@@ -130,6 +130,13 @@ export interface BlockInspection {
   /** What to title the panel: the block's label, or its name. */
   readonly label: string;
   /**
+   * The block's one-line description, from its definition, for the card under
+   * the title. Every definition declares one.
+   */
+  readonly description: string;
+  /** The concept its icon names, from `editor.icon`, if it names one. */
+  readonly icon: string | undefined;
+  /**
    * Props in the order the definition declares them.
    *
    * Declaration order rather than alphabetical: a block author writes a heading
@@ -328,6 +335,14 @@ export function inspectSelection(
     // only for blocks which declare a label: an unlabelled third-party block
     // was "Collection loop" in the palette and `acme/collection-loop` here.
     label: blockLabel(node.type),
+    // Narrowed for the reason the inspector component is: a definition
+    // registered from JavaScript never had its type checked.
+    description:
+      typeof definition.description === "string" ? definition.description : "",
+    icon:
+      typeof definition.editor?.icon === "string"
+        ? definition.editor.icon
+        : undefined,
     props,
     inspector: inspectorOf(definition),
   };

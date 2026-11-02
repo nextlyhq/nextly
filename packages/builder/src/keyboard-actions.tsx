@@ -27,9 +27,10 @@ import {
   type ComponentLookup,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
-import { useShortcuts } from "@nextlyhq/ui";
+import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
 import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
@@ -51,6 +52,7 @@ import {
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
   type ToolbarAction,
+  type ToolbarActionId,
 } from "./toolbar-actions";
 
 /**
@@ -279,6 +281,19 @@ export function useNestingSource(): NestingSource {
   // `toolbarActions` is called inside a memo keyed on its arguments — is not
   // handed a new object every render.
   return React.useMemo(() => supplied ?? registryNestingSource(), [supplied]);
+}
+
+/**
+ * The verbs for the current selection, as a surface OUTSIDE the provider is
+ * handed them: which are offered and why not, and a way to run one.
+ *
+ * The inspector is drawn beside the canvas rather than under this provider,
+ * and its card offers Duplicate and Delete. Handing it these is what keeps
+ * that menu to the toolbar's verdicts and verbs rather than a second copy.
+ */
+export interface SharedBlockVerbs {
+  readonly actions: readonly ToolbarAction[];
+  readonly run: (id: ToolbarActionId) => void;
 }
 
 export interface BlockKeyboardActionsOptions {
@@ -975,9 +990,15 @@ export function BlockKeyboardActions({
   definitions,
   onSaveAsPattern,
   mayCreatePattern,
+  onShareVerbs,
   children,
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
+  /**
+   * Called with the verbs whenever they change, and with `undefined` when this
+   * provider goes, for a surface drawn outside it.
+   */
+  readonly onShareVerbs?: (verbs: SharedBlockVerbs | undefined) => void;
 }): React.JSX.Element {
   const {
     announcement,
@@ -993,6 +1014,41 @@ export function BlockKeyboardActions({
     ...(nesting === undefined ? {} : { nesting }),
     ...(definitions === undefined ? {} : { definitions }),
   });
+
+  /*
+   * Shared from a layout effect, so a surface outside sees the verbs for the
+   * selection it is drawing in the same frame.
+   *
+   * Shared again only when what is OFFERED changes — which verbs, whether each
+   * may run, and why not — and never merely because a render made new
+   * objects. A host keeps the shared value in its own state, so sharing on
+   * every render re-renders the host, which re-renders this, which shares
+   * again: an infinite update. `run` reads the latest verbs through a ref, so
+   * a value shared earlier still runs what this render would, whatever the
+   * verbs close over beside the editor (they already read the live editor).
+   */
+  const latestVerbs = React.useRef(actions);
+  const sharedOffer = React.useRef<string | null>(null);
+  useIsomorphicLayoutEffect(() => {
+    latestVerbs.current = actions;
+    if (onShareVerbs === undefined) return;
+    const offer = offered
+      .map(each => `${each.id}:${each.enabled}:${each.reason ?? ""}`)
+      .join("|");
+    if (offer === sharedOffer.current) return;
+    sharedOffer.current = offer;
+    onShareVerbs({
+      actions: offered,
+      run: id => blockActionRunners(latestVerbs.current)[id](),
+    });
+  }, [onShareVerbs, actions, offered]);
+  useIsomorphicLayoutEffect(
+    () => () => {
+      sharedOffer.current = null;
+      onShareVerbs?.(undefined);
+    },
+    [onShareVerbs]
+  );
 
   // `polite`, not `assertive`: a move is the author's own action and its result
   // can wait for a pause. Assertive interrupts whatever is being read, which for

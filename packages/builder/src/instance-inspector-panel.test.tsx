@@ -861,38 +861,48 @@ describe("two editors on one page", () => {
     }
   });
 
-  it("gives the NAME field an id of its own too, which both inspectors draw", () => {
+  it("gives the LABEL field an id of its own too, which both inspectors draw", () => {
     mount({ ...instance(), name: "Header" } as BlockNode);
     mount({ ...instance(), name: "Header" } as BlockNode);
 
-    const names = screen.getAllByRole("textbox", {
-      name: "Name",
-    }) as HTMLInputElement[];
-    expect(names).toHaveLength(2);
-    expect(new Set(names.map(field => field.id)).size).toBe(2);
+    // One open at a time, as an author would: opening the second takes focus,
+    // and the first closes on its blur. Each one's id is read while it is open.
+    const ids = screen.getAllByRole("heading", { level: 2 }).map(title => {
+      fireEvent.doubleClick(title);
+      const field = screen.getByRole("textbox", { name: "Label" });
+      const id = field.id;
+      fireEvent.blur(field);
+      return id;
+    });
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 });
 
 describe("the instance's own name", () => {
   const named = (): BlockNode => ({ ...instance(), name: "Header" });
 
-  it("hands the field back the stored name when a draft differs from it only in spaces, and renames nothing", () => {
-    // The rename trims, so such a draft changes nothing — and a field left
-    // showing the spaces would show a name the document does not hold.
+  it("renames nothing when a draft differs from the label only in spaces, and shows the stored label", () => {
+    // The rename trims, so such a draft changes nothing — and a title left
+    // showing the spaces would show a label the document does not hold.
     const editor = mount(named());
-    const field = screen.getByRole("textbox", { name: "Name" });
+    fireEvent.doubleClick(screen.getByRole("heading", { level: 2 }));
+    const field = screen.getByRole("textbox", { name: "Label" });
 
     fireEvent.change(field, { target: { value: "  Header  " } });
     fireEvent.blur(field);
 
     expect(editor.apply).not.toHaveBeenCalled();
-    expect((field as HTMLInputElement).value).toBe("Header");
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toContain(
+      "Header"
+    );
   });
 
   it("renames with the trimmed name", () => {
     // The control: a draft that differs once trimmed is applied, trimmed.
     const editor = mount(named());
-    const field = screen.getByRole("textbox", { name: "Name" });
+    fireEvent.doubleClick(screen.getByRole("heading", { level: 2 }));
+    const field = screen.getByRole("textbox", { name: "Label" });
 
     fireEvent.change(field, { target: { value: "  Footer  " } });
     fireEvent.blur(field);

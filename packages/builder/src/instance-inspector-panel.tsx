@@ -48,8 +48,9 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { BlockCard } from "./block-card";
 import type { EditorState } from "./editor-state";
-import { IdentityFields } from "./identity-fields";
+import { lockOp, lockStatusOf, renameOp } from "./inspector";
 import {
   resetOverrideOp,
   setOverrideOp,
@@ -142,32 +143,29 @@ export function InstanceInspectorPanel({
 
   return (
     <div className="nx-inspector" data-instance="">
-      <h2 className="nx-inspector__title">
-        <span aria-hidden="true" className="nx-inspector__glyph">
-          ⧉
-        </span>{" "}
-        {inspection.label}
-      </h2>
       {/*
-        What this IS, said once under the title. "Component" for the author who
-        clicked into a header and is wondering why the tabs went; the usage
-        count beside it when the library could say, because an edit to this
-        component's definition reaches every one of those pages.
+        The same card every block gets. Its description says what this IS —
+        "Component", for the author who clicked into a header and is wondering
+        why the Style tab went — with the usage count beside it when the
+        library could say, because an edit to this component's definition
+        reaches every one of those pages.
       */}
-      <p className="nx-inspector__meta">
-        Component
-        {inspection.usedOn === undefined
-          ? null
-          : ` · used on ${inspection.usedOn} ${inspection.usedOn === 1 ? "page" : "pages"}`}
-      </p>
-
-      <IdentityFields
-        // Keyed by node so the name input does not carry an uncommitted edit
-        // across a selection change, exactly as the block inspector's does.
-        key={`${inspection.nodeId}:identity`}
-        nodeId={inspection.nodeId}
-        identity={inspection.identity}
-        editor={editor}
+      <BlockCard
+        // Keyed by node so a rename half-typed for one instance does not carry
+        // to the next, exactly as the block inspector's does.
+        key={`${inspection.nodeId}:card`}
+        // The editor's fallback mark: no block icon names a component.
+        icon={undefined}
+        type={inspection.label}
+        name={inspection.identity.name}
+        description={`Component${
+          inspection.usedOn === undefined
+            ? ""
+            : ` · used on ${inspection.usedOn} ${inspection.usedOn === 1 ? "page" : "pages"}`
+        }`}
+        lock={lockStatusOf(editor.document, inspection.nodeId)}
+        onRename={name => editor.apply(renameOp(inspection.nodeId, name))}
+        onLock={locked => editor.apply(lockOp(inspection.nodeId, locked))}
       />
 
       {!inspection.definitionFound ? (

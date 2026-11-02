@@ -654,15 +654,6 @@
   background: var(--nx-builder-surface, var(--nx-background));
 }
 
-.nx-inspector__title {
-  margin: 0;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--nx-muted-foreground);
-}
-
 .nx-inspector__note {
   margin: 0;
   font-size: 0.8125rem;
@@ -671,21 +662,161 @@
 }
 
 /*
- * The instance inspector's own furniture: what the selection IS, under the
- * title, and the section headings beneath. The title keeps the block
- * inspector's treatment so an author switching between a block and a
- * component reads one panel, not two; the glyph before it is what marks the
- * difference, in the accent the canvas already uses for an instance.
+ * The block card at the top of the inspector: icon, type and label, the menu,
+ * a line about the block, and a line per lock. One card for a block, an
+ * instance and a multiple selection, so the top of the panel reads the same
+ * whatever is selected.
  */
-.nx-inspector__glyph {
-  color: var(--nx-primary);
+.nx-block-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-block-end: 0.75rem;
+  border-block-end: 1px solid var(--nx-builder-border);
 }
 
-.nx-inspector__meta {
-  margin: -0.5rem 0 0;
+.nx-block-card__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-block-size: var(--nx-control-height-sm);
+}
+
+.nx-block-card__title {
+  flex: 1;
+  min-inline-size: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nx-foreground);
+}
+
+.nx-block-card__type {
+  font-weight: 400;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-block-card__menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--nx-control-height-sm);
+  block-size: var(--nx-control-height-sm);
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-block-card__menu:hover,
+.nx-block-card__menu:focus-visible {
+  color: var(--nx-foreground);
+  background: var(--nx-accent);
+}
+
+.nx-block-card__rename {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.nx-block-card__description,
+.nx-block-card__hint {
+  margin: 0;
   font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--nx-muted-foreground);
+}
+
+.nx-block-card__status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.nx-block-card__status li {
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-block-card__reason {
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The "what you're editing" bar: the target, the device and the state in
+ * words, with the state's control beneath. Kept at the top of the Style tab
+ * while its sections scroll.
+ */
+.nx-editing-bar {
+  position: sticky;
+  inset-block-start: -0.75rem;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0 -0.75rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-block-end: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface, var(--nx-background));
+}
+
+.nx-editing-bar__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.nx-editing-bar__fact {
+  min-inline-size: 0;
+}
+
+.nx-editing-bar__fact dt {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-editing-bar__fact dd {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Content's last section: the CSS id and the custom attributes. */
+.nx-inspector__advanced {
+  margin-block-start: 1rem;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--nx-builder-border);
+}
+
+.nx-inspector__advanced > summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.nx-inspector__advanced[open] > summary {
+  margin-block-end: 0.75rem;
+}
+
+.nx-inspector__advanced-fields {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
 }
 
 .nx-inspector__heading {
@@ -1829,20 +1960,6 @@ fieldset.nx-inspector__fields {
 }
 
 /*
- * The block's own identity, separated from its properties by a rule.
- *
- * A divider rather than a heading: the section holds two fields and a heading
- * above them would be as tall as the fields themselves. The separation matters
- * because the two groups answer different questions — what this block IS, and
- * what it HOLDS — and without a break they read as one list in which "Name"
- * looks like another prop.
- */
-.nx-inspector__identity {
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--nx-builder-border);
-}
-
-/*
  * The floating block toolbar.
  *
  * Positioned in the canvas's own content coordinates, like the drop indicator
@@ -1914,20 +2031,6 @@ fieldset.nx-inspector__fields {
 
 .nx-block-toolbar__button[aria-disabled="true"]:hover {
   background: none;
-}
-
-/*
- * The inspector's checkbox row, for a control that has a label beside it rather
- * than above it. A checkbox and its words are one target, which is why the
- * label wraps the input instead of pointing at it.
- */
-.nx-inspector__check {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8125rem;
-  color: var(--nx-builder-text);
-  cursor: pointer;
 }
 
 /**

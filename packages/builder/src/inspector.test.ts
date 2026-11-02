@@ -461,3 +461,32 @@ describe("lockStatusOf and designIsWritable", () => {
     expect(lockStatusOf(doc, "frame").slot).toBeUndefined();
   });
 });
+
+describe("what the card shows", () => {
+  it("carries the block's own description and icon from its definition", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/quote",
+          description: "A quotation with its source.",
+          editor: { label: "Quote", icon: "quote" },
+          props: {},
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    const doc = documentOf([
+      { id: "q", type: "acme/quote", version: 1, props: {} } as BlockNode,
+    ]);
+    const inspection = inspectSelection(doc, "q");
+    expect(inspection?.description).toBe("A quotation with its source.");
+    expect(inspection?.icon).toBe("quote");
+  });
+
+  it("leaves the icon unset for a block that names none", () => {
+    const inspection = inspectSelection(withHeading(), "a");
+    expect(inspection?.icon).toBeUndefined();
+    expect(inspection?.description).toBe("A block.");
+  });
+});

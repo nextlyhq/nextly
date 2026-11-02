@@ -32,7 +32,8 @@ import {
   propertyWithheld,
 } from "./style-baseline";
 
-type BaselineStatus = "high" | "low" | false;
+// The dataset types the status as `boolean`, though it only ever stores `false`.
+type BaselineStatus = "high" | "low" | boolean;
 
 interface KeyStatus {
   /** The status the data gives this one compat key. */

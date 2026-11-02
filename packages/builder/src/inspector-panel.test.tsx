@@ -22,6 +22,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
@@ -352,32 +353,72 @@ describe("what InspectorPanel forwards to the style tab", () => {
   });
 });
 
-describe("InspectorPanel identity fields", () => {
-  it("shows the block's stored name and lock", () => {
-    mount({ name: "Hero title", locked: true });
+/** Open the card's "⋯" menu from the keyboard, as Radix's menu allows in jsdom. */
+function openCardMenu(title: string): void {
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: `Actions for ${title}` }),
+    {
+      key: "Enter",
+    }
+  );
+}
 
-    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
-      "Hero title"
+/** Choose one item of an open menu, by its name. */
+function choose(name: string | RegExp): void {
+  fireEvent.click(screen.getByRole("menuitem", { name }));
+}
+
+/**
+ * Bring Content's Advanced section on screen, as an author does: back to the
+ * Content tab if another is showing, then the summary, if it is closed.
+ */
+function openAdvanced(): void {
+  const content = screen.getByRole("tab", { name: "Content" });
+  if (content.getAttribute("aria-selected") !== "true") {
+    fireEvent.mouseDown(content);
+  }
+  const summary = screen.getByText("Advanced", { selector: "summary" });
+  if (!(summary.parentElement as HTMLDetailsElement).open) {
+    fireEvent.click(summary);
+  }
+}
+
+describe("InspectorPanel block card", () => {
+  it("shows the icon, the author's label beside the type, and the description", () => {
+    mount({ name: "Hero title" });
+
+    const card = document.querySelector("[data-block-card]") as HTMLElement;
+    expect(within(card).getByRole("heading").textContent).toBe(
+      "Hero title · Heading"
     );
-    // `data-state` rather than a `toBeChecked` matcher: this package does not
-    // register jest-dom, and the property form of that matcher is a no-op that
-    // reads as an assertion — it was in this test until it threw.
-    expect(
-      screen.getByLabelText("Lock this block").getAttribute("data-state")
-    ).toBe("checked");
+    expect(within(card).getByText("A heading.")).toBeDefined();
+    expect(card.querySelector(".nx-block-icon")).not.toBeNull();
   });
 
-  it("renames on blur, through the store", () => {
+  it("titles the card by type alone when the block has no label", () => {
+    mount();
+    expect(screen.getByRole("heading", { name: "Heading" })).toBeDefined();
+  });
+
+  it("renames from the menu, in one op through the store, on blur", async () => {
     // Through `editor.apply` rather than around it, so the rename is on the undo
     // stack with every other edit.
     const editor = mount();
+    openCardMenu("Heading");
+    choose("Rename");
 
-    fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "Hero title" },
-    });
+    // Found, not got: the field opens once the menu has finished closing,
+    // which the menu reports a tick after the choice.
+    const field = await screen.findByLabelText("Label");
+    expect(document.activeElement).toBe(field);
+    expect(
+      screen.getByText("Shown in Layers. Visitors never see it.")
+    ).toBeDefined();
+    fireEvent.change(field, { target: { value: "Hero title" } });
     expect(editor.apply).not.toHaveBeenCalled(); // not on every keystroke
-    fireEvent.blur(screen.getByLabelText("Name"));
+    fireEvent.blur(field);
 
+    expect(editor.apply).toHaveBeenCalledTimes(1);
     expect(editor.apply).toHaveBeenCalledWith({
       kind: "update",
       id: "a",
@@ -385,22 +426,46 @@ describe("InspectorPanel identity fields", () => {
     });
   });
 
-  it("does not write when the name is unchanged", () => {
+  it("renames from a double-click on the title too", () => {
+    const editor = mount({ name: "Hero title" });
+    fireEvent.doubleClick(screen.getByRole("heading"));
+
+    const field = screen.getByLabelText("Label");
+    fireEvent.change(field, { target: { value: "Intro" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { name: "Intro" },
+    });
+  });
+
+  it("writes nothing when the label is unchanged, or when Escape backs out", () => {
     // Blur fires whenever focus leaves, including when an author clicks into
     // the field and straight out of it. Writing there would put an op with no
     // effect on the undo stack, so one press of undo would appear to do nothing.
     const editor = mount({ name: "Hero title" });
+    fireEvent.doubleClick(screen.getByRole("heading"));
+    fireEvent.blur(screen.getByLabelText("Label"));
 
-    fireEvent.blur(screen.getByLabelText("Name"));
+    fireEvent.doubleClick(screen.getByRole("heading"));
+    const field = screen.getByLabelText("Label");
+    fireEvent.change(field, { target: { value: "Something else" } });
+    fireEvent.keyDown(field, { key: "Escape" });
 
     expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading").textContent).toBe(
+      "Hero title · Heading"
+    );
   });
 
-  it("clears the name by unsetting the field", () => {
+  it("clears the label by unsetting the field", () => {
     const editor = mount({ name: "Hero title" });
-
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "" } });
-    fireEvent.blur(screen.getByLabelText("Name"));
+    fireEvent.doubleClick(screen.getByRole("heading"));
+    const field = screen.getByLabelText("Label");
+    fireEvent.change(field, { target: { value: "  " } });
+    fireEvent.blur(field);
 
     expect(editor.apply).toHaveBeenCalledWith({
       kind: "update",
@@ -410,12 +475,10 @@ describe("InspectorPanel identity fields", () => {
     });
   });
 
-  it("locks immediately, with no blur to wait for", () => {
-    // There is nothing to coalesce in a checkbox, and waiting would leave the
-    // canvas disagreeing with a control the author has already changed.
+  it("locks from the menu, immediately", () => {
     const editor = mount();
-
-    fireEvent.click(screen.getByLabelText("Lock this block"));
+    openCardMenu("Heading");
+    choose("Lock");
 
     expect(editor.apply).toHaveBeenCalledWith({
       kind: "update",
@@ -424,11 +487,23 @@ describe("InspectorPanel identity fields", () => {
     });
   });
 
-  it("unlocks by unsetting rather than storing false", () => {
-    const editor = mount({ locked: true });
+  it("says a locked block is locked, offers Unlock, and shows every control read-only", () => {
+    const editor = mount({ locked: true, props: { text: "Hi" } });
 
-    fireEvent.click(screen.getByLabelText("Lock this block"));
+    expect(document.querySelector('[data-lock="layers"]')?.textContent).toMatch(
+      /Locked.*can't be moved, deleted or edited/
+    );
+    expect((screen.getByLabelText("Text") as HTMLInputElement).disabled).toBe(
+      true
+    );
+    openAdvanced();
+    expect(
+      (screen.getByLabelText("CSS id") as HTMLInputElement).matches(":disabled")
+    ).toBe(true);
 
+    openCardMenu("Heading");
+    expect(screen.queryByRole("menuitem", { name: "Lock" })).toBeNull();
+    choose("Unlock");
     expect(editor.apply).toHaveBeenCalledWith({
       kind: "update",
       id: "a",
@@ -437,9 +512,54 @@ describe("InspectorPanel identity fields", () => {
     });
   });
 
-  it("says nothing about identity when there is no selection", () => {
+  it("keeps every control editable on a block nothing locks", () => {
+    // The control for the case above.
+    mount({ props: { text: "Hi" } });
+    expect((screen.getByLabelText("Text") as HTMLInputElement).disabled).toBe(
+      false
+    );
+    openAdvanced();
+    expect(
+      (screen.getByLabelText("CSS id") as HTMLInputElement).matches(":disabled")
+    ).toBe(false);
+  });
+
+  it("offers the shared block verbs, disabled with their reason when refused", () => {
+    const run = vi.fn();
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        verbs={{
+          actions: [
+            { id: "duplicate", label: "Duplicate", enabled: true },
+            {
+              id: "delete",
+              label: "Delete",
+              enabled: false,
+              reason: "It is locked.",
+            },
+            { id: "move-up", label: "Move up", enabled: true },
+          ],
+          run,
+        }}
+      />
+    );
+    openCardMenu("Heading");
+    choose("Duplicate");
+    expect(run).toHaveBeenCalledWith("duplicate");
+
+    openCardMenu("Heading");
+    const remove = screen.getByRole("menuitem", { name: /Delete/ });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    expect(remove.textContent).toContain("It is locked.");
+    // Only the card's verbs; moving lives on the toolbar and in Layers.
+    expect(screen.queryByRole("menuitem", { name: "Move up" })).toBeNull();
+  });
+
+  it("draws no card when nothing is selected", () => {
     // The control for every case above: they would all pass against a panel
-    // that rendered the fields unconditionally, and this is the state the
+    // that rendered the card unconditionally, and this is the state the
     // inspector spends most of its time in.
     register();
     const editor = editorFor(documentOf({}));
@@ -449,8 +569,7 @@ describe("InspectorPanel identity fields", () => {
       />
     );
 
-    expect(screen.queryByLabelText("Name")).toBeNull();
-    expect(screen.queryByLabelText("Lock this block")).toBeNull();
+    expect(document.querySelector("[data-block-card]")).toBeNull();
   });
 });
 
@@ -487,27 +606,16 @@ describe("InspectorPanel with several blocks selected", () => {
      */
     manyEditor([false, false, false]);
 
-    expect(screen.getByText("3 blocks selected")).toBeDefined();
-    expect(screen.queryByLabelText("Name")).toBeNull();
+    expect(screen.getByRole("heading", { name: "3 blocks" })).toBeDefined();
+    expect(screen.queryByRole("tab", { name: "Content" })).toBeNull();
   });
 
-  it("shows the lock as MIXED when only some are locked", () => {
-    // A real third state. `checked` or unchecked here would tell the author
-    // something false about half of what they selected.
+  it("says when only some are locked, and when all are", () => {
     manyEditor([true, false]);
-
-    const box = screen.getByRole("checkbox", { name: /lock these blocks/i });
-    expect(box.getAttribute("aria-checked")).toBe("mixed");
-    expect((box as HTMLInputElement).indeterminate).toBe(true);
-  });
-
-  it("shows it as checked when they are ALL locked, which is the control", () => {
-    // Without this, "always mixed" would satisfy the case above.
+    expect(screen.getByText("Some of them are locked.")).toBeDefined();
+    cleanup();
     manyEditor([true, true]);
-
-    const box = screen.getByRole("checkbox", { name: /lock these blocks/i });
-    expect(box.getAttribute("aria-checked")).toBe("true");
-    expect((box as HTMLInputElement).indeterminate).toBe(false);
+    expect(screen.getByText("All of them are locked.")).toBeDefined();
   });
 
   it("LOCKS everything on the first press from mixed", () => {
@@ -518,16 +626,14 @@ describe("InspectorPanel with several blocks selected", () => {
      */
     const editor = manyEditor([true, false]);
 
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: /lock these blocks/i })
-    );
+    openCardMenu("2 blocks");
+    choose("Lock all");
 
     /*
      * ONLY the block that changes. The already-locked one is omitted, because
      * `applyOp` refuses an update writing what a node already holds and the
      * group is atomic — planning it would abort the whole edit and lock
-     * nothing. That is what the editor actually did until a browser run caught
-     * it; this suite passed throughout, because the spy never ran the ops.
+     * nothing.
      */
     expect(editor.applyAll).toHaveBeenCalledWith([
       { kind: "update", id: "1", patch: { locked: true } },
@@ -537,9 +643,8 @@ describe("InspectorPanel with several blocks selected", () => {
   it("unlocks everything when they are all locked", () => {
     const editor = manyEditor([true, true]);
 
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: /lock these blocks/i })
-    );
+    openCardMenu("2 blocks");
+    choose("Unlock all");
 
     expect(editor.applyAll).toHaveBeenCalledWith([
       { kind: "update", id: "0", patch: {}, unset: ["locked"] },
@@ -557,10 +662,6 @@ describe("InspectorPanel with several blocks selected", () => {
  * the page would drop is never stored.
  */
 describe("InspectorPanel advanced fields", () => {
-  const openAdvanced = () => {
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
-  };
-
   it("shows the block's stored id and attributes", () => {
     mount({ cssId: "hero", attributes: { "data-x": "1" } });
     openAdvanced();
@@ -666,10 +767,9 @@ describe("InspectorPanel advanced fields", () => {
   it("gives every row a distinct name, and does not collide with the block's", () => {
     /*
      * The visible labels are short because they sit inline, and short labels
-     * repeat: "Name" is also the block's own name field above the tabs. Two
-     * rows plus that one would announce the same word three times for three
-     * different things, and a voice-control user saying "name" would have no
-     * way to pick.
+     * repeat. Two rows called "Name" would announce the same word twice for
+     * two different things, and a voice-control user saying "name" would have
+     * no way to pick. The block's own label is called "Label", in the card.
      */
     mount({ attributes: { "data-a": "1", "data-b": "2" } });
     openAdvanced();
@@ -680,25 +780,17 @@ describe("InspectorPanel advanced fields", () => {
     expect(
       (screen.getByLabelText("Name of attribute 2") as HTMLInputElement).value
     ).toBe("data-b");
-    // The block's own field is still reachable by its own label, which is what
-    // an ambiguous name would break — `getByLabelText` throws on two matches.
-    // Told apart by what only the identity field has, its placeholder: the id
-    // is minted per mount so that two editors on one page do not share one.
-    expect(screen.getByLabelText("Name")).toHaveProperty(
-      "placeholder",
-      "Unnamed"
-    );
     // Each Remove is named too, for the same reason.
     expect(screen.getByRole("button", { name: "Remove data-a" })).toBeDefined();
   });
 
-  it("keeps the identity fields above the tabs", () => {
-    // The Advanced tab must not have moved the block's own name into it: the
-    // name answers "which of six headings is this" under every tab.
+  it("keeps the block card above the tabs while Advanced is open", () => {
+    // Advanced must not have moved the block's own label into it: the label
+    // answers "which of six headings is this" under every tab.
     mount({ name: "Hero title" });
     openAdvanced();
-    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
-      "Hero title"
+    expect(screen.getByRole("heading").textContent).toBe(
+      "Hero title · Heading"
     );
   });
 });
@@ -744,7 +836,7 @@ describe("the Advanced tab's ops, through the real store", () => {
   it("actually REMOVES a cleared css id", () => {
     const before = nodeWith({ cssId: "hero" });
     const editor = mount({ cssId: "hero" });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "" } });
@@ -759,7 +851,7 @@ describe("the Advanced tab's ops, through the real store", () => {
   it("actually REMOVES the last attribute", () => {
     const before = nodeWith({ attributes: { "data-x": "1" } });
     const editor = mount({ attributes: { "data-x": "1" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove data-x" }));
 
@@ -773,7 +865,7 @@ describe("the Advanced tab's ops, through the real store", () => {
     // never writes anything.
     const before = nodeWith({});
     const editor = mount({});
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "hero" } });
@@ -787,10 +879,6 @@ describe("the Advanced tab's ops, through the real store", () => {
  * The two ways a draft used to be lost, and the shadowed id it left behind.
  */
 describe("the Advanced tab keeps what the author typed", () => {
-  const openAdvanced = () => {
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
-  };
-
   it("commits a draft when the tab is switched away", () => {
     /*
      * The tabs activate on `mousedown` and unmount the inactive tab's content,
@@ -855,7 +943,7 @@ describe("a refused row survives its own commit", () => {
      * replaced must all still be there.
      */
     const editor = mount({ attributes: { "data-x": "1" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const name = screen.getByLabelText("Name of attribute 1");
     fireEvent.change(name, { target: { value: "onclick" } });
@@ -874,7 +962,7 @@ describe("a refused row survives its own commit", () => {
     // The id is a separate field, and holding it hostage to an unrelated typo
     // in the rows below would be its own surprise.
     const editor = mount({ attributes: { "data-x": "1" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const name = screen.getByLabelText("Name of attribute 1");
     fireEvent.change(name, { target: { value: "onclick" } });
@@ -904,7 +992,7 @@ describe("a refused row survives its own commit", () => {
       ],
     } as unknown as BlockDocument);
     render(<InspectorPanel editor={editor} />);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "hero" } });
@@ -926,7 +1014,7 @@ describe("a shadowed id and a mistyped row at the same time", () => {
      * clearing the CSS id later brought the old bag id back to life.
      */
     const editor = mount({ attributes: { id: "old", "data-x": "1" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     /*
      * Rows are shown in NAME order, so `data-x` is the first and `id` the
@@ -962,7 +1050,7 @@ describe("the panel's own write does not fight the document", () => {
      * replaced without freezing everything beside it.
      */
     const editor = mount({ attributes: { "data-a": "1", "data-b": "2" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const first = screen.getByLabelText("Name of attribute 1");
     expect((first as HTMLInputElement).value).toBe("data-a");
@@ -985,7 +1073,7 @@ describe("the panel's own write does not fight the document", () => {
     // document from elsewhere can carry one — it is shown, explained, and not
     // rewritten under a new value.
     mount({ attributes: { id: "from-a-file" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     expect(screen.getByRole("alert").textContent).toContain("CSS id field");
   });
@@ -1019,7 +1107,7 @@ describe("undo then redo, with the panel open", () => {
 
     const editor = editorFor(withId("one"));
     const { rerender } = render(<InspectorPanel editor={editor} />);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "two" } });
@@ -1055,7 +1143,7 @@ describe("the Advanced tab inside the entry's form", () => {
      * already prevented it; the two row inputs did not.
      */
     const editor = mount({ attributes: { "data-x": "1" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     for (const label of [
       "CSS id",
@@ -1099,7 +1187,7 @@ describe("the Advanced tab inside the entry's form", () => {
     const editor = editorFor(documentOf({}));
     editor.apply.mockReturnValue(null);
     render(<InspectorPanel editor={editor} />);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "hero" } });
@@ -1114,7 +1202,7 @@ describe("the Advanced tab inside the entry's form", () => {
     // The control: a refusal shown on every successful edit would be worse
     // than the silence it replaced.
     const editor = mount({});
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "hero" } });
     fireEvent.blur(field);
@@ -1135,7 +1223,7 @@ describe("a node carrying both a css id and a legacy id attribute", () => {
      * later clear the field it is what would render.
      */
     const editor = mount(both);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
     expect(editor.apply).not.toHaveBeenCalled();
@@ -1163,7 +1251,7 @@ describe("a node carrying both a css id and a legacy id attribute", () => {
       ],
     } as unknown as BlockDocument);
     render(<InspectorPanel editor={editor} />);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "taken" } });
@@ -1184,7 +1272,7 @@ describe("a node carrying both a css id and a legacy id attribute", () => {
     // author sets the field, the bag value can never render again, so keeping
     // it would let a later clear bring a dead id back to life.
     const editor = mount(both);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "fresh" } });
     fireEvent.blur(field);
@@ -1213,7 +1301,7 @@ describe("an attribute bag the document should not have held", () => {
 
   it("offers the entries it CAN edit rather than none of them", () => {
     mount(mixed);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     expect(
       (screen.getByLabelText("Name of attribute 1") as HTMLInputElement).value
@@ -1238,7 +1326,7 @@ describe("an attribute bag the document should not have held", () => {
       ...mixed,
     } as unknown as BlockNode;
     const editor = mount(mixed);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     fireEvent.click(screen.getByRole("button", { name: "Add attribute" }));
     fireEvent.change(screen.getByLabelText("Name of attribute 2"), {
@@ -1263,7 +1351,7 @@ describe("an attribute bag the document should not have held", () => {
      * changed, and this is the assertion that keeps it that way.
      */
     const editor = mount({ ...mixed, cssId: "old" });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "new" } });
@@ -1291,7 +1379,7 @@ describe("a panel that was only LOOKED at", () => {
 
   it("writes nothing when the tab is switched away", () => {
     const editor = mount(noncanonical);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
     expect(editor.apply).not.toHaveBeenCalled();
@@ -1301,7 +1389,7 @@ describe("a panel that was only LOOKED at", () => {
     // The same cause through the other door: blur commits too, so a click into
     // the id field and out of it was enough to rewrite the value.
     const editor = mount(noncanonical);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     fireEvent.blur(screen.getByLabelText("CSS id"));
     fireEvent.blur(screen.getByLabelText("Name of attribute 1"));
 
@@ -1316,7 +1404,7 @@ describe("a panel that was only LOOKED at", () => {
      * renders.
      */
     const editor = mount(noncanonical);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     const value = screen.getByLabelText("Value of attribute 1");
     fireEvent.change(value, { target: { value: "2" } });
     fireEvent.blur(value);
@@ -1338,12 +1426,12 @@ describe("a refused row when the author leaves the tab", () => {
      * rename did not take. The tab's content is force-mounted for this.
      */
     const editor = mount({ attributes: { "data-x": "1" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     const name = screen.getByLabelText("Name of attribute 1");
     fireEvent.change(name, { target: { value: "onclick" } });
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     // The document kept what it had: the rename was refused, not applied.
     expect(editor.apply).not.toHaveBeenCalled();
@@ -1358,7 +1446,7 @@ describe("a refused row when the author leaves the tab", () => {
   it("keeps a VALID draft too, and commits it", () => {
     // The other half: leaving the tab still saves work that can be saved.
     const editor = mount({});
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     fireEvent.change(screen.getByLabelText("CSS id"), {
       target: { value: "hero" },
     });
@@ -1384,7 +1472,7 @@ describe("a refusal that no longer describes anything", () => {
     const editor = editorFor(documentOf(node));
     editor.apply.mockReturnValue(null);
     render(<InspectorPanel editor={editor} />);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "enormous" } });
@@ -1449,7 +1537,7 @@ describe("an id the editor tidied on the way in", () => {
      * not, which is the whole defect.
      */
     const editor = mount({ attributes: { "data-x": "1" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: " hero " } });
@@ -1509,9 +1597,9 @@ describe("the Advanced tab stays mounted without staying on screen", () => {
     return panel as HTMLElement;
   };
 
-  it("is hidden under the other tabs, and shown under its own", () => {
+  it("is hidden under the Style tab, and shown again under Content", () => {
     mount({});
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     // The control: it really is on screen when chosen, so `hidden` below is
     // a state it moved INTO rather than one it never left.
     expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(false);
@@ -1520,10 +1608,30 @@ describe("the Advanced tab stays mounted without staying on screen", () => {
     expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(true);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Content" }));
-    expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(true);
-
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
     expect(panelOf(screen.getByLabelText("CSS id")).hidden).toBe(false);
+  });
+
+  it("keeps a half-typed row across a collapse of Advanced", () => {
+    mount({});
+    openAdvanced();
+    fireEvent.change(screen.getByLabelText("CSS id"), {
+      target: { value: "her" },
+    });
+
+    fireEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    openAdvanced();
+
+    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
+      "her"
+    );
+  });
+
+  it("names no section of either tab Advanced but Content's", () => {
+    // One "Advanced": the Style tab's sections end at Effects.
+    register();
+    render(<InspectorPanel editor={editorFor(documentOf({}))} />);
+    expect(screen.queryByRole("tab", { name: "Advanced" })).toBeNull();
+    expect(screen.getAllByText("Advanced")).toHaveLength(1);
   });
 
   it("is out of the accessibility tree while hidden", () => {
@@ -1534,7 +1642,7 @@ describe("the Advanced tab stays mounted without staying on screen", () => {
      * against the accessibility tree rather than the DOM.
      */
     mount({});
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
     expect(screen.queryByRole("textbox", { name: "CSS id" })).not.toBeNull();
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
@@ -1570,7 +1678,7 @@ describe("a refused id while an unrelated attribute saves", () => {
       ],
     } as unknown as BlockDocument);
     render(<InspectorPanel editor={editor} />);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "hero" } });
@@ -1630,7 +1738,7 @@ describe("the block set the collision check answers about", () => {
         ])}
       />
     );
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const field = screen.getByLabelText("CSS id");
     fireEvent.change(field, { target: { value: "hero" } });
@@ -1661,7 +1769,7 @@ describe("the block set the collision check answers about", () => {
       ],
     } as unknown as BlockDocument);
     render(<InspectorPanel editor={editor} />);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     fireEvent.change(screen.getByLabelText("CSS id"), {
       target: { value: "hero" },
@@ -1690,14 +1798,14 @@ describe("a node whose CSS id is present but empty", () => {
 
   it("says the empty id is there and what it is doing", () => {
     mount(shadowed);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     expect(screen.getByRole("status").textContent).toContain("empty id");
   });
 
   it("offers a way to remove it, and removes it", () => {
     const editor = mount(shadowed);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Remove the empty id" })
@@ -1715,7 +1823,7 @@ describe("a node whose CSS id is present but empty", () => {
     // The control: the ordinary block has no id and no note, or every block
     // would carry a warning about a state it is not in.
     mount({ attributes: { id: "from-bag" } });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     expect(screen.queryByRole("status")).toBeNull();
     expect(
@@ -1726,7 +1834,7 @@ describe("a node whose CSS id is present but empty", () => {
   it("says nothing when the id holds a value", () => {
     // The other control: a real id is not the empty-but-present state either.
     mount({ cssId: "hero" });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     expect(screen.queryByRole("status")).toBeNull();
   });
@@ -1745,7 +1853,7 @@ describe("an empty id while an unrelated attribute is edited", () => {
       cssId: "",
       attributes: { id: "from-bag", "data-x": "1" },
     } as unknown as Partial<BlockNode>);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     /*
      * Row ONE, not two: `rowsOf` sorts by name, so `data-x` sits above `id`.
@@ -1781,7 +1889,7 @@ describe("an empty id while an unrelated attribute is edited", () => {
     );
     editor.apply.mockReturnValue(null);
     render(<InspectorPanel editor={editor} />);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Remove the empty id" })
@@ -1806,7 +1914,7 @@ describe("what the empty-id note promises", () => {
       cssId: "",
       attributes: { " id ": "never-rendered" },
     } as unknown as Partial<BlockNode>);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const note = screen.getByRole("status").textContent ?? "";
     // The control: the note IS shown, so this is not passing on its absence.
@@ -1820,7 +1928,7 @@ describe("what the empty-id note promises", () => {
       cssId: "",
       attributes: { ID: "revealed" },
     } as unknown as Partial<BlockNode>);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     expect(screen.getByRole("status").textContent).toContain("is ignored");
   });
@@ -1845,7 +1953,7 @@ describe("removing an empty id while a row is refused", () => {
     } as unknown as Partial<BlockNode>);
     const editor = editorFor(document);
     const { rerender } = render(<InspectorPanel editor={editor} />);
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    openAdvanced();
 
     const name = screen.getByLabelText("Name of attribute 1");
     fireEvent.change(name, { target: { value: "onclick" } });

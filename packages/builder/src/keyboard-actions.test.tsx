@@ -1587,3 +1587,79 @@ describe("the save verb honours the planner before the host sees it", () => {
     expect(asked).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("sharing the verbs with a surface outside the provider", () => {
+  it("hands the same verdicts and runs the same verbs", () => {
+    // The inspector sits beside the canvas, outside the provider, so the card's
+    // menu is handed these rather than deciding for itself.
+    const editor = editorSpy(pair(), "a");
+    const shared = vi.fn();
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          onShareVerbs={shared}
+        />
+      </ShortcutProvider>
+    );
+
+    const latest = shared.mock.calls.at(-1)?.[0] as
+      | {
+          actions: { id: string; enabled: boolean }[];
+          run: (id: string) => void;
+        }
+      | undefined;
+    expect(latest?.actions.map(action => action.id)).toContain("duplicate");
+    latest?.run("delete");
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("withdraws them when the provider goes", () => {
+    const shared = vi.fn();
+    const { unmount } = render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editorSpy(pair(), "a")}
+          onShareVerbs={shared}
+        />
+      </ShortcutProvider>
+    );
+    unmount();
+    expect(shared).toHaveBeenLastCalledWith(undefined);
+  });
+});
+
+describe("sharing the verbs without a render loop", () => {
+  it("shares again only when what is offered changes, not on every render", () => {
+    // A host keeps what is shared in its own state, so sharing an equal value
+    // on every render re-renders the host, which re-renders this provider,
+    // which shares again: React stops it as an infinite update.
+    const shared = vi.fn();
+    const doc = pair();
+    const view = (editor: EditorState) => (
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          onShareVerbs={shared}
+        />
+      </ShortcutProvider>
+    );
+    const { rerender } = render(view(editorSpy(doc, "a")));
+    // A fresh editor object over the same document and selection, as a host
+    // re-render hands down.
+    rerender(view(editorSpy(doc, "a")));
+    rerender(view(editorSpy(doc, "a")));
+    expect(shared).toHaveBeenCalledTimes(1);
+
+    // The control: a selection whose verdicts differ is shared.
+    const locked = documentOf([
+      { id: "a", type: "acme/text", version: 1, props: {}, locked: true },
+      { id: "b", type: "acme/text", version: 1, props: {} },
+    ]);
+    rerender(view(editorSpy(locked, "a")));
+    expect(shared).toHaveBeenCalledTimes(2);
+  });
+});
