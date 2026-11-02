@@ -55,6 +55,7 @@ import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
+import { componentActionRoutes } from "./component-actions-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
@@ -83,6 +84,7 @@ import {
   type ComponentStore,
 } from "./library-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
+import { originStore, type OriginStore } from "./origin-store";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { retiredStore } from "./retired-store";
@@ -834,7 +836,10 @@ export const pageBuilder = (
 
   // The usage indexes' reconciler for a write made in a transaction the
   // caller owns, which their hooks skip. Set by `init`, read per request.
-  const usage: { reconcile?: CommittedWriteReconciler } = {};
+  const usage: {
+    reconcile?: CommittedWriteReconciler;
+    origins?: OriginStore;
+  } = {};
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -1036,6 +1041,14 @@ export const pageBuilder = (
       // Not where the host renders components from its own source: no
       // collection stands for it, and the plugin's store, holding retirements of
       // its own, would strip fields that source still exposes.
+      // Where a duplicated component came from, in the same bookkeeping
+      // table as the retired ids.
+      usage.origins = originStore({
+        nextly: () => requireInstalled().nextly(),
+        collection:
+          ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+          COMPONENT_RETIRED_SLUG,
+      });
       if (opts.componentReadiness !== false) {
         registerRetiredExposures({
           ctx,
@@ -1204,6 +1217,13 @@ export const pageBuilder = (
           // Read when a request arrives, after `init` has registered the
           // usage hooks this hands back.
           reconcile: () => usage.reconcile,
+        }),
+        // Detach, duplicate and update a pattern, each with a dry run.
+        ...componentActionRoutes({
+          store: componentStoreOf(opts),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+          reconcile: () => usage.reconcile,
+          origins: () => usage.origins,
         }),
         // The relation control's read: a collection's entries as `{ id, title }`,
         // for the collections a registered block prop names as relation targets,

@@ -46,6 +46,7 @@ import {
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
@@ -885,6 +886,13 @@ function EditorBody<TFieldValues extends FieldValues>({
             returnFocusTo={savePattern.returnFocusTo}
           />
           <ComponentFromSelectionPrompt
+            request={makeComponent.request}
+            editor={editor}
+            library={componentLibrary}
+            onClose={makeComponent.close}
+            returnFocusTo={makeComponent.returnFocusTo}
+          />
+          <ComponentActionPrompt
             request={makeComponent.request}
             editor={editor}
             library={componentLibrary}

@@ -37,12 +37,15 @@
 
 import {
   findNode,
+  isComponentInstance,
   lockedWithin,
   planConvertToComponent,
+  planDetach,
   registryNestingSource,
   saveAsPatternRefusal,
   type BlockDocument,
   type BlockNode,
+  type DefinitionsById,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 
@@ -105,6 +108,9 @@ export type ToolbarActionId =
   | "save-as-pattern"
   | "save-as-component"
   | "convert-to-component"
+  | "detach-component"
+  | "duplicate-component"
+  | "update-pattern"
   | "delete";
 
 /** One button's worth of decision. */
@@ -150,7 +156,21 @@ export interface ComponentVerbsOffer {
    * {@link MAKE_COMPONENT_GRANT_REFUSAL}.
    */
   readonly mayCreate: boolean;
+  /**
+   * The component definitions the canvas draws, which a detach inlines.
+   * Absent, Detach is not offered.
+   */
+  readonly definitions?: DefinitionsById;
+  /**
+   * Whether the author may update and publish patterns. Absent, "Update
+   * pattern" is not offered; `false` dims it with the reason.
+   */
+  readonly mayUpdatePattern?: boolean;
 }
+
+/** What an author without the grant to update a pattern is told. */
+const UPDATE_PATTERN_GRANT_REFUSAL =
+  "You do not have permission to update and publish patterns.";
 
 /** What an author without the grant to make a component is told. */
 const MAKE_COMPONENT_GRANT_REFUSAL =
@@ -213,6 +233,134 @@ function componentActions(
           enabled: false,
           reason: compositionRefusalReason(converting),
         },
+  ];
+}
+
+/**
+ * "Detach" and "Duplicate component" for one selected placement, and nothing
+ * for any other selection, so a menu over a heading does not grow verbs that
+ * could never apply to it. Detach is planned in full against the definitions
+ * the canvas draws, and its ops are put to the editor's lock question.
+ */
+function placementActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  const only = ids.length === 1 ? ids[0] : undefined;
+  if (offer === undefined || only === undefined) return [];
+  const node = findNode(document.nodes, only);
+  if (node === undefined || !isComponentInstance(node)) return [];
+  const actions: ToolbarAction[] = [];
+  if (offer.definitions !== undefined) {
+    const detach: ToolbarAction = {
+      id: "detach-component",
+      label: "Detach from component",
+      enabled: true,
+      inMenu: true,
+    };
+    const plan = planDetach(document, only, offer.definitions, nesting);
+    actions.push(
+      plan.problem === undefined
+        ? heldByLock(detach, ask, plan.pageOps)
+        : { ...detach, enabled: false, reason: compositionRefusalReason(plan) }
+    );
+  }
+  const duplicate: ToolbarAction = {
+    id: "duplicate-component",
+    label: "Duplicate component",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayCreate) {
+    actions.push({
+      ...duplicate,
+      enabled: false,
+      reason: MAKE_COMPONENT_GRANT_REFUSAL,
+    });
+    return actions;
+  }
+  // The copy is made from the component as this author may read it; one the
+  // canvas could not load for them is not one they can copy.
+  const source = (node.props as { componentId?: unknown }).componentId;
+  if (
+    offer.definitions !== undefined &&
+    (typeof source !== "string" || !offer.definitions.has(source))
+  ) {
+    actions.push({
+      ...duplicate,
+      enabled: false,
+      reason: "This component is not available to copy.",
+    });
+    return actions;
+  }
+  // The re-point is an edit of the placement, so a lock on it, or on the slot
+  // it sits in, refuses Duplicate as it would any edit.
+  const held = lockBlockingDelete(document, only);
+  actions.push(
+    held === undefined
+      ? heldByLock(duplicate, ask, [
+          {
+            kind: "update",
+            id: only,
+            patch: {
+              props: { ...node.props, componentId: PLANNED_COMPONENT_ID },
+            },
+          },
+        ])
+      : { ...duplicate, enabled: false, reason: lockedBy(held, only) }
+  );
+  return actions;
+}
+
+/**
+ * "Update pattern" for a selection that could be saved as one, where the host
+ * offers it: the selection replaces a pattern's content.
+ */
+function updatePatternAction(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined
+): ToolbarAction[] {
+  if (offer?.mayUpdatePattern === undefined) return [];
+  const action: ToolbarAction = {
+    id: "update-pattern",
+    label: "Update a pattern",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayUpdatePattern) {
+    return [
+      { ...action, enabled: false, reason: UPDATE_PATTERN_GRANT_REFUSAL },
+    ];
+  }
+  const refusal = saveAsPatternRefusal(document, ids, nesting);
+  return [
+    refusal === undefined
+      ? action
+      : {
+          ...action,
+          enabled: false,
+          reason: compositionRefusalReason(refusal),
+        },
+  ];
+}
+
+/** Every verb of the menu's component group, in the order it lists them. */
+function compositionActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  return [
+    ...componentActions(document, ids, nesting, offer, ask),
+    ...placementActions(document, ids, nesting, offer, ask),
+    ...updatePatternAction(document, ids, nesting, offer),
   ];
 }
 
@@ -467,7 +615,7 @@ function manyBlockActions(
       opsOf(selectionDuplication(document, ids))
     ),
     saveAction(document, ids, nesting, mayCreate),
-    ...componentActions(document, ids, nesting, components, ask),
+    ...compositionActions(document, ids, nesting, components, ask),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: true },
@@ -600,7 +748,7 @@ export function toolbarActions(
         : [{ kind: "insert", node: duplication.node, at: duplication.at }]
     ),
     saveAction(document, ids, rules, mayCreatePattern),
-    ...componentActions(document, ids, rules, components, lockRefusalFor),
+    ...compositionActions(document, ids, rules, components, lockRefusalFor),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: deletion !== null },
