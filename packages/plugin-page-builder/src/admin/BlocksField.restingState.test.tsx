@@ -68,6 +68,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   // No preview here: the surrounding editor offers none.
   useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   usePluginClientConfig: () => undefined,
   // A saved page around the field, so the card has the builder's address to
   // link to; outside a document, or before a first save, it has none.

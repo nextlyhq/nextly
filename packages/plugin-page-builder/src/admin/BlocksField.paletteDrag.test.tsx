@@ -363,6 +363,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // the top bar without putting a second subject in the assertions below.
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
   // The stored style tier. Answered as "nothing stored yet" here, because what
   // this file asserts is which props reach the two enforcing surfaces — the

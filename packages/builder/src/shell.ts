@@ -23,6 +23,11 @@
 
 export { BuilderShell } from "./builder-shell";
 export type { BuilderShellProps } from "./builder-shell";
+/**
+ * The shell's preferences kept per signed-in user, for a host that knows who
+ * is signed in: pass it as `store`. @experimental
+ */
+export { userPreferenceStore } from "./shell-state";
 
 /**
  * The compiled cascade behind the page, for chrome that names where a value
