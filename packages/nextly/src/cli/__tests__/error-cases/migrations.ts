@@ -105,6 +105,7 @@ function resolving(
     dialect: "postgresql",
     repo: {
       findFileApplies: () => Promise.resolve([]),
+      findFileRollbacks: () => Promise.resolve([]),
       insertEvent: () => Promise.resolve("evt_2"),
       supersede: () => Promise.resolve(),
       markRolledBack: () => Promise.resolve(),

@@ -13,9 +13,9 @@
  *   --rolled-back    record a rolled_back event so the next `migrate` re-runs
  *                    the file (requires a prior applied row).
  *   --failed-cleanup flip the stuck attempts (every failed or unfinished one
- *                    since the file's last other event) to rolled_back so
- *                    the .sql can be edited before the next attempt (no new
- *                    row).
+ *                    since the file's last other event, its down section's
+ *                    included) to rolled_back so the .sql can be edited
+ *                    before the next attempt (no new row).
  *
  * Effects (repo, fs existence, snapshot load, live introspection) are injected
  * so the state machine unit-tests against the in-memory SQLite fixture without
@@ -44,6 +44,8 @@ export type ResolveMode = "applied" | "rolled-back" | "failed-cleanup";
 /** Structural slice of SchemaEventsRepository this orchestration needs. */
 export interface ResolveRepo {
   findFileApplies(filename: string): Promise<SchemaEventRow[]>;
+  /** The filename's down-section attempts (`file_rollback` rows). */
+  findFileRollbacks(filename: string): Promise<SchemaEventRow[]>;
   insertEvent(values: Record<string, unknown>): Promise<string>;
   supersede(args: {
     supersededEventIds: string[];
@@ -319,7 +321,16 @@ async function resolveFailedCleanup(
   args: ResolveMigrationArgs,
   filename: string
 ): Promise<ResolveResult> {
-  const rows = await args.repo.findFileApplies(filename);
+  // An app file's down section records its attempts as `file_rollback` rows,
+  // and a stopped one is cleared as its UP's are: once the operator has
+  // reversed what of it ran, the migration stays applied. A plugin module
+  // keeps its history's rule, read from its `file_apply` rows alone.
+  const rows = isPluginLedgerRow(filename)
+    ? await args.repo.findFileApplies(filename)
+    : [
+        ...(await args.repo.findFileApplies(filename)),
+        ...(await args.repo.findFileRollbacks(filename)),
+      ];
   // Every unresolved attempt, since clearing only the newest would leave the
   // next one unresolved and `nextly migrate` refusing the file again; one an
   // outcome already resolved is history the file has moved past.
