@@ -7,12 +7,16 @@
  * refuses everything a stored baseline would and more. A read answered with a
  * guess instead would let a locked change through.
  */
-import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 
-import { composedFormsRead, storedFormsOf } from "./lock-baselines";
+import {
+  composedFormsRead,
+  readStoredForms,
+  storedFormsOf,
+} from "./lock-baselines";
 
 const forest = { formatVersion: 1, kind: "page", nodes: [] };
 
@@ -109,6 +113,42 @@ describe("storedFormsOf", () => {
       )
     ).toEqual([]);
     expect(await storedFormsOf(undefined, "content")).toEqual([]);
+  });
+});
+
+describe("readStoredForms on a translated field", () => {
+  const localizedWrite = (fails: unknown): PluginFieldWrite => ({
+    kind: "collection",
+    slug: "pages",
+    id: "p1",
+    locale: "de",
+    inTransaction: false,
+    readStored: async () => {
+      throw fails;
+    },
+  });
+
+  it("is unreadable only while the language's store is not ready", async () => {
+    await expect(
+      readStoredForms(
+        localizedWrite(NextlyError.serviceUnavailable()),
+        "content",
+        [false, true],
+        true
+      )
+    ).resolves.toEqual({ forms: [], readable: false });
+  });
+
+  it("lets any other failure through, rather than waving the write past the rule", async () => {
+    // A query failure is not a reason to treat a stored page as unjudgeable.
+    await expect(
+      readStoredForms(
+        localizedWrite(new Error("connection reset")),
+        "content",
+        [false, true],
+        true
+      )
+    ).rejects.toThrow("connection reset");
   });
 });
 
