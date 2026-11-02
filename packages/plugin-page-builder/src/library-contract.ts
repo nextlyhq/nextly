@@ -18,7 +18,11 @@
  *
  * @module library-contract
  */
-import type { BlockDocument, ComponentDocument } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  BreakpointSet,
+  ComponentDocument,
+} from "@nextlyhq/blocks-engine";
 import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
@@ -392,4 +396,44 @@ export interface PatternCapabilityResponse {
    * which is worse than the late failure this replaces.
    */
   readonly mayCreate: boolean;
+}
+
+/**
+ * Where Settings writes the site's breakpoints: the one way they change.
+ *
+ * A route of its own rather than the `site-style` Single's update, because
+ * redefining the site's devices is a site setting with a permission of its
+ * own (`manage-page-builder-site`), not a style. The Single refuses every
+ * other write that changes them, so the two cannot disagree about who may.
+ */
+export const SITE_BREAKPOINTS_ROUTE_PATH = "/site/breakpoints";
+
+/**
+ * What Settings sends to change the site's breakpoints, and what the route
+ * answers it stored: the whole set, or `null` to clear the stored set so the
+ * site's configured breakpoints apply again.
+ */
+export interface SiteBreakpointsRequest {
+  readonly breakpoints: BreakpointSet | null;
+}
+
+/** Where Settings asks what this caller may change in its Site tab. */
+export const SITE_CAPABILITY_ROUTE_PATH = "/site/capability";
+
+/**
+ * What this caller may change in Settings' Site tab, each answer derived from
+ * the grants its write is judged by.
+ *
+ * Two fields, because the tab asks two questions: whether to offer the tab at
+ * all, and whether its default Layout is a control or a reading. Like the
+ * pattern answer, NOT A SECURITY BOUNDARY: each write is authorized on its own.
+ */
+export interface SiteCapabilityResponse {
+  /** Whether this caller may change the site's settings: the tab is offered. */
+  readonly mayManageSite: boolean;
+  /**
+   * Whether this caller may choose the site's default Layout, which also
+   * needs the rights to update and publish Layouts.
+   */
+  readonly mayChooseDefaultLayout: boolean;
 }

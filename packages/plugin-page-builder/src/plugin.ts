@@ -85,6 +85,7 @@ import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
+import { siteBreakpointsRoute, siteCapabilityRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
@@ -1185,17 +1186,24 @@ export const pageBuilder = (
         // preconditions (the Layout is published, the caller may publish
         // Layouts) that a plain Single write cannot state.
         makeDefaultRoute(),
+        // Settings' Site tab: what the caller may change there, and the one
+        // way the site's breakpoints change.
+        siteCapabilityRoute(),
+        siteBreakpointsRoute(),
       ],
-      // The grant that lets a role choose the site's default Layout, read by
-      // the make-default route. A permission of its own rather than
-      // `update-page-builder-settings`, because that grant would also name a
-      // Single nobody edits directly.
+      // The grant that lets a role change the site's settings in the editor's
+      // Settings: its breakpoints, through the one route that changes them,
+      // and with the Layout rights its default Layout, through make-default.
+      // A permission of its own rather than `update-site-style` or
+      // `update-page-builder-settings`: redefining the site's devices is not
+      // a style, and the second grant would name a Single nobody edits directly.
       permissions: [
         {
           action: "manage",
           resource: "page-builder-site",
           label: "Manage page builder site settings",
-          description: "Choose the site's default Layout.",
+          description:
+            "Change the site's breakpoints, and choose its default Layout.",
         },
       ],
 
@@ -1204,10 +1212,6 @@ export const pageBuilder = (
       // `update-pages` already covers, and no code path asked whether the user
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
-      //
-      // The permission below is read by the `customCss` field rule in
-      // `pagesCollection()`, so granting and withholding it each change what a
-      // user can do.
       admin: {
         // The canvas needs the allowlist and runs in the browser, so it
         // travels with the rest of the admin metadata. `remotePatterns` is
