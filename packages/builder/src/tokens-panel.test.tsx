@@ -430,3 +430,95 @@ describe("import and export", () => {
     );
   });
 });
+
+describe("dark values for every kind", () => {
+  it("gives a spacing variable Light, then Dark that can be added, changed and cleared", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Space 4/);
+    const darkOf = () =>
+      (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[4]?.values.dark;
+    expect(within(editor).getByLabelText("Light")).toHaveProperty(
+      "value",
+      "1rem"
+    );
+    expect(within(editor).getByText("Same as light")).toBeDefined();
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Add dark value" })
+    );
+    expect(darkOf()).toBe("1rem");
+    enter(within(editor).getByLabelText("Dark"), "2rem");
+    expect(darkOf()).toBe("2rem");
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Use light value" })
+    );
+    expect(darkOf()).toBeUndefined();
+  });
+
+  it("gives a type size and its line height each a Light and a Dark", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const lineHeight = within(editor).getByRole("group", {
+      name: "Line height",
+    });
+    fireEvent.click(
+      within(lineHeight).getByRole("button", { name: "Add dark value" })
+    );
+    enter(within(lineHeight).getByLabelText("Dark"), "30px");
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    expect(saved.tokens[3]?.values).toEqual({ light: "26px", dark: "30px" });
+    expect(
+      within(
+        within(editor).getByRole("group", { name: "Size" })
+      ).getByLabelText("Light")
+    ).toHaveProperty("value", "16px");
+  });
+});
+
+describe("a variable added past the first page", () => {
+  it("is shown and opened, though its group holds more than a page", async () => {
+    const many: SiteTokenSet = {
+      tokens: Array.from({ length: 51 }, (_, n) => ({
+        name: `color.c${String(n)}`,
+        kind: "color" as const,
+        values: { light: "#000000" },
+      })),
+    };
+    render(<Hosted tokens={many} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    const editor = await screen.findByRole("dialog");
+    expect(editor.getAttribute("aria-label")).toBe("Edit New colour");
+    // Its row is mounted too (the open editor hides the rest of the page
+    // from the accessibility tree, so it is found by its key).
+    expect(
+      document.querySelector('[data-variable-key="color.new-colour"]')
+    ).not.toBeNull();
+  });
+});
+
+describe("reset of a code-supplied type size", () => {
+  it("is offered when only its line height was changed, and resets that too", async () => {
+    const onChange = vi.fn();
+    const supplied: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
+      ],
+    };
+    render(<Hosted tokens={SITE} supplied={supplied} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Reset" }));
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    expect(saved.tokens[2]?.values).toEqual({ light: "16px" });
+    expect(saved.tokens[3]?.values).toEqual({ light: "24px" });
+  });
+});

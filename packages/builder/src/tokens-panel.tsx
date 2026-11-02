@@ -181,6 +181,7 @@ export function TokensPanel({
               entries={group.entries}
               searching={needle !== ""}
               readOnly={readOnly}
+              openKey={openKey}
               onAdd={add}
             >
               {(entry: VariableEntry) => (
@@ -189,7 +190,7 @@ export function TokensPanel({
                   entry={entry}
                   tokens={tokens}
                   mode={mode}
-                  supplied={suppliedFor(supplied, entry.row.identity)}
+                  suppliedOf={identity => suppliedFor(supplied, identity)}
                   readOnly={readOnly}
                   open={openKey === entry.row.key}
                   onOpenChange={open => toggle(entry.row.key, open)}
@@ -458,6 +459,7 @@ function Group({
   entries,
   searching,
   readOnly,
+  openKey,
   onAdd,
   children,
 }: {
@@ -466,12 +468,14 @@ function Group({
   entries: readonly VariableEntry[];
   searching: boolean;
   readOnly: boolean;
+  /** The row whose editor is open, which is drawn even past the page. */
+  openKey: string | null;
   onAdd: (what: NewVariable) => void;
   children: (entry: VariableEntry) => React.ReactNode;
 }): React.JSX.Element {
   const id = React.useId();
   const [pages, setPages] = React.useState(1);
-  const shown = entries.slice(0, pages * PAGE_SIZE);
+  const shown = withOpenRow(entries, pages * PAGE_SIZE, openKey);
   const hidden = entries.length - shown.length;
   const adds = ADDS[group];
   return (
@@ -494,18 +498,12 @@ function Group({
         )}
       </div>
       {entries.length === 0 && !searching ? (
-        <p className="nx-vars__empty">
-          {adds.empty}
-          {group === "type" && !readOnly ? (
-            <button
-              type="button"
-              className="nx-vars__link"
-              onClick={() => onAdd("type size")}
-            >
-              Add type size
-            </button>
-          ) : null}
-        </p>
+        <EmptyGroup
+          group={group}
+          text={adds.empty}
+          readOnly={readOnly}
+          onAdd={onAdd}
+        />
       ) : (
         <ul className="nx-vars__list">{shown.map(children)}</ul>
       )}
@@ -520,6 +518,56 @@ function Group({
       ) : null}
     </section>
   );
+}
+
+/** An empty group's one line; an empty type scale offers its add here. */
+function EmptyGroup({
+  group,
+  text,
+  readOnly,
+  onAdd,
+}: {
+  group: VariableGroup;
+  text: string;
+  readOnly: boolean;
+  onAdd: (what: NewVariable) => void;
+}): React.JSX.Element {
+  return (
+    <p className="nx-vars__empty">
+      {text}
+      {group === "type" && !readOnly ? (
+        <button
+          type="button"
+          className="nx-vars__link"
+          onClick={() => onAdd("type size")}
+        >
+          Add type size
+        </button>
+      ) : null}
+    </p>
+  );
+}
+
+/**
+ * The rows a page shows, and the open row as well when it lies past them.
+ *
+ * A variable is added at the end of its group, so in a group longer than a
+ * page its row would not mount and the editor opened for it would have
+ * nothing to open beside. It is drawn on its own after the page rather than
+ * by raising the page, which would mount every row before it.
+ */
+function withOpenRow(
+  entries: readonly VariableEntry[],
+  limit: number,
+  openKey: string | null
+): readonly VariableEntry[] {
+  const page = entries.slice(0, limit);
+  const at =
+    openKey === null
+      ? -1
+      : entries.findIndex(entry => entry.row.key === openKey);
+  const open = at >= limit ? entries[at] : undefined;
+  return open === undefined ? page : [...page, open];
 }
 
 /** A group's "+": a button for one kind, a menu for several. */
@@ -578,7 +626,7 @@ function VariableRow({
   entry,
   tokens,
   mode,
-  supplied,
+  suppliedOf,
   readOnly,
   open,
   onOpenChange,
@@ -588,7 +636,7 @@ function VariableRow({
   entry: VariableEntry;
   tokens: SiteTokenSet;
   mode: TokenMode;
-  supplied: SiteToken | undefined;
+  suppliedOf: (identity: string) => SiteToken | undefined;
   readOnly: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -624,7 +672,7 @@ function VariableRow({
           <VariableEditor
             entry={entry}
             tokens={tokens}
-            supplied={supplied}
+            suppliedOf={suppliedOf}
             readOnly={readOnly}
             onChange={onChange}
             onRemoved={onRemoved}

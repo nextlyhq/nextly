@@ -23,15 +23,17 @@ import {
   removeToken,
   setTokenValue,
   variableLabelIssue,
-  type TokenRow,
   type VariableEntry,
 } from "./tokens-studio";
 
 export interface VariableEditorProps {
   entry: VariableEntry;
   tokens: SiteTokenSet;
-  /** The site code's own version of this variable, when it supplies one. */
-  supplied: SiteToken | undefined;
+  /**
+   * The site code's own version of a variable, by identity, when it supplies
+   * one. Asked for the row and for a type size's paired line height.
+   */
+  suppliedOf: (identity: string) => SiteToken | undefined;
   readOnly: boolean;
   onChange: (tokens: SiteTokenSet) => void;
   /** The variable was removed; the popover's row no longer exists. */
@@ -41,7 +43,7 @@ export interface VariableEditorProps {
 export function VariableEditor({
   entry,
   tokens,
-  supplied,
+  suppliedOf,
   readOnly,
   onChange,
   onRemoved,
@@ -109,7 +111,7 @@ export function VariableEditor({
           entry={entry}
           token={token}
           tokens={tokens}
-          supplied={supplied}
+          suppliedOf={suppliedOf}
           onChange={onChange}
           onRemoved={onRemoved}
         />
@@ -133,50 +135,70 @@ function Values({
   onChange: (tokens: SiteTokenSet) => void;
 }): React.JSX.Element {
   const { row, lineHeight } = entry;
-  const write = (at: number, mode: "light" | "dark", value: string): void => {
-    onChange(setTokenValue(tokens, at, mode, value.trim()));
-  };
-  if (token.kind === "color") {
-    return (
-      <>
-        <ColourValue
-          label="Light"
-          value={token.values.light}
-          readOnly={readOnly}
-          onCommit={value => write(row.at, "light", value)}
-        />
-        <DarkValue
-          token={token}
-          readOnly={readOnly}
-          onCommit={value => write(row.at, "dark", value)}
-          onAdd={() => write(row.at, "dark", token.values.light)}
-          onClear={() => onChange(clearDarkValue(tokens, row.at))}
-        />
-      </>
-    );
+  const pair = (at: number, held: SiteToken): React.JSX.Element => (
+    <ModeValues
+      token={held}
+      readOnly={readOnly}
+      onCommit={(mode, value) =>
+        onChange(setTokenValue(tokens, at, mode, value.trim()))
+      }
+      onClear={() => onChange(clearDarkValue(tokens, at))}
+    />
+  );
+  const lineToken =
+    lineHeight === undefined ? undefined : tokens.tokens[lineHeight.at];
+  if (lineHeight === undefined || lineToken === undefined) {
+    return pair(row.at, token);
   }
+  // A type size is two variables shown as one: each half keeps its own light
+  // and dark value, grouped under its own name.
   return (
     <>
-      <TextValue
-        label={lineHeight === undefined && !isTypeSize(row) ? "Value" : "Size"}
-        value={token.values.light}
-        readOnly={readOnly}
-        onCommit={value => write(row.at, "light", value)}
-      />
-      {lineHeight === undefined ? null : (
-        <TextValue
-          label="Line height"
-          value={tokens.tokens[lineHeight.at]?.values.light ?? ""}
-          readOnly={readOnly}
-          onCommit={value => write(lineHeight.at, "light", value)}
-        />
-      )}
+      <fieldset className="nx-vars-editor__group">
+        <legend className="nx-vars-editor__legend">Size</legend>
+        {pair(row.at, token)}
+      </fieldset>
+      <fieldset className="nx-vars-editor__group">
+        <legend className="nx-vars-editor__legend">Line height</legend>
+        {pair(lineHeight.at, lineToken)}
+      </fieldset>
     </>
   );
 }
 
-function isTypeSize(row: TokenRow): boolean {
-  return row.name.startsWith("font-size.");
+/**
+ * One variable's Light value, then its Dark value, for every kind: a colour
+ * with its swatch and picker, anything else as text.
+ */
+function ModeValues({
+  token,
+  readOnly,
+  onCommit,
+  onClear,
+}: {
+  token: SiteToken;
+  readOnly: boolean;
+  onCommit: (mode: "light" | "dark", value: string) => void;
+  onClear: () => void;
+}): React.JSX.Element {
+  const Field = token.kind === "color" ? ColourValue : TextValue;
+  return (
+    <>
+      <Field
+        label="Light"
+        value={token.values.light}
+        readOnly={readOnly}
+        onCommit={value => onCommit("light", value)}
+      />
+      <DarkValue
+        token={token}
+        readOnly={readOnly}
+        onCommit={value => onCommit("dark", value)}
+        onAdd={() => onCommit("dark", token.values.light)}
+        onClear={onClear}
+      />
+    </>
+  );
 }
 
 /** A text field that commits when it loses focus or on Enter. */
@@ -348,9 +370,10 @@ function DarkValue({
       </div>
     );
   }
+  const Field = token.kind === "color" ? ColourValue : TextValue;
   return (
     <>
-      <ColourValue
+      <Field
         label="Dark"
         value={dark}
         readOnly={readOnly}
@@ -381,20 +404,39 @@ function Actions({
   entry,
   token,
   tokens,
-  supplied,
+  suppliedOf,
   onChange,
   onRemoved,
 }: {
   entry: VariableEntry;
   token: SiteToken;
   tokens: SiteTokenSet;
-  supplied: SiteToken | undefined;
+  suppliedOf: (identity: string) => SiteToken | undefined;
   onChange: (tokens: SiteTokenSet) => void;
   onRemoved: () => void;
 }): React.JSX.Element | null {
   const [confirming, setConfirming] = React.useState(false);
-  if (supplied !== undefined) {
-    if (sameAsSupplied(token, supplied)) return null;
+  // The row and, for a type size, its line height: the line height has no row
+  // of its own, so its override is reset from here or from nowhere.
+  const parts = [
+    { at: entry.row.at, held: token, from: suppliedOf(entry.row.identity) },
+    ...(entry.lineHeight === undefined
+      ? []
+      : [
+          {
+            at: entry.lineHeight.at,
+            held: tokens.tokens[entry.lineHeight.at],
+            from: suppliedOf(entry.lineHeight.identity),
+          },
+        ]),
+  ];
+  if (parts.some(part => part.from !== undefined)) {
+    const changed = parts.filter(
+      part =>
+        part.from !== undefined &&
+        (part.held === undefined || !sameAsSupplied(part.held, part.from))
+    );
+    if (changed.length === 0) return null;
     return (
       <div className="nx-vars-editor__actions">
         <Button
@@ -403,7 +445,9 @@ function Actions({
           size="sm"
           onClick={() => {
             const next = [...tokens.tokens];
-            next[entry.row.at] = supplied;
+            for (const part of changed) {
+              if (part.from !== undefined) next[part.at] = part.from;
+            }
             onChange({ ...tokens, tokens: next });
           }}
         >
