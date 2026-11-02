@@ -182,6 +182,135 @@ describe("inspectSelection", () => {
   });
 });
 
+describe("a block inside an area locked to its content", () => {
+  // A headline whose text is content and whose alignment is design, held by
+  // blocks whose slots are locked in each way a lock can read.
+  function withLockedAreas() {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/headline",
+          editor: { label: "Headline" },
+          props: {
+            text: { type: "text", role: "content" },
+            align: { type: "select", options: ["left", "right"] },
+          },
+        },
+        {
+          ...base,
+          name: "acme/hero",
+          editor: { label: "Hero" },
+          slots: {
+            body: {
+              defaultBlock: [{ type: "acme/headline" }],
+              lock: "contentOnly",
+            },
+          },
+        },
+        // A slot that declares no lock of its own, inside the hero's area.
+        {
+          ...base,
+          name: "acme/card",
+          slots: { inner: { defaultBlock: [{ type: "acme/headline" }] } },
+        },
+        {
+          ...base,
+          name: "acme/row",
+          slots: {
+            items: { defaultBlock: [{ type: "acme/headline" }], lock: "all" },
+          },
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+  }
+
+  const headline = (id: string): BlockNode =>
+    ({
+      id,
+      type: "acme/headline",
+      version: 1,
+      props: { text: "Title", align: "left" },
+    }) as BlockNode;
+
+  const holder = (id: string, type: string, slot: string, child: BlockNode) =>
+    ({
+      id,
+      type,
+      version: 1,
+      props: {},
+      slots: { [slot]: [child] },
+    }) as BlockNode;
+
+  it("keeps its content editable and shows the rest read-only", () => {
+    withLockedAreas();
+    const inspection = inspectSelection(
+      documentOf([holder("h", "acme/hero", "body", headline("t"))]),
+      "t"
+    );
+
+    expect(inspection?.props.map(prop => [prop.name, prop.readOnly])).toEqual([
+      ["text", false],
+      ["align", true],
+    ]);
+  });
+
+  it("gives the reason in the words every lock refusal uses", () => {
+    withLockedAreas();
+    const inspection = inspectSelection(
+      documentOf([holder("h", "acme/hero", "body", headline("t"))]),
+      "t"
+    );
+
+    expect(inspection?.designLock).toEqual({
+      headline: "This area of Hero is locked to its content.",
+      remedy: "Headline's design and settings can't change here.",
+    });
+  });
+
+  it("names the area by its outermost locked block, two slots down", () => {
+    // The card's slot declares no lock, so the hero's passes through it: the
+    // headline is held, and the area an author meets is the hero's.
+    withLockedAreas();
+    const inspection = inspectSelection(
+      documentOf([
+        holder(
+          "h",
+          "acme/hero",
+          "body",
+          holder("c", "acme/card", "inner", headline("t"))
+        ),
+      ]),
+      "t"
+    );
+
+    expect(inspection?.designLock?.headline).toBe(
+      "This area of Hero is locked to its content."
+    );
+    expect(
+      inspection?.props.find(prop => prop.name === "align")?.readOnly
+    ).toBe(true);
+  });
+
+  it("holds nothing read-only where no lock fixes the design", () => {
+    // Locked "all" fixes which blocks the row holds, not how they look; and a
+    // block at the top level sits in no slot at all.
+    withLockedAreas();
+    for (const document of [
+      documentOf([holder("r", "acme/row", "items", headline("t"))]),
+      documentOf([headline("t")]),
+    ]) {
+      const inspection = inspectSelection(document, "t");
+      expect(inspection?.designLock).toBeUndefined();
+      expect(inspection?.props.map(prop => prop.readOnly)).toEqual([
+        false,
+        false,
+      ]);
+    }
+  });
+});
+
 describe("propPatch", () => {
   it("carries every other prop through", () => {
     // THE case. `updateNode` merges at the top level, so a patch holding only

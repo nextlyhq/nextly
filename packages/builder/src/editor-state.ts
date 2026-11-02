@@ -28,14 +28,31 @@
  */
 
 import {
+  componentUsageIn,
+  compositionFaults,
   DEFAULT_LIMITS,
+  lockRefusal,
+  planRepair as planDocumentRepair,
+  registryBlockSource,
+  registryNestingSource,
+  resolveComponentInstances,
   type BlockDocument,
+  type CompositionFault,
+  type ResolvedComposition,
   type ComponentLookup,
   type DocumentLimits,
+  type LockSources,
+  type RepairPlan,
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { compositionRefusal, type CompositionRefusal } from "./inserter";
+import {
+  lockRefusalWording,
+  type LockEditRefusal,
+  type LockRefusalFacts,
+} from "./lock-refusal";
+import { refusalAnnouncement } from "./move-refusal";
 import { applyOps, type BuilderOp } from "./ops";
 import {
   EMPTY_SELECTION,
@@ -81,6 +98,24 @@ export interface EditorState {
    * committed.
    */
   applyAll: (ops: readonly BuilderOp[]) => BlockDocument | null;
+  /**
+   * The lock break `ops` would add, asked BEFORE they are applied, or
+   * undefined when they keep every lock. Nothing is applied.
+   *
+   * The question `apply` asks, with the same baseline, so a surface that
+   * refuses an action ahead of time (a drop indicator, the inserter, a
+   * keyboard move, a toolbar action) can never disagree with the apply that
+   * would follow.
+   */
+  lockRefusalFor: (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;
+  /**
+   * The repair of everything the document holds that the engine's repair
+   * rules put right (today, its lock breaks), planned by the engine's one
+   * repair planner against the baseline `apply` judges by. Nothing is
+   * applied: a surface shows the plan's steps and, once the author confirms,
+   * applies it as one edit. No steps when there is nothing to repair.
+   */
+  planRepair: () => RepairPlan;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
@@ -132,7 +167,20 @@ export interface UseEditorStateArgs {
    * should read. Surfaces already treat a `null` apply as "nothing happened";
    * this is the one place the reason is still known.
    */
-  onRefused?: (refusal: CompositionRefusal) => void;
+  onRefused?: (refusal: CompositionRefusal | LockEditRefusal) => void;
+  /**
+   * Where the locks an edit is held to are read: the block definitions and
+   * nesting rules. Defaults to the live registry, so every host's editor holds
+   * the locks its saves enforce.
+   */
+  locks?: Pick<LockSources, "definitions" | "nesting">;
+  /**
+   * The document as last saved: the stored form a save keeps `contentOnly`
+   * values against, so the editor keeps exactly what the save would. A host
+   * passes the saved value again after every save; absent, the document as
+   * opened stands for it.
+   */
+  stored?: BlockDocument;
 }
 
 /**
@@ -149,13 +197,344 @@ function refusedForRoom(
     definitions,
     onRefused,
   }: Pick<UseEditorStateArgs, "definitions" | "onRefused">,
-  limits: DocumentLimits
+  limits: DocumentLimits,
+  compose: Composer
 ): boolean {
   if (definitions === undefined) return false;
-  const refusal = compositionRefusal(before, after, definitions, limits);
+  const refusal = compositionRefusal(
+    before,
+    after,
+    definitions,
+    limits,
+    compose
+  );
   if (refusal === undefined) return false;
   onRefused?.(refusal);
   return true;
+}
+
+/** A document as composed, under the store's components and limits. */
+type Composer = (document: BlockDocument) => ResolvedComposition;
+
+/** Compositions already made, by document, and what they were made under. */
+interface CompositionCache {
+  readonly components: ComponentLookup | undefined;
+  readonly limits: DocumentLimits;
+  readonly byDocument: WeakMap<BlockDocument, ResolvedComposition>;
+}
+
+/**
+ * Compose through the cache, so each document is composed once.
+ *
+ * Every edit asks of three documents: the one before it, the one it makes and
+ * the one last saved. The one before is the last edit's result, and the saved
+ * one changes only with a save, so both are already composed; an edit
+ * composes only the document it makes. Keyed by the document OBJECT, which the
+ * store never changes in place, and dropped whole when the components or the
+ * limits change, since a composition is made under both.
+ */
+function composerFrom(
+  cache: { current: CompositionCache },
+  components: ComponentLookup,
+  limits: DocumentLimits
+): Composer {
+  if (
+    cache.current.components !== components ||
+    cache.current.limits !== limits
+  ) {
+    cache.current = { components, limits, byDocument: new WeakMap() };
+  }
+  const { byDocument } = cache.current;
+  return document => {
+    let composed = byDocument.get(document);
+    if (composed === undefined) {
+      composed = resolveComponentInstances(document, components, { limits });
+      byDocument.set(document, composed);
+    }
+    return composed;
+  };
+}
+
+/** What a lock question reads besides the documents. */
+interface LockJudgement {
+  readonly locks: UseEditorStateArgs["locks"];
+  readonly limits: DocumentLimits;
+  /** The composed page, for the locks a placement reaches inside a component. */
+  readonly compose: Composer | undefined;
+}
+
+/**
+ * Whether an edit that turned `before` into `after` adds a lock break,
+ * telling the host why, when it does.
+ *
+ * Judged as a save judges it, by the engine's `lockRefusal`, with the document
+ * as last saved as the stored form, so a value the stored page holds stays
+ * allowed after edits in between, and one a saved repair removed does not.
+ */
+function refusedForLock(
+  before: BlockDocument,
+  after: BlockDocument,
+  stored: BlockDocument,
+  judgement: LockJudgement,
+  onRefused: UseEditorStateArgs["onRefused"]
+): boolean {
+  const found = lockBreakAdded(before, after, stored, judgement);
+  if (found === undefined) return false;
+  onRefused?.({
+    reason: "locked",
+    sentence: refusalAnnouncement(lockRefusalWording(found)),
+    lock: found,
+  });
+  return true;
+}
+
+/**
+ * The lock break an edit adds, judged against the last-saved document: on the
+ * page itself, then on the composed page, where a placement's values and slot
+ * content land inside its component's own locked slots.
+ */
+function lockBreakAdded(
+  before: BlockDocument,
+  after: BlockDocument,
+  stored: BlockDocument,
+  judgement: LockJudgement
+): LockRefusalFacts | undefined {
+  const sources = lockSourcesOf(judgement.locks, stored);
+  return (
+    lockRefusal(before, after, sources) ??
+    composedLockAdded(before, after, stored, sources, judgement)
+  );
+}
+
+/**
+ * The lock break an edit adds to the composed page, judged by the engine's
+ * `compositionFaults`, the check a save runs over the same composition.
+ *
+ * "Adds" as on the page itself: a break the composed page already had before
+ * the edit is left to the repair, and the document before the edit and as last
+ * saved, both composed, are the baselines a `"contentOnly"` value may keep.
+ */
+function composedLockAdded(
+  before: BlockDocument,
+  after: BlockDocument,
+  stored: BlockDocument,
+  sources: LockSources,
+  { compose, limits }: LockJudgement
+): LockRefusalFacts | undefined {
+  if (compose === undefined) return undefined;
+  // A page placing no component has no composed break to add.
+  const placed = componentUsageIn(after.nodes, limits.maxNodes);
+  if (placed.complete && placed.ids.length === 0) return undefined;
+  const composedBefore = compose(before);
+  const baselines = [composedBefore.document, compose(stored).document];
+  const lockFaults = (host: BlockDocument, composition: ResolvedComposition) =>
+    compositionFaults(host, composition, {
+      definitions: sources.definitions,
+      nesting: sources.nesting,
+      limits,
+      baselines,
+    }).filter(fault => fault.lock !== undefined);
+  const had = new Set(lockFaults(before, composedBefore).map(composedBreakKey));
+  const added = lockFaults(after, compose(after)).find(
+    fault => !had.has(composedBreakKey(fault))
+  );
+  if (added?.lock === undefined) return undefined;
+  return {
+    code:
+      added.code === "locked-slot-content-only"
+        ? "locked-slot-content-only"
+        : "locked-slot-altered",
+    holderType: added.lock.holderType,
+    lock: added.lock.lock,
+    childType: added.lock.childType,
+    instanceId: added.instanceId,
+  };
+}
+
+/** What the store reads at apply time: the host's sources and its saved copy. */
+interface AtApply
+  extends Pick<UseEditorStateArgs, "definitions" | "onRefused" | "locks"> {
+  /** The document as last saved; the document as opened when none is given. */
+  readonly stored: BlockDocument;
+}
+
+function atApply(
+  host: Pick<
+    UseEditorStateArgs,
+    "definitions" | "onRefused" | "locks" | "stored"
+  >,
+  opened: BlockDocument
+): AtApply {
+  return {
+    definitions: host.definitions,
+    onRefused: host.onRefused,
+    locks: host.locks,
+    stored: host.stored ?? opened,
+  };
+}
+
+/**
+ * The store's lock questions, asked of the document as it stands and the
+ * baseline as last saved, with the composer the room check shares.
+ */
+function useLockQuestions(
+  latestDocument: { current: BlockDocument },
+  composition: { current: AtApply },
+  limits: DocumentLimits
+): {
+  composerNow: () => Composer | undefined;
+  lockRefusalFor: EditorState["lockRefusalFor"];
+  planRepair: EditorState["planRepair"];
+} {
+  const composerNow = useComposer(composition, limits);
+  const lockRefusalFor = useCallback(
+    (ops: readonly BuilderOp[]): LockRefusalFacts | undefined =>
+      lockAnswerFor(
+        latestDocument.current,
+        ops,
+        composition.current.stored,
+        judgementOf(composition.current, limits, composerNow())
+      ),
+    [latestDocument, composition, limits, composerNow]
+  );
+  const planRepair = useCallback(
+    (): RepairPlan =>
+      planDocumentRepair(
+        latestDocument.current,
+        lockSourcesOf(composition.current.locks, composition.current.stored)
+      ),
+    [latestDocument, composition]
+  );
+  return { composerNow, lockRefusalFor, planRepair };
+}
+
+/**
+ * The composer for the components the store holds at the moment it is asked,
+ * or none without them; the compositions the room and lock checks share. See
+ * `composerFrom`.
+ */
+function useComposer(
+  composition: { current: Pick<UseEditorStateArgs, "definitions"> },
+  limits: DocumentLimits
+): () => Composer | undefined {
+  const compositions = useRef<CompositionCache>({
+    components: undefined,
+    limits,
+    byDocument: new WeakMap(),
+  });
+  return useCallback((): Composer | undefined => {
+    const components = composition.current.definitions;
+    return components === undefined
+      ? undefined
+      : composerFrom(compositions, components, limits);
+  }, [composition, limits]);
+}
+
+/**
+ * Whether a fresh edit is refused: the page no longer composes, or the edit
+ * adds a lock break. The host is told why, in that order.
+ */
+function refusedAsFresh(
+  before: BlockDocument,
+  after: BlockDocument,
+  {
+    stored,
+    current,
+    limits,
+    compose,
+  }: {
+    stored: BlockDocument;
+    current: Pick<UseEditorStateArgs, "definitions" | "onRefused" | "locks">;
+    limits: DocumentLimits;
+    compose: Composer | undefined;
+  }
+): boolean {
+  if (
+    compose !== undefined &&
+    refusedForRoom(before, after, current, limits, compose)
+  ) {
+    return true;
+  }
+  return refusedForLock(
+    before,
+    after,
+    stored,
+    judgementOf(current, limits, compose),
+    current.onRefused
+  );
+}
+
+/**
+ * The lock break `ops` would add to `document`, applied only to ask. Ops the
+ * document cannot take are the apply's to refuse; they add no lock break,
+ * because they add nothing.
+ */
+function lockAnswerFor(
+  document: BlockDocument,
+  ops: readonly BuilderOp[],
+  stored: BlockDocument,
+  judgement: LockJudgement
+): LockRefusalFacts | undefined {
+  let group;
+  try {
+    group = applyOps(document, ops, judgement.limits);
+  } catch {
+    return undefined;
+  }
+  if (group.inverses.length === 0) return undefined;
+  return lockBreakAdded(document, group.document, stored, judgement);
+}
+
+/** The lock judgement from what the store reads at apply time. */
+function judgementOf(
+  current: Pick<UseEditorStateArgs, "locks">,
+  limits: DocumentLimits,
+  compose: Composer | undefined
+): LockJudgement {
+  return { locks: current.locks, limits, compose };
+}
+
+/**
+ * A composed break by its rule, its placement, its locked slot and, for the
+ * blocks a slot holds, which blocks those are: so a slot already broken may
+ * keep its blocks, as on the page itself, but not change them further.
+ */
+function composedBreakKey(fault: CompositionFault): string {
+  const { lock } = fault;
+  if (lock === undefined) return `${fault.code}\u0000${fault.instanceId}`;
+  return [
+    fault.code,
+    fault.instanceId,
+    lock.holderId,
+    lock.slot,
+    lock.heldCount,
+    heldKey(lock),
+  ].join("\u0000");
+}
+
+/**
+ * The blocks a locked slot holds, as a key: in order where the lock fixes the
+ * order, and as a set of types where it only fixes membership (`"insert"`).
+ */
+function heldKey(lock: NonNullable<CompositionFault["lock"]>): string {
+  const held = lock.held.map(type => type ?? "\u0001");
+  if (lock.lock === "insert") held.sort();
+  return held.join("\u0002");
+}
+
+/**
+ * What every lock question here is judged by: the host's definitions and
+ * nesting rules, or the live registry's, and the document as last saved.
+ */
+function lockSourcesOf(
+  locks: UseEditorStateArgs["locks"],
+  stored: BlockDocument
+): LockSources {
+  return {
+    definitions: locks?.definitions ?? registryBlockSource(),
+    nesting: locks?.nesting ?? registryNestingSource(),
+    stored: [stored],
+  };
 }
 
 /**
@@ -171,12 +550,17 @@ export function useEditorState({
   limits = DEFAULT_LIMITS,
   definitions,
   onRefused,
+  locks,
+  stored,
 }: UseEditorStateArgs): EditorState {
   // Read at apply time rather than closed over, so a library that reloads or
   // a host that swaps its callback does not rebuild `apply` and everything
   // keyed on it.
-  const composition = useRef({ definitions, onRefused });
-  composition.current = { definitions, onRefused };
+  // The document as last saved is read the same way, so a save the host
+  // reports takes effect on the very next edit.
+  const host = { definitions, onRefused, locks, stored };
+  const composition = useRef(atApply(host, initialDocument));
+  composition.current = atApply(host, initialDocument);
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
   const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
 
@@ -205,6 +589,11 @@ export function useEditorState({
    * is the more expensive of the two.
    */
   const latestDocument = useRef(document);
+  const { composerNow, lockRefusalFor, planRepair } = useLockQuestions(
+    latestDocument,
+    composition,
+    limits
+  );
   latestDocument.current = document;
 
   // READONLY groups. A recorded inverse describes the document as it stood when
@@ -293,18 +682,18 @@ export function useEditorState({
       // with two verdicts.
       if (group.inverses.length === 0) return latestDocument.current;
 
-      // Whether the page still COMPOSES with the edit in, asked of a fresh
-      // edit only. An undo or a redo returns the page to a state that was
-      // accepted when it was made, and a library that grew or a cap that
+      // Whether the page still composes and keeps its locks, asked of a
+      // fresh edit only. An undo or a redo returns the page to a state that
+      // was accepted when it was made, and a library that grew or a cap that
       // shrank since must not strand the history.
       if (
         into === "new" &&
-        refusedForRoom(
-          latestDocument.current,
-          group.document,
-          composition.current,
-          limits
-        )
+        refusedAsFresh(latestDocument.current, group.document, {
+          stored: composition.current.stored,
+          current: composition.current,
+          limits,
+          compose: composerNow(),
+        })
       ) {
         return null;
       }
@@ -350,7 +739,7 @@ export function useEditorState({
     // would rebuild these callbacks every edit for a value none of them close
     // over. Stable identity is also the point — a stale `run` is now the same
     // `run`, folding onto the tree as it stands.
-    [limits]
+    [limits, composerNow]
   );
 
   const apply = useCallback((op: BuilderOp) => run([op], "new"), [run]);
@@ -394,6 +783,8 @@ export function useEditorState({
       select,
       apply,
       applyAll,
+      lockRefusalFor,
+      planRepair,
       undo,
       redo,
       canUndo: depths.undo > 0,
@@ -401,6 +792,18 @@ export function useEditorState({
       limits,
       undoDepth: depths.undo,
     }),
-    [document, selection, select, apply, applyAll, undo, redo, depths, limits]
+    [
+      document,
+      selection,
+      select,
+      apply,
+      applyAll,
+      lockRefusalFor,
+      planRepair,
+      undo,
+      redo,
+      depths,
+      limits,
+    ]
   );
 }

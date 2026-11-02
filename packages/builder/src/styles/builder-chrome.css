@@ -2439,8 +2439,12 @@
  * screen reader announcing "list, 3 items" is the only thing that tells them
  * how many they have without tabbing through. The markers are removed and the
  * semantics are not.
+ *
+ * The inspector's controls a lock holds sit in a fieldset too, only so that
+ * disabling it disables every control inside; it draws nothing of its own.
  */
-.nx-attributes {
+.nx-attributes,
+.nx-inspector__held {
   border: 0;
   margin: 0;
   padding: 0;
@@ -3672,4 +3676,36 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/*
+ * The notice above the canvas while a locked area holds what its lock does
+ * not allow: a heading, the sentence, and the steps once the author reviews
+ * them. Bordered like the other chrome notices, on the raised surface.
+ */
+.nx-lock-repair {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--nx-builder-border, var(--nx-border));
+  background: var(--nx-builder-surface-raised, var(--nx-background));
+}
+
+.nx-lock-repair__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.nx-lock-repair__steps {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.nx-lock-repair__actions {
+  display: flex;
+  gap: 0.5rem;
 }

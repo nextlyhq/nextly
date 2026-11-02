@@ -56,6 +56,8 @@ import {
   type BlockNode,
   type ComponentLookup,
   type NestingSource,
+  type OpPosition,
+  type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 import {
   Command,
@@ -84,6 +86,7 @@ import {
   nodeForEntry,
   patternEntriesFrom,
   registrySlotSource,
+  type BlockInsertEntry,
   type ComponentInsertEntry,
   type InsertGroup,
   type InsertionPoint,
@@ -92,6 +95,8 @@ import {
   type SavedComponent,
   type SavedPattern,
 } from "./inserter";
+import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
+import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp } from "./ops";
 
 /**
@@ -723,23 +728,25 @@ export function InsertPanel({
   // recompute exactly as often while reading as though it cached. The work is a
   // filter and a group over one array, and the render it happens in is already
   // driven by a keystroke.
-  const groups =
+  // The canvas's lookup travels with the question: a pattern whose root is a
+  // component instance is judged by what that component draws, as its own
+  // tile is.
+  const offered =
     point === null
+      ? []
+      : allowedEntries(catalog, point.target, source, componentDefinitions);
+  const pointLock =
+    point === null
+      ? undefined
+      : pointLockOf(point.at, offered, editor, { blockSource, nesting });
+  const groups =
+    point === null || pointLock !== undefined
       ? []
       : // Allowed first, then the query. Both orders yield the same set, but
         // this one keeps the empty state honest: "no blocks match" after a
         // search is a different message from "nothing can go here", and
         // filtering first would collapse them into one.
-        groupByCategory(
-          filterEntries(
-            // The canvas's lookup travels with the question: a pattern whose
-            // root is a component instance is judged by what that component
-            // draws, as its own tile is.
-            allowedEntries(catalog, point.target, source, componentDefinitions),
-            query
-          ),
-          categoryOrder
-        );
+        groupByCategory(filterEntries(offered, query), categoryOrder);
 
   /*
    * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
@@ -939,11 +946,7 @@ export function InsertPanel({
         </p>
         <LibraryNotices library={library} />
         <CommandList>
-          <CommandEmpty>
-            {query.trim() === ""
-              ? "No blocks can be added here."
-              : `No blocks match "${query.trim()}".`}
-          </CommandEmpty>
+          <CommandEmpty>{emptyStateText(pointLock, query)}</CommandEmpty>
           {groups.map(group => (
             <CommandGroup key={group.category} heading={group.category}>
               {group.entries.map(entry => (
@@ -1054,4 +1057,48 @@ export function InsertPanel({
       </Command>
     </div>
   );
+}
+
+/**
+ * The locks' answer for an insertion point, asked once rather than per tile.
+ *
+ * Inserting into a slot whose blocks are fixed is refused whatever the block,
+ * and a block placed where no lock reaches arrives with the blocks its own
+ * slots start with, so it breaks none of its own: the answer is the point's,
+ * and the editor's own question asked with the first block offered here is the
+ * answer for every tile.
+ */
+function pointLockOf(
+  at: OpPosition,
+  offered: readonly InsertEntry[],
+  editor: Pick<EditorState, "lockRefusalFor">,
+  sources: {
+    blockSource: SlotDefaultSource;
+    nesting: NestingSource | undefined;
+  }
+): LockRefusalFacts | undefined {
+  const probe = offered.find(
+    (entry): entry is BlockInsertEntry => entry.kind === "block"
+  );
+  if (probe === undefined) return undefined;
+  return editor.lockRefusalFor([
+    {
+      kind: "insert",
+      node: nodeForEntry(probe, sources.blockSource, sources.nesting),
+      at,
+    },
+  ]);
+}
+
+/** What the list says when it offers nothing: the lock's reason, or why not. */
+function emptyStateText(
+  pointLock: LockRefusalFacts | undefined,
+  query: string
+): string {
+  if (pointLock !== undefined) {
+    return refusalAnnouncement(lockRefusalWording(pointLock));
+  }
+  return query.trim() === ""
+    ? "No blocks can be added here."
+    : `No blocks match "${query.trim()}".`;
 }

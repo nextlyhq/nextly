@@ -25,10 +25,13 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentPath,
+  type NodeLock,
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
 
+import type { RefusalWording } from "./drag-refusal";
 import { blockLabel } from "./inserter";
+import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import type { BuilderOp, NodePatch } from "./ops";
 
@@ -68,6 +71,12 @@ export interface EditableProp {
   readonly supported: boolean;
   /** The options a `select` offers, empty for every other type. */
   readonly options: readonly string[];
+  /**
+   * Whether a lock fixes this prop where the block sits: it is not content,
+   * and the block is inside an area locked to its content. Shown, not hidden,
+   * so the author sees the value and is told why it holds.
+   */
+  readonly readOnly: boolean;
 }
 
 /**
@@ -143,6 +152,13 @@ export interface BlockInspection {
    * back to the registry for a second reading of the same definition.
    */
   readonly inspector: ComponentPath | undefined;
+  /**
+   * Why the block's design and settings can't change, when it sits inside an
+   * area locked to its content; undefined where nothing fixes them. Worded as
+   * the store's refusal of the same edit is, so the read-only controls and a
+   * refused edit give one reason.
+   */
+  readonly designLock: RefusalWording | undefined;
 }
 
 /** The selected node together with the definition that describes it. */
@@ -288,6 +304,10 @@ export function inspectSelection(
   const selected = selectedBlock(document, selectedId);
   if (selected === null) return null;
   const { node, definition } = selected;
+  const designLock = designLockOf(document, node.id);
+  // Content stays editable under the lock; the rest is read-only. The same
+  // set the save's lock rule keeps, read from the same declaration.
+  const content = contentPropsOf(definition.props);
 
   const declared = definition.props ?? {};
   const props = Object.entries(declared).flatMap<EditableProp>(
@@ -302,6 +322,7 @@ export function inspectSelection(
             schema.type
           ),
           options: optionsOf(schema),
+          readOnly: designLock !== undefined && !content.has(name),
         },
       ];
     }
@@ -328,6 +349,7 @@ export function inspectSelection(
     label: blockLabel(node.type),
     props,
     inspector: inspectorOf(definition),
+    designLock,
   };
 }
 
@@ -376,9 +398,49 @@ export function propIsWritable(
   name: string
 ): boolean {
   if (blockIsReadOnly(document, id)) return false;
-  const area = nodeLocks(document.nodes, registryBlockSource()).get(id);
-  if (area?.lock !== "contentOnly") return true;
-  return contentPropsOf(getBlock(area.type)?.props).has(name);
+  const held = contentOnlyAreaOf(document, id);
+  if (held === undefined) return true;
+  return contentPropsOf(getBlock(held.type)?.props).has(name);
+}
+
+/**
+ * Why `node`'s design is fixed, when it sits inside a `"contentOnly"` area.
+ *
+ * Read from the engine's `nodeLocks`, the walk that passes each slot's lock
+ * down as validation does, against the live registry the store's lock check
+ * defaults to, so the inspector holds read-only exactly what a save refuses
+ * to change. The area is named by its outermost locked block, the one the
+ * author sees on the canvas. The inspector and the canvas's spacing handles
+ * both ask it, so the two hold the same blocks.
+ */
+export function designLockOf(
+  document: BlockDocument,
+  nodeId: string
+): RefusalWording | undefined {
+  const held = contentOnlyAreaOf(document, nodeId);
+  if (held === undefined) return undefined;
+  return lockRefusalWording({
+    code: "locked-slot-content-only",
+    holderType: held.area.holderType,
+    lock: "contentOnly",
+    childType: held.type,
+  });
+}
+
+/**
+ * Where `id` sits inside a `"contentOnly"` area, or `undefined` outside one.
+ *
+ * The one reading both {@link propIsWritable} and {@link designLockOf} take,
+ * so the controls the inspector holds read-only and the commits it refuses
+ * are the same set. Read from the engine's `nodeLocks` against the live
+ * registry, the walk validation applies on save.
+ */
+function contentOnlyAreaOf(
+  document: BlockDocument,
+  id: string
+): (NodeLock & { readonly area: NonNullable<NodeLock["area"]> }) | undefined {
+  const held = nodeLocks(document.nodes, registryBlockSource()).get(id);
+  return held?.area === undefined ? undefined : { ...held, area: held.area };
 }
 
 /**

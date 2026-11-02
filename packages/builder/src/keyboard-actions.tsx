@@ -39,8 +39,10 @@ import {
   type MoveEffect,
 } from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
+import { lockRefusalWording } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
 import { nestingRefusalForMove, refusalAnnouncement } from "./move-refusal";
+import type { BuilderOp } from "./ops";
 import {
   isRefusal,
   selectionDeletion,
@@ -237,6 +239,20 @@ const SelectionActionsContext = React.createContext<ToolbarAction[] | null>(
  * Answering `null` hands that decision back to the caller, which is the only
  * place the inputs are known.
  */
+/**
+ * The sentence for ops the editor's locks refuse, or null when they keep every
+ * lock: the editor's own question, worded as every lock refusal is.
+ */
+function lockSentence(
+  editor: Pick<EditorState, "lockRefusalFor">,
+  ops: readonly BuilderOp[]
+): string | null {
+  const found = editor.lockRefusalFor(ops);
+  return found === undefined
+    ? null
+    : refusalAnnouncement(lockRefusalWording(found));
+}
+
 export function useSelectionActionsContext(): ToolbarAction[] | null {
   return React.useContext(SelectionActionsContext);
 }
@@ -457,6 +473,11 @@ export function useBlockKeyboardActions({
       announce(plan.reason);
       return;
     }
+    const locked = lockSentence(editorNow, plan.ops);
+    if (locked !== null) {
+      announce(locked);
+      return;
+    }
 
     if (editorNow.applyAll(plan.ops) === null) return;
 
@@ -482,7 +503,15 @@ export function useBlockKeyboardActions({
      * author move or delete a locked node, and duplicating does neither — the
      * originals stay exactly where they are. Refusing would mean an author
      * could not take copies of the blocks they had most deliberately protected.
+     *
+     * A slot's lock is another matter: a copy placed in a slot whose blocks
+     * are fixed changes what that slot holds, so the slot's lock refuses it.
      */
+    const locked = lockSentence(editorNow, plan.ops);
+    if (locked !== null) {
+      announce(locked);
+      return;
+    }
     if (editorNow.applyAll(plan.ops) === null) return;
 
     /*
@@ -535,6 +564,11 @@ export function useBlockKeyboardActions({
        */
       if (isRefusal(plan)) {
         announce(plan.reason);
+        return true;
+      }
+      const locked = lockSentence(editorNow, plan.ops);
+      if (locked !== null) {
+        announce(locked);
         return true;
       }
 
@@ -602,12 +636,21 @@ export function useBlockKeyboardActions({
         return;
       }
 
-      const applied = editorNow.apply({
-        kind: "move",
+      const op = {
+        kind: "move" as const,
         id: selectedId,
         to: move.to,
         dropSlotIfEmpty: move.dropSlotIfEmpty,
-      });
+      };
+      // The locks' half, asked of the editor's own question so the sentence a
+      // keyboard author hears is the one the pointer's notice shows.
+      const lockBreak = editorNow.lockRefusalFor([op]);
+      if (lockBreak !== undefined) {
+        announce(refusalAnnouncement(lockRefusalWording(lockBreak)));
+        return;
+      }
+
+      const applied = editorNow.apply(op);
       // Announced only once the store has accepted it. A keyboard author
       // cannot see the result, and announcing before it answered would report
       // a move that did not happen, which is worse than silence because it
@@ -915,7 +958,8 @@ export function useBlockKeyboardActions({
         editor.selectedId,
         editor.selection.ids,
         nestingSource,
-        mayCreatePattern
+        mayCreatePattern,
+        editor.lockRefusalFor
       ),
     [
       editor.document,
@@ -923,6 +967,7 @@ export function useBlockKeyboardActions({
       editor.selection.ids,
       nestingSource,
       mayCreatePattern,
+      editor.lockRefusalFor,
     ]
   );
 

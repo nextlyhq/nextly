@@ -158,7 +158,12 @@ function useSavePatternVerb(
 export function useEditorMount(
   initialValue: unknown,
   /** The kinds the field accepts, so a seeded document is one it will take. */
-  kinds: readonly DocumentKind[] | undefined
+  kinds: readonly DocumentKind[] | undefined,
+  /**
+   * The field's value as last loaded or saved, which locks keep against;
+   * undefined for an entry never saved.
+   */
+  savedValue?: unknown
 ): EditorMount {
   // The core blocks and every block a plugin contributed, before anything
   // reads the registry. Inside the component that mounts the editor rather
@@ -170,6 +175,11 @@ export function useEditorMount(
   const initialDocument = useMemo(
     () => documentFrom(initialValue, kinds),
     [initialValue, kinds]
+  );
+  const stored = useMemo(
+    () =>
+      savedValue === undefined ? undefined : documentFrom(savedValue, kinds),
+    [savedValue, kinds]
   );
   const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
   /*
@@ -210,6 +220,9 @@ export function useEditorMount(
     // through this apply, and this is the one place the reason is known.
     definitions: componentLibrary.definitions,
     onRefused: refusal => notices.raise(refusal.sentence),
+    // What the next save judges locks against, so the editor refuses exactly
+    // what that save would.
+    stored,
   });
 
   /*
