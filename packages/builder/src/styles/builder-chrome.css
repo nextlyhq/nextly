@@ -548,18 +548,61 @@
  *
  * TWO tones, because the ring is drawn on the site's content and no single
  * colour reads on all of it: the select blue disappears on a blue section, and
- * a white mark on a white one. An inset white band directly inside the blue is
- * the halo — on a white ground the blue carries it, on a blue or a photograph
- * the white does, and on a dark section both do. The band is an inset shadow
- * the 2px outline covers half of, so it changes no geometry either.
- *
- * A block whose own styles set a `box-shadow` keeps it — an author's rule
- * outweighs this one — and then shows the blue ring alone.
+ * a white mark on a white one. A white band directly inside the blue is the
+ * halo — on a white ground the blue carries it, on a blue or a photograph the
+ * white does, and on a dark section both do. It is `.nx-selection-halo` below,
+ * a layer of the canvas's own, and NOT a shadow on the block: the block's
+ * `box-shadow` belongs to the page, and a selection that replaced it drew a
+ * page the visitor never sees.
  */
 .nx-canvas [data-nx-selected] {
   outline: 2px solid var(--nx-builder-select);
   outline-offset: -2px;
-  box-shadow: inset 0 0 0 4px var(--nx-builder-halo);
+}
+
+/*
+ * The primary selection names itself as an anchor for the halo. An anchor name
+ * changes nothing about how the block itself is drawn.
+ */
+.nx-canvas [data-nx-selected="primary"] {
+  anchor-name: --nx-selected;
+}
+
+/*
+ * The halo: a 2px white band just inside the ring, on the primary selection.
+ *
+ * Positioned on the selected block through CSS anchor positioning, so the
+ * canvas draws it without measuring and the block is left exactly as the page
+ * styles it — its own shadow, background and pseudo-elements untouched. The
+ * margin keeps the band inside the 2px the ring covers, so ring and halo keep
+ * the inset geometry: never clipped at the page edge, never merging with a
+ * neighbour's.
+ *
+ * Above the block's content rather than beneath it, which a separate layer
+ * has to be; the band is the 2px beside the ring, which the ring's own width
+ * already sits over. Where anchor positioning is unsupported the halo is not
+ * drawn and the blue ring stands alone.
+ */
+.nx-selection-halo {
+  display: none;
+}
+
+@supports (anchor-name: --nx-selected) {
+  .nx-selection-halo {
+    display: block;
+    position: absolute;
+    position-anchor: --nx-selected;
+    top: anchor(top);
+    right: anchor(right);
+    bottom: anchor(bottom);
+    left: anchor(left);
+    margin: 2px;
+    border: 2px solid var(--nx-builder-halo);
+    /* Under the drop indicator and the toolbar, beside the spacing bands. */
+    z-index: 1;
+    /* Never a pointer target: it sits over the block it marks. */
+    pointer-events: none;
+  }
 }
 
 /*
@@ -577,7 +620,6 @@
  */
 .nx-canvas [data-nx-selected=""] {
   outline-width: 1px;
-  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
 }
 
 /*

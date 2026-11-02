@@ -488,6 +488,18 @@ describe("the selected block is marked on its own element", () => {
     expect(marked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("b");
   });
 
+  it("draws the selection halo as its own layer, only while a block is selected", () => {
+    // A layer of the canvas's own rather than a shadow on the block, so the
+    // block keeps whatever shadow the page gives it.
+    expect(
+      renderCanvas("b").container.querySelectorAll(".nx-selection-halo").length
+    ).toBe(1);
+    cleanup();
+    expect(
+      renderCanvas(null).container.querySelectorAll(".nx-selection-halo").length
+    ).toBe(0);
+  });
+
   it("marks nothing when the selection is empty", () => {
     const { container } = renderCanvas(null);
 
@@ -3427,6 +3439,50 @@ describe("the site's ground and text on the canvas root", () => {
     expect(marked("hsl(222, 47%, 11%)")).toBe(true);
     expect(marked("oklch(0.98 0 0)")).toBe(false);
     expect(marked("hsl(0 0% 98%)")).toBe(false);
+  });
+
+  it("marks no dark ground for a translucent dark value", () => {
+    /*
+     * A colour with alpha below 1 has no lightness of its own: what shows is
+     * the surface behind it, which the canvas cannot see. So it is unknown,
+     * not dark, in every syntax the ground is read in.
+     */
+    const marked = (dark: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-dark-ground");
+    for (const dark of [
+      "#0000",
+      "#00000080",
+      "rgba(0, 0, 0, 0)",
+      "rgb(0 0 0 / 50%)",
+      "oklch(0.145 0 0 / 0.5)",
+      "oklch(14.5% 0 0 / 50%)",
+      "hsl(222 47% 11% / 0.4)",
+      "hsla(222, 47%, 11%, 0.4)",
+    ]) {
+      expect(marked(dark), dark).toBe(false);
+    }
+    // Fully opaque, in the same syntaxes, is still judged by its lightness.
+    for (const dark of [
+      "#000f",
+      "rgba(0, 0, 0, 1)",
+      "oklch(0.145 0 0 / 1)",
+      "hsl(222 47% 11% / 100%)",
+      "hsla(222, 47%, 11%, 1)",
+    ]) {
+      expect(marked(dark), dark).toBe(true);
+    }
   });
 
   it("marks no dark ground when it cannot read the dark value", () => {

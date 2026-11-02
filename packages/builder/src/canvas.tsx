@@ -268,16 +268,38 @@ const OKLCH = /^oklch\(\s*([\d.]+)(%?)/i;
 /** `hsl(H S% L%)` or `hsla(H, S%, L%, A)`, hue optionally in degrees. */
 const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
 
+/** The alpha after a `/` that closes a colour function: `… / 0.5)`, `… / 50%)`. */
+const SLASH_ALPHA = /\/\s*([\d.]+)(%?)\s*\)\s*$/;
+/** The fourth, comma-separated component of a legacy `hsla(h, s%, l%, a)`. */
+const COMMA_ALPHA = /^hsla?\([^,)]*,[^,)]*,[^,)]*,\s*([\d.]+)(%?)\s*\)\s*$/i;
+
+/**
+ * The alpha a colour function states, 1 when it states none. Read for the
+ * syntaxes `groundLuminance` reads itself; the engine's parser reports its own.
+ */
+function functionAlpha(text: string): number {
+  const stated = SLASH_ALPHA.exec(text) ?? COMMA_ALPHA.exec(text);
+  if (stated === null) return 1;
+  return Number(stated[1]) / (stated[2] === "%" ? 100 : 1);
+}
+
 /**
  * The relative luminance of a ground colour, or `undefined` when it cannot be
  * told. Hex and `rgb()` go through the engine's own parser. `oklch()`, which
  * Tailwind themes write, carries perceptual lightness directly: its L cubed is
  * the luminance of a grey, close enough for a dark-or-light call. `hsl()`,
  * which shadcn-style themes write, converts to rgb by the standard formula.
+ *
+ * A TRANSLUCENT colour has no lightness of its own: what a visitor sees is the
+ * surface behind it, which the canvas cannot see either. So any alpha below 1,
+ * in any of these syntaxes, is `undefined` — `#0000` is not a dark ground.
  */
 function groundLuminance(text: string): number | undefined {
   const rgb = parseColor(text);
-  if (rgb !== undefined) return relativeLuminance(rgb);
+  if (rgb !== undefined) {
+    return rgb.a < 1 ? undefined : relativeLuminance(rgb);
+  }
+  if (functionAlpha(text) < 1) return undefined;
   const oklch = OKLCH.exec(text);
   if (oklch) {
     const lightness = Number(oklch[1]) / (oklch[2] === "%" ? 100 : 1);
@@ -2325,6 +2347,15 @@ export function Canvas({
       onPointerDown={pointerDown}
     >
       {page}
+      {/*
+       * The selection halo, anchored to the primary selection by CSS (see
+       * `.nx-selection-halo`). A layer of the canvas's own, so the selected
+       * block keeps every style the page gives it. After the page, because an
+       * anchor has to be laid out before what is positioned on it.
+       */}
+      {selectedId === null ? null : (
+        <div className="nx-selection-halo" aria-hidden="true" />
+      )}
       {overlay}
       {refusalDrawn === null ? null : (
         <DropRefusalNotice

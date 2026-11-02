@@ -26,7 +26,8 @@ import { contrastRatio, gotoAdmin, toRgb, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ lock: [LOCK.homepage] });
+// The canvas reads the site's tokens, which the Site Style single holds.
+test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 const HOMEPAGE_API = "/admin/api/singles/homepage";
@@ -75,6 +76,26 @@ const NODES = [
           props: { label: "Get started", href: "/start" },
         },
       ],
+    },
+  },
+  {
+    id: "card",
+    type: "core/text",
+    version: 1,
+    props: { text: "A block with a shadow of its own." },
+    // Padding only: its shadow comes from a host rule the test adds, because a
+    // node's own style outranks any editor rule and never showed the defect.
+    styles: {
+      base: {
+        base: {
+          padding: {
+            blockStart: "1rem",
+            blockEnd: "1rem",
+            inlineStart: "1rem",
+            inlineEnd: "1rem",
+          },
+        },
+      },
     },
   },
   {
@@ -343,5 +364,63 @@ test.describe("with the system in dark mode", () => {
       contrastRatio(pageText, ground),
       `page text ${pageText.join(",")} must read on the dark page`
     ).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+test.describe("selecting a block", () => {
+  test("keeps the shadow the page gives it, with the halo drawn beside the ring", async ({
+    page,
+  }) => {
+    /*
+     * The halo used to be an inset `box-shadow` on the selected block, which
+     * replaced any shadow of the block's own, so the selected page drew
+     * differently from the published one. It is a separate layer now.
+     */
+    test.slow();
+    await openBuilder(page, "light");
+    /*
+     * A shadow at the weight a host stylesheet or an element default has —
+     * below the editor's selection rule — which is where selecting a block
+     * used to replace it.
+     */
+    await page.addStyleTag({
+      content: ".nx-pb-page p { box-shadow: 0 4px 12px #00000040; }",
+    });
+    const card = page.locator('.nx-canvas [data-nx-node="card"]').first();
+    const shadowOf = () =>
+      card.evaluate(element => getComputedStyle(element).boxShadow);
+    const before = await shadowOf();
+    expect(before, "the fixture block has a shadow of its own").not.toBe(
+      "none"
+    );
+
+    await card.click();
+    await expect(card).toHaveAttribute("data-nx-selected", "primary");
+    expect(await shadowOf(), "selecting the block keeps its shadow").toBe(
+      before
+    );
+
+    // The halo sits on the selected block, inset by the same amount on every
+    // side: just inside the ring.
+    const halo = page.locator(".nx-canvas .nx-selection-halo");
+    await expect(halo).toBeVisible();
+    const block = await card.boundingBox();
+    const band = await halo.boundingBox();
+    expect(block && band, "both boxes are measurable").toBeTruthy();
+    if (block && band) {
+      const left = band.x - block.x;
+      const top = band.y - block.y;
+      const right = block.x + block.width - (band.x + band.width);
+      const bottom = block.y + block.height - (band.y + band.height);
+      for (const [side, gap] of [
+        ["left", left],
+        ["top", top],
+        ["right", right],
+        ["bottom", bottom],
+      ] as const) {
+        expect(gap, `the halo's ${side} inset`).toBeGreaterThan(0);
+        expect(gap, `the halo's ${side} inset`).toBeLessThan(3);
+      }
+    }
   });
 });
