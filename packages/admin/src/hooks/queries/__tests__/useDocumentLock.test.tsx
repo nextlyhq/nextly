@@ -1537,10 +1537,13 @@ describe("useDocumentLock: gaining a document this editor was kept out of", () =
     };
   }
 
+  /** One beat at a time, each settled, so no poll overlaps the next. */
   async function beat(times = 1) {
-    await act(async () => {
-      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS * times);
-    });
+    for (let i = 0; i < times; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
   }
 
   it("counts no gain for the first claim, nor for the beats that renew it", async () => {
