@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
 import { addFieldToArray, addFieldToGroup } from "../field-transformers";
-import { insertField } from "../insert-field";
+import { insertField, positionAfter } from "../insert-field";
 
 const f = (id: string, over: Partial<BuilderField> = {}): BuilderField => ({
   id,
@@ -188,5 +188,42 @@ describe("addFieldToArray and addFieldToGroup", () => {
     ]);
     expect(addFieldToGroup(TREE, "links", NEW)).toBe(TREE);
     expect(addFieldToGroup(TREE, "gone", NEW)).toBe(TREE);
+  });
+});
+
+// "/" on a field adds right after it: the position before its next sibling,
+// in its own container, or that container's end after its last field.
+describe("positionAfter", () => {
+  it.each([
+    ["a top-level field", "title", { beforeFieldId: "details" }],
+    ["the last top-level field", "body", {}],
+    [
+      "a field inside a group",
+      "subtitle",
+      { parentFieldId: "details", beforeFieldId: "links" },
+    ],
+    ["the last field inside a group", "links", { parentFieldId: "details" }],
+    [
+      "a field two levels down",
+      "url",
+      { parentFieldId: "links", beforeFieldId: "label" },
+    ],
+    ["the last field two levels down", "label", { parentFieldId: "links" }],
+  ])("after %s", (_name, fieldId, expected) => {
+    expect(positionAfter(TREE, fieldId)).toEqual(expected);
+  });
+
+  it("has no position after a field that is not there", () => {
+    expect(positionAfter(TREE, "gone")).toBeNull();
+  });
+
+  it("adds right after the field when used with insertField", () => {
+    const at = positionAfter(TREE, "subtitle");
+    expect(at).not.toBeNull();
+    expect(shape(insertField(TREE, NEW, at!))).toEqual([
+      "title",
+      { details: ["subtitle", "new", { links: ["url", "label"] }] },
+      "body",
+    ]);
   });
 });

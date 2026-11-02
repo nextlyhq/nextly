@@ -21,10 +21,14 @@ import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { WidthField } from "@admin/lib/builder/reflow";
 import { cn } from "@admin/lib/utils";
 
+import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+
 import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 import type { BuilderField } from "../types";
 
+import { InsertBetweenButton } from "./InsertBetweenButton";
 import { NestedAddButton } from "./NestedAddButton";
+import { isFieldLocked } from "./SortableRow";
 
 type Props = {
   parentField: BuilderField;
@@ -32,7 +36,10 @@ type Props = {
   onEditField: (id: string) => void;
   onDeleteField: (id: string) => void;
   onDuplicateField: (id: string) => void;
-  onAddInsideParent: (parentId: string) => void;
+  /** Opens the field picker at a position inside this container. */
+  onAddAt: (position: FieldInsertPosition) => void;
+  /** "/" on a field opens the picker right after it. */
+  onAddAfter: (id: string) => void;
 };
 
 const fieldTypeIconName: Record<string, string> = Object.fromEntries(
@@ -52,10 +59,14 @@ export function NestedFieldGroup({
   onEditField,
   onDeleteField,
   onDuplicateField,
-  onAddInsideParent,
+  onAddAt,
+  onAddAfter,
 }: Props): JSX.Element {
   const children = parentField.fields ?? [];
   const parentLabel = parentField.label || parentField.name || "parent";
+  // Nothing is added into a container that is read-only, locked or owned by a
+  // plugin, and what it holds is read-only with it, at every depth below.
+  const locked = isFieldLocked(parentField, readOnly);
 
   const rows = packIntoRows<RowItem>(
     children.map(c => ({
@@ -80,28 +91,42 @@ export function NestedFieldGroup({
         >
           <div className="space-y-1.5">
             {rows.map((row, rIdx) => (
-              <div key={rIdx} className="flex gap-2 w-full">
-                {row.map(item => (
-                  <NestedFieldRow
-                    key={item.id}
-                    field={item._field}
-                    readOnly={readOnly}
-                    onEditField={onEditField}
-                    onDeleteField={onDeleteField}
-                    onDuplicateField={onDuplicateField}
-                    onAddInsideParent={onAddInsideParent}
+              <div key={rIdx} className="space-y-1.5">
+                {rIdx > 0 && !locked && (
+                  <InsertBetweenButton
+                    beforeLabel={row[0]._field.label || row[0]._field.name}
+                    onClick={() =>
+                      onAddAt({
+                        parentFieldId: parentField.id,
+                        beforeFieldId: row[0].id,
+                      })
+                    }
                   />
-                ))}
+                )}
+                <div className="flex gap-2 w-full">
+                  {row.map(item => (
+                    <NestedFieldRow
+                      key={item.id}
+                      field={item._field}
+                      readOnly={locked}
+                      onEditField={onEditField}
+                      onDeleteField={onDeleteField}
+                      onDuplicateField={onDuplicateField}
+                      onAddAt={onAddAt}
+                      onAddAfter={onAddAfter}
+                    />
+                  ))}
+                </div>
               </div>
             ))}
           </div>
         </SortableContext>
       )}
 
-      {!readOnly && (
+      {!locked && (
         <NestedAddButton
           parentLabel={parentLabel}
-          onClick={() => onAddInsideParent(parentField.id)}
+          onClick={() => onAddAt({ parentFieldId: parentField.id })}
         />
       )}
     </div>
@@ -114,14 +139,16 @@ function NestedFieldRow({
   onEditField,
   onDeleteField,
   onDuplicateField,
-  onAddInsideParent,
+  onAddAt,
+  onAddAfter,
 }: {
   field: BuilderField;
   readOnly: boolean;
   onEditField: (id: string) => void;
   onDeleteField: (id: string) => void;
   onDuplicateField: (id: string) => void;
-  onAddInsideParent: (parentId: string) => void;
+  onAddAt: (position: FieldInsertPosition) => void;
+  onAddAfter: (id: string) => void;
 }) {
   const {
     setNodeRef,
@@ -154,11 +181,17 @@ function NestedFieldRow({
       <div
         role="button"
         tabIndex={0}
+        // Named as the top-level cards are, so a row is found the same way at any depth.
+        data-testid={`field-row-${field.name}`}
         onClick={() => onEditField(field.id)}
         onKeyDown={e => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onEditField(field.id);
+          } else if (e.key === "/" && !readOnly) {
+            // "/" adds a field right after this one, in this container.
+            e.preventDefault();
+            onAddAfter(field.id);
           }
         }}
         // Full-strength hover border, more visible than the resting border, not a fainter alpha.
@@ -224,7 +257,8 @@ function NestedFieldRow({
           onEditField={onEditField}
           onDeleteField={onDeleteField}
           onDuplicateField={onDuplicateField}
-          onAddInsideParent={onAddInsideParent}
+          onAddAt={onAddAt}
+          onAddAfter={onAddAfter}
         />
       )}
     </div>

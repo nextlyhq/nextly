@@ -133,6 +133,8 @@ const FIXTURE_NAMES = new Set([
   "Hero",
   "Users",
   "Draft",
+  // A field's own label, which the between-rows add names as its place.
+  "Cover",
 ]);
 
 /** Type ids that are not already their own plain name, read from the catalog. */
@@ -492,6 +494,7 @@ const SURFACES: readonly Surface[] = [
           config={configFor(kind)}
           name="Posts"
           unsavedCount={1}
+          onAddField={() => {}}
           onOpenSettings={() => {}}
           onSave={() => {}}
         />
@@ -523,7 +526,7 @@ const SURFACES: readonly Surface[] = [
             onDeleteField={() => {}}
             onDuplicateField={() => {}}
             onReorder={() => {}}
-            onAddInsideParent={() => {}}
+            onAddAfter={() => {}}
           />
         </DndContext>
       ),

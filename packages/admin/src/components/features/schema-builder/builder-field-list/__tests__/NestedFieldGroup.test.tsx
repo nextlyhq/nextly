@@ -42,7 +42,8 @@ describe("NestedFieldGroup", () => {
         onEditField={noop}
         onDeleteField={noop}
         onDuplicateField={noop}
-        onAddInsideParent={noop}
+        onAddAt={noop}
+        onAddAfter={noop}
       />
     );
     expect(
@@ -67,7 +68,8 @@ describe("NestedFieldGroup", () => {
         onEditField={onEdit}
         onDeleteField={noop}
         onDuplicateField={noop}
-        onAddInsideParent={noop}
+        onAddAt={noop}
+        onAddAfter={noop}
       />
     );
     await userEvent.click(screen.getByText("Title Field"));
@@ -92,7 +94,8 @@ describe("NestedFieldGroup", () => {
         onEditField={noop}
         onDeleteField={noop}
         onDuplicateField={noop}
-        onAddInsideParent={noop}
+        onAddAt={noop}
+        onAddAfter={noop}
       />
     );
     expect(
@@ -102,7 +105,7 @@ describe("NestedFieldGroup", () => {
     ).toEqual(["Reorder Title Field", "Reorder an unnamed field"]);
   });
 
-  it("calls onAddInsideParent with the parent's id when +Add is clicked", async () => {
+  it("opens the picker at the end of the container when +Add is clicked", async () => {
     const onAdd = vi.fn();
     renderInDnd(
       <NestedFieldGroup
@@ -117,13 +120,14 @@ describe("NestedFieldGroup", () => {
         onEditField={noop}
         onDeleteField={noop}
         onDuplicateField={noop}
-        onAddInsideParent={onAdd}
+        onAddAt={onAdd}
+        onAddAfter={noop}
       />
     );
     await userEvent.click(
       screen.getByRole("button", { name: /add field inside hero sections/i })
     );
-    expect(onAdd).toHaveBeenCalledWith("p1");
+    expect(onAdd).toHaveBeenCalledWith({ parentFieldId: "p1" });
   });
 
   it("recursively renders nested children when a child is itself a repeater", () => {
@@ -149,7 +153,8 @@ describe("NestedFieldGroup", () => {
         onEditField={noop}
         onDeleteField={noop}
         onDuplicateField={noop}
-        onAddInsideParent={noop}
+        onAddAt={noop}
+        onAddAfter={noop}
       />
     );
     expect(
@@ -184,7 +189,8 @@ describe("NestedFieldGroup", () => {
         onEditField={noop}
         onDeleteField={noop}
         onDuplicateField={noop}
-        onAddInsideParent={noop}
+        onAddAt={noop}
+        onAddAfter={noop}
       />
     );
     expect(

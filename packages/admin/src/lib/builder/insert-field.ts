@@ -65,3 +65,35 @@ export function insertField(
   const next = walk(fields);
   return placed ? next : null;
 }
+
+/**
+ * The position right after `fieldId`, in the container it sits in: before its
+ * next sibling, or that container's end after its last field. This is where
+ * "/" on a field adds, so "Add and add another" from there keeps adding after
+ * it, in order. `null` when the field is not in the tree.
+ */
+export function positionAfter(
+  fields: readonly BuilderField[],
+  fieldId: string
+): FieldInsertPosition | null {
+  const find = (
+    list: readonly BuilderField[],
+    parentFieldId: string | undefined
+  ): FieldInsertPosition | null => {
+    const at = list.findIndex(field => field.id === fieldId);
+    if (at !== -1) {
+      const next = list[at + 1];
+      return {
+        ...(parentFieldId ? { parentFieldId } : {}),
+        ...(next ? { beforeFieldId: next.id } : {}),
+      };
+    }
+    for (const field of list) {
+      if (!field.fields) continue;
+      const found = find(field.fields, field.id);
+      if (found) return found;
+    }
+    return null;
+  };
+  return find(fields, undefined);
+}

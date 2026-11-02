@@ -31,7 +31,7 @@ import { FieldSourceBadge } from "./FieldSourceBadge";
  * (code-first / locked) OR the field itself is plugin-contributed / locked.
  * Plugin fields are code-owned, so they're inspectable but never editable here.
  */
-function isFieldLocked(field: BuilderField, readOnly: boolean): boolean {
+export function isFieldLocked(field: BuilderField, readOnly: boolean): boolean {
   return readOnly || field.source === "plugin" || field.locked === true;
 }
 
@@ -53,6 +53,8 @@ type Props = {
   onEditField: (id: string) => void;
   onDeleteField: (id: string) => void;
   onDuplicateField: (id: string) => void;
+  /** "/" on a field opens the picker right after it; absent where nothing may be added. */
+  onAddAfter?: (id: string) => void;
 };
 
 export function SortableRow({
@@ -62,6 +64,7 @@ export function SortableRow({
   onEditField,
   onDeleteField,
   onDuplicateField,
+  onAddAfter,
 }: Props): React.JSX.Element {
   // Why: previously only setNodeRef + transform/transition were extracted,
   // so useSortable's pointer/keyboard listeners were never attached to the
@@ -104,6 +107,7 @@ export function SortableRow({
           onEdit={() => onEditField(f.id)}
           onDelete={() => onDeleteField(f.id)}
           onDuplicate={() => onDuplicateField(f.id)}
+          onAddAfter={onAddAfter && (() => onAddAfter(f.id))}
         />
       ))}
     </div>
@@ -122,6 +126,7 @@ function FieldCard({
   onEdit,
   onDelete,
   onDuplicate,
+  onAddAfter,
 }: {
   field: BuilderField;
   readOnly: boolean;
@@ -129,6 +134,7 @@ function FieldCard({
   onEdit: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
+  onAddAfter?: () => void;
 }) {
   const widthPct = parseWidth(field.admin?.width);
   // Tailwind doesn't have arbitrary calc() in flex-basis utilities at
@@ -152,6 +158,10 @@ function FieldCard({
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onEdit();
+          } else if (e.key === "/" && onAddAfter) {
+            // "/" adds a field right after this one, skipping the toolbar.
+            e.preventDefault();
+            onAddAfter();
           }
         },
       };

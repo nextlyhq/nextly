@@ -20,10 +20,14 @@ import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { builderRowId, builderRows } from "@admin/lib/builder/builder-rows";
-import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import {
+  positionAfter,
+  type FieldInsertPosition,
+} from "@admin/lib/builder/insert-field";
 
 import type { BuilderKind } from "./builder-config";
 import { EmptyState } from "./builder-field-list/EmptyState";
+import { InsertBetweenButton } from "./builder-field-list/InsertBetweenButton";
 import { NestedFieldGroup } from "./builder-field-list/NestedFieldGroup";
 import { SortableRow } from "./builder-field-list/SortableRow";
 import { SystemFieldsRow } from "./builder-field-list/SystemFieldsRow";
@@ -33,18 +37,17 @@ type Props = {
   /** The kind of entity being built; the empty state names it. */
   kind: BuilderKind;
   fields: readonly BuilderField[];
-  /** Opens the picker for a new field at `position` (the end of the list when empty). */
+  /**
+   * Opens the picker for a new field at `position`: the end of the list from
+   * its add button, before a row from the "+" between rows, inside a
+   * container from its own add or its "+", and right after a field from "/".
+   */
   onAddAt: (position: FieldInsertPosition) => void;
   onEditField: (id: string) => void;
   onDeleteField: (id: string) => void;
   onDuplicateField: (id: string) => void;
   /** Reorder callback — wired by the parent's DndContext.onDragEnd. */
   onReorder: (orderedIds: readonly string[]) => void;
-  /**
-   * PR I: called when the user clicks "+ Add field inside <parent>" in
-   * a nested area. The page opens the field picker inside parentId.
-   */
-  onAddInsideParent: (parentId: string) => void;
   /** Lock all editing affordances for code-first / locked collections. */
   readOnly?: boolean;
 };
@@ -56,7 +59,6 @@ export function BuilderFieldList({
   onEditField,
   onDeleteField,
   onDuplicateField,
-  onAddInsideParent,
   readOnly = false,
 }: Props): JSX.Element {
   const systemFields = fields.filter(f => f.isSystem);
@@ -64,6 +66,11 @@ export function BuilderFieldList({
   // too, so the row a reader sees is the row they move.
   const rows = builderRows(fields);
   const userFields = rows.flat().map(item => item._field);
+  // "/" on a field adds right after it, in its own container.
+  const addAfter = (fieldId: string) => {
+    const position = positionAfter(fields, fieldId);
+    if (position) onAddAt(position);
+  };
 
   return (
     <div className="space-y-6 p-4">
@@ -105,7 +112,15 @@ export function BuilderFieldList({
                   onlyField !== null &&
                   (onlyField.type === "repeater" || onlyField.type === "group");
                 return (
-                  <div key={`row-${idx}`}>
+                  <div key={`row-${idx}`} className="space-y-2">
+                    {idx > 0 && !readOnly && (
+                      <InsertBetweenButton
+                        beforeLabel={rowFields[0].label || rowFields[0].name}
+                        onClick={() =>
+                          onAddAt({ beforeFieldId: rowFields[0].id })
+                        }
+                      />
+                    )}
                     <SortableRow
                       rowId={builderRowId(idx)}
                       fields={rowFields}
@@ -113,6 +128,7 @@ export function BuilderFieldList({
                       onEditField={onEditField}
                       onDeleteField={onDeleteField}
                       onDuplicateField={onDuplicateField}
+                      onAddAfter={readOnly ? undefined : addAfter}
                     />
                     {isContainer && onlyField && (
                       <NestedFieldGroup
@@ -121,7 +137,8 @@ export function BuilderFieldList({
                         onEditField={onEditField}
                         onDeleteField={onDeleteField}
                         onDuplicateField={onDuplicateField}
-                        onAddInsideParent={onAddInsideParent}
+                        onAddAt={onAddAt}
+                        onAddAfter={addAfter}
                       />
                     )}
                   </div>
