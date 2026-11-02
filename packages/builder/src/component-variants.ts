@@ -1,0 +1,322 @@
+/**
+ * What a designer does to a component's variants in its own view, and what a
+ * placement's variant picker offers.
+ *
+ * Decides and draws nothing: the op an edit becomes, the sentences an author
+ * reads and what a placement's choice resolves to all live here, where they
+ * can be asserted without a DOM. `component-variants-panel` and
+ * `variant-picker` draw them.
+ *
+ * Every definition edit is asked of the engine's variant planners, which hold
+ * the rules (a key is the variant's id and is never reused, names are unique,
+ * an empty variant is kept), and written as ONE `envelope` op, so it is one
+ * undo step and reaches autosave and recovery with the rest of the document.
+ *
+ * @module component-variants
+ */
+import {
+  findNode,
+  isPlainRecord,
+  planAddVariant,
+  planDeleteVariant,
+  planRenameVariant,
+  planResetVariantValue,
+  planSetVariantValue,
+  variantLabelKey,
+  variantOptions,
+  type BlockNode,
+  type ComponentDocument,
+  type ExposedProperty,
+  type OverrideValue,
+  type VariantEditProblem,
+  type VariantEditResult,
+  type VariantOption,
+} from "@nextlyhq/blocks-engine";
+
+import { envelopeOpFor } from "./component-fields";
+import type { EditorState } from "./editor-state";
+import type { BuilderOp } from "./ops";
+
+/**
+ * How many placements chose a variant, for the delete dialog.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export interface VariantUse {
+  /** Placements that chose it. */
+  readonly placements: number;
+  /** The documents holding them: pages, Singles, components and patterns. */
+  readonly documents: number;
+  /**
+   * False when the count is a floor: the usage index did not list every host,
+   * or a host could not be read. Said as "at least".
+   */
+  readonly complete: boolean;
+}
+
+/**
+ * What the host knows about a component's variants that its document does not
+ * hold.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export interface ComponentVariantsHost {
+  /**
+   * Counts the placements that chose a variant, across every document that
+   * places the component. Absent where the host cannot count; the delete
+   * dialog then says the placements fall back without a number.
+   */
+  readonly countUse?: (variantId: string) => Promise<VariantUse>;
+}
+
+/** What the variant edits read from the editor, gathered once. */
+export interface VariantEditContext {
+  readonly editor: Pick<EditorState, "apply" | "limits">;
+  readonly component: ComponentDocument;
+  /**
+   * Keys a new variant must not take though the component no longer holds
+   * them: every key this editing session has seen, so a variant deleted and
+   * added again under its old name does not inherit the old one's placements.
+   */
+  readonly taken: readonly string[];
+}
+
+/** What an edit came to: applied, or refused with the sentence to show. */
+export type VariantEditOutcome =
+  | { readonly applied: true; readonly id: string }
+  | { readonly applied: false; readonly reason: string };
+
+/** The sentence for each refusal, said where the edit was made. */
+function problemSentence(problem: VariantEditProblem, clash?: string): string {
+  switch (problem) {
+    case "invalid-label":
+      return "A variant needs a name.";
+    case "label-taken":
+      return `There is already a variant called “${clash ?? ""}”. Choose another name.`;
+    case "unknown-variant":
+      return "That variant is no longer on this component.";
+    case "unknown-exposure":
+      return "That field is no longer exposed on this component.";
+    case "not-a-component":
+      return "Variants belong to components, and this is not one.";
+    case "exceeds-limits":
+      return "This component is at its size limit, so nothing more can be added.";
+    case "invalid-variant":
+      return "This component’s variants can’t be read, so they can’t be changed here.";
+    default:
+      return "This change could not be made.";
+  }
+}
+
+/** Apply a planned edit as one op, or say why it was not. */
+function applied(
+  context: VariantEditContext,
+  result: VariantEditResult
+): VariantEditOutcome {
+  if ("problem" in result) {
+    return {
+      applied: false,
+      reason: problemSentence(result.problem, result.clash),
+    };
+  }
+  const op = envelopeOpFor(context.component, result.document);
+  if (op === undefined) return { applied: true, id: result.id };
+  return context.editor.apply(op) === null
+    ? {
+        applied: false,
+        reason: "This change could not be applied here. Nothing was changed.",
+      }
+    : { applied: true, id: result.id };
+}
+
+/**
+ * A name for a new variant no other variant has: "Variant 2" when there is
+ * one already, and so on. The designer renames it in place.
+ */
+export function nextVariantName(component: ComponentDocument): string {
+  const taken = new Set(
+    variantOptions(component).map(option => variantLabelKey(option.label))
+  );
+  for (let n = taken.size + 1; ; n += 1) {
+    const name = `Variant ${String(n)}`;
+    if (!taken.has(variantLabelKey(name))) return name;
+  }
+}
+
+/** Define a variant. It presets nothing until it is given values. */
+export function addVariant(
+  context: VariantEditContext,
+  label: string
+): VariantEditOutcome {
+  return applied(
+    context,
+    planAddVariant(context.component, label, {
+      taken: context.taken,
+      limits: context.editor.limits,
+    })
+  );
+}
+
+/** Rename a variant; every placement that chose it keeps it. */
+export function renameVariant(
+  context: VariantEditContext,
+  id: string,
+  label: string
+): VariantEditOutcome {
+  return applied(
+    context,
+    planRenameVariant(context.component, id, label, context.editor.limits)
+  );
+}
+
+/** Delete a variant; its placements show the defaults with their own values. */
+export function deleteVariant(
+  context: VariantEditContext,
+  id: string
+): VariantEditOutcome {
+  return applied(
+    context,
+    planDeleteVariant(context.component, id, context.editor.limits)
+  );
+}
+
+/** Set what a variant presets for one field. */
+export function setVariantValue(
+  context: VariantEditContext,
+  id: string,
+  fieldId: string,
+  value: OverrideValue
+): VariantEditOutcome {
+  return applied(
+    context,
+    planSetVariantValue(
+      context.component,
+      id,
+      fieldId,
+      value,
+      context.editor.limits
+    )
+  );
+}
+
+/** Take a variant's value for one field away, back to the default. */
+export function resetVariantValue(
+  context: VariantEditContext,
+  id: string,
+  fieldId: string
+): VariantEditOutcome {
+  return applied(
+    context,
+    planResetVariantValue(context.component, id, fieldId, context.editor.limits)
+  );
+}
+
+/**
+ * The component's own value for an exposed field, which a variant that sets
+ * nothing for it shows: the prop at the field's path on the node it drives.
+ * Visibility reads as shown: the definition draws every node it holds.
+ */
+export function defaultValueOf(
+  component: ComponentDocument,
+  field: ExposedProperty
+): unknown {
+  const node = findNode(component.nodes, field.nodeId);
+  if (node === undefined) return undefined;
+  if (field.type === "visibility") return true;
+  let current: unknown = node.props;
+  for (const segment of field.propPath.split(".")) {
+    if (!isPlainRecord(current) || !Object.hasOwn(current, segment)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+/** How many values a variant presets, in words: "2 values", "(no changes)". */
+export function valuesSummary(option: VariantOption): string {
+  if (option.empty) return "(no changes)";
+  const count = Object.keys(option.values).length;
+  return count === 1 ? "1 value" : `${String(count)} values`;
+}
+
+/**
+ * What the delete dialog says will happen to the variant's placements.
+ *
+ * `undefined` use is a count still in flight; `null` is one that could not be
+ * made, which says what happens without a number rather than "none".
+ */
+export function deleteSentence(use: VariantUse | null | undefined): string {
+  const after =
+    "They will show the component’s defaults, and keep their own changes.";
+  if (use === undefined) return "Counting the placements that use it…";
+  if (use === null) {
+    return `Its placements could not be counted. ${after}`;
+  }
+  if (use.placements === 0) {
+    return use.complete
+      ? "No placement uses this variant."
+      : "No placement was found using this variant, though not every page could be checked.";
+  }
+  const floor = use.complete ? "" : "at least ";
+  const placements = `${floor}${String(use.placements)} ${use.placements === 1 ? "placement" : "placements"}`;
+  const documents = `${String(use.documents)} ${use.documents === 1 ? "document" : "documents"}`;
+  return `Used by ${placements} in ${documents}. ${after}`;
+}
+
+/**
+ * A placement's variant, as its picker shows it.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export interface VariantChoice {
+  /** The variants the component offers, in its stored order. */
+  readonly options: readonly VariantOption[];
+  /** The key the placement stores, if any. */
+  readonly chosen?: string;
+  /**
+   * True when the stored key names a variant the component no longer has:
+   * the placement then shows the defaults, and the picker says so.
+   */
+  readonly removed: boolean;
+}
+
+/** What a placement's picker offers and shows, read off the definition. */
+export function variantChoiceOf(
+  definition: ComponentDocument | undefined,
+  node: BlockNode
+): VariantChoice {
+  const options = variantOptions(definition);
+  const stored = isPlainRecord(node.props) ? node.props.variant : undefined;
+  if (typeof stored !== "string" || stored === "") {
+    return { options, removed: false };
+  }
+  return {
+    options,
+    chosen: stored,
+    removed: !options.some(option => option.id === stored),
+  };
+}
+
+/**
+ * The op that sets a placement's variant, or clears it with `undefined`.
+ *
+ * The whole props object, as every placement op writes it: `updateNode`
+ * merges at the top level, so a patch of the one key would drop the
+ * component's id. Clearing removes the key, since absent is "no variant".
+ */
+export function chooseVariantOp(
+  node: BlockNode,
+  variantId: string | undefined
+): BuilderOp {
+  const { variant: _stored, ...rest } = isPlainRecord(node.props)
+    ? node.props
+    : {};
+  return {
+    kind: "update",
+    id: node.id,
+    patch: {
+      props: variantId === undefined ? rest : { ...rest, variant: variantId },
+    },
+  };
+}

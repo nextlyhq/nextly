@@ -1061,7 +1061,10 @@ export const COMPONENT_INSTANCE_TYPE = "nextly/component-instance";
 export interface ComponentInstanceProps {
   /** The referenced component document's id. */
   componentId: string;
-  /** The selected variant name, when the component defines variants. */
+  /**
+   * The chosen variant's id: its key in the definition's `variants`, which a
+   * rename keeps. A key the definition no longer holds renders the defaults.
+   */
   variant?: string;
   /**
    * Per-instance values for the definition's exposed properties, keyed by
@@ -1337,7 +1340,10 @@ export interface ComponentDocument extends BlockDocument {
   exposed?: ExposedProperty[];
   /** Regions an instance may fill, keyed by slot id. Absent exposes none. */
   slots?: Record<string, ExposedSlot>;
-  /** Named override presets, keyed by variant name. */
+  /**
+   * Named override presets, keyed by each variant's stable id. The id is
+   * opaque and kept across renames; the name a picker shows is its `label`.
+   */
   variants?: Record<string, Variant>;
 }
 

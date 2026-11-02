@@ -44,6 +44,7 @@ import {
   MAX_COMPOSED_DEPTH,
   contentModelKeyOf,
   nodeLocks,
+  placementVariantIssues,
   registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
@@ -505,6 +506,48 @@ async function judgeOwnComposition(args: {
   );
   for (const fault of faults) {
     report.add(fault.code, fault.message);
+  }
+  await judgePlacementVariants({
+    document,
+    components: lookupOf(library),
+    limits: setup.limits,
+    stored: args.stored,
+    report,
+  });
+}
+
+/**
+ * Refuse a variant the write newly sets on a placement that its component does
+ * not define. Judged against the definitions this form composes with, so every
+ * write path that validates the field, an import included, is held to what the
+ * picker can choose.
+ *
+ * A key the stored document already holds at that placement is kept: a
+ * deleted variant leaves its key on placements, which render the defaults. The
+ * stored forms are read only once something is found; where they cannot be
+ * read (a single, a localized field), any key found may be one the stored
+ * document already held, so none is refused.
+ */
+async function judgePlacementVariants(args: {
+  document: BlockDocument;
+  components: ComponentLookup;
+  limits: DocumentLimits;
+  stored: () => Promise<StoredRead>;
+  report: Report;
+}): Promise<void> {
+  const { document, components, limits, report } = args;
+  if (placementVariantIssues(document, components, [], limits).length === 0) {
+    return;
+  }
+  const stored = await args.stored();
+  if (!stored.readable) return;
+  for (const issue of placementVariantIssues(
+    document,
+    components,
+    stored.forms,
+    limits
+  )) {
+    report.add("PLACEMENT_VARIANT_UNKNOWN", issue.message);
   }
 }
 
@@ -1102,7 +1145,7 @@ function describeHost(host: HostRef): string {
  */
 interface Footprint {
   readonly complete: boolean;
-  /** Keyed by variant name; the default selection under "". */
+  /** Keyed by variant id; the default selection under "". */
   readonly selections: ReadonlyMap<string, SelectionFootprint>;
   /** Each exposed slot, as the holder type, its slot and its depth. */
   readonly slots: ReadonlyMap<string, string>;

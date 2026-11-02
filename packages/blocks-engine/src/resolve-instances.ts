@@ -1,7 +1,7 @@
 /**
  * Inlining a linked component definition into the document that references it.
  *
- * A component INSTANCE is one node holding a reference, a variant name and a
+ * A component INSTANCE is one node holding a reference, a variant id and a
  * set of overrides. What a reader has to draw is the definition's whole tree,
  * with those overrides applied and the instance's own slot content in place of
  * the definition's. Turning the first into the second is this module.

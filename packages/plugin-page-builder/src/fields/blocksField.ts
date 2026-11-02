@@ -58,6 +58,17 @@ const PLACEMENT_BREAKS: ReadonlySet<string> = new Set<IssueCode>([
   "content-model",
 ]);
 
+/**
+ * The engine's issues a stored value may already hold, so finding one reads
+ * the stored forms to tell an old one, kept with a warning, from a new one: the
+ * placement breaks, and two of a component's variants sharing a name from
+ * before names had to differ.
+ */
+const STORED_MAY_HOLD: ReadonlySet<string> = new Set<string>([
+  ...PLACEMENT_BREAKS,
+  "variant-label-clash" satisfies IssueCode,
+]);
+
 /** The field type id. Was a built-in token; now this plugin's to own. */
 export const BLOCKS_TYPE = "blocks";
 
@@ -149,8 +160,7 @@ export function blocksFieldType(
       if (
         !issues.some(
           issue =>
-            issue.code === CONTENT_ONLY_BREAK ||
-            PLACEMENT_BREAKS.has(issue.code)
+            issue.code === CONTENT_ONLY_BREAK || STORED_MAY_HOLD.has(issue.code)
         )
       ) {
         return issues;
@@ -164,11 +174,11 @@ export function blocksFieldType(
       ).then(stored => {
         const again = stored.forms.length === 0 ? issues : judge(stored.forms);
         // A stored value this cannot read may already hold every placement
-        // break found, so none is refused; the server log says what was kept
+        // break or name clash found, so none is refused; the server log says what was kept
         // until the page can be judged against it.
         const kept = stored.readable
           ? again
-          : again.filter(issue => !PLACEMENT_BREAKS.has(issue.code));
+          : again.filter(issue => !STORED_MAY_HOLD.has(issue.code));
         if (kept.length < again.length) {
           composition?.()?.onPlacementUnjudged?.({
             field: args.path,

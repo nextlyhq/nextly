@@ -2034,3 +2034,52 @@ function listing(hosts: HostRef[]) {
   const hostsOf: HostFinder = { whole: async () => true, placing: lookups };
   return { hostsOf, lookups };
 }
+
+describe("a placement's variant on a page write", () => {
+  const card = component([node("t")], {
+    variants: { featured: { label: "Featured", overrides: {} } },
+  });
+  const choosing = (variant: string) =>
+    page([
+      {
+        ...placing("i1", "card"),
+        props: { componentId: "card", variant },
+      },
+    ]);
+
+  it("accepts a variant the component defines", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { card: { published: card } },
+    });
+
+    expect(
+      await judge(choosing("featured"), write(readStored, "pages", "home"))
+    ).toEqual([]);
+  });
+
+  it("refuses one the write newly sets that the component lacks", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { card: { published: card } },
+      pages: { home: { published: choosing("featured") } },
+    });
+
+    const issues = await judge(
+      choosing("gone"),
+      write(readStored, "pages", "home")
+    );
+
+    expect(codes(issues)).toEqual(["PLACEMENT_VARIANT_UNKNOWN"]);
+    expect(issues[0]!.message).toContain('"gone"');
+  });
+
+  it("keeps a deleted variant's key the stored page already held", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { card: { published: card } },
+      pages: { home: { published: choosing("gone") } },
+    });
+
+    expect(
+      await judge(choosing("gone"), write(readStored, "pages", "home"))
+    ).toEqual([]);
+  });
+});

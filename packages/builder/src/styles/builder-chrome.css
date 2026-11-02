@@ -3838,3 +3838,199 @@ fieldset.nx-inspector__fields {
   display: flex;
   gap: 0.5rem;
 }
+
+/*
+ * A component's variants, under its exposed fields in its own view: each a
+ * name to edit, how much it presets, and its values when opened. Bordered in
+ * the component accent's tint rather than its full strength, since a variant
+ * is a preset over the fields rather than a field itself.
+ */
+.nx-variants {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--nx-builder-border, var(--nx-border));
+}
+
+.nx-variants__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.nx-variants__header .nx-inspector__heading {
+  margin: 0;
+}
+
+.nx-variants__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nx-variants__item {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md, 0.375rem);
+  background: var(--nx-background);
+}
+
+.nx-variants__item[data-open] {
+  border-color: color-mix(in oklch, var(--nx-primary) 45%, var(--nx-border));
+}
+
+.nx-variants__main {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.375rem 0.25rem;
+}
+
+/* The chevron turns to point down while the variant's values are open. */
+.nx-variants__toggle svg {
+  transition: transform 150ms ease;
+}
+
+.nx-variants__item[data-open] .nx-variants__toggle svg {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-variants__toggle svg {
+    transition: none;
+  }
+}
+
+.nx-variants__name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.nx-variants__summary {
+  flex: 0 0 auto;
+  margin-top: 0.4rem;
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
+/* "(no changes)" is a state to notice, said in the muted tone, not the accent. */
+.nx-variants__summary[data-empty] {
+  color: var(--nx-muted-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-variants__values {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem 0.75rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+.nx-variants__value {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-variants__value-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/*
+ * Whether the value is the variant's own or the component's default, as a
+ * badge in words: the two differ by label and weight, never by colour alone.
+ */
+.nx-variants__source {
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 500;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-variants__source[data-set] {
+  font-weight: 600;
+  color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
+.nx-variants__reset {
+  align-self: flex-start;
+}
+
+.nx-variants__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--text-xs);
+}
+
+.nx-variants__problem {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-destructive);
+}
+
+/* A placement's variant, under its title in the placement's inspector. */
+.nx-variant-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.nx-variant-picker .nx-inspector__heading {
+  margin: 0;
+}
+
+/*
+ * A placement whose variant was deleted: said with an icon and words, in the
+ * warning tone, with the way to let it go beside it.
+ */
+.nx-variant-picker__removed {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.5rem;
+  border: 1px solid color-mix(in oklch, var(--nx-warning) 45%, transparent);
+  border-radius: var(--radius-md, 0.375rem);
+  font-size: var(--text-xs);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-warning) 10%, transparent);
+}
+
+.nx-variant-picker__removed svg {
+  flex: none;
+  color: var(--nx-warning);
+}
+
+.nx-variant-picker__removed span {
+  flex: 1 1 auto;
+}

@@ -1,0 +1,88 @@
+/**
+ * A component's variant names, which must be unique.
+ *
+ * A picker lists variants by name, so two called "Featured" are one choice
+ * drawn twice, and an author cannot tell which one a placement holds. Names
+ * are compared trimmed and without case, the way an author reads them.
+ *
+ * A save that NEWLY creates a clash is refused. A clash the stored definition
+ * already holds, from before names had to be unique, is only warned about:
+ * refusing it would refuse every unrelated edit to that component until
+ * someone renamed a variant they may not know about.
+ *
+ * @module variant-labels
+ */
+import { pointer } from "./issue-text";
+import { MAX_ENVELOPE_ENTRIES } from "./limits";
+import { isPlainRecord } from "./plain-record";
+import { boundedOwnKeys, ownEntry } from "./safe-record";
+import type { ValidationIssue } from "./validation";
+
+/**
+ * A label as names are compared: normalized, trimmed and folded to one case,
+ * so "Featured", " featured " and "FEATURED" are one name.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
+export function variantLabelKey(label: string): string {
+  return label.normalize("NFKC").trim().toLocaleLowerCase("en-US");
+}
+
+/**
+ * The names two or more variants share, each with the keys holding it, in
+ * stored order. Read defensively: a variant that is not a record, or has no
+ * usable label, takes no name, and the envelope check reports it.
+ */
+function sharedNames(variants: unknown): Map<string, string[]> {
+  const byName = new Map<string, string[]>();
+  if (!isPlainRecord(variants)) return byName;
+  for (const key of boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES) ?? []) {
+    const variant: unknown = ownEntry(variants, key);
+    if (!isPlainRecord(variant) || typeof variant.label !== "string") continue;
+    const name = variantLabelKey(variant.label);
+    if (name === "") continue;
+    byName.set(name, [...(byName.get(name) ?? []), key]);
+  }
+  for (const [name, keys] of byName) {
+    if (keys.length < 2) byName.delete(name);
+  }
+  return byName;
+}
+
+/**
+ * One issue per variant whose name an earlier variant already has.
+ *
+ * An `error` for a clash the save creates, and a `warning` for one any stored
+ * form of the definition already holds under the same name. Without stored
+ * forms (a create, or a value judged on its own) every clash is new.
+ */
+export function variantLabelIssues(
+  variants: unknown,
+  stored: readonly unknown[] | undefined
+): ValidationIssue[] {
+  const shared = sharedNames(variants);
+  if (shared.size === 0) return [];
+  const old = new Set<string>();
+  for (const form of stored ?? []) {
+    if (!isPlainRecord(form)) continue;
+    for (const name of sharedNames(form.variants).keys()) old.add(name);
+  }
+
+  const issues: ValidationIssue[] = [];
+  const record = variants as Record<string, { label: string }>;
+  for (const [name, keys] of shared) {
+    const first = ownEntry(record, keys[0])?.label.trim() ?? name;
+    const kept = old.has(name);
+    for (const key of keys.slice(1)) {
+      const label = ownEntry(record, key)?.label.trim() ?? name;
+      issues.push({
+        path: pointer(pointer("/variants", key), "label"),
+        code: "variant-label-clash",
+        severity: kept ? "warning" : "error",
+        message: `Variant "${label}" has the same name as variant "${first}". Variant names must differ, ignoring case and spaces.`,
+        suggestion: "Rename one of them.",
+      });
+    }
+  }
+  return issues;
+}
