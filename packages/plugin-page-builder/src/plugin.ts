@@ -85,7 +85,7 @@ import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
-import { siteBreakpointsRoute, siteCapabilityRoute } from "./site-settings";
+import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
@@ -1188,7 +1188,7 @@ export const pageBuilder = (
         makeDefaultRoute(),
         // Settings' Site tab: what the caller may change there, and the one
         // way the site's breakpoints change.
-        siteCapabilityRoute(),
+        siteSettingsRoute(),
         siteBreakpointsRoute(),
       ],
       // The grant that lets a role change the site's settings in the editor's

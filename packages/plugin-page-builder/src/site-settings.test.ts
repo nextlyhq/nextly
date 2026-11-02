@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import {
   MANAGE_SITE_PERMISSION,
-  readSiteCapability,
+  readSiteSettings,
   writeSiteBreakpoints,
   type SiteSettingsDirectApi,
   type SiteSettingsRouteContext,
@@ -209,54 +209,99 @@ function holding(...grants: string[]) {
   };
 }
 
-describe("what the Site tab is told", () => {
-  it("offers nothing to a caller without the site permission, whatever else it holds", async () => {
+const LAYOUTS = [
+  { id: "main", title: "Main" },
+  { id: "bare", title: "No header or footer" },
+];
+
+/** The Direct API slice the read uses, recording what it was asked. */
+function siteData(defaultLayout: string | null) {
+  const finds: Array<Record<string, unknown>> = [];
+  return {
+    finds,
+    nextly: {
+      findSingle: async () => ({ defaultLayout }),
+      find: async (args: Record<string, unknown>) => {
+        finds.push(args);
+        const where = args.where as { id?: { in?: string[] } } | undefined;
+        const only = where?.id?.in;
+        return {
+          items: LAYOUTS.filter(l => only === undefined || only.includes(l.id)),
+        };
+      },
+    } as unknown as Parameters<typeof readSiteSettings>[1],
+  };
+}
+
+describe("what the Site tab reads", () => {
+  it("tells a caller without the site permission nothing, whatever else it holds", async () => {
     const { caller } = holding("update-site_layouts", "publish-site_layouts");
-    expect(await readSiteCapability(route({ caller }))).toEqual({
+    const data = siteData("main");
+    expect(await readSiteSettings(route({ caller }), data.nextly)).toEqual({
       mayManageSite: false,
       mayChooseDefaultLayout: false,
+      defaultLayout: null,
+      layouts: [],
     });
+    expect(data.finds).toEqual([]);
   });
 
-  it("offers the tab, and the default Layout only with the rights to update and publish Layouts", async () => {
-    const site = holding("manage-page-builder-site");
-    expect(await readSiteCapability(route({ caller: site.caller }))).toEqual({
-      mayManageSite: true,
-      mayChooseDefaultLayout: false,
-    });
-    const updateOnly = holding(
-      "manage-page-builder-site",
-      "update-site_layouts"
-    );
-    expect(
-      (await readSiteCapability(route({ caller: updateOnly.caller })))
-        .mayChooseDefaultLayout
-    ).toBe(false);
-    const publishOnly = holding(
-      "manage-page-builder-site",
-      "publish-site_layouts"
-    );
-    expect(
-      (await readSiteCapability(route({ caller: publishOnly.caller })))
-        .mayChooseDefaultLayout
-    ).toBe(false);
+  it("offers every published Layout to a caller who may choose the default", async () => {
     const all = holding(
       "manage-page-builder-site",
       "update-site_layouts",
       "publish-site_layouts"
     );
-    expect(await readSiteCapability(route({ caller: all.caller }))).toEqual({
+    const data = siteData("main");
+    expect(
+      await readSiteSettings(route({ caller: all.caller }), data.nextly)
+    ).toEqual({
       mayManageSite: true,
       mayChooseDefaultLayout: true,
+      defaultLayout: "main",
+      layouts: LAYOUTS,
     });
-    // Asked about the RESOLVED Layouts collection, as make-default asks.
-    expect(all.asked).toContain("publish-site_layouts");
+    // Published only, from the RESOLVED Layouts collection.
+    expect(data.finds[0]).toMatchObject({
+      collection: "site_layouts",
+      status: "published",
+    });
   });
 
-  it("offers nothing to nobody", async () => {
-    expect(await readSiteCapability(route({ caller: null }))).toEqual({
-      mayManageSite: false,
-      mayChooseDefaultLayout: false,
-    });
+  it("names only the current default to a caller who may not choose it", async () => {
+    for (const grants of [
+      ["manage-page-builder-site"],
+      ["manage-page-builder-site", "update-site_layouts"],
+      ["manage-page-builder-site", "publish-site_layouts"],
+    ]) {
+      const data = siteData("bare");
+      const read = await readSiteSettings(
+        route({ caller: holding(...grants).caller }),
+        data.nextly
+      );
+      expect(read).toEqual({
+        mayManageSite: true,
+        mayChooseDefaultLayout: false,
+        defaultLayout: "bare",
+        layouts: [{ id: "bare", title: "No header or footer" }],
+      });
+    }
+  });
+
+  it("reads no Layouts for a site with no default, to a caller who may not choose", async () => {
+    const data = siteData(null);
+    const read = await readSiteSettings(
+      route({ caller: holding("manage-page-builder-site").caller }),
+      data.nextly
+    );
+    expect(read.layouts).toEqual([]);
+    expect(data.finds).toEqual([]);
+  });
+
+  it("tells nobody nothing", async () => {
+    const data = siteData("main");
+    expect(
+      await readSiteSettings(route({ caller: null }), data.nextly)
+    ).toMatchObject({ mayManageSite: false, layouts: [] });
   });
 });

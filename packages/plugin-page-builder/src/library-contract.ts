@@ -417,18 +417,23 @@ export interface SiteBreakpointsRequest {
   readonly breakpoints: BreakpointSet | null;
 }
 
-/** Where Settings asks what this caller may change in its Site tab. */
-export const SITE_CAPABILITY_ROUTE_PATH = "/site/capability";
+/** Where Settings' Site tab reads what it shows and what this caller may change. */
+export const SITE_SETTINGS_ROUTE_PATH = "/site/settings";
+
+/** A Layout the site's default may be, as the Site tab offers it. */
+export interface SiteLayoutOption {
+  readonly id: string;
+  readonly title: string;
+}
 
 /**
- * What this caller may change in Settings' Site tab, each answer derived from
- * the grants its write is judged by.
+ * What Settings' Site tab shows, and what this caller may change there, each
+ * permission answer derived from the grants its write is judged by.
  *
- * Two fields, because the tab asks two questions: whether to offer the tab at
- * all, and whether its default Layout is a control or a reading. Like the
- * pattern answer, NOT A SECURITY BOUNDARY: each write is authorized on its own.
+ * Like the pattern answer, NOT A SECURITY BOUNDARY: each write is authorized on
+ * its own. A caller who may not manage the site is told nothing about it.
  */
-export interface SiteCapabilityResponse {
+export interface SiteSettingsRead {
   /** Whether this caller may change the site's settings: the tab is offered. */
   readonly mayManageSite: boolean;
   /**
@@ -436,4 +441,11 @@ export interface SiteCapabilityResponse {
    * needs the rights to update and publish Layouts.
    */
   readonly mayChooseDefaultLayout: boolean;
+  /** The site's default Layout, by id, or `null` when it has none. */
+  readonly defaultLayout: string | null;
+  /**
+   * The published Layouts: every one the caller may choose from, or only the
+   * current default, to name it, for a caller who may not choose.
+   */
+  readonly layouts: readonly SiteLayoutOption[];
 }

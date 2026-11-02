@@ -18,11 +18,16 @@ import {
 import { z } from "nextly/zod";
 
 import { LAYOUTS_SLUG } from "./collections/layouts";
+import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
+import {
+  readLayoutSettings,
+  type DefaultLayoutDirectApi,
+} from "./default-layout/store";
 import {
   SITE_BREAKPOINTS_ROUTE_PATH,
-  SITE_CAPABILITY_ROUTE_PATH,
+  SITE_SETTINGS_ROUTE_PATH,
   type SiteBreakpointsRequest,
-  type SiteCapabilityResponse,
+  type SiteSettingsRead,
 } from "./library-contract";
 import { checkStoredBreakpoints } from "./site-style-record";
 import {
@@ -138,45 +143,91 @@ export function siteBreakpointsRoute(): {
   };
 }
 
+/** What a caller who may not manage the site is told: nothing about it. */
+const NOTHING: SiteSettingsRead = {
+  mayManageSite: false,
+  mayChooseDefaultLayout: false,
+  defaultLayout: null,
+  layouts: [],
+};
+
+/** How many Layouts the Site tab offers to choose from. */
+const LAYOUT_OPTIONS_LIMIT = 100;
+
 /**
- * What this caller may change in the Site tab, asked of the same grants each
- * write is judged by: the site permission for the tab, and with it the rights
- * to update and publish Layouts for the default Layout, as make-default asks.
+ * What the Site tab shows, and what this caller may change there: the site
+ * permission offers the tab, and with it the rights to update and publish
+ * Layouts let the default Layout be chosen, as make-default asks. Read past
+ * the Layouts' own read rule, as make-default's checks are, and only for a
+ * caller the site permission admits.
  */
-export async function readSiteCapability(
-  ctx: SiteSettingsRouteContext
-): Promise<SiteCapabilityResponse> {
+export async function readSiteSettings(
+  ctx: SiteSettingsRouteContext,
+  nextly: Pick<DefaultLayoutDirectApi, "find" | "findSingle">
+): Promise<SiteSettingsRead> {
   const { caller } = ctx;
-  if (caller === null) {
-    return { mayManageSite: false, mayChooseDefaultLayout: false };
+  if (caller === null) return NOTHING;
+  if (!(await caller.can(MANAGE_SITE.action, MANAGE_SITE.resource))) {
+    return NOTHING;
   }
-  const mayManageSite = await caller.can(
-    MANAGE_SITE.action,
-    MANAGE_SITE.resource
-  );
-  if (!mayManageSite) {
-    return { mayManageSite: false, mayChooseDefaultLayout: false };
-  }
-  const layouts = ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG;
+  const slugs = {
+    layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+    settings:
+      ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+      PAGE_BUILDER_SETTINGS_SLUG,
+  };
   const mayChooseDefaultLayout =
-    (await caller.can("update", layouts)) &&
-    (await caller.can("publish", layouts));
-  return { mayManageSite, mayChooseDefaultLayout };
+    (await caller.can("update", slugs.layouts)) &&
+    (await caller.can("publish", slugs.layouts));
+  const { defaultLayout } = await readLayoutSettings(nextly, slugs);
+  // Every published Layout for a caller who may choose; otherwise only the
+  // default, so it can be named.
+  const only = mayChooseDefaultLayout
+    ? undefined
+    : defaultLayout === null
+      ? []
+      : [defaultLayout];
+  const layouts =
+    only !== undefined && only.length === 0
+      ? []
+      : (
+          await nextly.find({
+            collection: slugs.layouts,
+            ...(only === undefined ? {} : { where: { id: { in: only } } }),
+            status: "published",
+            limit: LAYOUT_OPTIONS_LIMIT,
+            depth: 0,
+            select: { id: true, title: true },
+            overrideAccess: true,
+          })
+        ).items.flatMap(row => {
+          const { id, title } = row;
+          return typeof id === "string" && typeof title === "string"
+            ? [{ id, title }]
+            : [];
+        });
+  return {
+    mayManageSite: true,
+    mayChooseDefaultLayout,
+    defaultLayout,
+    layouts,
+  };
 }
 
 /**
- * The route the Site tab asks before it draws. Authenticated, with no
+ * The route the Site tab reads before it draws. Authenticated, with no
  * required permission: the permission is what it reports on, and gating the
  * question on the answer would refuse exactly the authors it tells "no".
  */
-export function siteCapabilityRoute(): {
+export function siteSettingsRoute(): {
   method: "GET";
   path: string;
   handler: (req: Request, ctx: SiteSettingsRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
-    path: SITE_CAPABILITY_ROUTE_PATH,
-    handler: async (_req, ctx) => Response.json(await readSiteCapability(ctx)),
+    path: SITE_SETTINGS_ROUTE_PATH,
+    handler: async (_req, ctx) =>
+      Response.json(await readSiteSettings(ctx, await getCachedNextly())),
   };
 }
