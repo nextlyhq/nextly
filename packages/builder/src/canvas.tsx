@@ -32,13 +32,20 @@
 import {
   findNode,
   PAGE_ROOT_CLASS,
+  parseColor,
   previewContainerName,
   previewStateClass,
+  relativeLuminance,
+  resolveSiteTokens,
+  resolveTokenPrefix,
   statePropagatesToAncestors,
   STYLE_STATES,
+  tokenCustomProperty,
+  tokenIdentity,
   walkNodes,
   type BlockDocument,
   type BreakpointSet,
+  type Rgb,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -65,12 +72,18 @@ import {
 } from "react";
 
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { guardCanvasNavigation } from "./canvas-link-guard";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isElement, isHTMLElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
-import { canvasContentRect, scrollableAncestor } from "./geometry-dom";
+import {
+  canvasContentRect,
+  canvasScroller,
+  scrollEventTarget,
+  visibleBandOf,
+} from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { observeRenderedTree } from "./rendered-tree";
@@ -158,6 +171,140 @@ export const DROP_REFUSED_ATTRIBUTE = "data-nx-drop-refused";
  * needs no marker only because it takes no pointer events at all.
  */
 export const CHROME_ATTRIBUTE = "data-nx-chrome";
+
+/**
+ * The site tokens the canvas page is drawn from, by IDENTITY as the default
+ * token set declares them, mapped to the custom property the stylesheet reads
+ * each from, with the value it falls back to where the token is undeclared.
+ *
+ * Set inline on the canvas root because the property each points at depends on
+ * the prefix the site's tokens are emitted under, which only the site sheet
+ * knows. An identity rather than a display name, so a site that renamed a
+ * token still resolves: the property is built from the identity. The
+ * fallbacks are the browser's own defaults, which is what a published page
+ * shows where nothing paints.
+ */
+const SITE_SURFACE_TOKENS = [
+  ["--nx-canvas-site-font", "font.body", "system-ui"],
+  ["--nx-canvas-site-ground", "color.background", "Canvas"],
+  ["--nx-canvas-site-ink", "color.text", "CanvasText"],
+] as const;
+
+/** The token the page's ground is drawn from, by identity. */
+const SITE_GROUND_TOKEN = "color.background";
+
+/**
+ * The largest relative luminance a ground can have and still be dark: the
+ * point where white text and black text contrast with it equally.
+ */
+const DARK_GROUND_LUMINANCE = 0.179;
+
+/** What the canvas root needs from the site sheet to draw the page as the site. */
+interface SiteSurface {
+  /** The custom properties naming the site's tokens, under its prefix. */
+  readonly style: Record<`--${string}`, string>;
+  /** How the site's dark token values are switched on. */
+  readonly darkMode: "attribute" | "media";
+  /** Whether the site's background token has a DARK value for that state. */
+  readonly darkGround: boolean;
+}
+
+/**
+ * The site's own surface tokens, as the canvas root carries them, or undefined
+ * when the host serves no site sheet.
+ *
+ * The prefix is the one the renderer compiles the sheet under:
+ * `sharedStyleInputs` reconciles the site's own prefixes with the route
+ * context's, exactly as `PageRenderer` does before emitting the sheet, and
+ * `resolveTokenPrefix` gives what is actually written. The token set is the
+ * one the sheet emits — the site's own layered over the defaults by
+ * `resolveSiteTokens` — so whether the ground has a dark value is asked of the
+ * same tokens the page draws with.
+ *
+ * The page's colour scheme is not inferred from the strategy alone. The
+ * strategy says when the site's dark VALUES apply; the scheme goes dark only
+ * where those values include a dark ground, so a site whose dark set leaves
+ * the background light keeps a light page and light native controls.
+ */
+function siteSurface(
+  render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  siteStyles: NonNullable<PageRendererProps["siteStyles"]>
+): SiteSurface | undefined {
+  if (typeof siteStyles !== "object") return undefined;
+  const stated = sharedStyleInputs(
+    render?.styleContext,
+    siteStyles
+  ).tokenPrefix;
+  const { prefix } = resolveTokenPrefix(stated ?? undefined);
+  const style: Record<`--${string}`, string> = {};
+  for (const [property, token, fallback] of SITE_SURFACE_TOKENS) {
+    style[property] = `var(${tokenCustomProperty(token, prefix)}, ${fallback})`;
+  }
+  const tokens = resolveSiteTokens(siteStyles.tokens);
+  const ground = tokens.tokens.find(
+    token => tokenIdentity(token) === SITE_GROUND_TOKEN
+  )?.values.dark;
+  return {
+    style,
+    darkMode: tokens.darkMode ?? "attribute",
+    darkGround: ground !== undefined && isDarkGround(ground),
+  };
+}
+
+/**
+ * Whether a token value is a dark ground. A value this engine cannot read as a
+ * colour — a named colour, `oklch()`, a reference to another property — says
+ * nothing about how light it is, so it is not called dark: the canvas keeps the
+ * page's light default rather than switching every native control to a dark
+ * scheme over what may be a light ground.
+ */
+function isDarkGround(value: string): boolean {
+  const luminance = groundLuminance(value.trim());
+  return luminance !== undefined && luminance < DARK_GROUND_LUMINANCE;
+}
+
+/** `oklch(L …)`, its lightness as a number or a percentage. */
+const OKLCH = /^oklch\(\s*([\d.]+)(%?)/i;
+/** `hsl(H S% L%)` or `hsla(H, S%, L%, A)`, hue optionally in degrees. */
+const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
+
+/**
+ * The relative luminance of a ground colour, or `undefined` when it cannot be
+ * told. Hex and `rgb()` go through the engine's own parser. `oklch()`, which
+ * Tailwind themes write, carries perceptual lightness directly: its L cubed is
+ * the luminance of a grey, close enough for a dark-or-light call. `hsl()`,
+ * which shadcn-style themes write, converts to rgb by the standard formula.
+ */
+function groundLuminance(text: string): number | undefined {
+  const rgb = parseColor(text);
+  if (rgb !== undefined) return relativeLuminance(rgb);
+  const oklch = OKLCH.exec(text);
+  if (oklch) {
+    const lightness = Number(oklch[1]) / (oklch[2] === "%" ? 100 : 1);
+    return Math.min(1, Math.max(0, lightness)) ** 3;
+  }
+  const hsl = HSL.exec(text);
+  if (hsl) {
+    const [hue, saturation, lightness] = [hsl[1], hsl[2], hsl[3]].map(Number);
+    return relativeLuminance(
+      hslToRgb(hue ?? 0, (saturation ?? 0) / 100, (lightness ?? 0) / 100)
+    );
+  }
+  return undefined;
+}
+
+/** An HSL colour as 0–255 channels, by the CSS Color 4 conversion. */
+function hslToRgb(hue: number, saturation: number, lightness: number): Rgb {
+  const h = ((hue % 360) + 360) % 360;
+  const a = saturation * Math.min(lightness, 1 - lightness);
+  const channel = (n: number): number => {
+    const k = (n + h / 30) % 12;
+    return Math.round(
+      (lightness - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255
+    );
+  };
+  return { r: channel(0), g: channel(8), b: channel(4), a: 1 };
+}
 
 /** Whether an event started inside editor chrome rather than inside the page. */
 /**
@@ -467,9 +614,11 @@ function useReportedInlineWidth(
     if (element === null || !measuring) return;
     // Guarded by CALLABILITY rather than presence: jsdom defines the global on
     // some setups without a working constructor, so a property test passes and
-    // the construction throws.
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(entries => {
+    // the construction throws. From the box's own window, the realm of what it
+    // observes.
+    const Sizes = element.ownerDocument.defaultView?.ResizeObserver;
+    if (typeof Sizes !== "function") return;
+    const observer = new Sizes(entries => {
       const entry = entries[0];
       if (entry === undefined) return;
       latest.current?.(inlineSizeOf(entry));
@@ -567,8 +716,10 @@ function useRegionWidth(
     if (!scaling) return;
     const region = layoutRegionOf(box.current);
     if (region === null) return;
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(entries => {
+    // From the region's own window, the realm of the element it observes.
+    const Sizes = region.ownerDocument.defaultView?.ResizeObserver;
+    if (typeof Sizes !== "function") return;
+    const observer = new Sizes(entries => {
       const entry = entries[0];
       if (entry === undefined) return;
       setWidth(inlineSizeOf(entry));
@@ -1774,6 +1925,7 @@ function DropRefusalNotice({
 }): React.JSX.Element {
   const notice = useRef<HTMLDivElement | null>(null);
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const framed = useCanvasFrame().frame !== null;
   const { parentId } = refusal;
   // One wording per rule: a lock's from the function every lock refusal uses,
   // a nesting refusal's from the drag's own.
@@ -1801,6 +1953,7 @@ function DropRefusalNotice({
     // Asked by node kind: a root rendered into an iframe is built by that
     // window, and `instanceof HTMLElement` would leave the notice unplaced.
     if (!isHTMLElement(root)) return;
+    const scroller = canvasScroller(root, framed);
     const measure = (): void => {
       // The root itself when the refusal is at the page level: there is no
       // container node to point at, which is the whole of what
@@ -1826,15 +1979,17 @@ function DropRefusalNotice({
        * are not looking. A very tall container scrolled past does the same.
        *
        * The scroller defines "visible": the shell scrolls an ancestor rather than
-       * the canvas, and its rectangle measured in this canvas's own content
-       * coordinates is exactly the band on screen.
+       * the canvas, and in a frame of its own the frame's viewport scrolls it.
+       * The same scroller this effect listens to below, so what is measured
+       * and what is heard cannot be two different elements, and its visible
+       * part measured in this canvas's own content coordinates is exactly the
+       * band on screen.
        */
-      const within = scrollableAncestor(root);
-      if (within === null) {
+      if (scroller === null) {
         setAt({ x: rect.x, y: rect.y });
         return;
       }
-      const band = canvasContentRect(within, root);
+      const band = visibleBandOf(scroller, root);
       const inset = 12;
       const lowest = band.y + band.height - inset - element.offsetHeight;
       const top = band.y + inset;
@@ -1860,13 +2015,15 @@ function DropRefusalNotice({
      * explanation would sit still and the page would leave.
      *
      * Passive, because this only reads geometry, and on the SCROLLER rather
-     * than the canvas: the canvas does not scroll, its ancestor does.
+     * than the canvas: the canvas does not scroll, its ancestor does — or, in
+     * a frame of its own, the frame's viewport, whose scroll is dispatched at
+     * the frame's document rather than at any element.
      */
-    const scroller = scrollableAncestor(root);
     if (scroller === null) return;
-    scroller.addEventListener("scroll", measure, { passive: true });
+    const source = scrollEventTarget(scroller);
+    source.addEventListener("scroll", measure, { passive: true });
     return () => {
-      scroller.removeEventListener("scroll", measure);
+      source.removeEventListener("scroll", measure);
     };
     /*
      * Re-measured when the WORDING changes, not merely when the container does.
@@ -1882,7 +2039,7 @@ function DropRefusalNotice({
      * is a property of the text: two regions producing identical sentences need
      * no re-measure, and one region whose list changed does.
      */
-  }, [parentId, headline, remedy]);
+  }, [parentId, headline, remedy, framed]);
 
   return (
     <div
@@ -1915,6 +2072,40 @@ function DropRefusalNotice({
       )}
     </div>
   );
+}
+
+/**
+ * The document and window the canvas draws in, held where nothing walking an
+ * object's own keys can reach them.
+ *
+ * The value is a prop of the environment provider, and React's development
+ * build describes every changed prop for its performance panel by walking the
+ * object's own enumerable keys a few levels down. A plain `{ document, window }`
+ * leads that walk into the window, whose own keys include each child frame —
+ * and a page with an Embed block has one in an opaque origin, where reading
+ * anything throws a `SecurityError`. It threw while React was running the
+ * commit's effects, so the effects after it never ran: the canvas stopped
+ * measuring its region, and the device and zoom controls stopped moving it.
+ *
+ * Private fields behind getters are not own enumerable keys, so the walk finds
+ * nothing to enter, while `environment.window` reads exactly as before.
+ */
+class CanvasEnvironment implements BlockEnvironment {
+  readonly #document: Document;
+  readonly #window: Window;
+
+  constructor(document: Document, view: Window) {
+    this.#document = document;
+    this.#window = view;
+  }
+
+  get document(): Document {
+    return this.#document;
+  }
+
+  get window(): Window {
+    return this.#window;
+  }
 }
 
 export function Canvas({
@@ -2003,6 +2194,8 @@ export function Canvas({
   );
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
+  const surface = siteSurface(render, siteStyles);
+  const rootStyle: React.CSSProperties = { ...boxStyle, ...surface?.style };
 
   /*
    * The document and window the blocks are drawn in, for block code that
@@ -2010,7 +2203,8 @@ export function Canvas({
    * root's OWN document rather than the globals, so the answer is the frame's
    * once the canvas renders inside one, with nothing here to change.
    * `undefined` until the root has mounted, which the hook passes on rather
-   * than falling back to the admin page.
+   * than falling back to the admin page. Built as a `CanvasEnvironment` rather
+   * than an object literal; see there for why.
    */
   const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
     undefined
@@ -2018,7 +2212,7 @@ export function Canvas({
   useEffect(() => {
     const view = root.current?.ownerDocument.defaultView;
     if (root.current === null || view == null) return;
-    setEnvironment({ document: root.current.ownerDocument, window: view });
+    setEnvironment(new CanvasEnvironment(root.current.ownerDocument, view));
   }, []);
 
   const page = useMemo(
@@ -2078,13 +2272,31 @@ export function Canvas({
       // are positioned in this element's own content coordinates: a box inside
       // it would size the page while leaving the drop indicator and the
       // selection chrome measuring the region instead.
-      style={boxStyle}
+      style={rootStyle}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and
       // a single name meaning both is the kind of thing that reads correctly
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
+      /*
+       * How the site's GROUND turns dark, for the stylesheet: the strategy the
+       * site's dark token values apply by, present only when those values
+       * include a dark ground.
+       *
+       * The canvas draws the page from the site's own tokens, so its ground
+       * and text already follow the site's dark values; what this decides is
+       * the colour scheme — Canvas, CanvasText and native controls. A site on
+       * the `media` strategy darkens with the visitor's system, and only the
+       * token set says which strategy it uses — CSS cannot read it — so it is
+       * carried here and the sheet pairs it with the media query. The strategy
+       * alone says when dark values apply, not that the page is dark, so a
+       * site whose dark set keeps a light ground carries nothing. Absent too
+       * when the host serves no site sheet.
+       */
+      data-nx-site-dark-ground={
+        surface?.darkGround === true ? surface.darkMode : undefined
+      }
       /*
        * What the pointer means, for the cursor.
        *

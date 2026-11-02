@@ -236,6 +236,15 @@ export type {
   DocumentAction,
 } from "./components/features/entries/EntryForm/document-actions";
 export type { SubmitRefusal } from "./components/features/entries/EntryForm/submit-outcome";
+/**
+ * The header's save state and leading action, drawn for a document view that
+ * replaces the header. Exported for the plugin surface, so the view shows the
+ * header's own controls rather than a copy of them.
+ */
+export {
+  DocumentSaveIndicator,
+  DocumentPrimaryAction,
+} from "./components/features/entries/EntryForm/DocumentSurfaceControls";
 export {
   pillStateFromForm,
   PILL_LABEL,

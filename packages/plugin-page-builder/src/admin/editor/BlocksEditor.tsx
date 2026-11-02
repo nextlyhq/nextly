@@ -30,6 +30,8 @@ import {
   type OpenPassages,
 } from "@nextlyhq/builder/shell";
 import {
+  DocumentPrimaryAction,
+  DocumentSaveIndicator,
   loadInlineRichTextEditor,
   MediaPickerDialog,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -51,9 +53,7 @@ import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import { SiteStyleHistoryContext } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
-import { UnsavedChangesPill } from "../UnsavedChangesPill";
 
-import { DocumentActionButtons } from "./document-action-buttons";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -230,10 +230,6 @@ function editorTopBar(view: EditorView): {
       <>
         <HistoryButtons editor={editor} inline={inline} />
         <DocumentStatusPill isDirty={documentDirty} />
-        {/* Beside the publish state, not folded into it. The two answer
-                different questions and one of them has no answer where a
-                collection declares no lifecycle. */}
-        <UnsavedChangesPill isDirty={documentDirty} />
       </>
     ),
     topBarCenter: (
@@ -277,11 +273,20 @@ function editorTopBar(view: EditorView): {
     ),
     topBarEnd: (
       <>
+        {/* Whether the work is stored, beside the verbs that store it: the
+          header's own chip, which reads the field's held work too. Its text
+          sits against Preview, so the width it reserves for its longest
+          state opens towards the panel buttons rather than between it and
+          what it describes. Reserved only where the bar has the room: below
+          1400px it takes what it shows, as the device labels give way there,
+          so the end column never runs into the zoom. */}
+        <DocumentSaveIndicator className="min-w-[9rem] justify-end @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
         {/* Last, at the bar's far end where the header kept them: the
-          document's save verbs, which the builder's taking the window would
-          otherwise leave reachable only from the keyboard. */}
-        <DocumentActionButtons />
+          document's leading action with its other ways to publish on its
+          arrow, which the builder's taking the window would otherwise leave
+          reachable only from the keyboard. */}
+        <DocumentPrimaryAction />
       </>
     ),
   };
