@@ -1083,9 +1083,11 @@
 }
 
 /*
- * The banner over a component's own view. In the component accent the canvas
- * outlines placements with, so the author reads it as "this is the shared
- * thing", and a band rather than a toast because it holds for the whole view.
+ * The banner over a component's own view: Webflow's banner over a main
+ * component, in the component's hue from the accepted editor mock, so the
+ * author reads it as "this is the shared thing". A band rather than a toast,
+ * because it holds for the whole view. Drawn above the shell, outside the
+ * chrome's own tokens, so the hue falls back to the admin's purple there.
  */
 .nx-component-banner {
   display: flex;
@@ -1094,14 +1096,22 @@
   gap: 0.25rem 0.5rem;
   padding: 0.375rem 0.75rem;
   border-bottom: 1px solid
-    color-mix(in oklch, var(--nx-primary) 35%, transparent);
-  background: color-mix(in oklch, var(--nx-primary) 8%, var(--nx-background));
+    color-mix(
+      in oklch,
+      var(--nx-builder-component, var(--nx-code-keyword)) 35%,
+      transparent
+    );
+  background: color-mix(
+    in oklch,
+    var(--nx-builder-component, var(--nx-code-keyword)) 8%,
+    var(--nx-background)
+  );
   color: var(--nx-foreground);
 }
 
 .nx-component-banner__glyph {
   flex: 0 0 auto;
-  color: var(--nx-primary);
+  color: var(--nx-builder-component, var(--nx-code-keyword));
 }
 
 .nx-component-banner__text {
@@ -1128,6 +1138,10 @@
 .nx-inspector__edit-component {
   align-self: flex-start;
   gap: 0.375rem;
+}
+
+.nx-inspector__edit-component svg {
+  color: var(--nx-builder-component, var(--nx-code-keyword));
 }
 
 /*

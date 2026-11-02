@@ -68,7 +68,7 @@ export function useMayCreatePattern(): boolean {
  * @experimental Settles when the component editor ships.
  */
 export function useComponentEditing():
-  | { readonly collection: string }
+  | { readonly collection: string; readonly field: string }
   | undefined {
   const read = usePluginRoute<PatternCapabilityResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,

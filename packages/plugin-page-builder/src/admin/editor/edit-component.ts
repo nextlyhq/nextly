@@ -33,10 +33,13 @@ import { useCallback, useEffect, useRef } from "react";
 import { BUILDER_VIEW_PATH } from "../../builder-view";
 import { useComponentEditing } from "../pattern-capability-client";
 
-import { sectionAddress } from "./builder-address";
+import { addressWithoutSection, sectionAddress } from "./builder-address";
 
 /** The query parameter naming where the component view goes back to. */
 const RETURN_PARAM = "return";
+
+/** The view's own parameter naming the blocks field it opens. */
+const FIELD_PARAM = "field";
 
 /** A fixed origin to resolve a path against, which no real address has. */
 const NOWHERE = "http://return.invalid";
@@ -45,11 +48,16 @@ const NOWHERE = "http://return.invalid";
 export function componentEditorAddress(
   collection: string,
   componentId: string,
-  returnTo: string | undefined
+  returnTo: string | undefined,
+  /** The blocks field the definition lives in, so the view opens that one. */
+  field?: string
 ): string {
   const base = `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(componentId)}/${BUILDER_VIEW_PATH}`;
-  if (returnTo === undefined) return base;
-  return `${base}?${new URLSearchParams({ [RETURN_PARAM]: returnTo }).toString()}`;
+  const query = new URLSearchParams();
+  if (field !== undefined) query.set(FIELD_PARAM, field);
+  if (returnTo !== undefined) query.set(RETURN_PARAM, returnTo);
+  const said = query.toString();
+  return said === "" ? base : `${base}?${said}`;
 }
 
 /**
@@ -93,7 +101,11 @@ export function hereAddress(
   sectionId: string | undefined
 ): string {
   const href = `${location.pathname}${location.search}`;
-  return sectionId === undefined ? href : sectionAddress(href, sectionId);
+  // Not a section: any section the address already names is the author's
+  // earlier one, and Back must not reopen there.
+  return sectionId === undefined
+    ? addressWithoutSection(href)
+    : sectionAddress(href, sectionId);
 }
 
 /**
@@ -121,7 +133,12 @@ export function useEditComponent(
         asked.current(nodeId) ? nodeId : undefined
       );
       openDocument(
-        componentEditorAddress(editing.collection, componentId, back)
+        componentEditorAddress(
+          editing.collection,
+          componentId,
+          back,
+          editing.field
+        )
       );
     },
     [editing]

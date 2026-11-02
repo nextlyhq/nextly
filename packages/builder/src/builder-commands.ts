@@ -53,9 +53,10 @@ export interface CommandVerbs {
   /**
    * Open the selected placement's component in its own view. Silent when the
    * selection is not one placement or the host does not offer it, so it may
-   * be pressed without asking first.
+   * be pressed without asking first. Optional, so a host built before it
+   * keeps compiling; absent, the verb does nothing.
    */
-  readonly editComponent: () => void;
+  readonly editComponent?: () => void;
 }
 
 /** Everything the command list is built from. */
@@ -155,7 +156,7 @@ export function blockActionRunners(
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
     "save-as-pattern": verbs.saveAsPattern,
-    "edit-component": verbs.editComponent,
+    "edit-component": () => verbs.editComponent?.(),
     delete: verbs.delete,
   };
 }

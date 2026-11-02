@@ -149,6 +149,19 @@ describe("the Edit component verb", () => {
   });
 });
 
+describe("a host built before the verb", () => {
+  it("still runs the shared map, where Edit component does nothing", () => {
+    const runners = blockActionRunners({
+      move: () => {},
+      delete: () => {},
+      duplicate: () => {},
+      selectParent: () => {},
+      saveAsPattern: () => {},
+    });
+    expect(() => runners["edit-component"]()).not.toThrow();
+  });
+});
+
 describe("the banner over a component's own view", () => {
   it("names the component, says the reach as documents, and goes back", () => {
     const back = vi.fn();

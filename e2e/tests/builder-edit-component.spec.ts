@@ -110,7 +110,7 @@ test.describe("Edit component", () => {
 
     await expect(page).toHaveURL(
       new RegExp(
-        `/admin/collections/components/${seeded.component}/builder\\?return=`
+        `/admin/collections/components/${seeded.component}/builder\\?field=content&return=`
       )
     );
     await expect(banner(page)).toContainText(seeded.title);

@@ -32,6 +32,12 @@ describe("the component's own view", () => {
     );
   });
 
+  it("names the field the definition lives in, so the view opens that one", () => {
+    expect(componentEditorAddress("defs", "c1", undefined, "definition")).toBe(
+      "/admin/collections/defs/c1/builder?field=definition"
+    );
+  });
+
   it("names no way back when there is none", () => {
     expect(componentEditorAddress("components", "c1", undefined)).toBe(
       "/admin/collections/components/c1/builder"
@@ -71,6 +77,18 @@ describe("the way back", () => {
     expect(hereAddress(here, undefined)).toBe(
       "/admin/collections/pages/p1/builder?field=content"
     );
+  });
+
+  it("drops a section the address already named, for a placement that is not one", () => {
+    expect(
+      hereAddress(
+        {
+          pathname: "/admin/collections/pages/p1/builder",
+          search: "?field=content&section=old",
+        },
+        undefined
+      )
+    ).toBe("/admin/collections/pages/p1/builder?field=content");
   });
 });
 

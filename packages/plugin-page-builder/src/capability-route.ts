@@ -34,6 +34,8 @@
  * @module capability-route
  */
 
+import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
+
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
@@ -79,7 +81,7 @@ export async function readPatternCapability(
  */
 export async function readEditorCapability(
   ctx: CapabilityRouteContext,
-  store: Pick<ComponentStore, "collection"> = {}
+  store: ComponentEditingStore = {}
 ): Promise<PatternCapabilityResponse> {
   if (ctx.caller === null) return { mayCreate: false, componentEditing: null };
   const [pattern, componentEditing] = await Promise.all([
@@ -88,6 +90,11 @@ export async function readEditorCapability(
   ]);
   return { ...pattern, componentEditing };
 }
+
+/** Where component definitions live, as far as the editor's offer needs. */
+type ComponentEditingStore = Partial<
+  Pick<ComponentStore, "collection" | "field">
+>;
 
 type Caller = NonNullable<CapabilityRouteContext["caller"]>;
 
@@ -119,19 +126,24 @@ async function mayCreatePattern(
 /**
  * Where this caller may open a component in its own view: the store the
  * definitions are read from (a configured one literally, the plugin's own
- * under the host's name for it), when they may update it; `null` otherwise.
- * Opening the view takes `update`, as every document view does.
+ * under the host's name for it) and the field they live in, when they may
+ * read and update it; `null` otherwise. Both, because the view reads the
+ * entry before it lets anyone edit it: an author who may update but not read
+ * would be offered a screen that refuses them.
  */
 async function componentEditingFor(
   ctx: CapabilityRouteContext,
   caller: Caller,
-  store: Pick<ComponentStore, "collection">
-): Promise<{ readonly collection: string } | null> {
+  store: ComponentEditingStore
+): Promise<{ readonly collection: string; readonly field: string } | null> {
   const collection =
     store.collection ??
     ctx.self.collections[COMPONENTS_SLUG] ??
     COMPONENTS_SLUG;
-  return (await caller.can("update", collection)) ? { collection } : null;
+  for (const action of ["read", "update"]) {
+    if (!(await caller.can(action, collection))) return null;
+  }
+  return { collection, field: store.field ?? COMPONENT_DOCUMENT_FIELD };
 }
 
 /**
@@ -143,9 +155,7 @@ async function componentEditingFor(
  * question on the answer would return 403 to exactly the authors this exists to
  * tell "no" gracefully.
  */
-export function patternCapabilityRoute(
-  store: Pick<ComponentStore, "collection"> = {}
-): {
+export function patternCapabilityRoute(store: ComponentEditingStore = {}): {
   method: "GET";
   path: string;
   handler: (req: Request, ctx: CapabilityRouteContext) => Promise<Response>;

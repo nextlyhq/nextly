@@ -192,8 +192,9 @@ export interface BlockActions {
    * Open the selected placement's component in its own view, through the
    * host. Like Save as pattern it runs no op: where the component opens, and
    * whether this author may, are the host's. Silent for any other selection.
+   * Optional, so a host built before it keeps compiling.
    */
-  readonly editComponent: () => void;
+  readonly editComponent?: () => void;
 }
 
 /**

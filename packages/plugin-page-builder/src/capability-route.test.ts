@@ -149,16 +149,36 @@ describe("whether the caller may open a component in its own view", () => {
   }
 
   it("names the RESOLVED collection to an author who may update it", async () => {
-    const { ctx, asked } = caller([["update", "site_components"]]);
+    const { ctx, asked } = caller([
+      ["read", "site_components"],
+      ["update", "site_components"],
+    ]);
     const answer = await readEditorCapability(ctx);
-    expect(answer.componentEditing).toEqual({ collection: "site_components" });
+    expect(answer.componentEditing).toEqual({
+      collection: "site_components",
+      field: "content",
+    });
     expect(asked).toContainEqual(["update", "site_components"]);
   });
 
   it("names a configured store literally", async () => {
-    const { ctx } = caller([["update", "my_defs"]]);
-    const answer = await readEditorCapability(ctx, { collection: "my_defs" });
-    expect(answer.componentEditing).toEqual({ collection: "my_defs" });
+    const { ctx } = caller([
+      ["read", "my_defs"],
+      ["update", "my_defs"],
+    ]);
+    const answer = await readEditorCapability(ctx, {
+      collection: "my_defs",
+      field: "definition",
+    });
+    expect(answer.componentEditing).toEqual({
+      collection: "my_defs",
+      field: "definition",
+    });
+  });
+
+  it("answers null to an author who may update but not read them", async () => {
+    const { ctx } = caller([["update", "site_components"]]);
+    expect((await readEditorCapability(ctx)).componentEditing).toBeNull();
   });
 
   it("answers null to an author who may only read components", async () => {
