@@ -40,7 +40,6 @@ import {
   truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
 import {
-  ACCEPT_DATA_LOSS_HELP,
   isInteractiveTerminal,
   judgeDataLoss,
   resolveDataLossConsent,
@@ -1199,48 +1198,27 @@ export async function runMigrateDown(
   }
 }
 
-export function registerMigrateDownCommand(program: Command): void {
-  program
-    .command("migrate:down")
-    .description(
-      "Roll back the most-recently-applied migration(s) using their -- DOWN section"
-    )
-    .option("--step <n>", "Roll back the last N migrations", parseInt)
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    .option("--allow-data-loss", "Deprecated: use --accept-data-loss", false)
-    .option(
-      "--yes",
-      "Confirm rollback in production (NODE_ENV=production)",
-      false
-    )
-    .option(
-      "--dry-run",
-      "Show what would be rolled back (and the DOWN SQL) without executing",
-      false
-    )
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
-    .option(
-      "--plugin <name>",
-      "Roll back <name>'s migrations instead of the app's"
-    )
-    .action(async (cmdOptions: MigrateDownCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      const resolvedOptions: ResolvedDownOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
-      try {
-        await runMigrateDown(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+/**
+ * The action of `nextly migrate:down`, loaded when it runs.
+ */
+export async function migrateDownAction(
+  cmdOptions: MigrateDownCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  const resolvedOptions: ResolvedDownOptions = {
+    ...cmdOptions,
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
+  try {
+    await runMigrateDown(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateDownCommand } from "./migrate-down.command";

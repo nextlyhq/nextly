@@ -211,42 +211,28 @@ export async function runGenerateManifest(
   );
 }
 
-/**
- * Register the generate:manifest command with the program
- *
- * @param program - Commander program instance
- */
-export function registerGenerateManifestCommand(program: Command): void {
-  program
-    .command("generate:manifest")
-    .description(
-      "Generate the block manifest from plugin declarations, or check it is current"
-    )
-    .option(
-      "-o, --output <path>",
-      "Types output path the manifest is written beside"
-    )
-    .option(
-      "--check",
-      "Write nothing; exit non-zero if the committed manifest is stale"
-    )
-    .action(async (cmdOptions: GenerateManifestOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+/** The action of `nextly generate:manifest`, loaded when it runs. */
+export async function generateManifestAction(
+  cmdOptions: GenerateManifestOptions,
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      try {
-        await runGenerateManifest(
-          {
-            ...cmdOptions,
-            config: globalOpts.config,
-            verbose: globalOpts.verbose,
-            quiet: globalOpts.quiet,
-            cwd: globalOpts.cwd,
-          },
-          context
-        );
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  try {
+    await runGenerateManifest(
+      {
+        ...cmdOptions,
+        config: globalOpts.config,
+        verbose: globalOpts.verbose,
+        quiet: globalOpts.quiet,
+        cwd: globalOpts.cwd,
+      },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerGenerateManifestCommand } from "./generate-manifest.command";

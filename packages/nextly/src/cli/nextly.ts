@@ -44,12 +44,18 @@ import { join } from "path";
 
 import { config } from "dotenv";
 
-// Load environment variables from .env file in current working directory.
-// This MUST happen before any application module is imported because those
-// modules may read process.env during initialisation (e.g. env validation).
-const envPath = join(process.cwd(), ".env");
-if (existsSync(envPath)) {
-  config({ path: envPath });
+/**
+ * Loads the `.env` file of the folder the CLI runs in. Called before a
+ * command's action runs and before anything it imports: those modules may read
+ * `process.env` as they load (env validation, for one). An answer-only
+ * invocation (`--help`, `--version`, an unknown command) runs no action, so it
+ * reads no file and answers the same in any folder.
+ */
+function loadEnvFile(): void {
+  const envPath = join(process.cwd(), ".env");
+  if (existsSync(envPath)) {
+    config({ path: envPath });
+  }
 }
 
 // ============================================================================
@@ -59,17 +65,15 @@ if (existsSync(envPath)) {
 /**
  * Main CLI entry point
  *
- * Uses dynamic import() for createProgram so that all application modules
- * (and their transitive dependencies) are loaded AFTER dotenv has populated
- * process.env. Static ESM imports are hoisted and evaluated before the
- * module body, which would cause env validation to fire before dotenv runs.
+ * The program declares every command without loading its work, and a
+ * command's work is imported only when it runs, after `loadEnvFile`.
+ * Telemetry is imported when a command runs, and the error reporting only for
+ * a run that fails.
  */
 async function main(): Promise<void> {
   const { createProgram } = await import("./program");
-  const { reportCliError } = await import("./errors/index");
-  const telemetry = await import("@nextlyhq/telemetry");
 
-  const program = createProgram();
+  const program = createProgram({ beforeAction: loadEnvFile });
 
   try {
     await program.parseAsync(process.argv);
@@ -78,6 +82,7 @@ async function main(): Promise<void> {
     // message or stack. Wrapped so a telemetry failure can never mask the
     // underlying user-visible error.
     try {
+      const telemetry = await import("@nextlyhq/telemetry");
       telemetry.capture("command_failed", {
         command: process.argv[2] ?? "unknown",
         duration_ms: 0,
@@ -97,6 +102,7 @@ async function main(): Promise<void> {
       typeof error.code === "string" &&
       error.code.startsWith("commander.");
     if (!commanderError) {
+      const { reportCliError } = await import("./errors/index");
       const globals = program.opts<{ verbose?: boolean }>();
       reportCliError(error, { verbose: globals.verbose === true });
     }

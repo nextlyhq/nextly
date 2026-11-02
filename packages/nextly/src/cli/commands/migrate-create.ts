@@ -1371,55 +1371,30 @@ async function runMigrateCreatePlugin(
   reportPluginMigration(result, cwd, logger);
 }
 
-export function registerMigrateCreateCommand(program: Command): void {
-  program
-    .command("migrate:create")
-    .description(
-      "Create a new migration file from schema changes or for custom SQL"
-    )
-    .argument("[name]", "Migration name (slug-cased, e.g., add_excerpt)")
-    .option("--name <name>", "Migration name (alternate to positional arg)")
-    .option("--blank", "Create an empty migration file for custom SQL", false)
-    .option(
-      "--non-interactive",
-      "Skip interactive prompts (auto-detected from non-TTY)",
-      false
-    )
-    .option(
-      "--accept-renames",
-      "ADVANCED: auto-accept all rename candidates in non-interactive mode",
-      false
-    )
-    .option(
-      "--plugin <entry>",
-      "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"
-    )
-    .option(
-      "--no-transaction",
-      "Write a unit that runs outside a transaction: with --blank, a file whose first line is the marker; with --plugin, a module with transaction: false that you can edit"
-    )
-    .action(
-      async (
-        positionalName: string | undefined,
-        cmdOptions: MigrateCreateCommandOptions,
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
+/**
+ * The action of `nextly migrate:create`, loaded when it runs.
+ */
+export async function migrateCreateAction(
+  positionalName: string | undefined,
+  cmdOptions: MigrateCreateCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-        const resolvedOptions: ResolvedMigrateCreateOptions = {
-          ...cmdOptions,
-          config: globalOpts.config,
-          verbose: globalOpts.verbose,
-          quiet: globalOpts.quiet,
-          cwd: globalOpts.cwd,
-        };
+  const resolvedOptions: ResolvedMigrateCreateOptions = {
+    ...cmdOptions,
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
 
-        try {
-          await runMigrateCreate(positionalName, resolvedOptions, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
-    );
+  try {
+    await runMigrateCreate(positionalName, resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateCreateCommand } from "./migrate-create.command";

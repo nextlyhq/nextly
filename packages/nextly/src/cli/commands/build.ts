@@ -979,42 +979,30 @@ async function getAppliedMigrations(
 }
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
-/**
- * Register the build command with the program
- *
- * @param program - Commander program instance
- */
-export function registerBuildCommand(program: Command): void {
-  program
-    .command("build")
-    .description("Production build - validate collections and generate files")
-    .option("--strict", "Fail on any validation warnings", false)
-    .option(
-      "--skip-migrations-check",
-      "Skip migration status verification",
-      false
-    )
-    .option("--no-types", "Skip TypeScript type generation")
-    .option("--no-zod", "Skip Zod validation schema generation")
-    .action(async (cmdOptions: BuildCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+/** The action of `nextly build`, loaded when it runs. */
+export async function buildAction(
+  cmdOptions: BuildCommandOptions,
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      const resolvedOptions: ResolvedBuildOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
+  const resolvedOptions: ResolvedBuildOptions = {
+    ...cmdOptions,
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
 
-      try {
-        await runBuild(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  try {
+    await runBuild(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerBuildCommand } from "./build.command";

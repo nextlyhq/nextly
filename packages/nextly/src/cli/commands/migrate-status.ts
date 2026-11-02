@@ -1042,37 +1042,28 @@ function displayRegistryDisagreements(
 }
 
 /**
- * Register the migrate:status command with the program
- *
- * @param program - Commander program instance
+ * The action of `nextly migrate:status`, loaded when it runs.
  */
-export function registerMigrateStatusCommand(program: Command): void {
-  program
-    .command("migrate:status")
-    .description("Show current migration status")
-    .option("--json", "Output as JSON for scripting/CI", false)
-    .option("--plugin <name>", "List <name>'s migrations instead of the app's")
-    .action(async (cmdOptions: MigrateStatusCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+export async function migrateStatusAction(
+  cmdOptions: MigrateStatusCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      const resolvedOptions: ResolvedMigrateStatusOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
+  const resolvedOptions: ResolvedMigrateStatusOptions = {
+    ...cmdOptions,
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
 
-      try {
-        await runMigrateStatus(resolvedOptions, context);
-      } catch (error) {
-        endWithError(
-          resolvedOptions,
-          context.logger,
-          describeError(error),
-          error
-        );
-      }
-    });
+  try {
+    await runMigrateStatus(resolvedOptions, context);
+  } catch (error) {
+    endWithError(resolvedOptions, context.logger, describeError(error), error);
+  }
 }
+
+export { registerMigrateStatusCommand } from "./migrate-status.command";

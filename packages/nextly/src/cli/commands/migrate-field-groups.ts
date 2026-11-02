@@ -221,41 +221,29 @@ function reportLock(
   logger.info("No migration is currently running.");
 }
 
-export function registerMigrateFieldGroupsCommand(program: Command): void {
-  program
-    .command("migrate:field-groups")
-    .description(
-      "Preview or apply the rename of field-group storage to its current names"
-    )
-    .option(
-      "--apply",
-      "Perform the migration (without this, the command only previews)",
-      false
-    )
-    .option("--down", "Roll a completed migration back", false)
-    .option(
-      "--backup-confirmed",
-      "You confirm a restorable backup exists (required with --apply)",
-      false
-    )
-    .action(
-      async (cmdOptions: MigrateFieldGroupsCommandOptions, cmd: Command) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        try {
-          await runMigrateFieldGroups(
-            {
-              ...cmdOptions,
-              config: globalOpts.config,
-              verbose: globalOpts.verbose,
-              quiet: globalOpts.quiet,
-              cwd: globalOpts.cwd,
-            },
-            context
-          );
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
+/**
+ * The action of `nextly migrate:field-groups`, loaded when it runs.
+ */
+export async function migrateFieldGroupsAction(
+  cmdOptions: MigrateFieldGroupsCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runMigrateFieldGroups(
+      {
+        ...cmdOptions,
+        config: globalOpts.config,
+        verbose: globalOpts.verbose,
+        quiet: globalOpts.quiet,
+        cwd: globalOpts.cwd,
+      },
+      context
     );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateFieldGroupsCommand } from "./migrate-field-groups.command";

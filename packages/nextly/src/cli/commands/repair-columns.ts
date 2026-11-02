@@ -28,8 +28,6 @@ import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
-const REPAIR_COLUMNS_COMMAND = "repair-columns";
-
 const ENTITY_LABEL: Record<ColumnLocation["kind"], string> = {
   collection: "collection",
   single: "Single",
@@ -165,22 +163,22 @@ async function runRepairColumns(
   }
 }
 
-export function registerRepairColumnsCommand(
-  program: Command,
+/**
+ * The action of `nextly repair-columns`, loaded when it runs, with the
+ * context factory the program registered it with.
+ */
+export function repairColumnsAction(
   createContext: (options: GlobalOptions) => CommandContext
-): void {
-  program
-    .command(REPAIR_COLUMNS_COMMAND)
-    .description(
-      "Report every column whose type or nullability differs from its field (changes nothing)"
-    )
-    .action(async (_options: Record<string, never>, cmd: Command) => {
-      const globals = cmd.optsWithGlobals<GlobalOptions>();
-      const context = createContext(globals);
-      // Every way the run stops ends in the CLI's error shape, with the code that names it.
-      await runRepairColumns(
-        { config: globals.config, cwd: globals.cwd, verbose: globals.verbose },
-        context
-      ).catch((error: unknown) => exitWithError(context.logger, error));
-    });
+) {
+  return async (_options: Record<string, never>, cmd: Command) => {
+    const globals = cmd.optsWithGlobals<GlobalOptions>();
+    const context = createContext(globals);
+    // Every way the run stops ends in the CLI's error shape, with the code that names it.
+    await runRepairColumns(
+      { config: globals.config, cwd: globals.cwd, verbose: globals.verbose },
+      context
+    ).catch((error: unknown) => exitWithError(context.logger, error));
+  };
 }
+
+export { registerRepairColumnsCommand } from "./repair-columns.command";

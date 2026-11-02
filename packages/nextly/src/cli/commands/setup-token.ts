@@ -35,6 +35,8 @@ import type { CommandContext, GlobalOptions } from "../program";
 import { withAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 
+export { registerSetupTokenCommand } from "./setup-token.command";
+
 /**
  * What the command concluded, for its shell to print and exit on: the lines
  * to print, or the refusal the command ends with.
@@ -137,30 +139,18 @@ export async function runSetupTokenCommand(
 }
 
 /**
- * Register the `nextly setup-token` command. The program hands in its context
- * factory, so this module imports nothing at runtime from the program that
- * imports it.
+ * The action of `nextly setup-token`, loaded when it runs, building its
+ * context with the factory the program hands in.
  */
-export function registerSetupTokenCommand(
-  program: Command,
+export function setupTokenAction(
   createContext: (options: GlobalOptions) => CommandContext
-): void {
-  program
-    .command("setup-token")
-    .description(
-      "Replace the production setup token and print the new one, or print a value for NEXTLY_SETUP_TOKEN"
-    )
-    .option(
-      "--generate",
-      "Print a value suitable for NEXTLY_SETUP_TOKEN, touching nothing",
-      false
-    )
-    .action(async (cmdOptions: { generate?: boolean }, cmd: Command) => {
-      const context = createContext(cmd.optsWithGlobals());
-      try {
-        await runSetupTokenCommand(cmdOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+): (cmdOptions: { generate?: boolean }, cmd: Command) => Promise<void> {
+  return async (cmdOptions: { generate?: boolean }, cmd: Command) => {
+    const context = createContext(cmd.optsWithGlobals());
+    try {
+      await runSetupTokenCommand(cmdOptions, context);
+    } catch (error) {
+      exitWithError(context.logger, error);
+    }
+  };
 }
