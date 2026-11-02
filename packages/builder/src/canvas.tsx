@@ -203,9 +203,7 @@ const DARK_GROUND_LUMINANCE = 0.179;
 interface SiteSurface {
   /** The custom properties naming the site's tokens, under its prefix. */
   readonly style: Record<`--${string}`, string>;
-  /** How the site's dark token values are switched on. */
-  readonly darkMode: "attribute" | "media";
-  /** Whether the site's background token has a DARK value for that state. */
+  /** Whether the site's background token has a DARK value. */
   readonly darkGround: boolean;
 }
 
@@ -221,10 +219,10 @@ interface SiteSurface {
  * `resolveSiteTokens` — so whether the ground has a dark value is asked of the
  * same tokens the page draws with.
  *
- * The page's colour scheme is not inferred from the strategy alone. The
- * strategy says when the site's dark VALUES apply; the scheme goes dark only
- * where those values include a dark ground, so a site whose dark set leaves
- * the background light keeps a light page and light native controls.
+ * The site sheet applies dark values with the device (or a dark marker), for
+ * every site. The scheme goes dark only where those values include a dark
+ * ground, so a site whose dark set leaves the background light keeps a light
+ * page and light native controls.
  */
 function siteSurface(
   render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
@@ -246,7 +244,6 @@ function siteSurface(
   )?.values.dark;
   return {
     style,
-    darkMode: tokens.darkMode ?? "attribute",
     darkGround: ground !== undefined && isDarkGround(ground),
   };
 }
@@ -2280,23 +2277,13 @@ export function Canvas({
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
       /*
-       * How the site's GROUND turns dark, for the stylesheet: the strategy the
-       * site's dark token values apply by, present only when those values
-       * include a dark ground.
-       *
-       * The canvas draws the page from the site's own tokens, so its ground
-       * and text already follow the site's dark values; what this decides is
-       * the colour scheme — Canvas, CanvasText and native controls. A site on
-       * the `media` strategy darkens with the visitor's system, and only the
-       * token set says which strategy it uses — CSS cannot read it — so it is
-       * carried here and the sheet pairs it with the media query. The strategy
-       * alone says when dark values apply, not that the page is dark, so a
-       * site whose dark set keeps a light ground carries nothing. Absent too
-       * when the host serves no site sheet.
+       * Whether the site's dark values include a dark ground. They apply with
+       * the device, or under a dark marker, exactly as the site sheet applies
+       * them, and the stylesheet pairs this with both to switch the SCHEME:
+       * Canvas, CanvasText and native controls. Absent when the dark values
+       * keep a light ground, or the host serves no site sheet.
        */
-      data-nx-site-dark-ground={
-        surface?.darkGround === true ? surface.darkMode : undefined
-      }
+      data-nx-site-dark-ground={surface?.darkGround === true ? "" : undefined}
       /*
        * What the pointer means, for the cursor.
        *
