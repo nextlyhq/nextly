@@ -103,12 +103,15 @@ const NON_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /** What pressing Escape over the editor should do. */
-export type EscapeOutcome = "defer-to-modal" | "leave-to-field" | "deselect";
+export type EscapeOutcome =
+  | "defer-to-modal"
+  | "leave-to-field"
+  | "navigate-selection";
 
 /**
  * The whole rule, as one decision a test can make without a keyboard.
  *
- * `"leave-to-field"` and `"deselect"` are both CONSUMED by the editor; they
+ * `"leave-to-field"` and `"navigate-selection"` are both CONSUMED by the editor; they
  * differ only in what happens afterwards. Only `"defer-to-modal"` declines the
  * key, and it declines to something that is itself dismissing on Escape.
  *
@@ -116,8 +119,9 @@ export type EscapeOutcome = "defer-to-modal" | "leave-to-field" | "deselect";
  * key, and the editor owns it whether or not a block is selected — an editor
  * that released Escape once the canvas happened to have nothing selected would
  * lose the author's work in exactly the state a click on background produces.
- * Whether there is anything to deselect is the caller's question, asked after
- * this one.
+ * What it does with the selection — up to the block holding it, or clear at
+ * the top — and whether there is a selection at all are the caller's
+ * questions, asked after this one.
  */
 export function escapeOutcome(root: Document | undefined): EscapeOutcome {
   if (modalIsOpen(root)) return "defer-to-modal";
@@ -127,9 +131,10 @@ export function escapeOutcome(root: Document | undefined): EscapeOutcome {
   if (isTextEntry(root === undefined ? null : deepActiveElement(root))) {
     return "leave-to-field";
   }
-  // Deselecting with nothing selected is a no-op that still consumes the key —
-  // which is the whole point. An editor that let Escape through once the canvas
-  // happened to have no selection would lose the author's work in exactly the
-  // state where they had clicked away from a block before pressing it.
-  return "deselect";
+  // Moving the selection with nothing selected is a no-op that still consumes
+  // the key — which is the whole point. An editor that let Escape through once
+  // the canvas happened to have no selection would lose the author's work in
+  // exactly the state where they had clicked away from a block before pressing
+  // it.
+  return "navigate-selection";
 }

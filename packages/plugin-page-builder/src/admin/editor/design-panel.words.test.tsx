@@ -24,7 +24,7 @@ const { DesignPanel } = await import("./design-panel");
 afterEach(cleanup);
 
 describe("the Design panel's words", () => {
-  it("names its tabs from the editor's catalogue", () => {
+  it("names itself and its tabs from the editor's catalogue", () => {
     render(
       <DesignPanel
         view={{ current: null, choose: vi.fn() }}
@@ -41,5 +41,7 @@ describe("the Design panel's words", () => {
       "«sharedStyles»",
       "«fonts»",
     ]);
+    expect(screen.getByRole("heading", { name: "«design»" })).toBeTruthy();
+    expect(screen.getByRole("tablist", { name: "«design»" })).toBeTruthy();
   });
 });

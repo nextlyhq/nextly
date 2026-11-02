@@ -10,6 +10,7 @@
  *
  * @module editor-words.surfaces.test
  */
+import { ShortcutProvider } from "@nextlyhq/ui";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as React from "react";
@@ -29,6 +30,7 @@ const { inspectorTabLabels } = await import("./inspector-panel");
 const { InsertPanel } = await import("./insert-panel");
 const { LayersPanel } = await import("./layers-panel");
 const { useEditorState } = await import("./editor-state");
+const { HelpDialog } = await import("./help-dialog");
 
 afterEach(cleanup);
 
@@ -63,5 +65,15 @@ describe("the editor's surfaces read the catalogue", () => {
     expect(screen.getByRole("tab", { name: "«blocks»" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "«sections»" })).toBeTruthy();
     expect(screen.getByRole("tree", { name: "«layers»" })).toBeTruthy();
+  });
+
+  it("titles the Help dialog from it", () => {
+    render(
+      <ShortcutProvider>
+        <HelpDialog open onOpenChange={() => {}} />
+      </ShortcutProvider>
+    );
+
+    expect(screen.getByRole("dialog", { name: "«help»" })).toBeTruthy();
   });
 });

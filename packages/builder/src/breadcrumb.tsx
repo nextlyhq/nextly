@@ -100,7 +100,9 @@ export function SelectionBreadcrumb({
 
   return (
     <div className="nx-bottom-bar">
-      <ol className="nx-breadcrumb" aria-label="Selected block's ancestors">
+      {/* Named for what it always shows, the page down to the selection,
+          rather than for a selection there may not be. */}
+      <ol className="nx-breadcrumb" aria-label="Current location">
         {crumbs.map((crumb, index) => (
           <li className="nx-breadcrumb__item" key={crumb.key}>
             {index > 0 ? (

@@ -996,7 +996,7 @@ export function useBlockKeyboardActions({
           const outcome = escapeOutcome(
             typeof document === "undefined" ? undefined : document
           );
-          if (outcome !== "deselect") return;
+          if (outcome !== "navigate-selection") return;
           if (editorNow.selectedId === null) return;
           // Up a level: the block holding the selection, the same answer
           // "Select parent" gives, or nothing once the selection is at the top.
