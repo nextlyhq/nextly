@@ -59,6 +59,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "DocumentLocale (type)",
   "DocumentLockGates (type)",
   "DocumentPreview (type)",
+  "DocumentPrimaryAction (value)",
+  "DocumentSaveIndicator (value)",
   "DocumentSaveState (type)",
   "DocumentStatus (type)",
   "DocumentViewProps (type)",

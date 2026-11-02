@@ -242,6 +242,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useBeforeDocumentAction: (handler: () => void) => {
     beforeStore = handler;
   },
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () =>
     React.useSyncExternalStore(
       listener => {

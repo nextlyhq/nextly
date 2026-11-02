@@ -262,6 +262,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useBeforeDocumentAction: (handler: (action: string) => void) => {
     beforeAction = handler;
   },
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useSuppressAdminChrome: () => {},
   // No preview here: the top bar's Preview draws nothing.

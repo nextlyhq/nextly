@@ -114,6 +114,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useDocumentStatus: () => null,
   useSingleDocument: () => siteStyleRead,
