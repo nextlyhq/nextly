@@ -157,24 +157,46 @@ describe("the canvas surface is the site's, not the admin's", () => {
     expect(family?.includes("--font-sans"), "the admin's own face").toBe(false);
   });
 
-  it("is darkened by the site's own dark mode, keyed on the strategy the canvas states", () => {
+  it("is darkened by the site's own dark mode, by the marker the canvas states", () => {
     expect(
       declared(
         ruleIn(
           CANVAS_FRAME_SHEET,
-          '[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground="attribute"]'
+          '.nx-canvas[data-nx-site-dark-ground][data-nx-site-theme="dark"]'
         ),
         "color-scheme"
       )
     ).toBe("dark");
+    // With no marker stated, the device decides, as it does for the values.
     const media =
-      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground="media"\] \{([^}]*)\}/.exec(
+      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground\]:not\(\[data-nx-site-theme\]\) \{([^}]*)\}/.exec(
         CANVAS_FRAME_SHEET
       );
-    expect(media, "the media-strategy rule exists").not.toBeNull();
+    expect(media, "the device rule exists").not.toBeNull();
     expect(declared(media?.[1] ?? "", "color-scheme")).toBe("dark");
-    // Nothing keyed on the admin's `.dark` class: it is in another document.
+    // Nothing keyed on the admin's `.dark` class, or on markers above the
+    // canvas, which the canvas states for itself.
     expect(/\.dark\b/.test(CANVAS_FRAME_SHEET)).toBe(false);
+    expect(CANVAS_FRAME_SHEET.includes("[data-nx-theme")).toBe(false);
+  });
+
+  it("makes the page one stacking context, and repeats only an opaque ground", () => {
+    const page = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas > .nx-pb-page");
+    expect(declared(page, "isolation")).toBe("isolate");
+    for (const property of ["display", "background-color", "background"]) {
+      expect(declared(page, property), `the page root's ${property}`).toBe(
+        undefined
+      );
+    }
+    expect(
+      declared(
+        ruleIn(
+          CANVAS_FRAME_SHEET,
+          ":where(.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page)"
+        ),
+        "background-color"
+      )
+    ).toBe("var(--nx-canvas-site-ground, Canvas)");
   });
 
   it("draws none of the editor's chrome inside the page", () => {
@@ -270,6 +292,14 @@ describe("the editing colours drawn on the page", () => {
   it("halo the selection ring and the drop line in a mode-invariant white", () => {
     expect(declared(ruleFor(SELECTED), "box-shadow")).toBe(
       "inset 0 0 0 4px var(--nx-builder-halo)"
+    );
+    // The rest of a selection: a thinner ring with a thinner halo.
+    const secondary = ruleFor(
+      '.nx-canvas-mark[data-mark="selected"][data-secondary]'
+    );
+    expect(declared(secondary, "outline-width")).toBe("1px");
+    expect(declared(secondary, "box-shadow")).toBe(
+      "inset 0 0 0 2px var(--nx-builder-halo)"
     );
     expect(declared(ruleFor(".nx-drop-indicator"), "box-shadow")).toBe(
       "0 0 0 1px var(--nx-builder-halo)"

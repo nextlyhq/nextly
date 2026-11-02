@@ -294,6 +294,273 @@ describe("toolbarActions", () => {
   });
 });
 
+describe("making a component from a selection", () => {
+  const anyParent = { parentsOf: () => undefined };
+  const offer = { mayCreate: true };
+
+  it("offers neither verb where the host has no component library", () => {
+    const ids = toolbarActions(
+      documentOf([node("a")]),
+      "a",
+      ["a"],
+      anyParent
+    ).map(action => action.id);
+
+    expect(ids).not.toContain("save-as-component");
+    expect(ids).not.toContain("convert-to-component");
+  });
+
+  it("offers both behind the menu, for a run of blocks", () => {
+    const document = documentOf([node("a"), node("b"), node("c")]);
+    const actions = toolbarActions(
+      document,
+      "a",
+      ["a", "b"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    );
+
+    for (const id of ["save-as-component", "convert-to-component"] as const) {
+      expect(actionOf(actions, id)).toMatchObject({
+        enabled: true,
+        inMenu: true,
+      });
+    }
+    // The structural verbs stay buttons of their own.
+    expect(actionOf(actions, "delete").inMenu).toBeUndefined();
+  });
+
+  it("dims both with the grant's reason for an author who may not publish components", () => {
+    const actions = toolbarActions(
+      documentOf([node("a")]),
+      "a",
+      ["a"],
+      anyParent,
+      true,
+      undefined,
+      { mayCreate: false }
+    );
+
+    for (const id of ["save-as-component", "convert-to-component"] as const) {
+      expect(actionOf(actions, id)).toMatchObject({
+        enabled: false,
+        reason: "You do not have permission to create and publish components.",
+      });
+    }
+  });
+
+  it("dims both with the planner's reason for a run with a gap", () => {
+    const document = documentOf([node("a"), node("b"), node("c")]);
+    const actions = toolbarActions(
+      document,
+      "a",
+      ["a", "c"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    );
+
+    const reason = compositionRefusalReason({ problem: "gap" });
+    expect(actionOf(actions, "save-as-component").reason).toBe(reason);
+    expect(actionOf(actions, "convert-to-component").reason).toBe(reason);
+  });
+
+  it("dims convert alone when a locked block cannot be taken off the page", () => {
+    // Saving copies, so a locked block may be saved; converting removes it.
+    const document = documentOf([node("a", "acme/heading", { locked: true })]);
+    const actions = toolbarActions(
+      document,
+      "a",
+      ["a"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    );
+
+    expect(actionOf(actions, "save-as-component").enabled).toBe(true);
+    expect(actionOf(actions, "convert-to-component").enabled).toBe(false);
+  });
+
+  it("dims convert when the editor's lock question refuses its ops", () => {
+    const document = documentOf([node("a")]);
+    const asked: string[] = [];
+    const actions = toolbarActions(
+      document,
+      "a",
+      ["a"],
+      anyParent,
+      true,
+      ops => {
+        asked.push(ops.map(op => op.kind).join(","));
+        return ops.some(op => op.kind === "insert")
+          ? {
+              code: "locked-slot-altered",
+              holderType: "acme/hero",
+              lock: "all",
+              childType: undefined,
+            }
+          : undefined;
+      },
+      offer
+    );
+
+    expect(asked).toContain("remove,insert");
+    expect(actionOf(actions, "convert-to-component").enabled).toBe(false);
+    expect(actionOf(actions, "save-as-component").enabled).toBe(true);
+  });
+});
+
+describe("detach, duplicate and update a pattern", () => {
+  const anyParent = { parentsOf: () => undefined };
+  const card = {
+    formatVersion: 1,
+    kind: "component",
+    nodes: [node("t", "acme/heading")],
+  } as unknown as BlockDocument;
+  const placed = (id: string) =>
+    node(id, "nextly/component-instance", {
+      props: { componentId: "card" },
+    });
+  const offer = {
+    mayCreate: true,
+    mayUpdatePattern: true,
+    definitions: new Map([["card", card]]),
+  };
+
+  it("offers Detach and Duplicate for one placement, behind the menu", () => {
+    const actions = toolbarActions(
+      documentOf([placed("p")]),
+      "p",
+      ["p"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    );
+
+    expect(actionOf(actions, "detach-component")).toMatchObject({
+      enabled: true,
+      inMenu: true,
+    });
+    expect(actionOf(actions, "duplicate-component").enabled).toBe(true);
+  });
+
+  it("offers neither for a block that is not a placement", () => {
+    const ids = toolbarActions(
+      documentOf([node("a")]),
+      "a",
+      ["a"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    ).map(action => action.id);
+
+    expect(ids).not.toContain("detach-component");
+    expect(ids).not.toContain("duplicate-component");
+  });
+
+  it("dims Detach with the reason when the component cannot be drawn", () => {
+    const actions = toolbarActions(
+      documentOf([placed("p")]),
+      "p",
+      ["p"],
+      anyParent,
+      true,
+      undefined,
+      { ...offer, definitions: new Map() }
+    );
+
+    const detach = actionOf(actions, "detach-component");
+    expect(detach.enabled).toBe(false);
+    expect(detach.reason).toBeTruthy();
+  });
+
+  it("dims Duplicate for an author who may not create components", () => {
+    const actions = toolbarActions(
+      documentOf([placed("p")]),
+      "p",
+      ["p"],
+      anyParent,
+      true,
+      undefined,
+      { ...offer, mayCreate: false }
+    );
+
+    expect(actionOf(actions, "duplicate-component")).toMatchObject({
+      enabled: false,
+      reason: "You do not have permission to create and publish components.",
+    });
+  });
+
+  it("dims Duplicate for a placement whose component this author cannot read", () => {
+    const actions = toolbarActions(
+      documentOf([placed("p")]),
+      "p",
+      ["p"],
+      anyParent,
+      true,
+      undefined,
+      { ...offer, definitions: new Map() }
+    );
+
+    expect(actionOf(actions, "duplicate-component")).toMatchObject({
+      enabled: false,
+      reason: "This component is not available to copy.",
+    });
+  });
+
+  it("dims Duplicate for a locked placement, whose re-point is an edit", () => {
+    const locked = node("p", "nextly/component-instance", {
+      props: { componentId: "card" },
+      locked: true,
+    });
+    const actions = toolbarActions(
+      documentOf([locked]),
+      "p",
+      ["p"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    );
+
+    expect(actionOf(actions, "duplicate-component").enabled).toBe(false);
+  });
+
+  it("offers Update a pattern for a savable run, dimmed without the grant", () => {
+    const document = documentOf([node("a"), node("b")]);
+    const allowed = toolbarActions(
+      document,
+      "a",
+      ["a", "b"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    );
+    const refused = toolbarActions(
+      document,
+      "a",
+      ["a", "b"],
+      anyParent,
+      true,
+      undefined,
+      { ...offer, mayUpdatePattern: false }
+    );
+
+    expect(actionOf(allowed, "update-pattern").enabled).toBe(true);
+    expect(actionOf(refused, "update-pattern")).toMatchObject({
+      enabled: false,
+      reason: "You do not have permission to update and publish patterns.",
+    });
+  });
+});
+
 describe("depthMoveActions", () => {
   it("dims Move in and Move out for a block holding a locked block, and says which", () => {
     // The op store refuses to relocate a subtree holding a locked block, so

@@ -24,6 +24,7 @@ import {
   desc,
   gte,
   lt,
+  type Column,
   type SQL,
   type SQLWrapper,
 } from "drizzle-orm";
@@ -126,6 +127,7 @@ import {
   type FieldGroupReach,
   hiddenColumnMatcher,
   isPasswordFieldName,
+  queriesPassword,
   reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
@@ -1273,6 +1275,51 @@ export class CollectionQueryService extends BaseService {
    * it). Shape: `{ _translated: { locale, state } }`, state ∈ missing|translated|draft|published.
    */
   /**
+   * Refuse an untrusted filter or sort that names a password field, or a
+   * container holding one.
+   *
+   * A password's guarantee comes from its type, not from an `access.read`
+   * rule, so the field-rule guards below never see it, and the strip that
+   * hides its value works on rows after they are selected. A filter or an
+   * ordering on it runs before that: which rows match, and in what order,
+   * would disclose the stored hash one probe at a time.
+   */
+  private async assertNoPasswordQueried(params: {
+    collectionName: string;
+    where?: WhereFilter;
+    sort?: string | readonly string[];
+    overrideAccess?: boolean;
+    enforceFieldAccess?: boolean;
+    frameworkFilter?: boolean;
+  }): Promise<void> {
+    if (fieldTrustOf(params)) return;
+    const filtered = params.frameworkFilter
+      ? []
+      : [...filterKeys(params.where)];
+    const sorted = parseSortKeys(params.sort).map(key => key.field);
+    if (filtered.length === 0 && sorted.length === 0) return;
+    const fields = collectionFieldsFor(
+      await this.collectionService.getCollection(params.collectionName)
+    );
+    const refused = [
+      ...filtered
+        .filter(key => queriesPassword(fields, key))
+        .map(key => ({ path: `where.${key}`, code: "FIELD_NOT_FILTERABLE" })),
+      ...sorted
+        .filter(key => queriesPassword(fields, key))
+        .map(key => ({ path: `sort.${key}`, code: "FIELD_NOT_SORTABLE" })),
+    ];
+    if (refused.length === 0) return;
+    throw NextlyError.validation({
+      errors: refused.map(error => ({
+        ...error,
+        message:
+          "A password field cannot be filtered or sorted on. Its stored value never leaves the server, and which rows match would disclose it.",
+      })),
+    });
+  }
+
+  /**
    * What a caller may select and order by, asked once for both read verbs.
    *
    * `listEntries` and `countEntries` ask the same question of the same request,
@@ -1299,6 +1346,7 @@ export class CollectionQueryService extends BaseService {
     // a refusal after it would come after those effects. The condition is
     // judged again where it is built, for one a trusted hook adds.
     await this.assertReleaseFilterReadable(params);
+    await this.assertNoPasswordQueried(params);
     // The settled filter a list forwards to its own count already passed this
     // check as the caller's, and what a read hook added to it is trusted
     // server code, which may scope by the column its own plugin contributed.
@@ -2991,6 +3039,14 @@ export class CollectionQueryService extends BaseService {
      */
     offset?: number;
     /**
+     * What a sort key naming no sortable field does: `"drop"` (the default)
+     * warns and sorts by the other keys and the id; `"refuse"` refuses the
+     * read, naming every such key, before it runs. A reader serving the
+     * public refuses, so an author learns of the key rather than a list
+     * quietly changing order.
+     */
+    unknownSort?: "drop" | "refuse";
+    /**
      * Number of documents per page.
      * Maximum allowed is 500 to prevent abuse.
      * @default 10
@@ -3254,6 +3310,93 @@ export class CollectionQueryService extends BaseService {
       // makes "what the caller sent" true rather than intended.
       await this.assertQueryReadable(params);
 
+      // Collection metadata: the sort needs its table, and the response
+      // pipeline its relation fields and hooks.
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      // Convert camelCase field names to snake_case for database column lookup
+      // e.g., 'createdAt' → 'created_at', 'updatedAt' → 'updated_at'
+      const toSnakeCase = (str: string): string => {
+        return str.replace(/([A-Z])/g, "_$1").toLowerCase();
+      };
+      const isHiddenColumn = hiddenColumnMatcher(
+        collectionTableName(collection, params.collectionName)
+      );
+      const sortKeys = parseSortKeys(params.sort);
+      // An own property only: a key such as `constructor` must not resolve to
+      // a member every object inherits.
+      const ownColumn = (name: string) =>
+        Object.hasOwn(schema, name)
+          ? (schema as Record<string, unknown>)[name]
+          : undefined;
+      /**
+       * What one sort key names, decided once for both the refusal below and
+       * the ORDER BY: a localized field, a column, a column withheld from
+       * every row, or nothing.
+       */
+      const classifySortKey = (
+        sortField: string
+      ):
+        | { kind: "localized"; column: string }
+        | { kind: "column"; column: Column }
+        | { kind: "withheld" }
+        | { kind: "unknown" } => {
+        const sortFieldSnake = toSnakeCase(sortField);
+        // i18n M4: a localized sort field lives in the companion table (absent
+        // from the main schema), ordered by a correlated subquery below.
+        const localizedSortField =
+          companion && localeChain
+            ? companion.localizedFields.find(
+                f => f.name === sortField || f.column === sortFieldSnake
+              )
+            : undefined;
+        if (localizedSortField) {
+          return { kind: "localized", column: localizedSortField.column };
+        }
+        // The system owner column is stripped from responses, so it must not be
+        // sortable either — sorting by it would let a caller order/target rows
+        // by creator. A hidden contributed column is stripped from every row as
+        // the owner column is, so it is withheld for the same reason: the
+        // order of the page would be a comparison of values never returned.
+        if (
+          sortField === "created_by" ||
+          sortField === "createdBy" ||
+          sortFieldSnake === "created_by" ||
+          isHiddenColumn(sortField)
+        ) {
+          return { kind: "withheld" };
+        }
+        // Both camelCase and snake_case: user-defined fields are often
+        // camelCase, system fields snake_case in the database.
+        const column = ownColumn(sortField) ?? ownColumn(sortFieldSnake);
+        return column
+          ? { kind: "column", column: column as Column }
+          : { kind: "unknown" };
+      };
+      // Refused BEFORE the read hooks, as the other query checks are: a hook
+      // may write an audit entry or spend a rate-limit budget, and a refusal
+      // after it would come after those effects. A withheld key is named as
+      // unknown, so what the caller may not sort by is not told apart from
+      // what does not exist.
+      if (params.unknownSort === "refuse") {
+        const unknownSortKeys = sortKeys
+          .map(key => key.field)
+          .filter(field => {
+            const { kind } = classifySortKey(field);
+            return kind === "withheld" || kind === "unknown";
+          });
+        if (unknownSortKeys.length > 0) {
+          throw NextlyError.validation({
+            errors: unknownSortKeys.map(key => ({
+              path: `sort.${key}`,
+              code: "FIELD_NOT_SORTABLE",
+              message: `"${key}" is not a field this list can be sorted by.`,
+            })),
+          });
+        }
+      }
+
       // The read hooks settle the filter before any seam or constraint touches
       // it, so `beforeOperation` and `beforeRead` both narrow the rows actually
       // returned rather than being computed and dropped.
@@ -3347,28 +3490,12 @@ export class CollectionQueryService extends BaseService {
         );
       }
 
-      // Collection metadata: the sort below needs its table, and the response
-      // pipeline its relation fields and hooks.
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
-
       // ============================================================
       // SORTING: Apply ORDER BY clause
       // ============================================================
 
       // Each key sorts in turn: '-createdAt' descending, 'title' ascending;
       // empty values last and the id as the last key (see orderBySortKeys).
-      // A read naming neither a sort nor an offset keeps issuing no ORDER BY.
-      // Convert camelCase field names to snake_case for database column lookup
-      // e.g., 'createdAt' → 'created_at', 'updatedAt' → 'updated_at'
-      const toSnakeCase = (str: string): string => {
-        return str.replace(/([A-Z])/g, "_$1").toLowerCase();
-      };
-      const isHiddenColumn = hiddenColumnMatcher(
-        collectionTableName(collection, params.collectionName)
-      );
-      const sortKeys = parseSortKeys(params.sort);
       const orderBy = orderBySortKeys({
         keys: sortKeys,
         // An empty array asks for id order; a string naming no key asks for
@@ -3379,24 +3506,13 @@ export class CollectionQueryService extends BaseService {
           params.offset !== undefined,
         id: schema.id,
         resolve: sortField => {
-          const sortFieldSnake = toSnakeCase(sortField);
-
-          // i18n M4: a localized sort field lives in the companion table (absent from the main
-          // schema). Order by a correlated subquery pulling the companion value for the requested
-          // locale (with fallback) so pagination is correct. Applied only when the collection is
-          // localized and this field is one of its translatable fields.
-          const localizedSortField =
-            companion && localeChain
-              ? companion.localizedFields.find(
-                  f => f.name === sortField || f.column === sortFieldSnake
-                )
-              : undefined;
-          if (localizedSortField && companion && localeChain) {
+          const named = classifySortKey(sortField);
+          if (named.kind === "localized" && companion && localeChain) {
             return {
               expr: buildLocalizedOrderExpr({
                 companionTableName: companion.companionTableName,
                 mainIdColumn: schema.id,
-                column: localizedSortField.column,
+                column: named.column,
                 localeChain,
                 statusValues: localizedCtx?.statusValues, // don't sort by draft translations
               }),
@@ -3404,31 +3520,15 @@ export class CollectionQueryService extends BaseService {
               nullable: true,
             };
           }
-
-          // The system owner column is stripped from responses, so it must not be
-          // sortable either — sorting by it would let a caller order/target rows
-          // by creator. Ignore an owner-column sort instead of resolving it.
-          // A hidden contributed column is stripped from every row as the owner
-          // column is, so it is ignored as a sort for the same reason: the
-          // order of the page would be a comparison of values never returned.
-          if (
-            sortField === "created_by" ||
-            sortField === "createdBy" ||
-            sortFieldSnake === "created_by" ||
-            isHiddenColumn(sortField)
-          ) {
-            return undefined;
+          if (named.kind === "column") {
+            return { expr: named.column, nullable: !named.column.notNull };
           }
-
-          // Try both camelCase and snake_case versions of the field name
-          // This handles both user-defined fields (often camelCase) and system fields (snake_case in DB)
-          const column = schema[sortField] || schema[sortFieldSnake];
-          if (column) return { expr: column, nullable: !column.notNull };
-
-          // An unknown key is dropped with a warning, and the read carries on
-          // with the others and the id.
+          // Withheld keys are ignored quietly. An unknown key is dropped with
+          // a warning, and the read carries on with the others and the id; a
+          // read that asked to refuse was refused before its hooks ran.
+          if (named.kind === "withheld") return undefined;
           this.logger?.warn(
-            `Sort field '${sortField}' (or '${sortFieldSnake}') not found in schema for collection '${params.collectionName}'. ` +
+            `Sort field '${sortField}' not found in schema for collection '${params.collectionName}'. ` +
               `Available fields: ${Object.keys(schema).join(", ")}`
           );
           return undefined;

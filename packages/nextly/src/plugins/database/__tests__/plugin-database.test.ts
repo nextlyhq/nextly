@@ -733,6 +733,101 @@ describe("transaction", () => {
   });
 });
 
+describe("a snapshot transaction", () => {
+  /** A surface whose deps record what each transaction was opened with. */
+  function recording() {
+    const opened: unknown[][] = [];
+    const wrote: string[] = [];
+    const db = {
+      insert: () => ({
+        values: () => {
+          wrote.push("insert");
+          return Promise.resolve();
+        },
+      }),
+      update: () => ({
+        set: () => ({
+          where: () => {
+            wrote.push("update");
+            return Promise.resolve({ rowCount: 1 });
+          },
+        }),
+      }),
+      delete: () => ({
+        where: () => {
+          wrote.push("delete");
+          return Promise.resolve({ rowCount: 1 });
+        },
+      }),
+    };
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      dependsOn: new Set(),
+      owners: () => new Map([["fx__notes", OWNER]]),
+      tables: () => ({ fx__notes: { name: "fx__notes" } }),
+      tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
+      db: () => db,
+      relationalDb: () => db,
+      transaction: (fn, ...rest) => {
+        opened.push(rest);
+        return fn({ db, relationalDb: db });
+      },
+    });
+    return { surface, opened, wrote };
+  }
+
+  it("asks the deps for a snapshot, and an ordinary one for nothing", async () => {
+    // The option is how a supplier learns to open REPEATABLE READ; dropped
+    // here, every snapshot would run at the database's default isolation.
+    const { surface, opened } = recording();
+    await surface.transaction(async () => undefined);
+    await surface.transaction(async () => undefined, { isolation: "snapshot" });
+    expect(opened).toEqual([[], [{ isolation: "snapshot" }]]);
+  });
+
+  it("refuses every write through its handle, sending none", async () => {
+    // Read-only on every dialect, SQLite included, where the database itself
+    // would accept the write.
+    const { surface, wrote } = recording();
+    const refusals = await surface.transaction(
+      async tx =>
+        Promise.all([
+          tx.insert(notes, { bodyText: "x" } as never).catch(error => error),
+          tx
+            .update(notes, { bodyText: "y" })
+            .where(sql`true`)
+            .catch(error => error),
+          tx
+            .delete(notes)
+            .where(sql`true`)
+            .catch(error => error),
+        ]),
+      { isolation: "snapshot" }
+    );
+    expect(
+      refusals.map(error => (error as NextlyError).logContext?.reason)
+    ).toEqual([
+      "write-in-snapshot-transaction",
+      "write-in-snapshot-transaction",
+      "write-in-snapshot-transaction",
+    ]);
+    expect(wrote).toEqual([]);
+  });
+
+  it("CONTROL: the same writes go through in an ordinary transaction", async () => {
+    // Without this, a surface that refused every write everywhere would pass
+    // the case above.
+    const { surface, wrote } = recording();
+    await surface.transaction(async tx => {
+      await tx.insert(notes, { bodyText: "x" } as never);
+      await tx.update(notes, { bodyText: "y" }).where(sql`true`);
+      await tx.delete(notes).where(sql`true`);
+    });
+    expect(wrote).toEqual(["insert", "update", "delete"]);
+  });
+});
+
 describe("relational queries", () => {
   /**
    * A namespace shaped like Drizzle's: schema-wide, naming a core table and

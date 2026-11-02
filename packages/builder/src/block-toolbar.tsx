@@ -43,12 +43,24 @@
  */
 
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@nextlyhq/ui";
+import {
   ArrowDown,
   ArrowUp,
+  Component,
   Copy,
+  CopyPlus,
   CornerLeftUp,
+  Ellipsis,
   LayoutTemplate,
+  RefreshCw,
+  Replace,
   Trash2,
+  Unlink,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -78,6 +90,11 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   // A page outline rather than a bookmark or a star: what is stored is a piece
   // of layout, and the same glyph names the Patterns tier in the insert panel.
   "save-as-pattern": LayoutTemplate,
+  "save-as-component": Component,
+  "convert-to-component": Replace,
+  "detach-component": Unlink,
+  "duplicate-component": CopyPlus,
+  "update-pattern": RefreshCw,
   delete: Trash2,
 };
 
@@ -112,6 +129,17 @@ export function BlockToolbar({
   const { document, selectedId } = editor;
   const selectedIds = editor.selection.ids;
   const actions = useSelectionActions(editor);
+  // The verbs drawn as buttons, and those kept behind "More". One stop in the
+  // bar's roving order stands for the whole menu.
+  const buttons = React.useMemo(
+    () => actions.filter(action => action.inMenu !== true),
+    [actions]
+  );
+  const menu = React.useMemo(
+    () => actions.filter(action => action.inMenu === true),
+    [actions]
+  );
+  const stops = buttons.length + (menu.length > 0 ? 1 : 0);
 
   /*
    * Which button holds the tab stop, per the WAI-ARIA toolbar pattern: one stop
@@ -272,7 +300,7 @@ export function BlockToolbar({
 
   const onKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const count = actions.length;
+      const count = stops;
       if (count === 0) return;
       // Wrapping, which the toolbar pattern lists as the common choice: the bar
       // is five buttons, and stopping at the ends makes reaching Delete from
@@ -292,7 +320,7 @@ export function BlockToolbar({
       // every shortcut the shell binds to reach their own handlers.
       event.preventDefault();
     },
-    [actions.length, activeIndex, focusAt]
+    [stops, activeIndex, focusAt]
   );
 
   /*
@@ -352,7 +380,7 @@ export function BlockToolbar({
       }
       onKeyDown={onKeyDown}
     >
-      {actions.map((action, index) => {
+      {buttons.map((action, index) => {
         const Icon = ICONS[action.id];
         const describedBy =
           action.reason === undefined
@@ -402,6 +430,79 @@ export function BlockToolbar({
           </button>
         );
       })}
+      {menu.length === 0 ? null : (
+        <MoreMenu
+          actions={menu}
+          index={buttons.length}
+          activeIndex={activeIndex}
+          onFocus={setActiveIndex}
+          run={run}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The bar's last stop: the verbs kept behind "More", each with its reason
+ * when it may not run. The reason is visible text, as in the context menu,
+ * since a disabled menu item takes no focus and a tooltip would reach nobody.
+ */
+function MoreMenu({
+  actions,
+  index,
+  activeIndex,
+  onFocus,
+  run,
+}: {
+  actions: readonly ToolbarAction[];
+  index: number;
+  activeIndex: number;
+  onFocus: (index: number) => void;
+  run: (action: ToolbarAction) => void;
+}): React.JSX.Element {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="nx-block-toolbar__button"
+          aria-label="More actions"
+          title="More actions"
+          tabIndex={index === activeIndex ? 0 : -1}
+          onFocus={() => onFocus(index)}
+        >
+          <Ellipsis size={16} aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="nx-block-toolbar__menu"
+        // Chrome, so a press inside is not read as a click on the page.
+        {...{ [CHROME_ATTRIBUTE]: "" }}
+      >
+        {actions.map(action => {
+          const Icon = ICONS[action.id];
+          return (
+            <DropdownMenuItem
+              key={action.id}
+              disabled={!action.enabled}
+              className="nx-block-toolbar__menu-item"
+              onSelect={() => run(action)}
+            >
+              <Icon size={16} aria-hidden="true" />
+              <span className="nx-block-toolbar__menu-text">
+                <span>{action.label}</span>
+                {action.reason === undefined ? null : (
+                  <span className="nx-block-toolbar__menu-reason">
+                    {action.reason}
+                  </span>
+                )}
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

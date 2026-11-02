@@ -82,6 +82,8 @@ import {
 } from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
+import { useNearestThemeMarker } from "./nearest-theme";
+import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
@@ -199,10 +201,10 @@ const DARK_GROUND_LUMINANCE = 0.179;
 interface SiteSurface {
   /** The custom properties naming the site's tokens, under its prefix. */
   readonly style: Record<`--${string}`, string>;
-  /** How the site's dark token values are switched on. */
-  readonly darkMode: "attribute" | "media";
-  /** Whether the site's background token has a DARK value for that state. */
+  /** Whether the site's background token has a DARK value. */
   readonly darkGround: boolean;
+  /** Whether every value of the site's background token is fully opaque. */
+  readonly opaqueGround: boolean;
 }
 
 /**
@@ -217,10 +219,10 @@ interface SiteSurface {
  * `resolveSiteTokens` — so whether the ground has a dark value is asked of the
  * same tokens the page draws with.
  *
- * The page's colour scheme is not inferred from the strategy alone. The
- * strategy says when the site's dark VALUES apply; the scheme goes dark only
- * where those values include a dark ground, so a site whose dark set leaves
- * the background light keeps a light page and light native controls.
+ * The site sheet applies dark values with the device (or a dark marker), for
+ * every site. The scheme goes dark only where those values include a dark
+ * ground, so a site whose dark set leaves the background light keeps a light
+ * page and light native controls.
  */
 function siteSurface(
   render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
@@ -237,13 +239,18 @@ function siteSurface(
     style[property] = `var(${tokenCustomProperty(token, prefix)}, ${fallback})`;
   }
   const tokens = resolveSiteTokens(siteStyles.tokens);
-  const ground = tokens.tokens.find(
+  const values = tokens.tokens.find(
     token => tokenIdentity(token) === SITE_GROUND_TOKEN
-  )?.values.dark;
+  )?.values;
+  const ground = values?.dark;
   return {
     style,
-    darkMode: tokens.darkMode ?? "attribute",
     darkGround: ground !== undefined && isDarkGround(ground),
+    opaqueGround:
+      values !== undefined &&
+      [values.light, values.dark].every(
+        value => value === undefined || alphaOf(value.trim()) === 1
+      ),
   };
 }
 
@@ -259,10 +266,114 @@ function isDarkGround(value: string): boolean {
   return luminance !== undefined && luminance < DARK_GROUND_LUMINANCE;
 }
 
-/** `oklch(L …)`, its lightness as a number or a percentage. */
-const OKLCH = /^oklch\(\s*([\d.]+)(%?)/i;
-/** `hsl(H S% L%)` or `hsla(H, S%, L%, A)`, hue optionally in degrees. */
-const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
+/**
+ * One numeric colour component, with its percentage sign if it has one: an
+ * optional sign, a decimal, an optional exponent, an optional `%`.
+ *
+ * The SAME grammar as the engine's `NUMERIC_COMPONENT` in `contrast.ts`, which
+ * reads `rgb()` and does not export it; mirrored here for the two syntaxes the
+ * engine does not read, so a component is a number in all of them alike.
+ * Matched whole rather than parsed with `parseFloat`, which reads a prefix and
+ * stops — `5e-1` would read as 5 and `12abc` as 12.
+ */
+const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%?)$/;
+
+/** A component as a number, and whether it was a percentage. */
+function numericOf(
+  part: string | undefined
+): { value: number; percent: boolean } | undefined {
+  if (part === undefined) return undefined;
+  const match = NUMERIC_COMPONENT.exec(part);
+  if (match === null) return undefined;
+  const value = Number.parseFloat(part);
+  return Number.isFinite(value)
+    ? { value, percent: match[1] === "%" }
+    : undefined;
+}
+
+/** A component as a 0–1 fraction: a percentage of 100, or a number of `scale`. */
+function fractionOf(
+  part: string | undefined,
+  scale: number
+): number | undefined {
+  const parsed = numericOf(part);
+  if (parsed === undefined) return undefined;
+  const fraction = parsed.value / (parsed.percent ? 100 : scale);
+  // Clamped, as CSS Color 4 clamps alpha, lightness and saturation.
+  return Math.min(1, Math.max(0, fraction));
+}
+
+/**
+ * An `oklch()` or `hsl()`/`hsla()` call, split into its colour components and
+ * its alpha: after a `/` in the modern syntax, the fourth comma-separated
+ * component in the legacy one. `undefined` for anything else, or a call whose
+ * shape is neither.
+ */
+function colourFunction(text: string): ColourCall | undefined {
+  const call = /^(oklch|hsla?)\(([^()]*)\)$/i.exec(text);
+  if (call === null) return undefined;
+  const name = (call[1] ?? "").toLowerCase() === "oklch" ? "oklch" : "hsl";
+  const body = call[2] ?? "";
+  return body.includes(",") ? legacyCall(name, body) : modernCall(name, body);
+}
+
+/** A colour function's name, colour components and alpha, as written. */
+interface ColourCall {
+  readonly name: "oklch" | "hsl";
+  readonly components: readonly string[];
+  readonly alpha: string | undefined;
+}
+
+/**
+ * The legacy, comma-separated form: `hsl(h, s%, l%)` or `hsla(h, s%, l%, a)`.
+ * Only `hsl()` has one, and it takes no slash.
+ */
+function legacyCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  if (name === "oklch" || body.includes("/")) return undefined;
+  const parts = body.split(",").map(part => part.trim());
+  if (parts.length !== 3 && parts.length !== 4) return undefined;
+  return { name, components: parts.slice(0, 3), alpha: parts[3] };
+}
+
+/** The modern, space-separated form, with an optional `/ alpha` after it. */
+function modernCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  const [channels, alpha, ...rest] = body.split("/");
+  if (rest.length > 0) return undefined;
+  const parts = (channels ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(part => part !== "");
+  if (parts.length !== 3) return undefined;
+  return { name, components: parts, alpha: alpha?.trim() };
+}
+
+/**
+ * A colour's alpha, 0–1, or `undefined` when it cannot be told.
+ *
+ * Hex and `rgb()` from the engine's parser; `oklch()` and `hsl()` from their
+ * own alpha component, 1 when they state none. A bare colour keyword is opaque
+ * — every named colour is — except `transparent`, and a keyword this cannot
+ * place, such as `currentColor`, is unknown, as is a reference or a function
+ * this does not read.
+ */
+function alphaOf(text: string): number | undefined {
+  const rgb = parseColor(text);
+  if (rgb !== undefined) return rgb.a;
+  const call = colourFunction(text);
+  if (call !== undefined) {
+    return call.alpha === undefined ? 1 : fractionOf(call.alpha, 1);
+  }
+  if (!/^[a-z]+$/i.test(text)) return undefined;
+  const keyword = text.toLowerCase();
+  if (keyword === "transparent") return 0;
+  return keyword === "currentcolor" ? undefined : 1;
+}
 
 /**
  * The relative luminance of a ground colour, or `undefined` when it cannot be
@@ -270,23 +381,38 @@ const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
  * Tailwind themes write, carries perceptual lightness directly: its L cubed is
  * the luminance of a grey, close enough for a dark-or-light call. `hsl()`,
  * which shadcn-style themes write, converts to rgb by the standard formula.
+ *
+ * A TRANSLUCENT colour has no lightness of its own: what a visitor sees is the
+ * surface behind it, which the canvas cannot see either. So any alpha below 1,
+ * in any of these syntaxes, is `undefined` — `#0000` is not a dark ground — and
+ * so is an alpha this cannot read.
  */
 function groundLuminance(text: string): number | undefined {
+  if (alphaOf(text) !== 1) return undefined;
   const rgb = parseColor(text);
   if (rgb !== undefined) return relativeLuminance(rgb);
-  const oklch = OKLCH.exec(text);
-  if (oklch) {
-    const lightness = Number(oklch[1]) / (oklch[2] === "%" ? 100 : 1);
-    return Math.min(1, Math.max(0, lightness)) ** 3;
+  const call = colourFunction(text);
+  if (call === undefined) return undefined;
+  const [first, second, third] = call.components;
+  if (call.name === "oklch") {
+    // L is a number in 0–1, or a percentage.
+    const lightness = fractionOf(first, 1);
+    return lightness === undefined ? undefined : lightness ** 3;
   }
-  const hsl = HSL.exec(text);
-  if (hsl) {
-    const [hue, saturation, lightness] = [hsl[1], hsl[2], hsl[3]].map(Number);
-    return relativeLuminance(
-      hslToRgb(hue ?? 0, (saturation ?? 0) / 100, (lightness ?? 0) / 100)
-    );
+  // Hue as a number, in degrees if it says so; saturation and lightness as
+  // percentages, or the bare numbers CSS Color 4 also accepts for them.
+  const hue = numericOf(first?.replace(/deg$/i, ""));
+  const saturation = fractionOf(second, 100);
+  const lightness = fractionOf(third, 100);
+  if (
+    hue === undefined ||
+    hue.percent ||
+    saturation === undefined ||
+    lightness === undefined
+  ) {
+    return undefined;
   }
-  return undefined;
+  return relativeLuminance(hslToRgb(hue.value, saturation, lightness));
 }
 
 /** An HSL colour as 0–255 channels, by the CSS Color 4 conversion. */
@@ -524,26 +650,6 @@ export function nodeElement(root: HTMLElement, id: string): Element | null {
   // instance is replaced rather than rendered — but the precedence states which
   // answer is the node's rather than leaving it to iteration order.
   return own ?? hosted;
-}
-
-/**
- * Every element the renderer marked as a node, in document order.
- *
- * Beside {@link nodeElement} because both answer from the same marker, and a
- * caller that needs all of them should not walk the tree with its own selector.
- *
- * Chrome drawn INSIDE the canvas root carries no node marker, so it is excluded
- * by construction rather than by a filter that would have to be kept in step
- * with whatever chrome arrives next.
- */
-export function nodeElements(root: HTMLElement): readonly Element[] {
-  const found: Element[] = [];
-  // `forEach` for the reason given in `nodeElement`: a `NodeList` is only
-  // iterable under a lib this package does not compile with.
-  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    found.push(element);
-  });
-  return found;
 }
 
 /**
@@ -1516,6 +1622,7 @@ export function Canvas({
     [canvasPointerDown, dragPointerDown]
   );
 
+  useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
 
   /*
@@ -1601,22 +1708,27 @@ export function Canvas({
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
       /*
-       * How the site's GROUND turns dark, for the stylesheet: the strategy the
-       * site's dark token values apply by, present only when those values
-       * include a dark ground.
-       *
-       * The canvas draws the page from the site's own tokens, so its ground
-       * and text already follow the site's dark values; what this decides is
-       * the colour scheme — Canvas, CanvasText and native controls. A site on
-       * the `media` strategy darkens with the visitor's system, and only the
-       * token set says which strategy it uses — CSS cannot read it — so it is
-       * carried here and the sheet pairs it with the media query. The strategy
-       * alone says when dark values apply, not that the page is dark, so a
-       * site whose dark set keeps a light ground carries nothing. Absent too
-       * when the host serves no site sheet.
+       * Whether the site's dark values include a dark ground. They apply with
+       * the device, or under a dark marker, exactly as the site sheet applies
+       * them, and the stylesheet pairs this with both to switch the SCHEME:
+       * Canvas, CanvasText and native controls. Absent when the dark values
+       * keep a light ground, or the host serves no site sheet.
        */
-      data-nx-site-dark-ground={
-        surface?.darkGround === true ? surface.darkMode : undefined
+      data-nx-site-dark-ground={surface?.darkGround === true ? "" : undefined}
+      /*
+       * `data-nx-site-theme`, the mode the nearest theme marker above names,
+       * is written onto this element by `useNearestThemeMarker` before paint,
+       * not rendered here: see that hook.
+       */
+      /*
+       * Whether the site's ground is fully opaque, in every mode. Only then
+       * does the rendered page carry the ground as well as the canvas: painted
+       * twice, an opaque ground looks exactly as it does once, while a
+       * translucent one would darken where the layers overlap. See the page
+       * root's rule in `builder-chrome.css` for why the page wants it.
+       */
+      data-nx-site-ground-opaque={
+        surface?.opaqueGround === true ? "" : undefined
       }
       /*
        * What the pointer means, for the cursor.

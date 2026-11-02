@@ -13,7 +13,7 @@
  * @module entries-route.binding.test
  */
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
-import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import { clearBlocks } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** The Direct API handle the route reaches, with its list read recorded. */
@@ -26,6 +26,7 @@ vi.mock("nextly/runtime", async importOriginal => ({
   requireNextly: () => nextly,
 }));
 
+import * as registration from "./blocks/registration-service";
 import { ENTRIES_ROUTE_PATH } from "./entries-contract";
 import { entriesRoute } from "./entries-route";
 import { pageBuilder } from "./plugin";
@@ -67,13 +68,47 @@ function contextAs(identity: {
   } as unknown as PluginRouteContext;
 }
 
+/**
+ * Register the teaser as a plugin declares a block for the editor, with an
+ * editor entry: the route reads only for blocks the editor can draw.
+ */
+function declareTeaser(): void {
+  const backend = registration.createBlockRegistrationService();
+  const ctx = {
+    self: { name: "@acme/teaser" },
+    logger: { warn() {}, info() {}, error() {}, debug() {} },
+    config: {
+      plugins: [
+        {
+          name: "@acme/teaser",
+          contributes: {
+            declarations: {
+              [registration.PAGE_BUILDER_PLUGIN]: {
+                blocks: [teaser],
+                editorEntry: "@acme/teaser/editor#blocks",
+              },
+            },
+          },
+        },
+      ],
+    },
+    services: {
+      plugins: {
+        [registration.PAGE_BUILDER_PLUGIN]: {
+          [registration.BLOCK_SERVICE]: backend,
+        },
+      },
+    },
+  } as unknown as Parameters<typeof registration.registerDeclaredBlocks>[0];
+  registration.registerDeclaredBlocks(ctx);
+}
+
 const request = (query: string) =>
   new Request(`http://nextly.test/plugins/x${ENTRIES_ROUTE_PATH}?${query}`);
 
 describe("the entries route reads AS THE CALLER", () => {
   beforeEach(() => {
-    clearBlocks();
-    registerBlocks([teaser as never], { source: "test" });
+    declareTeaser();
     nextly.find.mockReset();
     nextly.find.mockResolvedValue({
       items: [{ id: "p1", title: "First post", body: "not sent" }],

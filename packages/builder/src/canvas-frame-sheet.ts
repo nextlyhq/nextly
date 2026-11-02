@@ -73,14 +73,29 @@ ${ROOT} {
   -webkit-user-select: none;
 }
 
-/* The site's own dark mode, the one thing that darkens the page: the canvas
-   root states the strategy its dark ground applies by, and only when there is
-   a dark ground. The admin's theme reaches nothing in this document. */
-[data-nx-theme="dark"] ${ROOT}[data-nx-site-dark-ground="attribute"] {
+/* The site's own dark mode, the one thing that darkens the page. The canvas
+   root carries the dark-ground marker only when the site's dark values include
+   a dark ground, and states the nearest theme marker above it as
+   data-nx-site-theme; with none stated, the device decides, as it does for
+   the token values. The admin's theme reaches nothing in this document. */
+${ROOT}[data-nx-site-dark-ground][data-nx-site-theme="dark"] {
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
-  ${ROOT}[data-nx-site-dark-ground="media"] { color-scheme: dark; }
+  ${ROOT}[data-nx-site-dark-ground]:not([data-nx-site-theme]) {
+    color-scheme: dark;
+  }
+}
+
+/* The page is one stacking context, so a blend mode inside it starts from the
+   page's own background, and it repeats the site's ground where that ground is
+   opaque, so a blended block mixes with it as on the published page. The
+   ground at no weight, so a background the page gives its own root wins. */
+${ROOT} > .nx-pb-page {
+  isolation: isolate;
+}
+:where(${ROOT}[data-nx-site-ground-opaque] > .nx-pb-page) {
+  background-color: var(--nx-canvas-site-ground, Canvas);
 }
 
 /* Text being edited is text again. */

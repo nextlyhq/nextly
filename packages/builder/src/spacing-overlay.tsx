@@ -64,19 +64,13 @@
 
 import * as React from "react";
 
-import {
-  clipPathOf,
-  scaleCornerRadii,
-  SQUARE_CORNERS,
-  usedCornerRadii,
-  type CornerRadii,
-} from "./border-radii";
+import { clipPathOf, scaleCornerRadii } from "./border-radii";
 import { BASE_BREAKPOINT } from "./breakpoints";
 import { CANVAS_ROOT_CLASS, nodeElement } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import type { EditorState } from "./editor-state";
-import type { Rect, Scale } from "./geometry";
+import type { Scale } from "./geometry";
 import {
   canvasContentRect,
   canvasPaintedScale,
@@ -85,6 +79,7 @@ import {
   layoutFragments,
   overlaySpaceOf,
   renderedScale,
+  usedRadiiOf,
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
@@ -224,45 +219,6 @@ function boxesOf(style: CSSStyleDeclaration): {
       left: lengthOf(style.borderLeftWidth),
     },
   };
-}
-
-/**
- * The block's USED border-box corner radii, in LAYOUT pixels.
- *
- * A percentage radius resolves against the border box's own size, and the size
- * that governs is the one the element was LAID OUT at rather than the one it is
- * drawn at — `border-radius: 50%` on a block under `scale(2)` is half its layout
- * width, which then renders doubled like everything else inside the transform.
- *
- * That layout size is the measured rectangle divided back out by the scale it
- * was measured at, rather than a second reading from the element. `offsetWidth`
- * would answer the same question in whole pixels only, and `getComputedStyle`
- * reports whichever box `box-sizing` selects — so both are a second answer to a
- * question `renderedScale` has already answered exactly.
- *
- * A scale that is zero on either axis leaves nothing to resolve against and no
- * band to draw; `describable` refuses that block anyway, and answering square
- * here keeps this from dividing by it on the way to that refusal.
- *
- * UNDEFINED when a corner cannot be resolved at all — a percentage inside a
- * `calc()` stays unresolved in the computed value — which the caller treats as a
- * shape it cannot describe rather than as a square one.
- */
-function radiiOf(
-  style: CSSStyleDeclaration,
-  border: Rect,
-  scale: Scale
-): CornerRadii | undefined {
-  if (!(scale.x > 0) || !(scale.y > 0)) return SQUARE_CORNERS;
-  return usedCornerRadii(
-    {
-      topLeft: style.borderTopLeftRadius,
-      topRight: style.borderTopRightRadius,
-      bottomRight: style.borderBottomRightRadius,
-      bottomLeft: style.borderBottomLeftRadius,
-    },
-    { width: border.width / scale.x, height: border.height / scale.y }
-  );
 }
 
 /**
@@ -732,7 +688,7 @@ export function SpacingOverlay({
      */
     const border = canvasContentRect(block, root);
     const scaledBy: Scale = { x: scale.x, y: scale.y };
-    const radii = radiiOf(style, border, scaledBy);
+    const radii = usedRadiiOf(style, border, scaledBy);
     /*
      * A block whose own radii cannot be resolved is a shape this cannot
      * describe, and drawing nothing is the answer it already gives for every

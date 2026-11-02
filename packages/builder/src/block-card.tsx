@@ -44,7 +44,14 @@ import type { ToolbarActionId } from "./toolbar-actions";
 export type CardVerbs = SharedBlockVerbs;
 
 /** The verbs from the shared set that the card's menu offers, in order. */
-const CARD_VERBS: readonly ToolbarActionId[] = ["duplicate", "delete"];
+const CARD_VERBS: readonly ToolbarActionId[] = [
+  "duplicate",
+  "save-as-component",
+  "convert-to-component",
+  "detach-component",
+  "duplicate-component",
+  "delete",
+];
 
 export interface BlockCardProps {
   /** The block's icon concept, if it names one. */

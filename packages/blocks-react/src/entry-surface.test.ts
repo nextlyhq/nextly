@@ -549,6 +549,7 @@ describe("the blocks entry", () => {
       // them by relative import, and publishing them would add four names no
       // consumer needs and which could then never be renamed.
       "CORE_CATEGORIES",
+      "CORE_PALETTE_ORDER",
       "FORM_FIELD_TYPES",
       "FORM_METHODS",
       "HEADING_LEVELS",

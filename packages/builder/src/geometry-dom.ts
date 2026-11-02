@@ -26,6 +26,7 @@ import {
   isSquare,
   roundedInsideRounded,
   scaleCornerRadii,
+  SQUARE_CORNERS,
   usedCornerRadii,
 } from "./border-radii";
 import { isHTMLElement, isIFrame } from "./dom-kind";
@@ -1773,4 +1774,47 @@ export function canvasRootFrom(
   // A root with no window is not on screen, so there is nothing to draw over.
   if (root.ownerDocument.defaultView === null) return null;
   return isHTMLElement(root) ? root : null;
+}
+
+/**
+ * An element's USED border-box corner radii, in LAYOUT pixels, from its
+ * computed style and its rectangle as measured here.
+ *
+ * Here rather than in one overlay because every overlay drawn on a block's
+ * shape asks it, and a second reading of the radii would drift from the first.
+ *
+ * A percentage radius resolves against the border box's own size, and the size
+ * that governs is the one the element was LAID OUT at rather than the one it is
+ * drawn at — `border-radius: 50%` on a block under `scale(2)` is half its layout
+ * width, which then renders doubled like everything else inside the transform.
+ *
+ * That layout size is the measured rectangle divided back out by the scale it
+ * was measured at, rather than a second reading from the element. `offsetWidth`
+ * would answer the same question in whole pixels only, and `getComputedStyle`
+ * reports whichever box `box-sizing` selects — so both are a second answer to a
+ * question `renderedScale` has already answered exactly.
+ *
+ * A scale that is zero on either axis leaves nothing to resolve against and no
+ * band to draw; `describable` refuses that block anyway, and answering square
+ * here keeps this from dividing by it on the way to that refusal.
+ *
+ * UNDEFINED when a corner cannot be resolved at all — a percentage inside a
+ * `calc()` stays unresolved in the computed value — which the caller treats as a
+ * shape it cannot describe rather than as a square one.
+ */
+export function usedRadiiOf(
+  style: CSSStyleDeclaration,
+  border: Rect,
+  scale: Scale
+): CornerRadii | undefined {
+  if (!(scale.x > 0) || !(scale.y > 0)) return SQUARE_CORNERS;
+  return usedCornerRadii(
+    {
+      topLeft: style.borderTopLeftRadius,
+      topRight: style.borderTopRightRadius,
+      bottomRight: style.borderBottomRightRadius,
+      bottomLeft: style.borderBottomLeftRadius,
+    },
+    { width: border.width / scale.x, height: border.height / scale.y }
+  );
 }
