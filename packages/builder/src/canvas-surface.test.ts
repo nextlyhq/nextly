@@ -416,9 +416,88 @@ describe("the editing colours drawn on the page", () => {
   });
 
   it("halo the selection ring and the drop line in a mode-invariant white", () => {
+    /*
+     * The ring is an outline, and the halo is measured and drawn in the
+     * editor's own layer — nothing on the page's elements. A `box-shadow`
+     * replaced a shadow the page gave the block, and an `anchor-name` an
+     * anchor it gave it, so neither may appear on a selection rule.
+     */
+    const selectionRules = canvasRules().filter(rule =>
+      rule.selector.includes("[data-nx-selected")
+    );
     expect(
-      declared(ruleFor(".nx-canvas [data-nx-selected]"), "box-shadow")
-    ).toBe("inset 0 0 0 4px var(--nx-builder-halo)");
+      selectionRules.length,
+      "the scan finds the selection rules"
+    ).toBeGreaterThan(1);
+    for (const rule of selectionRules) {
+      for (const property of ["box-shadow", "anchor-name"]) {
+        expect(
+          declared(rule.body, property),
+          `${rule.selector} writes ${property} onto the page's element`
+        ).toBeUndefined();
+      }
+    }
+    const layer = ruleFor(".nx-selection-halos");
+    expect(declared(layer, "position")).toBe("absolute");
+    expect(declared(layer, "pointer-events")).toBe("none");
+    /*
+     * Above the page by order, not by a number: the page is one stacking
+     * context, so no z-index a site gives its content can rise past the layer,
+     * and a fixed number here would be a guess at what the page uses.
+     */
+    expect(declared(layer, "z-index")).toBeUndefined();
+    const page = ruleFor(".nx-canvas > .nx-pb-page");
+    expect(declared(page, "isolation")).toBe("isolate");
+    /*
+     * The page root stays an ordinary block — a flex or grid item would be its
+     * own formatting context and change how its children's margins collapse —
+     * and paints NO ground of its own unless the site's ground is opaque:
+     * laid over the canvas's ground, a translucent one is composited twice.
+     */
+    for (const property of ["display", "background-color", "background"]) {
+      expect(declared(page, property), `the page root's ${property}`).toBe(
+        undefined
+      );
+    }
+    /*
+     * Where the ground IS opaque, the page carries it for a blend to mix with
+     * — inside `:where()`, so it weighs nothing and a background the page's
+     * own styles compile onto `.nx-pb-page.nx-pb-page` (0-2-0) still wins, as
+     * it does when published. Found by the exact selector, so a weighted
+     * spelling of the same rule fails here.
+     */
+    expect(
+      declared(
+        ruleFor(":where(.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page)"),
+        "background-color"
+      )
+    ).toBe("var(--nx-canvas-site-ground, Canvas)");
+    /*
+     * On the editor's own element: the ring redrawn as the element carries
+     * it, with the white band as an inset shadow beneath, so the two stay
+     * adjacent at any zoom. Read off the halo's rule, never a page element's.
+     */
+    const halo = ruleFor(".nx-selection-halo");
+    expect(declared(halo, "outline")).toBe(
+      "1px solid var(--nx-builder-select)"
+    );
+    expect(declared(halo, "outline-offset")).toBe("-2px");
+    expect(declared(halo, "box-shadow")).toBe(
+      "inset 0 0 0 2px var(--nx-builder-halo)"
+    );
+    // The primary's ring and halo are the full width, as on the element.
+    const primary = ruleFor(".nx-selection-halo[data-primary]");
+    expect(declared(primary, "outline-width")).toBe("2px");
+    expect(declared(primary, "box-shadow")).toBe(
+      "inset 0 0 0 4px var(--nx-builder-halo)"
+    );
+    expect(
+      declared(ruleFor(".nx-selection-halo[data-component]"), "outline-color")
+    ).toBe("var(--nx-builder-component)");
+    // The element's ring is unchanged: what the halo redraws.
+    expect(declared(ruleFor(".nx-canvas [data-nx-selected]"), "outline")).toBe(
+      "2px solid var(--nx-builder-select)"
+    );
     expect(declared(ruleFor(".nx-drop-indicator"), "box-shadow")).toBe(
       "0 0 0 1px var(--nx-builder-halo)"
     );
