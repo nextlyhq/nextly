@@ -2111,3 +2111,38 @@ describe("what the reader reports it did not keep", () => {
     });
   });
 });
+
+describe("a variable's plain label across the format", () => {
+  it("round-trips under this system's own extension", () => {
+    const token: SiteToken = {
+      name: "color.brand",
+      label: "Brand blue",
+      kind: "color",
+      values: { light: "#1d2b6b", dark: "#8fa7ff" },
+    };
+    const { document } = tokensToDtcg({ tokens: [token] });
+    const back = dtcgToTokens(document);
+    expect(back.tokens).toEqual([token]);
+  });
+
+  it("drops a label it cannot show, keeping the token and saying so", () => {
+    const back = dtcgToTokens({
+      color: {
+        brand: {
+          $type: "color",
+          $value: "#123456",
+          $extensions: {
+            "com.nextlyhq.nextly": {
+              css: { light: "#123456" },
+              kind: "color",
+              label: "x".repeat(500),
+            },
+          },
+        },
+      },
+    });
+    expect(back.tokens).toHaveLength(1);
+    expect(back.tokens[0]?.label).toBeUndefined();
+    expect(back.issues.map(i => i.message).join(" ")).toMatch(/label/);
+  });
+});

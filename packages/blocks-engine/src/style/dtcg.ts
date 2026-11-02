@@ -67,6 +67,7 @@ import {
   isAuthorableTokenName,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
+  tokenLabelIssue,
   tokenNamingProblem,
   tokenValueFetches,
 } from "./site-tokens";
@@ -95,6 +96,11 @@ interface NextlyExtension {
    * field a reader has to interpret to arrive at the token that was written.
    */
   id?: string;
+  /**
+   * The token's plain label, when it has one. The format has no field for a
+   * display name beside the path, so it rides here with the identity.
+   */
+  label?: string;
 }
 
 /** A DTCG group or token; the format is a tree of plain JSON. */
@@ -231,6 +237,7 @@ function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
     // token that never moved would make the field say nothing about identity
     // and everything about which version of this exporter ran.
     ...(token.id === undefined ? {} : { id: token.id }),
+    ...(token.label === undefined ? {} : { label: token.label }),
   };
   const entry: DtcgNode = {
     $type: type,
@@ -1323,6 +1330,20 @@ function readToken(
   // the model rather than two spellings of it.
   const id = stated === name ? undefined : stated;
 
+  // A label is display text, so one that cannot be shown costs the label and
+  // not the token: the derived label stands in, and the report says so.
+  const statedLabel = isPlainObject(own) ? own.label : undefined;
+  const labelIssue = tokenLabelIssue(statedLabel);
+  if (labelIssue !== undefined) {
+    issues.push(
+      issue(`"${name}" carries a label that was not kept: ${labelIssue}`)
+    );
+  }
+  const label =
+    labelIssue === undefined && typeof statedLabel === "string"
+      ? statedLabel
+      : undefined;
+
   // The cap, now that the identity is settled. Held here rather than on either
   // field alone because the identity is what a stylesheet is written under: a
   // token whose stated id is short imports normally however long its label, and
@@ -1364,6 +1385,7 @@ function readToken(
     return {
       ...(id !== undefined ? { id } : {}),
       name,
+      ...(label !== undefined ? { label } : {}),
       kind,
       values,
       ...(description !== undefined ? { description } : {}),
@@ -1431,7 +1453,7 @@ function readToken(
  * to be named here, so adding a field to the emitter without adding it here
  * fails.
  */
-const NEXTLY_FIELDS = new Set(["id", "css", "kind"]);
+const NEXTLY_FIELDS = new Set(["id", "css", "kind", "label"]);
 
 /**
  * The half of this system's OWN extension key that the model does not state.

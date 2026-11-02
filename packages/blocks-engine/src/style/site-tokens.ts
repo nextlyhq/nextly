@@ -102,6 +102,15 @@ export interface SiteToken {
   id?: string;
   /** Dot-path name, as authors read and write it. Free to change. */
   name: string;
+  /**
+   * The name in plain words, as the editor shows it: "Brand", "Heading 1".
+   *
+   * Optional and display-only. It never reaches a stylesheet or a stored
+   * reference, so it can hold any one line of text. Absent, a label is derived
+   * from the code name by {@link tokenDisplayLabel}, which is why sites stored
+   * before this field existed need no migration.
+   */
+  label?: string;
   kind: TokenKind;
   /**
    * The value for each mode.
@@ -212,6 +221,80 @@ export function renameSiteToken(token: SiteToken, name: string): SiteToken {
     return { ...token, id: undefined, name };
   }
   return { ...token, id: current, name };
+}
+
+/** The longest plain label a variable may carry. */
+export const MAX_TOKEN_LABEL_LENGTH = 80;
+
+/**
+ * Why a label cannot be stored, or nothing.
+ *
+ * A label is one line of text for people, so the rules are only what keeps it
+ * that: text, not blank, no line breaks or other control characters, and short
+ * enough to sit in a row. Absent is fine: the derived label stands in.
+ */
+export function tokenLabelIssue(label: unknown): string | undefined {
+  if (label === undefined) return undefined;
+  if (typeof label !== "string") return "A label must be text.";
+  if (label.trim() === "") return "A label cannot be empty.";
+  // A control character, a line break among them, would break the one line a
+  // label is drawn on, and a screen reader would read it out as a pause.
+  for (const char of label) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || (code >= 0x7f && code < 0xa0)) {
+      return "A label is one line of text.";
+    }
+  }
+  if (label.length > MAX_TOKEN_LABEL_LENGTH) {
+    return `A label is at most ${MAX_TOKEN_LABEL_LENGTH} characters.`;
+  }
+  return undefined;
+}
+
+/**
+ * The leading words of a code name that say which group a variable is in.
+ *
+ * Dropped from a derived label because the editor already groups by them:
+ * "Colours" over a row reading "Color brand" says it twice.
+ */
+const GROUP_WORDS: ReadonlySet<string> = new Set([
+  "color",
+  "colour",
+  "font",
+  "font-size",
+  "line-height",
+  "text",
+  "space",
+  "spacing",
+  "radius",
+  "shadow",
+  "size",
+  "weight",
+  "duration",
+]);
+
+/**
+ * The plain name the editor shows for a variable.
+ *
+ * Its own label when it has one; otherwise words made from the code name:
+ * `color.brand` reads "Brand", `content.width` reads "Content width", and
+ * `space.4` keeps its group word ("Space 4"), because a number alone names
+ * nothing.
+ */
+export function tokenDisplayLabel(token: {
+  name: string;
+  label?: string;
+}): string {
+  const own = token.label?.trim();
+  if (own !== undefined && own !== "") return own;
+  const parts = token.name.split(".");
+  const rest = parts.slice(1);
+  const dropGroup =
+    parts.length > 1 &&
+    GROUP_WORDS.has(parts[0] ?? "") &&
+    !rest.every(part => /^\d+$/.test(part));
+  const words = (dropGroup ? rest : parts).join(" ").replaceAll("-", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /** One file a font face can be loaded from. */

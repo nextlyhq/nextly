@@ -266,6 +266,7 @@ function sameSiteToken(a: SiteToken, b: SiteToken): boolean {
   return (
     a.id === b.id &&
     a.name === b.name &&
+    a.label === b.label &&
     a.kind === b.kind &&
     a.description === b.description &&
     a.values.light === b.values.light &&

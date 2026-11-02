@@ -21,8 +21,11 @@ import {
   isTokenName,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
+  MAX_TOKEN_LABEL_LENGTH,
   MAX_TOKEN_SELECTOR_LENGTH,
   renameSiteToken,
+  tokenDisplayLabel,
+  tokenLabelIssue,
   tokenIdentity,
   tokenValueFetches,
   resolveTokenPrefix,
@@ -1310,5 +1313,69 @@ describe("the selector token blocks are written under", () => {
     const { css, issues } = emitTokenBlocks(oneToken, atBound);
     expect(issues).toEqual([]);
     expect(css).toContain(atBound);
+  });
+});
+
+describe("a variable's plain label", () => {
+  it("shows the label an author gave it", () => {
+    expect(
+      tokenDisplayLabel({ name: "color.primary", label: "Brand blue" })
+    ).toBe("Brand blue");
+  });
+
+  it("derives one from the code name when none was given", () => {
+    // Existing sites store no label, so every token has to read in plain
+    // words without a migration. The leading group word is what the panel's
+    // grouping already says, so it is dropped where something follows it.
+    expect(tokenDisplayLabel({ name: "color.brand" })).toBe("Brand");
+    expect(tokenDisplayLabel({ name: "color.border-strong" })).toBe(
+      "Border strong"
+    );
+    expect(tokenDisplayLabel({ name: "font-size.heading-1" })).toBe(
+      "Heading 1"
+    );
+    // A bare number says nothing on its own, so the group word stays.
+    expect(tokenDisplayLabel({ name: "space.4" })).toBe("Space 4");
+    // A first word that is not a group word is part of the name.
+    expect(tokenDisplayLabel({ name: "content.width" })).toBe("Content width");
+    expect(tokenDisplayLabel({ name: "brand" })).toBe("Brand");
+  });
+
+  it("falls back to the derived label when the stored one is blank", () => {
+    expect(tokenDisplayLabel({ name: "color.brand", label: "  " })).toBe(
+      "Brand"
+    );
+  });
+
+  it("accepts plain words and refuses what cannot be shown as one line", () => {
+    expect(tokenLabelIssue("Heading 1")).toBeUndefined();
+    expect(tokenLabelIssue("Café crème")).toBeUndefined();
+    expect(tokenLabelIssue(undefined)).toBeUndefined();
+    expect(tokenLabelIssue(42)).toMatch(/text/);
+    expect(tokenLabelIssue("   ")).toMatch(/empty/);
+    expect(tokenLabelIssue("a\nb")).toMatch(/one line/);
+    expect(tokenLabelIssue("x".repeat(MAX_TOKEN_LABEL_LENGTH))).toBeUndefined();
+    expect(tokenLabelIssue("x".repeat(MAX_TOKEN_LABEL_LENGTH + 1))).toMatch(
+      new RegExp(String(MAX_TOKEN_LABEL_LENGTH))
+    );
+  });
+
+  it("never reaches the stylesheet", () => {
+    // A label is for people. The custom property stays the identity's, so a
+    // label carrying CSS-looking text changes nothing on the page.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.brand",
+            label: "Brand}body{color:red",
+            kind: "color",
+            values: { light: "#123456" },
+          },
+        ],
+      },
+      ":root"
+    );
+    expect(css).toBe(":root{--site-color-brand:#123456}");
   });
 });

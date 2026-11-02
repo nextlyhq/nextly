@@ -738,6 +738,11 @@ export {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   MAX_TOKEN_PREFIX_LENGTH,
+  // A variable's plain name: the optional label, its check, and the label
+  // derived from the code name when none is stored.
+  MAX_TOKEN_LABEL_LENGTH,
+  tokenDisplayLabel,
+  tokenLabelIssue,
   // Both halves of token identity, public for the same reason the types are:
   // an editor that offers rename has to pin the identity the way this package
   // pins it, and one that cannot reach these has no way to do that except to
