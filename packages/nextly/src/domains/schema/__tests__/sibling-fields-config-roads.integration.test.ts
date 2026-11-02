@@ -268,6 +268,31 @@ for (const dialect of getConfiguredTestDialects()) {
         ]);
       });
 
+      // A declared column-less `Title` takes no column, so `define*` adds its text `title` beside
+      // it. The start and the sync that writes the row both judge `define*` output, so the added
+      // field stands aside on both and the row takes the new field.
+      it("starts a configuration whose column-less field stands beside the system field define* adds", async () => {
+        const withColumnlessTitle = defineCollection({
+          slug: "posts",
+          fields: [
+            text({ name: "headline" }),
+            { name: "Title", type: "text", virtual: true } as never,
+            group({ name: "seo", fields: [text({ name: "fooBar" })] }),
+          ],
+        });
+        expect(
+          withColumnlessTitle.fields.map(f => (f as { name: string }).name)
+        ).toEqual(["title", "slug", "headline", "Title", "seo"]);
+
+        await boot(withColumnlessTitle);
+
+        expect(await rowNames(database.adapter)).toEqual([
+          "headline",
+          "Title",
+          "seo",
+        ]);
+      });
+
       it("accepts the pair the registry row already holds", async () => {
         await rowHolds(database.adapter, posts(["fooBar", "foo_bar"]).fields);
 

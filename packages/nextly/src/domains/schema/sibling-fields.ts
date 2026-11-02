@@ -130,7 +130,9 @@ function sharedValue(
  * column, so one beside a declared sibling that shares no stored value or key
  * with it (a column-less `Title`, a `TITLE` whose column is `t_i_t_l_e`) is a
  * pair the author never wrote, and the definition stands as `define*` accepted
- * it. A sibling of the exact same name shares the document key, so it is judged.
+ * it, a sibling of the exact same name included. Only `define*` output gets this
+ * (`SiblingJudgeOptions.definedInCode`); a road that writes fields as it was
+ * sent judges a system name like any other.
  */
 const SYSTEM_FIELD_NAMES: ReadonlySet<string> = new Set(["title", "slug"]);
 
@@ -242,7 +244,8 @@ export interface SiblingJudgeOptions {
  * of a name already held twice makes new pairs) and only while it shares no
  * stored value it did not share before: a pair whose type change makes both
  * fields one column is new, since that column is what the database refuses.
- * With `kind`, a system field standing aside for a sibling is not judged.
+ * With `options.definedInCode` (only for `define*` output), a system field
+ * standing aside for a sibling is not judged.
  */
 export function judgeSiblingFields(
   next: unknown,
@@ -398,10 +401,11 @@ export function siblingClashWarning(
 export function assertNoNewSiblingClashes(
   entity: SiblingEntity,
   next: unknown,
-  previous: unknown
+  previous: unknown,
+  options: SiblingJudgeOptions = {}
 ): void {
-  // A road that writes a definition it was sent: nothing in it was added by `define*`.
-  const clashes = newSiblingClashes(next, previous);
+  // Unless the caller says the fields are `define*` output, nothing in them was added by `define*`.
+  const clashes = newSiblingClashes(next, previous, options);
   if (clashes.length > 0) throw siblingClashesError(entity, clashes);
 }
 
