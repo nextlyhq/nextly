@@ -115,7 +115,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     /** A stored page with the locked block, and an update of its content. */
-    async function storedPage() {
+    async function storedPage(nodes: Node[] = storedNodes()) {
       current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
       const t = current;
       const saved = await t.nextly.create({
@@ -123,7 +123,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           title: "Home",
           slug: `home-${String(Math.random()).slice(2, 8)}`,
-          content: pageOf(storedNodes()),
+          content: pageOf(nodes),
         },
         overrideAccess: true,
       });
@@ -141,8 +141,8 @@ describe.each(getConfiguredTestDialects())(
             collection: "pages",
             id,
             overrideAccess: true,
-          })) as unknown as { content: { nodes: Node[] } }
-        ).content;
+          })) as unknown as { content: { nodes: Node[] } | null }
+        ).content as { nodes: Node[] };
       return { update, read };
     }
 
@@ -211,6 +211,24 @@ describe.each(getConfiguredTestDialects())(
           })
         )
       );
+    });
+
+    it("refuses emptying the field of a page holding a locked block, and stores nothing", async () => {
+      // A `null` never reaches the field's own validation, so this is the
+      // write that would drop every locked block with nothing asked.
+      const { update, read } = await storedPage();
+      await expectRefusedNamingHero(update(null));
+      expect((await read()).nodes).toEqual(pageOf(storedNodes()).nodes);
+    });
+
+    it("still empties the field of a page holding no locked block", async () => {
+      // The control: the refusal above is the lock's, not a refusal of every
+      // empty write.
+      const unlocked = storedNodes();
+      delete childrenOf(unlocked[0]!)[0]!.locked;
+      const { update, read } = await storedPage(unlocked);
+      await expect(update(null)).resolves.toBeDefined();
+      expect(await read()).toBeNull();
     });
 
     it("accepts a change that leaves the locked block where and as it is", async () => {

@@ -126,6 +126,7 @@ describe("layersLockIssues", () => {
       kind: "collection",
       slug: "pages",
       id: "p1",
+      reason: "language-not-ready",
     });
   });
 
@@ -138,6 +139,38 @@ describe("layersLockIssues", () => {
     await expect(
       layersLockIssues(lockedPage("light"), argsFor(notReady), "Content")
     ).rejects.toThrow();
+  });
+
+  it("warns, and reads nothing, for a blocks field inside a group or a repeater", async () => {
+    // Its stored value cannot be read, so its locks cannot be judged: the
+    // write is kept and the server log is told, rather than it passing in
+    // silence.
+    const readStored = vi.fn(async () => ({
+      kind: "value" as const,
+      value: lockedPage("dark"),
+    }));
+    const onUnjudged = vi.fn();
+    for (const path of ["sections[0].content", "hero.content"]) {
+      expect(
+        await layersLockIssues(
+          lockedPage("light"),
+          argsFor(writeTo(readStored), { path }),
+          "Content",
+          onUnjudged
+        )
+      ).toEqual([]);
+    }
+    expect(readStored).not.toHaveBeenCalled();
+    expect(onUnjudged.mock.calls.map(([found]) => found)).toEqual([
+      expect.objectContaining({
+        field: "sections[0].content",
+        reason: "nested-field",
+      }),
+      expect.objectContaining({
+        field: "hero.content",
+        reason: "nested-field",
+      }),
+    ]);
   });
 
   it("reads nothing for a create, a value judged alone, or a nested field", async () => {

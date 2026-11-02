@@ -177,9 +177,9 @@ export interface CompositionSetup {
   readonly onPlacementUnjudged?: (found: PlacementUnjudged) => void;
   /**
    * Told of a write whose Layers locks could not be judged, because the
-   * stored value they would be judged against could not be read (a localized
-   * field whose language store is not ready). Kept, not refused, so the
-   * server log is where an operator learns of it.
+   * stored value they would be judged against could not be read (see
+   * `LayersLockUnjudged.reason`). Kept, not refused, so the server log is
+   * where an operator learns of it.
    */
   readonly onLayersLockUnjudged?: (found: LayersLockUnjudged) => void;
   /**
@@ -211,6 +211,12 @@ export interface PlacementUnjudged extends WrittenTo {
 export interface LayersLockUnjudged extends WrittenTo {
   /** The blocks field written. */
   readonly field: string;
+  /**
+   * Why its stored value could not be read: a translated field whose language
+   * store is not ready, a translated field emptied by a write whose language
+   * the check is not told, or a field inside a group or a repeater.
+   */
+  readonly reason: "language-not-ready" | "language-unknown" | "nested-field";
 }
 
 /**

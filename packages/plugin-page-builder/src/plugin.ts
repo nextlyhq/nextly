@@ -68,9 +68,13 @@ import {
 } from "./default-layout/install";
 import { makeDefaultRoute } from "./default-layout/make-default-route";
 import { pageBuilderSettingsSingle } from "./default-layout/settings-single";
-import type { CompositionSetup } from "./fields/blocks-composition";
+import type {
+  CompositionSetup,
+  LayersLockUnjudged,
+} from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import { registerLayersLockGuard } from "./layers-lock-guard";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import {
@@ -904,6 +908,22 @@ export const pageBuilder = (
       const componentIndex =
         ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
         COMPONENT_USAGE_INDEX_SLUG;
+      // One wording for every place a Layers lock goes unjudged: the field's
+      // validation and the guard on an emptied field.
+      const warnLayersLockUnjudged = (found: LayersLockUnjudged) =>
+        ctx.logger.warn(
+          `[page-builder] a save was not checked against the blocks locked in Layers, because the stored value could not be read (${found.reason}); a locked block it changed was not protected`,
+          {
+            field: found.field,
+            kind: found.kind,
+            slug: found.slug,
+            id: found.id,
+            reason: found.reason,
+          }
+        );
+      // Refuse an update that empties a blocks field holding a locked block,
+      // which the field's own validation is never handed.
+      registerLayersLockGuard({ ctx, onUnjudged: warnLayersLockUnjudged });
       composition = {
         store: {
           // The collection components actually live in, resolved the way the
@@ -965,16 +985,7 @@ export const pageBuilder = (
               id: found.id,
             }
           ),
-        onLayersLockUnjudged: found =>
-          ctx.logger.warn(
-            `[page-builder] a save was not checked against the blocks locked in Layers, because the stored value could not be read in its language yet; a locked block it changed was not protected`,
-            {
-              field: found.field,
-              kind: found.kind,
-              slug: found.slug,
-              id: found.id,
-            }
-          ),
+        onLayersLockUnjudged: warnLayersLockUnjudged,
         onLockedExposures: found =>
           ctx.logger.warn(
             `[page-builder] a component exposes ${String(found.exposures.length)} field(s) a contentOnly lock holds; placements cannot change them. Remove each exposure, or loosen the lock on its slot.`,

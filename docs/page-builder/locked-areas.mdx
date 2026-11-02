@@ -105,11 +105,24 @@ added to it. Changing only the lock is always allowed.
 Every save is held to it, the API's and an agent's included. A save is compared with
 the page as stored, its working draft where there is one: a block locked there may
 not change, move or disappear, and the save is refused with the code
-`layers-lock-changed`, naming the block. A block added before a locked one shifts its
-position without moving it, so that is allowed. To change a locked block, send it
-unlocked in the same save. A block can't be unlocked and deleted in one save, so unlock
-it and save first. On a localized blocks field whose language can't be read yet, the
-save is kept and the server log says it went unchecked.
+`layers-lock-changed`, naming the block. A save that empties the whole field, by
+setting it to `null`, is refused the same way while the page holds a locked block. A
+block added before a locked one shifts its position without moving it, so that is
+allowed. To change or move a locked block, send it unlocked in the same save.
+
+Deleting is the exception. A locked block can't be deleted in the same save that
+unlocks it, and neither can a block that holds it: unlock it and save first, then
+delete it in a second save.
+
+Some saves can't be checked, and are kept with a line in the server log saying so:
+
+- a blocks field inside a group or a repeater, whose stored value can't be read;
+- a localized blocks field whose language can't be read yet;
+- a localized blocks field set to `null`, since that check isn't told which
+  language is being saved.
+
+Two more aren't checked, and leave no log line: a Single's blocks field set to `null`,
+and an import that skips hooks and sets the field to `null`.
 
 ## Components and locks
 

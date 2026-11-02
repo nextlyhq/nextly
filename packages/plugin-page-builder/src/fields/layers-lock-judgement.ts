@@ -34,21 +34,21 @@ export const LAYERS_LOCK_CHANGED = "layers-lock-changed";
 
 /**
  * Whether a field path names a top-level field. A stored value can be read
- * only for one of those, so a blocks field inside a group or a repeater is not
- * judged here.
+ * only for one of those, so a blocks field inside a group or a repeater cannot
+ * be judged, and the server log says so.
  */
 function isTopLevel(path: string): boolean {
   return path !== "" && !/[.[\]]/.test(path);
 }
 
 /**
- * Whether a write's Layers locks are judged at all: an update of a top-level
- * field, with an entry write behind it to read the stored value through.
+ * Whether a write's Layers locks are asked about at all: an update, with an
+ * entry write behind it to read the stored value through. A nested field is
+ * asked about too, so that it is reported unjudged rather than passed in
+ * silence.
  */
 export function judgesLayersLocks(args: PluginFieldValidateArgs): boolean {
-  return (
-    args.mode === "update" && args.write !== undefined && isTopLevel(args.path)
-  );
+  return args.mode === "update" && args.write !== undefined;
 }
 
 /** What one broken lock is refused with, naming the block and the way on. */
@@ -60,7 +60,7 @@ function issueFor(
   const block = `"${change.label}"`;
   const message =
     change.kind === "removed"
-      ? `${block} is locked in Layers, and this write would remove it. Unlock it and save, then remove it.`
+      ? `${block} is locked in Layers, and this write would remove it. A locked block, or a block holding one, can't be removed in the save that unlocks it: unlock it and save first, then remove it.`
       : `${block} is locked in Layers, and this write would ${
           change.kind === "moved" ? "move it" : "change it or a block inside it"
         }. Send it unlocked in the same write to change it.`;
@@ -72,12 +72,26 @@ function issueFor(
 }
 
 /**
+ * The issues each broken lock is refused with. One wording for every path
+ * that judges a write, the field's validation and the guard on an emptied
+ * field alike.
+ */
+export function layersLockIssuesFor(
+  changes: readonly LayersLockChange[],
+  path: string,
+  label: string
+): PluginFieldIssue[] {
+  return changes.map(change => issueFor(change, path, label));
+}
+
+/**
  * The issues a write breaking a Layers lock is refused with; empty when it
- * keeps every lock, is a create, or names a nested field.
+ * keeps every lock or is a create.
  *
- * A translated field whose language store is not ready cannot be read, so its
- * locks cannot be judged: the write is kept, and `onUnjudged` is told so the
- * server log says which document went unprotected. Any other failure to read
+ * Two values cannot be read, so their locks cannot be judged: a blocks field
+ * inside a group or a repeater, and a translated field whose language store is
+ * not ready. The write is kept, and `onUnjudged` is told so the server log says
+ * which document went unprotected and why. Any other failure to read
  * propagates and fails the write, rather than passing a write unjudged.
  */
 export async function layersLockIssues(
@@ -87,6 +101,14 @@ export async function layersLockIssues(
   onUnjudged?: (found: LayersLockUnjudged) => void
 ): Promise<PluginFieldIssue[]> {
   if (!judgesLayersLocks(args) || args.write === undefined) return [];
+  if (!isTopLevel(args.path)) {
+    onUnjudged?.({
+      field: args.path,
+      ...documentOf(args.write),
+      reason: "nested-field",
+    });
+    return [];
+  }
   const stored = await readStoredForms(
     args.write,
     args.path,
@@ -96,13 +118,19 @@ export async function layersLockIssues(
     (args.field as { localized?: unknown }).localized === true
   );
   if (!stored.readable) {
-    onUnjudged?.({ field: args.path, ...documentOf(args.write) });
+    onUnjudged?.({
+      field: args.path,
+      ...documentOf(args.write),
+      reason: "language-not-ready",
+    });
     return [];
   }
   const [newest] = stored.forms;
   if (newest === undefined) return [];
-  return layersLockChanges(value, newest).map(change =>
-    issueFor(change, args.path, label)
+  return layersLockIssuesFor(
+    layersLockChanges(value, newest),
+    args.path,
+    label
   );
 }
 
