@@ -92,67 +92,108 @@ export function matchDocumentView(
   return declared ?? byFieldType.get(path);
 }
 
-/** A field a document addresses, with the unnamed groups it sits inside. */
+/** A field a document addresses, with the groups it sits inside. */
 interface AddressableField<F extends object> {
   field: F;
   /**
-   * The unnamed groups around it, outermost first. They add nothing to its
-   * path, but the form applies their gates to it — a read-only or hidden group
-   * makes everything inside it read-only or hidden — so a surface editing the
-   * field on its own needs them too.
+   * The groups around it, outermost first. The form applies their gates to it
+   * — a read-only or hidden group makes everything inside it read-only or
+   * hidden — so a surface editing the field on its own needs them too.
    */
   within: F[];
+  /** Its path in the form: its name, after each named group's around it. */
+  path: string;
+  /**
+   * The path each of `within` and then the field itself sits under, the base a
+   * condition on that step reads its value beside. An unnamed group adds
+   * nothing to it; a named group adds its name for what it holds.
+   */
+  bases: string[];
+}
+
+/** A field's own name, or `undefined` for none (an unnamed group). */
+function nameOf(field: object): string | undefined {
+  return "name" in field && typeof field.name === "string" && field.name !== ""
+    ? field.name
+    : undefined;
 }
 
 /**
- * The fields a document addresses at its top level: its own, plus those of any
- * UNNAMED group, which is presentation only and adds nothing to their paths. A
- * named group or a repeater moves its fields down a level, out of reach.
+ * The fields a document addresses, walking into groups: always into an
+ * UNNAMED group, which is presentation only and adds nothing to a path, and
+ * into a NAMED group only `throughNamedGroups`, where its name becomes a step
+ * of the path. A repeater is never walked: its rows have no address that
+ * survives a reorder.
  *
- * Raw config can hold a cycle, an unnamed group that lays itself out directly
- * or through another, so a group already open on its own path (`within`) is
- * not walked again: without that, every caller recursed until the stack ran
- * out.
+ * Raw config can hold a cycle, a group that lays itself out directly or
+ * through another, so a group already open on its own path (`within`) is not
+ * walked again: without that, every caller recursed until the stack ran out.
  */
-export function addressableFieldsWithin<F extends object>(
+function walkFields<F extends object>(
   fields: readonly F[] | undefined,
-  within: F[] = []
+  throughNamedGroups: boolean,
+  within: F[] = [],
+  bases: string[] = [],
+  base = ""
 ): AddressableField<F>[] {
   return (fields ?? []).flatMap(field => {
-    const unnamedGroup =
-      "type" in field &&
-      field.type === "group" &&
-      !("name" in field && typeof field.name === "string" && field.name !== "");
-    if (!unnamedGroup) return [{ field, within }];
+    const name = nameOf(field);
+    const path = name === undefined ? base : base ? `${base}.${name}` : name;
+    const own = { field, within, path, bases: [...bases, base] };
+    const group = "type" in field && field.type === "group";
+    if (!group || (name !== undefined && !throughNamedGroups)) return [own];
     if (within.includes(field)) return [];
     const children = "fields" in field ? field.fields : undefined;
     // A group's children are declarations of the same kind as the group, so
     // they are read as the caller's field type.
-    return Array.isArray(children)
-      ? addressableFieldsWithin(children as F[], [...within, field])
+    const inside = Array.isArray(children)
+      ? walkFields(
+          children as F[],
+          throughNamedGroups,
+          [...within, field],
+          [...bases, base],
+          path
+        )
       : [];
+    // A named group is itself a field of the document; an unnamed one is not.
+    return name === undefined ? inside : [own, ...inside];
   });
 }
 
-/** The addressable fields alone, derived from the one walk above. */
-function addressableFields<F extends object>(
+/**
+ * The fields a document addresses at its top level: its own, plus those of any
+ * UNNAMED group. A named group or a repeater moves its fields down a level.
+ */
+export function addressableFieldsWithin<F extends object>(
   fields: readonly F[] | undefined
-): F[] {
-  return addressableFieldsWithin(fields).map(entry => entry.field);
+): AddressableField<F>[] {
+  return walkFields(fields, false);
+}
+
+/**
+ * The fields a document view can edit: the top-level ones and, at any depth,
+ * those inside named groups, each with its path. The same walk as above, also
+ * stepping into named groups; repeaters stay out of reach.
+ */
+function viewableFields<F extends object>(
+  fields: readonly F[] | undefined
+): AddressableField<F>[] {
+  return walkFields(fields, true);
 }
 
 /**
  * Whether a matched view applies to a document with these top-level fields.
- * A slug-scoped view always does; a field-type view only where a TOP-LEVEL
- * field has its type. A field inside a group or a repeater does not count.
+ * A slug-scoped view always does; a field-type view where a field of its type
+ * sits at the top level or inside groups. One inside a repeater does not
+ * count: a row has no address that survives a reorder.
  */
 export function documentViewApplies(
   view: RegisteredDocumentView,
   fields: readonly object[] | undefined
 ): boolean {
   if (!("fieldType" in view)) return true;
-  return addressableFields(fields).some(
-    field => "type" in field && field.type === view.fieldType
+  return viewableFields(fields).some(
+    ({ field }) => "type" in field && field.type === view.fieldType
   );
 }
 
@@ -214,13 +255,19 @@ export function drawnDocumentView(
     : undefined;
 }
 
-/** A field a view could edit: its name and label for the chooser, and its declaration for the view. */
+/**
+ * A field a view could edit: its path (which the address names, `hero.body`
+ * for a field in a `hero` group) and label for the chooser, and its
+ * declaration for the view.
+ */
 export interface ViewFieldCandidate<F extends object = object> {
   name: string;
   label?: string;
   declaration: F;
-  /** The unnamed groups around it, outermost first, whose gates it inherits. */
+  /** The groups around it, outermost first, whose gates it inherits. */
   within: F[];
+  /** The base path each of `within` and then the field reads conditions under. */
+  bases: string[];
 }
 
 /**
@@ -230,22 +277,28 @@ export interface ViewFieldCandidate<F extends object = object> {
  */
 export type ViewFieldResolution<F extends object = object> =
   | { kind: "document" }
-  | { kind: "field"; name: string; declaration: F; within: F[] }
+  | {
+      kind: "field";
+      name: string;
+      declaration: F;
+      within: F[];
+      bases: string[];
+    }
   | { kind: "choose"; candidates: ViewFieldCandidate<F>[] };
 
-/** The top-level fields of `fieldType`, by name and label. */
+/** The fields of `fieldType` a view can edit, by path and label. */
 export function viewFieldCandidates<F extends object>(
   fieldType: string,
   fields: readonly F[] | undefined
 ): ViewFieldCandidate<F>[] {
-  return addressableFieldsWithin(fields).flatMap(({ field, within }) => {
+  return viewableFields(fields).flatMap(({ field, within, path, bases }) => {
     if (!("type" in field) || field.type !== fieldType) return [];
-    if (!("name" in field) || typeof field.name !== "string") return [];
+    if (nameOf(field) === undefined) return [];
     const label =
       "label" in field && typeof field.label === "string"
         ? { label: field.label }
         : {};
-    return [{ name: field.name, ...label, declaration: field, within }];
+    return [{ name: path, ...label, declaration: field, within, bases }];
   });
 }
 
@@ -284,6 +337,7 @@ export function resolveViewField<F extends object>(
       name: chosen.name,
       declaration: chosen.declaration,
       within: chosen.within,
+      bases: chosen.bases,
     };
   }
   return { kind: "choose", candidates: choices };

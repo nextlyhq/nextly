@@ -79,6 +79,7 @@
  * own.
  */
 import type { PropSchema, SlotSpec } from "./block";
+import type { ContentModelDeclaration } from "./content-model";
 import type { BlockNode } from "./document";
 import { isBlockType, renderedDomId } from "./document";
 import { isDescendable, walkForest } from "./forest-walk";
@@ -136,6 +137,16 @@ export interface SlotDefaultSource {
          * content, which a `"contentOnly"` slot leaves editable.
          */
         props?: Partial<Record<string, PropSchema>>;
+        /**
+         * What the block is as HTML content for a set of props, read by the
+         * placement rule. Typed loosely because the answer is read through
+         * `resolveContentModel`, which checks it rather than trusting it.
+         */
+        contentModel?: ContentModelDeclaration;
+        /** Whether these props draw nothing, read by the placement rule. */
+        rendersNothing?: (props: never) => boolean;
+        /** The label an author knows the block by, read to word a refusal. */
+        editor?: { readonly label?: string };
       }
     | undefined;
 }

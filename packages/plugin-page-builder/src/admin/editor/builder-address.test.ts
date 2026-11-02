@@ -28,15 +28,29 @@ describe("builderAddress", () => {
     ).toEqual({ unavailable: "Save this page to open the Page Builder." });
   });
 
-  it("is withheld from a field inside a group or a repeater", () => {
+  it("names a field inside a named group by its path", () => {
     expect(
       builderAddress(
         { kind: "collection", slug: "pages", documentId: "p1" },
-        "sections.0.body"
+        "hero.body"
+      )
+    ).toEqual({
+      href: "/admin/collections/pages/p1/builder?field=hero.body",
+    });
+  });
+
+  it.each([
+    ["a repeater's row", "sections.0.body"],
+    ["a group inside a repeater's row", "sections.12.hero.body"],
+  ])("is withheld from a field inside %s", (_case, path) => {
+    expect(
+      builderAddress(
+        { kind: "collection", slug: "pages", documentId: "p1" },
+        path
       )
     ).toEqual({
       unavailable:
-        "The Page Builder opens for a top-level field only. Move this field to the top level to edit it visually.",
+        "The Page Builder doesn't open for a field inside a repeater. Move this field out of the repeater to edit it visually.",
     });
   });
 

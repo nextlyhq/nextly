@@ -1883,3 +1883,96 @@ describe("when the library was cut, or could not be read", () => {
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 });
+
+describe("the offer under the one placement rule", () => {
+  /** A card whose link makes it refuse anything clickable beneath it. */
+  const linkableCard = {
+    ...base,
+    name: "t/card",
+    editor: { label: "Card" },
+    slots: { children: {} },
+    contentModel: (props: { link?: string }) =>
+      props.link
+        ? { is: ["flow", "interactive"], accepts: { without: ["interactive"] } }
+        : { is: ["flow"] },
+  };
+  const button = {
+    ...base,
+    name: "t/button",
+    editor: { label: "Button" },
+    contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
+  };
+  const heading = { ...base, name: "t/heading", editor: { label: "Heading" } };
+  const linkedCard = {
+    id: "card",
+    type: "t/card",
+    version: 1,
+    props: { link: "/go" },
+  };
+
+  it("judges the point by the palette's own definitions, not the registry's", () => {
+    /*
+     * The registry holds a Card with no content model; the palette is handed
+     * the Card that refuses clickable blocks when linked. The catalog and the
+     * insert both read the palette's, so the placement rule must too: judged
+     * by the registry's Card, the Button is offered and its insert would build
+     * a link inside a link.
+     */
+    registerBlocks(
+      [
+        { ...base, name: "t/card", slots: { children: {} } },
+        button,
+        heading,
+      ] as never,
+      { source: "test" }
+    );
+    const editor = {
+      ...editorSpy(documentOf([linkedCard] as never)),
+      selectedId: "card",
+    } as unknown as ReturnType<typeof editorSpy>;
+    render(
+      <InsertPanel
+        editor={editor}
+        definitions={[linkableCard, button, heading] as never}
+      />
+    );
+
+    // The point is inside the card: the Heading is offered there.
+    expect(tile("Heading")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Button" })).toBeNull();
+  });
+
+  it("asks the placement rule nothing again while the author types", () => {
+    /*
+     * The verdict depends on the document, the point, the catalog and the
+     * rule's sources, none of which a keystroke changes. Counted through the
+     * nesting source every verdict reads: re-judging the catalog per keystroke
+     * reads it again for every entry.
+     */
+    registerBlocks([button, heading] as never, { source: "test" });
+    let asked = 0;
+    const nesting = {
+      parentsOf: () => {
+        asked += 1;
+        return undefined;
+      },
+      slotAllowOf: () => {
+        asked += 1;
+        return undefined;
+      },
+    };
+    render(<InsertPanel editor={editorSpy(documentOf())} nesting={nesting} />);
+    // The control: the first render did ask, so the count can move.
+    expect(asked).toBeGreaterThan(0);
+    const before = asked;
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "He" } });
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "Hea" },
+    });
+
+    // The query did narrow the rows, so the renders really happened.
+    expect(screen.queryByRole("option", { name: "Button" })).toBeNull();
+    expect(asked).toBe(before);
+  });
+});

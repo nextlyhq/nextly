@@ -122,6 +122,10 @@ const ALLOWED_IN_TESTS = [
   "@nextlyhq/module-specifiers/parse-source",
   "oxc-parser",
   "vitest",
+  // The Baseline dataset, read by `style-baseline.test.ts` alone. Several
+  // megabytes the editor has no use for at run time: the gate ships only its
+  // answer, and listing the package here rather than above keeps it so.
+  "web-features",
 ];
 
 /**

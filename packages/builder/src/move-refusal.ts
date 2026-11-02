@@ -38,10 +38,13 @@ import type {
   ComponentLookup,
   NestingSource,
 } from "@nextlyhq/blocks-engine";
-import { findNode, placementVerdict } from "@nextlyhq/blocks-engine";
+import {
+  canPlaceIn,
+  findNode,
+  registryBlockSource,
+} from "@nextlyhq/blocks-engine";
 
-import { refusalWording, type RefusalWording } from "./drag-refusal";
-import { placementTypesOf } from "./inserter";
+import { placementWording, type RefusalWording } from "./drag-refusal";
 import type { OpPosition } from "./ops";
 
 /**
@@ -67,39 +70,32 @@ export function nestingRefusalForMove(
 ): RefusalWording | null {
   const moving = findNode(document.nodes, movingId);
   if (moving === undefined) return null;
-
-  /*
-   * The destination as the nesting rule describes it. A position with no
-   * `parentId` is the root, which the rule treats as its own case rather than
-   * as a slot with no container — a block restricted to living inside
-   * something is refused AT the root for a reason no slot could give.
-   */
   const parent =
     to.parentId === undefined
       ? undefined
       : findNode(document.nodes, to.parentId);
   if (to.parentId !== undefined && parent === undefined) return null;
-  const target =
+  // The one placement rule, over the moving block and everything it holds, at
+  // the destination with what its ancestors refuse. A position whose slot is
+  // unnamed is the root's.
+  const verdict = canPlaceIn(
+    document.nodes,
+    [moving],
     parent === undefined
-      ? ({ kind: "root" } as const)
-      : ({
-          kind: "slot",
-          parentType: parent.type,
-          slot: to.slot ?? "",
-        } as const);
-
-  const verdict = placementVerdict(
-    placementTypesOf(moving, definitions),
-    target,
-    nesting
+      ? { kind: "root" }
+      : { kind: "slot", parentId: parent.id, slot: to.slot ?? "" },
+    {
+      nesting,
+      definitions: registryBlockSource(),
+      ...(definitions === undefined ? {} : { components: definitions }),
+    }
   );
   // ALLOWED is null: the rule permits this placement. Whether it survives the
   // store's own limits is a later question with a different answer.
   if (verdict.allowed) return null;
-
   // Worded by the node being moved, as the pointer route words a refused drop:
   // the author picked up the instance, not the root inside it that refused.
-  return refusalWording(verdict, moving.type, parent?.type);
+  return placementWording(verdict, moving.type, parent?.type);
 }
 
 /**

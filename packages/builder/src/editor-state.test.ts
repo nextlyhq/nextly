@@ -1314,3 +1314,124 @@ describe("the locks an edit is held to", () => {
     ]);
   });
 });
+
+describe("the placement rule on every edit", () => {
+  const base = {
+    version: 1,
+    description: "A block.",
+    example: { props: {} },
+    render: () => null,
+  };
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  function registerLinkable(): void {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "t/card",
+          slots: { children: {} },
+          contentModel: (props: { link?: string }) =>
+            props.link
+              ? {
+                  is: ["flow", "interactive"],
+                  accepts: { without: ["interactive"] },
+                }
+              : { is: ["flow"] },
+        },
+        {
+          ...base,
+          name: "t/button",
+          contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
+        },
+      ] as never,
+      { source: "test" }
+    );
+  }
+
+  const card = (
+    props: Record<string, unknown>,
+    children: BlockNode[] = []
+  ): BlockNode => ({
+    id: "card",
+    type: "t/card",
+    version: 1,
+    props,
+    slots: { children },
+  });
+  const button: BlockNode = {
+    id: "btn",
+    type: "t/button",
+    version: 1,
+    props: {},
+  };
+
+  it("refuses an insert that puts a Button inside a linked card, and says which", () => {
+    registerLinkable();
+    const onPlacementRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([card({ link: "/go" })]),
+        onPlacementRefused,
+      })
+    );
+
+    let outcome: BlockDocument | null = doc([]);
+    act(() => {
+      outcome = result.current.apply({
+        kind: "insert",
+        node: button,
+        at: { parentId: "card", slot: "children", index: 0 },
+      });
+    });
+
+    expect(outcome).toBeNull();
+    expect(result.current.canUndo).toBe(false);
+    expect(onPlacementRefused).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "btn",
+        verdict: expect.objectContaining({ reason: "content-model" }),
+      })
+    );
+  });
+
+  it("refuses turning the link on while the card holds a Button", () => {
+    registerLinkable();
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([card({}, [button])]) })
+    );
+
+    let outcome: BlockDocument | null = doc([]);
+    act(() => {
+      outcome = result.current.apply({
+        kind: "update",
+        id: "card",
+        patch: { props: { link: "/go" } },
+      });
+    });
+
+    expect(outcome).toBeNull();
+  });
+
+  it("lets an unrelated edit through on a page that already breaks the rule", () => {
+    registerLinkable();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([card({ link: "/go" }, [button])]),
+      })
+    );
+
+    act(() => {
+      result.current.apply({
+        kind: "insert",
+        node: node("after"),
+        at: { index: 1 },
+      });
+    });
+
+    expect(ids(result.current.document)).toEqual(["card", "after"]);
+  });
+});

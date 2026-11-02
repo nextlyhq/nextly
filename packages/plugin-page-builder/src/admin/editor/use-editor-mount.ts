@@ -5,10 +5,14 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-editor-mount
  */
-import type {
-  BlockDocument,
-  DocumentKind,
-  DocumentLimits,
+import {
+  blockLabelFrom,
+  getBlock,
+  placementRefusalMessage,
+  type BlockDocument,
+  type DocumentKind,
+  type DocumentLimits,
+  type LocatedPlacementBreak,
 } from "@nextlyhq/blocks-engine";
 import {
   type NoticeQueue,
@@ -225,6 +229,10 @@ export function useEditorMount(
     // What the next save judges locks against, so the editor refuses exactly
     // what that save would.
     stored,
+    // An edit that would put a block where it may not go is refused by the op
+    // store whichever surface asked for it, so the author is told why here
+    // rather than seeing the edit silently not happen.
+    onPlacementRefused: refusal => notices.raise(placementSentence(refusal)),
   });
 
   /*
@@ -294,3 +302,13 @@ export type EditorMount = {
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
 };
+
+/**
+ * A placement refusal as the author reads it: the engine's wording, which the
+ * server uses for the same refusal on a save, with the editor's block labels.
+ */
+function placementSentence(refusal: LocatedPlacementBreak): string {
+  return placementRefusalMessage(refusal.verdict, {
+    labelOf: type => blockLabelFrom(type, getBlock(type)),
+  });
+}
