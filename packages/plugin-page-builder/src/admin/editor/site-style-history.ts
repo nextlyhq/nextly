@@ -34,11 +34,13 @@ import {
 } from "react";
 
 import { SITE_STYLE_SLUG } from "../../site-style-storage";
-import type {
-  SectionChain,
-  SiteStyleHistory,
-  SiteStyleSection,
-  SiteStyleStep,
+import {
+  sameSection,
+  storedSection,
+  type SectionChain,
+  type SiteStyleHistory,
+  type SiteStyleReplay,
+  type SiteStyleSection,
 } from "../site-style-client";
 
 /**
@@ -57,7 +59,7 @@ export const StyleRevisionContext: Context<StyleReplay> =
     settling: false,
   });
 
-/** How long a stored replay waits for the read before remounting anyway. */
+/** How long a stored replay waits for the read before asking for it again. */
 const READ_BACK_WAIT_MS = 5000;
 
 /**
@@ -92,51 +94,62 @@ export function RemountOnStyleReplay({
  *
  * The write invalidates the read rather than updating it, so a surface
  * remounted at once would read the value the replay replaced, and an edit
- * made then would write it back. So the revision moves once the read has
- * moved past what it held when the write was stored, or after
- * {@link READ_BACK_WAIT_MS} should it never. Settling until then, and while
- * any replay is in flight.
+ * made then would write it back. So the revision moves once the read holds
+ * the replayed value. Should it not within {@link READ_BACK_WAIT_MS}, the
+ * read is asked for again, and the answer is the server's own, whatever it
+ * holds by then: the surfaces remount on that, never on the read the write
+ * replaced. Settling until then, and while any replay is in flight.
  */
 function useReadBack(
   setRevision: (next: (current: number) => number) => void
 ): {
   inFlight: (delta: number) => void;
-  waitForRead: () => void;
+  waitForRead: (replay: SiteStyleReplay) => void;
   settling: boolean;
 } {
-  const { data } = useSingleDocument(SITE_STYLE_SLUG);
-  const latest = useRef(data);
-  latest.current = data;
+  const { data, refetch } = useSingleDocument(SITE_STYLE_SLUG);
   const [replaying, setReplaying] = useState(0);
-  // The read as it stood when a replayed write was stored, or none.
-  const [awaiting, setAwaiting] = useState<{ read: unknown } | null>(null);
+  const [awaiting, setAwaiting] = useState<SiteStyleReplay | null>(null);
   const caughtUp = useCallback(() => {
     setAwaiting(null);
     setRevision(current => current + 1);
   }, [setRevision]);
   useEffect(() => {
-    if (awaiting !== null && data !== awaiting.read) caughtUp();
+    if (
+      awaiting !== null &&
+      sameSection(storedSection(data, awaiting.section), awaiting.value)
+    ) {
+      caughtUp();
+    }
   }, [data, awaiting, caughtUp]);
   useEffect(() => {
     if (awaiting === null) return;
-    const timer = setTimeout(caughtUp, READ_BACK_WAIT_MS);
-    return () => clearTimeout(timer);
-  }, [awaiting, caughtUp]);
+    let live = true;
+    const timer = setTimeout(() => {
+      void Promise.resolve(refetch?.()).finally(() => {
+        if (live) caughtUp();
+      });
+    }, READ_BACK_WAIT_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [awaiting, caughtUp, refetch]);
   const inFlight = useCallback((delta: number) => {
     setReplaying(current => current + delta);
   }, []);
-  const waitForRead = useCallback(() => {
-    setAwaiting({ read: latest.current });
-  }, []);
   return {
     inFlight,
-    waitForRead,
+    waitForRead: setAwaiting,
     settling: replaying > 0 || awaiting !== null,
   };
 }
 
 /** The editor's history, as far as a style step needs it. */
-type RecordStep = (step: SiteStyleStep) => () => void;
+type RecordStep = (step: {
+  readonly undo: () => Promise<boolean>;
+  readonly redo: () => Promise<boolean>;
+}) => () => void;
 
 /**
  * Held ABOVE the editor's own hooks, because some of the style writers run in
@@ -158,12 +171,14 @@ export function useSiteStyleHistory(): {
   }, []);
   const history = useMemo<SiteStyleHistory>(() => {
     const replay =
-      (half: () => Promise<boolean>, verb: "undone" | "redone") => async () => {
+      (half: () => Promise<SiteStyleReplay>, verb: "undone" | "redone") =>
+      async (): Promise<boolean> => {
         inFlight(1);
         try {
-          const stored = await half();
+          const outcome = await half();
+          const stored = outcome.stored;
           if (stored) {
-            waitForRead();
+            waitForRead(outcome);
           } else {
             toast.error(
               `That style change could not be ${verb}, so it stays as it is.`

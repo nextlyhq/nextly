@@ -208,8 +208,10 @@ export interface EditorState {
    */
   limits: DocumentLimits;
   /**
-   * How many document edits are on the undo stack. A recorded step is not
-   * one: it is stored where it was made, so it is no unsaved work here.
+   * The document's position in its history: the document edits on the undo
+   * stack, plus those that fell off its old end. A recorded step is not one:
+   * it is stored where it was made, so it is no unsaved work here. The same as
+   * the number on the stack until the history passes its bound.
    *
    * Exported because "did anything change" is not answerable from the document
    * alone: an edit and its undo leave a document equal to the original but not

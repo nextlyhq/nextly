@@ -179,8 +179,16 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
  * writes the section and answers whether the write was stored.
  */
 export interface SiteStyleStep {
-  readonly undo: () => Promise<boolean>;
-  readonly redo: () => Promise<boolean>;
+  readonly undo: () => Promise<SiteStyleReplay>;
+  readonly redo: () => Promise<SiteStyleReplay>;
+}
+
+/** What one half of a step came to: whether it was stored, and what. */
+export interface SiteStyleReplay {
+  readonly stored: boolean;
+  readonly section: SiteStyleSection;
+  /** The section's value once the write answered. */
+  readonly value: unknown;
 }
 
 /**
@@ -217,7 +225,7 @@ export interface SectionChain {
 }
 
 /** Whether two section values are the same, as stored JSON. */
-function sameSection(a: unknown, b: unknown): boolean {
+export function sameSection(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
@@ -229,7 +237,10 @@ export const SiteStyleHistoryContext: Context<SiteStyleHistory | null> =
  * A section as the stored document holds it, or `null` when it holds none.
  * Raw rather than narrowed, so writing it back stores exactly what was there.
  */
-function storedSection(document: unknown, section: SiteStyleSection): unknown {
+export function storedSection(
+  document: unknown,
+  section: SiteStyleSection
+): unknown {
   if (typeof document !== "object" || document === null) return null;
   return (document as Record<string, unknown>)[section] ?? null;
 }
@@ -377,9 +388,15 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         return write(section, value);
       }
       const { before, done } = inTurn(chain, section, () => value);
-      const replay = (target: () => unknown) => async () =>
-        (await inTurn(chainOf(settled, section), section, target).done).result
-          .saved;
+      const replay =
+        (target: () => unknown) => async (): Promise<SiteStyleReplay> => {
+          const { result, holds } = await inTurn(
+            chainOf(settled, section),
+            section,
+            target
+          ).done;
+          return { stored: result.saved, section, value: holds };
+        };
       const withdraw = history.record({
         undo: replay(() => before),
         redo: replay(() => value),

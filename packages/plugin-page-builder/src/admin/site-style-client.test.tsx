@@ -272,7 +272,10 @@ describe("writing one section", () => {
 });
 
 describe("a save inside the editor, as a step of its history", () => {
-  type Step = { undo: () => Promise<boolean>; redo: () => Promise<boolean> };
+  type Step = {
+    undo: () => Promise<{ stored: boolean }>;
+    redo: () => Promise<{ stored: boolean }>;
+  };
 
   /** The editor's side: what was recorded, and what each section last held. */
   function editorHistory() {
@@ -308,11 +311,11 @@ describe("a save inside the editor, as a step of its history", () => {
     });
     expect(steps).toHaveLength(1);
 
-    let undone: boolean | undefined;
+    let undone: { stored: boolean } | undefined;
     await act(async () => {
       undone = await steps[0]?.undo();
     });
-    expect(undone).toBe(true);
+    expect(undone?.stored).toBe(true);
     expect(writes.at(-1)).toEqual({
       tokens: { tokens: [{ name: "brand", kind: "color" }] },
     });
@@ -376,11 +379,11 @@ describe("a save inside the editor, as a step of its history", () => {
     writeBehaviour = async () => {
       throw new Error("refused");
     };
-    let undone: boolean | undefined;
+    let undone: { stored: boolean } | undefined;
     await act(async () => {
       undone = await steps[0]?.undo();
     });
-    expect(undone).toBe(false);
+    expect(undone?.stored).toBe(false);
   });
 
   it("records nothing outside an editor", async () => {
