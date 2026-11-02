@@ -44,11 +44,44 @@ describe("storedFormsOf", () => {
     expect(forms).toEqual([forest, forest]);
   });
 
-  it("has no baseline where the read is refused, as it is for a localized field", async () => {
+  it("reads a single by its slug, and the language the write is judged in", async () => {
+    const asked: unknown[] = [];
+    const read: PluginFieldWrite["readStored"] = async target => {
+      asked.push(target);
+      return { kind: "value", value: forest };
+    };
+
+    await storedFormsOf(
+      writeTo(read, { kind: "single", slug: "home", id: undefined }),
+      "content"
+    );
+    await storedFormsOf(writeTo(read, { locale: "de" }), "content");
+
+    expect(asked).toEqual([
+      { single: "home", field: "content", form: "published" },
+      { single: "home", field: "content", form: "draft" },
+      {
+        collection: "pages",
+        id: "p1",
+        field: "content",
+        form: "published",
+        locale: "de",
+      },
+      {
+        collection: "pages",
+        id: "p1",
+        field: "content",
+        form: "draft",
+        locale: "de",
+      },
+    ]);
+  });
+
+  it("has no baseline where the read is refused", async () => {
     const forms = await storedFormsOf(
       writeTo(async () => {
         throw new Error(
-          '"pages.content" cannot be read here: it is localized.'
+          '"pages.content" cannot be read here: that store is not ready.'
         );
       }),
       "content"
@@ -56,12 +89,15 @@ describe("storedFormsOf", () => {
     expect(forms).toEqual([]);
   });
 
-  it("has none for a single, a create, or a value that is no document", async () => {
+  it("has none for a create, a language that stores nothing, or a value that is no document", async () => {
     const never: PluginFieldWrite["readStored"] = async () => {
       throw new Error("not asked");
     };
     expect(
-      await storedFormsOf(writeTo(never, { kind: "single" }), "content")
+      await storedFormsOf(
+        writeTo(async () => ({ kind: "absent" }), { locale: "fr" }),
+        "content"
+      )
     ).toEqual([]);
     expect(
       await storedFormsOf(writeTo(never, { id: undefined }), "content")

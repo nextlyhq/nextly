@@ -614,7 +614,14 @@ async function schemaIssues(
       ...(ctx.componentFields === undefined
         ? {}
         : { componentFields: ctx.componentFields }),
-      ...(ctx.write === undefined ? {} : { write: ctx.write }),
+      // The write as this language is judged in: one promotion can judge
+      // several languages, so the language joins here rather than where the
+      // write was built.
+      ...(ctx.write === undefined
+        ? {}
+        : {
+            write: locale === null ? ctx.write : { ...ctx.write, locale },
+          }),
     }
   );
   // The promoted document holds every stored field, those the publisher may

@@ -865,6 +865,12 @@ interface EntryValidationArgs {
    * `issuesTheReaderMaySee`.
    */
   readLocale?: string;
+  /**
+   * The language a single-language write is in, where the document is kept
+   * per language. Validators reading what the entry already stores read this
+   * language's value; absent means the app's default language.
+   */
+  writeLocale?: string;
   /** What `localizedRequiredContext` resolved for a localized write. */
   localeCtx?: {
     localizedFieldNames: ReadonlySet<string>;
@@ -2116,13 +2122,15 @@ export class CollectionMutationService extends BaseService {
   private validationWrite(
     slug: string,
     id: string | undefined,
-    tx?: TransactionContext
+    tx?: TransactionContext,
+    locale?: string
   ): EntryWriteContext {
     const defaultLocale = this.localization?.defaultLocale ?? null;
     return entryWriteContext({
       kind: "collection",
       slug,
       ...(id === undefined ? {} : { id }),
+      ...(locale === undefined ? {} : { locale }),
       connection:
         tx === undefined
           ? { db: this.adapter, executor: undefined, defaultLocale }
@@ -2175,7 +2183,10 @@ export class CollectionMutationService extends BaseService {
           args.collectionName,
           args.id ??
             suppliedCreateId(args.mode, args.collectionName, args.data),
-          args.tx
+          args.tx,
+          // The language judged: each in turn where a write judges several,
+          // else the one this write is in.
+          args.readLocale ?? args.writeLocale
         ),
       }
     );
@@ -5933,6 +5944,9 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           reader: params,
           localeCtx,
+          ...(params.locale === undefined
+            ? {}
+            : { writeLocale: params.locale }),
           // No transaction yet, so stored rows are read on the pool: no row
           // of this write exists for a read to miss.
         });
@@ -9706,6 +9720,9 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           reader: params,
           localeCtx,
+          ...(params.locale === undefined
+            ? {}
+            : { writeLocale: params.locale }),
           id: params.entryId,
         });
       }
