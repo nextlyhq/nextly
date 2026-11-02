@@ -457,3 +457,49 @@ describe("the builder's sections, over the engine's groups", () => {
     expect(fitIsCommon(true)).toBe(true);
   });
 });
+
+describe("which display the tiers read", () => {
+  const breakpoints = {
+    viewport: [
+      { id: BASE_BREAKPOINT, label: "Desktop" },
+      { id: "tablet", label: "Tablet", maxWidth: 1024 },
+      { id: "mobile", label: "Mobile", maxWidth: 640 },
+    ],
+    container: [],
+  } as never;
+  const flexShown = (
+    styles: NodeStyles,
+    state: "base" | "hover",
+    breakpoint: string
+  ) =>
+    inspectStyle(documentOf(styles), "a", {
+      state,
+      breakpoint: breakpoint as never,
+      breakpoints,
+    })?.sections[0]?.properties.find(p => p.property === "flexDirection")
+      ?.common;
+
+  it("reads the same state at a wider tier before the base state", () => {
+    register({ layout: true });
+    // Hover at mobile: hover set at tablet (wider) applies; the base state
+    // at mobile says block, which a hover rule outranks.
+    const styles = {
+      hover: { tablet: { display: "flex" } },
+      base: { mobile: { display: "block" } },
+    } as unknown as NodeStyles;
+    expect(flexShown(styles, "hover", "mobile")).toBe(true);
+  });
+
+  it("reads an intermediate tier before the unconditional one", () => {
+    register({ layout: true });
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: { display: "block" },
+        tablet: { display: "flex" },
+      },
+    } as unknown as NodeStyles;
+    expect(flexShown(styles, "base", "mobile")).toBe(true);
+    // The control: at the unconditional tier itself, block applies.
+    expect(flexShown(styles, "base", BASE_BREAKPOINT)).toBe(false);
+  });
+});

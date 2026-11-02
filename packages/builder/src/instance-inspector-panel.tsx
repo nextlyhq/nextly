@@ -48,9 +48,9 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { BlockCard } from "./block-card";
+import { BlockCard, type CardVerbs } from "./block-card";
 import type { EditorState } from "./editor-state";
-import { lockOp, lockStatusOf, renameOp } from "./inspector";
+import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
 import {
   resetOverrideOp,
   setOverrideOp,
@@ -112,9 +112,12 @@ const TYPE_LABEL: Readonly<Record<ExposedRow["type"], string>> = {
 export function InstanceInspectorPanel({
   inspection,
   editor,
+  verbs,
 }: {
   inspection: InstanceInspection;
   editor: EditorState;
+  /** The shared block verbs for the card's menu, as a block's card gets. */
+  verbs?: CardVerbs | undefined;
 }): React.JSX.Element {
   // Read the node at commit time rather than closing over one. A field
   // committing on blur can fire after another edit has already replaced the
@@ -163,9 +166,14 @@ export function InstanceInspectorPanel({
             ? ""
             : ` · used on ${inspection.usedOn} ${inspection.usedOn === 1 ? "page" : "pages"}`
         }`}
-        lock={lockStatusOf(editor.document, inspection.nodeId)}
+        lock={lockStatusOf(
+          editor.document,
+          inspection.nodeId,
+          lockViewOf(editor)
+        )}
         onRename={name => editor.apply(renameOp(inspection.nodeId, name))}
         onLock={locked => editor.apply(lockOp(inspection.nodeId, locked))}
+        verbs={verbs}
       />
 
       {!inspection.definitionFound ? (

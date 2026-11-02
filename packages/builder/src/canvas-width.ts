@@ -297,3 +297,56 @@ export function widthForBreakpoint(
    */
   return selectableTiers(set).find(tier => tier.id === id)?.maxWidth;
 }
+
+/**
+ * The narrowest the base breakpoint, Desktop, is previewed at.
+ *
+ * A fixed width rather than the region's: the region changes as panels open
+ * and close, and a preview that followed it would show a different layout for
+ * the same device. 1280 is the narrowest window the editor supports.
+ */
+export const DESKTOP_PREVIEW_WIDTH = 1280;
+
+/**
+ * The width the canvas lays a device out at, which the zoom then fits into
+ * the room the panels leave.
+ *
+ * A bounded breakpoint is shown at its own bound, the widest width at which
+ * it applies, rather than at some device's width: that is the width whose
+ * layout the author is styling. The base is shown at 1280, or one pixel past
+ * the widest bound on a site whose widest bound reaches 1280, so the base
+ * preview never sits inside a narrower breakpoint.
+ *
+ * `undefined` for an id the site does not define as a viewport breakpoint,
+ * and on a site with no viewport breakpoints at all, where there is nothing
+ * to simulate and the canvas fills its region.
+ */
+export function previewWidth(
+  set: BreakpointSet | undefined,
+  id: BreakpointId
+): number | undefined {
+  const tiers = offeredTiers(set);
+  if (tiers.length === 0) return undefined;
+  if (id === BASE_BREAKPOINT) {
+    return Math.max(DESKTOP_PREVIEW_WIDTH, (tiers[0]?.maxWidth ?? 0) + 1);
+  }
+  return tiers.find(tier => tier.id === id)?.maxWidth;
+}
+
+/**
+ * The breakpoint an edit goes to, from the device the author chose.
+ *
+ * The choice is stored as the author left it, so it can name a breakpoint the
+ * site has since removed, or a container breakpoint, which is not a device.
+ * Either way the edit goes to the base breakpoint: a value written under an
+ * id the site does not define as a device would never be drawn.
+ */
+export function editingBreakpointOf(
+  set: BreakpointSet | undefined,
+  chosen: string | null
+): BreakpointId {
+  if (chosen === null || chosen === BASE_BREAKPOINT) return BASE_BREAKPOINT;
+  return offeredTiers(set).some(tier => tier.id === chosen)
+    ? chosen
+    : BASE_BREAKPOINT;
+}

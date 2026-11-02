@@ -453,6 +453,8 @@ function itemProp(
     value,
     supported: hasContentControl(schema.type),
     options,
+    // The parent array control's `disabled` already holds the item fields.
+    readOnly: false,
   };
 }
 

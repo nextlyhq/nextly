@@ -76,6 +76,7 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorSpy {
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
   } as unknown as EditorSpy;
 }
 

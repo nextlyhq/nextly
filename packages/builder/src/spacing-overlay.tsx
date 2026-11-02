@@ -87,6 +87,7 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
+import { designIsWritable, lockViewOf } from "./inspector";
 import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
@@ -593,6 +594,16 @@ export function SpacingOverlay({
    * a true thing to report about a selection that includes it.
    */
   const singular = editor.selection.ids.length <= 1;
+  /*
+   * No handles either for a block whose design is held — its own Layers lock,
+   * or an area locked to its content: they write its spacing, which either
+   * lock fixes. Asked of the rule the inspector holds its Style tab read-only
+   * by, so the panel and the canvas agree. The bands stay, for the reason
+   * above.
+   */
+  const designHeld =
+    selectedId !== null &&
+    !designIsWritable(document, selectedId, lockViewOf(editor));
 
   /*
    * Measured before the browser paints, so the bands never appear over the
@@ -880,7 +891,7 @@ export function SpacingOverlay({
           <span className="nx-spacing-overlay__value">{band.label}</span>
         </div>
       ))}
-      {subject === null || !singular ? null : (
+      {subject === null || !singular || designHeld ? null : (
         <SpacingHandles
           editor={editor}
           bands={bands}

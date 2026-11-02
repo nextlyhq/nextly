@@ -69,6 +69,7 @@ import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { refusalWording } from "./drag-refusal";
 import { canvasContentRect, scrollableAncestor } from "./geometry-dom";
+import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
@@ -1772,7 +1773,12 @@ function DropRefusalNotice({
   const notice = useRef<HTMLDivElement | null>(null);
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
   const { parentId } = refusal;
-  const { headline, remedy } = refusalWording(refusal, movingType, regionType);
+  // One wording per rule: a lock's from the function every lock refusal uses,
+  // a nesting refusal's from the drag's own.
+  const { headline, remedy } =
+    "lock" in refusal
+      ? lockRefusalWording(refusal.lock)
+      : refusalWording(refusal, movingType, regionType);
 
   /*
    * Measured BEFORE the browser paints, not after.

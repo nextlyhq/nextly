@@ -145,6 +145,8 @@ function editorFor(document: BlockDocument): EditorState & {
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    // Nothing composed around the page: its own tree is all there is.
+    composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 
@@ -168,7 +170,7 @@ describe("a block inside a contentOnly area", () => {
     expect(
       document.querySelector('[data-lock="contentOnly"]')?.textContent
     ).toMatch(
-      /Frame fixes the design of the blocks it holds.*can't be unlocked here/
+      /This area of Frame is locked to its content\..*can't be unlocked here/
     );
     // Content: the content prop is writable, the design prop is not.
     expect(disabled("Body")).toBe(false);
@@ -176,13 +178,13 @@ describe("a block inside a contentOnly area", () => {
     // Advanced: read-only with the reason.
     openAdvanced();
     expect(disabled("CSS id")).toBe(true);
-    expect(
-      screen.getAllByText(/only this block's content can change here/).length
-    ).toBeGreaterThan(0);
+    expect(screen.getAllByText(/locked to its content/).length).toBeGreaterThan(
+      0
+    );
     // Style: read-only with the reason.
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
     expect(
-      screen.getByText(/Frame fixes the design/, {
+      screen.getByText(/locked to its content/, {
         selector: "[data-read-only]",
       })
     ).toBeDefined();
@@ -194,10 +196,18 @@ describe("a block inside a contentOnly area", () => {
     ).toBe(true);
   });
 
-  it("offers no Unlock for the area's lock", () => {
+  it("holds Lock, with the reason: the area pins the block's own lock", () => {
     render(<InspectorPanel editor={editorFor(inside("acme/frame"))} />);
     openMenu();
-    expect(screen.queryByRole("menuitem", { name: "Unlock" })).toBeNull();
+    const lock = screen.getByRole("menuitem", { name: /^Lock/ });
+    expect(lock.getAttribute("aria-disabled")).toBe("true");
+    expect(lock.textContent).toContain("The area it sits in fixes this.");
+    // The positive control: Rename is offered and not held.
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Rename" })
+        .getAttribute("aria-disabled")
+    ).toBeNull();
   });
 });
 
@@ -213,17 +223,25 @@ describe("a block in a slot locked all", () => {
     openAdvanced();
     expect(disabled("CSS id")).toBe(false);
     openMenu();
-    expect(screen.queryByRole("menuitem", { name: "Unlock" })).toBeNull();
+    // The arrangement lock leaves the block's own lock its own.
+    expect(screen.queryByRole("menuitem", { name: /^Unlock/ })).toBeNull();
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Lock" })
+        .getAttribute("aria-disabled")
+    ).toBeNull();
   });
 });
 
 describe("both locks at once", () => {
   it("says each apart, and Unlock lifts only the Layers lock", () => {
-    const editor = editorFor(inside("acme/frame", { locked: true }));
+    // A slot locked `all` fixes the arrangement and leaves the block's own
+    // lock its own, so Unlock is offered and removes only that.
+    const editor = editorFor(inside("acme/row", { locked: true }));
     render(<InspectorPanel editor={editor} />);
 
     expect(document.querySelector('[data-lock="layers"]')).not.toBeNull();
-    expect(document.querySelector('[data-lock="contentOnly"]')).not.toBeNull();
+    expect(document.querySelector('[data-lock="all"]')).not.toBeNull();
     // Every control read-only while the Layers lock holds, content included.
     expect(disabled("Body")).toBe(true);
 
@@ -235,6 +253,23 @@ describe("both locks at once", () => {
       patch: {},
       unset: ["locked"],
     });
+  });
+
+  it("holds Unlock where a contentOnly area pins the block's own lock", () => {
+    render(
+      <InspectorPanel
+        editor={editorFor(inside("acme/frame", { locked: true }))}
+      />
+    );
+
+    expect(document.querySelector('[data-lock="layers"]')).not.toBeNull();
+    expect(document.querySelector('[data-lock="contentOnly"]')).not.toBeNull();
+    openMenu();
+    expect(
+      screen
+        .getByRole("menuitem", { name: /^Unlock/ })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
   });
 });
 

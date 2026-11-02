@@ -123,6 +123,8 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
+    composed: () => undefined,
   } as unknown as EditorState & { applyAll: ReturnType<typeof vi.fn> };
 }
 
@@ -3224,5 +3226,29 @@ describe("a read-only design", () => {
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).toMatch(/locked/);
+  });
+});
+
+describe("which elements count as media for the fit controls", () => {
+  const fitShown = (renderedTag: string) => {
+    register({ dimensions: true });
+    const { unmount } = render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf())}
+        renderedTag={renderedTag}
+      />
+    );
+    const shown =
+      document.querySelector('[data-property="objectFit"]') !== null;
+    unmount();
+    clearBlocks();
+    return shown;
+  };
+
+  it("shows them on an image and not on a picture wrapper", () => {
+    expect(fitShown("img")).toBe(true);
+    // A `<picture>` only chooses a source; the image inside it is what fits.
+    expect(fitShown("picture")).toBe(false);
+    expect(fitShown("div")).toBe(false);
   });
 });

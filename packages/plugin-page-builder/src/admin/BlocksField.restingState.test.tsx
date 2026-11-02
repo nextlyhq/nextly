@@ -68,6 +68,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
+  // No preview here: the surrounding editor offers none.
+  useDocumentPreview: () => null,
   usePluginClientConfig: () => undefined,
   // A saved page around the field, so the card has the builder's address to
   // link to; outside a document, or before a first save, it has none.
@@ -149,6 +151,14 @@ const DOCUMENT = {
 } as unknown as BlockDocument;
 
 const MINIATURE = '[data-slot="page-miniature-surface"]';
+// The preview's part of the entry view. The section list beneath it names each
+// section by its first line, so "is the page's text on screen" has to be asked
+// of the preview alone to say anything about whether the page was drawn.
+const PREVIEW = '[data-slot="page-entry-preview"]';
+
+function drawn(container: HTMLElement): string {
+  return container.querySelector(MINIATURE)?.textContent ?? "";
+}
 
 const DEFINITION_TEXT = "The words inside the component";
 
@@ -212,8 +222,7 @@ describe("the entry form at rest", () => {
 
     const { container } = render(<Host />);
 
-    expect(container.querySelector(MINIATURE)).not.toBeNull();
-    expect(container.textContent).toContain(PAGE_TEXT);
+    expect(drawn(container)).toContain(PAGE_TEXT);
   });
 
   it("draws a placed component from the definition the component route answered", () => {
@@ -229,8 +238,7 @@ describe("the entry form at rest", () => {
 
     const { container } = render(<Host document={PAGE_WITH_INSTANCE} />);
 
-    expect(container.querySelector(MINIATURE)).not.toBeNull();
-    expect(container.textContent).toContain(DEFINITION_TEXT);
+    expect(drawn(container)).toContain(DEFINITION_TEXT);
   });
 
   it("draws nothing of a component the route did not answer with", () => {
@@ -239,7 +247,7 @@ describe("the entry form at rest", () => {
     const { container } = render(<Host document={PAGE_WITH_INSTANCE} />);
 
     expect(container.querySelector(MINIATURE)).not.toBeNull();
-    expect(container.textContent).not.toContain(DEFINITION_TEXT);
+    expect(drawn(container)).not.toContain(DEFINITION_TEXT);
   });
 
   it("does not read the component library for a page that places no component", () => {
@@ -256,8 +264,7 @@ describe("the entry form at rest", () => {
     const { container } = render(<Host />);
 
     expect(fetched).not.toContain("/library/components");
-    expect(container.querySelector(MINIATURE)).not.toBeNull();
-    expect(container.textContent).toContain(PAGE_TEXT);
+    expect(drawn(container)).toContain(PAGE_TEXT);
   });
 
   it("reads it for a page that places one", () => {
@@ -282,7 +289,9 @@ describe("the entry form at rest", () => {
     const { container } = render(<Host />);
 
     expect(container.querySelector(MINIATURE)).toBeNull();
-    expect(container.textContent).not.toContain(PAGE_TEXT);
+    expect(container.querySelector(PREVIEW)?.textContent).not.toContain(
+      PAGE_TEXT
+    );
   });
 
   it("still says what the page holds while the style is arriving", () => {
@@ -290,7 +299,7 @@ describe("the entry form at rest", () => {
 
     const { container } = render(<Host />);
 
-    expect(container.textContent).toContain("1 block");
+    expect(container.textContent).toContain("1 section");
   });
 
   /*
@@ -311,7 +320,9 @@ describe("the entry form at rest", () => {
     const { container } = render(<Host />);
 
     expect(container.querySelector(MINIATURE)).toBeNull();
-    expect(container.textContent).not.toContain(PAGE_TEXT);
+    expect(container.querySelector(PREVIEW)?.textContent).not.toContain(
+      PAGE_TEXT
+    );
   });
 
   it("still offers the way into the builder when that read failed", () => {

@@ -102,6 +102,8 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    // Nothing composed around the page: its own tree is all there is.
+    composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 

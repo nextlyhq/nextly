@@ -48,7 +48,7 @@ import {
   type RowProblem,
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
-import { designReadOnlyReason } from "./inspector";
+import { designReadOnlyReason, lockViewOf } from "./inspector";
 
 /**
  * What a refused write says, wherever it is refused.
@@ -212,7 +212,11 @@ export function AdvancedPanel({
      * the fields are read-only while the design is locked, but a lock set in
      * Layers after this panel drew must stop the next write too.
      */
-    const locked = designReadOnlyReason(editor.document, nodeId);
+    const locked = designReadOnlyReason(
+      editor.document,
+      nodeId,
+      lockViewOf(editor)
+    );
     if (locked !== undefined) {
       setRefusal(locked);
       return false;

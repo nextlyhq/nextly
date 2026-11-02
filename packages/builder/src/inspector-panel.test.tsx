@@ -104,6 +104,8 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
+    composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 
@@ -1988,5 +1990,155 @@ describe("removing an empty id while a row is refused", () => {
     expect(screen.getByRole("alert").textContent).toContain(
       "does not put that attribute"
     );
+  });
+});
+
+describe("a block inside an area locked to its content", () => {
+  /*
+   * Its content stays editable; everything else is SHOWN read-only, with the
+   * reason, rather than hidden: an author sees what the block is set to and
+   * is told why it holds. Asserted through `:disabled`, which a disabled
+   * fieldset gives every control inside it, Radix's buttons included.
+   */
+  function mountHeld(top: "held" | "free" = "held") {
+    registerBlocks(
+      [
+        {
+          name: "acme/headline",
+          version: 1,
+          description: "A headline.",
+          example: { props: {} },
+          editor: { label: "Headline" },
+          props: {
+            text: { type: "text", role: "content" },
+            align: { type: "select", options: ["left", "right"] },
+          },
+          // Declared so the Style tab draws controls for the lock to hold.
+          supports: { spacing: { margin: true, padding: true } },
+          render: () => null,
+        },
+        {
+          name: "acme/hero",
+          version: 1,
+          description: "A hero.",
+          example: { props: {} },
+          editor: { label: "Hero" },
+          slots: {
+            body: {
+              defaultBlock: [{ type: "acme/headline" }],
+              lock: top === "held" ? "contentOnly" : undefined,
+            },
+          },
+          render: () => null,
+        },
+      ] as never,
+      { source: "inspector-panel-test" }
+    );
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "h",
+          type: "acme/hero",
+          version: 1,
+          props: {},
+          slots: {
+            body: [
+              {
+                id: "a",
+                type: "acme/headline",
+                version: 1,
+                props: { text: "Title", align: "left" },
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument);
+    render(<InspectorPanel editor={editor} />);
+    return editor;
+  }
+
+  const isDisabled = (element: Element) => element.matches(":disabled");
+  const controlsIn = (panel: Element) =>
+    Array.from(
+      panel.querySelectorAll("input, button, select, textarea")
+    ).filter(control => control.getAttribute("role") !== "tab");
+
+  it("keeps its content and its layer name editable", () => {
+    mountHeld();
+
+    expect(isDisabled(screen.getByLabelText("Text"))).toBe(false);
+    // The layer name is the card's Rename, still offered.
+    openCardMenu("Headline");
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeDefined();
+  });
+
+  it("shows its other settings read-only, and offers no change to its own lock", () => {
+    mountHeld();
+
+    expect(isDisabled(screen.getByLabelText("Align"))).toBe(true);
+    // The area pins the block's own lock with its design, so the card holds
+    // Lock, and says why.
+    openCardMenu("Headline");
+    const lock = screen.getByRole("menuitem", { name: /^Lock/ });
+    expect(lock.getAttribute("aria-disabled")).toBe("true");
+    expect(lock.textContent).toContain("The area it sits in fixes this.");
+  });
+
+  it("says why, in the words the store's refusal uses, tied to the controls it holds", () => {
+    mountHeld();
+
+    const reason = screen.getByText(
+      "This area of Hero is locked to its content. Headline's design and settings can't change here."
+    );
+    const held = screen.getByLabelText("Align").closest("fieldset");
+    expect(held?.getAttribute("aria-describedby")).toBe(reason.id);
+  });
+
+  it("shows the Style tab and the Advanced section read-only", () => {
+    mountHeld();
+
+    // Controls that change something. A section's toggle and the state
+    // switcher only choose what is shown, so they stay usable.
+    const editingControls = (panel: Element) =>
+      controlsIn(panel).filter(
+        control =>
+          !control.hasAttribute("aria-expanded") &&
+          control.getAttribute("role") !== "radio"
+      );
+
+    openAdvanced();
+    const content = screen.getByRole("tabpanel", { name: "Content" });
+    const advanced = content.querySelector(
+      ".nx-inspector__advanced"
+    ) as Element;
+    expect(editingControls(advanced).length).toBeGreaterThan(0);
+    expect(
+      editingControls(advanced).filter(control => !isDisabled(control))
+    ).toEqual([]);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    const style = screen.getByRole("tabpanel", { name: "Style" });
+    expect(editingControls(style).length).toBeGreaterThan(0);
+    expect(
+      editingControls(style).filter(control => !isDisabled(control))
+    ).toEqual([]);
+  });
+
+  it("holds nothing where the slot fixes no design", () => {
+    mountHeld("free");
+
+    expect(isDisabled(screen.getByLabelText("Align"))).toBe(false);
+    expect(screen.queryByText(/locked to its content/)).toBeNull();
+    openAdvanced();
+    expect(isDisabled(screen.getByLabelText("CSS id"))).toBe(false);
+    openCardMenu("Headline");
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Lock" })
+        .getAttribute("aria-disabled")
+    ).toBeNull();
   });
 });

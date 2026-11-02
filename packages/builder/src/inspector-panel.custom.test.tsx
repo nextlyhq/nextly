@@ -130,6 +130,7 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 

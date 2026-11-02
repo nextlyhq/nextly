@@ -50,6 +50,12 @@ let edit: ((next: BlockDocument) => void) | undefined;
 /** The form's values as last rendered, which is what a save would send. */
 let values: FieldValues | undefined;
 
+/** The saved copy the open editor last judged locks against. */
+let lastStored: BlockDocument | undefined;
+
+/** Resets the host's form, as a save does to what the server stored. */
+let resetForm: ((next: FieldValues) => void) | undefined;
+
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
   const nothing = (): null => null;
@@ -92,6 +98,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: nothing,
     TokensPanel: nothing,
     OnboardingChecklist: nothing,
@@ -115,9 +122,12 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
      */
     useEditorState: ({
       initialDocument,
+      stored,
     }: {
       initialDocument: BlockDocument;
+      stored?: BlockDocument;
     }) => {
+      lastStored = stored;
       const [document, setDocument] = React.useState(() => {
         seeded.push(initialDocument);
         return initialDocument;
@@ -156,6 +166,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
+  // No preview here: the surrounding editor offers none.
+  useDocumentPreview: () => null,
   usePluginClientConfig: () => undefined,
   // A saved page around the view, as the admin draws it at that page's own
   // address.
@@ -281,7 +293,8 @@ function Host({
   readOnly?: boolean;
   stored?: FieldValues;
 }): React.JSX.Element {
-  const { control } = useForm<FieldValues>({ defaultValues: stored });
+  const { control, reset } = useForm<FieldValues>({ defaultValues: stored });
+  resetForm = reset;
   return (
     <>
       <PageBuilderView
@@ -304,6 +317,8 @@ beforeEach(() => {
   seeded.length = 0;
   edit = undefined;
   values = undefined;
+  lastStored = undefined;
+  resetForm = undefined;
   exit.mockClear();
 });
 
@@ -319,6 +334,17 @@ describe("the field the view edits", () => {
     // field holds a well-formed page too, so an editor bound to it would be
     // seeded with a plausible document and fail here only on its words.
     expect(seeded).toEqual([pageSaying(CONTENT_TEXT)]);
+  });
+
+  it("holds locks against the named field's saved copy, and follows it when a save resets the form", () => {
+    render(<Host />);
+    expect(lastStored).toEqual(pageSaying(CONTENT_TEXT));
+
+    // A save resets the form to what the server stored. The editor then
+    // judges the next edit against that page, not the one it opened with.
+    act(() => resetForm?.({ body: pageSaying(BODY_TEXT), content: EDITED }));
+
+    expect(lastStored).toEqual(EDITED);
   });
 
   it("commits an edit into the named field on leaving, and leaves the other alone", () => {
