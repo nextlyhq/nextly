@@ -51,6 +51,7 @@ import {
   type AuthenticatedScope,
   scopeHoldsSuperAdmin,
 } from "../../../auth/authenticated-scope";
+import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
 import { runWithCallerScope } from "../../../auth/caller-scope";
@@ -12212,7 +12213,9 @@ export class CollectionMutationService extends BaseService {
   ): Promise<boolean | undefined> {
     const executor =
       gate.executor === undefined ? {} : { executor: gate.executor };
-    const scope = gate.authenticatedScope;
+    // The scope the gate itself judges by: the one named, else the one the
+    // calling request authenticated, so a key's own grant answers for it.
+    const scope = effectiveCallerScope(gate.authenticatedScope);
     if (scope?.actorType === "apiKey") {
       return (
         scopeHoldsSuperAdmin(scope) ||

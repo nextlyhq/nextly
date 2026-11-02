@@ -23,6 +23,8 @@ import {
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
+import { apiKeyScope } from "../../../auth/authenticated-scope";
+import { runWithCallerScope } from "../../../auth/caller-scope";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
@@ -417,6 +419,50 @@ describe.each(getConfiguredTestDialects())(
 
         expect(status).toBe(403);
         vi.restoreAllMocks();
+        expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(true);
+      });
+
+      it("is refused by the key its request authenticated before its row is locked", async () => {
+        const t = await boot(dialect);
+        const { withGerman } = await seed(t, ANY_LANGUAGE);
+        // The author holds delete; the key the request authenticated holds
+        // read alone, and the gate judges the key.
+        const readKey = apiKeyScope([
+          {
+            slug: `read-${ANY_LANGUAGE}`,
+            action: "read",
+            resource: ANY_LANGUAGE,
+          },
+        ]);
+        const touched = { locks: 0, pendingReads: 0 };
+
+        const status = await runWithCallerScope(readKey, () =>
+          t.adapter.transaction(async tx => {
+            const lockRow = tx.lockRow.bind(tx);
+            tx.lockRow = async (...args: Parameters<typeof lockRow>) => {
+              touched.locks++;
+              return lockRow(...args);
+            };
+            const select = tx.select.bind(tx);
+            tx.select = ((table: string, ...rest: unknown[]) => {
+              if (table === "nextly_versions") touched.pendingReads++;
+              return (select as (...args: unknown[]) => unknown)(
+                table,
+                ...rest
+              );
+            }) as typeof tx.select;
+            const result = await entriesOf(t).deleteEntryInTransaction(tx, {
+              collectionName: ANY_LANGUAGE,
+              entryId: withGerman,
+              user: { id: AUTHOR },
+              overrideAccess: false,
+            } as never);
+            return (result as { statusCode?: number }).statusCode;
+          })
+        );
+
+        expect(status).toBe(403);
+        expect(touched).toEqual({ locks: 0, pendingReads: 0 });
         expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(true);
       });
 
