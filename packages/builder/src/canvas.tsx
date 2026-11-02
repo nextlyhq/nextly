@@ -43,12 +43,15 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   INSTANCE_ATTRIBUTE,
+  layoutPartSheets,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   previewContainerStyle,
   sharedStyleInputs,
+  type PagePart,
+  type PageRendererProps,
+  type PartSheet,
 } from "@nextlyhq/blocks-react";
-import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import {
   BlockEnvironmentProvider,
   type BlockEnvironment,
@@ -64,8 +67,10 @@ import {
   useState,
 } from "react";
 
+import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { guardCanvasNavigation } from "./canvas-link-guard";
+import { CanvasRegionFrame, type CanvasRegion } from "./canvas-regions";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isElement, isHTMLElement } from "./dom-kind";
@@ -143,21 +148,9 @@ export const DROP_PARENT_ATTRIBUTE = "data-nx-drop-parent";
  */
 export const DROP_REFUSED_ATTRIBUTE = "data-nx-drop-refused";
 
-/**
- * Marks editor chrome drawn over the page, which is not part of the page.
- *
- * A click on the canvas background CLEARS the selection, and the overlay sits
- * inside the canvas root — so without this a press on any control drawn over
- * the page resolves to "no node" and deselects the very block that control
- * acts on. The floating toolbar would run its action and then watch itself
- * disappear.
- *
- * An attribute rather than each overlay calling `stopPropagation`: the rule
- * belongs to what chrome IS, and the version where every new overlay has to
- * remember it is the version where the next one does not. The drop indicator
- * needs no marker only because it takes no pointer events at all.
- */
-export const CHROME_ATTRIBUTE = "data-nx-chrome";
+// Defined in its own module so the region frames drawn inside the canvas can
+// mark themselves as chrome without importing the canvas back.
+export { CHROME_ATTRIBUTE } from "./canvas-chrome";
 
 /** Whether an event started inside editor chrome rather than inside the page. */
 /**
@@ -1698,6 +1691,18 @@ export interface CanvasProps {
    * context of its own.
    */
   overlay?: React.ReactNode;
+  /**
+   * The regions of the page's Layout, drawn locked around the page: a header
+   * before it, a footer after it, as a visitor gets them.
+   *
+   * Drawn inside the canvas root, as part of what the canvas renders, so any
+   * surface the canvas is mounted on carries them with the page. They share
+   * the page's one site sheet and its previewed breakpoints, each compiled
+   * under a scope of its own (`layoutPartSheets`), so the canvas shows the
+   * cascade the published route serves. Absent or empty, the canvas draws the
+   * page exactly as it always has.
+   */
+  regions?: readonly CanvasRegion[];
 }
 
 /**
@@ -1917,6 +1922,79 @@ function DropRefusalNotice({
   );
 }
 
+/**
+ * The canvas box's style, with its zoom also published as a custom property.
+ *
+ * Chrome drawn inside the canvas (a Layout region's badge and tag) is scaled
+ * with everything else by the root's `zoom`, which makes its words unreadable
+ * on a zoomed-out canvas. Reading the factor back lets that chrome undo it and
+ * stay at the admin's own size, without each piece measuring the canvas.
+ */
+function withZoomVariable(style: React.CSSProperties): React.CSSProperties {
+  const zoom = style.zoom;
+  return typeof zoom === "number"
+    ? ({ ...style, "--nx-canvas-zoom": zoom } as React.CSSProperties)
+    : style;
+}
+
+/** A region of the page's Layout, with how it treats the site sheet. */
+interface DrawnRegion {
+  region: CanvasRegion;
+  sheet: PartSheet;
+}
+
+/**
+ * The page and the regions around it, each with its site-sheet inputs.
+ *
+ * Asked of `layoutPartSheets`, the answer the published route uses, so the
+ * first part drawn emits the site sheet and each part compiles under its own
+ * scope. `undefined` when there is no region to draw.
+ */
+function useLayoutParts(
+  regions: readonly CanvasRegion[] | undefined,
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  sheet: NonNullable<PageRendererProps["siteStyles"]>
+):
+  | {
+      page: PartSheet;
+      header: DrawnRegion | undefined;
+      footer: DrawnRegion | undefined;
+    }
+  | undefined {
+  return useMemo(() => {
+    const header = regions?.find(region => region.area === "header");
+    const footer = regions?.find(region => region.area === "footer");
+    if (header === undefined && footer === undefined) return undefined;
+    const parts: PagePart[] = [
+      ...(header === undefined ? [] : (["header"] as const)),
+      "page",
+      ...(footer === undefined ? [] : (["footer"] as const)),
+    ];
+    const sheets = layoutPartSheets({
+      parts,
+      styleContext: rendered?.styleContext,
+      siteStyles: sheet,
+      pageScope:
+        typeof rendered?.styles?.scope === "string"
+          ? rendered.styles.scope
+          : undefined,
+    });
+    const sheetFor = (part: PagePart): PartSheet =>
+      sheets[parts.indexOf(part)] ?? {};
+    return {
+      page: sheetFor("page"),
+      header:
+        header === undefined
+          ? undefined
+          : { region: header, sheet: sheetFor("header") },
+      footer:
+        footer === undefined
+          ? undefined
+          : { region: footer, sheet: sheetFor("footer") },
+    };
+  }, [regions, rendered, sheet]);
+}
+
 export function Canvas({
   document,
   rootRef,
@@ -1935,6 +2013,7 @@ export function Canvas({
   onDoubleClick,
   overlay,
   preview,
+  regions,
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
 
@@ -2021,6 +2100,11 @@ export function Canvas({
     setEnvironment({ document: root.current.ownerDocument, window: view });
   }, []);
 
+  // The page and the regions of its Layout, in drawing order, each with how it
+  // treats the site sheet. `undefined` when there are no regions, so a canvas
+  // without a Layout renders exactly as it did.
+  const drawn = useLayoutParts(regions, rendered, sheet);
+
   const page = useMemo(
     () => (
       <BlockEnvironmentProvider value={environment}>
@@ -2028,6 +2112,7 @@ export function Canvas({
           {...rendered}
           document={document}
           siteStyles={sheet}
+          {...drawn?.page}
           // What makes the hit-testing above possible at all. The renderer emits
           // the node attribute only when asked, because a PUBLISHED page should
           // not carry an editor's addressing — so the canvas asks and a route
@@ -2038,7 +2123,7 @@ export function Canvas({
         />
       </BlockEnvironmentProvider>
     ),
-    [rendered, document, sheet, environment]
+    [rendered, document, sheet, environment, drawn]
   );
 
   /*
@@ -2078,7 +2163,7 @@ export function Canvas({
       // are positioned in this element's own content coordinates: a box inside
       // it would size the page while leaving the drop indicator and the
       // selection chrome measuring the region instead.
-      style={boxStyle}
+      style={withZoomVariable(boxStyle)}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and
@@ -2112,7 +2197,21 @@ export function Canvas({
       {...dragHandlers}
       onPointerDown={pointerDown}
     >
+      {drawn?.header === undefined ? null : (
+        <CanvasRegionFrame
+          region={drawn.header.region}
+          rendered={rendered}
+          sheet={drawn.header.sheet}
+        />
+      )}
       {page}
+      {drawn?.footer === undefined ? null : (
+        <CanvasRegionFrame
+          region={drawn.footer.region}
+          rendered={rendered}
+          sheet={drawn.footer.sheet}
+        />
+      )}
       {overlay}
       {refusalDrawn === null ? null : (
         <DropRefusalNotice

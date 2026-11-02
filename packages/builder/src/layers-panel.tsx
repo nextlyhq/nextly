@@ -65,6 +65,7 @@ import {
   registryNestingSource,
   type ComponentLookup,
   type NestingSource,
+  type RegionArea,
 } from "@nextlyhq/blocks-engine";
 import {
   Input,
@@ -117,6 +118,46 @@ export interface LayersPanelProps {
    * instance is judged by what it draws, as its canvas drop is.
    */
   definitions?: ComponentLookup;
+  /**
+   * The regions of the page's Layout, shown as read-only rows: a header above
+   * the page's blocks, a footer below them.
+   *
+   * Outside the tree on purpose. They are not the page's blocks, so they take
+   * no part in its selection, its drag and drop, its locks or its visibility;
+   * each is one button an author reaches by Tab, and activating it shows the
+   * region on the canvas.
+   */
+  regions?: readonly LayersRegionRow[];
+}
+
+/** One region of the page's Layout, as a read-only row in Layers. */
+export interface LayersRegionRow {
+  readonly area: RegionArea;
+  /** The area's name, "Header". */
+  readonly name: string;
+  /** Where it comes from, "from Layout Main". */
+  readonly origin: string;
+  /** Show the region on the canvas. */
+  readonly onActivate: () => void;
+}
+
+/** A region of the page's Layout, as a row that is not one of the page's blocks. */
+function RegionRow({ row }: { row: LayersRegionRow }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="nx-layers-region"
+      data-nx-layers-region={row.area}
+      // Named whole, so it is announced as one sentence: what it is, where it
+      // comes from, and that it cannot be changed here.
+      aria-label={`${row.name}, ${row.origin}, locked`}
+      onClick={row.onActivate}
+    >
+      <Lock size={14} aria-hidden="true" />
+      <span className="nx-layers-region__name">{row.name}</span>
+      <span className="nx-layers-region__origin">{row.origin}</span>
+    </button>
+  );
 }
 
 /** One badge: an icon nobody has to see, and a word every reader gets. */
@@ -251,6 +292,7 @@ export function LayersPanel({
   moveHints = false,
   nesting,
   definitions,
+  regions,
 }: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
@@ -384,6 +426,12 @@ export function LayersPanel({
         />
       </div>
 
+      {regions
+        ?.filter(row => row.area === "header")
+        .map(row => (
+          <RegionRow key={row.area} row={row} />
+        ))}
+
       {tree.length === 0 ? (
         <p className="nx-layers-panel__note">
           This page has no blocks yet. Open Add in the rail to place one.
@@ -425,6 +473,12 @@ export function LayersPanel({
           <LayersDropOverlay drawn={drag.drawn} />
         </div>
       )}
+
+      {regions
+        ?.filter(row => row.area === "footer")
+        .map(row => (
+          <RegionRow key={row.area} row={row} />
+        ))}
 
       {/*
         Why a drop under the pointer is refused, spoken. Present from the first

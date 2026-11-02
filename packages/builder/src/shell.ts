@@ -109,6 +109,9 @@ export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
  */
 export { useModalKeyboardHold } from "./modal-keyboard-hold";
 export type { CanvasPreview, CanvasProps } from "./canvas";
+// The regions of a page's Layout, drawn locked around the page on the canvas.
+export type { CanvasRegion } from "./canvas-regions";
+export { REGION_ATTRIBUTE } from "./canvas-regions";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -455,7 +458,7 @@ export type {
  * document and ships from the root entry.
  */
 export { LayersPanel } from "./layers-panel";
-export type { LayersPanelProps } from "./layers-panel";
+export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
 /*
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
