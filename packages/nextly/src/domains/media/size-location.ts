@@ -42,15 +42,24 @@ export function pathOfSize(
 
 /**
  * Where a URL serves its file: its origin, or none for a URL relative to the
- * site, and its path, percent-encoded alike either way.
+ * site, and its path, percent-encoded alike either way, with each run of
+ * slashes written once. An absolute URL is parsed before anything is tidied:
+ * its scheme and host are case-insensitive, which parsing settles (it writes
+ * both in lower case), and its path is not, so only the path is tidied.
  */
 function servedAt(url: string): { origin: string | null; path: string } {
-  const key = canonicalStoredPath(url).replace(/[?#].*$/, "");
-  if (/^https?:\/\//i.test(key)) {
-    const parsed = new URL(key);
-    return { origin: parsed.origin, path: parsed.pathname };
+  const address = url.replace(/[?#].*$/, "");
+  if (/^https?:\/\//i.test(address)) {
+    const parsed = new URL(address);
+    return {
+      origin: parsed.origin,
+      path: parsed.pathname.replace(/\/{2,}/g, "/"),
+    };
   }
-  return { origin: null, path: new URL(key, "http://site.invalid").pathname };
+  return {
+    origin: null,
+    path: new URL(canonicalStoredPath(address), "http://site.invalid").pathname,
+  };
 }
 
 /**
