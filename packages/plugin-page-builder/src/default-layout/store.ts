@@ -21,6 +21,7 @@ export type DefaultLayoutDirectApi = Pick<
   | "find"
   | "findByID"
   | "create"
+  | "delete"
   | "update"
   | "findSingle"
   | "updateSingle"
@@ -111,6 +112,8 @@ export async function publishedLayoutIds(
     status: "published",
     limit: unique.length,
     depth: 0,
+    // Only the id is read from these rows, so only the id is fetched.
+    select: { id: true },
     overrideAccess: true,
   });
   const published = new Set<string>();
@@ -119,6 +122,28 @@ export async function publishedLayoutIds(
     if (id !== null) published.add(id);
   }
   return published;
+}
+
+/**
+ * Whether a Layout row exists at all, whatever its lifecycle state. The one
+ * answer the repair and the make-default route both ask.
+ */
+export async function layoutExists(
+  nextly: Pick<DefaultLayoutDirectApi, "find">,
+  slugs: DefaultLayoutSlugs,
+  id: string
+): Promise<boolean> {
+  const found = await nextly.find({
+    collection: slugs.layouts,
+    where: { id: { equals: id } },
+    status: "all",
+    limit: 1,
+    depth: 0,
+    // Existence is the whole answer; no column of the row is read.
+    select: { id: true },
+    overrideAccess: true,
+  });
+  return found.items.length > 0;
 }
 
 /** Whether the Single's default names a Layout that is published now. */

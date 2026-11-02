@@ -36,6 +36,7 @@ import { defineJob, type JobDefinition } from "nextly";
 
 import { seedSlug, seedTitle } from "./seed-names";
 import {
+  layoutExists,
   publishedLayoutIds,
   readLayoutSettings,
   relationId,
@@ -119,7 +120,9 @@ async function seedStillExists(
   seed: string,
   published: ReadonlySet<string>
 ): Promise<boolean> {
-  return published.has(seed) || (await exists(deps, seed));
+  return (
+    published.has(seed) || (await layoutExists(deps.nextly, deps.slugs, seed))
+  );
 }
 
 /**
@@ -167,10 +170,7 @@ async function reseed(
   }
 
   const created = await createSeed(deps);
-  await writeLayoutSettings(deps.nextly, deps.slugs, {
-    seededLayout: created,
-    defaultLayout: created,
-  });
+  await recordSeed(deps, created);
   deps.warn(
     settings.seededLayout === null
       ? "[page-builder] the site had no usable default Layout, so a 'Default (site)' Layout was created and made the default"
@@ -184,17 +184,43 @@ async function reseed(
   return "seeded";
 }
 
-/** Whether a Layout row exists at all, whatever its lifecycle state. */
-async function exists(deps: EnsureDefaultDeps, id: string): Promise<boolean> {
-  const found = await deps.nextly.find({
-    collection: deps.slugs.layouts,
-    where: { id: { equals: id } },
-    status: "all",
-    limit: 1,
-    depth: 0,
-    overrideAccess: true,
-  });
-  return found.items.length > 0;
+/**
+ * Record a just-created seed as the default, or remove it again.
+ *
+ * The create and this write are separate, so when this one fails the seed is
+ * recorded nowhere: no later run could find it by id, and it would sit in the
+ * Layouts list for good beside the next run's seed. So the created Layout is
+ * deleted as the system (best effort, and logged when even that fails) and
+ * the failure rethrown, which fails the run for the sweep to retry. The delete
+ * passes the guard: the seed is not the default, since the write failed.
+ */
+async function recordSeed(
+  deps: EnsureDefaultDeps,
+  created: string
+): Promise<void> {
+  try {
+    await writeLayoutSettings(deps.nextly, deps.slugs, {
+      seededLayout: created,
+      defaultLayout: created,
+    });
+  } catch (error) {
+    await deps.nextly
+      .delete({
+        collection: deps.slugs.layouts,
+        id: created,
+        overrideAccess: true,
+      })
+      .catch((cleanup: unknown) => {
+        deps.warn(
+          "[page-builder] a seeded default Layout could not be recorded or removed; delete it by hand",
+          {
+            seededLayout: created,
+            error: cleanup instanceof Error ? cleanup.message : String(cleanup),
+          }
+        );
+      });
+    throw error;
+  }
 }
 
 /**

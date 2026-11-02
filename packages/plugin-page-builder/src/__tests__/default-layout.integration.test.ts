@@ -30,7 +30,7 @@ import {
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { effectiveLayoutFor } from "../default-layout/effective-layout";
@@ -229,6 +229,35 @@ describe.each(getConfiguredTestDialects())(
         { skipHooks: true }
       );
       expect(result.successful, JSON.stringify(result)).toBe(1);
+    }
+
+    /** What one batch reports, per item. */
+    interface BatchAnswer {
+      successful: number;
+      failed: number;
+      errors: { error: string }[];
+    }
+
+    /**
+     * Core's atomic batch writer: each item's hooks run inside the batch's own
+     * transaction and are handed its `executor`, the path an import or a
+     * script takes. Hooks run; nothing is skipped.
+     */
+    function batchWriter(t: TestNextly) {
+      return (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): {
+            updateEntries(
+              params: { collectionName: string; overrideAccess?: boolean },
+              entries: { id: string; data: Record<string, unknown> }[]
+            ): Promise<BatchAnswer>;
+            deleteEntries(
+              params: { collectionName: string; user?: { id: string } },
+              ids: string[]
+            ): Promise<BatchAnswer>;
+          };
+        }
+      ).getEntryService();
     }
 
     async function person(t: TestNextly, name: string): Promise<string> {
@@ -675,6 +704,78 @@ describe.each(getConfiguredTestDialects())(
      * so they run after the plugin's guard on the same phase; each fires once,
      * at the moment the other write would land in a real race.
      */
+    describe("batch writes inside a transaction", () => {
+      const ONE_AT_A_TIME = "delete or unpublish Layouts one at a time";
+
+      it("refuses a batch delete of the default and changes nothing", async () => {
+        const t = await boot();
+        const owner = await person(t, "owner");
+        const fallback = String((await settingsOf(t)).defaultLayout);
+
+        const answer = await batchWriter(t).deleteEntries(
+          { collectionName: LAYOUTS_SLUG, user: { id: owner } },
+          [fallback]
+        );
+
+        expect(answer.failed, JSON.stringify(answer)).toBe(1);
+        expect(answer.errors[0]?.error).toContain(ONE_AT_A_TIME);
+        expect((await rowOf(t, fallback)).status).toBe("published");
+        expect((await settingsOf(t)).defaultLayout).toBe(fallback);
+      });
+
+      it("refuses a batch delete of a Layout that is not the default too, since no read is safe there", async () => {
+        const t = await boot();
+        const owner = await person(t, "owner");
+        const fallback = (await settingsOf(t)).defaultLayout;
+        const other = await layout(t, "Other", "other");
+
+        const answer = await batchWriter(t).deleteEntries(
+          { collectionName: LAYOUTS_SLUG, user: { id: owner } },
+          [other]
+        );
+
+        expect(answer.failed, JSON.stringify(answer)).toBe(1);
+        expect(answer.errors[0]?.error).toContain(ONE_AT_A_TIME);
+        expect((await rowOf(t, other)).status).toBe("published");
+        expect((await settingsOf(t)).defaultLayout).toBe(fallback);
+      });
+
+      it("refuses a batch unpublish of the default and changes nothing", async () => {
+        const t = await boot();
+        const fallback = String((await settingsOf(t)).defaultLayout);
+
+        const answer = await batchWriter(t).updateEntries(
+          { collectionName: LAYOUTS_SLUG, overrideAccess: true },
+          [{ id: fallback, data: { status: "draft" } }]
+        );
+
+        expect(answer.failed, JSON.stringify(answer)).toBe(1);
+        expect(answer.errors[0]?.error).toContain(ONE_AT_A_TIME);
+        expect((await rowOf(t, fallback)).status).toBe("published");
+        expect((await settingsOf(t)).defaultLayout).toBe(fallback);
+      });
+
+      it("lets a batch edit that unpublishes nothing through, with no read of the settings inside the transaction", async () => {
+        const t = await boot();
+        const draft = await layout(t, "Unfinished", "unfinished", "draft");
+        const reads = vi.spyOn(t.nextly, "findSingle");
+
+        const answer = await batchWriter(t).updateEntries(
+          { collectionName: LAYOUTS_SLUG, overrideAccess: true },
+          [{ id: draft, data: { title: "Still unfinished" } }]
+        );
+
+        expect(answer.successful, JSON.stringify(answer)).toBe(1);
+        expect((await rowOf(t, draft)).title).toBe("Still unfinished");
+        expect(
+          reads.mock.calls.filter(
+            ([args]) => args.slug === PAGE_BUILDER_SETTINGS_SLUG
+          )
+        ).toHaveLength(0);
+        reads.mockRestore();
+      });
+    });
+
     describe("make default racing an unpublish or a delete", () => {
       it("restores the previous default when the Layout is unpublished after the route's check but before its write is confirmed", async () => {
         const t = await boot();
@@ -711,6 +812,41 @@ describe.each(getConfiguredTestDialects())(
             message.includes("unpublished while it was being made the default")
           )
         ).toBe(true);
+      });
+
+      it("refuses without restoring when a newer make-default replaced the default before the unpublish landed", async () => {
+        const t = await boot();
+        const owner = await person(t, "owner");
+        const cookie = await sessionOf(t, owner);
+        const first = await layout(t, "First", "first");
+        const second = await layout(t, "Second", "second");
+
+        // After the first request's write commits: a second request makes
+        // `second` the default, then `first` is unpublished past the guard.
+        // The first request's re-check then finds `first` unpublished, but the
+        // default is no longer its to restore.
+        let armed = true;
+        let secondAnswer = 0;
+        t.hooks.register(
+          "afterUpdate",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async context => {
+            const data = (context as { data?: Record<string, unknown> }).data;
+            if (!armed || relationId(data?.defaultLayout) !== first) return;
+            armed = false;
+            secondAnswer = (await makeDefault(cookie, second)).status;
+            await unpublishSkippingHooks(t, first);
+          }
+        );
+
+        const answer = await makeDefault(cookie, first);
+
+        expect(secondAnswer).toBe(200);
+        expect(answer.status).toBe(409);
+        expect(JSON.stringify(answer.body)).toContain(
+          "stopped being published"
+        );
+        expect((await settingsOf(t)).defaultLayout).toBe(second);
       });
 
       it("queues the repair when a Layout is made the default after its unpublish passed the guard, and the repair re-points the default at the seed", async () => {
