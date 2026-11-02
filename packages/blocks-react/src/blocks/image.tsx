@@ -218,7 +218,12 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   baseStyles: IMAGE_BASE_STYLES,
   parts: IMAGE_PARTS,
   props: {
-    mediaId: { label: "Image", role: "content", type: "media" },
+    mediaId: {
+      label: "Image",
+      role: "content",
+      type: "media",
+      accept: "image/*",
+    },
     src: { label: "Image address", role: "content", type: "url" },
     alt: { label: "Alt text", role: "content", type: "text" },
     decorative: { label: "Decorative (no alt text)", type: "checkbox" },

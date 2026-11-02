@@ -148,6 +148,22 @@ describe("a list of text", () => {
     expect(written(editor).items).toEqual(["Two", "Uno"]);
   });
 
+  it("starts the next action from the stored list when a write was refused", () => {
+    register();
+    const editor = editorFor({ items: ["One", "Two"] });
+    render(<InspectorPanel editor={editor} />);
+    // An Add the document refuses (at its size cap, say) changes nothing.
+    editor.apply.mockReturnValueOnce(null);
+    fireEvent.click(
+      group("Items").getByRole("button", { name: "Add to Items" })
+    );
+    fireEvent.click(
+      group("Items").getByRole("button", { name: "Remove Items, item 1" })
+    );
+    // Not ["Two", ""]: the refused blank item is not written with the removal.
+    expect(written(editor).items).toEqual(["Two"]);
+  });
+
   it("adds, removes and moves items, one write each", () => {
     register();
     const editor = editorFor({ items: ["One", "Two"] });
@@ -205,6 +221,52 @@ describe("a list of records", () => {
     const item = group("Fields, item 1");
     expect(item.getByText("When")).toBeDefined();
     expect(item.getByText(/Not editable here \(datetime\)/)).toBeDefined();
+  });
+
+  it("draws lists nested only as deep as the engine's bound", () => {
+    // Past the bound a relation search would refuse what was drawn, so the
+    // list there is listed as not editable instead of drawn.
+    const list = (name: string, item: Record<string, unknown>) => ({
+      [name]: { type: "array", of: "object", item },
+    });
+    registerBlocks(
+      [
+        {
+          name: "acme/deep",
+          version: 1,
+          description: "Nested lists.",
+          example: { props: {} },
+          editor: { label: "Deep" },
+          props: list(
+            "l0",
+            list(
+              "l1",
+              list("l2", list("l3", list("l4", { t: { type: "text" } })))
+            )
+          ),
+          render: () => null,
+        },
+      ] as never,
+      { source: "content-controls-array-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/deep",
+          version: 1,
+          props: { l0: [{ l1: [{ l2: [{ l3: [{ l4: [{ t: "x" }] }] }] }] }] },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const editor = editorFor({});
+    (editor as { document: BlockDocument }).document = document;
+    render(<InspectorPanel editor={editor} />);
+    expect(screen.getByText("Not editable here (array).")).toBeDefined();
+    // The control: the levels inside the bound are drawn as lists.
+    expect(screen.getByRole("group", { name: "L3" })).toBeDefined();
   });
 
   it("says a list without an item schema can't be edited here", () => {

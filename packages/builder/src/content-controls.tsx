@@ -24,6 +24,7 @@
 
 import {
   isRichTextValue,
+  ITEM_SCHEMA_MAX_DEPTH,
   richTextToPlainText,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
@@ -70,6 +71,10 @@ export interface MediaPickerProps {
   onOpenChange: (open: boolean) => void;
   onSelect: (media: PickedMedia[]) => void;
   title?: string;
+  /** The kinds of file it offers, as an `accept` list: `image/*`. */
+  accept?: string;
+  /** What is chosen when it opens: the file the prop stores, if any. */
+  initialSelectedIds?: Set<string>;
 }
 
 /** What a relation control asks the host for: one collection's entries. */
@@ -130,6 +135,11 @@ export interface ContentControlProps {
   ) => BlockDocument | null | void;
   /** What the host lends, for the controls that need the admin. */
   readonly services?: ContentServices | undefined;
+  /**
+   * How many lists this control sits inside: 0 at the top of the tab. Lists
+   * nest only as deep as the engine's `ITEM_SCHEMA_MAX_DEPTH`.
+   */
+  readonly depth?: number;
   /**
    * The label to show, when it is not the prop's own name: an item of a list
    * is labelled by its list and its position.
@@ -396,7 +406,6 @@ function MediaControl({
   onCommit,
   services,
 }: ContentControlProps): React.JSX.Element {
-  const [open, setOpen] = React.useState(false);
   // What the last pick was called, for this session; a stored id shows as set.
   const [picked, setPicked] = React.useState<PickedMedia | null>(null);
   const label = propLabel(prop.name, prop.schema);
@@ -424,32 +433,21 @@ function MediaControl({
             The media library is not available here.
           </p>
         ) : (
-          <>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={disabled}
-              aria-label={`Choose ${label}`}
-              onClick={() => setOpen(true)}
-            >
-              {stored === null ? "Choose" : "Replace"}
-            </Button>
-            <Picker
-              open={open}
-              onOpenChange={setOpen}
-              title={`Choose ${label.toLowerCase()}`}
-              onSelect={media => {
-                const first = media[0];
-                // Closed here: the picker leaves closing to whoever opened it,
-                // and left open it would sit over a choice already made.
-                setOpen(false);
-                if (first === undefined) return;
-                setPicked(first);
-                onCommit(prop.name, first.id);
-              }}
-            />
-          </>
+          <MediaChoice
+            Picker={Picker}
+            label={label}
+            stored={stored}
+            accept={
+              typeof prop.schema.accept === "string"
+                ? prop.schema.accept
+                : undefined
+            }
+            disabled={disabled}
+            onChoose={first => {
+              setPicked(first);
+              onCommit(prop.name, first.id);
+            }}
+          />
         )}
         {stored === null ? null : (
           <Button
@@ -468,11 +466,67 @@ function MediaControl({
   );
 }
 
+/** The button that opens the host's media picker, and the picker while open. */
+function MediaChoice({
+  Picker,
+  label,
+  stored,
+  accept,
+  disabled,
+  onChoose,
+}: {
+  Picker: React.ComponentType<MediaPickerProps>;
+  label: string;
+  stored: string | null;
+  accept: string | undefined;
+  disabled: boolean;
+  onChoose: (media: PickedMedia) => void;
+}): React.JSX.Element {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={disabled}
+        aria-label={`Choose ${label}`}
+        onClick={() => setOpen(true)}
+      >
+        {stored === null ? "Choose" : "Replace"}
+      </Button>
+      {/*
+        Mounted only while open, so each opening starts from what the prop
+        stores now rather than from the picker's last choice, which could
+        belong to another block and be restored by a confirm.
+      */}
+      {open ? (
+        <Picker
+          open
+          onOpenChange={setOpen}
+          title={`Choose ${label.toLowerCase()}`}
+          {...(accept === undefined ? {} : { accept })}
+          initialSelectedIds={new Set(stored === null ? [] : [stored])}
+          onSelect={media => {
+            const first = media[0];
+            // Closed here: the picker leaves closing to whoever opened it,
+            // and left open it would sit over a choice already made.
+            setOpen(false);
+            if (first !== undefined) onChoose(first);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
 /** The live attachment of the shared editor to this field, while focused. */
 interface RichTextSession {
   focus(at?: number): void;
   read(): unknown;
   detach(): void;
+  /** Keep this attachment against anything else asking for the editor. */
+  hold(): void;
 }
 
 /**
@@ -500,9 +554,9 @@ function RichTextControl({
   // after the author has moved on is not attached to a field nobody is in.
   const focused = React.useRef(false);
   const [loading, setLoading] = React.useState(false);
-  const [refused, setRefused] = React.useState<"held" | "unsupported" | null>(
-    null
-  );
+  const [refused, setRefused] = React.useState<
+    "held" | "unsupported" | "unsaved" | null
+  >(null);
   const label = propLabel(prop.name, prop.schema);
   const load = services?.loadRichTextEditor;
   const editable = !disabled && load !== undefined;
@@ -546,14 +600,33 @@ function RichTextControl({
 
   const finish = (): BlockDocument | null | void => {
     focused.current = false;
+    const live = session.current;
+    if (live === null) {
+      release.current?.();
+      release.current = null;
+      return null;
+    }
+    // Read and written BEFORE letting go: the words exist in the editor alone.
+    const written = onCommit(prop.name, live.read());
+    if (written === null) {
+      // Refused (a size cap, a lock that arrived): the passage stays open with
+      // the author's words, held against anything else taking the editor,
+      // until they shorten it or press Escape, as on the canvas.
+      live.hold();
+      setRefused("unsaved");
+      return null;
+    }
+    letGo(live);
+    return written;
+  };
+
+  /** End the attachment and the host's hold on it. */
+  const letGo = (live: RichTextSession): void => {
     release.current?.();
     release.current = null;
-    const live = session.current;
-    if (live === null) return null;
     session.current = null;
-    const value = live.read();
     live.detach();
-    return onCommit(prop.name, value);
+    setRefused(null);
   };
 
   // While no editor is attached, the field shows the passage's words, set on
@@ -603,12 +676,22 @@ function RichTextControl({
           void attach();
         }}
         onBlur={finish}
+        onKeyDown={event => {
+          // Escape discards a change the document refused, deliberately.
+          if (event.key !== "Escape" || refused !== "unsaved") return;
+          const live = session.current;
+          if (live === null) return;
+          event.preventDefault();
+          letGo(live);
+        }}
       />
       {refused === null ? null : (
         <p className="nx-inspector__note" role="status">
           {refused === "held"
             ? "This passage is being edited on the canvas. Finish there first."
-            : "This passage can't be edited here."}
+            : refused === "unsaved"
+              ? "This change could not be saved, perhaps because the page is at its size limit. Shorten it, or press Escape to discard it."
+              : "This passage can't be edited here."}
         </p>
       )}
       {load === undefined ? (
@@ -677,7 +760,32 @@ function ArrayControl({
   disabled,
   onCommit,
   services,
+  depth = 0,
 }: ContentControlProps): React.JSX.Element {
+  // Items past the engine's bound are not drawn, so nothing is offered that
+  // the readers bounded the same way (a relation search) would refuse.
+  if (depth >= ITEM_SCHEMA_MAX_DEPTH) return <UnsupportedField prop={prop} />;
+  return (
+    <ArrayItems
+      id={id}
+      prop={prop}
+      disabled={disabled}
+      onCommit={onCommit}
+      services={services}
+      depth={depth}
+    />
+  );
+}
+
+/** A list's items and its actions, inside the bound {@link ArrayControl} keeps. */
+function ArrayItems({
+  id,
+  prop,
+  disabled,
+  onCommit,
+  services,
+  depth,
+}: ContentControlProps & { depth: number }): React.JSX.Element {
   const label = propLabel(prop.name, prop.schema);
   const list = Array.isArray(prop.value) ? prop.value : [];
   const records = prop.schema.of === "object";
@@ -689,8 +797,9 @@ function ArrayControl({
   const latest = React.useRef(list);
   latest.current = list;
   const write = (next: unknown[]) => {
-    latest.current = next;
-    onCommit(prop.name, next);
+    // Advanced only when the write lands: a refused one (a cap, a lock that
+    // arrived) changed nothing, and the next action must not start from it.
+    if (onCommit(prop.name, next) !== null) latest.current = next;
   };
   const position = (index: number) => `${label}, item ${index + 1}`;
   const move = (index: number, by: -1 | 1) => {
@@ -756,6 +865,7 @@ function ArrayControl({
                         <Control
                           key={name}
                           id={`${id}-${index}-${name}`}
+                          depth={depth + 1}
                           prop={itemProp(name, schema, record[name])}
                           disabled={disabled}
                           services={services}

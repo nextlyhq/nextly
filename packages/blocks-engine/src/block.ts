@@ -27,6 +27,17 @@ export interface BlockIsland {
 }
 
 /**
+ * How deep a list's `item` schemas nest before the editor stops drawing them:
+ * a list of records holding lists, and so on, this many levels down. Any
+ * reader that walks item schemas the editor draws (which relation targets a
+ * search may read, for one) walks exactly this far, so what is drawn and what
+ * is allowed cannot disagree.
+ *
+ * @experimental
+ */
+export const ITEM_SCHEMA_MAX_DEPTH = 4;
+
+/**
  * A prop's schema entry. Structural on purpose: the engine only needs each
  * prop's declared `type` (for the generated manifest and for deriving editor
  * controls); the full field-configuration vocabulary lives in the field system
@@ -78,6 +89,11 @@ export interface PropSchema {
    * shown as its value. The stored value never changes with its name.
    */
   optionLabels?: Readonly<Record<string, string>>;
+  /**
+   * For a `media` prop, the kinds of file the picker offers, as an `accept`
+   * list (`image/*`), so an image is never given a PDF to draw.
+   */
+  accept?: string;
   [option: string]: unknown;
 }
 

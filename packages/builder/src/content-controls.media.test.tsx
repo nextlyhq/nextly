@@ -62,7 +62,7 @@ function register(): void {
         example: { props: {} },
         editor: { label: "Picture" },
         props: {
-          mediaId: { role: "content", type: "media" },
+          mediaId: { role: "content", type: "media", accept: "image/*" },
           body: { role: "content", type: "richText" },
         },
         render: () => null,
@@ -409,5 +409,64 @@ describe("the rich-text control", () => {
     expect(passages.isOpen()).toBe(false);
     fireEvent.blur(field);
     expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the picker on what the prop stores now, offering only what it accepts", () => {
+    register();
+    const seen: MediaPickerProps[] = [];
+    function Recording(props: MediaPickerProps): React.JSX.Element | null {
+      seen.push(props);
+      return null;
+    }
+    render(
+      <InspectorPanel
+        editor={editorFor({ mediaId: "m-1" })}
+        contentServices={{ MediaPicker: Recording }}
+      />
+    );
+    // Not mounted while closed, so nothing of an earlier choice is kept.
+    expect(seen).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Choose Media id" }));
+    const opened = seen.at(-1);
+    expect(opened?.accept).toBe("image/*");
+    expect([...(opened?.initialSelectedIds ?? [])]).toEqual(["m-1"]);
+  });
+
+  it("keeps a passage the document refused, with its words, until Escape discards it", async () => {
+    register();
+    const editor = editorFor({ body: { root: "stored" } });
+    editor.apply.mockReturnValue(null);
+    const detach = vi.fn();
+    const hold = vi.fn();
+    const attach = vi.fn(() => ({
+      status: "attached",
+      session: {
+        focus: vi.fn(),
+        read: () => ({ root: "too long" }),
+        detach,
+        hold,
+      },
+    }));
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{ loadRichTextEditor: fakeEditor(attach) }}
+      />
+    );
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    fireEvent.blur(field);
+
+    // Refused: still attached and held, and the author is told what to do.
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(detach).not.toHaveBeenCalled();
+    expect(hold).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/could not be saved/)).toBeDefined();
+
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(detach).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/could not be saved/)).toBeNull();
   });
 });
