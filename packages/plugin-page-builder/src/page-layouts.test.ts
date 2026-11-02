@@ -3,7 +3,20 @@
  * reader of the settings Single, and names that Single so a change of default
  * revalidates the pages that depend on it.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+/**
+ * The SDK's accessor, standing in for the booted instance a route reads
+ * through when it names none. Plugin code reaches the Direct API through the
+ * SDK, so this is the one place the default may come from.
+ */
+const sdkInstance = vi.hoisted(() => ({
+  findSingle: vi.fn(async () => ({ defaultLayout: "from-sdk" })),
+}));
+vi.mock("@nextlyhq/plugin-sdk", async importActual => ({
+  ...(await importActual<typeof import("@nextlyhq/plugin-sdk")>()),
+  getCachedNextly: vi.fn(async () => sdkInstance),
+}));
 
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
@@ -55,6 +68,13 @@ describe("pageBuilderLayouts", () => {
     expect(
       await pageBuilderLayouts({ nextly: site.nextly }).readDefault()
     ).toBeNull();
+  });
+
+  it("reads through the SDK's instance when the route names none", async () => {
+    expect(await pageBuilderLayouts().readDefault()).toBe("from-sdk");
+    expect(sdkInstance.findSingle).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: PAGE_BUILDER_SETTINGS_SLUG })
+    );
   });
 
   it("names the Single it read and the Layouts collection", () => {

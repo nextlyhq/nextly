@@ -79,11 +79,13 @@ export function pageBuilderLayouts(
   const layouts = options.layoutsCollection ?? LAYOUTS_SLUG;
   return {
     readDefault: async () => {
-      // Resolved per read rather than captured, as the plugin's other server
-      // paths resolve it: `requireNextly` refuses until services are
-      // registered, which a route module loaded at build time may precede.
+      // Resolved per read rather than captured, through the plugin SDK as the
+      // plugin's other paths outside a route resolve it: a route module is
+      // loaded before Nextly has booted, and `getCachedNextly` waits for the
+      // boot that a captured instance would have raced.
       const nextly =
-        options.nextly ?? (await import("nextly/runtime")).requireNextly();
+        options.nextly ??
+        (await (await import("@nextlyhq/plugin-sdk")).getCachedNextly());
       const { defaultLayout } = await readLayoutSettings(nextly, {
         layouts,
         settings,
