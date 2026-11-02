@@ -20,6 +20,7 @@ import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { builderRowId, builderRows } from "@admin/lib/builder/builder-rows";
+import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 
 import type { BuilderKind } from "./builder-config";
 import { EmptyState } from "./builder-field-list/EmptyState";
@@ -33,7 +34,8 @@ type Props = {
   kind: BuilderKind;
   fields: readonly BuilderField[];
   /** Called when the user wants to insert a new field. index = position. */
-  onAddAt: (index: number) => void;
+  /** Opens the picker for a new field at `position` (the end of the list when empty). */
+  onAddAt: (position: FieldInsertPosition) => void;
   onEditField: (id: string) => void;
   onDeleteField: (id: string) => void;
   onDuplicateField: (id: string) => void;
@@ -79,7 +81,7 @@ export function BuilderFieldList({
         {userFields.length === 0 ? (
           <EmptyState
             kind={kind}
-            onAdd={() => onAddAt(0)}
+            onAdd={() => onAddAt({})}
             readOnly={readOnly}
           />
         ) : (
@@ -137,7 +139,7 @@ export function BuilderFieldList({
           // top header's button was removed since this one is now the
           // single, prominent affordance.
           <div className="border border-dashed border-border rounded-md p-6 text-center mt-2">
-            <Button onClick={() => onAddAt(userFields.length)}>
+            <Button onClick={() => onAddAt({})}>
               + Add field
             </Button>
           </div>

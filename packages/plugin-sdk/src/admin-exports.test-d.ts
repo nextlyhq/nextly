@@ -1,4 +1,5 @@
 import { expectTypeOf } from "vitest";
+import type { FieldTypeCatalogEntry } from "nextly/field-catalog";
 
 import type { PluginAdminContributions as RootAdminContributions } from "@nextlyhq/plugin-sdk";
 import * as adminEntry from "@nextlyhq/plugin-sdk/admin";
@@ -211,3 +212,64 @@ expectTypeOf(adminEntry).not.toHaveProperty("cardNumber");
 expectTypeOf(adminEntry).not.toHaveProperty("cardChange");
 expectTypeOf(adminEntry).not.toHaveProperty("GroupsChart");
 expectTypeOf(adminEntry).not.toHaveProperty("OverTimeChart");
+
+// ---------------------------------------------------------------------------
+// The shared field picker and the field-type description (@experimental).
+//
+// New names beside the field-UI kit, which `field-ui-compat.test-d.ts` keeps
+// pinned as it was. The props are asserted EXACTLY against a consumer's view
+// of them, so a prop renamed, dropped or widened to `any` fails here, and the
+// description is asserted to be the catalog row plus its search words.
+type PickerProps = Parameters<typeof adminEntry.FieldPicker>[0];
+expectTypeOf<PickerProps>().toEqualTypeOf<adminEntry.FieldPickerProps>();
+expectTypeOf<adminEntry.FieldPickerProps>().toEqualTypeOf<{
+  open: boolean;
+  config: adminEntry.FieldPickerConfig;
+  title?: string;
+  placement?: string;
+  onCancel: () => void;
+  onAdd: (
+    choice: adminEntry.FieldPickerChoice,
+    how: { addAnother: boolean }
+  ) => void;
+}>();
+expectTypeOf<adminEntry.FieldPickerConfig>().toEqualTypeOf<{
+  surface: "entries" | "users" | "forms" | "blocks";
+  types: readonly adminEntry.FieldTypeDescription<string>[];
+  exclude?: readonly string[];
+  mostUsed?: readonly string[];
+  deriveName: (label: string) => string;
+  fieldGroups?: {
+    type: string;
+    options: readonly adminEntry.FieldGroupOption[];
+    loading?: boolean;
+  };
+}>();
+expectTypeOf<adminEntry.FieldPickerChoice>().toEqualTypeOf<{
+  type: string;
+  label: string;
+  name: string;
+  fieldGroup?: string;
+}>();
+expectTypeOf<adminEntry.FieldGroupOption>().toEqualTypeOf<{
+  slug: string;
+  label: string;
+  text: string;
+}>();
+expectTypeOf<adminEntry.FieldTypeDescription<"rating">>().toEqualTypeOf<{
+  type: "rating";
+  label: string;
+  category: "Basic" | "Advanced" | "Media" | "Relational" | "Structured";
+  hint: string;
+  icon: string;
+  synonyms: readonly string[];
+}>();
+// One description function, generic over the surface's own type union.
+expectTypeOf(adminEntry.describeFieldTypes<"rating">)
+  .parameter(0)
+  .toEqualTypeOf<
+    readonly FieldTypeCatalogEntry<"rating">[]
+  >();
+expectTypeOf(adminEntry.describeFieldTypes<"rating">).returns.toEqualTypeOf<
+  adminEntry.FieldTypeDescription<"rating">[]
+>();
