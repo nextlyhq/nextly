@@ -347,7 +347,7 @@ function withinRenderedScope(
  * ordinary drafting of a live page, which is most of an author's day, and a
  * notice that cries wolf is one nobody reads by the time it is right.
  */
-function leavesDocumentPublished(
+export function leavesDocumentPublished(
   context: HookContext<unknown>,
   collection: unknown
 ): boolean {
@@ -417,7 +417,7 @@ function writtenDocuments(
  * A string that does not parse is not a document, and neither is a parsed value
  * without a node list.
  */
-function asDocument(value: unknown): BlockDocument | null {
+export function asDocument(value: unknown): BlockDocument | null {
   const decoded = typeof value === "string" ? parseJson(value) : value;
   return typeof decoded === "object" &&
     decoded !== null &&
