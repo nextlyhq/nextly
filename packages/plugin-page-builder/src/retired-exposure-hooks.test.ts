@@ -1,0 +1,520 @@
+/**
+ * Retiring a component's removed fields at publish, and stripping their values
+ * on every write.
+ *
+ * Driven through the handlers the registration wires, with a store that keeps
+ * its rows in memory, so each case asserts what a write stores and what the
+ * store records rather than how the hooks get there.
+ */
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+  type RetiredExposures,
+} from "@nextlyhq/blocks-engine";
+import { describe, expect, it } from "vitest";
+
+import { registerRetiredExposures } from "./retired-exposure-hooks";
+import type { RetiredStore } from "./retired-store";
+
+type Row = Record<string, unknown>;
+type Handler = (context: unknown) => unknown;
+
+const COMPONENTS = "nx_pb_components";
+const LIMITS = { maxDepth: 12, maxNodes: 5000, maxBytes: 2_097_152 };
+
+const heading = (id: string): Row => ({
+  id,
+  type: "core/heading",
+  version: 1,
+  props: { text: id, level: 2 },
+});
+
+const placing = (
+  id: string,
+  componentId: string,
+  overrides?: Row,
+  slots?: Row
+): Row => ({
+  id,
+  type: COMPONENT_INSTANCE_TYPE,
+  version: 1,
+  props: { componentId, ...(overrides === undefined ? {} : { overrides }) },
+  ...(slots === undefined ? {} : { slots }),
+});
+
+const box = (id: string, children: Row[]): Row => ({
+  id,
+  type: "core/box",
+  version: 1,
+  props: {},
+  slots: { children },
+});
+
+const page = (nodes: Row[]): Row => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes,
+});
+
+/** A definition exposing these fields and slots, with optional variants. */
+const definition = (
+  fields: string[],
+  slots: string[] = [],
+  variants?: Row
+): Row => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "component",
+  nodes: [heading("h"), box("b", [])],
+  exposed: fields.map(id => ({
+    id,
+    label: id,
+    nodeId: "h",
+    propPath: "text",
+    type: "text",
+  })),
+  ...(slots.length === 0
+    ? {}
+    : {
+        slots: Object.fromEntries(
+          slots.map(id => [id, { label: id, nodeId: "b", slot: "children" }])
+        ),
+      }),
+  ...(variants === undefined ? {} : { variants }),
+});
+
+/** A store over an in-memory map, recording each retirement it is asked for. */
+function memoryStore(initial: Record<string, RetiredExposures> = {}) {
+  const held = new Map(Object.entries(initial));
+  const retired: { componentId: string; retired: RetiredExposures }[] = [];
+  const reads: string[][] = [];
+  const store: RetiredStore = {
+    of: async ids => {
+      reads.push([...ids]);
+      return new Map(
+        ids.flatMap(id => {
+          const entry = held.get(id);
+          return entry === undefined ? [] : [[id, entry] as const];
+        })
+      );
+    },
+    retire: async (componentId, ids) => {
+      retired.push({ componentId, retired: ids });
+    },
+  };
+  return { store, retired, reads };
+}
+
+/** The registration's handlers, by phase and collection. */
+function harness(
+  options: {
+    store?: RetiredStore;
+    componentStoreLocalized?: boolean;
+    singles?: Record<string, Row[]>;
+    collections?: Record<string, Row[]>;
+  } = {}
+) {
+  const handlers = new Map<string, Handler>();
+  const errors: { message: string; meta?: Row }[] = [];
+  const registryReads: string[] = [];
+  const { store } = options.store ? { store: options.store } : memoryStore();
+  registerRetiredExposures({
+    ctx: {
+      hooks: {
+        on: (type, collection, handler) => {
+          handlers.set(`${type} ${collection}`, handler as Handler);
+        },
+      },
+      services: {
+        collections: {
+          getCollection: async name => {
+            registryReads.push(name);
+            if (name === COMPONENTS) {
+              return {
+                status: true,
+                localized: options.componentStoreLocalized === true,
+                fields: [{ name: "content", type: "blocks" }],
+              };
+            }
+            return {
+              status: true,
+              fields: options.collections?.[name] ?? [
+                { name: "content", type: "blocks" },
+                { name: "settings", type: "json" },
+              ],
+            };
+          },
+        },
+        singles: {
+          list: async ({ slugAllowlist }) => ({
+            data: slugAllowlist.flatMap(slug =>
+              options.singles?.[slug] === undefined
+                ? []
+                : [{ slug, fields: options.singles[slug] }]
+            ),
+          }),
+        },
+      },
+      logger: {
+        error: (message, meta) => errors.push({ message, meta }),
+      },
+    },
+    componentCollection: COMPONENTS,
+    componentField: "content",
+    store,
+    limits: () => LIMITS,
+  });
+  const run = (phase: string, collection: string, context: Row) =>
+    handlers.get(`${phase} ${collection}`)!({
+      collection: COMPONENTS,
+      ...context,
+    });
+  return { handlers, run, errors, registryReads };
+}
+
+describe("recording retired ids at publish", () => {
+  const published = (before: Row, after: Row, extra: Row = {}): Row => ({
+    operation: "update",
+    originalData: { id: "hero", status: "published", content: before },
+    data: { id: "hero", status: "published", content: after, ...extra },
+  });
+
+  it("retires the fields and slots the published definition dropped", async () => {
+    const { store, retired } = memoryStore();
+    const { run } = harness({ store });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(
+        definition(["title", "body"], ["aside", "main"]),
+        definition(["body"], ["main"])
+      )
+    );
+
+    expect(retired).toEqual([
+      {
+        componentId: "hero",
+        retired: { properties: ["title"], slots: ["aside"] },
+      },
+    ]);
+  });
+
+  it("reads definitions stored as JSON text", async () => {
+    const { store, retired } = memoryStore();
+    const { run } = harness({ store });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(
+        JSON.stringify(definition(["title", "body"])) as never,
+        JSON.stringify(definition(["body"])) as never
+      )
+    );
+
+    expect(retired).toEqual([
+      { componentId: "hero", retired: { properties: ["title"], slots: [] } },
+    ]);
+  });
+
+  it("retires nothing on a working-draft save", async () => {
+    const { store, retired } = memoryStore();
+    const { run } = harness({ store });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(definition(["title"]), definition([]), {
+        _isWorkingDraft: true,
+      })
+    );
+
+    expect(retired).toEqual([]);
+  });
+
+  it("retires nothing when the write leaves the component a draft", async () => {
+    const { store, retired } = memoryStore();
+    const { run } = harness({ store });
+
+    await run("afterUpdate", COMPONENTS, {
+      originalData: {
+        id: "hero",
+        status: "published",
+        content: definition(["title"]),
+      },
+      data: { id: "hero", status: "draft", content: definition([]) },
+    });
+
+    expect(retired).toEqual([]);
+  });
+
+  it("retires nothing for an unchanged definition, as a held edit reported with the live row", async () => {
+    const { store, retired } = memoryStore();
+    const { run } = harness({ store });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(
+        definition(["title"], ["aside"]),
+        definition(["title"], ["aside"])
+      )
+    );
+
+    expect(retired).toEqual([]);
+  });
+
+  it("retires nothing, and reports nothing, when the new definition cannot be read", async () => {
+    const { store, retired } = memoryStore();
+    const { run, errors } = harness({ store });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(definition(["title"]), "{not json" as never)
+    );
+
+    expect(retired).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("logs a failed record naming the component, and does not throw", async () => {
+    const { store } = memoryStore();
+    const failing: RetiredStore = {
+      ...store,
+      retire: async () => {
+        throw new Error("database down");
+      },
+    };
+    const { run, errors } = harness({ store: failing });
+
+    await expect(
+      run(
+        "afterUpdate",
+        COMPONENTS,
+        published(definition(["title"]), definition([]))
+      )
+    ).resolves.toBeUndefined();
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain('"hero"');
+    expect(errors[0].meta).toMatchObject({
+      componentId: "hero",
+      retired: { properties: ["title"], slots: [] },
+    });
+  });
+});
+
+describe("stripping retired values on every write", () => {
+  const retiredHero = () =>
+    memoryStore({ hero: { properties: ["title"], slots: ["aside"] } });
+
+  it("strips a page's placements, nested ones too, keeping live values", async () => {
+    const { store } = retiredHero();
+    const { run } = harness({ store });
+
+    const written = (await run("beforeUpdate", "*", {
+      collection: "pages",
+      data: {
+        title: "Home",
+        content: page([
+          placing("i1", "hero", { title: "old", body: "kept" }),
+          box("b1", [
+            placing("i2", "card", undefined, {
+              body: [placing("i3", "hero", { title: "deep" })],
+            }),
+          ]),
+          placing("i4", "hero", undefined, {
+            aside: [heading("gone")],
+            main: [heading("kept")],
+          }),
+        ]),
+      },
+    })) as Row;
+
+    const nodes = (written.content as { nodes: Row[] }).nodes;
+    expect((nodes[0].props as Row).overrides).toEqual({ body: "kept" });
+    const nested = (
+      (nodes[1].slots as { children: Row[] }).children[0].slots as {
+        body: Row[];
+      }
+    ).body[0];
+    expect((nested.props as Row).overrides).toBeUndefined();
+    expect(nodes[2].slots).toEqual({ main: [heading("kept")] });
+    expect(written.title).toBe("Home");
+  });
+
+  it("strips a Single's blocks field, read from the Singles registry", async () => {
+    const { store } = retiredHero();
+    const { run, registryReads } = harness({
+      store,
+      singles: { homepage: [{ name: "layout", type: "blocks" }] },
+    });
+
+    const written = (await run("beforeUpdate", "*", {
+      collection: "single:homepage",
+      data: { layout: page([placing("i1", "hero", { title: "old" })]) },
+    })) as Row;
+
+    const nodes = (written.layout as { nodes: Row[] }).nodes;
+    expect((nodes[0].props as Row).overrides).toBeUndefined();
+    expect(registryReads).toEqual([]);
+  });
+
+  it("strips inside a caller's transaction", async () => {
+    const { store } = retiredHero();
+    const { run } = harness({ store });
+
+    const written = (await run("beforeCreate", "*", {
+      collection: "pages",
+      executor: {},
+      data: { content: page([placing("i1", "hero", { title: "old" })]) },
+    })) as Row;
+
+    expect(
+      ((written.content as { nodes: Row[] }).nodes[0].props as Row).overrides
+    ).toBeUndefined();
+  });
+
+  it("keeps a value written as JSON text as text", async () => {
+    const { store } = retiredHero();
+    const { run } = harness({ store });
+
+    const written = (await run("beforeUpdate", "*", {
+      collection: "pages",
+      data: {
+        content: JSON.stringify(
+          page([placing("i1", "hero", { title: "old", body: "kept" })])
+        ),
+      },
+    })) as Row;
+
+    expect(typeof written.content).toBe("string");
+    const nodes = (JSON.parse(written.content as string) as { nodes: Row[] })
+      .nodes;
+    expect((nodes[0].props as Row).overrides).toEqual({ body: "kept" });
+  });
+
+  it("leaves a write with nothing retired as it came", async () => {
+    const { store } = memoryStore({
+      other: { properties: ["title"], slots: [] },
+    });
+    const { run } = harness({ store });
+
+    const written = await run("beforeUpdate", "*", {
+      collection: "pages",
+      data: { content: page([placing("i1", "hero", { title: "live" })]) },
+    });
+
+    expect(written).toBeUndefined();
+  });
+
+  it("leaves a document-shaped value in a field that is not a blocks field", async () => {
+    const { store } = retiredHero();
+    const { run } = harness({ store });
+
+    const written = await run("beforeUpdate", "*", {
+      collection: "pages",
+      data: { settings: page([placing("i1", "hero", { title: "kept" })]) },
+    });
+
+    expect(written).toBeUndefined();
+  });
+
+  it("reads no configuration for a write carrying no document", async () => {
+    const { store, reads } = retiredHero();
+    const { run, registryReads } = harness({ store });
+
+    await run("beforeUpdate", "*", {
+      collection: "pages",
+      data: { title: "Home" },
+    });
+
+    expect(registryReads).toEqual([]);
+    expect(reads).toEqual([]);
+  });
+
+  it("lets the write through and logs when the store cannot be read", async () => {
+    const { store } = retiredHero();
+    const failing: RetiredStore = {
+      ...store,
+      of: async () => {
+        throw new Error("database down");
+      },
+    };
+    const { run, errors } = harness({ store: failing });
+
+    const written = await run("beforeUpdate", "*", {
+      collection: "pages",
+      data: { content: page([placing("i1", "hero", { title: "old" })]) },
+    });
+
+    expect(written).toBeUndefined();
+    expect(errors).toHaveLength(1);
+    expect(errors[0].meta).toMatchObject({ collection: "pages" });
+  });
+});
+
+describe("a component dropping its own retired ids", () => {
+  it("drops them from exposed, slots and variants, keeping an emptied variant", async () => {
+    const { store } = memoryStore({
+      hero: { properties: ["title"], slots: ["aside"] },
+    });
+    const { run } = harness({ store });
+
+    const restored = definition(["title", "body"], ["aside"], {
+      bold: { label: "Bold", overrides: { title: "Big", body: "Strong" } },
+      quiet: { label: "Quiet", overrides: { title: "small" } },
+    });
+    const written = (await run("beforeUpdate", "*", {
+      collection: COMPONENTS,
+      originalData: { id: "hero" },
+      data: { content: restored },
+    })) as Row;
+
+    const content = written.content as Row;
+    expect((content.exposed as Row[]).map(entry => entry.id)).toEqual(["body"]);
+    expect(content.slots).toBeUndefined();
+    expect(content.variants).toEqual({
+      bold: { label: "Bold", overrides: { body: "Strong" } },
+      quiet: { label: "Quiet", overrides: {} },
+    });
+    // The value written is never changed in place.
+    expect((restored.exposed as Row[]).map(entry => entry.id)).toEqual([
+      "title",
+      "body",
+    ]);
+  });
+
+  it("drops a retired field when that is all the definition holds of it", async () => {
+    const { store } = memoryStore({
+      hero: { properties: ["title"], slots: [] },
+    });
+    const { run } = harness({ store });
+
+    const written = (await run("beforeUpdate", "*", {
+      collection: COMPONENTS,
+      originalData: { id: "hero" },
+      data: { content: definition(["title", "body"]) },
+    })) as Row;
+
+    expect(
+      ((written.content as Row).exposed as Row[]).map(entry => entry.id)
+    ).toEqual(["body"]);
+  });
+
+  it("leaves another component's definition holding the same ids", async () => {
+    const { store } = memoryStore({
+      hero: { properties: ["title"], slots: [] },
+    });
+    const { run } = harness({ store });
+
+    const written = await run("beforeUpdate", "*", {
+      collection: COMPONENTS,
+      originalData: { id: "card" },
+      data: { content: definition(["title"]) },
+    });
+
+    expect(written).toBeUndefined();
+  });
+});
