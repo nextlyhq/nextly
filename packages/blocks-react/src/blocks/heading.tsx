@@ -91,11 +91,28 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
     keywords: ["title", "headline", "h1", "h2"],
   },
   props: {
-    text: { role: "content", type: "text", inline: true },
-    level: { type: "select", options: [...HEADING_LEVELS] },
-    href: { role: "content", type: "url" },
-    target: { type: "select", options: ["_self", "_blank"] },
-    rel: { type: "text" },
+    text: { label: "Text", role: "content", type: "text", inline: true },
+    level: {
+      label: "Level",
+      optionLabels: {
+        h1: "H1",
+        h2: "H2",
+        h3: "H3",
+        h4: "H4",
+        h5: "H5",
+        h6: "H6",
+      },
+      type: "select",
+      options: [...HEADING_LEVELS],
+    },
+    href: { label: "Link", role: "content", type: "url" },
+    target: {
+      label: "Open link in",
+      optionLabels: { _self: "This tab", _blank: "A new tab" },
+      type: "select",
+      options: ["_self", "_blank"],
+    },
+    rel: { label: "Link relationship", type: "text" },
   },
   defaultProps: { text: "", level: "h2" },
   // A heading is what a page calls itself, so the first one is the best title

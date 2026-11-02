@@ -21,7 +21,6 @@
  */
 
 import {
-  findNode,
   registryNestingSource,
   saveAsPatternRefusal,
   type ComponentLookup,
@@ -39,10 +38,14 @@ import {
   type MoveDirection,
   type MoveEffect,
 } from "./keyboard-move";
-import { layerLabel, pathTo } from "./layers";
-import { lockRefusalWording } from "./lock-refusal";
+import { pathTo } from "./layers";
+import { lockedBlockWording, lockRefusalWording } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
-import { nestingRefusalForMove, refusalAnnouncement } from "./move-refusal";
+import {
+  nestingRefusalForMove,
+  refusalAnnouncement,
+  unmovedAnnouncement,
+} from "./move-refusal";
 import type { BuilderOp } from "./ops";
 import {
   isRefusal,
@@ -51,8 +54,12 @@ import {
   selectionMove,
 } from "./selection-ops";
 import {
+  depthMoveActions,
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
+  type DepthMoveAction,
+  type MoveJudge,
+  type MovePosition,
   type ToolbarAction,
   type ToolbarActionId,
 } from "./toolbar-actions";
@@ -260,6 +267,18 @@ export function useSelectionActionsContext(): ToolbarAction[] | null {
 }
 
 /**
+ * Move in and Move out for the current selection, judged by the provider with
+ * the position function its move verb runs, component definitions included.
+ * Empty outside a provider, where there is no verb to run them.
+ */
+const DepthMovesContext = React.createContext<readonly DepthMoveAction[]>([]);
+
+/** The provider's Move in and Move out, for the block menu. */
+export function useDepthMoveActions(): readonly DepthMoveAction[] {
+  return React.useContext(DepthMovesContext);
+}
+
+/**
  * The verbs from the nearest {@link BlockKeyboardActions}.
  *
  * Throws when there is none. A toolbar without them would render its buttons
@@ -410,6 +429,11 @@ export interface BlockKeyboardActionsResult {
    * save would store.
    */
   readonly selectionActions: ToolbarAction[];
+  /**
+   * Move in and Move out, judged with the position function the move verb
+   * itself runs, so an item is offered exactly when pressing it would move.
+   */
+  readonly depthMoves: readonly DepthMoveAction[];
 }
 
 /**
@@ -597,6 +621,29 @@ export function useBlockKeyboardActions({
     [announce]
   );
 
+  /*
+   * Where a block's move goes, with the component definitions this provider
+   * was given. ONE function for the verb below and for the menu's Move in and
+   * Move out availability, so the menu never offers a move the verb, asked
+   * with other inputs, would find nowhere to make.
+   */
+  const movePosition = React.useCallback<MovePosition>(
+    (document, id, direction) =>
+      keyboardMovePosition(document.nodes, id, direction, definitions),
+    [definitions]
+  );
+
+  /*
+   * Whether the placement rule refuses a move, and its words: the one call
+   * the verb below refuses by and the menu's Move in and Move out are dimmed
+   * by, with the same rules and component definitions.
+   */
+  const placementRefusal = React.useCallback<MoveJudge>(
+    (document, id, to) =>
+      nestingRefusalForMove(document, id, to, nestingSource, definitions),
+    [nestingSource, definitions]
+  );
+
   const moveSelected = React.useCallback(
     (direction: MoveDirection) => {
       if (moveSet(direction)) return;
@@ -611,18 +658,13 @@ export function useBlockKeyboardActions({
       // whole section around it.
       const lockedNode = lockBlockingMove(editorNow.document, selectedId);
       if (lockedNode !== undefined) {
-        announce(`${layerLabel(lockedNode)} is locked. Unlock it to move it.`);
+        announce(refusalAnnouncement(lockedBlockWording(lockedNode)));
         return;
       }
 
       // The component definitions go with it so an indent into a component
       // instance enters a slot the component exposes.
-      const move = keyboardMovePosition(
-        editorNow.document.nodes,
-        selectedId,
-        direction,
-        definitions
-      );
+      const move = movePosition(editorNow.document, selectedId, direction);
       // `null` is an ordinary answer: the first block cannot move up, and a
       // top-level block cannot outdent. Refusing quietly is right — a block
       // at the end of its container has nowhere to go, and saying so would
@@ -639,13 +681,7 @@ export function useBlockKeyboardActions({
        * disagree about where a block may go. A keyboard author who could not
        * be refused here would build documents a pointer author cannot.
        */
-      const refusal = nestingRefusalForMove(
-        editorNow.document,
-        selectedId,
-        move.to,
-        nestingSource,
-        definitions
-      );
+      const refusal = placementRefusal(editorNow.document, selectedId, move.to);
       if (refusal !== null) {
         announce(refusalAnnouncement(refusal));
         return;
@@ -684,14 +720,12 @@ export function useBlockKeyboardActions({
        * with nowhere to go and is correctly quiet; reaching HERE means a move
        * was attempted and did not happen, which a keyboard author cannot see.
        */
-      const moved = findNode(editorNow.document.nodes, selectedId);
-      const subject = moved === undefined ? "The block" : layerLabel(moved);
-      announce(`${subject} could not be moved.`);
+      announce(unmovedAnnouncement(editorNow.document, selectedId));
       // The selection deliberately does NOT change. The block that moved is
       // the block still selected, so a second press continues moving the
       // same block — which is what makes a run of presses walk it across the
     },
-    [announce, moveSet, nestingSource, definitions]
+    [announce, moveSet, movePosition, placementRefusal]
   );
 
   /**
@@ -1008,11 +1042,32 @@ export function useBlockKeyboardActions({
     ]
   );
 
+  const depthMoves = React.useMemo(
+    () =>
+      depthMoveActions(
+        editor.document,
+        editor.selectedId,
+        editor.selection.ids,
+        editor.lockRefusalFor,
+        movePosition,
+        placementRefusal
+      ),
+    [
+      editor.document,
+      editor.selectedId,
+      editor.selection.ids,
+      editor.lockRefusalFor,
+      movePosition,
+      placementRefusal,
+    ]
+  );
+
   return {
     announcement,
     actions,
     nesting: nestingSource,
     selectionActions,
+    depthMoves,
   };
 }
 
@@ -1055,6 +1110,7 @@ export function BlockKeyboardActions({
     actions,
     nesting: rules,
     selectionActions: offered,
+    depthMoves,
   } = useBlockKeyboardActions({
     editor,
     enabled,
@@ -1111,12 +1167,14 @@ export function BlockKeyboardActions({
   return (
     <NestingContext.Provider value={rules}>
       <SelectionActionsContext.Provider value={offered}>
-        <BlockActionsContext.Provider value={actions}>
-          <p aria-live="polite" role="status" className="nx-sr-only">
-            {announcement}
-          </p>
-          {children}
-        </BlockActionsContext.Provider>
+        <DepthMovesContext.Provider value={depthMoves}>
+          <BlockActionsContext.Provider value={actions}>
+            <p aria-live="polite" role="status" className="nx-sr-only">
+              {announcement}
+            </p>
+            {children}
+          </BlockActionsContext.Provider>
+        </DepthMovesContext.Provider>
       </SelectionActionsContext.Provider>
     </NestingContext.Provider>
   );

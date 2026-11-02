@@ -582,7 +582,17 @@ async function build(): Promise<InlineRichTextEditor> {
         read() {
           // Nothing rather than another passage's state. A superseded session
           // reading the live editor is how one block's words reach another.
-          return owns() ? editor.getEditorState().toJSON() : undefined;
+          //
+          // Through JSON, because that is the stored shape. Lexical exports a
+          // node stored without some of its fields (no `direction`, no
+          // `indent`, a text node with only its format) with those fields
+          // `undefined`, which JSON drops — and a document op refuses a value
+          // JSON would not carry unchanged, so the edit was lost on leaving.
+          return owns()
+            ? (JSON.parse(
+                JSON.stringify(editor.getEditorState().toJSON())
+              ) as unknown)
+            : undefined;
         },
         detach() {
           if (owns()) detachCurrent();

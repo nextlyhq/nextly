@@ -64,12 +64,17 @@ export function HistoryButtons({
     commit: () => InlineEditOutcome;
     editing: unknown;
     editingRich: unknown;
+    inspecting?: boolean;
   };
 }): React.JSX.Element {
   const keys = useShortcutLabels();
   // An open inline edit is a step the history does not hold yet: Undo takes
   // it back once committed, so it is offered even on a fresh document.
-  const editingInline = inline.editing !== null || inline.editingRich !== null;
+  // An inspector field's open passage too: Undo commits it and takes it back.
+  const editingInline =
+    inline.editing !== null ||
+    inline.editingRich !== null ||
+    inline.inspecting === true;
   const undo = () => {
     if (heldOpen(inline.commit())) return;
     editor.undo();

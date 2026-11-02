@@ -101,14 +101,17 @@ function useCheckpoints<TFieldValues extends FieldValues>({
  */
 export function hasUnsavedWork(
   editor: { undoDepth: number },
-  inline: { editing: unknown; editingRich: unknown },
+  inline: { editing: unknown; editingRich: unknown; inspecting?: boolean },
   savedAt: SavedAt = 0
 ): boolean {
   return (
     savedAt === "unreachable" ||
     editor.undoDepth !== savedAt ||
     inline.editing !== null ||
-    inline.editingRich !== null
+    inline.editingRich !== null ||
+    // A passage open in an inspector field, whose words are in the shared
+    // editor alone until it is finished.
+    inline.inspecting === true
   );
 }
 

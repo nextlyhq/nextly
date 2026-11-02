@@ -141,8 +141,8 @@ export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
       keywords: ["disclosure", "panel", "faq"],
     },
     props: {
-      title: { role: "content", type: "text" },
-      open: { type: "checkbox" },
+      title: { label: "Title", role: "content", type: "text" },
+      open: { label: "Open by default", type: "checkbox" },
     },
     defaultProps: { title: "Section", open: false },
     example: { props: { title: "What is included?", open: false } },

@@ -46,7 +46,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { isUsableWidth, liveBreakpointsFor } from "./breakpoints";
+import { liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
 import {
   INSPECTOR_SECTIONS,
@@ -337,30 +337,28 @@ function displayOf(
 }
 
 /**
- * The tiers whose rules apply at the edited one, narrowest first.
+ * The tiers whose rules apply at the edited one, the one that wins first.
  *
  * WHICH tiers is the shared resolver's answer (`liveBreakpointsFor`), the one
  * the provenance dots use, so an axis's unbounded container tier is included
- * exactly where the compiler applies it. Only the ORDER is added here, by each
- * tier's upper bound with the unbounded ones last, because reading a node's own
- * values walks them from the most specific out.
+ * exactly where the compiler applies it. The ORDER is the compiler's own
+ * emission order, reversed: `breakpointContexts` lists the contexts in cascade
+ * order, where a later rule wins over an earlier one of the same specificity,
+ * so the walk over a node's own values meets the winner first. Two tiers with
+ * no upper bound (the unconditional one and a container axis's unbounded one)
+ * are then ordered as the stylesheet orders them, not as equals.
  */
 function tiersFrom(
   breakpoint: BreakpointId,
   breakpoints: BreakpointSet | undefined
 ): BreakpointId[] {
-  const bound = new Map(
-    breakpointContexts(breakpoints).map(context => [
-      context.id,
-      isUsableWidth(context.maxWidth)
-        ? context.maxWidth
-        : Number.POSITIVE_INFINITY,
-    ])
+  const emitted = new Map(
+    breakpointContexts(breakpoints).map((context, index) => [context.id, index])
   );
-  const widthOf = (id: BreakpointId) =>
-    bound.get(id) ?? Number.POSITIVE_INFINITY;
+  // An id the compiler does not emit sorts last: nothing it holds applies.
+  const positionOf = (id: BreakpointId) => emitted.get(id) ?? -1;
   return liveBreakpointsFor(breakpoints, breakpoint).sort(
-    (a, b) => widthOf(a) - widthOf(b)
+    (a, b) => positionOf(b) - positionOf(a)
   );
 }
 
