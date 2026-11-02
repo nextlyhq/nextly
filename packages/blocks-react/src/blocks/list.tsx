@@ -124,8 +124,11 @@ const LIST_BASE_STYLES = {
 export const list: BlockDefinition<ListProps, PageContext> = defineBlock({
   name: "core/list",
   version: 1,
-  description:
-    "An ordered or unordered list of items, rendered as real list elements so its length and positions are announced.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: An ordered or unordered list
+  // of items, rendered as real list elements so its length and positions are
+  // announced.
+  description: "A bulleted or numbered list.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.

@@ -12,8 +12,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as React from "react";
+import * as ReactDOM from "react-dom";
 
-import { DesignPanel, designViewOf } from "./design-panel";
+import { DesignPanel, designViewOf, useDesignHeaderSlot } from "./design-panel";
 import { StyleRevisionContext } from "./site-style-history";
 
 afterEach(cleanup);
@@ -58,7 +59,7 @@ describe("DesignPanel", () => {
   it("hands a chosen tab to the shell to remember", () => {
     const { choose } = renderPanel("variables");
 
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Classes" }), {
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Shared styles" }), {
       button: 0,
     });
 
@@ -119,5 +120,54 @@ describe("a style change undone behind the open tab", () => {
     expect(holder?.hasAttribute("inert")).toBe(true);
     rerender(panel(false));
     expect(screen.getByText("a control").closest("[inert]")).toBeNull();
+  });
+});
+
+describe("the panel's header", () => {
+  it("is titled Design, above the tabs Variables, Shared styles and Fonts", () => {
+    renderPanel("variables");
+    const heading = screen.getByRole("heading", { name: "Design" });
+    const tabs = screen.getAllByRole("tab").map(tab => tab.textContent);
+    expect(tabs).toEqual(["Variables", "Shared styles", "Fonts"]);
+    expect(
+      heading.compareDocumentPosition(screen.getByRole("tablist")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("still opens Shared styles for the stored view it always had", () => {
+    renderPanel("classes");
+    expect(
+      screen
+        .getByRole("tab", { name: "Shared styles" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+  });
+
+  it("gives the open tab a place in the header for its own controls", async () => {
+    function Controls(): React.JSX.Element | null {
+      const slot = useDesignHeaderSlot();
+      return slot === null
+        ? null
+        : ReactDOM.createPortal(
+            <button type="button">Tab control</button>,
+            slot
+          );
+    }
+    render(
+      <DesignPanel
+        view={{ current: "variables", choose: vi.fn() }}
+        tabs={{
+          variables: () => <Controls />,
+          classes: () => null,
+          fonts: () => null,
+        }}
+      />
+    );
+    const control = await screen.findByRole("button", { name: "Tab control" });
+    const header = screen.getByRole("heading", {
+      name: "Design",
+    }).parentElement;
+    expect(header?.contains(control)).toBe(true);
   });
 });

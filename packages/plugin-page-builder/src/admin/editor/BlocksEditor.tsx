@@ -593,12 +593,11 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     showEmptyElements
                   )}
                   onAppend={nodeId => {
-                    // Select first, then open. The inserter derives its
-                    // target from the selection, so selecting the container
-                    // is what makes the next insert land inside it — there
-                    // is no second targeting path to keep in step.
+                    // Select the container and open Add to add INSIDE it,
+                    // said explicitly: selecting a container never implies
+                    // inside, so a click on a selected block adds after it.
                     editor.select(nodeId);
-                    openInsertPanel();
+                    openInsertPanel(nodeId);
                   }}
                 />
               </>

@@ -79,8 +79,10 @@ export function renderHeading({
 export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
   name: "core/heading",
   version: 1,
-  description:
-    "A section title. The level is chosen by the author, so the page outline stays stable when blocks move.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A section title. The level
+  // is chosen by the author, so the page outline stays stable when blocks move.
+  description: "A title for a page or section.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.

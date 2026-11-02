@@ -131,8 +131,7 @@ function declared(body: string, property: string): string | undefined {
  * The site's attribute dark mode, keyed on the strategy the canvas states and
  * on the site's dark values including a dark ground.
  */
-const SITE_DARK =
-  '[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground="attribute"]';
+const SITE_DARK = '[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground]';
 
 /** Every rule whose selector names `.nx-canvas`, as selector and body. */
 function canvasRules(): { selector: string; body: string }[] {
@@ -233,7 +232,7 @@ describe("the canvas surface is the site's, not the admin's", () => {
       expect(
         rule.selector,
         "keyed on the strategy the canvas states"
-      ).toContain('.nx-canvas[data-nx-site-dark-ground="attribute"]');
+      ).toContain(".nx-canvas[data-nx-site-dark-ground]");
     }
     const admin = rules.filter(
       rule =>
@@ -251,23 +250,39 @@ describe("the canvas surface is the site's, not the admin's", () => {
 });
 
 describe("a site that darkens with the visitor's system", () => {
-  it("darkens the canvas page's scheme under the media query, only for a dark ground", () => {
+  it("darkens the canvas page's scheme with the device unless a light marker is above it", () => {
     /*
-     * The playground's own site uses the `media` strategy, so with the system
-     * in dark its tokens take their dark values on the canvas. The strategy
-     * says only WHEN those values apply; the scheme goes dark where they
-     * include a dark ground, so a site whose dark set keeps a light background
-     * keeps light native controls.
+     * The site sheet applies dark values with the device for every site, so
+     * the scheme follows the device wherever the dark values include a dark
+     * ground; a light marker above the canvas keeps it light, as it keeps the
+     * values light.
      */
     const block =
-      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground="media"\] \{([^}]*)\}/.exec(
+      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground\] \{([^}]*)\}/.exec(
         CHROME
       );
-    expect(block, "the media-strategy rule exists").not.toBeNull();
+    expect(block, "the device rule exists").not.toBeNull();
     const body = block?.[1] ?? "";
     expect(declared(body, "color-scheme")).toBe("dark");
     expect(declared(body, "--nx-builder-select")).toBe(
       "var(--nx-builder-select-on-dark)"
+    );
+    const light = ruleFor(
+      '[data-nx-theme="light"] .nx-canvas[data-nx-site-dark-ground]'
+    );
+    expect(declared(light, "color-scheme")).toBe("light");
+    expect(declared(light, "--nx-builder-select")).toBe(
+      "var(--nx-builder-select-on-light)"
+    );
+    // After the device rule, which it outweighs and must not be outweighed by.
+    expect(
+      CHROME.indexOf(
+        '[data-nx-theme="light"] .nx-canvas[data-nx-site-dark-ground]'
+      )
+    ).toBeGreaterThan(
+      CHROME.indexOf(
+        "@media (prefers-color-scheme: dark) {\n  .nx-canvas[data-nx-site-dark-ground]"
+      )
     );
   });
 });
