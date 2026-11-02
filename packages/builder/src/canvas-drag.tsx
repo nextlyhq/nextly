@@ -62,6 +62,7 @@ import {
   resolveDrop,
   type DropRefusal,
   type DropRegion,
+  type DropResolution,
   type DropTarget,
   type RectSource,
 } from "./drop-targets";
@@ -76,6 +77,7 @@ import {
   type CanvasPointerPoints,
 } from "./geometry-dom";
 import { placementTypesOf, type SlotSource } from "./inserter";
+import type { LockDropRefusal, LockRefusalFacts } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
 import type { OpPosition } from "./ops";
 import {
@@ -183,7 +185,7 @@ export interface CanvasDragState {
    * Distinct from a null target: the author has aimed at something, and saying
    * nothing tells them the editor did not notice.
    */
-  readonly refusal: DropRefusal | null;
+  readonly refusal: DropRefusal | LockDropRefusal | null;
 }
 
 /** The handlers the canvas root must carry for a drag to work. */
@@ -304,6 +306,70 @@ function admitsPress(current: Gesture | null): boolean {
   return current === null || !current.active;
 }
 
+/** Where the pointer aims, with a target the locks refuse turned into a refusal. */
+type AimResolution =
+  | DropResolution
+  | { readonly kind: "refused"; readonly refusal: LockDropRefusal };
+
+/**
+ * A resolved target the editor's locks refuse, answered as a refusal that says
+ * so. Asked of the editor's own `lockRefusalFor`, the question its apply asks,
+ * so the indicator never offers a drop the release would then refuse.
+ */
+function withLockVerdict(
+  drag: Gesture,
+  editor: Pick<EditorState, "lockRefusalFor">,
+  resolution: DropResolution
+): AimResolution {
+  if (resolution.kind !== "target") return resolution;
+  const target = resolution.target;
+  let verdict = drag.lockVerdicts.get(target.id);
+  if (verdict === undefined) {
+    verdict = lockVerdictAt(drag.subject, target.at, editor) ?? null;
+    drag.lockVerdicts.set(target.id, verdict);
+  }
+  if (verdict === null) return resolution;
+  return {
+    kind: "refused",
+    refusal: {
+      regionId: target.regionId,
+      ...(target.at.parentId === undefined
+        ? {}
+        : { parentId: target.at.parentId }),
+      lock: verdict,
+    },
+  };
+}
+
+/**
+ * A thunk that builds its node on the first call and hands back that node
+ * after, so one gesture judges and inserts one node. Building twice would
+ * judge one subtree and insert another, with ids of its own.
+ */
+function builtOnce(make: () => BlockNode | null): () => BlockNode | null {
+  let built: { node: BlockNode | null } | undefined;
+  return () => (built ??= { node: make() }).node;
+}
+
+/** The lock break dropping the subject at `at` would add. */
+function lockVerdictAt(
+  subject: DragSubject,
+  at: OpPosition,
+  editor: Pick<EditorState, "lockRefusalFor">
+): LockRefusalFacts | undefined {
+  if (subject.kind === "move") {
+    return editor.lockRefusalFor([
+      { kind: "move", id: subject.nodeId, to: at },
+    ]);
+  }
+  // The node an insert would place, starting blocks and all: a block whose
+  // own slots are locked is judged as it would land, not as an empty shell.
+  const node = subject.makeNode();
+  return node === null
+    ? undefined
+    : editor.lockRefusalFor([{ kind: "insert", node, at }]);
+}
+
 /** What a drag needs to remember, none of which renders. */
 interface Gesture {
   readonly subject: DragSubject;
@@ -356,6 +422,12 @@ interface Gesture {
   switchState: TargetSwitchState;
   /** Targets by id, so the committed id resolves back to something drawable. */
   targets: Map<string, DropTarget>;
+  /**
+   * Each target's lock verdict, asked once for the gesture's life: the document
+   * does not change mid-drag, and asking per pointer move would apply the edit
+   * speculatively on every frame.
+   */
+  lockVerdicts: Map<string, LockRefusalFacts | null>;
   /**
    * The canvas root, kept so a frame with no pointer event still has it.
    *
@@ -566,6 +638,7 @@ export function useCanvasDrag({
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
+        lockVerdicts: new Map(),
         root,
         scroller: scrollableAncestor(root),
         clientX: event.clientX,
@@ -595,17 +668,21 @@ export function useCanvasDrag({
    */
   const aim = React.useCallback(
     (drag: Gesture, pointer: CanvasPointerPoints) => {
-      const resolution = resolveDrop(
-        {
-          blockNames: drag.blockNames,
-          forbiddenParents: drag.forbiddenParents,
-          regions: drag.regions,
-          rects: drag.rects,
-          nesting: latest.current.nesting,
-        },
-        // CONTENT coordinates: the rects were snapshotted in that space at drag
-        // start, and a scroll deliberately does not invalidate them.
-        pointer.content
+      const resolution = withLockVerdict(
+        drag,
+        latest.current.editor,
+        resolveDrop(
+          {
+            blockNames: drag.blockNames,
+            forbiddenParents: drag.forbiddenParents,
+            regions: drag.regions,
+            rects: drag.rects,
+            nesting: latest.current.nesting,
+          },
+          // CONTENT coordinates: the rects were snapshotted in that space at drag
+          // start, and a scroll deliberately does not invalidate them.
+          pointer.content
+        )
       );
 
       if (resolution.kind === "none") {
@@ -857,7 +934,8 @@ export function useCanvasDrag({
         return;
       }
 
-      // Built at the release, from the caller's own snapshot of the palette.
+      // From the caller's own snapshot of the palette, built once per gesture:
+      // the same node the locks were asked about while the pointer aimed.
       const node = subject.makeNode();
       if (node === null) return;
       // The position and the nesting verdict were both computed for the type
@@ -1054,7 +1132,9 @@ export function useCanvasDrag({
         subject: {
           kind: "insert",
           blockName: entry.blockName,
-          makeNode: entry.makeNode,
+          // Built once for the gesture: the node the locks judge while the
+          // pointer aims is the node the release inserts.
+          makeNode: builtOnce(entry.makeNode),
           onInserted: entry.onInserted,
         },
         origin: canvasContentPoint(event.clientX, event.clientY, root),
@@ -1070,6 +1150,7 @@ export function useCanvasDrag({
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
+        lockVerdicts: new Map(),
         root,
         scroller: scrollableAncestor(root),
         clientX: event.clientX,

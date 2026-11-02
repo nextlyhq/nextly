@@ -134,6 +134,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: record("layers"),
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
