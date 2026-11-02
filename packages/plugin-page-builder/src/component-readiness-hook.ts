@@ -39,15 +39,16 @@
  * @module component-readiness-hook
  */
 import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
-import {
-  unsuppliedComponentIds,
-  type ComponentSource,
-} from "@nextlyhq/blocks-react";
+import { unsuppliedComponentIds } from "@nextlyhq/blocks-react";
 import type { HookContext } from "nextly";
 import { recordAdvisoryNotice } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
-import { chunked, ID_BATCH_SIZE } from "./id-batches";
+import {
+  AS_THE_SYSTEM,
+  asDocument,
+  publishedStoreSource,
+} from "./component-store-source";
 import {
   requestContextFor,
   writeTargetOf,
@@ -202,11 +203,15 @@ async function composeNotice(
   // components a visitor never meets — a gated instance, slot content the
   // chosen definition discards, an id an override replaced — and misses ones it
   // does.
-  const source = storeSource(
-    target.nextly,
-    args.componentCollection,
-    args.componentField
-  );
+  // `overrideAccess` because the question is about the document's lifecycle,
+  // not about what this caller may read: an author who cannot read a component
+  // still needs to know their page has a hole, and judging it by their
+  // permissions answers "missing" for one that is perfectly live.
+  const source = publishedStoreSource(target.nextly, {
+    collection: args.componentCollection,
+    field: args.componentField,
+    reading: AS_THE_SYSTEM,
+  });
   const missing = new Set<string>();
   for (const document of documents) {
     for (const id of await unsuppliedComponentIds(
@@ -390,115 +395,6 @@ function writtenDocuments(
     if (document !== null) documents.push(document);
   }
   return documents;
-}
-
-/**
- * A stored block value as a document, or `null` when it is not one.
- *
- * Decodes a STRING first, and that is not defensiveness. A post-commit hook
- * receives the value as the adapter persisted it: JSON columns come back as
- * text on SQLite and on any adapter that stores them that way, and the write
- * path parses them AFTER the hooks have run. An object-only test therefore
- * finds no documents at all on those adapters, and the check reports nothing
- * for every page — silently, because finding nothing to look at and finding
- * nothing wrong are the same answer here.
- *
- * A string that does not parse is not a document, and neither is a parsed value
- * without a node list.
- */
-export function asDocument(value: unknown): BlockDocument | null {
-  const decoded = typeof value === "string" ? parseJson(value) : value;
-  return typeof decoded === "object" &&
-    decoded !== null &&
-    Array.isArray((decoded as { nodes?: unknown }).nodes)
-    ? (decoded as BlockDocument)
-    : null;
-}
-
-/** `JSON.parse`, answering `null` rather than throwing on stored text. */
-function parseJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The store, shaped as the source the render's discovery asks.
- *
- * One field, named the way the renderer names it, because that is the document
- * the renderer reads: a store with a second blocks field would otherwise have
- * references in a field nothing renders counted against the page.
- *
- * Chunked because a collection query is CLAMPED to `PAGINATION_DEFAULTS.maxLimit`
- * (500) and returns a subset silently, while a document may reference far more
- * instances than that. One unbounded query answers for the first page only, and
- * every published component missing from it reads as unpublished — a warning
- * manufactured by the read rather than by the data.
- *
- * Relationship DEPTH is left unstated, which is what the renderer's own
- * component read does. Forcing it to zero would hand an `afterRead` hook bare
- * ids where the render gives it expanded relationships, so a hook whose blocks
- * output depends on one produces a different component graph here than the page
- * actually draws — and this check would then miss an unpublished component, or
- * name one no visitor meets.
- *
- * `overrideAccess` because the question is about the document's lifecycle, not
- * about what this caller may read: an author who cannot read a component still
- * needs to know their page has a hole, and judging it by their permissions
- * answers "missing" for one that is perfectly live.
- */
-function storeSource(
-  nextly: ReadinessDirectApi,
-  collection: string,
-  field: string
-): ComponentSource {
-  return async (ids: readonly string[]) => {
-    const found = new Map<string, BlockDocument>();
-    for (const chunk of chunked(ids, ID_BATCH_SIZE)) {
-      const page = await nextly.find({
-        collection,
-        where: { id: { in: [...chunk] } },
-        limit: chunk.length,
-        status: "published",
-        overrideAccess: true,
-        // BOTH identity channels cleared, stated rather than omitted.
-        // `mergeConfig` spreads the pooled reader's defaults UNDER the call, so
-        // an omitted key restores whatever identity the instance was booted
-        // with — and an `afterRead` hook branching on the caller would then
-        // hand this read a definition the anonymous visitor never sees,
-        // suppressing a real notice or inventing one. The renderer's own
-        // component read states both for the same reason.
-        user: undefined,
-        req: undefined,
-      });
-      for (const item of page.items) {
-        const row = item as Record<string, unknown> | null;
-        const id = row?.id;
-        // Handed over WHOLE and unjudged, exactly as the renderer's own source
-        // hands it over. Whether the stored value is a readable document is the
-        // pipeline's question, and it answers it with reasons a store cannot:
-        // an id present with an unreadable value is a definition somebody
-        // published and cannot be read, and that is not the same as absent.
-        if (typeof id !== "string") continue;
-        // PRESENT even when the value will not read as a document. The row came
-        // back under a published scope, so somebody published it, and dropping
-        // it here would report the component as one nobody published — a
-        // diagnosis republishing cannot repair. The resolver keeps those apart
-        // by asking presence and readability separately, and reports the second
-        // as `unreadable`; handing the raw value over is what lets it.
-        //
-        // Decoded first all the same: an adapter storing JSON as text hands
-        // back a string, and a string is unreadable to the resolver for a
-        // reason that has nothing to do with the data.
-        const stored = row?.[field];
-        const decoded = asDocument(stored);
-        found.set(id, (decoded ?? stored) as BlockDocument);
-      }
-    }
-    return found;
-  };
 }
 
 /**

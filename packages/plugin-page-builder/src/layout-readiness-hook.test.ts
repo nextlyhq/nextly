@@ -18,6 +18,7 @@ const {
   registerLayoutReadinessNotice,
   LAYOUT_NOT_PUBLISHED_CODE,
   LAYOUT_NOT_PUBLISHED_MESSAGE,
+  LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE,
 } = await import("./layout-readiness-hook");
 
 type Handler = (context: unknown) => unknown;
@@ -25,7 +26,8 @@ type Handler = (context: unknown) => unknown;
 /** The hook as registered, run against one write of `data`. */
 async function publish(
   data: Record<string, unknown>,
-  published: readonly string[]
+  published: readonly string[],
+  defaultLayout: string | null = "main"
 ): Promise<void> {
   const handlers: { phase: string; collection: string; run: Handler }[] = [];
   registerLayoutReadinessNotice({
@@ -52,6 +54,7 @@ async function publish(
         .filter(id => published.includes(id))
         .map(id => ({ id })),
     }),
+    findSingle: async () => ({ defaultLayout }),
   };
   await handlers[1]!.run({
     collection: "pages",
@@ -76,6 +79,22 @@ describe("the advisory for a page naming an unpublished Layout", () => {
         entryId: "p1",
       },
     ]);
+  });
+
+  it("says no header or footer shows when the site has no usable default", async () => {
+    // No default set, then a default that is not published itself.
+    await publish({ status: "published", layout: "unfinished" }, [], null);
+    await publish({ status: "published", layout: "unfinished" }, [], "draft");
+    expect(recorded).toHaveLength(2);
+    for (const notice of recorded) {
+      expect(notice).toMatchObject({
+        code: LAYOUT_NOT_PUBLISHED_CODE,
+        message: LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE,
+      });
+    }
+    expect(LAYOUT_NOT_PUBLISHED_NO_DEFAULT_MESSAGE).toBe(
+      "This page names a Layout that is not published, so it is shown with no header or footer until that Layout is published."
+    );
   });
 
   it("says nothing for a published Layout, the default, a draft page, or no header or footer", async () => {

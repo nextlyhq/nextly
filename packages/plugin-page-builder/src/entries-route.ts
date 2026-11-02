@@ -59,6 +59,7 @@ import {
   type EntryItem,
 } from "./entries-contract";
 import { readingAsUser } from "./library-route";
+import { parseRouteQuery } from "./route-query";
 
 /**
  * The longest single id the route accepts.
@@ -136,25 +137,12 @@ const querySchema = z.object({
  * nowhere but the read it was checked for.
  */
 export function parseEntriesQuery(url: string | URL): EntriesRequest {
-  const params = new URL(url).searchParams;
-  // Only the parameters the route reads, and each once: a repeated parameter
-  // takes its first value, as `URLSearchParams.get` does everywhere.
-  const raw: Record<string, string> = {};
-  for (const name of Object.values(ENTRIES_PARAMS)) {
-    const value = params.get(name);
-    if (value !== null) raw[name] = value;
-  }
-  const parsed = querySchema.safeParse(raw);
-  if (!parsed.success) {
-    throw NextlyError.validation({
-      errors: parsed.error.issues.map(issue => ({
-        path: issue.path.map(String).join(".") || "query",
-        code: "INVALID_QUERY",
-        message: "This parameter is not one the entries route accepts.",
-      })),
-    });
-  }
-  const query = parsed.data;
+  const query = parseRouteQuery(
+    url,
+    Object.values(ENTRIES_PARAMS),
+    querySchema,
+    "entries route"
+  );
   const ids = query[ENTRIES_PARAMS.ids];
   const search = query[ENTRIES_PARAMS.search];
   const locale = query[ENTRIES_PARAMS.locale];

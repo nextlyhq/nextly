@@ -1205,8 +1205,12 @@ export const pageBuilder = (
         makeDefaultRoute(),
         // The Layouts an author may choose for a page, with the published
         // regions the editor draws around it, read as the author from the
-        // component store the editor's library reads.
-        layoutChoicesRoute(componentStoreOf(opts)),
+        // component store the editor's library reads, under the bounds the
+        // published renderer draws with.
+        layoutChoicesRoute(
+          componentStoreOf(opts),
+          () => opts.limits ?? DEFAULT_LIMITS
+        ),
         // Which collection holds the pages, as renamed: the picker draws on
         // that collection's forms and no other.
         pageCollectionRoute(),

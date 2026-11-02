@@ -21,17 +21,28 @@ import {
 import type { CanvasRegion, LayersRegionRow } from "@nextlyhq/builder/shell";
 import {
   useDocumentIdentity,
+  useDocumentLocale,
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
   Label,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useId, useMemo, useState, type JSX } from "react";
 import {
   useController,
@@ -66,20 +77,28 @@ const SWITCH_FIELD = "noHeaderFooter";
  * The Layout choices, read as the author, with where the read stands.
  *
  * Asked about the page's `selected` Layout by id, so a Layout the list's bound
- * cut is still answered for. A new choice asks again; until the new answer
+ * cut is still answered for, and searching titles when `search` is given. A new choice asks again; until the new answer
  * arrives the last one stands, so the picker and canvas never blank between
  * the two.
  */
 function useLayoutChoices(
   enabled: boolean,
-  selected: string | null
+  selected: string | null,
+  search?: string
 ): {
   state: LayoutChoicesState;
+  /** Whether `state` is the last answer, held while a new one is asked. */
+  stale: boolean;
   retry: () => void;
 } {
+  // In the language being edited, so the regions read as the page reads.
+  const locale = useDocumentLocale()?.code ?? null;
   const read = usePluginRoute<LayoutChoicesResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: layoutChoicesPath(selected),
+    path: layoutChoicesPath(
+      selected,
+      search === undefined ? { locale } : { locale, search }
+    ),
     enabled,
     // Asked again on every mount: a Layout published or made the default in
     // another tab is a choice the author should see when they come back.
@@ -104,7 +123,9 @@ function useLayoutChoices(
       ? { kind: "pending" }
       : { kind: "ready", choices: held };
   }, [read.data, read.error, held]);
-  return { state, retry: read.refetch };
+  const stale =
+    read.data === undefined && read.error === null && held !== undefined;
+  return { state, stale, retry: read.refetch };
 }
 
 /**
@@ -246,39 +267,173 @@ function Picker<T extends FieldValues>({
     switchField.onChange(next.noHeaderFooter);
   };
 
+  // More Layouts than one answer lists: the rest are reached by title, so the
+  // picker searches. Otherwise the plain dropdown, which lists them all.
+  const capped = state.kind === "ready" && state.choices.meta.more;
+
   return (
     <div className="flex min-w-0 flex-col gap-1.5" data-slot="page-layout">
       <Label htmlFor={id}>Layout</Label>
-      <Select
-        value={view.value}
-        onValueChange={choose}
-        disabled={disabled || view.readOnly || state.kind === "pending"}
-      >
-        {/* One line, cut with an ellipsis: a long Layout title or the
+      {capped ? (
+        <SearchingPicker
+          id={id}
+          whyId={whyId}
+          view={view}
+          stored={stored}
+          disabled={disabled || view.readOnly}
+          onChoose={choose}
+        />
+      ) : (
+        <Select
+          value={view.value}
+          onValueChange={choose}
+          disabled={disabled || view.readOnly || state.kind === "pending"}
+        >
+          {/* One line, cut with an ellipsis: a long Layout title or the
             deleted-choice wording must not grow the control, and the line
             under it says the whole of it. Styled through the trigger, since
             the value element takes no class of its own. */}
-        <SelectTrigger
-          id={id}
-          aria-describedby={whyId}
-          className="[&>span]:min-w-0 [&>span]:truncate [&>span]:text-left"
-        >
-          <SelectValue
-            placeholder={
-              state.kind === "pending" ? "Loading Layouts…" : undefined
-            }
-          />
-        </SelectTrigger>
-        <SelectContent>
-          {view.options.map(option => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+          <SelectTrigger
+            id={id}
+            aria-describedby={whyId}
+            className="[&>span]:min-w-0 [&>span]:truncate [&>span]:text-left"
+          >
+            <SelectValue
+              placeholder={
+                state.kind === "pending" ? "Loading Layouts…" : undefined
+              }
+            />
+          </SelectTrigger>
+          <SelectContent>
+            {view.options.map(option => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
       <WhyLine id={whyId} view={view} state={state} retry={retry} />
     </div>
+  );
+}
+
+/** How long typing pauses before Layout titles are searched again. */
+const SEARCH_PAUSE_MS = 200;
+
+/** The words under a capped list, saying how to reach the rest. */
+const CAPPED_NOTE = "Showing the first 200; search to find more.";
+
+/**
+ * The picker for a site with more Layouts than one answer lists: the same
+ * choices behind a search field, as the admin's other searchable choices are
+ * drawn. Titles are searched on the server, so every Layout the author may
+ * read can be found and chosen.
+ */
+function SearchingPicker({
+  id,
+  whyId,
+  view,
+  stored,
+  disabled,
+  onChoose,
+}: {
+  id: string;
+  whyId: string;
+  view: LayoutPickerView;
+  stored: { layout: unknown; noHeaderFooter: boolean };
+  disabled: boolean;
+  onChoose: (value: string) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(typed.trim()), SEARCH_PAUSE_MS);
+    return () => clearTimeout(timer);
+  }, [typed]);
+  const searching = search !== "";
+  const found = useLayoutChoices(
+    open && searching,
+    selectedOf(stored),
+    search
+  ).state;
+  // The matches while searching, words and all; the first answer otherwise.
+  const options =
+    searching && found.kind === "ready"
+      ? layoutPickerView(stored, found).options
+      : view.options;
+  const current = view.options.find(option => option.value === view.value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          id={id}
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          aria-describedby={whyId}
+          disabled={disabled}
+          className="w-full justify-between font-normal"
+        >
+          <span className="min-w-0 truncate text-left">
+            {current?.label ?? "Choose a Layout"}
+          </span>
+          <ChevronDown aria-hidden="true" className="h-4 w-4 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        // As wide as the trigger, whatever the titles: a long one is cut
+        // to its row rather than widening the list.
+        className="w-[var(--radix-popover-trigger-width)] p-0"
+      >
+        {/* Filtered by the server, not here: the list holds only the first
+            answer, and a Layout past it is found only by asking. */}
+        {/* The menu's label names its search field, which the field
+            reads by reference rather than by a label of its own. */}
+        <Command shouldFilter={false} label="Search Layouts">
+          <CommandInput
+            placeholder="Search Layouts"
+            value={typed}
+            onValueChange={setTyped}
+          />
+          <CommandList>
+            <CommandEmpty>
+              {searching && found.kind === "pending"
+                ? "Searching…"
+                : "No Layouts match."}
+            </CommandEmpty>
+            <CommandGroup>
+              {options.map(option => (
+                <CommandItem
+                  key={option.value}
+                  value={option.value}
+                  onSelect={() => {
+                    onChoose(option.value);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {option.label}
+                  </span>
+                  {option.value === view.value ? (
+                    <Check aria-hidden="true" className="h-4 w-4" />
+                  ) : null}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+          {searching ? null : (
+            <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+              {CAPPED_NOTE}
+            </p>
+          )}
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -331,12 +486,29 @@ export function usePageLayoutRegions<T extends FieldValues>(
   canvasRoot: HTMLElement | null
 ): { canvas: readonly CanvasRegion[]; layers: readonly LayersRegionRow[] } {
   const stored = useStoredLayout(control);
-  const { state } = useLayoutChoices(stored !== undefined, selectedOf(stored));
-  return useMemo(
-    () => regionsOf(stored, state, canvasRoot),
-    [stored, state, canvasRoot]
+  const { state, stale } = useLayoutChoices(
+    stored !== undefined,
+    selectedOf(stored)
   );
+  // Nothing new while the answer for a new choice is on its way: the held one
+  // lacks the new Layout's definitions, so drawing from it would show its
+  // regions as missing components for a moment. The last regions drawn stay.
+  const fresh = useMemo(
+    () => (stale ? undefined : regionsOf(stored, state, canvasRoot)),
+    [stale, stored, state, canvasRoot]
+  );
+  const [shown, setShown] = useState(NOTHING_DRAWN);
+  useEffect(() => {
+    if (fresh !== undefined) setShown(fresh);
+  }, [fresh]);
+  return fresh ?? shown;
 }
+
+/** What is drawn before any answer has arrived. */
+const NOTHING_DRAWN: {
+  canvas: readonly CanvasRegion[];
+  layers: readonly LayersRegionRow[];
+} = { canvas: [], layers: [] };
 
 /** The regions to draw for `stored`, and their Layers rows. */
 function regionsOf(

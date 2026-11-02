@@ -13,6 +13,7 @@ import {
   layoutRelationId,
   resolvePageLayout,
   type LayoutRegion,
+  type LayoutSite,
 } from "@nextlyhq/blocks-engine";
 
 import type {
@@ -76,11 +77,20 @@ export interface LayoutPickerView {
   readonly effective: EffectiveLayout | null;
 }
 
-/** The words for one Layout's option. */
-function optionLabel(item: LayoutChoice): string {
-  return item.published
-    ? item.title
-    : `${item.title} (not published: the site default shows until it is)`;
+/**
+ * The words for one Layout's option. An unpublished one says what a page
+ * naming it is drawn inside meanwhile, asked of the rule itself: the site
+ * default where one is usable, and otherwise no header or footer.
+ */
+function optionLabel(item: LayoutChoice, site: LayoutSite): string {
+  if (item.published) return item.title;
+  const meanwhile = resolvePageLayout(
+    { layout: item.id, noHeaderFooter: false },
+    site
+  );
+  return meanwhile.kind === "layout"
+    ? `${item.title} (not published: the site default shows until it is)`
+    : `${item.title} (not published: no header or footer shows until it is)`;
 }
 
 /**
@@ -174,6 +184,11 @@ function viewFromList(
   const { items, meta } = choices;
   const byId = new Map(items.map(item => [item.id, item]));
   const isPublished = (id: string) => byId.get(id)?.published === true;
+  const site: LayoutSite = { defaultLayout: meta.defaultLayout, isPublished };
+  const toOption = (item: LayoutChoice): PickerOption => ({
+    value: layoutValue(item.id),
+    label: optionLabel(item, site),
+  });
   // A named Layout the answer does not hold is gone: the route answers for
   // the page's selected Layout however far past its bound it sorts.
   const deleted = named !== null && !byId.has(named) && !switchedOff;
@@ -190,7 +205,7 @@ function viewFromList(
 
   const resolution = resolvePageLayout(
     { layout: named, noHeaderFooter: switchedOff },
-    { defaultLayout: meta.defaultLayout, isPublished }
+    site
   );
   return {
     options,
@@ -228,8 +243,21 @@ function effectiveOf(item: LayoutChoice | undefined): EffectiveLayout | null {
   };
 }
 
-function toOption(item: LayoutChoice): PickerOption {
-  return { value: layoutValue(item.id), label: optionLabel(item) };
+/** The "why" line for a page drawn with no Layout, and the reason. */
+function whyNothingShows(
+  resolution: Extract<ReturnType<typeof resolvePageLayout>, { kind: "none" }>,
+  byId: ReadonlyMap<string, LayoutChoice>
+): string {
+  if (resolution.reason === "switched-off") return "No header or footer";
+  // A named Layout that is not published, with no usable default behind it:
+  // the page is drawn with nothing, and the line says so.
+  const fellFrom =
+    resolution.fellBackFrom === undefined
+      ? undefined
+      : byId.get(resolution.fellBackFrom);
+  return fellFrom === undefined
+    ? "No header or footer: the site has no published default Layout"
+    : `${fellFrom.title} (not published, so no header or footer shows)`;
 }
 
 /** The "why" line: the Layout in effect, and the reason it is that one. */
@@ -239,11 +267,7 @@ function whyLine(
   named: string | null,
   deleted: boolean
 ): string {
-  if (resolution.kind === "none") {
-    return resolution.reason === "switched-off"
-      ? "No header or footer"
-      : "No header or footer: the site has no published default Layout";
-  }
+  if (resolution.kind === "none") return whyNothingShows(resolution, byId);
   const title = byId.get(resolution.id)?.title ?? resolution.id;
   if (resolution.source === "page") return title;
   if (deleted) return `Site default: ${title} (the chosen Layout was deleted)`;

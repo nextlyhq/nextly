@@ -26,10 +26,12 @@ import {
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: vi.fn(),
   useDocumentIdentity: vi.fn(),
+  useDocumentLocale: vi.fn(() => null),
 }));
 
 import {
   useDocumentIdentity,
+  useDocumentLocale,
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 
@@ -47,6 +49,7 @@ import {
 
 const read = vi.mocked(usePluginRoute);
 const identity = vi.mocked(useDocumentIdentity);
+const documentLocale = vi.mocked(useDocumentLocale);
 
 /** The collection the form under test belongs to, and the site's pages. */
 let formCollection = "pages";
@@ -76,6 +79,7 @@ const choices: LayoutChoicesResponse = {
     defaultLayout: "main",
     layoutsCollection: "layouts",
     canUpdateLayouts: true,
+    more: false,
     regionComponents: {},
     regionDefinitions: {},
   },
@@ -124,6 +128,7 @@ beforeEach(() => {
   formCollection = "pages";
   pagesCollection = "pages";
   read.mockClear();
+  documentLocale.mockReturnValue(null);
   answering(choices);
 });
 afterEach(cleanup);
@@ -215,6 +220,80 @@ describe("the page's Layout picker", () => {
     );
   });
 
+  it("asks for the choices in the language being edited", () => {
+    documentLocale.mockReturnValue({ code: "de" } as ReturnType<
+      typeof useDocumentLocale
+    >);
+    renderPicker({ layout: "landing", noHeaderFooter: false });
+    expect(choicePaths()).toContain(
+      `${LAYOUT_CHOICES_ROUTE_PATH}?selected=landing&locale=de`
+    );
+  });
+
+  it("offers a search when the site has more Layouts than one answer lists, and a found one can be chosen", async () => {
+    // The first 200 of 250 Layouts, and more beyond them.
+    const layout = (i: number) => ({
+      id: `l${i}`,
+      title: `Layout ${i}`,
+      published: true,
+      draftChangesNotLive: false,
+      regions: [],
+    });
+    const first = {
+      items: Array.from({ length: 200 }, (_, i) => layout(i)),
+      meta: { ...choices.meta, defaultLayout: "l0", more: true },
+    };
+    const searched = {
+      items: [layout(0), layout(230)],
+      meta: { ...choices.meta, defaultLayout: "l0", more: false },
+    };
+    identity.mockImplementation(() => ({ kind: "collection", slug: "pages" }));
+    read.mockImplementation(({ path }) => {
+      const answer =
+        path === PAGE_COLLECTION_ROUTE_PATH
+          ? { pagesCollection: "pages" }
+          : path.includes("q=Layout+230")
+            ? searched
+            : path.includes("q=")
+              ? { ...searched, items: [layout(0)] }
+              : first;
+      return {
+        data: answer,
+        error: null,
+        pending: false,
+        refetch: () => {},
+      } as unknown as ReturnType<typeof usePluginRoute>;
+    });
+    renderPicker();
+    const trigger = screen.getByRole("combobox", { name: "Layout" });
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    expect(
+      screen.getByText("Showing the first 200; search to find more.")
+    ).toBeTruthy();
+    const search = screen.getByRole("combobox", { name: "Search Layouts" });
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "Layout 230" } });
+    });
+    const found = await screen.findByRole("option", { name: "Layout 230" });
+    await act(async () => {
+      fireEvent.click(found);
+    });
+    expect(values()).toMatchObject({ layout: "l230", noHeaderFooter: false });
+  });
+
+  it("keeps the plain dropdown when every Layout fits in one answer", () => {
+    renderPicker();
+    expect(
+      screen.queryByText("Showing the first 200; search to find more.")
+    ).toBeNull();
+    // The dropdown's own trigger, not a search field.
+    expect(screen.queryByRole("combobox", { name: "Search Layouts" })).toBe(
+      null
+    );
+  });
+
   it("draws on the pages collection a host renamed", () => {
     formCollection = "site-pages";
     pagesCollection = "site-pages";
@@ -288,6 +367,42 @@ describe("the regions the editor draws from the choice", () => {
       return usePageLayoutRegions(form.control, null);
     }).result.current;
   }
+
+  it("keeps the regions it drew while the answer for a new choice is on its way", async () => {
+    // The answer for Landing has not arrived; the one held is Main's, which
+    // carries no definitions for Landing's regions.
+    identity.mockImplementation(() => ({ kind: "collection", slug: "pages" }));
+    read.mockImplementation(({ path }) => {
+      const data =
+        path === PAGE_COLLECTION_ROUTE_PATH
+          ? { pagesCollection: "pages" }
+          : path.includes("selected=landing")
+            ? undefined
+            : choices;
+      return {
+        data,
+        error: null,
+        pending: data === undefined,
+        refetch: () => {},
+      } as unknown as ReturnType<typeof usePluginRoute>;
+    });
+    let form: ReturnType<typeof useForm> | undefined;
+    const hook = renderHook(() => {
+      form = useForm({
+        defaultValues: { layout: null, noHeaderFooter: false },
+      });
+      return usePageLayoutRegions(form.control, null);
+    });
+    expect(hook.result.current.canvas[0]?.label).toBe(
+      "Header, from Layout Main"
+    );
+    await act(async () => {
+      form?.setValue("layout", "landing");
+    });
+    expect(hook.result.current.canvas[0]?.label).toBe(
+      "Header, from Layout Main"
+    );
+  });
 
   it("names each region, where it comes from, and offers Edit Layout in a new tab", () => {
     const { canvas, layers } = regionsFor({

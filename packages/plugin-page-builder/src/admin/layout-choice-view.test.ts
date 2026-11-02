@@ -51,6 +51,7 @@ function ready(
         defaultLayout: "main",
         layoutsCollection: "layouts",
         canUpdateLayouts: true,
+        more: false,
         regionComponents: {},
         regionDefinitions: {},
         ...overrides,
@@ -128,6 +129,33 @@ describe("the page's Layout picker", () => {
     expect(view.value).toBe(NO_HEADER_FOOTER_VALUE);
     expect(view.why).toBe("No header or footer");
     expect(view.effective).toBeNull();
+  });
+
+  it("says no header or footer shows for an unpublished Layout when the site has no usable default", () => {
+    // No default set, or one that is not published: the page falls back to
+    // nothing, so neither the option nor the line may promise a default.
+    for (const meta of [
+      { defaultLayout: null },
+      { defaultLayout: "unfinished" },
+    ]) {
+      const view = layoutPickerView(page({ id: "unfinished" }), ready(meta));
+      expect(
+        view.options.find(o => o.value === layoutValue("unfinished"))?.label
+      ).toBe(
+        "Unfinished (not published: no header or footer shows until it is)"
+      );
+      expect(view.why).toBe(
+        "Unfinished (not published, so no header or footer shows)"
+      );
+      expect(view.effective).toBeNull();
+    }
+  });
+
+  it("says the site default shows for an unpublished option when one is usable", () => {
+    const view = layoutPickerView(page(), ready());
+    expect(
+      view.options.find(o => o.value === layoutValue("unfinished"))?.label
+    ).toBe("Unfinished (not published: the site default shows until it is)");
   });
 
   it("says when the site has no published default", () => {

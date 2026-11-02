@@ -19,29 +19,33 @@ import {
   regionDocument,
   regionsOf,
   type BlockDocument,
+  type DocumentLimits,
   type LayoutRegion,
 } from "@nextlyhq/blocks-engine";
 import { definitionsFor } from "@nextlyhq/blocks-react";
-import {
-  NextlyError,
-  type PluginRouteContext,
-  type PluginRoutePermissionScope,
+import type {
+  PluginRouteContext,
+  PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGES_SLUG } from "./collections/pages";
+import { publishedStoreSource } from "./component-store-source";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
-import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import {
+  LAYOUT_CHOICES_LOCALE_PARAM,
   LAYOUT_CHOICES_ROUTE_PATH,
+  LAYOUT_CHOICES_SEARCH_PARAM,
   LAYOUT_CHOICES_SELECTED_PARAM,
   LAYOUT_ID_MAX,
+  LAYOUT_LOCALE_MAX,
+  LAYOUT_SEARCH_MAX,
   PAGE_COLLECTION_ROUTE_PATH,
   type LayoutChoice,
   type LayoutChoicesResponse,
@@ -53,6 +57,7 @@ import {
   readingAsUser,
   type ComponentStore,
 } from "./library-route";
+import { parseRouteQuery } from "./route-query";
 
 /**
  * How many Layouts one answer lists. A site has a handful; the bound is there
@@ -70,12 +75,21 @@ export type LayoutChoicesDirectApi = Pick<
 /** The route context the read uses. */
 export type LayoutChoicesContext = Pick<PluginRouteContext, "caller" | "self">;
 
-/** What the editor asked about, and where component definitions live. */
+/** What the editor asked about, and how the published renderer reads. */
 export interface LayoutChoicesRequest {
   /** The Layout the page has selected, by id, or null for none. */
   readonly selected: string | null;
   /** Where component definitions are stored, as the plugin was told. */
   readonly store: ComponentStore;
+  /**
+   * The bounds the published renderer discovers definitions under, so a
+   * nested component the page draws is one the editor fetched.
+   */
+  readonly limits: DocumentLimits;
+  /** The language being edited; none is the default language. */
+  readonly locale?: string | undefined;
+  /** Text Layout titles must contain, to reach those past the list's bound. */
+  readonly search?: string | undefined;
 }
 
 type Row = Record<string, unknown>;
@@ -131,18 +145,24 @@ export async function readLayoutChoices(
   // answer every author with every Layout, whatever their rights say.
   const asUser = await readingAsUser(ctx);
 
-  const listed = rowsOf(
-    await nextly.find({
-      collection: layouts,
-      ...asUser,
-      // Every lifecycle state the caller may read: an unpublished Layout is a
-      // choice the picker offers, marked as such.
-      status: "all",
-      sort: "title",
-      limit: MAX_LAYOUT_CHOICES,
-      depth: 0,
-    })
-  );
+  // In the language being edited: a Layout's regions are region content.
+  const inLocale =
+    request.locale === undefined ? {} : { locale: request.locale };
+  const listing = await nextly.find({
+    collection: layouts,
+    ...asUser,
+    ...inLocale,
+    ...(request.search === undefined
+      ? {}
+      : { where: { title: { contains: request.search } } }),
+    // Every lifecycle state the caller may read: an unpublished Layout is a
+    // choice the picker offers, marked as such.
+    status: "all",
+    sort: "title",
+    limit: MAX_LAYOUT_CHOICES,
+    depth: 0,
+  });
+  const listed = rowsOf(listing);
   const { defaultLayout } = await readLayoutSettings(nextly, {
     layouts,
     settings,
@@ -157,7 +177,10 @@ export async function readLayoutChoices(
   ];
   const rows = [
     ...listed,
-    ...(await rowsPastTheBound(nextly, layouts, focus, listed, asUser)),
+    ...(await rowsPastTheBound(nextly, layouts, focus, listed, {
+      ...asUser,
+      ...inLocale,
+    })),
   ];
   const items = rows
     .map(choiceOf)
@@ -170,7 +193,7 @@ export async function readLayoutChoices(
         nextly,
         layouts,
         focused.filter(item => item.published).map(item => item.id),
-        asUser
+        { ...asUser, ...inLocale }
       )
     : new Set<string>();
   const focusedComponents = [
@@ -178,7 +201,10 @@ export async function readLayoutChoices(
   ];
   const componentDrafts =
     (await ctx.caller?.can("update", components)) === true
-      ? await pendingDrafts(nextly, components, focusedComponents, asUser)
+      ? await pendingDrafts(nextly, components, focusedComponents, {
+          ...asUser,
+          ...inLocale,
+        })
       : new Set<string>();
 
   return {
@@ -190,17 +216,25 @@ export async function readLayoutChoices(
       defaultLayout,
       layoutsCollection: layouts,
       canUpdateLayouts,
+      more:
+        (listing as { meta?: { hasNext?: unknown } }).meta?.hasNext === true,
       regionComponents: Object.fromEntries(
         focusedComponents.map((id): [string, RegionComponentFacts] => [
           id,
           { draftChangesNotLive: componentDrafts.has(id) },
         ])
       ),
+      // Only the Layouts a page can be drawn inside: the canvas draws no
+      // other, and every other Layout's graph would only grow the answer.
       regionDefinitions: await publishedDefinitions(
         nextly,
-        { collection: components, field: request.store.field },
-        items.flatMap(item => item.regions),
-        asUser
+        {
+          collection: components,
+          field: request.store.field,
+          locale: request.locale,
+        },
+        focused.flatMap(item => item.regions),
+        { reading: asUser, limits: request.limits }
       ),
     },
   };
@@ -217,7 +251,7 @@ async function rowsPastTheBound(
   layouts: string,
   focus: readonly string[],
   listed: readonly Row[],
-  asUser: AsUser
+  reading: AsUser & { locale?: string }
 ): Promise<Row[]> {
   const have = new Set(listed.map(rowId));
   const missing = focus.filter(id => !have.has(id));
@@ -226,7 +260,7 @@ async function rowsPastTheBound(
     await nextly.find({
       collection: layouts,
       where: { id: { in: missing } },
-      ...asUser,
+      ...reading,
       status: "all",
       limit: missing.length,
       depth: 0,
@@ -272,7 +306,8 @@ async function pendingDrafts(
   nextly: LayoutChoicesDirectApi,
   collection: string,
   ids: readonly string[],
-  asUser: AsUser
+  // In the language being edited: a working draft is kept per language.
+  reading: AsUser & { locale?: string }
 ): Promise<Set<string>> {
   const found = await Promise.all(
     ids.map(async id => {
@@ -280,7 +315,7 @@ async function pendingDrafts(
         const row = await nextly.findByID({
           collection,
           id,
-          ...asUser,
+          ...reading,
           status: "all",
           draft: true,
           depth: 0,
@@ -298,93 +333,101 @@ async function pendingDrafts(
 /**
  * The PUBLISHED definitions the regions reach, nested ones included.
  *
- * Discovered by the render's own discovery (`definitionsFor`), so a nested
- * component the canvas will draw is one this read fetched, from the store the
- * plugin was told about. Read in batches under the collection's row clamp, so
- * every requested id is answered rather than the first page of them. Read as
- * the caller at the published posture: the canvas shows what a visitor gets.
- * A caller who may not read components gets none, and each region then draws
- * the marker a missing component draws.
+ * Discovered by the render's own discovery (`definitionsFor`) under the
+ * renderer's own bounds, through the store read the readiness notice shares
+ * with it, in the language being edited, so the canvas draws the graph the
+ * published page draws. Read as the caller: a caller who may not read
+ * components gets none, and each region then draws the marker a missing
+ * component draws.
  */
 async function publishedDefinitions(
   nextly: LayoutChoicesDirectApi,
-  store: { collection: string; field: string },
+  store: { collection: string; field: string; locale: string | undefined },
   regions: readonly LayoutRegion[],
-  asUser: AsUser
+  read: { reading: AsUser; limits: DocumentLimits }
 ): Promise<Record<string, BlockDocument>> {
   if (regions.length === 0) return {};
+  const source = publishedStoreSource(nextly, {
+    ...store,
+    reading: read.reading,
+  });
   const found = await definitionsFor(
     regionDocument(regions),
     async ids => {
-      const read = new Map<string, BlockDocument>();
       try {
-        for (const batch of chunked([...ids], ID_BATCH_SIZE)) {
-          const rows = rowsOf(
-            await nextly.find({
-              collection: store.collection,
-              where: { id: { in: batch } },
-              ...asUser,
-              status: "published",
-              limit: batch.length,
-              depth: 0,
-            })
-          );
-          for (const row of rows) {
-            const id = rowId(row);
-            if (id !== null) read.set(id, row[store.field] as BlockDocument);
-          }
-        }
+        return await source(ids);
       } catch {
         // Refused or failed: the regions draw as missing rather than failing
         // the whole answer, which the picker needs either way.
+        return new Map<string, BlockDocument>();
       }
-      return read;
     },
-    DEFAULT_LIMITS
+    read.limits
   );
   return Object.fromEntries(found);
 }
 
-/** The query the choices route accepts: an optional selected Layout id. */
-const selectedQuery = z.object({
+/** An optional text parameter, where an empty value is none. */
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .optional()
+    .transform(value => (value === "" ? undefined : value));
+
+/**
+ * The query the choices route accepts: the selected Layout, the language
+ * being edited, and a title search. Every one is optional.
+ */
+const choicesQuery = z.object({
   [LAYOUT_CHOICES_SELECTED_PARAM]: z
     .string()
     .trim()
     .min(1)
     .max(LAYOUT_ID_MAX)
     .optional(),
+  [LAYOUT_CHOICES_LOCALE_PARAM]: optionalText(LAYOUT_LOCALE_MAX),
+  [LAYOUT_CHOICES_SEARCH_PARAM]: optionalText(LAYOUT_SEARCH_MAX),
 });
 
+/** What the request asks, as the route reads it. */
+export interface LayoutChoicesQuery {
+  readonly selected: string | null;
+  readonly locale: string | undefined;
+  readonly search: string | undefined;
+}
+
 /**
- * The selected Layout the request names, or null, parsed at the boundary.
- * A value that is not an id is refused as a validation error naming the
- * parameter, never echoing it.
+ * The request's query, parsed at the boundary. A value the route cannot take
+ * is refused as a validation error naming the parameter, never echoing it.
  */
-export function parseSelectedLayout(url: string | URL): string | null {
-  const value = new URL(url).searchParams.get(LAYOUT_CHOICES_SELECTED_PARAM);
-  const parsed = selectedQuery.safeParse(
-    value === null ? {} : { [LAYOUT_CHOICES_SELECTED_PARAM]: value }
+export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
+  const query = parseRouteQuery(
+    url,
+    [
+      LAYOUT_CHOICES_SELECTED_PARAM,
+      LAYOUT_CHOICES_LOCALE_PARAM,
+      LAYOUT_CHOICES_SEARCH_PARAM,
+    ],
+    choicesQuery,
+    "Layout choices route"
   );
-  if (!parsed.success) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: LAYOUT_CHOICES_SELECTED_PARAM,
-          code: "INVALID_QUERY",
-          message: "This parameter is not a Layout id.",
-        },
-      ],
-    });
-  }
-  return parsed.data[LAYOUT_CHOICES_SELECTED_PARAM] ?? null;
+  return {
+    selected: query[LAYOUT_CHOICES_SELECTED_PARAM] ?? null,
+    locale: query[LAYOUT_CHOICES_LOCALE_PARAM],
+    search: query[LAYOUT_CHOICES_SEARCH_PARAM],
+  };
 }
 
 /**
  * The route declaration: `read` on the Layouts collection, as resolved, with
- * component definitions read from the store the plugin was told about.
+ * component definitions read from the store the plugin was told about, under
+ * the bounds the published renderer draws with.
  */
 export function layoutChoicesRoute(
-  store: ComponentStore = DEFAULT_COMPONENT_STORE
+  store: ComponentStore = DEFAULT_COMPONENT_STORE,
+  limits: () => DocumentLimits = () => DEFAULT_LIMITS
 ): {
   method: "GET";
   path: string;
@@ -398,14 +441,16 @@ export function layoutChoicesRoute(
     // a route its authors can call.
     requiredPermission: ({ collection }) => collection(LAYOUTS_SLUG, "read"),
     handler: async (req, ctx) => {
-      const selected = parseSelectedLayout(req.url);
+      const query = parseChoicesQuery(req.url);
       // The Direct API through the plugin SDK, resolved per request, as the
       // plugin's other paths resolve it.
       const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
       return Response.json(
         await readLayoutChoices(ctx, await getCachedNextly(), {
-          selected,
+          ...query,
           store,
+          // Asked per request, as the renderer asks, so both read one answer.
+          limits: limits(),
         })
       );
     },

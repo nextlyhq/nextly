@@ -21,16 +21,46 @@ export const LAYOUT_CHOICES_ROUTE_PATH = "/layouts/choices";
  */
 export const LAYOUT_CHOICES_SELECTED_PARAM = "selected";
 
+/** The query parameter naming the language region content is read in. */
+export const LAYOUT_CHOICES_LOCALE_PARAM = "locale";
+
+/**
+ * The query parameter searching Layout titles. The list is bounded, so a site
+ * with more Layouts than one answer holds finds the rest by title.
+ */
+export const LAYOUT_CHOICES_SEARCH_PARAM = "q";
+
 /** The longest Layout id the route accepts, as an entry id is bounded. */
 export const LAYOUT_ID_MAX = 200;
 
-/** The choices route's path, asking about the page's selected Layout. */
-export function layoutChoicesPath(selected: string | null): string {
-  if (selected === null || selected === "") return LAYOUT_CHOICES_ROUTE_PATH;
-  const query = new URLSearchParams({
-    [LAYOUT_CHOICES_SELECTED_PARAM]: selected,
-  });
-  return `${LAYOUT_CHOICES_ROUTE_PATH}?${query.toString()}`;
+/** The longest language code the route accepts, past any real BCP 47 tag. */
+export const LAYOUT_LOCALE_MAX = 35;
+
+/** The longest search the route accepts. */
+export const LAYOUT_SEARCH_MAX = 200;
+
+/**
+ * The choices route's path: about the page's selected Layout, in the language
+ * being edited, optionally searching titles. An absent value is left out
+ * rather than sent empty, so the path, which is the read's cache key, is the
+ * same for the same question.
+ */
+export function layoutChoicesPath(
+  selected: string | null,
+  options: { locale?: string | null; search?: string } = {}
+): string {
+  const query = new URLSearchParams();
+  if (selected !== null && selected !== "") {
+    query.set(LAYOUT_CHOICES_SELECTED_PARAM, selected);
+  }
+  const locale = options.locale ?? "";
+  if (locale !== "") query.set(LAYOUT_CHOICES_LOCALE_PARAM, locale);
+  const search = options.search?.trim() ?? "";
+  if (search !== "") query.set(LAYOUT_CHOICES_SEARCH_PARAM, search);
+  const text = query.toString();
+  return text === ""
+    ? LAYOUT_CHOICES_ROUTE_PATH
+    : `${LAYOUT_CHOICES_ROUTE_PATH}?${text}`;
 }
 
 /**
@@ -97,13 +127,20 @@ export interface LayoutChoicesResponse {
     /** Whether the caller may update Layouts, which offers "Edit Layout". */
     readonly canUpdateLayouts: boolean;
     /**
+     * Whether more Layouts match than the list holds: the picker then offers
+     * a search, since the rest are reachable by title.
+     */
+    readonly more: boolean;
+    /**
      * Facts about the region components of the selected Layout and the
      * default, by id, for an author who may update components.
      */
     readonly regionComponents: Readonly<Record<string, RegionComponentFacts>>;
     /**
-     * The PUBLISHED definitions the regions reach, nested components
-     * included, by id: what the canvas draws them from, read as the caller.
+     * The PUBLISHED definitions the regions of the selected Layout and the
+     * default reach, nested components included, by id: what the canvas draws
+     * them from, read as the caller. Only those two can be drawn, so only
+     * theirs are sent, which bounds the answer whatever the list holds.
      */
     readonly regionDefinitions: Readonly<Record<string, BlockDocument>>;
   };
