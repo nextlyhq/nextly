@@ -17,6 +17,10 @@
  *   attributes and Style set beside it survive the same reload. A custom
  *   inspector replacing the whole panel, or one whose commit went nowhere,
  *   fails here.
+ * - A block whose prop is a `relation` to the playground's posts finds a post
+ *   by searching its title, stores the post's id, and names it by its title
+ *   when reopened. A control that stored the title, or one whose search read
+ *   nothing, fails here.
  * - A stored document holding a contributed block opens with that block drawn,
  *   on the canvas and in the entry screen's miniature, never as the
  *   unknown-block placeholder.
@@ -25,6 +29,7 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
+import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -106,12 +111,12 @@ async function saveDraft(page: Page): Promise<void> {
       ["PATCH", "PUT", "POST"].includes(response.request().method()) &&
       response.ok()
   );
-  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await pressSave(page);
   await saved;
 }
 
 /** One drawn fixture block on the canvas. */
-function fixture(page: Page, kind: "plain" | "custom") {
+function fixture(page: Page, kind: "plain" | "custom" | "teaser") {
   return page.locator(`.nx-canvas [data-fixture="${kind}"]`);
 }
 
@@ -242,5 +247,49 @@ test.describe("blocks a plugin contributes", () => {
       timeout: 60_000,
     });
     await expect(page.locator(PLACEHOLDER)).toHaveCount(0);
+  });
+  test("a relation prop searches a collection, stores the entry's id and names it by title", async ({
+    page,
+  }) => {
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const title = `Teaser target ${stamp}`;
+    const created = await page.request.post(
+      "/admin/api/collections/posts/entries",
+      { data: { title, slug: `teaser-target-${stamp}` } }
+    );
+    expect(created.ok()).toBe(true);
+    const postId = ((await created.json()) as { item?: { id?: string } }).item
+      ?.id;
+    expect(typeof postId).toBe("string");
+
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await insertBySearch(page, "fixture", "Test fixture: teaser");
+    await expect(fixture(page, "teaser")).toHaveText("No post chosen");
+
+    const content = page.getByRole("tabpanel", { name: "Content" });
+    await expect(content.getByText("Nothing chosen.")).toBeVisible();
+    const search = content.getByRole("searchbox", { name: "Search Post" });
+    await search.focus();
+    await search.fill(stamp);
+    await content.getByRole("button", { name: title }).click();
+    // The page stores the id, not the title it showed.
+    await expect(fixture(page, "teaser")).toHaveText(postId ?? "");
+
+    await saveDraft(page);
+    await expect
+      .poll(async () => (await storedNodes(page.request, id))[0]?.props)
+      .toEqual({ post: postId });
+
+    await page.reload();
+    await expect(fixture(page, "teaser")).toHaveText(postId ?? "", {
+      timeout: 60_000,
+    });
+    await fixture(page, "teaser").click();
+    await expect(
+      page
+        .getByRole("tabpanel", { name: "Content" })
+        .locator("[data-relation-chosen]")
+    ).toHaveText(title);
   });
 });

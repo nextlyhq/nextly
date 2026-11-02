@@ -13,8 +13,8 @@
       "compiled": 3
     },
     "docs/api-reference/direct-api.mdx": {
-      "samples": 38,
-      "compiled": 37
+      "samples": 39,
+      "compiled": 38
     },
     "docs/api-reference/rest-api.mdx": {
       "samples": 3,
@@ -145,12 +145,16 @@
       "compiled": 1
     },
     "docs/page-builder/contributed-blocks.mdx": {
-      "samples": 6,
+      "samples": 8,
       "compiled": 5
     },
     "docs/page-builder/index.mdx": {
       "samples": 5,
       "compiled": 5
+    },
+    "docs/page-builder/layouts.mdx": {
+      "samples": 1,
+      "compiled": 1
     },
     "docs/page-builder/locked-areas.mdx": {
       "samples": 2,
@@ -165,8 +169,8 @@
       "compiled": 7
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 18,
-      "compiled": 12
+      "samples": 19,
+      "compiled": 13
     },
     "docs/plugins/api-reference.mdx": {
       "samples": 24,
@@ -423,11 +427,11 @@
       "context #4 error TS2304: Cannot find name 'slug'.": 1
     },
     "docs/api-reference/direct-api.mdx": {
-      "suppressed #37 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
-      "suppressed #37 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
-      "suppressed #37 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
+      "suppressed #38 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
+      "suppressed #38 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "suppressed #38 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
       "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #37 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #38 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/getting-started/index.mdx": {
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
@@ -454,9 +458,9 @@
       "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "uninstalled #17 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "uninstalled #18 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
-      "reader-file #15 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
+      "reader-file #16 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '../../../types/generated/plugin-admin-imports.generated'.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1

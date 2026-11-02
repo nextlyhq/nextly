@@ -2124,7 +2124,9 @@ describe("a block inside an area locked to its content", () => {
   it("shows its other settings read-only, and offers no change to its own lock", () => {
     mountHeld();
 
-    expect(isDisabled(screen.getByLabelText("Align"))).toBe(true);
+    // Align's two options are a row of radio buttons; every one is held.
+    const align = within(screen.getByRole("radiogroup", { name: "Align" }));
+    expect(align.getAllByRole("radio").every(isDisabled)).toBe(true);
     // The area pins the block's own lock with its design, so the card holds
     // Lock, and says why.
     openCardMenu("Headline");

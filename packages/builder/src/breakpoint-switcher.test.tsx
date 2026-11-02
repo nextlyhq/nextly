@@ -74,6 +74,18 @@ describe("choosing a device", () => {
   });
 });
 
+describe("focus", () => {
+  it("draws the house ring on every device button, not the browser's outline", () => {
+    // Off the button by a gap, so it shows on the chosen device's fill too.
+    mount({ selected: "mobile" });
+    for (const option of options()) {
+      expect(option.className).toContain("focus-visible:ring-2");
+      expect(option.className).toContain("focus-visible:ring-offset-1");
+      expect(option.className).toContain("focus-visible:outline-none");
+    }
+  });
+});
+
 describe("which device is shown as being styled", () => {
   it("selects the device the author chose", () => {
     mount({ selected: "tablet" });
