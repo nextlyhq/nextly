@@ -24,7 +24,11 @@ import {
 } from "@admin/components/field-ui";
 import { toast } from "@admin/components/ui";
 import { useFieldGroups } from "@admin/hooks/queries";
-import { findFieldById, toSnakeName } from "@admin/lib/builder";
+import {
+  findFieldById,
+  generateFieldId,
+  toSnakeName,
+} from "@admin/lib/builder";
 import { distinguishEntities } from "@admin/lib/builder/distinguishing-label";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import {
@@ -60,14 +64,6 @@ type Props = {
   /** Called after each add, with the new field's id. */
   onAdded: (fieldId: string, how: { addAnother: boolean }) => void;
 };
-
-/**
- * A new field id, drawn as the Builder pages always have (7 random
- * characters), so ids stay in the shape the running page already holds.
- */
-function newFieldId(): string {
-  return `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-}
 
 /** The fields a new field will sit beside at `position`. */
 function siblingsAt(
@@ -123,7 +119,7 @@ export function BuilderFieldPicker({
 
   const add = (choice: FieldPickerChoice, how: { addAnother: boolean }) => {
     const field: BuilderField = {
-      id: newFieldId(),
+      id: generateFieldId(),
       name: choice.name,
       label: choice.label,
       type: choice.type,
