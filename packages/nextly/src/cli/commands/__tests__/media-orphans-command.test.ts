@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -93,6 +94,7 @@ vi.mock("../../../init/build-service-config", () => ({
   buildServiceConfig: () => ({}),
 }));
 
+import { loadCliEnvironment } from "../../environment";
 import { createProgram } from "../../program";
 
 let dir: string;
@@ -295,8 +297,8 @@ describe("nextly media orphans, as the CLI runs it", () => {
     expect(seen.loadConfig).toEqual([{ configPath: undefined, cwd: dir }]);
   });
 
-  // The CLI reads `.env` from the directory it was run in, before it reads
-  // --cwd, so a database named there may be another project's.
+  // The CLI reads its environment files from the directory it was run in,
+  // before it reads --cwd, so a database named there may be another project's.
   it("removes nothing when run from another project with its own .env", async () => {
     const media = bucketWithOrphan("media");
     seen.storage = [
@@ -328,6 +330,68 @@ describe("nextly media orphans, as the CLI runs it", () => {
     expect(exits).toEqual([1]);
     expect(media.deleted).toEqual([]);
     expect(seen.calls).not.toContain("select media");
+  });
+
+  // The run read every environment file Next.js reads for its mode in the
+  // directory it was run in, not only `.env`; a listing from another
+  // directory names each one, so the database's source is never hidden.
+  it("names every environment file the run read, when run from another directory", async () => {
+    const media = bucketWithOrphan("media");
+    seen.storage = [
+      {
+        name: "s3-media",
+        type: "s3",
+        collections: { media: { prefix: "media" } },
+        adapter: media.adapter,
+      },
+    ];
+    const elsewhere = path.join(dir, "elsewhere");
+    await mkdir(elsewhere);
+    // Next.js's order of precedence for development, highest first.
+    const files = [
+      ".env.development.local",
+      ".env.local",
+      ".env.development",
+      ".env",
+    ];
+    // Other modes' files, which the run does not read and the warning must
+    // not name: a list of every `.env*` file there would.
+    for (const file of [...files, ".env.production", ".env.test"]) {
+      await writeFile(path.join(elsewhere, file), "MEDIA_ENV_FILES_PROBE=1\n");
+    }
+    process.chdir(elsewhere);
+    const argv = [
+      "node",
+      "nextly",
+      "--mode",
+      "development",
+      "--cwd",
+      dir,
+      "media",
+      "orphans",
+    ];
+    // The entry point's environment step; it sets `NODE_ENV` for the run.
+    const nodeEnv = process.env.NODE_ENV;
+    try {
+      loadCliEnvironment(argv);
+      await createProgram().parseAsync(argv);
+    } finally {
+      Object.assign(process.env, { NODE_ENV: nodeEnv });
+      delete process.env.MEDIA_ENV_FILES_PROBE;
+      delete process.env.__NEXT_PROCESSED_ENV;
+    }
+
+    const logged = vi
+      .mocked(console.log)
+      .mock.calls.map(call => stripVTControlCharacters(String(call[0])));
+    expect(logged).toContain(
+      `⚠ The environment was read from ${files
+        .map(file => path.join(elsewhere, file))
+        .join(
+          ", "
+        )}, not from ${dir}, so the database it names may be another project's.`
+    );
+    expect(media.deleted).toEqual([]);
   });
 
   // The database settings may come from the shell or a parent process as

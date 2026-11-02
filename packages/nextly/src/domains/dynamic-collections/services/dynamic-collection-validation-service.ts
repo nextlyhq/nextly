@@ -129,7 +129,11 @@ export class DynamicCollectionValidationService {
   }
 
   /**
-   * @throws Error if any field name is invalid or duplicated
+   * Whether two of the fields clash is the sibling rule's question, asked with
+   * the stored list beside them (`assertNoNewSiblingClashes`), so a pair the
+   * collection already holds is not refused here on an unrelated save.
+   *
+   * @throws Error if any field name is invalid
    */
   validateFieldNames(fields: FieldDefinition[]): void {
     const countResult = fieldsArraySchema.safeParse(fields);
@@ -137,30 +141,6 @@ export class DynamicCollectionValidationService {
       const errorMessage =
         countResult.error.issues[0]?.message || "Invalid fields array";
       throw new Error(errorMessage);
-    }
-
-    // Two names that become one column clash as surely as two equal names:
-    // `metaTitle` and `meta_title` are both stored in `meta_title`.
-    const namesByColumn = new Map<string, string>();
-    const duplicates: string[] = [];
-
-    for (const field of fields) {
-      const column = toSnakeCase(field.name);
-      const earlier = namesByColumn.get(column);
-      if (earlier !== undefined) {
-        duplicates.push(
-          earlier === field.name
-            ? field.name
-            : `${earlier} and ${field.name} (both column ${column})`
-        );
-      }
-      namesByColumn.set(column, field.name);
-    }
-
-    if (duplicates.length > 0) {
-      throw new Error(
-        `Duplicate field names found: ${duplicates.join(", ")}. Each field must have a unique name.`
-      );
     }
 
     for (const field of fields) {

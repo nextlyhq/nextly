@@ -22,6 +22,11 @@
 
 import type { FieldAccess } from "../collections/fields/types/base";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
+import {
+  configuredSiblingClashes,
+  siblingClashMessage,
+  type SiblingEntityKind,
+} from "../domains/schema/sibling-fields";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 import {
@@ -177,14 +182,14 @@ export function validateSlugShared(
 
 /**
  * Validate a single field name against the standard Nextly rules:
- * required, string, pattern-conformant, not a SQL keyword, unique within
- * its level (tracked via `seenNames`).
+ * required, string, pattern-conformant, not a SQL keyword. Whether it clashes
+ * with a sibling's is the sibling rule's question, asked once for the whole
+ * entity (`validateSiblingFieldsShared`).
  */
 export function validateFieldNameShared(
   name: unknown,
   path: string,
   errors: BaseValidationError[],
-  seenNames: Set<string>,
   sqlKeywordsSet: Set<string> = DEFAULT_SQL_KEYWORDS_SET
 ): void {
   if (!name) {
@@ -220,16 +225,28 @@ export function validateFieldNameShared(
       code: "FIELD_NAME_SQL_KEYWORD",
     });
   }
+}
 
-  const nameLower = name.toLowerCase();
-  if (seenNames.has(nameLower)) {
+/**
+ * Refuse, for a `define*` call, the pairs of sibling fields the one sibling
+ * rule refuses that configuration refused before it (`configuredSiblingClashes`):
+ * no entity configured in code can already hold one. The rest wait for the
+ * start and the migrate commands, which know the definition the entity last
+ * had, so an existing pair keeps working.
+ */
+export function validateSiblingFieldsShared(
+  kind: SiblingEntityKind,
+  slug: unknown,
+  fields: unknown,
+  errors: BaseValidationError[]
+): void {
+  const entity = { kind, slug: typeof slug === "string" ? slug : "" };
+  for (const clash of configuredSiblingClashes(kind, fields)) {
     errors.push({
-      path: `${path}.name`,
-      message: `Duplicate field name '${name}' at this level`,
+      path: "fields",
+      message: siblingClashMessage(entity, clash),
       code: "FIELD_NAME_DUPLICATE",
     });
-  } else {
-    seenNames.add(nameLower);
   }
 }
 
@@ -694,7 +711,7 @@ export const FIELD_ACCESS_KEYS = [
 
 /**
  * What every field is checked for, whatever its type and whichever entity it
- * belongs to: a usable, unique name, and its own access rules, each a function
+ * belongs to: a usable name, and its own access rules, each a function
  * or a boolean with no key a field does not have.
  *
  * Checked before the type, because a contributed type defers its own checks
@@ -705,10 +722,9 @@ export function validateFieldBasicsShared(
   field: Record<string, unknown>,
   path: string,
   errors: BaseValidationError[],
-  seenNames: Set<string>,
   sqlKeywordsSet: Set<string> = DEFAULT_SQL_KEYWORDS_SET
 ): void {
-  validateFieldNameShared(field.name, path, errors, seenNames, sqlKeywordsSet);
+  validateFieldNameShared(field.name, path, errors, sqlKeywordsSet);
   validateAccessShared(
     field.access,
     FIELD_ACCESS_KEYS,

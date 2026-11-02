@@ -353,6 +353,8 @@ export {
   // Reads a plugin's own PUBLIC config from admin metadata; see
   // `usePluginClientConfig`.
   usePluginClientConfig,
+  FieldPicker,
+  describeFieldTypes,
   ConditionRow,
   operatorsForType,
   operatorTakesValue,
@@ -362,6 +364,11 @@ export {
   EDITABLE_VALIDATION_RULES,
 } from "./components/field-ui";
 export type {
+  FieldPickerProps,
+  FieldPickerConfig,
+  FieldPickerChoice,
+  FieldGroupOption,
+  FieldTypeDescription,
   FieldTypePickerProps,
   FieldDefaultValueInputProps,
   FieldDefaultOption,
