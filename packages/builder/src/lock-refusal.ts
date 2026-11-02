@@ -10,12 +10,14 @@
 import {
   findNode,
   type BlockDocument,
+  type BlockNode,
   type LocatedLockBreak,
   type RepairStep,
 } from "@nextlyhq/blocks-engine";
 
 import type { RefusalWording } from "./drag-refusal";
 import { blockLabel } from "./inserter";
+import { layerLabel } from "./layers";
 
 /**
  * The facts a lock refusal is worded from: the rule, and the block whose slot
@@ -44,6 +46,19 @@ export interface LockDropRefusal {
   /** The container the refusing region belongs to, absent at the top level. */
   readonly parentId?: string;
   readonly lock: LockRefusalFacts;
+}
+
+/**
+ * Why a block the author locked, or a block holding one, will not move: the
+ * locked block by the name the author knows it by, and the way forward. The
+ * op layer refuses to relocate any subtree that holds a locked block, so this
+ * is said for the block itself and for every container around it.
+ */
+export function lockedBlockWording(locked: BlockNode): RefusalWording {
+  return {
+    headline: `${layerLabel(locked)} is locked.`,
+    remedy: "Unlock it to move it.",
+  };
 }
 
 /**

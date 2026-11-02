@@ -54,7 +54,6 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url));
  * list can only shrink.
  */
 const PENDING: ReadonlyMap<string, readonly string[]> = new Map([
-  ["use-inline-editing.ts", ["Element"]],
   ["use-inline-text.ts", ["Element"]],
 ]);
 

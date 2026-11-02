@@ -36,6 +36,8 @@
  */
 
 import {
+  findNode,
+  lockedWithin,
   registryNestingSource,
   saveAsPatternRefusal,
   type BlockDocument,
@@ -45,14 +47,19 @@ import {
 
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
+import type { RefusalWording } from "./drag-refusal";
 import { blockDuplication } from "./duplicate-block";
 import type { Rect } from "./geometry";
-import { keyboardMovePosition } from "./keyboard-move";
+import {
+  keyboardMovePosition,
+  type KeyboardMove,
+  type MoveDirection,
+} from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
 import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp, OpPosition } from "./ops";
 import {
   isRefusal,
   selectionDeletion,
@@ -78,11 +85,11 @@ function lockReason(
 }
 
 /** An action enabled, or dimmed with the lock's reason when one refuses it. */
-function heldByLock(
-  action: ToolbarAction,
+function heldByLock<A extends Pick<ToolbarAction, "enabled" | "reason">>(
+  action: A,
   ask: LockQuestion | undefined,
   ops: readonly BuilderOp[] | undefined
-): ToolbarAction {
+): A {
   if (!action.enabled || ops === undefined) return action;
   const reason = lockReason(ask, ops);
   return reason === undefined ? action : { ...action, enabled: false, reason };
@@ -132,6 +139,92 @@ function lockedBy(locked: BlockNode, selectedId: string): string {
   return locked.id === selectedId
     ? "This block is locked."
     : `${layerLabel(locked)} inside this block is locked.`;
+}
+
+/**
+ * Where a block's move in one direction goes: the keyboard move's own answer.
+ *
+ * Passed in by a caller that runs the move, so the availability it shows is
+ * asked with the very function, and the very component definitions, its verb
+ * moves by. The default reads no definitions, as the bar's Move up and Move
+ * down always have — a step within one list needs none.
+ */
+export type MovePosition = (
+  document: BlockDocument,
+  id: string,
+  direction: MoveDirection
+) => KeyboardMove | null;
+
+/**
+ * Whether the placement rule refuses a block's move to `to`, and its words,
+ * or `null` when it allows it. Passed in by a caller that runs the move, so
+ * an item it offers is judged by the very call its verb judges by.
+ */
+export type MoveJudge = (
+  document: BlockDocument,
+  id: string,
+  to: OpPosition
+) => RefusalWording | null;
+
+const POSITION_WITHOUT_DEFINITIONS: MovePosition = (document, id, direction) =>
+  keyboardMovePosition(document.nodes, id, direction);
+
+/** Why a verb that acts on one block is not offered for a set. */
+function oneAtATime(count: number): string {
+  return `Only one block at a time. ${count} are selected.`;
+}
+
+/**
+ * One block's move in one direction, as an action: dimmed when the block is
+ * locked or has nowhere to go that way, and when a slot's lock refuses it.
+ *
+ * Where it goes is the keyboard move's own answer (`keyboardMovePosition`), so
+ * an action offered here is the step its keystroke takes. Whether the
+ * placement rule allows it there is asked when it runs, by the same verb the
+ * keystroke runs, which says why when it does not.
+ */
+function singleMove<Id extends string>(
+  document: BlockDocument,
+  selectedId: string,
+  id: Id,
+  label: string,
+  direction: MoveDirection,
+  ask: LockQuestion | undefined,
+  position: MovePosition = POSITION_WITHOUT_DEFINITIONS,
+  judge?: MoveJudge
+): Omit<ToolbarAction, "id"> & { readonly id: Id } {
+  const moveLock = lockBlockingMove(document, selectedId);
+  if (moveLock !== undefined) {
+    return {
+      id,
+      label,
+      enabled: false,
+      reason: lockedBy(moveLock, selectedId),
+    };
+  }
+  const to = position(document, selectedId, direction);
+  // The placement rule's refusal, said where the author would press.
+  const refused =
+    to === null || judge === undefined
+      ? null
+      : judge(document, selectedId, to.to);
+  if (refused !== null) {
+    return { id, label, enabled: false, reason: refusalAnnouncement(refused) };
+  }
+  return heldByLock(
+    { id, label, enabled: to !== null },
+    ask,
+    to === null
+      ? undefined
+      : [
+          {
+            kind: "move",
+            id: selectedId,
+            to: to.to,
+            dropSlotIfEmpty: to.dropSlotIfEmpty,
+          },
+        ]
+  );
 }
 
 /**
@@ -263,7 +356,7 @@ function manyBlockActions(
   mayCreate: boolean,
   ask?: LockQuestion
 ): ToolbarAction[] {
-  const many = `Only one block at a time. ${ids.length} are selected.`;
+  const many = oneAtATime(ids.length);
   const deleteLock = ids
     .map(id => lockBlockingDelete(document, id))
     .find(node => node !== undefined);
@@ -369,38 +462,8 @@ export function toolbarActions(
       lockRefusalFor
     );
 
-  const moveLock = lockBlockingMove(document, selectedId);
   const deleteLock = lockBlockingDelete(document, selectedId);
 
-  const move = (
-    id: "move-up" | "move-down",
-    label: string,
-    direction: "up" | "down"
-  ): ToolbarAction => {
-    if (moveLock !== undefined) {
-      return {
-        id,
-        label,
-        enabled: false,
-        reason: lockedBy(moveLock, selectedId),
-      };
-    }
-    const to = keyboardMovePosition(document.nodes, selectedId, direction);
-    return heldByLock(
-      { id, label, enabled: to !== null },
-      lockRefusalFor,
-      to === null
-        ? undefined
-        : [
-            {
-              kind: "move",
-              id: selectedId,
-              to: to.to,
-              dropSlotIfEmpty: to.dropSlotIfEmpty,
-            },
-          ]
-    );
-  };
   const duplication = blockDuplication(document, selectedId);
   const deletion = blockDeletion(document, selectedId);
 
@@ -412,8 +475,22 @@ export function toolbarActions(
       // a top-level block with no container to step out to.
       enabled: path.length > 1,
     },
-    move("move-up", "Move up", "up"),
-    move("move-down", "Move down", "down"),
+    singleMove(
+      document,
+      selectedId,
+      "move-up",
+      "Move up",
+      "up",
+      lockRefusalFor
+    ),
+    singleMove(
+      document,
+      selectedId,
+      "move-down",
+      "Move down",
+      "down",
+      lockRefusalFor
+    ),
     // A node's lock deliberately does not stop this. Duplicating neither moves
     // nor removes the original, and refusing would mean an author could not
     // take a copy of the one block they had most deliberately protected — the
@@ -544,4 +621,88 @@ function opsOf(
     | null
 ): readonly BuilderOp[] | undefined {
   return plan === null || !("ops" in plan) ? undefined : plan.ops;
+}
+
+/**
+ * A locked block INSIDE the selected one, which the op store will not let a
+ * move carry: it relocates no subtree holding a locked block (`lockedWithin`).
+ * The selected block's own lock is `lockBlockingMove`'s, asked as before.
+ */
+function heldInside(
+  document: BlockDocument,
+  selectedId: string
+): BlockNode | undefined {
+  const node = findNode(document.nodes, selectedId);
+  const lockedId = node === undefined ? undefined : lockedWithin(node);
+  return lockedId === undefined || lockedId === selectedId || node === undefined
+    ? undefined
+    : findNode([node], lockedId);
+}
+
+/** The block menu's moves across depth: into the block above, and out. */
+export type DepthMoveId = "move-in" | "move-out";
+
+/** One of them, and the keyboard move it runs. */
+export interface DepthMoveAction extends Omit<ToolbarAction, "id"> {
+  readonly id: DepthMoveId;
+  readonly direction: Extract<MoveDirection, "indent" | "outdent">;
+}
+
+const DEPTH_MOVES: ReadonlyArray<
+  Pick<DepthMoveAction, "id" | "label" | "direction">
+> = [
+  { id: "move-in", label: "Move in", direction: "indent" },
+  { id: "move-out", label: "Move out", direction: "outdent" },
+];
+
+/**
+ * Move in and Move out for the current selection, or `[]` when there is none.
+ *
+ * The menu path to what Alt+ArrowRight and Alt+ArrowLeft do, so every move a
+ * drag in Layers makes has a way without dragging. Decided as the bar decides
+ * Move up and Move down — the keyboard move's position, the node's lock and a
+ * slot's — and run through the same verb the keystroke runs. Kept off the bar
+ * itself, whose five buttons are fixed so the one an author aims at does not
+ * move.
+ *
+ * A set is offered them dimmed with the reason, as the bar dims a verb that
+ * has no meaning for several blocks.
+ */
+export function depthMoveActions(
+  document: BlockDocument,
+  selectedId: string | null,
+  selectedIds?: readonly string[],
+  lockRefusalFor?: LockQuestion,
+  /**
+   * The position the verb these run moves by. A caller that runs them passes
+   * its own, so an item is offered exactly when pressing it would move.
+   */
+  position?: MovePosition,
+  /** The placement rule as the verb asks it, so a refused move is dimmed. */
+  judge?: MoveJudge
+): DepthMoveAction[] {
+  if (selectedId === null || pathTo(document, selectedId).length === 0) {
+    return [];
+  }
+  const ids = selectedIds ?? [selectedId];
+  const held = heldInside(document, selectedId);
+  return DEPTH_MOVES.map(move =>
+    ids.length > 1
+      ? { ...move, enabled: false, reason: oneAtATime(ids.length) }
+      : held !== undefined
+        ? { ...move, enabled: false, reason: lockedBy(held, selectedId) }
+        : {
+            ...singleMove(
+              document,
+              selectedId,
+              move.id,
+              move.label,
+              move.direction,
+              lockRefusalFor,
+              position,
+              judge
+            ),
+            direction: move.direction,
+          }
+  );
 }
