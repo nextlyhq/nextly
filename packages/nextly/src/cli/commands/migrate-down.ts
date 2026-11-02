@@ -1071,6 +1071,7 @@ export async function downDatabaseDeps(args: {
         fileExists: () => Promise.resolve(true),
         loadTargetSnapshot: () => Promise.resolve(null),
         marksNoTransaction: () => Promise.resolve(false),
+        fileChecksum: () => Promise.resolve(""),
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       return true;

@@ -10,13 +10,15 @@
  * @module cli/commands/migrate-resolve
  * @since v0.0.3-alpha
  */
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import type { SupportedDialect } from "../../database/schema-registry";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
 import {
   resolveMigration,
@@ -36,6 +38,10 @@ import type { CommandContext } from "../program";
 import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import {
+  discoverMigrationGroups,
+  selectVariant,
+} from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
 import { maybeForceUnlock } from "./migrate";
@@ -76,30 +82,42 @@ function pickMode(opts: ResolveCommandOptions): {
   return { mode: chosen[0][0], filename: chosen[0][1] };
 }
 
-/** `<dir>/<name>.sql`, from a bare or `.sql`-suffixed name. */
-function sqlPathIn(dir: string, filename: string): string {
-  return resolve(dir, filename.endsWith(".sql") ? filename : `${filename}.sql`);
-}
-
-async function fileExistsIn(dir: string, filename: string): Promise<boolean> {
-  try {
-    await access(sqlPathIn(dir, filename));
-    return true;
-  } catch {
-    return false;
-  }
+/**
+ * The path of the file `nextly migrate` reads for this migration on
+ * `dialect`, its dialect's variant before the base file (`selectVariant`), or
+ * undefined where the folder has none. Every read here goes through it, so
+ * the file recorded is the one the run compares: a project shipping `x.sql`
+ * beside `x.postgresql.sql` is recorded from the variant on PostgreSQL.
+ */
+export async function migrationFileIn(
+  dir: string,
+  filename: string,
+  dialect: SupportedDialect
+): Promise<string | undefined> {
+  const base = filename.replace(/\.sql$/i, "");
+  const group = (await discoverMigrationGroups(dir)).get(base);
+  const file = group && selectVariant(group.variants, dialect);
+  return file === undefined ? undefined : resolve(dir, file);
 }
 
 /**
- * Whether `migrations/<name>.sql` is marked to run outside a transaction.
- * Asked only after the file is known to exist, so a read failure here is a
- * real one and travels.
+ * The text of the file `nextly migrate` reads (`migrationFileIn`). Asked only
+ * after the file is known to exist, so a read failure here is a real one and
+ * travels.
  */
-async function fileMarksNoTransaction(
+async function migrationTextIn(
   dir: string,
-  filename: string
-): Promise<boolean> {
-  return marksNoTransaction(await readFile(sqlPathIn(dir, filename), "utf-8"));
+  filename: string,
+  dialect: SupportedDialect
+): Promise<string> {
+  const path = await migrationFileIn(dir, filename, dialect);
+  if (path === undefined) {
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_FILE_MISSING",
+      publicMessage: `Migration file not found: ${filename.replace(/\.sql$/i, "")}.sql`,
+    });
+  }
+  return readFile(path, "utf-8");
 }
 
 async function loadSnapshot(
@@ -191,10 +209,15 @@ export async function runMigrateResolve(
             executeTransaction(adapter as unknown as DrizzleAdapter, tx =>
               work(repo.boundTo(tx.db))
             ),
-          fileExists: name => fileExistsIn(migrationsDir, name),
+          fileExists: async name =>
+            (await migrationFileIn(migrationsDir, name, dialect)) !== undefined,
           loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
-          marksNoTransaction: () =>
-            fileMarksNoTransaction(migrationsDir, filename),
+          marksNoTransaction: async () =>
+            marksNoTransaction(
+              await migrationTextIn(migrationsDir, filename, dialect)
+            ),
+          fileChecksum: async () =>
+            checksumOf(await migrationTextIn(migrationsDir, filename, dialect)),
           introspectLive: async () => {
             // Config and the Builder manifest, merged as generation merges them,
             // so the verifier excludes the same derived tables the snapshot never
@@ -267,6 +290,11 @@ export async function runMigrateResolve(
             `${filename} has no snapshot, so the live schema was not compared.`
           );
         }
+        break;
+      case "checksum-accepted":
+        logger.success(
+          `Accepted the edit to ${filename}: its new checksum is recorded, and later runs of \`nextly migrate\` go on.`
+        );
         break;
       case "rolled-back":
         logger.success(

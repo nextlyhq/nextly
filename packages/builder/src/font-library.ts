@@ -330,7 +330,7 @@ export function tokenSummary(
   attention: readonly FontTokenRow[]
 ): string {
   if (rows.length === 0) {
-    return "This site has no typeface tokens yet. The Tokens panel creates them.";
+    return "This site has no typeface tokens yet. Design’s Variables tab creates them.";
   }
   if (attention.length === 0) {
     const noun = rows.length === 1 ? "token" : "tokens";

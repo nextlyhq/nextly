@@ -7,7 +7,8 @@ import {
   migrationChecksum,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
-import { migrateCore } from "../migrate";
+import { CliError } from "../../errors";
+import { migrateCore, migrateExitCode } from "../migrate";
 
 function deps(over: Record<string, unknown> = {}) {
   return {
@@ -25,6 +26,7 @@ function deps(over: Record<string, unknown> = {}) {
     reconcileCoreFn: vi.fn(async () => ({ changed: false })),
     runFileMigrationsFn: vi.fn(async () => 0),
     refuseUnresolvedAttemptsFn: vi.fn(async () => {}),
+    assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
       collectionsRegistered: 0,
@@ -537,6 +539,43 @@ describe("an unresolved app attempt", () => {
       "refusal:boot migrations (db.runMigrationsOnBoot)",
     ]);
     expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("an applied file edited since it ran", () => {
+  it("is refused inside the lock, after the attempt check and before the core reconcile", async () => {
+    const order: string[] = [];
+    const refusal = new CliError("MIGRATION_TAMPERED", {
+      what: "edited",
+      why: "edited",
+      next: "restore it",
+    });
+    const d = deps({
+      refuseUnresolvedAttemptsFn: vi.fn(async () => {
+        order.push("attempts");
+      }),
+      assertAppliedFilesUnchangedFn: vi.fn(
+        async (args: { command: string }) => {
+          order.push(`checksums:${args.command}`);
+          throw refusal;
+        }
+      ),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    expect(order).toEqual(["attempts", "checksums:nextly migrate"]);
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+    // The code the guide documents, so a deploy script can tell it apart.
+    expect(migrateExitCode(refusal)).toBe(2);
+    expect(migrateExitCode(new Error("anything else"))).toBe(1);
+    expect(
+      migrateExitCode(
+        new CliError("MIGRATION_MISSING", { what: "x", why: "x", next: "x" })
+      )
+    ).toBe(1);
   });
 });
 

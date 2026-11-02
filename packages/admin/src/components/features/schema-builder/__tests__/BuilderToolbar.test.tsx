@@ -33,6 +33,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -51,6 +52,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={3}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -67,6 +69,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -81,6 +84,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -96,6 +100,7 @@ describe("BuilderToolbar", () => {
         config={componentConfig}
         name="Hero"
         unsavedCount={0}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -119,6 +124,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -137,6 +143,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={2}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -151,6 +158,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -166,6 +174,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -180,6 +189,7 @@ describe("BuilderToolbar", () => {
         name="Posts"
         locked
         unsavedCount={0}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
@@ -200,6 +210,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={2}
+        onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={onSave}
       />

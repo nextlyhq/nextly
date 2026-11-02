@@ -14,7 +14,7 @@ export function registerMigrateResolveCommand(program: Command): void {
     )
     .option(
       "--applied <filename>",
-      "Mark <filename> as applied (verifies live == target snapshot unless --skip-verify)"
+      "Mark <filename> as applied, or accept an edit to an applied one (verifies live == target snapshot unless --skip-verify)"
     )
     .option(
       "--rolled-back <filename>",

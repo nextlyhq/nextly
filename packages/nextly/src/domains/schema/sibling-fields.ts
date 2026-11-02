@@ -127,9 +127,12 @@ function sharedValue(
 /**
  * The system fields `define*` adds at a collection's and a Single's top level
  * (`title`, `slug`). Each is added only when no declared field takes its
- * column, so one beside a declared sibling that shares no stored value with it
- * (a column-less `Title`, a `TITLE` whose column is `t_i_t_l_e`) is a pair the
- * author never wrote, and the definition stands as `define*` accepted it.
+ * column, so one beside a declared sibling that shares no stored value or key
+ * with it (a column-less `Title`, a `TITLE` whose column is `t_i_t_l_e`) is a
+ * pair the author never wrote, and the definition stands as `define*` accepted
+ * it, a sibling of the exact same name included. Only `define*` output gets this
+ * (`SiblingJudgeOptions.definedInCode`); a road that writes fields as it was
+ * sent judges a system name like any other.
  */
 const SYSTEM_FIELD_NAMES: ReadonlySet<string> = new Set(["title", "slug"]);
 
@@ -208,15 +211,26 @@ function sameShared(a: SiblingClash["shared"], b: SiblingClash["shared"]) {
 }
 
 function isSystemFieldStandingAside(
-  kind: SiblingEntityKind | undefined,
+  definedInCode: SiblingEntityKind | undefined,
   clash: SiblingClash
 ): boolean {
   return (
-    (kind === "collection" || kind === "single") &&
+    (definedInCode === "collection" || definedInCode === "single") &&
     clash.path.length === 0 &&
     clash.shared === null &&
     SYSTEM_SHAPED_PAIRS.has(clash)
   );
+}
+
+/** How a road judges sibling fields. */
+export interface SiblingJudgeOptions {
+  /**
+   * The kind of entity whose `define*` output the fields are. Only `define*` adds `title` and
+   * `slug` itself, and it refuses two declared fields equal ignoring case before it adds them, so
+   * only on a road that judges its output can such a pair be one the author never wrote. Every
+   * other road leaves it unset, and a system-named pair is judged there like any other.
+   */
+  definedInCode?: SiblingEntityKind;
 }
 
 /**
@@ -230,15 +244,16 @@ function isSystemFieldStandingAside(
  * of a name already held twice makes new pairs) and only while it shares no
  * stored value it did not share before: a pair whose type change makes both
  * fields one column is new, since that column is what the database refuses.
- * With `kind`, a system field standing aside for a sibling is not judged.
+ * With `options.definedInCode` (only for `define*` output), a system field
+ * standing aside for a sibling is not judged.
  */
 export function judgeSiblingFields(
   next: unknown,
   previous: unknown,
-  kind?: SiblingEntityKind
+  options: SiblingJudgeOptions = {}
 ): { refused: SiblingClash[]; existing: SiblingClash[] } {
   const clashes = siblingClashes(next).filter(
-    clash => !isSystemFieldStandingAside(kind, clash)
+    clash => !isSystemFieldStandingAside(options.definedInCode, clash)
   );
   if (previous === null) return { refused: clashes, existing: [] };
   const held = new Map<string, SiblingClash[]>();
@@ -267,9 +282,9 @@ export function judgeSiblingFields(
 export function newSiblingClashes(
   next: unknown,
   previous: unknown,
-  kind?: SiblingEntityKind
+  options: SiblingJudgeOptions = {}
 ): SiblingClash[] {
-  return judgeSiblingFields(next, previous, kind).refused;
+  return judgeSiblingFields(next, previous, options).refused;
 }
 
 /**
@@ -386,9 +401,11 @@ export function siblingClashWarning(
 export function assertNoNewSiblingClashes(
   entity: SiblingEntity,
   next: unknown,
-  previous: unknown
+  previous: unknown,
+  options: SiblingJudgeOptions = {}
 ): void {
-  const clashes = newSiblingClashes(next, previous, entity.kind);
+  // Unless the caller says the fields are `define*` output, nothing in them was added by `define*`.
+  const clashes = newSiblingClashes(next, previous, options);
   if (clashes.length > 0) throw siblingClashesError(entity, clashes);
 }
 
@@ -447,7 +464,7 @@ export async function refusedConfiguredSiblingFields(
       const clashes = newSiblingClashes(
         entry.fields ?? [],
         row?.fields ?? null,
-        kind
+        { definedInCode: kind }
       );
       if (clashes.length === 0) continue;
       if (row === undefined) {
