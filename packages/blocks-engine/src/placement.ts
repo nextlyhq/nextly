@@ -175,6 +175,8 @@ interface Memo {
 interface InstanceFacts {
   readonly slots: ReadonlyMap<string, SlotRule>;
   readonly kinds: readonly ContentKind[];
+  /** The types of the blocks it draws at its top, which the name rules judge. */
+  readonly rootTypes: readonly string[];
 }
 
 /** A fresh memo, for one judgement. */
@@ -424,7 +426,14 @@ function readComposed(
     }
   );
   if (rootsArePhrasing) kinds.add("phrasing");
-  return { slots, kinds: CONTENT_KINDS.filter(kind => kinds.has(kind)) };
+  return {
+    slots,
+    kinds: CONTENT_KINDS.filter(kind => kinds.has(kind)),
+    rootTypes: composed
+      .slice(0, MAX_NODES)
+      .map(root => root.type)
+      .filter(type => type !== PROBE_TYPE),
+  };
 }
 
 /** Record the rule of the exposed slot a stand-in landed in, by its holder. */
@@ -568,17 +577,8 @@ function judgeOne(
   memo: Memo
 ): PlacementVerdict {
   const blockType = node.type;
-  if (site.kind === "root") {
-    const verdict = canBeRoot(blockType, sources.nesting);
-    return verdict.allowed
-      ? ALLOWED
-      : {
-          allowed: false,
-          reason: verdict.reason,
-          blockType,
-          permitted: verdict.permitted,
-        };
-  }
+  const named = namedTypesOf(node, sources, memo);
+  if (site.kind === "root") return rootVerdict(named, sources);
   const { parent, slot } = site;
   const parentModel = modelOf(parent, sources, memo);
   const slots = declaredSlots(parent, parentModel, sources, memo);
@@ -592,8 +592,10 @@ function judgeOne(
       slot,
     };
   }
-  const named = nameRules(blockType, parent.type, slot, rule, sources);
-  if (!named.allowed) return named;
+  const byName = firstRefusal(named, type =>
+    nameRules(type, parent.type, slot, rule, sources)
+  );
+  if (!byName.allowed) return byName;
   return contentVerdict(blockType, model, {
     parent,
     parentModel,
@@ -644,6 +646,50 @@ function contentVerdict(
         kind: refused.kind,
         refusedBy: refused,
       };
+}
+
+/**
+ * The types the name rules judge for a node: its own, or for a component
+ * placement the blocks it draws at its top, since its own type restricts
+ * nothing and it sits where those sit.
+ */
+function namedTypesOf(
+  node: PlacedNode,
+  sources: PlacementSources,
+  memo: Memo
+): readonly string[] {
+  if (node.type !== COMPONENT_INSTANCE_TYPE) return [node.type];
+  return instanceFacts(node, sources, memo)?.rootTypes ?? [node.type];
+}
+
+/** The first refusal among these types, or allowed. */
+function firstRefusal(
+  types: readonly string[],
+  judge: (type: string) => PlacementVerdict
+): PlacementVerdict {
+  for (const type of types) {
+    const verdict = judge(type);
+    if (!verdict.allowed) return verdict;
+  }
+  return ALLOWED;
+}
+
+/** Whether these types may stand at the top level. */
+function rootVerdict(
+  types: readonly string[],
+  sources: PlacementSources
+): PlacementVerdict {
+  return firstRefusal(types, type => {
+    const verdict = canBeRoot(type, sources.nesting);
+    return verdict.allowed
+      ? ALLOWED
+      : {
+          allowed: false,
+          reason: verdict.reason,
+          blockType: type,
+          permitted: verdict.permitted,
+        };
+  });
 }
 
 /** A map entry looked up without trusting the key, as `ownEntry` does. */

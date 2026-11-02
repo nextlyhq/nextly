@@ -1159,8 +1159,8 @@ async function footprintOf(
 /** The deepest node of a composed forest, counted from its own top. */
 /**
  * The placement facts of a composed tree, as one comparable string: every
- * distinct block type with its resolved content model, bounded as `deepest`
- * is. A set rather than a count per node, so moving a block changes nothing
+ * node by id with its type and resolved content model, bounded as `deepest`
+ * is. Keyed by id rather than position, so moving a block changes nothing
  * here (the slot and depth footprints see moves).
  */
 function placementFacts(
@@ -1172,9 +1172,14 @@ function placementFacts(
     definitions: registryBlockSource(),
   };
   const facts = new Set<string>();
+  // Per node, by id: a set of type/model pairs alone would not move when two
+  // Cards swap linked and unlinked, while the host filling one of them is
+  // affected.
   eachComposed(nodes, setup, entry => {
     if (typeof entry?.type !== "string") return;
-    facts.add(`${entry.type}|${contentModelKeyOf(entry, sources)}`);
+    facts.add(
+      `${String(entry.id)}|${entry.type}|${contentModelKeyOf(entry, sources)}`
+    );
   });
   return [...facts].sort().join("\n");
 }

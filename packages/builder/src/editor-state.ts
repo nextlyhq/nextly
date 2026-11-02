@@ -141,8 +141,7 @@ export interface UseEditorStateArgs {
    * Told when an edit was refused because it would put a block where the
    * placement rule forbids, with the block and the reason. Every editor path
    * (insert, drag, keyboard, toolbar, paste) ends in an op group here, so this
-   * is the one check none of them can miss; the paths also ask before acting,
-   * so the author reads the refusal where they tried.
+   * is the one check none of them can miss, whatever a surface asked first.
    */
   onPlacementRefused?: (refusal: LocatedPlacementBreak) => void;
 }
