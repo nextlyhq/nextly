@@ -153,6 +153,26 @@ describe("the For Figma export, one file per mode", () => {
     expect(made.issues.map(i => i.message).join(" ")).toMatch(/bad\}/);
   });
 
+  it("says it is the id that cannot be written, when it is", () => {
+    const made = tokensToFigma(
+      {
+        tokens: [
+          {
+            id: "bad}",
+            name: "color.ink",
+            kind: "color",
+            values: { light: "#000000" },
+          },
+        ],
+      },
+      "light"
+    );
+    expect(made.document).toEqual({});
+    expect(made.issues.map(i => i.message).join(" ")).toMatch(
+      /"color\.ink" has an id that is not a token name/
+    );
+  });
+
   it("leaves out what Figma cannot hold, from both files, and says so", () => {
     const light = tokensToFigma(SET, "light");
     expect(paths(light.document)).not.toContain("shadow.card");

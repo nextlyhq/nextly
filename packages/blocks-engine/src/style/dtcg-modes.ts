@@ -22,16 +22,12 @@ import type { ValidationIssue } from "../validation";
 import { parseColor } from "./contrast";
 import {
   dtcgToTokens,
+  exportNamingRefusal,
   readFamilyList,
   tokensToDtcg,
   type DtcgNode,
 } from "./dtcg";
-import {
-  tokenNamingProblem,
-  type SiteToken,
-  type SiteTokenSet,
-  type TokenMode,
-} from "./site-tokens";
+import type { SiteToken, SiteTokenSet, TokenMode } from "./site-tokens";
 
 /** The Resolver format version a theme file declares. */
 export const RESOLVER_VERSION = "2025.10";
@@ -367,12 +363,12 @@ export function tokensToFigma(
   for (const token of set.tokens) {
     // The same naming verdict the DTCG export applies: a name the engine
     // refuses is a key no file should carry.
-    if (tokenNamingProblem(token) !== undefined) {
-      issues.push(
-        issue(
-          `"${String(token.name)}" is not a usable variable name, so it was left out of the Figma files.`
-        )
-      );
+    const naming = exportNamingRefusal(
+      token,
+      "it was left out of the Figma files"
+    );
+    if (naming !== undefined) {
+      issues.push(issue(naming));
       continue;
     }
     const pair = figmaPair(token);
