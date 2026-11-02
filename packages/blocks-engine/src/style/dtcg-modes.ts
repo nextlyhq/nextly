@@ -233,6 +233,18 @@ export function modeFilesToTokens(files: readonly ModeFile[]): {
   tokens: SiteToken[];
   issues: ValidationIssue[];
 } {
+  // Two modes, so two files at most. Reading two of a larger choice would
+  // drop the rest without a word.
+  if (files.length > 2) {
+    return {
+      tokens: [],
+      issues: [
+        issue(
+          `${String(files.length)} files were chosen. Choose one file, or two: one for light and one for dark, with a theme file if there is one.`
+        ),
+      ],
+    };
+  }
   const named = (word: RegExp) => files.find(file => word.test(file.name));
   const dark = named(/dark/i) ?? (named(/light/i) ? undefined : files[1]);
   const light =
@@ -369,7 +381,13 @@ function figmaDimension(text: string): FigmaValue {
 
 /** The first family of a list, since Figma takes a single family. */
 function figmaFamily(text: string): FigmaValue {
-  const first = readFamilyList(text).parts[0]?.part.name;
+  // Only a list of family names: one reading another property, or a bare
+  // keyword, has no name Figma could hold.
+  const reading = readFamilyList(text);
+  if (reading.kind !== "families") {
+    return { refused: "is not a list of font names Figma can read." };
+  }
+  const first = reading.parts[0]?.part.name;
   return first === undefined || first === ""
     ? { refused: "names no font family Figma can read." }
     : { type: "fontFamily", value: first };

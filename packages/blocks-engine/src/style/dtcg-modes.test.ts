@@ -123,6 +123,25 @@ describe("the For Figma export, one file per mode", () => {
     expect(doc.space?.["4"]?.$value).toEqual({ value: 16, unit: "px" });
   });
 
+  it("leaves out a family list that reads another property, saying so", () => {
+    // `var(--brand-font)` is not a family name, so writing it as one would
+    // hand Figma a font that does not exist.
+    const made = tokensToFigma(
+      {
+        tokens: [
+          {
+            name: "font.brand",
+            kind: "fontFamily",
+            values: { light: "var(--brand-font), sans-serif" },
+          },
+        ],
+      },
+      "light"
+    );
+    expect(made.document).toEqual({});
+    expect(made.issues.map(i => i.message).join(" ")).toMatch(/font\.brand/);
+  });
+
   it("leaves out what Figma cannot hold, from both files, and says so", () => {
     const light = tokensToFigma(SET, "light");
     expect(paths(light.document)).not.toContain("shadow.card");
@@ -200,6 +219,18 @@ describe("an import of Figma's own export", () => {
     ]);
     expect(issues.map(i => i.message).join(" ")).toMatch(
       /"accent" is a color in the light file and a dimension in the dark file/
+    );
+  });
+
+  it("refuses more than two mode files rather than reading two of them", () => {
+    const { tokens, issues } = modeFilesToTokens([
+      { name: "Light.tokens.json", document: read("Light") },
+      { name: "Dark.tokens.json", document: read("Dark") },
+      { name: "Contrast.tokens.json", document: read("Light") },
+    ]);
+    expect(tokens).toEqual([]);
+    expect(issues.map(i => i.message).join(" ")).toMatch(
+      /3 files.*one for light and one for dark/
     );
   });
 
