@@ -3,9 +3,10 @@
  * that was saved while they waited.
  *
  * The Single counterpart of `entry-lock-fresh-copy`: B opens the playground's
- * homepage while A holds it, A saves its title, and when B gains it, by A
- * leaving or by B taking it over, B's form shows A's title before it lets B
- * type. B's read of the Single after the gain is held until the test lets it
+ * site settings while A holds them, A saves the tagline, and when B gains the
+ * Single, by A leaving or by B taking it over, B's form shows A's tagline
+ * before it lets B type. (A Single's title is set by its config and never
+ * editable, so a plain field of its own carries the value.) B's read of the Single after the gain is held until the test lets it
  * go, so the form is seen read-only while the latest version is on its way.
  *
  * @module tests/single-lock-fresh-copy
@@ -28,9 +29,9 @@ import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ lock: [LOCK.homepage, LOCK.usersRoles] });
+test.describe.configure({ lock: [LOCK.siteSettings, LOCK.usersRoles] });
 
-const HOMEPAGE_API = "/admin/api/singles/homepage";
+const SINGLE_API = "/admin/api/singles/site-settings";
 
 /**
  * A second super-admin in a context of its own, so the two pages are two lock
@@ -51,17 +52,17 @@ async function secondEditor(
   return { context, page: await context.newPage() };
 }
 
-function title(page: Page) {
-  return page.getByRole("textbox", { name: "Title", exact: true });
+function tagline(page: Page) {
+  return page.getByRole("textbox", { name: "Tagline", exact: true });
 }
 
 /**
- * Hold the page's reads of the homepage document until the returned release
+ * Hold the page's reads of the Single's document until the returned release
  * is called, and say when the first one is asked for. Its schema and other
  * sub-resources carry more path after the slug.
  */
-async function holdHomepageReads(page: Page) {
-  const read = new RegExp(`${HOMEPAGE_API}(?:\\?|$)`);
+async function holdSingleReads(page: Page) {
+  const read = new RegExp(`${SINGLE_API}(?:\\?|$)`);
   let release: () => void = () => {};
   const released = new Promise<void>(resolve => {
     release = resolve;
@@ -86,9 +87,9 @@ test.describe(
 
     let before = "";
     test.beforeEach(async ({ page }) => {
-      before = `Homepage before ${uniqueTag()}`;
-      const stored = await page.request.patch(HOMEPAGE_API, {
-        data: { title: before },
+      before = `Tagline before ${uniqueTag()}`;
+      const stored = await page.request.patch(SINGLE_API, {
+        data: { tagline: before },
       });
       expect(stored.ok(), await stored.text()).toBe(true);
     });
@@ -101,29 +102,29 @@ test.describe(
 
       test(name, async ({ page, browser, baseURL }) => {
         const saved = `Saved by A ${uniqueTag()}`;
-        await gotoAdmin(page, "/singles/homepage");
-        await expect(title(page)).toBeEditable({ timeout: 30_000 });
+        await gotoAdmin(page, "/singles/site-settings");
+        await expect(tagline(page)).toBeEditable({ timeout: 30_000 });
 
         const other = await secondEditor(browser, page, baseURL);
         try {
-          await gotoAdmin(other.page, "/singles/homepage");
+          await gotoAdmin(other.page, "/singles/site-settings");
           await expect(
             other.page.getByText(/is editing this document/)
           ).toBeVisible({ timeout: 30_000 });
-          await expect(title(other.page)).toHaveValue(before);
-          await expect(title(other.page)).not.toBeEditable();
+          await expect(tagline(other.page)).toHaveValue(before);
+          await expect(tagline(other.page)).not.toBeEditable();
 
-          await title(page).fill(saved);
+          await tagline(page).fill(saved);
           const stored = page.waitForResponse(
             response =>
-              response.url().includes(HOMEPAGE_API) &&
+              response.url().includes(SINGLE_API) &&
               response.request().method() === "PATCH",
             { timeout: 30_000 }
           );
           await page.getByRole("button", { name: /save draft/i }).click();
           expect((await stored).ok(), "A's save must be stored").toBe(true);
 
-          const reads = await holdHomepageReads(other.page);
+          const reads = await holdSingleReads(other.page);
           if (way === "leaves") {
             // Leaving inside the admin, which releases the claim as the
             // editor unmounts.
@@ -140,13 +141,13 @@ test.describe(
           await expect(
             other.page.getByText(/Loading the latest version/)
           ).toBeVisible();
-          await expect(title(other.page)).not.toBeEditable();
+          await expect(tagline(other.page)).not.toBeEditable();
 
           reads.release();
-          await expect(title(other.page)).toHaveValue(saved, {
+          await expect(tagline(other.page)).toHaveValue(saved, {
             timeout: 30_000,
           });
-          await expect(title(other.page)).toBeEditable();
+          await expect(tagline(other.page)).toBeEditable();
         } finally {
           await other.context.close();
         }
