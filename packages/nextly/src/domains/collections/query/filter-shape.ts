@@ -601,7 +601,7 @@ export function sortsById(keys: readonly SortKey[]): boolean {
 /**
  * Refuse an offset that names no position, or one given together with a page.
  *
- * An offset is a whole number from zero. A page and an offset each say where
+ * An offset is a whole number from zero, within the safe integer range. A page and an offset each say where
  * the read starts, and two answers to one question have no right one to pick.
  */
 export function assertReadOffset(
@@ -609,7 +609,9 @@ export function assertReadOffset(
   page: number | undefined
 ): void {
   if (offset === undefined) return;
-  if (!Number.isInteger(offset) || offset < 0) {
+  // A safe integer: beyond 2^53 a number is no longer a row position, and
+  // the database would refuse it as an error rather than a refusal.
+  if (!Number.isSafeInteger(offset) || offset < 0) {
     throw NextlyError.invalidInput({
       message: "offset must be a whole number from 0.",
       logContext: { reason: "read-offset-not-whole", offset },

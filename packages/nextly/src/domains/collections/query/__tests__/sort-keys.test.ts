@@ -103,7 +103,7 @@ describe("assertReadOffset", () => {
     expect(() => assertReadOffset(7, undefined)).not.toThrow();
   });
 
-  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 1e20])(
     "refuses %s",
     value => {
       expect(() => assertReadOffset(value, undefined)).toThrow(/offset/);
