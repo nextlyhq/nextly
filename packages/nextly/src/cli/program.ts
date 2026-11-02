@@ -12,6 +12,7 @@
 import { Command, Option } from "commander";
 import pc from "picocolors";
 
+import { setNonInteractive } from "../domains/schema/migrate/can-prompt";
 import { getCoreVersion } from "../plugins/core-version";
 
 import { registerAddCommand } from "./commands/add.command";
@@ -120,6 +121,14 @@ export function createProgram(options: ProgramOptions = {}): Command {
         "Mode to run in, which picks the environment files (default: from NODE_ENV)"
       ).choices(CLI_MODES)
     )
+    // Every prompt asks `canPrompt`, which this turns off: a command that
+    // needs an answer then stops and names the flag that gives it.
+    .addOption(
+      new Option(
+        "--non-interactive",
+        "Never prompt; a command that needs an answer stops and names the flag"
+      ).default(false)
+    )
     .addOption(new Option("--no-color", "Disable colored output"))
     .configureHelp({
       sortSubcommands: true,
@@ -155,6 +164,10 @@ ${pc.bold("Documentation:")}
     // First, before anything a command loads: only an action reaches this
     // hook, so `--help`, `--version` and an unknown command never run it.
     await options.beforeAction?.(thisCommand);
+    // The run's `--non-interactive`, for every prompt the command may reach.
+    setNonInteractive(
+      thisCommand.opts<{ nonInteractive?: boolean }>().nonInteractive === true
+    );
     // The mode line goes to stderr, so a command's `--json` output stays one
     // document, and `--quiet` keeps it to errors only.
     setModeLineWriter(
