@@ -32,7 +32,11 @@
  *
  * @module drag-refusal
  */
-import { placementRefusalWording } from "@nextlyhq/blocks-engine";
+import {
+  placementRefusalWording,
+  type NestingRefusal,
+  type PlacementRefused,
+} from "@nextlyhq/blocks-engine";
 
 import type { DropRefusal } from "./drop-targets";
 import { blockLabel } from "./inserter";
@@ -47,7 +51,10 @@ import { blockLabel } from "./inserter";
  * has a position and no pointer — reuse these sentences instead of inventing a
  * second vocabulary, without fabricating a region id to satisfy a type.
  */
-export type RefusalFacts = Pick<DropRefusal, "reason" | "permitted">;
+export type RefusalFacts = Pick<
+  DropRefusal,
+  "reason" | "permitted" | "verdict"
+>;
 
 /** The two lines a refusal draws. */
 export interface RefusalWording {
@@ -84,10 +91,14 @@ export function refusalWording(
   movingType: string,
   regionType: string | undefined
 ): RefusalWording {
+  // The rule's whole answer, when the drop was judged by it.
+  if (refusal.verdict !== undefined) {
+    return placementWording(refusal.verdict, movingType, regionType);
+  }
   return placementRefusalWording(
     {
       allowed: false,
-      reason: refusal.reason,
+      reason: refusal.reason as NestingRefusal,
       blockType: movingType,
       permitted: refusal.permitted,
     },
@@ -96,4 +107,22 @@ export function refusalWording(
       ...(regionType === undefined ? {} : { regionType }),
     }
   );
+}
+
+/**
+ * Why a placement the one rule refused will not happen, for any reason it
+ * gives: a slot the container does not declare, a block that holds none, or
+ * HTML's content model, as well as the name rules. Named for the block the
+ * author moved; when the rule refused something inside it, both are named.
+ */
+export function placementWording(
+  verdict: PlacementRefused,
+  movingType: string,
+  regionType: string | undefined
+): RefusalWording {
+  return placementRefusalWording(verdict, {
+    labelOf: blockLabel,
+    movingType,
+    ...(regionType === undefined ? {} : { regionType }),
+  });
 }
