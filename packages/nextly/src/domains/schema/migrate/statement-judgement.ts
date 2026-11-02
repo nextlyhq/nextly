@@ -24,7 +24,8 @@
  * - `mixed`: some claims hold and some do not.
  * - `no_table`: a claim about part of a table the database does not have.
  *
- * Statements are read through the splitter's tokenizer (`statementTokens`),
+ * Statements are read through the shared statement cursor (`cursorOf`, over
+ * the splitter's tokenizer `statementTokens`),
  * the one reading of a statement's words, and labelled through the shared
  * scanner (`scanSql`), so a label never carries text from a string literal.
  *
@@ -39,8 +40,8 @@ import {
   introspectTableNames,
 } from "../pipeline/diff/introspect-live";
 
-import { statementTokens, type QuotedToken } from "./split-sql";
 import { scanSql } from "./sql-scan";
+import { cursorOf, StatementCursor } from "./statement-cursor";
 
 export type StatementVerdict = "done" | "not_done" | "unknown";
 
@@ -118,8 +119,6 @@ type Reading =
   | { kind: "rows"; touches?: string; anything?: true }
   | { kind: "unread"; touches?: string; anything?: true };
 
-type Token = string | QuotedToken;
-
 const ROWS: Reading = { kind: "rows" };
 /** A statement not read, whose reach is not known either. */
 const UNREAD: Reading = { kind: "unread", anything: true };
@@ -192,98 +191,11 @@ const NON_COLUMN_WORDS = new Set([
 /** What a named constraint can be, as the word after its name says. */
 const CONSTRAINT_KINDS = new Set(["UNIQUE", "FOREIGN", "CHECK", "PRIMARY"]);
 
-/** An unquoted name: a word with no qualifier and no `@` prefix. */
-const BARE_NAME = /^[A-Z_][A-Z0-9_$]*$/;
-
-/**
- * A reading position over a statement's tokens. `conditional` records that
- * an `IF [NOT] EXISTS` was read anywhere in the statement.
- */
-class Cursor {
-  at = 0;
-  conditional = false;
-
-  constructor(private readonly tokens: readonly Token[]) {}
-
-  peek(offset = 0): Token | undefined {
-    return this.tokens[this.at + offset];
-  }
-
-  done(): boolean {
-    return this.at >= this.tokens.length;
-  }
-
-  /** Whether the next token is this keyword (an unquoted word). */
-  isWord(word: string, offset = 0): boolean {
-    return this.peek(offset) === word;
-  }
-
-  /** Consumes `words` when they are the next tokens, in order. */
-  accept(...words: string[]): boolean {
-    if (!words.every((word, i) => this.isWord(word, i))) return false;
-    this.at += words.length;
-    return true;
-  }
-
-  /** Consumes `IF EXISTS` or `IF NOT EXISTS` when next, and notes it. */
-  acceptCondition(): void {
-    if (this.accept("IF", "EXISTS") || this.accept("IF", "NOT", "EXISTS")) {
-      this.conditional = true;
-    }
-  }
-
-  /**
-   * Consumes one unqualified name and returns it lower-cased, or undefined
-   * when the next token is not a name or the name is schema-qualified
-   * (`s.t`, `"s"."t"`): which schema an unqualified read reaches is not
-   * something this reading decides. A string is never a name.
-   */
-  name(): string | undefined {
-    const token = this.peek();
-    let name: string | undefined;
-    if (typeof token === "string") {
-      if (!BARE_NAME.test(token)) return undefined;
-      name = token.toLowerCase();
-    } else if (
-      token !== undefined &&
-      token.name !== undefined &&
-      token.escaped !== true
-    ) {
-      name = token.name.toLowerCase();
-    }
-    if (name === undefined) return undefined;
-    this.at += 1;
-    if (this.isWord(".")) return undefined;
-    return name;
-  }
-
-  /** The tokens from here to the end, consumed. */
-  rest(): Token[] {
-    const tokens = this.tokens.slice(this.at);
-    this.at = this.tokens.length;
-    return tokens;
-  }
-
-  /** The tokens from here to the end, split at commas outside parentheses. */
-  clauses(): Token[][] {
-    const clauses: Token[][] = [[]];
-    let depth = 0;
-    for (const token of this.tokens.slice(this.at)) {
-      if (token === "(") depth += 1;
-      if (token === ")") depth -= 1;
-      if (token === "," && depth === 0) {
-        clauses.push([]);
-        continue;
-      }
-      clauses[clauses.length - 1].push(token);
-    }
-    this.at = this.tokens.length;
-    return clauses;
-  }
-}
-
 /** A schema reading, or unread when the statement makes no claim at all. */
-function schemaReading(claims: Claim[] | undefined, cursor: Cursor): Reading {
+function schemaReading(
+  claims: Claim[] | undefined,
+  cursor: StatementCursor
+): Reading {
   if (claims === undefined || claims.length === 0) return UNREAD;
   return { kind: "schema", claims, conditional: cursor.conditional };
 }
@@ -295,9 +207,7 @@ const table = (name: string): LiveObject => ({ kind: "table", table: name });
  * a caller left one on, is not part of its shape.
  */
 function readStatement(statement: string, dialect: SupportedDialect): Reading {
-  const tokens = statementTokens(statement, dialect);
-  while (tokens.length > 0 && tokens[tokens.length - 1] === ";") tokens.pop();
-  const cursor = new Cursor(tokens);
+  const cursor = cursorOf(statement, dialect);
   const first = cursor.peek();
   if (typeof first !== "string") return UNREAD;
   if (CODE_WORDS.has(first)) return { kind: "rows", anything: true };
@@ -329,7 +239,7 @@ function readStatement(statement: string, dialect: SupportedDialect): Reading {
  * query (`AS`, or MySQL's `SELECT` after the column list) also writes rows;
  * any other form (`LIKE`, `OF`, `PARTITION OF`) is unread.
  */
-function readCreateTable(cursor: Cursor): Reading {
+function readCreateTable(cursor: StatementCursor): Reading {
   cursor.acceptCondition();
   const name = cursor.name();
   if (name === undefined) return UNREAD;
@@ -359,7 +269,7 @@ function readCreateTable(cursor: Cursor): Reading {
  * index n on t present. A nameless index has no name to look for.
  */
 function readCreateIndex(
-  cursor: Cursor,
+  cursor: StatementCursor,
   dialect: SupportedDialect
 ): Claim[] | undefined {
   if (dialect === "postgresql") cursor.accept("CONCURRENTLY");
@@ -380,7 +290,7 @@ function readCreateIndex(
 }
 
 /** `DROP TABLE [IF EXISTS] a[, b...] [CASCADE|RESTRICT]`: each absent. */
-function readDropTables(cursor: Cursor): Claim[] | undefined {
+function readDropTables(cursor: StatementCursor): Claim[] | undefined {
   cursor.acceptCondition();
   const claims: Claim[] = [];
   do {
@@ -397,7 +307,7 @@ function readDropTables(cursor: Cursor): Claim[] | undefined {
  * index n absent, on t when the statement names it (MySQL always does).
  */
 function readDropIndex(
-  cursor: Cursor,
+  cursor: StatementCursor,
   dialect: SupportedDialect
 ): Claim[] | undefined {
   if (dialect === "postgresql") cursor.accept("CONCURRENTLY");
@@ -419,7 +329,7 @@ function readDropIndex(
 }
 
 /** MySQL's `RENAME TABLE a TO b[, c TO d]`: each old name absent, new present. */
-function readRenameTables(cursor: Cursor): Claim[] | undefined {
+function readRenameTables(cursor: StatementCursor): Claim[] | undefined {
   const claims: Claim[] = [];
   do {
     const from = cursor.name();
@@ -441,7 +351,10 @@ function readRenameTables(cursor: Cursor): Claim[] | undefined {
  * this reading does not model makes the whole statement unread, since its
  * effect on the schema is then unknown.
  */
-function readAlterTable(cursor: Cursor, dialect: SupportedDialect): Reading {
+function readAlterTable(
+  cursor: StatementCursor,
+  dialect: SupportedDialect
+): Reading {
   cursor.acceptCondition();
   if (dialect === "postgresql") cursor.accept("ONLY");
   const name = cursor.name();
@@ -449,7 +362,7 @@ function readAlterTable(cursor: Cursor, dialect: SupportedDialect): Reading {
   const clauses = cursor.clauses();
   const claims: Claim[] = [];
   for (const tokens of clauses) {
-    const clause = new Cursor(tokens);
+    const clause = new StatementCursor(tokens);
     const read = readAlterClause(clause, name, dialect, clauses.length);
     // SQLite has no ALTER TABLE ADD or DROP CONSTRAINT and records no
     // constraint names to read, so such a clause there is unread rather than
@@ -468,7 +381,7 @@ function readAlterTable(cursor: Cursor, dialect: SupportedDialect): Reading {
 
 /** One clause of an `ALTER TABLE` on `on`, or undefined when unmodelled. */
 function readAlterClause(
-  clause: Cursor,
+  clause: StatementCursor,
   on: string,
   dialect: SupportedDialect,
   clauseCount: number
@@ -511,7 +424,7 @@ function renamed(from: LiveObject, to: LiveObject): Claim[] {
  * constraint, are unread.
  */
 function readAddClause(
-  clause: Cursor,
+  clause: StatementCursor,
   on: string,
   dialect: SupportedDialect
 ): Claim[] | undefined {
@@ -562,7 +475,7 @@ function readAddClause(
  * optionally followed by `CASCADE` or `RESTRICT` and nothing else.
  */
 function readDropClause(
-  clause: Cursor,
+  clause: StatementCursor,
   on: string,
   dialect: SupportedDialect
 ): Claim[] | undefined {
@@ -603,7 +516,7 @@ function readDropClause(
  * `RENAME u` as the table), and MySQL's `RENAME INDEX|KEY a TO b`.
  */
 function readRenameClause(
-  clause: Cursor,
+  clause: StatementCursor,
   on: string,
   dialect: SupportedDialect,
   clauseCount: number
