@@ -39,6 +39,7 @@ import {
 import * as React from "react";
 import { flushSync } from "react-dom";
 
+import { deepActiveElement } from "./dom-kind";
 import { useModalKeyboardHold } from "./modal-keyboard-hold";
 import { useShellIsActive } from "./shell-active";
 
@@ -276,8 +277,11 @@ function PaletteSurface({
     // palette's OWN search input — and by the final close that element is gone, so there is
     // nothing to restore and focus lands on `<body>`. A completed close clears this, so an
     // ordinary second opening still records a fresh origin.
+    //
+    // Read through any focused frame, so an origin inside the canvas frame is the control itself
+    // rather than the iframe, whose inner focus the browser restores as it chooses.
     if (openedFrom.current === null)
-      openedFrom.current = document.activeElement;
+      openedFrom.current = deepActiveElement(document);
   }, [open]);
 
   // Radix fires this when it is actually returning focus, which is AFTER the exit animation. A
@@ -295,6 +299,8 @@ function PaletteSurface({
     const refocus = (target as Partial<HTMLOrSVGElement>).focus;
     if (typeof refocus !== "function") return;
     // Only once nothing else has claimed focus — a command that moved it deliberately wins.
+    // This document's own reading: focus a command put inside a frame shows here as the iframe,
+    // which is not `<body>`, so the command still wins.
     const active = document.activeElement;
     if (active && active !== document.body && active.isConnected) return;
     event.preventDefault();

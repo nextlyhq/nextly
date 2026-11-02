@@ -35,6 +35,8 @@
  * @module canvas-escape
  */
 
+import { deepActiveElement, isInput, isTextArea } from "./dom-kind";
+
 /** The priority that puts the editor's claim above a host page's bindings. */
 export const CANVAS_ESCAPE_PRIORITY = 1;
 
@@ -67,7 +69,9 @@ export function modalIsOpen(root: Document | undefined): boolean {
  */
 export function isTextEntry(element: Element | null): boolean {
   if (element === null) return false;
-  if (element instanceof HTMLTextAreaElement) return true;
+  // By tag rather than by `instanceof`: a field inside a canvas mounted in an
+  // iframe was built by that window, whose constructors are not this one's.
+  if (isTextArea(element)) return true;
   /*
    * `closest`, not `isContentEditable`.
    *
@@ -80,7 +84,7 @@ export function isTextEntry(element: Element | null): boolean {
   if (element.closest('[contenteditable=""], [contenteditable="true"]')) {
     return true;
   }
-  if (!(element instanceof HTMLInputElement)) return false;
+  if (!isInput(element)) return false;
   // Buttons, checkboxes and radios are inputs that nobody types into, and
   // Escape over one of those is an ordinary "clear the selection".
   return !NON_TEXT_INPUT_TYPES.has(element.type);
@@ -117,7 +121,12 @@ export type EscapeOutcome = "defer-to-modal" | "leave-to-field" | "deselect";
  */
 export function escapeOutcome(root: Document | undefined): EscapeOutcome {
   if (modalIsOpen(root)) return "defer-to-modal";
-  if (isTextEntry(root?.activeElement ?? null)) return "leave-to-field";
+  // Through any focused frame: from the host, focus inside the canvas frame is
+  // the iframe itself, which is no field, and Escape would deselect under an
+  // author who is typing.
+  if (isTextEntry(root === undefined ? null : deepActiveElement(root))) {
+    return "leave-to-field";
+  }
   // Deselecting with nothing selected is a no-op that still consumes the key —
   // which is the whole point. An editor that let Escape through once the canvas
   // happened to have no selection would lose the author's work in exactly the
