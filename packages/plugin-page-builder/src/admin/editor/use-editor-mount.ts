@@ -275,10 +275,6 @@ export function useEditorMount(
     const problem = inlineEditProblem(outcome);
     if (problem !== null) toast.error(problem);
   }, []);
-  // Where the inspector's rich-text fields hold an open passage: lent to the
-  // inline editing below, whose commit finishes them before a save, and to
-  // the inspector. One per mounted editor.
-  const [passages] = useState(createOpenPassages);
   /*
    * A double-click on text a component does not expose selects the placement
    * (the hook does that) and says whose the text is, with the variant, so the
@@ -298,13 +294,7 @@ export function useEditorMount(
     },
     [editor.document, componentLibrary]
   );
-  const inline = useInlineEditing(
-    editor,
-    loadInlineRichTextEditor,
-    announce,
-    partOf,
-    passages
-  );
+  const { inline, passages } = useInlineWithPassages(editor, announce, partOf);
 
   // Whether the save-as-pattern form is up. A boolean here rather than the form
   // itself, because the verb that raises it belongs to the shared chain — the
@@ -370,4 +360,25 @@ function placementSentence(refusal: LocatedPlacementBreak): string {
   return placementRefusalMessage(refusal.verdict, {
     labelOf: type => blockLabelFrom(type, getBlock(type)),
   });
+}
+
+/**
+ * The canvas's inline editing, with the registry the inspector's rich-text
+ * fields hold an open passage in: lent to the inline editing, whose commit
+ * finishes them before a save, and to the inspector. One per mounted editor.
+ */
+function useInlineWithPassages(
+  editor: EditorState,
+  announce: (outcome: InlineEditOutcome) => void,
+  partOf: (placementId: string) => void
+): { inline: UseInlineEditingResult; passages: OpenPassages } {
+  const [passages] = useState(createOpenPassages);
+  const inline = useInlineEditing(
+    editor,
+    loadInlineRichTextEditor,
+    announce,
+    partOf,
+    passages
+  );
+  return { inline, passages };
 }
