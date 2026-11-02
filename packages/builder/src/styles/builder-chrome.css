@@ -3701,6 +3701,8 @@
 .nx-lock-repair__steps {
   margin: 0;
   padding-inline-start: 1.25rem;
+  /* Numbered, because the steps are applied in the order shown. */
+  list-style: decimal;
   font-size: var(--text-xs);
   line-height: 1.5;
 }

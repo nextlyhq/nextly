@@ -1,7 +1,11 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
 import { BuilderLocksHarness } from "./harness";
+
+/** A title of its own, so the page is named in a tab and to assistive tech. */
+export const metadata: Metadata = { title: "Builder locks harness" };
 
 /**
  * A harness route for the editor inside locked areas.

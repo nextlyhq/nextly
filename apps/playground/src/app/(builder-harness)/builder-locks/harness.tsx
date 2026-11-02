@@ -94,8 +94,10 @@ export function BuilderLocksHarness({ seed }: { seed: "placed" | "broken" }) {
   );
   const drag = useCanvasDrag({ editor, ...sources });
 
+  // A <main>, as the admin draws its screens, so the page's one landmark is
+  // the editor and the visual check can find it.
   return (
-    <div
+    <main
       data-testid="locks-harness"
       data-nx-undo-depth={editor.undoDepth}
       data-nx-tree={JSON.stringify(treeOf(editor.document.nodes))}
@@ -141,6 +143,6 @@ export function BuilderLocksHarness({ seed }: { seed: "placed" | "broken" }) {
           />
         </BlockKeyboardActions>
       </BuilderShell>
-    </div>
+    </main>
   );
 }
