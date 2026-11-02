@@ -214,7 +214,11 @@ export function useVariablesTransfer({
           type="file"
           multiple
           className="nx-sr-only"
+          // Opened only from the menu's "Import variables…", so it is kept
+          // out of the tab order and out of the accessibility tree: one way
+          // to import, not a second bare file control beside the menu.
           tabIndex={-1}
+          aria-hidden="true"
           aria-label="Choose variable files to import"
           accept=".json,.tokens,.tokens.json,application/json"
           onChange={event => {

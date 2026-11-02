@@ -480,6 +480,14 @@ function Group({
         <h3 className="nx-vars__group-name" id={id}>
           {heading}
         </h3>
+        {/* The two small swatches on a colour row are its light and dark
+            values; this names those columns for sight. Each row's accessible
+            name already says which value is which, so it is not read. */}
+        {group === "colours" ? (
+          <span className="nx-vars__group-hint" aria-hidden="true">
+            Light / Dark
+          </span>
+        ) : null}
         {/* An empty type scale offers its add in the line below instead. */}
         {readOnly || (group === "type" && entries.length === 0) ? null : (
           <AddButton adds={adds} onAdd={onAdd} />

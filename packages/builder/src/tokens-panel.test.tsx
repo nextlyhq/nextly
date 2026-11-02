@@ -88,6 +88,19 @@ describe("the rows", () => {
     ]);
   });
 
+  it("labels the colour columns beside the Colours heading, for sight only", () => {
+    render(<Hosted tokens={SITE} />);
+    const colours = screen.getByRole("region", { name: "Colours" });
+    const hint = colours.querySelector(".nx-vars__group-hint");
+    expect(hint?.textContent).toBe("Light / Dark");
+    // The rows already say each value's mode, so the hint is not read twice.
+    expect(hint?.getAttribute("aria-hidden")).toBe("true");
+    const spacing = screen.getByRole("region", {
+      name: "Spacing, radius & shadows",
+    });
+    expect(spacing.querySelector(".nx-vars__group-hint")).toBeNull();
+  });
+
   it("names a row in plain words and says its values, with no usage count", () => {
     render(<Hosted tokens={SITE} />);
     const brand = row(/^Brand/);
@@ -374,6 +387,10 @@ describe("import and export", () => {
       value: () => Promise.resolve(contents),
     });
     const input = screen.getByLabelText("Choose variable files to import");
+    // Reached only through the menu's "Import variables…": a reader browsing
+    // the panel meets one way to import, not a second bare file control.
+    expect(input.getAttribute("aria-hidden")).toBe("true");
+    expect(input.tabIndex).toBe(-1);
     await act(async () => {
       fireEvent.change(input, { target: { files: [file] } });
     });
