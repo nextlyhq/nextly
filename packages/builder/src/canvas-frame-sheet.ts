@@ -43,6 +43,13 @@ html, body { margin: 0; padding: 0; }
    the page is the browser's default canvas. */
 html { color-scheme: light; background-color: Canvas; }
 
+/* The page fills the frame's viewport, so the end of a short page still has
+   pixels to drop a block on. Grown as a flex item of the body rather than
+   given a minimum height of its own: with a minimum height on the canvas root,
+   Chromium's End and Home keys stop moving the caret in text being edited
+   below the first block. */
+body { min-height: 100vh; display: flex; flex-direction: column; }
+
 /* The page's own surface, in the SITE's colours and type. The frame is a
    document of its own, so nothing of the admin's theme is inherited here; what
    the canvas does not name falls back to the browser's defaults, which is what
@@ -50,9 +57,8 @@ html { color-scheme: light; background-color: Canvas; }
 ${ROOT} {
   position: relative;
   box-sizing: border-box;
-  /* Fills the frame's viewport, so the end of a short page still has pixels to
-     drop a block on. */
-  min-height: 100vh;
+  /* Fills the viewport: see the body above. */
+  flex: 1 0 auto;
   /* The site's background, text and body font, which the canvas root names
      under the site's token prefix (see \`canvas.tsx\`); they follow the site's
      dark values by themselves. */

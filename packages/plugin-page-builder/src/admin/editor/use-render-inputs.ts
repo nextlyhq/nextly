@@ -1,7 +1,7 @@
 /**
  * What the canvas draws with, and the readings the inspector and the spacing
  * handles take from the same inputs: the site's style, the render context,
- * the box's width and zoom, the interaction state shown, and the cascade.
+ * the frame's width and zoom, the interaction state shown, and the cascade.
  *
  * Every reading here is derived from one context the canvas is compiled
  * under, never assembled a second time beside it.
@@ -628,7 +628,7 @@ function useStyleReadings({
    *
    * Every field is read back from the SAME context the canvas sheet was
    * compiled under, never derived again here. A preview compiled against a
-   * different breakpoint set, container name, token prefix or scope than the
+   * different breakpoint set, token prefix or scope than the
    * rule it has to outrank simply does not match — the drag looks frozen and
    * the value jumps into place on release, which reads as the handle being
    * broken rather than as the two answers having diverged.

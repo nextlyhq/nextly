@@ -407,23 +407,13 @@ function editorInspector(
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
-      // Which tier the Style tab writes to, and which tiers it may call
-      // live. Both are the canvas's answer rather than the panel's: the
-      // queries are about the preview box, and `matchMedia` cannot
-      // evaluate a container query, so only the surface that owns the box
-      // can observe them. The container name travels with them because
-      // that is what tells the panel the window is not the authority.
+      // Which tier the Style tab writes to, and which tiers are live: the
+      // canvas's answer rather than the panel's, as the frame's width is
+      // what the page's media queries answer for.
       /*
-       * Going to a tier is SIZING THE CANVAS to it, never setting a
-       * second piece of state saying which tier is being edited. The
-       * edited tier is derived from the width the box gets, so a jump
-       * that wrote its own answer would put the two back in the
-       * disagreement deriving them from one width exists to remove.
-       *
-       * A tier the compiler emits no bound for resolves to `undefined`
-       * and releases the canvas to the region rather than pinning it to a
-       * number nothing responds to — which is also what the unconditional
-       * tier means.
+       * Going to a tier is CHOOSING ITS DEVICE, never setting a second
+       * piece of state saying which tier is being edited, so the device the
+       * frame shows and the tier edits go to cannot disagree.
        */
       // Already a TIER, so it is stored directly rather than converted
       // to a width and back.
