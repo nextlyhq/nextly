@@ -18,6 +18,7 @@ import {
   openEditorWith,
   openLayers,
 } from "./canvas/editor-driver";
+import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -35,6 +36,7 @@ const NODES = [
 ];
 
 const BLUE = "rgb(17, 85, 204)";
+const ENTRIES = "/admin/api/collections/pages/entries";
 
 /** The device buttons, by their group's name. */
 function devices(page: Page) {
@@ -46,16 +48,30 @@ function zoomTrigger(page: Page) {
   return page.getByRole("button", { name: /^Canvas zoom:/ });
 }
 
-/** Save the Single from the builder's top bar, and wait for the write. */
-async function save(page: Page): Promise<void> {
-  const saved = page.waitForResponse(
+/** The write of one entry, and not the other requests under its path. */
+function entryWrite(page: Page, id: string) {
+  return page.waitForResponse(
     response =>
-      response.url().includes("/singles/homepage") &&
-      ["PATCH", "PUT", "POST"].includes(response.request().method()) &&
+      new URL(response.url()).pathname.endsWith(`/entries/${id}`) &&
+      ["PATCH", "PUT"].includes(response.request().method()) &&
       response.ok()
   );
+}
+
+/**
+ * Save the builder's edits and publish them, from the top bar, as an author
+ * does: on a published page, Save keeps the edit as a draft and "Publish
+ * changes" puts it live.
+ */
+async function saveAndPublish(page: Page, id: string): Promise<void> {
+  const saved = entryWrite(page, id);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await saved;
+  const published = entryWrite(page, id);
+  await page
+    .getByRole("button", { name: "Publish changes", exact: true })
+    .click();
+  await published;
 }
 
 test.describe("the device being edited", () => {
@@ -63,10 +79,24 @@ test.describe("the device being edited", () => {
 
   test("styles Desktop with a panel open, and the published page shows it at desktop width", async ({
     page,
-    browser,
   }) => {
+    // Its own published page, served at /<slug>, so the check reads what a
+    // visitor gets rather than the editor's canvas.
+    const slug = `device-${Date.now()}`;
+    const created = await page.request.post(ENTRIES, {
+      data: {
+        title: "Device check",
+        slug,
+        content: { formatVersion: 1, kind: "page", nodes: NODES },
+        status: "published",
+      },
+    });
+    expect(created.ok(), `seeding the page: ${created.status()}`).toBe(true);
+    const id = ((await created.json()) as { item: { id: string } }).item.id;
+
     await page.setViewportSize({ width: 1280, height: 800 });
-    await openEditorWith(page, NODES, TEXT_ID);
+    await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+    await expect(await block(page, TEXT_ID)).toBeVisible({ timeout: 30_000 });
 
     // A fresh editor, so no device has been chosen: the author is on
     // Desktop. Nothing here touches the device buttons, so the only thing that
@@ -75,6 +105,11 @@ test.describe("the device being edited", () => {
 
     await clickBlock(page, TEXT_ID);
     await page.getByRole("tab", { name: "Style" }).click();
+    // The Color section starts closed for a text block; open it once.
+    const section = page.getByRole("button", { name: "Color", exact: true });
+    if ((await section.getAttribute("aria-expanded")) === "false") {
+      await section.click();
+    }
     const color = page
       .getByRole("region", { name: "Color" })
       .getByRole("textbox", { name: "Color", exact: true });
@@ -82,14 +117,14 @@ test.describe("the device being edited", () => {
     await color.press("Enter");
     await expect(await block(page, TEXT_ID)).toHaveCSS("color", BLUE);
 
-    await save(page);
+    await saveAndPublish(page, id);
 
-    // The published page, read by a visitor at a desktop width.
-    const visitor = await browser.newPage({
-      viewport: { width: 1440, height: 900 },
-    });
+    // The published page, at a desktop width.
+    const visitor = await page.context().newPage();
+    await visitor.setViewportSize({ width: 1440, height: 900 });
     try {
-      await visitor.goto("/");
+      const response = await visitor.goto(`/${slug}`);
+      expect(response?.status()).toBe(200);
       const text = visitor.getByText("Styled while a panel was open");
       await expect(text).toBeVisible({ timeout: 60_000 });
       await expect(text).toHaveCSS("color", BLUE);
@@ -146,8 +181,12 @@ test.describe("the zoom", () => {
     // Desktop is laid out at 1280 and fitted into a narrower region.
     const trigger = zoomTrigger(page);
     await expect(trigger).toHaveText(/^Fit · \d+%$/);
-    const fitted = Number((await trigger.textContent())?.match(/(\d+)%/)?.[1]);
-    expect(fitted).toBeLessThan(100);
+    // Under 100%: a 1280px Desktop is shrunk into the room the panels leave.
+    await expect
+      .poll(async () =>
+        Number((await trigger.textContent())?.match(/(\d+)%/)?.[1])
+      )
+      .toBeLessThan(100);
 
     await trigger.click();
     await page.getByRole("menuitemradio", { name: "100%" }).click();
@@ -156,7 +195,8 @@ test.describe("the zoom", () => {
 
     await trigger.click();
     await page.getByRole("menuitemradio", { name: "Fit" }).click();
-    await expect(trigger).toHaveText(`Fit · ${fitted}%`);
+    await expect(trigger).toHaveText(/^Fit · \d+%$/);
+    await expect(trigger).toHaveAccessibleName(/^Canvas zoom: fitting, \d+%$/);
   });
 
   test("goes to actual size on mod+0 and back to fitting on Shift+1", async ({
@@ -170,7 +210,12 @@ test.describe("the zoom", () => {
 
     // Pressed with nothing focused that types, as an author would on the canvas.
     await page.locator("body").click({ position: { x: 1, y: 1 } });
-    await page.keyboard.press("ControlOrMeta+0");
+    // The key the PAGE reads as mod: the suite's browser profile reports a
+    // Windows user agent, where mod is Control, whatever machine runs it.
+    const apple = await page.evaluate(() =>
+      /Mac|iPhone|iPad/.test(navigator.userAgent)
+    );
+    await page.keyboard.press(apple ? "Meta+0" : "Control+0");
     await expect(trigger).toHaveText("100%");
 
     await page.keyboard.press("Shift+1");
