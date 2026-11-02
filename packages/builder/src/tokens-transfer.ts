@@ -408,17 +408,23 @@ export function applyImport(
   into: SiteTokenSet,
   choices: ReadonlyMap<string, ConflictChoice>
 ): ImportResult {
-  const kept = new Set(
-    plan.conflicts
+  // Only what changes the site is applied and counted: a variable the file
+  // holds unchanged, or a conflict kept as the site has it, is no change, and
+  // merging it would spend a save and claim an arrival that did not happen.
+  const standing = new Set([
+    ...plan.unchanged.map(tokenIdentity),
+    ...plan.conflicts
       .filter(conflict => choices.get(conflict.identity) === "keep")
-      .map(conflict => conflict.identity)
+      .map(conflict => conflict.identity),
+  ]);
+  const taken = plan.incoming.filter(
+    token => !standing.has(tokenIdentity(token))
   );
-  const taken = plan.incoming.filter(token => !kept.has(tokenIdentity(token)));
   if (taken.length === 0) {
     return {
       ok: false,
       error:
-        "Every change was set to keep this site's own values, so nothing was changed.",
+        "Nothing in those files would change this site's variables, so nothing was changed.",
       skipped: plan.skipped,
     };
   }
