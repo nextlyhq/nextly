@@ -11,7 +11,7 @@
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { maskingServiceLogger } from "../../observability/mask-emails";
-import type { HookExemptRead } from "../lib/hook-exempt-read";
+import type { HookExemptRead } from "../../services/collections/trust-grant";
 
 /**
  * Type alias for Drizzle database instance.

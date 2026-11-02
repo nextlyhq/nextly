@@ -13,9 +13,8 @@ import type {
   GroupArgs,
 } from "../direct-api/types/collections";
 
-import type { OwnCollectionReadOpts } from "./own-collection-reads";
 import type { PluginContext } from "./plugin-context";
-import type { ServiceOpts } from "./service-opts";
+import type { OwnCollectionReadOpts, ServiceOpts } from "./service-opts";
 
 type Own = PluginContext["services"]["ownCollections"];
 

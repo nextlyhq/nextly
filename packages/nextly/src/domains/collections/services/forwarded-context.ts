@@ -24,7 +24,7 @@
  */
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
-import type { HookExemptRead } from "../../../shared/lib/hook-exempt-read";
+import type { HookExemptRead } from "../../../services/collections/trust-grant";
 import type { RequestContext } from "../../../shared/types";
 
 /** What the entry service receives about the call it is being asked to make. */

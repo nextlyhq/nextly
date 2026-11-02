@@ -89,10 +89,12 @@ import {
   type ReadExpansionCaches,
   type RelatedRowReadContext,
 } from "../../../services/collections/related-row-read-context";
-import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
+  type TrustBound,
   assumedBound,
   narrows,
+  readHooksWaived,
+  type HookExemptRead,
 } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
@@ -120,10 +122,6 @@ import {
   filterSearchableFields,
   refuseHiddenColumnFilter,
 } from "../../../shared/lib/filterable-fields";
-import {
-  readHooksWaived,
-  type HookExemptRead,
-} from "../../../shared/lib/hook-exempt-read";
 import {
   type FieldGroupReach,
   hiddenColumnMatcher,

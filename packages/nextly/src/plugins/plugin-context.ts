@@ -80,10 +80,6 @@ import type {
 } from "./hook-point-payloads";
 import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import { createPluginLimits } from "./limits/plugin-limits";
-import {
-  ownCollectionReads,
-  type PluginOwnCollectionReads,
-} from "./own-collection-reads";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
@@ -121,8 +117,10 @@ import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
 import {
   resolveServiceOpts,
+  ownCollectionReads,
   wrapCollectionsForPlugin,
   type PluginCollectionService,
+  type PluginOwnCollectionReads,
   type ServiceOpts,
 } from "./service-opts";
 import { buildPluginServicesNamespace } from "./services/plugin-services-registry";

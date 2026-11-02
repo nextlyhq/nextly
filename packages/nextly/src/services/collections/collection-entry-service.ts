@@ -63,7 +63,6 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
-import type { HookExemptRead } from "../../shared/lib/hook-exempt-read";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -72,7 +71,7 @@ import type { Logger } from "../shared";
 
 import type { CollectionRelationshipService } from "./collection-relationship-service";
 import type { WhereFilter } from "./query-operators";
-import type { TrustBound } from "./trust-grant";
+import type { HookExemptRead, TrustBound } from "./trust-grant";
 
 export {
   type CollectionServiceResult,

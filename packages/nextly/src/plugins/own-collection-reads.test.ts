@@ -9,12 +9,9 @@ import { describe, expect, it, vi } from "vitest";
 import { currentPrincipal, runAsPrincipal } from "../auth/principal-scope";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { RequestContext } from "../services/shared";
-import { readHooksWaived } from "../shared/lib/hook-exempt-read";
+import { readHooksWaived } from "../services/collections/trust-grant";
 
-import {
-  ownCollectionReads,
-  type OwnCollectionReadOpts,
-} from "./own-collection-reads";
+import { ownCollectionReads, type OwnCollectionReadOpts } from "./service-opts";
 import type { Principal } from "./principals/types";
 
 function standIn() {

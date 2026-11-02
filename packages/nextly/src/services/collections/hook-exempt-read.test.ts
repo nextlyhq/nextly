@@ -4,7 +4,7 @@ import {
   issueHookExemptRead,
   readHooksWaived,
   type HookExemptRead,
-} from "./hook-exempt-read";
+} from "./trust-grant";
 
 describe("a hook-exempt read grant", () => {
   it("waives the hooks of exactly the collections it was issued for", () => {
