@@ -23,7 +23,9 @@ import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
 // The homepage Single is reseeded and edited here, as the other builder files do.
-test.describe.configure({ lock: [LOCK.homepage] });
+// The site's breakpoints are stored and cleared here, so the site-style lock
+// keeps the specs reading the device buttons off them.
+test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
 const TEXT_ID = "device-text";
 const NODES = [
@@ -239,5 +241,95 @@ test.describe("the zoom", () => {
       .getByRole("radio", { name: /^Mobile/ })
       .click();
     await expect(trigger).toHaveText(/^Fit · \d+%$/);
+  });
+});
+
+test.describe("the device buttons", () => {
+  test.describe.configure({ timeout: 120_000 });
+
+  const SITE_STYLE = "/admin/api/singles/site-style";
+
+  test("a site with two breakpoints shows two buttons and no menu", async ({
+    page,
+  }) => {
+    // Stored breakpoints replace the site's set whole, so this site has
+    // Desktop and one more. Cleared afterwards: the e2e site stores none, and
+    // its devices come from the app's code.
+    const stored = await page.request.patch(SITE_STYLE, {
+      data: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1024 }],
+          container: [],
+        },
+      },
+    });
+    expect(stored.ok(), `storing two breakpoints: ${stored.status()}`).toBe(
+      true
+    );
+    try {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await openEditorWith(page, NODES, TEXT_ID);
+      await expect(devices(page).getByRole("radio")).toHaveCount(2);
+      await expect(
+        devices(page).getByRole("radio", { name: /^Tablet/ })
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: /^More devices/ })
+      ).toHaveCount(0);
+    } finally {
+      const cleared = await page.request.patch(SITE_STYLE, {
+        data: { breakpoints: null },
+      });
+      expect(
+        cleared.ok(),
+        `clearing the breakpoints: ${cleared.status()}`
+      ).toBe(true);
+    }
+  });
+  test("a site with four breakpoints puts the narrowest in a menu, and styles it from there", async ({
+    page,
+  }) => {
+    const stored = await page.request.patch(SITE_STYLE, {
+      data: {
+        breakpoints: {
+          viewport: [
+            { id: "phone", label: "Phone", maxWidth: 480 },
+            { id: "mobile", label: "Mobile", maxWidth: 767 },
+            { id: "tablet", label: "Tablet", maxWidth: 1024 },
+          ],
+          container: [],
+        },
+      },
+    });
+    expect(stored.ok(), `storing four breakpoints: ${stored.status()}`).toBe(
+      true
+    );
+    try {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await openEditorWith(page, NODES, TEXT_ID);
+      await expect(devices(page).getByRole("radio")).toHaveCount(3);
+
+      const more = page.getByRole("button", { name: /^More devices/ });
+      await more.click();
+      await page.getByRole("menuitemradio", { name: /^Phone/ }).click();
+
+      // The menu's button names the device being styled; no button is checked,
+      // and the canvas lays the page out at the phone's width.
+      await expect(more).toHaveAccessibleName(
+        "More devices, styling Phone, up to 480 pixels"
+      );
+      await expect(more).toHaveText("Phone · 480px");
+      await expect(
+        devices(page).getByRole("radio", { checked: true })
+      ).toHaveCount(0);
+    } finally {
+      const cleared = await page.request.patch(SITE_STYLE, {
+        data: { breakpoints: null },
+      });
+      expect(
+        cleared.ok(),
+        `clearing the breakpoints: ${cleared.status()}`
+      ).toBe(true);
+    }
   });
 });
