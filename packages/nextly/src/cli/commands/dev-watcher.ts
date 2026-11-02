@@ -14,6 +14,7 @@ import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
+import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
@@ -105,10 +106,17 @@ export function createDebouncedSync(
           async () => {
             // The configuration's new addresses, judged by the one address rule as a start judges
             // them, before this sync reads or writes any schema.
+            // Its sibling fields too: a pair the registry row does not hold is new and refused.
             const liveAdapter = adapter as unknown as DrizzleAdapter;
+            const registered = await loadBuilderEntities(liveAdapter);
             await assertConfiguredAddresses(
               configToSync.config,
-              await loadBuilderEntities(liveAdapter),
+              registered,
+              table => liveAdapter.tableExists(table)
+            );
+            await assertConfiguredSiblingFields(
+              configToSync.config,
+              registered,
               table => liveAdapter.tableExists(table)
             );
 

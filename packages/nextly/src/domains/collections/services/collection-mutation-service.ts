@@ -296,7 +296,10 @@ import {
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
-import { VersionCaptureService } from "../../versions/version-capture-service";
+import {
+  underSavepoint,
+  VersionCaptureService,
+} from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import {
   type VersionRef,
@@ -14452,50 +14455,60 @@ export class CollectionMutationService extends BaseService {
         tx.getDrizzle()
       );
 
-      // Insert using transaction context
-      const entry = await tx.insert<unknown>(tableName, entryData, {
-        returning: "*",
-      });
-      rowWritten = true;
+      // The row and the rows that complete it — its translations and its
+      // field-group instances — are written under one savepoint where the
+      // transaction has them. A later step refused (a translation or
+      // field-group table this instance has not registered, say) then undoes
+      // the row too, so a caller that catches the failure and commits its own
+      // transaction keeps nothing of this create. Side effects and hooks run
+      // after it, as before.
+      const entry = await underSavepoint(tx, async () => {
+        // Insert using transaction context
+        const entry = await tx.insert<unknown>(tableName, entryData, {
+          returning: "*",
+        });
+        rowWritten = true;
 
-      // The companion row for this write's locale, on the same transaction, so
-      // it rolls back with the main row. A brand-new parent has no row to
-      // conflict with, which is why this inserts where the update path upserts.
-      if (localizedWrite) {
-        // A failure here is a write-integrity failure: the parent row is
-        // already written. Reported as a soft per-item failure, a batch under
-        // `stopOnError: false` would carry on and commit a document whose
-        // translations never landed — the row would exist with no content in
-        // any language. Marked, the batch loop aborts and the transaction
-        // rolls back, exactly as a failed component save does.
-        try {
-          await this.insertCompanionRow(
-            tx,
-            localizedWrite,
-            (entry as { id: string }).id
-          );
-        } catch (error: unknown) {
-          throw markWriteIntegrityFailure(error);
+        // The companion row for this write's locale, on the same transaction, so
+        // it rolls back with the main row. A brand-new parent has no row to
+        // conflict with, which is why this inserts where the update path upserts.
+        if (localizedWrite) {
+          // A failure here is a write-integrity failure: the parent row is
+          // already written. Reported as a soft per-item failure, a batch under
+          // `stopOnError: false` would carry on and commit a document whose
+          // translations never landed — the row would exist with no content in
+          // any language. Marked, the batch loop aborts and the transaction
+          // rolls back, exactly as a failed component save does.
+          try {
+            await this.insertCompanionRow(
+              tx,
+              localizedWrite,
+              (entry as { id: string }).id
+            );
+          } catch (error: unknown) {
+            throw markWriteIntegrityFailure(error);
+          }
+          // Split out of the insert, so the returned row lacks them: merge them
+          // back for the hooks, the event and the response. Under the FIELD's
+          // name rather than the column's — a field whose column differs
+          // (`metaTitle` -> `meta_title`) would otherwise reach hooks and the
+          // durable snapshot under a key no field has.
+          for (const [field, value] of Object.entries(
+            localizedWrite.localizedFieldValues
+          )) {
+            (entry as Record<string, unknown>)[field] = value;
+          }
         }
-        // Split out of the insert, so the returned row lacks them: merge them
-        // back for the hooks, the event and the response. Under the FIELD's
-        // name rather than the column's — a field whose column differs
-        // (`metaTitle` -> `meta_title`) would otherwise reach hooks and the
-        // durable snapshot under a key no field has.
-        for (const [field, value] of Object.entries(
-          localizedWrite.localizedFieldValues
-        )) {
-          (entry as Record<string, unknown>)[field] = value;
-        }
-      }
 
-      await this.saveComponentFieldDataInTx(tx, {
-        parentId: (entry as { id: string }).id,
-        tableName,
-        fields,
-        data: componentFieldData,
-        user: params.user,
-        access: this.fieldGroupAccess(params),
+        await this.saveComponentFieldDataInTx(tx, {
+          parentId: (entry as { id: string }).id,
+          tableName,
+          fields,
+          data: componentFieldData,
+          user: params.user,
+          access: this.fieldGroupAccess(params),
+        });
+        return entry;
       });
 
       // Junction rows, the version snapshot, the outbox event and the

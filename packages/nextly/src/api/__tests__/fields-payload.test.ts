@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
 import { assertValidFieldsPayload } from "../fields-payload";
+import { parseUiSchema } from "../../schemas/_zod/ui-schema";
 
 describe("assertValidFieldsPayload", () => {
   it("accepts an upload field without relationTo (runtime ignores it; builder never collects it)", () => {
@@ -138,21 +139,18 @@ describe("assertValidFieldsPayload", () => {
     ).toThrow(NextlyError);
   });
 
-  it("rejects duplicate top-level field names (mirror parity with the manifest)", () => {
-    try {
-      assertValidFieldsPayload([
-        { name: "title", type: "text" },
-        { name: "title", type: "textarea" },
-      ]);
-      expect.unreachable("should have thrown");
-    } catch (error) {
-      expect(error).toBeInstanceOf(NextlyError);
-      const errors = (
-        (error as NextlyError).publicData as {
-          errors: Array<{ path: string }>;
-        }
-      ).errors;
-      expect(errors.some(e => e.path.includes("name"))).toBe(true);
-    }
+  // A payload alone cannot say whether two fields of one name are a pair the
+  // entity already holds, which keeps working, or one this save creates; each
+  // road asks the sibling rule with the stored fields beside the payload. The
+  // manifest's entity validator leaves it to the same rule (parity kept).
+  it("leaves two fields of one name to the sibling rule, as the manifest does", () => {
+    const fields = [
+      { name: "title", type: "text" },
+      { name: "title", type: "textarea" },
+    ];
+    expect(() => assertValidFieldsPayload(fields)).not.toThrow();
+    expect(
+      parseUiSchema({ collections: [{ slug: "x", fields }] }).success
+    ).toBe(true);
   });
 });

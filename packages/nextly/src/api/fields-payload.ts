@@ -30,27 +30,12 @@ import { nextlyValidationFromZod } from "./zod-to-nextly-error";
  */
 const COLLECTION_OWNER_RESERVED = new Set(["created_by", "createdBy"]);
 
-// The ui-schema.json entity validator rejects duplicate field names, so the
-// shared payload validator must too — otherwise a payload could pass the
-// API/dispatcher checks and still fail the manifest write, exactly the
-// divergence this shared validator exists to prevent.
-const fieldsArraySchema = z
-  .array(uiSchemaFieldSchema)
-  .superRefine((fields, ctx) => {
-    const seen = new Set<string>();
-    fields.forEach((field, index) => {
-      const name = (field as { name?: unknown }).name;
-      if (typeof name !== "string") return;
-      if (seen.has(name)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `duplicate field name '${name}'`,
-          path: [index, "name"],
-        });
-      }
-      seen.add(name);
-    });
-  });
+// Whether two fields clash is not judged here. A payload alone cannot say
+// whether a pair of sibling fields is new or one the entity already holds,
+// which keeps working, so each road asks the sibling rule
+// (`domains/schema/sibling-fields`) with the stored fields beside the payload,
+// and the manifest's entity validator leaves it to the same rule.
+const fieldsArraySchema = z.array(uiSchemaFieldSchema);
 
 /**
  * Run each plugin field type's own declaration checks over the payload.

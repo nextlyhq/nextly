@@ -156,7 +156,7 @@ describe("BuilderFieldList", () => {
     ).toBeInTheDocument();
   });
 
-  it("invokes onAddAt(0) when the empty-state button is clicked", async () => {
+  it("opens the picker at the end of the list from the empty state", async () => {
     const user = userEvent.setup();
     const onAddAt = vi.fn();
     render(
@@ -174,7 +174,7 @@ describe("BuilderFieldList", () => {
       )
     );
     await user.click(screen.getByRole("button", { name: /add your first/i }));
-    expect(onAddAt).toHaveBeenCalledWith(0);
+    expect(onAddAt).toHaveBeenCalledWith({});
   });
 
   it("hides the Add field button and per-card Delete in readOnly mode", () => {

@@ -126,7 +126,10 @@ describe("parseUiSchema", () => {
     expect(r.success).toBe(false);
   });
 
-  it("rejects duplicate field names within a collection", () => {
+  // The sibling rule judges two fields of one name where the entity's last
+  // definition is known (a save, the migrate commands), so a manifest holding
+  // a pair an entity already has still loads.
+  it("leaves two fields of one name in a collection to the sibling rule", () => {
     const r = parseUiSchema({
       collections: [
         {
@@ -138,7 +141,7 @@ describe("parseUiSchema", () => {
         },
       ],
     });
-    expect(r.success).toBe(false);
+    expect(r.success).toBe(true);
   });
 
   it("rejects a reserved field name", () => {

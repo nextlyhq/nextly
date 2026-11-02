@@ -47,6 +47,8 @@ import {
   migrateDownCore,
 } from "../../../../cli/commands/migrate-down";
 import { createLogger } from "../../../../cli/utils/logger";
+import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import { reconcileCore } from "../../../schema/migrate/core-reconcile";
 import { marksNoTransaction } from "../../../schema/migrate/split-sql";
 import {
@@ -142,6 +144,10 @@ for (const entry of DIALECTS) {
             : await createScratchDatabase(dialect, "field_leaves");
         adapter = entry.make(scratch?.url ?? entry.url ?? "");
         await adapter.connect();
+        await loadDialectTables(dialect);
+        // The static resolver every production adapter carries: the lock seeds its row through a
+        // transaction insert, which an adapter refuses for a table its resolver does not hold.
+        installRegistryResolver(adapter as unknown as DrizzleAdapter);
         // What `nextly migrate` creates first: the ledger, the owner registry and the archive.
         await reconcileCore({
           db: adapter.getDrizzle(),

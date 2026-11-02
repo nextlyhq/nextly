@@ -899,6 +899,10 @@ export class PostgresAdapter extends DrizzleAdapter {
       return [result];
     }
 
+    // Refused as the single-row insert is: a table this instance never
+    // registered may not match what its code would write.
+    this.resolvedTableObject(table);
+
     // Build multi-row INSERT
     const columns = Object.keys(data[0]);
     const params: SqlParam[] = [];
@@ -1231,7 +1235,10 @@ export class PostgresAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const mapped = this.mapRowToRawSql(this.getTableObject(table), data);
+        // Refused before any statement, as the pooled insert is: a rejected
+        // statement would abort the caller's whole transaction.
+        const tableObj = this.resolvedTableObject(table);
+        const mapped = this.mapRowToRawSql(tableObj, data);
         const columns = Object.keys(mapped);
         const values = Object.values(mapped);
         const placeholders = values.map((_, i) => `$${i + 1}`).join(", ");
@@ -1240,7 +1247,6 @@ export class PostgresAdapter extends DrizzleAdapter {
 
         const ret = options?.returning;
         const returningEmpty = Array.isArray(ret) && ret.length === 0;
-        const tableObj = this.getTableObject(table);
         // Each returned timestamp's wall clock, spelled out by the database.
         // node-postgres turns one into a `Date` in the LOCAL zone before this
         // code sees it, and that conversion cannot be undone: a wall clock
@@ -1272,7 +1278,8 @@ export class PostgresAdapter extends DrizzleAdapter {
       ): Promise<T[]> => {
         if (data.length === 0) return [];
 
-        const tableObj = this.getTableObject(table);
+        // Refused before any statement, as `insert` above is.
+        const tableObj = this.resolvedTableObject(table);
         const mappedRecords = data.map(r => this.mapRowToRawSql(tableObj, r));
         const columns = Object.keys(mappedRecords[0]);
         const params: unknown[] = [];

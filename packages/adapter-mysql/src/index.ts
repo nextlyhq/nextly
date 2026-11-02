@@ -1442,7 +1442,10 @@ export class MySqlAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const mapped = this.mapRowToRawSql(this.getTableObject(table), data);
+        // Refused before any statement, as the pooled insert is: a table this
+        // instance never registered may not match what its code would write.
+        const insertTableObj = this.resolvedTableObject(table);
+        const mapped = this.mapRowToRawSql(insertTableObj, data);
         const columns = Object.keys(mapped);
         const values = Object.values(mapped);
         const placeholders = this.buildPlaceholders(values.length, 0);
@@ -1459,7 +1462,6 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         // MySQL has no RETURNING; select the inserted row back. Project only the
         // requested columns so a large JSON snapshot is not read unless asked.
-        const insertTableObj = this.getTableObject(table);
         // Each timestamp's wall clock, spelled out by the database. mysql2
         // turns one into a `Date` in the LOCAL zone before this code sees it,
         // and that conversion cannot be undone: a wall clock inside a
@@ -1511,7 +1513,8 @@ export class MySqlAdapter extends DrizzleAdapter {
         const retMany = options?.returning;
         const skipReread = Array.isArray(retMany) && retMany.length === 0;
 
-        const tableObj = this.getTableObject(table);
+        // Refused before any statement, as `insert` above is.
+        const tableObj = this.resolvedTableObject(table);
         const mappedRecords = data.map(r => this.mapRowToRawSql(tableObj, r));
         const columns = Object.keys(mappedRecords[0]);
         const allValues: unknown[] = [];

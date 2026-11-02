@@ -16,6 +16,13 @@ import {
   VERSION,
 } from "../index";
 
+/**
+ * A resolver holding every table under a model that declares no columns, so
+ * these cases assert how the raw statement binds its values, and the insert is
+ * not refused as one to a table the resolver does not hold.
+ */
+const holdsEveryTable = { getTable: () => ({}) };
+
 type SqliteErrorLike = Error & { code?: string };
 type DatabaseErrorLike = { kind?: string; code?: string; message?: string };
 
@@ -578,6 +585,7 @@ describe("SqliteAdapter", () => {
     it("should provide insert method with RETURNING", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
 
       mockStatement.all.mockReturnValue([
         { id: 1, email: "test@test.com", name: "Test" },
@@ -693,6 +701,7 @@ describe("SqliteAdapter", () => {
     it("should use bulk INSERT for multiple records", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
 
       mockStatement.all.mockReturnValue([
         { id: 1, name: "User 1" },
@@ -714,6 +723,7 @@ describe("SqliteAdapter", () => {
     it("should add RETURNING clause by default", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
 
       mockStatement.all.mockReturnValue([{ id: 1 }, { id: 2 }]);
 
@@ -789,6 +799,7 @@ describe("SqliteAdapter", () => {
     it("tx.insert converts boolean true to 1 before binding", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
       mockStatement.all.mockReturnValue([{ id: "1", is_active: 1 }]);
 
       await adapter.transaction(async tx => {
@@ -801,6 +812,7 @@ describe("SqliteAdapter", () => {
     it("tx.insert converts boolean false to 0 before binding", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
       mockStatement.all.mockReturnValue([{ id: "1", is_active: 0 }]);
 
       await adapter.transaction(async tx => {
@@ -818,6 +830,7 @@ describe("SqliteAdapter", () => {
     it("tx.insert binds a Date as unix seconds", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
       const date = new Date("2026-05-05T06:00:00.000Z");
       mockStatement.all.mockReturnValue([
         { id: "1", created_at: date.getTime() / 1000 },
@@ -840,6 +853,7 @@ describe("SqliteAdapter", () => {
     it("tx.insert binds a Date the same way the typed path does", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
       const date = new Date("2026-05-05T06:00:00.000Z");
       mockStatement.all.mockReturnValue([{ id: "1" }]);
 
@@ -857,6 +871,7 @@ describe("SqliteAdapter", () => {
     it("tx.insert converts undefined to null before binding", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
       mockStatement.all.mockReturnValue([{ id: "1", title: null }]);
 
       await adapter.transaction(async tx => {
@@ -869,6 +884,7 @@ describe("SqliteAdapter", () => {
     it("tx.insert converts plain objects to JSON strings before binding", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
       mockStatement.all.mockReturnValue([{ id: "1", meta: '{"key":"val"}' }]);
 
       await adapter.transaction(async tx => {
@@ -881,6 +897,7 @@ describe("SqliteAdapter", () => {
     it("tx.insert converts arrays to JSON strings before binding", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
       mockStatement.all.mockReturnValue([{ id: "1", tags: '["a","b"]' }]);
 
       await adapter.transaction(async tx => {
@@ -957,6 +974,7 @@ describe("SqliteAdapter", () => {
     it("insertMany converts boolean values to 0/1 before binding", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
       mockStatement.all.mockReturnValue([
         { id: "1", is_active: 1 },
         { id: "2", is_active: 0 },
