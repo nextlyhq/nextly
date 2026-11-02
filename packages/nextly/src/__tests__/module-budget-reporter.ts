@@ -95,7 +95,14 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the CLI's error shape). Those three now mock empty what their tests never
  * reach, which brings the heavy files back to the pinned list at 69, and the
  * tail measured 1,257 with the same heavy files and chains; 1,291 holds
- * whether CI measures one fewer.
+ * whether CI measures one fewer. The tail rose to 1,326 when the suite
+ * measured 1,292: the service registry gained modules from features that
+ * belong on it (value conversion, the cache-tag expiry ledger, retired image
+ * sizes, sample content), and two new tests load it by design (the
+ * sample-content route's absent answer through the route handler, and the
+ * CLI's env-file reading through the CLI's database adapter), with no new
+ * edge from a product import to make lazy. The heavy files measured 71, so
+ * their pin is 73: two of headroom, as before.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -103,7 +110,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 72, tailMeanModules: 1_291 };
+export const BUDGET = { heavyFiles: 73, tailMeanModules: 1_326 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
