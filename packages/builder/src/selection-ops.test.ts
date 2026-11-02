@@ -161,6 +161,58 @@ describe("selectionDeletion", () => {
 });
 
 describe("selectionDuplication", () => {
+  /** Apply a group and its undo, as the store does, keeping both documents. */
+  function appliedAndUndone(
+    document: BlockDocument,
+    ops: readonly BuilderOp[]
+  ) {
+    let working = document;
+    const inverses: BuilderOp[] = [];
+    for (const op of ops) {
+      const applied = applyOp(working, op);
+      working = applied.document;
+      inverses.unshift(applied.inverse);
+    }
+    let undone = working;
+    for (const inverse of inverses) undone = applyOp(undone, inverse).document;
+    return { applied: working, undone };
+  }
+
+  it("copies a locked block as a locked copy, and its undo removes the copy", () => {
+    register();
+    const document = documentOf([node("a", { locked: true, name: "Pinned" })]);
+    const plan = selectionDuplication(document, ["a"]);
+    if (plan === null) throw new Error("expected a plan");
+
+    const { applied, undone } = appliedAndUndone(document, plan.ops);
+    const [original, copy] = applied.nodes;
+    expect(original).toEqual(document.nodes[0]);
+    expect(copy).toMatchObject({
+      id: plan.newIds[0],
+      locked: true,
+      name: "Pinned copy",
+    });
+    expect(undone).toEqual(document);
+  });
+
+  it("copies a block holding a locked block, the copy's inner lock kept", () => {
+    register();
+    const document = documentOf([
+      node("outer", {
+        type: "acme/box",
+        slots: { children: [node("kid", { locked: true })] },
+      }),
+    ]);
+    const plan = selectionDuplication(document, ["outer"]);
+    if (plan === null) throw new Error("expected a plan");
+
+    const { applied, undone } = appliedAndUndone(document, plan.ops);
+    const copy = applied.nodes[1];
+    expect(copy?.locked).toBeUndefined();
+    expect(copy?.slots?.children?.[0]?.locked).toBe(true);
+    expect(undone).toEqual(document);
+  });
+
   it("puts every copy immediately after its own original", () => {
     /*
      * THE case. Each insert shifts every later sibling along, so a plan built
@@ -210,7 +262,9 @@ describe("selectionDuplication", () => {
     const plan = selectionDuplication(document, ["a"]);
 
     expect(plan).not.toBeNull();
-    expect(plan?.ops).toHaveLength(1);
+    // The copy arrives unlocked and is locked where it lands, so the insert is
+    // accepted and its undo still works.
+    expect(plan?.ops.map(op => op.kind)).toEqual(["insert", "update"]);
   });
 
   it("plans nothing for an empty selection", () => {

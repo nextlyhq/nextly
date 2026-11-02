@@ -51,7 +51,6 @@ import {
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import type { RefusalWording } from "./drag-refusal";
-import { blockDuplication } from "./duplicate-block";
 import type { Rect } from "./geometry";
 import {
   keyboardMovePosition,
@@ -722,7 +721,9 @@ export function toolbarActions(
 
   const deleteLock = lockBlockingDelete(document, selectedId);
 
-  const duplication = blockDuplication(document, selectedId);
+  // The very ops the Duplicate verb applies, so what the bar offers and what
+  // a press does cannot disagree.
+  const duplication = selectionDuplication(document, [selectedId]);
   const deletion = blockDeletion(document, selectedId);
 
   return [
@@ -757,9 +758,7 @@ export function toolbarActions(
     heldByLock(
       { id: "duplicate", label: "Duplicate", enabled: duplication !== null },
       lockRefusalFor,
-      duplication === null
-        ? undefined
-        : [{ kind: "insert", node: duplication.node, at: duplication.at }]
+      duplication?.ops
     ),
     saveAction(document, ids, rules, mayCreatePattern),
     ...compositionActions(document, ids, rules, components, lockRefusalFor),

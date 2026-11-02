@@ -1047,6 +1047,8 @@ export {
   type LayersLockChange,
   type LayersLockChangeKind,
 } from "./layers-lock-stored";
+// How every copy into a document keeps the Layers locks it carries.
+export { insertKeepingLocks, type Placed } from "./locked-insert";
 
 /**
  * The stored shape of rich text.

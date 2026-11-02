@@ -16,6 +16,7 @@ import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyOps,
   clearBlocks,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
@@ -871,6 +872,11 @@ describe("useBlockKeyboardActions", () => {
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0][0][0].kind).toBe("insert");
+    // And what it applies is accepted, giving a copy that keeps the lock: a
+    // spy that records ops says nothing about whether the store takes them.
+    const applied = applyOps(editor.document, editor.applyAll.mock.calls[0][0]);
+    expect(applied.document.nodes).toHaveLength(2);
+    expect(applied.document.nodes[1]?.locked).toBe(true);
   });
 
   it("does nothing with no selection", () => {

@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyOps,
   saveAsPatternRefusal,
   type BlockDocument,
   type BlockNode,
@@ -23,6 +24,7 @@ import {
 
 import { compositionRefusalReason } from "./composition-refusal";
 import { layersLockRefusalFor } from "./lock-refusal";
+import { selectionDuplication } from "./selection-ops";
 
 import {
   depthMoveActions,
@@ -250,6 +252,45 @@ describe("toolbarActions", () => {
       true
     );
   });
+
+  it.each([
+    ["a locked block", "a", [node("a", "acme/heading", { locked: true })]],
+    [
+      "a block holding a locked one",
+      "outer",
+      [box("outer", [node("kid", "acme/heading", { locked: true })])],
+    ],
+    [
+      "a block inside a locked one",
+      "kid",
+      [box("outer", [node("kid")], { locked: true, name: "Hero" })],
+    ],
+  ])(
+    "offers Duplicate for %s exactly when its ops apply",
+    (_case, selectedId, nodes) => {
+      // The bar asks the editor's own question of the very ops the verb
+      // applies, so an offered Duplicate never fails in silence and a dimmed
+      // one says why.
+      const document = documentOf(nodes);
+      const action = actionOf(
+        toolbarActions(document, selectedId, undefined, undefined, true, ops =>
+          layersLockRefusalFor(document, ops)
+        ),
+        "duplicate"
+      );
+      const plan = selectionDuplication(document, [selectedId]);
+      const applies = (): boolean => {
+        try {
+          applyOps(document, plan?.ops ?? []);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      expect(action.enabled).toBe(applies());
+    }
+  );
 
   it("a lock INSIDE a block stops its delete and its move", () => {
     // THE case that separates asking the lock rule from reading `node.locked`

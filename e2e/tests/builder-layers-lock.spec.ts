@@ -257,6 +257,41 @@ test.describe("a block locked in Layers", () => {
     expect(title?.props).toEqual({ text: "Locked heading", level: "h2" });
   });
 
+  test("duplicates a locked block as a locked copy, and refuses a copy inside it", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await openLayers(page);
+
+    // Inside the locked block a copy would change what it holds, so the bar
+    // says so before anything is tried.
+    await clickBlock(page, TITLE);
+    await expect.poll(() => selection(page)).toEqual([TITLE]);
+    const inside = await toolbarButton(page, "Duplicate");
+    await expect(inside).toHaveAttribute("aria-disabled", "true");
+    await expect(inside).toHaveAttribute(
+      "title",
+      "Hero is locked. Unlock it to add blocks to it."
+    );
+
+    // The locked block itself copies, and the copy keeps its lock.
+    await selectBlock(page, HERO);
+    const duplicate = await toolbarButton(page, "Duplicate");
+    await expect(duplicate).not.toHaveAttribute("aria-disabled", "true");
+    await duplicate.click();
+    // Selection follows the copy, which is what the author works on next.
+    await expect
+      .poll(async () => {
+        const selected = await selection(page);
+        return selected.length === 1 && selected[0] !== HERO;
+      })
+      .toBe(true);
+    const [copy] = await selection(page);
+    await expect(layerRow(page, copy ?? "").first()).toContainText("Hero copy");
+    await expect(layerRow(page, copy ?? "").first()).toContainText("Locked");
+  });
+
   test("saves an unlock and a change to the block in one write, with one Saved, and keeps the history", async ({
     page,
   }) => {
