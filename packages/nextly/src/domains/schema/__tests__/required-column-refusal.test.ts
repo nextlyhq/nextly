@@ -1,0 +1,104 @@
+/**
+ * The one refusal every road gives for a column made required over rows that
+ * would break it: the entity, the field and the count, and for a field group
+ * each collection and Single whose rows would break it.
+ */
+import { describe, expect, it } from "vitest";
+
+import { NextlyError } from "../../../errors/nextly-error";
+import {
+  requiredColumnBreakMessage,
+  requiredColumnOverNullsError,
+} from "../required-column-refusal";
+
+describe("requiredColumnBreakMessage", () => {
+  it("names the entity, the field and the count of rows holding no value", () => {
+    expect(
+      requiredColumnBreakMessage({
+        entity: { kind: "collection", slug: "posts" },
+        field: "title",
+        count: 3,
+        added: false,
+      })
+    ).toBe(
+      "Collection 'posts': field 'title' cannot become required while 3 rows hold no value in it. Give those rows a value first, or keep the field optional."
+    );
+    expect(
+      requiredColumnBreakMessage({
+        entity: { kind: "single", slug: "home" },
+        field: "title",
+        count: 1,
+        added: false,
+      })
+    ).toBe(
+      "Single 'home': field 'title' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the field optional."
+    );
+  });
+
+  it("says why for a required field added without a default", () => {
+    expect(
+      requiredColumnBreakMessage({
+        entity: { kind: "collection", slug: "posts" },
+        field: "summary",
+        count: 4,
+        added: true,
+      })
+    ).toBe(
+      "Collection 'posts': field 'summary' cannot be added as required without a default while 4 rows exist, which would hold no value in it. Give it a default, or add it as optional."
+    );
+  });
+
+  it("names each collection and Single whose rows would break a field group's column", () => {
+    expect(
+      requiredColumnBreakMessage({
+        entity: { kind: "fieldGroup", slug: "hero" },
+        field: "cta",
+        count: 3,
+        added: false,
+        users: [
+          { kind: "collection", slug: "posts", count: 2 },
+          { kind: "single", slug: "home", count: 1 },
+        ],
+      })
+    ).toBe(
+      "Field group 'hero': field 'cta' cannot become required while 3 rows hold no value in it: 2 in collection 'posts', 1 in Single 'home'. Give those rows a value first, or keep the field optional."
+    );
+  });
+});
+
+describe("requiredColumnOverNullsError", () => {
+  it("is one validation error with an entry per field, on the field's path", () => {
+    const err = requiredColumnOverNullsError([
+      {
+        entity: { kind: "collection", slug: "posts" },
+        field: "title",
+        count: 3,
+        added: false,
+      },
+      {
+        entity: { kind: "collection", slug: "posts" },
+        field: "summary",
+        count: 4,
+        added: true,
+      },
+    ]);
+    expect(err).toBeInstanceOf(NextlyError);
+    expect(err.code).toBe("VALIDATION_ERROR");
+    expect(err.publicData).toEqual({
+      errors: [
+        {
+          path: "fields.title",
+          code: "REQUIRED_COLUMN_HAS_NULLS",
+          message:
+            "Collection 'posts': field 'title' cannot become required while 3 rows hold no value in it. Give those rows a value first, or keep the field optional.",
+        },
+        {
+          path: "fields.summary",
+          code: "REQUIRED_COLUMN_HAS_NULLS",
+          message:
+            "Collection 'posts': field 'summary' cannot be added as required without a default while 4 rows exist, which would hold no value in it. Give it a default, or add it as optional.",
+        },
+      ],
+    });
+  });
+});
