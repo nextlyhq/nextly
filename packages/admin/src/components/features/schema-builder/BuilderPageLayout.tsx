@@ -104,15 +104,14 @@ export function BuilderPageLayout({
             kind={config.kind}
             fields={builder.fields}
             readOnly={locked}
-            onAddAt={insertAt => onActiveChange({ kind: "picker", insertAt })}
+            onAddAt={position => onActiveChange({ kind: "picker", position })}
             onEditField={fieldId => onActiveChange({ kind: "edit", fieldId })}
             onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
             onDuplicateField={onDuplicateField}
             onAddInsideParent={parentId =>
               onActiveChange({
                 kind: "picker",
-                insertAt: 0,
-                parentFieldId: parentId,
+                position: { parentFieldId: parentId },
               })
             }
             onReorder={() => {

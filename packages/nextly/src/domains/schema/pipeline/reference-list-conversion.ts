@@ -37,14 +37,16 @@ export { isReferenceListConversion } from "./diff/types";
 /**
  * The PostgreSQL expression reading one stored value as a `jsonb` list.
  *
- * Exported for the convertibility probe, which forces this same expression over every row before
- * anything changes, so the probe and the conversion cannot read a value differently.
+ * The value-conversion judgement reads each stored value branch by branch as this expression does
+ * (`value-conversion/judge-value.ts`), and where the two could disagree it is the stricter: a value
+ * it judges readable that this expression refuses fails the single statement, so the column is left
+ * as it was.
  *
  * `::text` first, so one expression serves a `uuid` and a `text` column alike. A value starting
  * with `{` is an array literal; one starting with `[` is already a JSON list; anything else
  * non-empty is a single id. An empty string is no reference, so it becomes an empty list.
  */
-export function postgresReferenceListExpression(columnName: string): string {
+function postgresReferenceListExpression(columnName: string): string {
   const c = quoteIdent(columnName, "postgresql");
   const value = `btrim(${c}::text)`;
   return (

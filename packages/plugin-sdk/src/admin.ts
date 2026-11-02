@@ -583,6 +583,30 @@ export {
 } from "@nextlyhq/admin";
 
 /**
+ * The shared field picker (@experimental), beside the field-UI kit above and
+ * replacing its `FieldTypePicker` for adding a field. One picker serves every
+ * surface: search first (names, descriptions, categories and synonyms, older
+ * and developer names included), a most-used group then categories, keyboard
+ * alone, and a label-only add step with "Add and add another". Your surface
+ * configures it with `FieldPickerConfig` (its built-in `types`, the `surface`
+ * whose plugin types join them, `exclude`, `mostUsed`, `deriveName`, and
+ * optionally `fieldGroups`) and owns where the field goes: `onAdd` hands you
+ * the choice and the picker writes nothing.
+ * - `describeFieldTypes` turns catalog rows into the `FieldTypeDescription`s
+ *   the picker takes (each row plus its search words).
+ * Experimental until every built-in surface uses it; the kit above stays
+ * exported and working beside it.
+ */
+export { FieldPicker, describeFieldTypes } from "@nextlyhq/admin";
+export type {
+  FieldPickerProps,
+  FieldPickerConfig,
+  FieldPickerChoice,
+  FieldGroupOption,
+  FieldTypeDescription,
+} from "@nextlyhq/admin";
+
+/**
  * @experimental Upload a file into the media library, as the admin's own
  * dropzone does.
  *

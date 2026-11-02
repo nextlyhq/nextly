@@ -1271,6 +1271,9 @@ importers:
       '@inquirer/prompts':
         specifier: ^7.3.2
         version: 7.10.1(@types/node@22.20.5)
+      '@next/env':
+        specifier: ^16.4.1
+        version: 16.4.2
       '@nextlyhq/adapter-drizzle':
         specifier: workspace:*
         version: link:../adapter-drizzle

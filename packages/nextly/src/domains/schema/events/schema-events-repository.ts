@@ -463,6 +463,19 @@ export class SchemaEventsRepository {
   }
 
   /**
+   * Every `file_rollback` row for one filename: its down section's attempts,
+   * which `migrate:resolve --failed-cleanup` clears beside its UP's.
+   */
+  async findFileRollbacks(filename: string): Promise<SchemaEventRow[]> {
+    return (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`filename = ${filename} AND event_type = 'file_rollback'`
+      )) as unknown as SchemaEventRow[];
+  }
+
+  /**
    * Transition a row to rolled_back (used by migrate:resolve --failed-cleanup).
    *
    * Only the status changes on the record of the attempt itself: its start
