@@ -176,7 +176,10 @@ export function useVariablesTransfer({
 
   const menu = (
     <>
-      <DropdownMenu>
+      {/* Not modal: it opens the file chooser and the import preview from
+          inside, and a modal menu would hide the rest of the editor from
+          assistive technology while leaving it focusable. */}
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"

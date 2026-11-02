@@ -320,6 +320,29 @@ describe("the read-only view", () => {
   });
 });
 
+describe("the import and export menu", () => {
+  it("leaves the rest of the panel reachable while it is open", async () => {
+    render(<Hosted tokens={SITE} />);
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Import or export" }),
+      { key: "Enter" }
+    );
+    await screen.findByRole("menu");
+    // A modal menu hides everything else from assistive technology while
+    // leaving it focusable; this one opens the file chooser and the import
+    // preview from inside, as the admin's other action menus do, so it is not
+    // modal and nothing outside it is hidden.
+    expect(
+      document.querySelector(
+        '[aria-hidden="true"] input[type="search"], [aria-hidden="true"] [role="searchbox"]'
+      )
+    ).toBeNull();
+    expect(
+      screen.getByRole("searchbox", { name: "Search variables" })
+    ).toBeDefined();
+  });
+});
+
 describe("states", () => {
   it("says the variables are being read", () => {
     render(<Hosted tokens={undefined} />);
