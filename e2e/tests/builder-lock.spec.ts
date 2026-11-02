@@ -11,22 +11,13 @@
  *
  * @module tests/builder-lock
  */
-import {
-  expect,
-  type Browser,
-  type BrowserContext,
-  type Page,
-} from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
-import {
-  createSignedInUser,
-  superAdminRoleId,
-  uniqueTag,
-} from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
+import { secondEditor } from "./support/two-editors";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.usersRoles] });
@@ -40,28 +31,6 @@ function heading(id: string, text: string) {
 
 function block(page: Page, id: string) {
   return page.locator(`.nx-canvas [data-nx-node="${id}"]`).first();
-}
-
-/**
- * A second super-admin, signed in in a context of its own (see
- * `support/accounts`), so the two pages are two lock holders. One person in two
- * tabs is one holder and would prove nothing.
- */
-async function secondEditor(
-  browser: Browser,
-  first: Page,
-  baseURL: string | undefined
-): Promise<{ context: BrowserContext; page: Page }> {
-  if (!baseURL) throw new Error("The suite configures no baseURL.");
-  const { storageState } = await createSignedInUser(first.request, baseURL, {
-    email: `second-editor-${uniqueTag()}@nextly.local`,
-    name: "Second Editor",
-    roleIds: [await superAdminRoleId(first.request)],
-  });
-  // A context from `browser` inherits none of the test's options, so it is
-  // given the address and the second editor's session.
-  const context = await browser.newContext({ baseURL, storageState });
-  return { context, page: await context.newPage() };
 }
 
 async function openBuilder(page: Page): Promise<void> {

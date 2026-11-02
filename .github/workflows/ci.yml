@@ -1965,9 +1965,9 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
-  # The locking and conflict specs on PostgreSQL, beside the whole suite on
-  # SQLite in `e2e`. A lease, its expiry and a document's version are compared on
-  # the database's own clock, so each dialect proves them itself. Only specs
+  # The document-lock browser tests on PostgreSQL, beside the whole suite on
+  # SQLite in `e2e`. Who holds a document is read from a lease row on the
+  # database's own clock, so each dialect proves it itself. Only specs
   # tagged `EVERY_DIALECT` (`e2e/tests/support/every-dialect.ts`) run here, and
   # a spec tagged later runs here with nothing else to change.
   #
@@ -2060,9 +2060,9 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
-  # The locking and conflict specs on MySQL, beside the whole suite on
-  # SQLite in `e2e`. A lease, its expiry and a document's version are compared on
-  # the database's own clock, so each dialect proves them itself. Only specs
+  # The document-lock browser tests on MySQL, beside the whole suite on
+  # SQLite in `e2e`. Who holds a document is read from a lease row on the
+  # database's own clock, so each dialect proves it itself. Only specs
   # tagged `EVERY_DIALECT` (`e2e/tests/support/every-dialect.ts`) run here, and
   # a spec tagged later runs here with nothing else to change.
   #

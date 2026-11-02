@@ -40,10 +40,9 @@ const E2E_DATABASE = e2eDatabase({ port: PORT });
 
 /**
  * On PostgreSQL and MySQL the suite runs only the specs tagged
- * `EVERY_DIALECT`: the locking and conflict specs, whose behaviour is the
- * database's (leases, claims and versions compared on its clock). The rest
- * runs on SQLite alone. A spec tagged later runs on every dialect with nothing
- * else to change.
+ * `EVERY_DIALECT`: the document-lock specs, whose answers come from the
+ * database's lease rows. The rest runs on SQLite alone. A spec tagged later
+ * runs on every dialect with nothing else to change.
  */
 const EVERY_DIALECT_ONLY = E2E_DATABASE.dialect !== "sqlite";
 
