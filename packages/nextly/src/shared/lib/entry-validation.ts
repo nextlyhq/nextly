@@ -149,6 +149,13 @@ export interface ValidateEntryOptions {
    * `componentFields` to resolve the top-level components.
    */
   judgeComponentInstances?: boolean;
+  /**
+   * `false` leaves a component held in a group or repeater unjudged by its
+   * own fields' rules too. A publish in a language whose component rules are
+   * not enforced sets it, as it leaves `judgeComponentInstances` off; an
+   * ordinary write leaves it on, since nothing else judges such a component.
+   */
+  judgeContainedComponents?: boolean;
 }
 
 /**
@@ -367,7 +374,8 @@ async function validateFieldValue(
   if (
     field.type === "password" &&
     // A stored instance judged as it goes live reads back without its hash,
-    // which no read returns: an absent password there is the stored one.
+    // which no read returns, so its password is not judged again: whether one
+    // is stored is not known without reading a secret, and none is read.
     (options.mode === "update" || options.judgeComponentInstances === true) &&
     (value === undefined || (typeof value === "string" && value.trim() === ""))
   ) {
@@ -729,7 +737,9 @@ async function validateFieldValue(
     // component inside a container is the exception: nothing else judges it.
     default:
       if (
-        (options.insideContainer || options.judgeComponentInstances) &&
+        ((options.insideContainer &&
+          options.judgeContainedComponents !== false) ||
+          options.judgeComponentInstances) &&
         isFieldGroupFieldType(field.type)
       ) {
         await validateContainedComponents(
@@ -978,7 +988,11 @@ async function validateContainedComponents(
     // its default is not refused. Filled on a copy: validation reports, and
     // the value written is the caller's.
     const filled = { ...(instance as Record<string, unknown>) };
-    applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
+    // A stored instance going live is judged as stored: a default added since
+    // it was saved was never written into it, so it does not stand in.
+    if (!options.judgeComponentInstances) {
+      applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
+    }
     // A stored instance never holds a component placed directly among its
     // fields, which the component write omits, so it is not judged missing.
     const judged = options.judgeComponentInstances
@@ -987,7 +1001,11 @@ async function validateContainedComponents(
     await validateFields(
       attachFieldValidators("fieldGroup", slug, judged),
       filled,
-      write,
+      // A stored instance is judged as the component write judges one: a field
+      // type's validator sees the instance as the document it compares with.
+      options.judgeComponentInstances
+        ? { data: filled, mode: "create" }
+        : write,
       at,
       // A component's value is written whole, so its required fields apply.
       { ...options, mode: "create", insideContainer: true },

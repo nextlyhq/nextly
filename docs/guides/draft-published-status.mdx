@@ -86,7 +86,9 @@ field. Fix the field, then publish. The custom `validate` functions of top-level
 component and many-to-many fields run too, and so do the rules on each
 component's own fields: a component instance saved before one of its fields
 became required, or before a `validate` was tightened, refuses the publish with
-an error that names the field inside the component (`hero.code`).
+an error that names the field inside the component (`hero.code`). A password
+field inside a component is the exception: a stored password is never read
+back, so it is judged only when the instance is written.
 
 On a localized collection, a required component and the rules inside a
 component are enforced for the default language only, as a translated field's

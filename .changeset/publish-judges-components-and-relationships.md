@@ -49,7 +49,8 @@ range rule, a custom `validate`. An instance is judged when it is written, so a
 rule added or tightened since then let an instance that no longer meets it go
 live; the publish is now refused with an error that names the field inside the
 component (`hero.code`). These rules are also judged for the default language
-only on a localized collection.
+only on a localized collection. A password field inside a component is judged
+only when the instance is written, since a stored password is never read back.
 
 Compatibility: custom `validate` functions on top-level component and
 many-to-many fields now also run when an entry is published, with the stored
