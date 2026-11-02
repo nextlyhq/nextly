@@ -249,7 +249,8 @@ everything it added to other owners' tables; if one is left, it keeps them and r
 uninstall, with or without `--keep-data`, the boot refuses the plugin while it is
 still listed (`PLUGIN_SCHEMA_UNINSTALLED`): remove it from the config, or install it
 again. An uninstall that stopped part way is finished by running it again
-(`PLUGIN_UNINSTALL_UNFINISHED` until then). See
+(`PLUGIN_UNINSTALL_UNFINISHED` until then); one run again after it finished
+reports it done and changes nothing, without running `onUninstall` again. See
 [Installing](/docs/guides/production-migrations#installing) and
 [Uninstalling](/docs/guides/production-migrations#uninstalling) for the rules.
 

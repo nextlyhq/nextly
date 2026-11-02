@@ -782,6 +782,15 @@ async function executeUninstall(
   deps: PluginLifecycleDeps
 ): Promise<void> {
   const { plugin } = decided;
+  if (finishedAlready(decided)) {
+    deps.logger.success(
+      `${plugin.name} is already uninstalled; nothing was changed.`
+    );
+    deps.logger.info(
+      `Remove "${plugin.name}" from your config to finish. Until you do, boot will refuse to start.`
+    );
+    return;
+  }
   const registry = createOwnerRegistry(
     new SchemaOwnersRepository(deps.db, deps.dialect)
   );
@@ -805,21 +814,28 @@ async function executeUninstall(
   // uninstall is decided again over what it left (`afterTheBoot`), and that
   // decision is the one the hook and the DOWNs run under. A plugin without
   // the hook boots nothing, and the first decision and reading stand.
+  //
+  // A plugin recorded uninstalled has had its hook run, and no install since:
+  // its boot would sync the schema that uninstall removed back into place.
+  // So neither runs again; whatever a later `migrate` applied is undone by
+  // the DOWNs alone.
   let decision = decided;
   let beforeHook = judged;
-  await deps.runLifecycleHook(
-    plugin,
-    "onUninstall",
-    { keepData: opts.keepData },
-    async () => {
-      ({ decision, beforeHook } = await afterTheBoot(
-        decided,
-        judged,
-        opts,
-        deps
-      ));
-    }
-  );
+  if (decided.found?.state !== "uninstalled") {
+    await deps.runLifecycleHook(
+      plugin,
+      "onUninstall",
+      { keepData: opts.keepData },
+      async () => {
+        ({ decision, beforeHook } = await afterTheBoot(
+          decided,
+          judged,
+          opts,
+          deps
+        ));
+      }
+    );
+  }
   const { plan, downs, owned } = decision;
   await assertHookLeftTables(plugin, plan, beforeHook, deps);
 
@@ -850,6 +866,20 @@ async function executeUninstall(
   );
   deps.logger.info(
     `Remove "${plugin.name}" from your config to finish. Until you do, boot will refuse to start.`
+  );
+}
+
+/**
+ * An uninstall run again after one finished, with nothing left to undo: the
+ * plugin is recorded uninstalled, no module of it is applied, and it owns
+ * nothing that exists. It is reported done and changes nothing, the hook
+ * included, rather than recorded begun and finished a second time.
+ */
+function finishedAlready(decided: UninstallDecision): boolean {
+  return (
+    decided.found?.state === "uninstalled" &&
+    decided.plan.downModules.length === 0 &&
+    decided.owned.length === 0
   );
 }
 

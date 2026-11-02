@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DependentsSources } from "../../../collections/services/collection-dependents";
+import { resolveIndexName } from "../../extension/compile";
 import { enumCheckName } from "../../extension/enum-check";
 import type { ExtensionSchemaRecord } from "../dependent-elements";
 import type { OwnerRecord } from "../owner-registry";
@@ -403,6 +404,115 @@ describe("findUninstallDependents", () => {
       ]
     );
     expect(found).toEqual([]);
+  });
+
+  it("reads an expression index and a partial index by the columns their SQL names", async () => {
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          entityIndexes: new Map([
+            [
+              "users",
+              [
+                {
+                  name: "idx_users_handle_lower",
+                  columns: [],
+                  unique: false,
+                  expression: 'lower("fx_handle")',
+                },
+                // CONTROL: an expression over another column does not.
+                {
+                  name: "idx_users_email_lower",
+                  columns: [],
+                  unique: false,
+                  expression: 'lower("email")',
+                },
+              ],
+            ],
+          ]) as ExtensionSchemaRecord["entityIndexes"],
+          specs: [
+            {
+              name: "users",
+              columns: [],
+              indexes: [
+                {
+                  name: "idx_users_org_handled",
+                  columns: ["org_id"],
+                  unique: false,
+                  where: "fx_handle IS NOT NULL",
+                },
+              ],
+            },
+          ] as unknown as ExtensionSchemaRecord["specs"],
+        }),
+      }),
+      [
+        row({
+          tableName: "users",
+          elementKind: "index",
+          elementName: "idx_users_handle_lower",
+          ownerKind: "app",
+          ownerId: "app",
+          migratedBy: "app",
+        }),
+      ]
+    );
+    expect(found.map(dependent => dependent.name).sort()).toEqual([
+      "idx_users_handle_lower",
+      "idx_users_org_handled",
+    ]);
+  });
+
+  it("names an entity index declared without a name as the compiler does", async () => {
+    const onEmail = { columns: ["email"], unique: false };
+    const onHandle = { columns: ["fx_handle"], unique: true };
+    const recordedIndex = (name: string) =>
+      row({
+        tableName: "users",
+        elementKind: "index",
+        elementName: name,
+        ownerKind: "app",
+        ownerId: "app",
+        migratedBy: "app",
+      });
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          entityIndexes: new Map([
+            ["users", [onEmail, onHandle]],
+          ]) as ExtensionSchemaRecord["entityIndexes"],
+        }),
+      }),
+      [
+        recordedIndex(resolveIndexName("users", onEmail)),
+        recordedIndex(resolveIndexName("users", onHandle)),
+      ]
+    );
+    // The index on another column is described, and is no reason to refuse;
+    // CONTROL: the one on the contributed column counts, by its derived name.
+    expect(found).toEqual([
+      expect.objectContaining({
+        kind: "index",
+        name: resolveIndexName("users", onHandle),
+        owner: expect.stringContaining('using column "fx_handle"'),
+      }),
+    ]);
   });
 
   it("CONTROL: never counts the plugin's own schema", async () => {

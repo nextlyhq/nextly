@@ -27,6 +27,13 @@ import { pluginOfLedgerRow } from "./ledger-scope";
 import { standingOf } from "./migration-state";
 import { asRepositoryDb, type RepositoryDb } from "./repository-db";
 
+/**
+ * Ids deleted per statement. Each binds one parameter, and SQLite's default
+ * SQLITE_MAX_VARIABLE_NUMBER of 999 is the lowest across the supported
+ * dialects; the same run the versions repository deletes in.
+ */
+const DELETE_CHUNK_SIZE = 500;
+
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
 /** A read-back schema-events row (camelCase, as Drizzle maps it). */
@@ -438,8 +445,13 @@ export class SchemaEventsRepository {
     const ids = rows
       .filter(row => pluginOfLedgerRow(row.filename) === pluginName)
       .map(row => row.id);
-    if (ids.length === 0) return;
-    await this.db.delete(this.table).where(inArray(this.table.id, ids));
+    // In runs: each id binds one parameter, and a plugin's rows can number
+    // more than one statement may bind.
+    for (let at = 0; at < ids.length; at += DELETE_CHUNK_SIZE) {
+      await this.db
+        .delete(this.table)
+        .where(inArray(this.table.id, ids.slice(at, at + DELETE_CHUNK_SIZE)));
+    }
   }
 
   /**

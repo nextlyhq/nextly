@@ -36,6 +36,7 @@ import {
   type DependentsSources,
 } from "../../collections/services/collection-dependents";
 import { enumCheckName } from "../extension/enum-check";
+import type { ExtensionIndex } from "../extension/types";
 import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
 import {
@@ -97,8 +98,9 @@ interface CompiledUser {
   table: string;
   columns: readonly string[];
   /**
-   * A check's SQL. A check names no columns its declaration lists, so the
-   * ones it uses are read from the expression (`expressionMayName`).
+   * SQL it reads columns through: a check's expression, which lists no
+   * columns, or an index's expression or predicate. The columns it uses
+   * there are read from it (`expressionMayName`).
    */
   expression?: string;
   owner: ElementOnTable["owner"];
@@ -108,11 +110,11 @@ interface CompiledUser {
 const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
 /**
- * Whether a check's expression may use `column`: whether the column's name
- * appears in it as a word, quoted or not, in any case. A check can reach a
- * column only by naming it, so an expression without the name cannot use
- * it; one that has it, even inside a string literal, counts. A column whose
- * name is not a plain word cannot be looked for that way, so every check
+ * Whether an element's expression may use `column`: whether the column's name
+ * appears in it as a word, quoted or not, in any case. An expression can
+ * reach a column only by naming it, so one without the name cannot use it;
+ * one that has it, even inside a string literal, counts. A column whose name
+ * is not a plain word cannot be looked for that way, so every expression
  * counts as using it: the guard does not assume what it could not read.
  */
 function expressionMayName(expression: string, column: string): boolean {
@@ -144,31 +146,50 @@ function contributorOf(
     )?.owner;
 }
 
-/** The indexes on `table`, an entity's and a declared table's, by their columns. */
+/** The name the compiler gives an index (`resolveIndexName`), handed in by the caller. */
+type IndexNamer = (table: string, index: ExtensionIndex) => string;
+
+/**
+ * The SQL an index reads beyond its column list: an expression index's
+ * expression, which it has in place of columns, and a partial index's
+ * predicate. Read as a check's expression is (`expressionMayName`).
+ */
+function indexExpression(index: {
+  expression?: string;
+  where?: string;
+}): string | undefined {
+  const parts = [index.expression, index.where].filter(
+    (part): part is string => part !== undefined && part !== ""
+  );
+  return parts.length === 0 ? undefined : parts.join(" ");
+}
+
+/**
+ * The indexes on `table`, an entity's and a declared table's, by their
+ * columns and any expression or predicate. An entity index declared without
+ * a name is named as the compiler names it.
+ */
 function indexUsers(
   schema: ExtensionSchemaRecord,
   table: string,
-  tableOwner: ElementOnTable["owner"]
+  tableOwner: ElementOnTable["owner"],
+  nameIndex: IndexNamer
 ): CompiledUser[] {
-  const onEntity = (schema.entityIndexes.get(table) ?? []).flatMap(index =>
-    index.name === undefined
-      ? []
-      : [
-          {
-            kind: "index" as const,
-            name: index.name,
-            table,
-            columns: index.columns,
-            owner: index.contributedBy ?? tableOwner,
-          },
-        ]
-  );
+  const onEntity = (schema.entityIndexes.get(table) ?? []).map(index => ({
+    kind: "index" as const,
+    name: index.name ?? nameIndex(table, index),
+    table,
+    columns: index.columns,
+    expression: indexExpression(index),
+    owner: index.contributedBy ?? tableOwner,
+  }));
   const spec = schema.specs.find(candidate => candidate.name === table);
   const declared = (spec?.indexes ?? []).map(index => ({
     kind: "index" as const,
     name: index.name,
     table,
     columns: index.columns,
+    expression: indexExpression(index),
     owner: contributorOf(schema, table, "index", index.name) ?? tableOwner,
   }));
   return [...onEntity, ...declared];
@@ -249,13 +270,14 @@ function keyUsers(
  */
 function compiledColumnUsers(
   schema: ExtensionSchemaRecord | null,
-  table: string
+  table: string,
+  nameIndex: IndexNamer
 ): Map<string, CompiledUser> {
   const users = new Map<string, CompiledUser>();
   if (schema === null) return users;
   const tableOwner = schema.owners.get(table) ?? { kind: "app" as const };
   for (const user of [
-    ...indexUsers(schema, table, tableOwner),
+    ...indexUsers(schema, table, tableOwner, nameIndex),
     ...keyUsers(schema, table, tableOwner),
     ...checkUsers(schema, table, tableOwner),
   ]) {
@@ -396,7 +418,7 @@ function howItUses(
   if (user.table !== table)
     return `referencing column "${table}.${columnName}"`;
   if (user.columns.includes(columnName)) return `using column "${columnName}"`;
-  return `whose expression names column "${columnName}" (a check's columns are read from its expression, so a mention counts)`;
+  return `whose expression names column "${columnName}" (its columns are read from its expression, so a mention counts)`;
 }
 
 /**
@@ -448,6 +470,9 @@ async function onItsContributedColumns(
     row => row.elementKind === "column" && !own.has(row.tableName)
   );
   if (contributed.length === 0) return;
+  // Loaded when asked, as `elementsAddedTo` loads it: the index naming rule
+  // lives beside the compiler, which nothing else here needs.
+  const { resolveIndexName } = await import("../extension/compile");
   const schema = await input.sources.extensionSchema();
   const recorded = elementsFromOwnerRows(
     await input.recordedRowsOn([
@@ -456,7 +481,11 @@ async function onItsContributedColumns(
   );
   for (const column of contributed) {
     const columnName = column.elementName ?? "";
-    const compiled = compiledColumnUsers(schema, column.tableName);
+    const compiled = compiledColumnUsers(
+      schema,
+      column.tableName,
+      resolveIndexName
+    );
     compiledUsersOf(
       compiled,
       input.pluginName,

@@ -636,6 +636,78 @@ describe("plugins uninstall with nothing applied to undo what it added elsewhere
   });
 });
 
+describe("plugins uninstall run again once it has finished", () => {
+  const uninstalled = vi.fn(
+    async () =>
+      new Map([
+        ["@acme/fx", { state: "uninstalled" as const }],
+        ["@acme/core", { state: "installed" as const }],
+      ])
+  );
+
+  it("reports it done and changes nothing, booting nothing, when nothing is left to undo", async () => {
+    const runLifecycleHook = vi.fn(async () => {});
+    const recordLifecycle = vi.fn(async () => {});
+    const forgetPlugin = vi.fn(async () => undefined);
+    const success = vi.fn();
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({
+        plugins: deps({}).plugins.map(p => ({ ...p, modules: [] })),
+        readLifecycle: uninstalled,
+        runLifecycleHook,
+        recordLifecycle,
+        forgetPlugin,
+        logger: { ...logger, success } as never,
+      })
+    );
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(recordLifecycle).not.toHaveBeenCalled();
+    expect(forgetPlugin).not.toHaveBeenCalled();
+    expect(success).toHaveBeenCalledWith(
+      "@acme/fx is already uninstalled; nothing was changed."
+    );
+  });
+
+  it("undoes modules a later migrate applied with the DOWNs alone, booting nothing", async () => {
+    const row = {
+      tableName: "fx__notes",
+      elementKind: "table",
+      elementName: "",
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active",
+    };
+    const db = {
+      select: () => ({
+        from: () => Object.assign([row], { where: () => [row] }),
+      }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    };
+    const runLifecycleHook = vi.fn(async () => {});
+    const runDown = vi.fn(async () => 1);
+    const forgetPlugin = vi.fn(async () => undefined);
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({
+        db: db as never,
+        readLifecycle: uninstalled,
+        runLifecycleHook,
+        forgetPlugin,
+        ...droppedByDowns(runDown),
+      })
+    );
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(runDown).toHaveBeenCalledTimes(2);
+    expect(forgetPlugin).toHaveBeenCalled();
+  });
+});
+
 describe("what install reports", () => {
   it("counts tables, not owner rows", async () => {
     // One table, with an index row on it and a column the plugin added to
