@@ -128,8 +128,8 @@ function setStoredSizes(id: string, sizes: string | null): void {
     .run(sizes, id);
 }
 
-/** An image uploaded, then given the sizes an earlier upload stored. */
-async function uploadPhoto(folderId?: string): Promise<string> {
+/** An image uploaded as one is now: its original and its thumbnail. */
+async function uploadImage(folderId?: string): Promise<string> {
   const file = await image();
   const result = await service.uploadMedia({
     file,
@@ -140,7 +140,12 @@ async function uploadPhoto(folderId?: string): Promise<string> {
     folderId,
   });
   expect(result.success).toBe(true);
-  const id = result.data!.id;
+  return result.data!.id;
+}
+
+/** An image uploaded, then given the sizes an earlier upload stored. */
+async function uploadPhoto(folderId?: string): Promise<string> {
+  const id = await uploadImage(folderId);
   await withStoredSizes(id);
   return id;
 }
@@ -235,6 +240,286 @@ describe("deleting a media item", () => {
     await service.deleteMediaBulk(ids);
 
     expect(await onDisk()).toEqual([]);
+  });
+});
+
+// An earlier release could record a size by its URL alone. Its file is
+// located as `nextly media remove-sizes` locates it: the path its URL shows
+// beside the original's, where the storage configured now serves that path
+// at that URL.
+describe("an image size recorded by its URL alone", () => {
+  /** A size file stored through the media storage, and where it is. */
+  async function sizeFile(): Promise<{ path: string; url: string }> {
+    const buffer = await sharp(await image())
+      .resize(4, 4)
+      .webp()
+      .toBuffer();
+    return getMediaStorage().upload(buffer, {
+      filename: "photo-small.webp",
+      mimeType: "image/webp",
+      collection: "media",
+    });
+  }
+
+  /** Every warning the delete wrote, as one text. */
+  function warned(warn: { mock: { calls: unknown[][] } }): string {
+    return warn.mock.calls
+      .map(args =>
+        args
+          .map(arg => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+          .join(" ")
+      )
+      .join("\n");
+  }
+
+  it("goes with its item when this storage serves it there", async () => {
+    onLocalDisk();
+    const id = await uploadImage();
+    const small = await sizeFile();
+    setStoredSizes(id, JSON.stringify({ small: { url: small.url } }));
+    expect(await onDisk()).toContain(small.path);
+
+    const result = await service.deleteMedia(id);
+
+    expect(result.success).toBe(true);
+    expect(await onDisk()).toEqual([]);
+  });
+
+  it("stays while another item uses its file", async () => {
+    onLocalDisk();
+    const id = await uploadImage();
+    const other = await uploadImage();
+    const [otherRow] = await db.db
+      .select()
+      .from(db.schema.media)
+      .where(eq(db.schema.media.id, other));
+    // The size's URL names the other item's original.
+    setStoredSizes(id, JSON.stringify({ small: { url: otherRow.url } }));
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    expect(await onDisk()).toContain(otherRow.filename);
+  });
+
+  // The original was stored elsewhere and the item kept its record, so the
+  // size's URL shows a key this storage also has: handed to it, that key
+  // would remove this storage's own file.
+  it("is named by its URL, and nothing removed for it, when another storage serves it", async () => {
+    onLocalDisk();
+    const id = await uploadImage();
+    const collider = await sizeFile();
+    await db.db
+      .update(db.schema.media)
+      .set({
+        filename: "2026/01/elsewhere.png",
+        url: "https://old-bucket.example/2026/01/elsewhere.png",
+        thumbnailUrl: null,
+      })
+      .where(eq(db.schema.media.id, id));
+    const sizeUrl = `https://old-bucket.example/${collider.path}`;
+    setStoredSizes(id, JSON.stringify({ small: { url: sizeUrl } }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await service.deleteMedia(id);
+
+    expect(result.success).toBe(true);
+    expect(await onDisk()).toContain(collider.path);
+    const said = warned(warn);
+    expect(said).toContain(sizeUrl);
+    expect(said).toContain(id);
+  });
+
+  it("is named by its URL when its path cannot be worked out from the record", async () => {
+    onLocalDisk();
+    const id = await uploadImage();
+    const sizeUrl = "https://cdn.example/elsewhere/photo-small.webp";
+    setStoredSizes(id, JSON.stringify({ small: { url: sizeUrl } }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    const said = warned(warn);
+    expect(said).toContain(sizeUrl);
+    expect(said).toContain(id);
+  });
+
+  it("goes with its item when its folder is deleted", async () => {
+    onLocalDisk();
+    const folders = new MediaFolderService(db.adapter, testLogger);
+    const created = await folders.createFolder({
+      name: `folder-${randomUUID()}`,
+      createdBy: "user-1",
+    });
+    const folder = created.data!.id;
+    const id = await uploadImage(folder);
+    const small = await sizeFile();
+    setStoredSizes(id, JSON.stringify({ small: { url: small.url } }));
+
+    expect((await folders.deleteFolder(folder, true)).success).toBe(true);
+
+    expect(await onDisk()).toEqual([]);
+  });
+});
+
+// An import can copy a record whose size is recorded by its URL alone. The
+// item deleted and the item that stays are read alike, so the size the
+// delete would take is found among the other item's files.
+describe("a size recorded by its URL alone that two items name", () => {
+  /** Two items naming one size file by its URL alone, and that file. */
+  async function sharedSize(
+    folderId?: string
+  ): Promise<{ id: string; copy: string; size: string }> {
+    const id = await uploadImage(folderId);
+    const buffer = await sharp(await image())
+      .resize(4, 4)
+      .webp()
+      .toBuffer();
+    const small = await getMediaStorage().upload(buffer, {
+      filename: "photo-small.webp",
+      mimeType: "image/webp",
+      collection: "media",
+    });
+    setStoredSizes(id, JSON.stringify({ small: { url: small.url } }));
+    return { id, copy: await copyOf(id), size: small.path };
+  }
+
+  it("stays while the other names it, and goes with the last", async () => {
+    onLocalDisk();
+    const { id, copy, size } = await sharedSize();
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+    expect(await onDisk()).toContain(size);
+
+    expect((await service.deleteMedia(copy)).success).toBe(true);
+    expect(await onDisk()).toEqual([]);
+  });
+
+  it("stays when the folder of one is deleted, while the other names it", async () => {
+    onLocalDisk();
+    const folders = new MediaFolderService(db.adapter, testLogger);
+    const created = await folders.createFolder({
+      name: `folder-${randomUUID()}`,
+      createdBy: "user-1",
+    });
+    const { size } = await sharedSize(created.data!.id);
+
+    expect((await folders.deleteFolder(created.data!.id, true)).success).toBe(
+      true
+    );
+
+    expect(await onDisk()).toContain(size);
+  });
+});
+
+// A folder cascade a caller hands its own storage reads every record
+// against that storage, the items it keeps files for as well as its own.
+describe("a size recorded by its URL alone on a storage a folder delete is given", () => {
+  it("stays while an item outside the folder names it", async () => {
+    onLocalDisk();
+    const folders = new MediaFolderService(db.adapter, testLogger);
+    const created = await folders.createFolder({
+      name: `folder-${randomUUID()}`,
+      createdBy: "user-1",
+    });
+    const folder = created.data!.id;
+    // Records of files on the given storage, not on the media storage.
+    const cdn = "https://cdn.example";
+    const shared = `${cdn}/2026/11/shared-small.webp`;
+    const onGivenStorage = async (id: string, name: string) => {
+      await db.db
+        .update(db.schema.media)
+        .set({
+          filename: `2026/11/${name}`,
+          url: `${cdn}/2026/11/${name}`,
+          thumbnailUrl: null,
+        })
+        .where(eq(db.schema.media.id, id));
+      setStoredSizes(id, JSON.stringify({ small: { url: shared } }));
+    };
+    await onGivenStorage(await uploadImage(folder), "inside.png");
+    await onGivenStorage(await uploadImage(), "outside.png");
+    const given: string[] = [];
+    const storage = {
+      bulkDelete: async (filePaths: string[]) => {
+        given.push(...filePaths);
+        return { successful: filePaths, failed: [] };
+      },
+      getPublicUrl: (filePath: string) => `${cdn}/${filePath}`,
+      getStorageType: () => "s3",
+    };
+
+    const result = await folders.deleteFolder(folder, true, storage);
+
+    expect(result.success).toBe(true);
+    // The control: the deleted item's own file went to the given storage.
+    expect(given).toContain("2026/11/inside.png");
+    expect(given).not.toContain("2026/11/shared-small.webp");
+  });
+});
+
+// Whether another item names a file is asked by its key, compared as the
+// storage tells its files apart: S3 keeps `2026//10/x` and `2026/10/x` as
+// two objects, while a custom adapter promises nothing of the kind.
+describe("a file whose key another item spells otherwise", () => {
+  /**
+   * The S3 stand-in, reporting itself as `type`, and its files. Any type but
+   * S3's reads every spelling of a key as one file, as a filesystem-backed
+   * custom adapter would.
+   */
+  function bucketAs(type: string): Map<string, Buffer> {
+    const bucket = new Bucket("s3");
+    const one = (filePath: string) =>
+      type === "s3" ? filePath : filePath.replace(/\/{2,}/g, "/");
+    const adapter = {
+      upload: bucket.upload.bind(bucket),
+      delete: (filePath: string) => bucket.delete(one(filePath)),
+      exists: (filePath: string) => bucket.exists(one(filePath)),
+      getPublicUrl: bucket.getPublicUrl.bind(bucket),
+      getType: () => type,
+    };
+    initializeMediaStorage({
+      plugins: [
+        { name: type, type: "s3", collections: { media: true }, adapter },
+      ],
+    });
+    return bucket.files;
+  }
+
+  /** An item, and a second whose record spells its original otherwise. */
+  async function respelled(): Promise<{ id: string; original: string }> {
+    const id = await uploadImage();
+    const [row] = await db.db
+      .select()
+      .from(db.schema.media)
+      .where(eq(db.schema.media.id, id));
+    const other = row.filename.replace("/", "//");
+    expect(other).not.toBe(row.filename);
+    await db.db.insert(db.schema.media).values({
+      ...row,
+      id: `respelled-${id}`,
+      filename: other,
+      url: getMediaStorage().getPublicUrl(other, "media"),
+      thumbnailUrl: null,
+    });
+    return { id, original: row.filename };
+  }
+
+  it("goes on S3, where the other spelling is another object", async () => {
+    const files = bucketAs("s3");
+    const { id, original } = await respelled();
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    expect(files.has(original)).toBe(false);
+  });
+
+  it("stays on a custom adapter, which may read both spellings as one file", async () => {
+    const files = bucketAs("acme-storage");
+    const { id, original } = await respelled();
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    expect(files.has(original)).toBe(true);
   });
 });
 
@@ -660,6 +945,33 @@ describe("deleting a folder with its contents", () => {
     await uploadPhoto(folder);
     await uploadPhoto(inner);
     expect((await onDisk()).length).toBeGreaterThan(2);
+
+    const result = await folders().deleteFolder(folder, true);
+
+    expect(result.success).toBe(true);
+    expect(result.deletedMedia).toBe(2);
+    expect(await onDisk()).toEqual([]);
+  });
+
+  // An item can come into the folder after the delete's first reads and
+  // before its transaction locks the folder. It is deleted with the rest, so
+  // its retired sizes are read for the rows the transaction holds, not for
+  // the ones the folder held when the delete began.
+  it("removes the size files of an item moved into the folder as its delete begins", async () => {
+    onLocalDisk();
+    const folder = await newFolder();
+    await uploadPhoto(folder);
+    const moved = await uploadPhoto();
+    const begin = db.adapter.transaction.bind(db.adapter);
+    vi.spyOn(db.adapter, "transaction").mockImplementationOnce(
+      async (...args: Parameters<typeof begin>) => {
+        await db.db
+          .update(db.schema.media)
+          .set({ folderId: folder })
+          .where(eq(db.schema.media.id, moved));
+        return begin(...args);
+      }
+    );
 
     const result = await folders().deleteFolder(folder, true);
 

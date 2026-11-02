@@ -162,6 +162,9 @@ export function createMockAdapter(db: MockRecord): MockRecord {
           lockRow: vi.fn().mockResolvedValue(undefined),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
+          // No pending versions row: a delete reads them on the transaction
+          // for the languages it removes.
+          select: vi.fn().mockResolvedValue([]),
           // A created row, not `{}`. The write path derives this entry's cache
           // tags from the id it just wrote, and `requireSegment` REFUSES a
           // blank segment on purpose -- a bare `nextly:` tag would

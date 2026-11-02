@@ -96,6 +96,10 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import {
+  issuesTheReaderMaySee,
+  type IssueReader,
+} from "../../../shared/lib/unreadable-field-issues";
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
@@ -223,6 +227,7 @@ import {
   liveStoredDocument,
   promoteCallerFor,
   promotionIssues,
+  readsSingleInEveryLanguage,
   type PromoteGateContext,
 } from "./promote-gate";
 import type { SingleMediaUsageDeps } from "./single-media-usage";
@@ -1227,6 +1232,7 @@ export class SingleMutationService extends BaseService {
       undefined,
       this.fieldRuleVisitor
     );
+    const readsEntry = await this.readsSingle(params.slug, params);
     // Read in a transaction of its own, which writes nothing: the gate reads
     // the live document through one.
     return this.adapter.transaction(async tx => {
@@ -1264,7 +1270,14 @@ export class SingleMutationService extends BaseService {
       const issues = await refusalIssues(() =>
         promotionIssues(drafts, {
           // The caller the release's write has: the member's author, checked.
-          ...this.promotionGate(setup, tx, row, { user: params.user }, grants),
+          ...this.promotionGate(
+            setup,
+            tx,
+            row,
+            { user: params.user },
+            grants,
+            readsEntry
+          ),
           // Every language goes live, so none falls back to another.
           enforceLocalizedRequired: true,
         })
@@ -1318,6 +1331,7 @@ export class SingleMutationService extends BaseService {
       params.user,
       params.authenticatedScope
     );
+    const readsEntry = await this.readsSingle(params.slug, params);
     // Read in a transaction of its own, which writes nothing: the gate reads
     // the stored document through one.
     return this.adapter.transaction(async tx => {
@@ -1335,7 +1349,8 @@ export class SingleMutationService extends BaseService {
                 user: params.user,
                 authenticatedScope: params.authenticatedScope,
               },
-              grants
+              grants,
+              readsEntry
             ),
             // One language goes live; the others keep what they hold.
             enforceLocalizedRequired: false,
@@ -1467,7 +1482,9 @@ export class SingleMutationService extends BaseService {
     tx: TransactionContext,
     row: SingleDocument,
     caller: { user: UserContext; authenticatedScope?: AuthenticatedScope },
-    grants: () => Promise<CallerGrants>
+    grants: () => Promise<CallerGrants>,
+    /** Whether the caller may read the Single; see `readsSingle`. */
+    readsEntry: boolean
   ): Omit<PromoteGateContext, "enforceLocalizedRequired"> {
     const { slug, meta, fieldConfigs, companion, companionExists } = setup;
     return {
@@ -1480,6 +1497,9 @@ export class SingleMutationService extends BaseService {
           setup.componentSchemas?.get(componentSlug)?.fields,
         options: { ...caller, overrideAccess: false },
         grants,
+        readsEntry,
+        localization: this.localization,
+        tableName: meta.tableName,
       }),
       entryId: row.id,
       toLogical: doc =>
@@ -1504,6 +1524,98 @@ export class SingleMutationService extends BaseService {
         (companion?.localizedFields ?? []).map(f => f.name)
       ),
     };
+  }
+
+  /**
+   * Whether `caller` may read the Single in every language; see
+   * `readsSingleInEveryLanguage`.
+   */
+  private async readsSingle(
+    slug: string,
+    caller: {
+      user?: UpdateSingleOptions["user"];
+      authenticatedScope?: AuthenticatedScope;
+    }
+  ): Promise<boolean> {
+    return readsSingleInEveryLanguage({
+      slug,
+      user: caller.user,
+      authenticatedScope: caller.authenticatedScope,
+      rbacAccessControlService: this.rbacAccessControlService,
+      visitor: this.fieldRuleVisitor,
+      logger: this.logger,
+      localization: this.localization,
+    });
+  }
+
+  /**
+   * Refuse a save whose values break the Single's declared rules: the same
+   * gate the collection write paths run. Singles updates are PATCH
+   * semantics, so absent keys stay untouched and provided keys must hold. An
+   * issue on a field the caller may not read is told without naming it or
+   * its value.
+   */
+  private async assertSaveValid(args: {
+    slug: string;
+    data: Record<string, unknown>;
+    fieldConfigs: DynamicSingleRecord["fields"];
+    localizedFieldNames: ReadonlySet<string>;
+    enforceLocalizedRequired: boolean;
+    /** The Single's stored document id, which a read rule is handed. */
+    entryId: string;
+    user: UpdateSingleOptions["user"];
+    /** Who the refusal is told to, with the scope a key arrived with. */
+    reader: IssueReader;
+  }): Promise<void> {
+    const { slug, fieldConfigs } = args;
+    const validationView = relationshipValidationView(args.data, fieldConfigs);
+    const judgedIssues = await validateEntryData(
+      validationView,
+      attachFieldValidators("single", slug, fieldConfigs),
+      {
+        mode: "update",
+        req: args.user ? { user: args.user } : {},
+        // A component inside a group or repeater is judged here, since no
+        // component write reaches it. On the pool, as this is.
+        componentFields: await containedComponentResolver(
+          fieldConfigs,
+          async componentSlug =>
+            (await this.fieldGroupDataService?.getComponentFields(
+              componentSlug
+            )) ?? null
+        ),
+        localizedFieldNames: args.localizedFieldNames,
+        enforceLocalizedRequired: args.enforceLocalizedRequired,
+        // Before the transaction opens, so on the pool.
+        write: entryWriteContext({
+          kind: "single",
+          slug,
+          connection: {
+            db: this.adapter,
+            executor: undefined,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          },
+        }),
+      }
+    );
+    const validationIssues = await issuesTheReaderMaySee(judgedIssues, {
+      kind: "single",
+      slug,
+      document: validationView,
+      fields: fieldConfigs,
+      fieldGroups: this.fieldGroupDataService,
+      entryId: args.entryId,
+      // A Single the reader may not read is shown to them in no part.
+      rowReadable: () =>
+        this.readsSingle(slug, {
+          user: args.user,
+          authenticatedScope: args.reader.authenticatedScope,
+        }),
+      reader: args.reader,
+    });
+    if (validationIssues.length > 0) {
+      throw NextlyError.validation({ errors: validationIssues });
+    }
   }
 
   async update(
@@ -1943,40 +2055,21 @@ export class SingleMutationService extends BaseService {
       // 6.2. Enforce the schema's declared rules on the server — the same
       // gate the collection write paths run. Singles updates are PATCH
       // semantics: absent keys stay untouched, provided keys must hold.
-      {
-        const validationIssues = await validateEntryData(
-          relationshipValidationView(currentData, fieldConfigs),
-          attachFieldValidators("single", slug, fieldConfigs),
-          {
-            mode: "update",
-            req: options.user ? { user: options.user } : {},
-            // A component inside a group or repeater is judged here, since
-            // no component write reaches it. On the pool, as this is.
-            componentFields: await containedComponentResolver(
-              fieldConfigs,
-              async componentSlug =>
-                (await this.fieldGroupDataService?.getComponentFields(
-                  componentSlug
-                )) ?? null
-            ),
-            localizedFieldNames,
-            enforceLocalizedRequired,
-            // Before the transaction opens, so on the pool.
-            write: entryWriteContext({
-              kind: "single",
-              slug,
-              connection: {
-                db: this.adapter,
-                executor: undefined,
-                defaultLocale: this.localization?.defaultLocale ?? null,
-              },
-            }),
-          }
-        );
-        if (validationIssues.length > 0) {
-          throw NextlyError.validation({ errors: validationIssues });
-        }
-      }
+      await this.assertSaveValid({
+        slug,
+        data: currentData,
+        fieldConfigs,
+        localizedFieldNames,
+        enforceLocalizedRequired,
+        entryId: String(documentId),
+        user: options.user,
+        reader: {
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+          authenticatedScope: options.authenticatedScope,
+          grants: writeGrants,
+        },
+      });
 
       // 6.3. A publish promotes the held pending change, and that content has
       // been judged only once, when it was SAVED. The gate that judges it
@@ -2007,6 +2100,15 @@ export class SingleMutationService extends BaseService {
             this.fieldRuleVisitor
           )
         : undefined;
+      // Whether the caller may read the Single, which decides what a refusal
+      // of the promotion may name; asked here for the same reason. Wherever
+      // the Single has a status, since a publish with nothing pending is
+      // judged as a promotion too, drafts or none.
+      const promoteReads =
+        (singleMeta as { status?: boolean }).status === true &&
+        options.overrideAccess !== true
+          ? await this.readsSingle(slug, options)
+          : undefined;
 
       // 6.25. Single-level beforeChange hooks, on data the validation gate has
       // just passed. The declaration used to register onto `beforeUpdate`,
@@ -2818,6 +2920,9 @@ export class SingleMutationService extends BaseService {
                   singleComponentSchemas?.get(componentSlug)?.fields,
                 options,
                 grants: promoteGrants,
+                readsEntry: promoteReads,
+                localization: this.localization,
+                tableName: singleMeta.tableName,
               }),
               entryId: promotedInto.id,
               // A snapshot belongs to this document, so its identity is
