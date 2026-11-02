@@ -488,6 +488,33 @@ describe("PageMiniature's sections", () => {
     expect(thin.style.zIndex).toBe("1");
   });
 
+  it("keeps a thin section's target inside the page at its top and bottom edges", () => {
+    // Centred on a divider at the very top, half the grown target would sit
+    // above the frame, where the frame clips it: a target shorter than 24 px
+    // again. Half scale: the page is 500 px tall on screen.
+    restore = stubLayout({
+      frameWidth: 640,
+      pageHeight: 1000,
+      boxes: { a: { top: 0, height: 4 }, b: { top: 497, height: 3 } },
+    });
+    render(
+      <PageMiniature
+        document={twoSections}
+        siteStyles={undefined}
+        render={RENDER}
+        sections={sections}
+        onNavigate={() => {}}
+      />
+    );
+
+    const top = screen.getByRole("link", { name: /Section 1/ });
+    expect(top.style.top).toBe("0px");
+    expect(top.style.height).toBe("24px");
+    const bottom = screen.getByRole("link", { name: /Section 2/ });
+    expect(bottom.style.top).toBe("476px");
+    expect(bottom.style.height).toBe("24px");
+  });
+
   it("opens a section within the admin on a plain click, and on Space", () => {
     const onNavigate = vi.fn();
     render(

@@ -20,6 +20,7 @@ import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
 import {
+  prepareDocumentAsDrawn,
   prepareDocumentForRead,
   prepareDocumentReadStages,
 } from "./prepare-document";
@@ -134,5 +135,54 @@ describe("the narrow view is derived, not recomputed", () => {
 
     expect(prepareDocumentForRead(wrongVersion, { resolver })).toBeNull();
     expect(prepareDocumentReadStages(wrongVersion, { resolver })).toBeNull();
+  });
+});
+
+describe("prepareDocumentAsDrawn", () => {
+  /** A heading, a block nothing registers, and a condition-gated heading. */
+  function mixedDocument(): BlockDocument {
+    return {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "core/heading", version: 1, props: { text: "Real" } },
+        { id: "gone", type: "acme/removed", version: 1, props: {} },
+        {
+          id: "gated",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Members" },
+          visibility: {
+            conditions: [[{ field: "role", operator: "equals", value: "x" }]],
+          },
+        } as BlockDocument["nodes"][number],
+      ],
+    };
+  }
+
+  it("keeps a node the renderer draws a placeholder for, which the reading view drops", () => {
+    // The renderer walks this tree: a block it cannot draw still takes a place
+    // on the page as a placeholder. A list of the page's parts read from the
+    // reading view would leave it out and number everything after it wrongly.
+    const drawn = prepareDocumentAsDrawn(mixedDocument(), { resolver });
+    const read = prepareDocumentForRead(mixedDocument(), { resolver });
+
+    expect(drawn?.nodes.map(node => node.id)).toEqual(["a", "gone"]);
+    expect(read?.nodes.map(node => node.id)).toEqual(["a"]);
+  });
+
+  it("is the stage the renderer walks", () => {
+    const document = mixedDocument();
+    const stages = prepareDocumentReadStages(document, { resolver });
+
+    expect(prepareDocumentAsDrawn(document, { resolver })).toEqual(
+      stages?.deduped
+    );
+  });
+
+  it("answers null for an unreadable envelope, as the stages do", () => {
+    const unreadable = { ...untouchedDocument(), formatVersion: -1 };
+
+    expect(prepareDocumentAsDrawn(unreadable, { resolver })).toBeNull();
   });
 });

@@ -57,13 +57,16 @@
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
-import { useDocumentPreview } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentLocale,
+  useDocumentPreview,
+} from "@nextlyhq/plugin-sdk/admin";
 import { Button, Skeleton } from "@nextlyhq/ui";
 import { ArrowRight, LayoutGrid } from "lucide-react";
 import { useId, useMemo, type JSX } from "react";
 
 import type { ComponentLibraryState } from "./component-library-client";
-import { sectionAddress } from "./editor/builder-address";
+import { sectionAddress, showsAnotherLanguage } from "./editor/builder-address";
 import { entryBlockResolver } from "./entry-block-resolver";
 import type { PageRenderInputs } from "./page-render-inputs";
 import { pageSections, type PageSection } from "./page-sections";
@@ -459,19 +462,28 @@ function PreviewBar({
  * Where each section opens, for an author who may edit a page that has an
  * address; `undefined` for anyone else, who is shown the page and its parts
  * and nothing more.
+ *
+ * None either while another language is on screen. The sections listed are
+ * that language's, and the builder opens the default language's document,
+ * whose sections need not match: a link would select an unrelated section or
+ * none. The way into the builder itself stays, saying where it leads.
  */
 function sectionLinks(
   sections: readonly PageSection[],
   canEdit: boolean,
-  href: string | undefined
+  href: string | undefined,
+  anotherLanguage: boolean
 ): {
   hrefFor: ((section: PageSection) => string) | undefined;
   inPicture: MiniatureSection[] | undefined;
 } {
-  if (!canEdit || href === undefined) {
+  if (!canEdit || href === undefined || anotherLanguage) {
     return { hrefFor: undefined, inPicture: undefined };
   }
-  const hrefFor = (section: PageSection) => sectionAddress(href, section.id);
+  // Opened at the section's target, which is what the editor's document holds;
+  // placed in the picture by the id it was drawn with.
+  const hrefFor = (section: PageSection) =>
+    sectionAddress(href, section.target);
   return {
     hrefFor,
     inPicture: sections.map(section => ({
@@ -505,6 +517,7 @@ export function PageBuilderCard({
   );
 
   const said = note ?? (canEdit && href === undefined ? SAVE_FIRST : undefined);
+  const anotherLanguage = showsAnotherLanguage(useDocumentLocale());
 
   // Empty means nothing stored, not nothing drawn: a page whose only sections
   // are gated by a condition still holds a page, and inviting the author to
@@ -520,7 +533,12 @@ export function PageBuilderCard({
     );
   }
 
-  const { hrefFor, inPicture } = sectionLinks(sections, canEdit, href);
+  const { hrefFor, inPicture } = sectionLinks(
+    sections,
+    canEdit,
+    href,
+    anotherLanguage
+  );
 
   return (
     // `min-w-0` because the form lays fields out as grid items, whose default

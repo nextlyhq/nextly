@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
@@ -10,7 +11,11 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PageBuilderCard, PREVIEW_PAGE_LABEL } from "./PageBuilderCard";
+import {
+  OPEN_BUILDER_LABEL,
+  PageBuilderCard,
+  PREVIEW_PAGE_LABEL,
+} from "./PageBuilderCard";
 import { pageRenderInputs } from "./page-render-inputs";
 
 /*
@@ -20,13 +25,24 @@ import { pageRenderInputs } from "./page-render-inputs";
 const preview = vi.hoisted(() => ({
   current: null as null | { open: () => void },
 }));
+// The language the surrounding form shows; null outside a form, as at rest.
+const locale = vi.hoisted(() => ({
+  current: null as null | {
+    code: string | null;
+    documentLocalized: boolean;
+    isDefaultLocale: boolean;
+    rtl: boolean;
+  },
+}));
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useDocumentPreview: () => preview.current,
+  useDocumentLocale: () => locale.current,
 }));
 
 beforeEach(() => {
   preview.current = null;
+  locale.current = null;
 });
 
 // Derived from the block's own definition rather than pinned: the renderer
@@ -522,5 +538,81 @@ describe("PageBuilderCard for a page never saved", () => {
     expect(
       screen.getByText("Save this page to open the Page Builder.")
     ).toBeDefined();
+  });
+});
+
+describe("PageBuilderCard while another language is on screen", () => {
+  it("offers no way into a single section, and still the way into the builder", () => {
+    // The sections listed are this language's; the builder opens the default
+    // language's document, whose sections need not be the same.
+    locale.current = {
+      code: "de",
+      documentLocalized: true,
+      isDefaultLocale: false,
+      rtl: false,
+    };
+    render(<PageBuilderCard {...base} document={FIVE} />);
+
+    expect(within(sectionList()).getAllByRole("listitem")).toHaveLength(5);
+    expect(within(sectionList()).queryAllByRole("link")).toHaveLength(0);
+    expect(screen.queryByRole("link", { name: /^Section \d/ })).toBeNull();
+    expect(
+      screen.getByRole("link", { name: OPEN_BUILDER_LABEL })
+    ).toBeDefined();
+  });
+
+  it("links each section in the default language", () => {
+    // The control: the same page, the default language, links as usual.
+    locale.current = {
+      code: null,
+      documentLocalized: true,
+      isDefaultLocale: true,
+      rtl: false,
+    };
+    render(<PageBuilderCard {...base} document={FIVE} />);
+
+    expect(within(sectionList()).getAllByRole("link")).toHaveLength(5);
+  });
+});
+
+describe("PageBuilderCard with a placed component", () => {
+  it("opens the component's section at the instance, which the editor holds", () => {
+    const withHeader = pageRenderInputs({
+      siteStyle: undefined,
+      clientConfig: undefined,
+      previewContainer: undefined,
+      limits: DEFAULT_LIMITS,
+      definitions: new Map([
+        [
+          "header",
+          {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [node("d1", "core/heading", { text: "Site header" })],
+          } as unknown as BlockDocument,
+        ],
+      ]),
+    });
+    const page = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "i1",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    render(<PageBuilderCard {...base} document={page} render={withHeader} />);
+
+    const link = within(sectionList()).getByRole("link", {
+      name: /^Edit section 1/,
+    });
+    expect(link.getAttribute("href")).toBe(
+      "/admin/collections/pages/p1/builder?field=body&section=i1"
+    );
   });
 });

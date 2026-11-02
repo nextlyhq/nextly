@@ -9,6 +9,7 @@
  * nodes rather than the drawn ones numbers a section the preview never shows.
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
@@ -20,6 +21,7 @@ import { describe, expect, it } from "vitest";
 import { entryBlockResolver } from "./entry-block-resolver";
 import { pageRenderInputs } from "./page-render-inputs";
 import { pageSections } from "./page-sections";
+import { layerLabel } from "@nextlyhq/builder";
 
 function versionOf(type: string): number {
   const block = coreBlocks.find(candidate => candidate.name === type);
@@ -99,21 +101,41 @@ describe("pageSections", () => {
     );
 
     expect(sections).toEqual([
-      { id: "hero", number: 1, label: "Section", firstLine: "Welcome to Acme" },
+      {
+        id: "hero",
+        target: "hero",
+        number: 1,
+        label: "Section",
+        firstLine: "Welcome to Acme",
+      },
       {
         id: "intro",
+        target: "intro",
         number: 2,
         label: "Text",
         firstLine: "Plain words first.",
       },
-      { id: "rule", number: 3, label: "Divider", firstLine: "" },
+      {
+        id: "rule",
+        target: "rule",
+        number: 3,
+        label: "Divider",
+        firstLine: "",
+      },
       {
         id: "plans",
+        target: "plans",
         number: 4,
         label: "Pricing",
         firstLine: "Plans for teams",
       },
-      { id: "contact", number: 5, label: "Heading", firstLine: "Contact us" },
+      {
+        id: "contact",
+        target: "contact",
+        number: 5,
+        label: "Heading",
+        firstLine: "Contact us",
+      },
     ]);
   });
 
@@ -138,6 +160,73 @@ describe("pageSections", () => {
     expect(sections.map(({ id, number }) => [id, number])).toEqual([
       ["a", 1],
       ["b", 2],
+    ]);
+  });
+
+  it("opens a component's section at the instance the editor holds, not the ids it was drawn with", () => {
+    // A placed component draws as its definition's nodes, which carry ids
+    // minted for the drawing. The editor's document holds the INSTANCE, so a
+    // section opened by a drawn id would select nothing.
+    const instance = {
+      id: "i1",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "header" },
+    } as BlockNode;
+    const withHeader = pageRenderInputs({
+      siteStyle: undefined,
+      clientConfig: undefined,
+      previewContainer: undefined,
+      limits: DEFAULT_LIMITS,
+      definitions: new Map([
+        [
+          "header",
+          {
+            ...page([block("d1", "core/heading", { text: "Site header" })]),
+            kind: "component",
+          },
+        ],
+      ]) as never,
+    });
+
+    const sections = pageSections(
+      page([block("intro", "core/text", { text: "Hello" }), instance]),
+      entryBlockResolver(),
+      withHeader
+    );
+
+    const header = sections[1];
+    expect(header?.target).toBe("i1");
+    expect(header?.id).not.toBe("i1");
+    expect(header?.firstLine).toBe("Site header");
+    // Named as Layers names what the author placed: the instance.
+    expect(header?.label).toBe(
+      layerLabel(instance, type => entryBlockResolver().get(type))
+    );
+    // An ordinary section opens at its own id.
+    expect(sections[0]?.target).toBe("intro");
+  });
+
+  it("keeps a block the preview draws as a placeholder in its place", () => {
+    // A block nothing registers still takes a place on the drawn page. Left
+    // out, every number after it would point one section too high.
+    const sections = sectionsOf(
+      page([
+        block("a", "core/heading", { text: "First" }),
+        {
+          id: "gone",
+          type: "acme/removed",
+          version: 1,
+          props: {},
+        } as BlockNode,
+        block("b", "core/heading", { text: "Second" }),
+      ])
+    );
+
+    expect(sections.map(({ target, number }) => [target, number])).toEqual([
+      ["a", 1],
+      ["gone", 2],
+      ["b", 3],
     ]);
   });
 

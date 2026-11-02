@@ -9,12 +9,22 @@
  * ## The sections the preview DRAWS, not the ones stored
  *
  * The list sits under a preview of the page and its numbers are read against
- * it, so it has to describe the same tree. The document is prepared by the
- * renderer's own pipeline — format guard, shape repair under the site's caps,
- * migration, condition gating, id repair — and only what that leaves is listed.
+ * it, so it has to describe the same tree: the one the renderer walks, from its
+ * own pipeline — format guard, shape repair under the site's caps, component
+ * resolution, migration, condition gating, id repair. A block the renderer
+ * draws as a placeholder keeps its place, since it takes one on the page.
  * Listing the stored nodes instead would number a condition-gated section the
  * preview leaves out, and every number after it would point one section too
  * far down the page.
+ *
+ * ## Drawn by one id, opened by another
+ *
+ * A placed component draws as its definition's nodes, which carry ids minted
+ * for the drawing; the editor's document holds the instance the author placed.
+ * So each section keeps the id it was drawn with, which is how the preview
+ * finds it, and a `target`, which is how the builder opens it: the instance a
+ * drawn node came from, or the node itself. It is named as Layers names that
+ * target.
  *
  * Preparing first also makes the text walk safe. A stored value has been
  * repaired by nothing, and a hand walk over it can overflow the stack on a
@@ -36,7 +46,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import {
-  prepareDocumentForRead,
+  prepareDocumentAsDrawn,
   type BlockResolver,
 } from "@nextlyhq/blocks-react";
 import { layerLabel } from "@nextlyhq/builder";
@@ -46,8 +56,10 @@ import { documentNodes } from "./page-summary";
 
 /** One section of the page, as the entry screen lists it. */
 export interface PageSection {
-  /** The block's id, which is what the editor opens at. */
+  /** The id the section is drawn with, which is how the preview finds it. */
   id: string;
+  /** The id the builder opens at: the placed instance it came from, or itself. */
+  target: string;
   /** Its place on the page, counting from 1. */
   number: number;
   /** Its name: the author's, or its block's. */
@@ -72,7 +84,7 @@ export function pageSections(
   // The pipeline expects a document; anything without a node list draws
   // nothing, which is what the preview shows for it too.
   if (documentNodes(value).length === 0) return [];
-  const prepared = prepareDocumentForRead(value as BlockDocument, {
+  const prepared = prepareDocumentAsDrawn(value as BlockDocument, {
     resolver,
     styleContext: render.styleContext,
     ...(render.limits === undefined ? {} : { limits: render.limits }),
@@ -85,7 +97,13 @@ export function pageSections(
   if (prepared === null) return [];
 
   const lookup = (type: string) => resolver.get(type);
+  const stored = new Map(documentNodes(value).map(node => [node.id, node]));
   return prepared.nodes.map((node, index) => {
+    // `instanceOf` is set by component resolution on every node a definition
+    // contributed, naming the instance on the page; an author's own node has
+    // none.
+    const host = (node as { instanceOf?: unknown }).instanceOf;
+    const target = typeof host === "string" ? host : node.id;
     // Every node is offered: the tree was already gated above, so nothing left
     // in it is withheld from the reader this describes.
     const text = deriveSeoFromDocument(
@@ -95,8 +113,9 @@ export function pageSections(
     );
     return {
       id: node.id,
+      target,
       number: index + 1,
-      label: layerLabel(node, lookup),
+      label: layerLabel(stored.get(target) ?? node, lookup),
       firstLine: text.title ?? text.description ?? "",
     };
   });

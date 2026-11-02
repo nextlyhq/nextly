@@ -147,15 +147,20 @@ const MIN_TARGET = 24;
 
 /**
  * Where a section's link goes: over the section, grown to the least target
- * height about its own middle. Unmeasured, it takes no room rather than
- * covering the page.
+ * height about its own middle and kept within the page's on-screen height.
+ * Unmeasured, it takes no room rather than covering the page.
  */
-function linkBox(box: Box | undefined): CSSProperties {
+function linkBox(box: Box | undefined, pageHeight: number): CSSProperties {
   if (box === undefined) return { top: 0, left: 0, width: 0, height: 0 };
   if (box.height >= MIN_TARGET) return box;
+  const centred = box.top - (MIN_TARGET - box.height) / 2;
+  // Kept inside the page, whose frame clips anything past its edges: a thin
+  // first or last section grows inward instead. A page shorter than the
+  // target cannot hold it, and starts at the top.
+  const top = Math.max(0, Math.min(centred, pageHeight - MIN_TARGET));
   return {
     ...box,
-    top: box.top - (MIN_TARGET - box.height) / 2,
+    top,
     height: MIN_TARGET,
     // Above its neighbours, whose links it now overlaps: drawn later, they
     // would otherwise cover most of it again. They lose a few pixels of a
@@ -367,10 +372,13 @@ function ScaledPage({
 function SectionLinks({
   sections,
   boxes,
+  pageHeight,
   onNavigate,
 }: {
   sections: readonly MiniatureSection[];
   boxes: Record<string, Box>;
+  /** The page's height on screen, which no link may extend past. */
+  pageHeight: number;
   onNavigate: (href: string) => void;
 }): JSX.Element {
   return (
@@ -382,7 +390,7 @@ function SectionLinks({
           aria-label={section.name}
           data-slot="page-miniature-section"
           className="absolute block rounded-sm outline-none ring-inset ring-primary/60 hover:ring-2 focus-visible:ring-2 focus-visible:ring-ring"
-          style={linkBox(boxes[section.id])}
+          style={linkBox(boxes[section.id], pageHeight)}
           {...navigateWithin(section.href, onNavigate)}
         />
       ))}
@@ -497,6 +505,7 @@ export function PageMiniature({
             <SectionLinks
               sections={sections}
               boxes={boxes}
+              pageHeight={composedHeight * scale}
               onNavigate={onNavigate}
             />
           )}
