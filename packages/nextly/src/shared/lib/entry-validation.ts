@@ -988,9 +988,13 @@ async function validateContainedComponents(
     // its default is not refused. Filled on a copy: validation reports, and
     // the value written is the caller's.
     const filled = { ...(instance as Record<string, unknown>) };
-    // A stored instance going live is judged as stored: a default added since
-    // it was saved was never written into it, so it does not stand in.
-    if (!options.judgeComponentInstances) {
+    // A top-level instance going live is judged as its own row stores it: a
+    // default added since it was saved was never written into it, so it does
+    // not stand in. One held in a group or repeater is stored as sent, its
+    // defaults filled only to judge it, so they are filled again here.
+    const storedRow =
+      options.judgeComponentInstances === true && !options.insideContainer;
+    if (!storedRow) {
       applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
     }
     // A stored instance never holds a component placed directly among its
@@ -1001,17 +1005,28 @@ async function validateContainedComponents(
     await validateFields(
       attachFieldValidators("fieldGroup", slug, judged),
       filled,
-      // A stored instance is judged as the component write judges one: a field
-      // type's validator sees the instance as the document it compares with.
-      options.judgeComponentInstances
-        ? { data: filled, mode: "create" }
-        : write,
+      // A stored row is judged as the component write judges one: a field
+      // type's validator sees the instance as the document it compares with,
+      // and no entry write, which that pass does not hand it either.
+      storedRow ? { data: filled, mode: "create" } : write,
       at,
       // A component's value is written whole, so its required fields apply.
-      { ...options, mode: "create", insideContainer: true },
+      {
+        ...(storedRow ? withoutEntryWrite(options) : options),
+        mode: "create",
+        insideContainer: true,
+      },
       issues
     );
   }
+}
+
+/** `options` without the entry write a plugin field type is handed. */
+function withoutEntryWrite(
+  options: ValidateEntryOptions
+): ValidateEntryOptions {
+  const { write: _entryWrite, ...rest } = options;
+  return rest;
 }
 
 async function validateFields(
