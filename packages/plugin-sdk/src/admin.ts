@@ -198,6 +198,26 @@ export {
 } from "@nextlyhq/admin";
 
 /**
+ * The editor header's own save state and leading action, for a document view
+ * that replaces the header (@experimental).
+ *
+ * - `<DocumentSaveIndicator />` is the header's save chip: Saving…, Unsaved
+ *   changes, Saved (when, in its tooltip) or Not saved with Retry, in a
+ *   reserved width so nothing beside it moves, and announced as the header
+ *   announces it. `className` places it; it does not restyle it.
+ * - `<DocumentPrimaryAction />` is the leading action (Publish, Publish
+ *   changes or Save, as the header's), with the other ways to publish and
+ *   Unpublish on its arrow, each row showing why it cannot run when it
+ *   cannot. Every control runs through the same runner as `run`.
+ *
+ * Drawn by the admin, so a view offers the header's controls rather than a
+ * copy that drifts from them. Both render nothing outside a document editor.
+ * Experimental while the first view that uses them settles; the intent is to
+ * keep both names and their props stable.
+ */
+export { DocumentSaveIndicator, DocumentPrimaryAction } from "@nextlyhq/admin";
+
+/**
  * The entry's remaining fields, drawn for a takeover surface (@experimental).
  *
  * A field whose type is registered as a TAKEOVER covers the whole form, so an

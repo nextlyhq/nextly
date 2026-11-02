@@ -2325,6 +2325,49 @@ describe("the top bar's three columns", () => {
     expect(end?.querySelector('[aria-label="Inspector"]')).not.toBeNull();
   });
 
+  it("ends on the host's actions: the panel buttons come first, then a rule", () => {
+    // The accepted layout ends the bar on the action that leads, so the panel
+    // buttons sit before the document's controls rather than after them.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="About us"
+        topBarEnd={<button type="button">Publish</button>}
+        onZoomChange={vi.fn()}
+      />
+    );
+    const end = document.querySelector<HTMLElement>('[data-topbar="end"]');
+    const names = Array.from(end?.querySelectorAll("button") ?? []).map(
+      button => button.getAttribute("aria-label") ?? button.textContent
+    );
+    expect(names).toEqual(["Left panel", "Inspector", "Publish"]);
+    const publish = screen.getByRole("button", { name: "Publish" });
+    expect(publish.previousElementSibling?.getAttribute("aria-hidden")).toBe(
+      "true"
+    );
+  });
+
+  it.each([
+    ["no end content", undefined],
+    ["an empty conditional slot", null],
+    ["a false condition", false],
+  ])("draws no rule for %s", (_name, topBarEnd) => {
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="About us"
+        topBarEnd={topBarEnd}
+        onZoomChange={vi.fn()}
+      />
+    );
+    const end = document.querySelector<HTMLElement>('[data-topbar="end"]');
+    expect(end?.querySelector('[aria-hidden="true"].w-px')).toBeNull();
+  });
+
   it("truncates a long title rather than pushing the centre column", () => {
     stubContainerFits(true);
     render(
