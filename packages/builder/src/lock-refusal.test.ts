@@ -72,6 +72,7 @@ describe("repairStepSentence", () => {
       repairStepSentence(
         {
           kind: "move",
+          cause: "lock",
           nodeId: "card",
           type: "acme/card",
           from: { holderId: "hero", slot: "body" },
@@ -80,6 +81,24 @@ describe("repairStepSentence", () => {
         document
       )
     ).toBe("Move Card out of Hero's locked area, to just after Hero.");
+  });
+
+  it("says a block the placement rule moves isn't allowed where it was, not that it is locked", () => {
+    expect(
+      repairStepSentence(
+        {
+          kind: "move",
+          cause: "placement",
+          nodeId: "card",
+          type: "acme/card",
+          from: { holderId: "hero", slot: "body" },
+          after: "hero",
+        },
+        document
+      )
+    ).toBe(
+      "Move Card out of Hero, where it isn't allowed, to just after Hero."
+    );
   });
 
   it("says which block is added, and to whose area", () => {

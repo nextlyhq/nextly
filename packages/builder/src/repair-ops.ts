@@ -1,6 +1,6 @@
 /**
- * A lock repair as ops the editor's store applies, so confirming it is one
- * edit an author can undo.
+ * A repair, of locks and placements, as ops the editor's store applies, so
+ * confirming it is one edit an author can undo.
  *
  * The engine's `planRepair` decides the repair: its `result` is the document
  * the author confirms, and its steps are what the preview shows. The store
@@ -104,7 +104,12 @@ function slotGroups(steps: readonly RepairStep[]): RepairStep[][] {
 function placeOf(step: RepairStep): string {
   switch (step.kind) {
     case "move":
-      return `${step.from.holderId}\u0000${step.from.slot}`;
+      // A placement move names the exact block it lands after, so it is a
+      // group of its own: never counted against a lock move's anchor, and
+      // never sorted ahead of a lock add in the slot it leaves.
+      return step.cause === "placement"
+        ? `placement\u0000${step.nodeId}`
+        : `${step.from.holderId}\u0000${step.from.slot}`;
     case "add":
       return `${step.at.holderId}\u0000${step.at.slot}`;
     case "reorder":

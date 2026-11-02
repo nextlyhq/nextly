@@ -1,20 +1,27 @@
 "use client";
 
 /**
- * The repair of a page whose locked areas hold what their locks don't allow.
+ * The repair of a page whose locked areas hold what their locks don't allow,
+ * or whose blocks sit where the placement rule refuses them.
  *
- * A page stored before its locks were enforced, or written by an import, can
- * hold blocks a locked area may not, or a design inside an area locked to its
- * content. The editor goes on editing such a page, refusing only a new break,
- * and a save refuses the blocks a locked area may not hold; this offers to put
- * it right. It shows each step first, in words, and changes nothing
- * until the author confirms; the repair is then one edit, which undo takes
- * back. No block the author placed is removed: the engine's planner moves
- * what an area may not hold to just after it.
+ * A page stored before its locks or the placement rule were enforced, or
+ * written by an import, can hold blocks a locked area may not, a design inside
+ * an area locked to its content, or a block where it isn't allowed: a Button
+ * inside a linked Card, say. The editor goes on editing such a page, refusing
+ * only a new break, and a save refuses or warns; this offers to put it right.
+ * It shows each step first, in words, and changes nothing until the author
+ * confirms; the repair is then one edit, which undo takes back. No block the
+ * author placed is removed: the engine's planner moves what an area may not
+ * hold to just after it, and a misplaced block to the nearest place it is
+ * allowed.
  *
  * @module repair-notice
  */
-import { findNode, type RepairPlan } from "@nextlyhq/blocks-engine";
+import {
+  findNode,
+  type RepairPlan,
+  type RepairStep,
+} from "@nextlyhq/blocks-engine";
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -41,10 +48,11 @@ export function RepairNotice({
   const [refused, setRefused] = React.useState<string | undefined>();
   const headingId = React.useId();
 
-  // Nothing to say on a page every lock allows. A page whose only breaks
-  // are ones the plan can't repair still says so, with nothing to confirm:
-  // hiding the notice would read as a page the next save accepts.
-  if (plan.steps.length === 0 && plan.remaining.length === 0) return null;
+  // Nothing to say on a page every lock and the placement rule allow. A page
+  // whose only breaks are ones the plan can't repair still says so, with
+  // nothing to confirm: hiding the notice would read as a page the next save
+  // accepts.
+  if (!holdsAnything(plan)) return null;
 
   const confirm = () => {
     // The plan shown is this render's, made for the store as it stands: a
@@ -68,14 +76,11 @@ export function RepairNotice({
   return (
     <section className="nx-lock-repair" aria-labelledby={headingId}>
       <h2 id={headingId} className="nx-lock-repair__title">
-        Locked areas
+        Repair this page
       </h2>
-      <p className="nx-inspector__note">
-        Some locked areas on this page hold blocks or settings their lock
-        doesn’t allow.
-      </p>
+      <p className="nx-inspector__note">{introSentence(plan)}</p>
       {plan.steps.length === 0 ? (
-        <UnrepairableNote />
+        <UnrepairableNote plan={plan} />
       ) : reviewing ? (
         <RepairReview
           plan={plan}
@@ -126,11 +131,9 @@ function RepairReview({
       <p className="nx-inspector__note">
         No block is removed, and nothing changes until you repair.
       </p>
-      {plan.remaining.length === 0 ? null : (
-        // Said before the author confirms, so a repair that leaves a break is
-        // never taken for one that fixes the page.
-        <UnrepairableNote />
-      )}
+      {/* Said before the author confirms, so a repair that leaves a break is
+          never taken for one that fixes the page. */}
+      <UnrepairableNote plan={plan} />
       {refused === undefined ? null : (
         <p className="nx-inspector__note" role="alert">
           {refused}
@@ -148,14 +151,69 @@ function RepairReview({
   );
 }
 
-/** That some breaks have no repair here, whatever else is repaired. */
-function UnrepairableNote(): React.JSX.Element {
+/**
+ * That some breaks have no repair here, whatever else is repaired: one
+ * sentence for the locks and one for the placements the plan leaves, each
+ * only when it leaves some. Nothing when it leaves none.
+ */
+function UnrepairableNote({
+  plan,
+}: {
+  plan: RepairPlan;
+}): React.JSX.Element | null {
+  const locks = plan.remaining.length > 0;
+  const placements = plan.remainingPlacements.length > 0;
+  if (!locks && !placements) return null;
   return (
-    <p className="nx-inspector__note">
-      Some locked areas can’t be repaired here: a block they hold has nowhere
-      else it may go. Those stay as they are.
-    </p>
+    <>
+      {locks ? (
+        <p className="nx-inspector__note">
+          Some locked areas can’t be repaired here: a block they hold has
+          nowhere else it may go. Those stay as they are.
+        </p>
+      ) : null}
+      {placements ? (
+        <p className="nx-inspector__note">
+          Some blocks can’t be repaired here: there is nowhere else on this page
+          they may go. Those stay where they are.
+        </p>
+      ) : null}
+    </>
   );
+}
+
+/** Whether the plan has anything to repair or to say it can't. */
+function holdsAnything(plan: RepairPlan): boolean {
+  return (
+    plan.steps.length > 0 ||
+    plan.remaining.length > 0 ||
+    plan.remainingPlacements.length > 0
+  );
+}
+
+/** A move the placement rule makes, as opposed to one a lock makes. */
+function isPlacementMove(step: RepairStep): boolean {
+  return step.kind === "move" && step.cause === "placement";
+}
+
+/**
+ * What the page holds, naming locks and placements each only when the plan
+ * repairs or leaves one of that kind.
+ */
+function introSentence(plan: RepairPlan): string {
+  const locks =
+    plan.remaining.length > 0 ||
+    plan.steps.some(step => !isPlacementMove(step));
+  const placements =
+    plan.remainingPlacements.length > 0 || plan.steps.some(isPlacementMove);
+  const lockWords =
+    "Some locked areas on this page hold blocks or settings their lock doesn’t allow";
+  if (locks && placements) {
+    return `${lockWords}, and some blocks sit where they aren’t allowed.`;
+  }
+  if (placements)
+    return "Some blocks on this page sit where they aren’t allowed.";
+  return `${lockWords}.`;
 }
 
 /** Why the repair can't be applied, and what the author can do about it. */

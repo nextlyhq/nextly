@@ -67,7 +67,7 @@ test.describe("the editor inside locked areas", () => {
     await open(page);
     expect(await tree(page)).toEqual(PLACED);
     await expect(
-      page.getByRole("region", { name: "Locked areas" })
+      page.getByRole("region", { name: "Repair this page" })
     ).toHaveCount(0);
   });
 
@@ -221,7 +221,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
   }) => {
     await open(page, "broken");
     expect(await tree(page)).toEqual(BROKEN);
-    const notice = page.getByRole("region", { name: "Locked areas" });
+    const notice = page.getByRole("region", { name: "Repair this page" });
     await notice.getByRole("button", { name: "Review the repair" }).click();
 
     await expect(notice.getByRole("listitem")).toHaveText([
@@ -239,7 +239,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
     page,
   }) => {
     await open(page, "broken");
-    const notice = page.getByRole("region", { name: "Locked areas" });
+    const notice = page.getByRole("region", { name: "Repair this page" });
     await notice.getByRole("button", { name: "Review the repair" }).click();
     await notice.getByRole("button", { name: "Repair" }).click();
 
@@ -257,7 +257,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
       ]);
     expect(await undoDepth(page)).toBe(1);
     await expect(
-      page.getByRole("region", { name: "Locked areas" })
+      page.getByRole("region", { name: "Repair this page" })
     ).toHaveCount(0);
 
     // One undo takes the whole repair back, and the notice with it.
@@ -267,7 +267,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
     await page.keyboard.press("Control+z");
     await expect.poll(() => tree(page)).toEqual(BROKEN);
     await expect(
-      page.getByRole("region", { name: "Locked areas" })
+      page.getByRole("region", { name: "Repair this page" })
     ).toBeVisible();
   });
 });
