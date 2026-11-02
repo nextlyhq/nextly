@@ -185,3 +185,26 @@ function bodyOf<T extends object | null>(
 ): T | undefined {
   return cached === NO_BODY ? undefined : cached;
 }
+
+/**
+ * Read a plugin route once, outside React: a search an author is typing, which
+ * cancels the read a newer one replaces. Through `protectedApi`, as
+ * `usePluginRoute` is, so an expired session is renewed and the read retried
+ * rather than failing, and a refusal arrives as the admin's parsed error.
+ * Not cached: each call is one request.
+ *
+ * Answers `undefined` for a route that answered with nothing.
+ */
+export function readPluginRoute<T extends object | null>({
+  plugin,
+  path,
+  mount,
+  signal,
+}: Pick<PluginRouteRequest, "plugin" | "path" | "mount"> & {
+  signal?: AbortSignal;
+}): Promise<T | undefined> {
+  return protectedApi.get<T | undefined>(
+    pluginRouteFullPath(plugin, path, mount),
+    signal === undefined ? {} : { signal }
+  );
+}

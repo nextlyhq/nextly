@@ -298,6 +298,12 @@ export type {
   ResolvedBlockNode,
   ResolvedDocument,
   UnresolvedInstance,
+  // Named by the composition and exposed-property types above: a resolution's
+  // options carry a work allowance, and an exposed property states its type,
+  // so a host typing either needs these without reaching into the engine.
+  ExposedPropertyType,
+  ResolveComponentOptions,
+  WorkAllowance,
   StyleCompileContext,
   StyleOrigin,
   StyleState,

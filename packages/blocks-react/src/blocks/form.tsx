@@ -377,10 +377,31 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
     keywords: ["contact", "input", "submit", "fields"],
   },
   props: {
-    action: { type: "url" },
-    method: { type: "select", options: [...FORM_METHODS] },
-    fields: { type: "array", of: "object" },
-    submitText: { role: "content", type: "text" },
+    action: { label: "Send to", type: "url" },
+    method: {
+      label: "Method",
+      optionLabels: { post: "POST", get: "GET" },
+      type: "select",
+      options: [...FORM_METHODS],
+    },
+    // Each field's own settings, so the inspector can draw a control for
+    // each. Description only: the stored shape is the same list of records.
+    fields: {
+      label: "Fields",
+      type: "array",
+      of: "object",
+      item: {
+        label: { label: "Label", type: "text" },
+        name: { label: "Name sent with the form", type: "text" },
+        type: {
+          label: "Field type",
+          type: "select",
+          options: [...FORM_FIELD_TYPES],
+        },
+        required: { label: "Required", type: "checkbox" },
+      },
+    },
+    submitText: { label: "Submit button text", role: "content", type: "text" },
   },
   defaultProps: { method: "post", submitText: "Submit", fields: [] },
   example: {

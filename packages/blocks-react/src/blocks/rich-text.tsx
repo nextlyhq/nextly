@@ -102,7 +102,12 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
       keywords: ["rich text", "formatted", "prose", "wysiwyg", "editor"],
     },
     props: {
-      content: { role: "content", type: RICH_TEXT_PROP_TYPE, inline: true },
+      content: {
+        label: "Content",
+        role: "content",
+        type: RICH_TEXT_PROP_TYPE,
+        inline: true,
+      },
     },
     defaultProps: { content: EMPTY_PASSAGE },
     /*

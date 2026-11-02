@@ -23,7 +23,9 @@ import {
   inspectInstance,
   partOfComponentSentence,
   useEditorState,
+  createOpenPassages,
   useInlineEditing,
+  type OpenPassages,
   useNoticeQueue,
   userPreferenceStore,
   type BuilderShellProps,
@@ -33,6 +35,7 @@ import {
 import {
   loadInlineRichTextEditor,
   useCurrentUserId,
+  useDocumentLocale,
   usePluginClientConfig,
 } from "@nextlyhq/plugin-sdk/admin";
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
@@ -223,6 +226,54 @@ function useMakeComponentVerb(
 }
 
 /**
+ * What the canvas's inline editing tells the author: an edit that did not
+ * save, and the component a clicked part of a placement belongs to.
+ */
+function useInlineNotices(
+  editor: EditorState,
+  componentLibrary: ComponentLibraryRead
+): {
+  announce: (outcome: InlineEditOutcome) => void;
+  partOf: (placementId: string) => void;
+} {
+  /*
+   * ONE place the author is told about an inline edit that did not save.
+   *
+   * Passed to the hook rather than read from what `commit` returns here,
+   * because most edits do not end by this component calling `commit`. Leaving
+   * the passage ends one; so does opening another, and so does this canvas
+   * unmounting. The outcome that most needs saying — a passage whose block was
+   * deleted or locked while the author typed into it — is reached almost
+   * entirely by the first of those, so reporting from the return value alone
+   * said nothing on the common path.
+   */
+  const announce = useCallback((outcome: InlineEditOutcome) => {
+    const problem = inlineEditProblem(outcome);
+    if (problem !== null) toast.error(problem);
+  }, []);
+  /*
+   * A double-click on text a component does not expose selects the placement
+   * (the hook does that) and says whose the text is, with the variant, so the
+   * gesture is never met with nothing. Read against the same library the
+   * canvas draws with. A toast rather than the builder's notice queue, which
+   * holds failures: this is information, and it fades.
+   */
+  const partOf = useCallback(
+    (placementId: string) => {
+      const inspection = inspectInstance(
+        editor.document,
+        placementId,
+        componentLibrary.definitions,
+        componentLibrary.components
+      );
+      if (inspection !== null) toast.info(partOfComponentSentence(inspection));
+    },
+    [editor.document, componentLibrary]
+  );
+  return { announce, partOf };
+}
+
+/**
  * Everything the editor is mounted from, read once per opening.
  *
  * Called by the component that is mounted only while the editor is open, so
@@ -317,43 +368,9 @@ export function useEditorMount(
    * keeps its node classes recognisable, and this package is already on the
    * admin side of that line.
    */
-  /*
-   * ONE place the author is told about an inline edit that did not save.
-   *
-   * Passed to the hook rather than read from what `commit` returns here,
-   * because most edits do not end by this component calling `commit`. Leaving
-   * the passage ends one; so does opening another, and so does this canvas
-   * unmounting. The outcome that most needs saying — a passage whose block was
-   * deleted or locked while the author typed into it — is reached almost
-   * entirely by the first of those, so reporting from the return value alone
-   * said nothing on the common path.
-   */
-  const announce = useCallback((outcome: InlineEditOutcome) => {
-    const problem = inlineEditProblem(outcome);
-    if (problem !== null) toast.error(problem);
-  }, []);
-  /*
-   * A double-click on text a component does not expose selects the placement
-   * (the hook does that) and says whose the text is, with the variant, so the
-   * gesture is never met with nothing. Read against the same library the
-   * canvas draws with. A toast rather than the builder's notice queue, which
-   * holds failures: this is information, and it fades.
-   */
-  const partOf = useCallback(
-    (placementId: string) => {
-      const inspection = inspectInstance(
-        editor.document,
-        placementId,
-        componentLibrary.definitions,
-        componentLibrary.components
-      );
-      if (inspection !== null) toast.info(partOfComponentSentence(inspection));
-    },
-    [editor.document, componentLibrary]
-  );
-  const inline = useInlineEditing(
+  const { announce, partOf } = useInlineNotices(editor, componentLibrary);
+  const { inline, passages, locale } = useInlineAndInspector(
     editor,
-    loadInlineRichTextEditor,
     announce,
     partOf
   );
@@ -391,6 +408,8 @@ export function useEditorMount(
     notices,
     editor,
     inline,
+    passages,
+    locale,
     savePattern,
     mayCreatePattern,
     makeComponent,
@@ -407,6 +426,10 @@ export type EditorMount = {
   componentLibrary: ComponentLibraryRead;
   notices: NoticeQueue;
   editor: EditorState;
+  /** The inspector's open passages; see `createOpenPassages`. */
+  passages: OpenPassages;
+  /** The language being edited, by code, when the document has one. */
+  locale: string | undefined;
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
@@ -425,4 +448,33 @@ function placementSentence(refusal: LocatedPlacementBreak): string {
   return placementRefusalMessage(refusal.verdict, {
     labelOf: type => blockLabelFrom(type, getBlock(type)),
   });
+}
+
+/**
+ * What the canvas's inline editing and the inspector share:
+ * - the registry the inspector's rich-text fields hold an open passage in,
+ *   lent to the inline editing, whose commit finishes them before a save, and
+ *   to the inspector; one per mounted editor;
+ * - the language being edited, which the inspector's relation searches read
+ *   titles in.
+ */
+function useInlineAndInspector(
+  editor: EditorState,
+  announce: (outcome: InlineEditOutcome) => void,
+  partOf: (placementId: string) => void
+): {
+  inline: UseInlineEditingResult;
+  passages: OpenPassages;
+  locale: string | undefined;
+} {
+  const [passages] = useState(createOpenPassages);
+  const locale = useDocumentLocale()?.code ?? undefined;
+  const inline = useInlineEditing(
+    editor,
+    loadInlineRichTextEditor,
+    announce,
+    partOf,
+    passages
+  );
+  return { inline, passages, locale };
 }
