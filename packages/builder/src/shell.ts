@@ -357,7 +357,22 @@ export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
  * never fetch.
  */
 export { useInlineEditing } from "./use-inline-editing";
+/**
+ * The registry an inspector rich-text field holds its open passage in, so the
+ * host's `useInlineEditing` finishes it before the document is stored.
+ * Made once per editor and lent to both the inspector and the inline editing.
+ *
+ * @experimental
+ */
+export { createOpenPassages } from "./open-passages";
+export type { OpenPassages } from "./open-passages";
 export type { UseInlineEditingResult } from "./use-inline-editing";
+/**
+ * What a host says when a double-click lands on text a component does not
+ * expose: the hook selects the placement and hands the host its id, and the
+ * host reads the placement with `inspectInstance` against its own library.
+ */
+export { inspectInstance, partOfComponentSentence } from "./instance-inspector";
 /**
  * What finishing an inline edit did.
  *

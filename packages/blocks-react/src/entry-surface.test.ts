@@ -296,7 +296,13 @@ const SOURCE_MODULES: ReadonlyArray<{
     // implementation of one pass, which is the drift the pass's own docblock
     // argues against — but it is an internal derivation rather than something a
     // host composes with, so it crosses a module boundary and stops there.
+    //
+    // `pageCompileContext` is internal too: it lets the `/next` route draw a
+    // page and its Layout's regions with one site sheet between them, each
+    // document compiled under the context the renderer itself would derive.
+    // A host renders one document and has the renderer derive it.
     internal: [
+      "pageCompileContext",
       "pruneRenderedPlaceholders",
       "statedBreakpoints",
       "withoutStatedNulls",

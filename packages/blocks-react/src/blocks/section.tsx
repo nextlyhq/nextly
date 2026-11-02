@@ -38,8 +38,12 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["container", "wrapper", "band", "region"],
     },
     props: {
-      as: { type: "select", options: ["section", "header", "footer", "main"] },
-      contained: { type: "checkbox" },
+      as: {
+        label: "HTML tag",
+        type: "select",
+        options: ["section", "header", "footer", "main"],
+      },
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "section", contained: true },
     example: { props: { as: "section", contained: true } },

@@ -62,6 +62,11 @@ export const StyleRevisionContext: Context<StyleReplay> =
 /** How long a stored replay waits for the read before asking for it again. */
 const READ_BACK_WAIT_MS = 5000;
 
+/** A fresh copy restarts the read-back wait without changing what it awaits. */
+function again(current: SiteStyleReplay | null): SiteStyleReplay | null {
+  return current === null ? null : { ...current };
+}
+
 /**
  * Mounts its children afresh each time a style step is undone or redone.
  *
@@ -126,9 +131,18 @@ function useReadBack(
     if (awaiting === null) return;
     let live = true;
     const timer = setTimeout(() => {
-      void Promise.resolve(refetch?.()).finally(() => {
-        if (live) caughtUp();
-      });
+      // Only a read that answered unlocks the surfaces. A failed one leaves
+      // the value the replay replaced, so the wait starts over instead.
+      Promise.resolve(refetch?.()).then(
+        answer => {
+          if (!live) return;
+          if (answer?.isError === true) setAwaiting(again);
+          else caughtUp();
+        },
+        () => {
+          if (live) setAwaiting(again);
+        }
+      );
     }, READ_BACK_WAIT_MS);
     return () => {
       live = false;

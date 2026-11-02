@@ -149,6 +149,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written
@@ -176,6 +178,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
@@ -496,5 +501,32 @@ describe("undoing a class created from the editor", () => {
     storedRead = { data: { classes: [hero] }, isPending: false, error: null };
     rerender(<Host />);
     expect(managerMounts).toBe(before + 1);
+  });
+
+  it("refuses a new class while a classes undo is settling, then allows it", async () => {
+    // The inspector composes a creation from the library it holds, which
+    // still has the class the undo removed until the read catches up.
+    const hero = { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} };
+    storedRead = { data: { classes: [hero] }, isPending: false, error: null };
+    const { rerender } = render(<Host />);
+    await classProps().onCreateClass!("call-to-action");
+    storedRead = {
+      data: { classes: saved.at(-1)?.classes },
+      isPending: false,
+      error: null,
+    };
+    rerender(<Host />);
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    const writes = saved.length;
+    const refused = await classProps().onCreateClass!("another");
+    expect(refused.ok).toBe(false);
+    expect(saved).toHaveLength(writes);
+
+    storedRead = { data: { classes: [hero] }, isPending: false, error: null };
+    rerender(<Host />);
+    const created = await classProps().onCreateClass!("another");
+    expect(created.ok).toBe(true);
   });
 });

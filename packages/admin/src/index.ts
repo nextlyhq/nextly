@@ -236,6 +236,15 @@ export type {
   DocumentAction,
 } from "./components/features/entries/EntryForm/document-actions";
 export type { SubmitRefusal } from "./components/features/entries/EntryForm/submit-outcome";
+/**
+ * The header's save state and leading action, drawn for a document view that
+ * replaces the header. Exported for the plugin surface, so the view shows the
+ * header's own controls rather than a copy of them.
+ */
+export {
+  DocumentSaveIndicator,
+  DocumentPrimaryAction,
+} from "./components/features/entries/EntryForm/DocumentSurfaceControls";
 export {
   pillStateFromForm,
   PILL_LABEL,
@@ -335,7 +344,10 @@ export type {
 // to hand-roll auth and error parsing or to read something else instead.
 // Through `protectedApi` and TanStack Query, so the session, its refresh and
 // the typed error envelope are the ones the rest of the admin uses.
-export { usePluginRoute } from "@admin/hooks/queries/usePluginRoute";
+export {
+  readPluginRoute,
+  usePluginRoute,
+} from "@admin/hooks/queries/usePluginRoute";
 export type {
   PluginRouteRead,
   PluginRouteRequest,

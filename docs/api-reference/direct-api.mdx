@@ -436,14 +436,13 @@ not write, such as rendering a page from settings that may never have been
 saved.
 
 ```typescript
-const settings = await nextly.findSingle({
+const saved = await nextly.findSingle({
   slug: "site-settings",
   createIfMissing: false,
 });
 
-if (settings === null) {
-  // Nobody has saved these settings yet; use your defaults.
-}
+// `null` when nobody has saved these settings yet: fall back to your default.
+const siteName = saved === null ? "My site" : saved.siteName;
 ```
 
 ### updateSingle

@@ -222,9 +222,12 @@ export function BlockToolbar({
     if (!isHTMLElement(root)) return;
     // Absent in jsdom unless a test supplies one, and absent in older browsers.
     // A missing observer costs a re-measure, not correctness — every render
-    // path above still measures.
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => measure());
+    // path above still measures. Built from the canvas root's window, the
+    // realm of the blocks it observes, which is a frame's when the canvas is in
+    // one.
+    const Sizes = root.ownerDocument.defaultView?.ResizeObserver;
+    if (typeof Sizes !== "function") return;
+    const observer = new Sizes(() => measure());
 
     /*
      * EVERY selected block, not only the primary.

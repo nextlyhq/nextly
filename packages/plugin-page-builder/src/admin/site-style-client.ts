@@ -225,6 +225,9 @@ export interface SectionChain {
 }
 
 /** Whether two section values are the same, as stored JSON. */
+/** What a queued write answers with when it should write nothing after all. */
+const SKIP: unique symbol = Symbol("skip");
+
 export function sameSection(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
@@ -323,6 +326,10 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       chain.pending += 1;
       const done = before.then(async held => {
         const next = await value(held);
+        // A write whose step was withdrawn while it waited stores nothing.
+        if (next === SKIP) {
+          return { result: { saved: false, issues: {} }, holds: held };
+        }
         const result = await write(section, next);
         return { result, holds: result.saved ? next : held };
       });
@@ -388,12 +395,16 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         return write(section, value);
       }
       const { before, done } = inTurn(chain, section, () => value);
+      // Set once the save is refused: an undo or redo of it queued in the
+      // meantime then writes nothing, or a change would be stored with no
+      // step left to take it back.
+      let withdrawn = false;
       const replay =
         (target: () => unknown) => async (): Promise<SiteStyleReplay> => {
           const { result, holds } = await inTurn(
             chainOf(settled, section),
             section,
-            target
+            () => (withdrawn ? SKIP : target())
           ).done;
           return { stored: result.saved, section, value: holds };
         };
@@ -402,7 +413,10 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         redo: replay(() => value),
       });
       const { result } = await done;
-      if (!result.saved) withdraw();
+      if (!result.saved) {
+        withdrawn = true;
+        withdraw();
+      }
       return result;
     },
     [write, history, inTurn, chainOf]
