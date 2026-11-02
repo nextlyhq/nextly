@@ -30,3 +30,5 @@
 ---
 
 Page builder: the editor asks the placement rule before it acts. A keyboard move, a canvas drop and the Add panel are judged by the same rule as a save, so a refused placement is explained where the author tried it ("Heading can't hold blocks."), and a component placement's exposed slots become drop targets.
+
+`DropRefusal.reason` (an `@experimental` export of `@nextlyhq/builder`) now also carries the placement rule's reasons: `"undeclared-slot"`, `"holds-no-blocks"`, `"phrasing-only"` and `"content-model"`, beside `"wrong-parent"`, `"restricted-at-root"` and `"not-allowed-in-slot"`. A `switch` over it needs a `default`, or a case for each new reason; the refusal's `verdict` carries the facts each one is explained by.

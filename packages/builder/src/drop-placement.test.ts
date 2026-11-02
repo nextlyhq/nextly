@@ -14,10 +14,22 @@ import {
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+} from "vitest";
 
 import { refusalWording } from "./drag-refusal";
-import { collectRegions, resolveDrop, type DropRegion } from "./drop-targets";
+import {
+  collectRegions,
+  resolveDrop,
+  type DropRefusal,
+  type DropRegion,
+} from "./drop-targets";
 import type { Rect } from "./geometry";
 import { registrySlotSource } from "./inserter";
 
@@ -68,6 +80,22 @@ const sources = (components?: Map<string, BlockDocument>) => ({
 });
 
 describe("a drop judged by the one placement rule", () => {
+  it("names exactly the reasons a refusal can carry", () => {
+    // `DropRefusal` is published, and a consumer switching over `reason`
+    // handles a fixed set of cases. Spelled out as literals rather than as the
+    // engine's alias, so a reason added on either side fails the typecheck
+    // here instead of reaching that switch unannounced.
+    expectTypeOf<DropRefusal["reason"]>().toEqualTypeOf<
+      | "wrong-parent"
+      | "restricted-at-root"
+      | "not-allowed-in-slot"
+      | "undeclared-slot"
+      | "holds-no-blocks"
+      | "phrasing-only"
+      | "content-model"
+    >();
+  });
+
   it("refuses a Button over a linked card, and says the card is in the way", () => {
     const card: BlockNode = {
       id: "card",
@@ -265,6 +293,55 @@ describe("a drop judged by the one placement rule", () => {
     expect(resolveDrop(query, { x: 20, y: 20 }).kind).toBe("target");
     expect(resolveDrop(query, { x: 30, y: 30 }).kind).toBe("target");
     expect(asked).toBe(once);
+  });
+
+  it("keeps apart two regions whose ids spell the same string", () => {
+    // Card `a`'s slot `b::children` and card `a::b`'s slot `children` both
+    // spell the id `a::b::children`. The first is a slot the Card does not
+    // declare, so it refuses; the second is the Card's own slot and accepts.
+    // One gesture's answers must not hand the second the first's refusal.
+    const a: BlockNode = { id: "a", type: "t/card", version: 1, props: {} };
+    const ab: BlockNode = { id: "a::b", type: "t/card", version: 1, props: {} };
+    const region = (parentId: string, slot: string): DropRegion => ({
+      id: `${parentId}::${slot}`,
+      target: { kind: "slot", parentType: "t/card", slot },
+      parentId,
+      slot,
+      depth: 1,
+      rect: box,
+      axis: "y",
+      childIds: [],
+    });
+    const verdicts = new Map();
+    const at = (aimed: DropRegion) =>
+      resolveDrop(
+        {
+          blockNames: ["t/button"],
+          forbiddenParents: new Set(),
+          regions: [aimed],
+          nesting: registryNestingSource(),
+          rects,
+          placement: {
+            nodes: [a, ab],
+            placing: () => [
+              { id: "b", type: "t/button", version: 1, props: {} },
+            ],
+            sources: sources(),
+            verdicts,
+          },
+        },
+        { x: 10, y: 10 }
+      );
+    const undeclared = region("a", "b::children");
+    const declared = region("a::b", "children");
+    // The premise: the two ids collide, so a cache keyed by id would mix them.
+    expect(undeclared.id).toBe(declared.id);
+    const first = at(undeclared);
+    expect(first.kind).toBe("refused");
+    if (first.kind === "refused") {
+      expect(first.refusal.reason).toBe("undeclared-slot");
+    }
+    expect(at(declared).kind).toBe("target");
   });
 
   it("offers a component placement's exposed slot as a region", () => {
