@@ -550,11 +550,14 @@ describe("LayersPanel", () => {
     fireEvent.keyDown(screen.getAllByRole("treeitem")[0]!, { key: "*" });
 
     const [hero, inner] = screen.getAllByRole("treeitem");
-    expect(hero?.querySelector('[data-tone="strong"]')?.textContent).toBe(
+    expect(hero?.querySelector('[data-lock="own"]')?.textContent).toBe(
       "Locked"
     );
     expect(inner?.textContent).toContain("Locked by Hero");
-    expect(inner?.querySelector('[data-tone="strong"]')).toBeNull();
+    expect(inner?.querySelector('[data-lock="own"]')).toBeNull();
+    expect(inner?.querySelector('[data-lock="inherited"]')?.textContent).toBe(
+      "Locked by Hero"
+    );
   });
 
   it("offers to open only the rows that hold something", () => {

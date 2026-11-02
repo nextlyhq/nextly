@@ -123,17 +123,17 @@ export interface LayersPanelProps {
 function Badge({
   icon,
   text,
-  tone,
+  lock,
 }: {
   icon: React.ReactNode;
   text: string;
-  /** `strong` for a fact the author set on this block itself. */
-  tone?: "strong";
+  /** For a lock badge: the block's own lock, or one it is held by. */
+  lock?: "own" | "inherited";
 }): React.JSX.Element {
   return (
     <span
       className="nx-layer-row__badge"
-      {...(tone === undefined ? {} : { "data-tone": tone })}
+      {...(lock === undefined ? {} : { "data-lock": lock })}
     >
       {/*
         The icon is decorative and the word is the fact. A title attribute would
@@ -192,15 +192,21 @@ function rowOf(
         <span className="nx-layer-row__label" data-nx-layer={node.id}>
           {node.label}
         </span>
-        {/* A block's own lock in the text colour, and a lock it is held by
-            from a block around it quieter, in the muted one: both say so in
-            words, and the inherited one names the block to unlock. */}
+        {/* Both locks in the row's own ink, so each reads against the row in
+            every state it can be in. A lock held from a block around it is
+            quieter by weight, a thinner stroke, never by a fainter colour; both
+            say so in words, and the inherited one names the block to unlock. */}
         {node.locked ? (
-          <Badge icon={<Lock size={12} />} text="Locked" tone="strong" />
+          <Badge
+            icon={<Lock size={12} strokeWidth={2.5} />}
+            text="Locked"
+            lock="own"
+          />
         ) : node.lockedBy === undefined ? null : (
           <Badge
-            icon={<Lock size={11} />}
+            icon={<Lock size={12} strokeWidth={1.25} />}
             text={`Locked by ${node.lockedBy}`}
+            lock="inherited"
           />
         )}
         {node.breakpointHidden ? (

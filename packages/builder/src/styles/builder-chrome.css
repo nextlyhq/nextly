@@ -2042,12 +2042,14 @@
 }
 
 /*
- * A fact the author set on this block itself, such as its own lock, in the
- * text colour, so it stands apart from a lock the row is only held by from a
- * block around it, which keeps the muted one.
+ * A lock, the block's own or one it is held by from a block around it, in the
+ * row's own ink rather than the muted badge colour. The row sets that ink for
+ * each state it can be in (the text colour at rest and on hover, the accent's
+ * foreground when selected), so the icon meets non-text contrast wherever the
+ * row is drawn. The two locks differ by stroke weight, set on the icon.
  */
-.nx-layer-row__badge[data-tone="strong"] {
-  color: var(--nx-builder-text);
+.nx-layer-row__badge[data-lock] {
+  color: inherit;
 }
 
 /*
