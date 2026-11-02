@@ -59,6 +59,14 @@ export interface SnapshotFile {
    * must never take the absence as settings cleared.
    */
   entities?: EntitySettingsRecord;
+  /**
+   * That every translated table in `snapshot` carries `localized: true` and its
+   * `localizedColumns`, so a table without them was not translated. Written in
+   * every snapshot, because a snapshot with no translated table looks the same
+   * as one written before tables recorded it. Absent from such an older
+   * snapshot, which may not say which tables were translated.
+   */
+  translatedFieldsRecorded?: true;
 }
 
 /** Empty snapshot used for "first migration" (no prior state). */
@@ -161,19 +169,26 @@ export function parseSnapshotFile(
       "expected snapshot.tables to be an array"
     );
   }
+  const problem = optionalPartProblem(obj);
+  if (problem !== undefined) throw new SnapshotFileError(filename, problem);
+  return obj as unknown as SnapshotFile;
+}
+
+/** What is wrong with the envelope's optional parts, each checked only when present. */
+function optionalPartProblem(obj: Record<string, unknown>): string | undefined {
   if (obj.contributions !== undefined && !isContributions(obj.contributions)) {
-    throw new SnapshotFileError(
-      filename,
-      "expected contributions to map table names to their contributed element names"
-    );
+    return "expected contributions to map table names to their contributed element names";
   }
   if (obj.entities !== undefined && !isEntitySettingsRecord(obj.entities)) {
-    throw new SnapshotFileError(
-      filename,
-      "expected entities to record each collection's, single's and field group's settings by slug"
-    );
+    return "expected entities to record each collection's, single's and field group's settings by slug";
   }
-  return obj as unknown as SnapshotFile;
+  if (
+    obj.translatedFieldsRecorded !== undefined &&
+    obj.translatedFieldsRecorded !== true
+  ) {
+    return `expected translatedFieldsRecorded to be true when present, got ${JSON.stringify(obj.translatedFieldsRecorded)}`;
+  }
+  return undefined;
 }
 
 /**
@@ -205,6 +220,8 @@ export async function writeSnapshot(
     // Key order is sorted by the replacer below, so the record is written the
     // same way whatever order the config declares its entities in.
     ...(entities !== undefined ? { entities } : {}),
+    // The tables below carry the translated-field record as written here.
+    translatedFieldsRecorded: true,
     // Sort tables by name for reproducibility across machines.
     snapshot: {
       tables: [...snapshot.tables]
