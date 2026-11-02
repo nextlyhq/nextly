@@ -30,6 +30,7 @@ import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
+import { ownIndexReader } from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
   classUsageIndexCollection,
@@ -50,10 +51,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import {
-  USAGE_BACKFILL_STATE_SLUG,
-  usageBackfillStateCollection,
-} from "./collections/usage-backfill-state";
+import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageIndex } from "./component-usage";
@@ -84,6 +82,10 @@ import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
+import {
+  pageBuilderSchema,
+  pageBuilderSchemaPlugin,
+} from "./schema/definition";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
@@ -93,6 +95,7 @@ import {
   usageBackfillDeps,
   type BackfillHost,
 } from "./usage-backfill-wiring";
+import { usageBookkeeping } from "./usage-bookkeeping";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
@@ -733,19 +736,20 @@ function installContext(
     // reads them per call: an index derived under different ones records a
     // different document than the page serves.
     limits: () => opts.limits ?? DEFAULT_LIMITS,
-    // RESOLVED slugs, not the declared ones. An integrator may rename any of
-    // the three, and a pass holding a literal would write to a table that does
-    // not exist while reporting the scope backfilled.
+    // RESOLVED slugs, not the declared ones. An integrator may rename either,
+    // and a pass holding a literal would write to a table that does not exist
+    // while reporting the scope backfilled.
     slugs: () => ({
       classIndex:
         ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ?? CLASS_USAGE_INDEX_SLUG,
       componentIndex:
         ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
         COMPONENT_USAGE_INDEX_SLUG,
-      backfillState:
-        ctx.self.collections[USAGE_BACKFILL_STATE_SLUG] ??
-        USAGE_BACKFILL_STATE_SLUG,
     }),
+    // The run, its progress and the dirty mark, in the plugin's own tables.
+    bookkeeping: () => usageBookkeeping(ctx.db, ctx.dialect),
+    ownIndexReader: indexCollection =>
+      ownIndexReader(ctx.services.ownCollections, indexCollection),
   };
 }
 
@@ -1012,6 +1016,9 @@ export const pageBuilder = (
         // raised bounds leave classes on the extra nodes unindexed, so a class
         // the page renders reads as unused.
         limits: () => opts.limits ?? DEFAULT_LIMITS,
+        // A failed write marks the index dirty, so health stops calling it
+        // whole until a full rebuild has walked the site again.
+        markDirty: () => usageBookkeeping(ctx.db, ctx.dialect).markDirty(),
       });
       registerReadinessNotice(ctx, opts);
       // A component's removed fields: recorded when the definition dropping
@@ -1049,7 +1056,13 @@ export const pageBuilder = (
         void seedDefaultLayoutAtStart(defaultLayoutSetup);
       }
     },
+    // Moves with every migration of the plugin's own tables below.
+    schemaVersion: pageBuilderSchemaPlugin.schemaVersion,
     contributes: {
+      // The usage indexes' bookkeeping: the current run, each scope's progress
+      // and the dirty mark. Tables rather than collections, so no admin
+      // screen, REST route or Direct API call reaches them.
+      schema: pageBuilderSchema,
       // The channel another plugin adds blocks through. Core carries no
       // `contributes.blocks` key — a plugin contributing blocks is contributing
       // to the page builder, not to Nextly — so the registry is offered here and
@@ -1076,8 +1089,8 @@ export const pageBuilder = (
         usageBackfillJob({
           scopes: async () => backfillScopes(requireInstalled()),
           state: () => usageBackfillDeps(requireInstalled()).state(),
-          rebuild: scope =>
-            usageBackfillDeps(requireInstalled()).rebuild(scope),
+          rebuild: (scope, walk) =>
+            usageBackfillDeps(requireInstalled()).rebuild(scope, walk),
         }),
         // The default-Layout repair. A sweep, so the runner keeps one queued
         // and every jobs pass confirms the site still has a published default,
@@ -1107,11 +1120,10 @@ export const pageBuilder = (
         // definition that drops one is published. Contributed unconditionally,
         // because every write to a page that places a component reads it.
         componentRetiredCollection(),
-        // The backfill's progress. Contributed beside the indexes it fills,
-        // because an index whose write hooks only maintain it going FORWARD is
-        // empty for every document that already existed — and an empty index
-        // answers "used by nothing" for every component, which is the answer a
-        // delete acts on.
+        // The backfill's former progress collection. Nothing reads or writes
+        // it any more: progress lives in the plugin's own tables. Still
+        // declared so an existing site keeps its table and registry row as
+        // they are, rather than meeting a collection that disappeared.
         usageBackfillStateCollection(),
       ],
       // The Site Style global: one versioned, access-controlled document the

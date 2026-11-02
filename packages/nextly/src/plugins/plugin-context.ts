@@ -12,6 +12,7 @@
 import type {
   SupportedDialect,
   TransactionContext,
+  TransactionOptions,
 } from "@nextlyhq/adapter-drizzle/types";
 import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
@@ -1471,7 +1472,7 @@ function buildPluginDatabase(
     // On SQLite it also runs marked as a plugin transaction, as `raw`'s does:
     // a service called inside nests as a savepoint, defers what follows its
     // write until the commit, and refuses what a rollback could not undo.
-    transaction: fn => {
+    transaction: (fn, options) => {
       const run = (tx: AdapterTransactionHandles) =>
         fn({
           db: tx.getDrizzle(),
@@ -1481,8 +1482,19 @@ function buildPluginDatabase(
           adapterTx: asTransactionContext(tx),
         });
       const transactions = adapter();
+      // A snapshot: REPEATABLE READ and read-only on PostgreSQL and MySQL
+      // (MySQL's default level already, named so a server configured
+      // otherwise still gives one). SQLite's transactions are serial, so one
+      // is a snapshot already, and nothing is asked of its adapter.
+      const adapterOptions: TransactionOptions | undefined =
+        options?.isolation === "snapshot" && dialect() !== "sqlite"
+          ? { isolationLevel: "repeatable read", readOnly: true }
+          : undefined;
       return runAdapterTransaction(
-        transactions.transaction.bind(transactions),
+        adapterOptions === undefined
+          ? transactions.transaction.bind(transactions)
+          : <R>(work: (tx: AdapterTransactionHandles) => Promise<R>) =>
+              transactions.transaction(work, adapterOptions),
         (tx: AdapterTransactionHandles) =>
           dialect() === "sqlite"
             ? runInPluginTransaction(() => run(tx))
@@ -1516,7 +1528,9 @@ export interface AdapterTransactions extends AfterCommitAdapter {
    * a call made inside an open transaction nests as a savepoint.
    */
   transaction: <T>(
-    work: (tx: AdapterTransactionHandles) => Promise<T>
+    work: (tx: AdapterTransactionHandles) => Promise<T>,
+    /** The isolation and access mode, where the caller asked for one. */
+    options?: TransactionOptions
   ) => Promise<T>;
   /**
    * The pooled Drizzle handle, relations-enabled when given a config. Used
