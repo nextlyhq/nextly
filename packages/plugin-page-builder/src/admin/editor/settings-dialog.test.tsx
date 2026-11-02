@@ -61,6 +61,19 @@ vi.mock("@nextlyhq/builder/shell", () => ({
 
 const { SettingsDialog } = await import("./settings-dialog");
 
+// What Radix's Select reaches for and jsdom lacks.
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
+
+const LAYOUT_LABEL = "Pages without a Layout of their own use";
+
+/** Choose a Layout in the default Layout's select, as an author does. */
+async function chooseLayout(title: string): Promise<void> {
+  await userEvent.click(screen.getByRole("combobox", { name: LAYOUT_LABEL }));
+  await userEvent.click(await screen.findByRole("option", { name: title }));
+}
+
 const MANAGER: SiteSettingsRead = {
   mayManageSite: true,
   mayChooseDefaultLayout: true,
@@ -197,10 +210,7 @@ describe("the Settings dialog", () => {
   it("changes the default Layout at once, and says Saved", async () => {
     show();
     await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    await userEvent.selectOptions(
-      screen.getByLabelText("Pages without a Layout of their own use"),
-      "bare"
-    );
+    await chooseLayout("No header or footer");
     await screen.findByText("Saved");
     expect(writes).toEqual([
       expect.objectContaining({ path: "/layouts/bare/make-default" }),
@@ -213,10 +223,7 @@ describe("the Settings dialog", () => {
       Promise.reject(new Error("This Layout is not published."));
     show();
     await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    await userEvent.selectOptions(
-      screen.getByLabelText("Pages without a Layout of their own use"),
-      "bare"
-    );
+    await chooseLayout("No header or footer");
     await screen.findByText("Not saved");
     writeAnswer = async () => ({});
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -232,10 +239,8 @@ describe("the Settings dialog", () => {
     };
     show();
     await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    const select = screen.getByLabelText(
-      "Pages without a Layout of their own use"
-    ) as HTMLSelectElement;
-    expect(select.disabled).toBe(true);
+    const select = screen.getByRole("combobox", { name: LAYOUT_LABEL });
+    expect(select.hasAttribute("disabled")).toBe(true);
     await waitFor(() =>
       expect(
         screen.getByText(/needs the rights to update and publish Layouts/)
@@ -299,12 +304,11 @@ describe("the Settings dialog", () => {
   it("keeps the chosen default shown after Saved, until the read catches up", async () => {
     show();
     await userEvent.click(screen.getByRole("tab", { name: "Site" }));
-    const select = screen.getByLabelText(
-      "Pages without a Layout of their own use"
-    ) as HTMLSelectElement;
-    await userEvent.selectOptions(select, "bare");
+    await chooseLayout("No header or footer");
     await screen.findByText("Saved");
-    expect(select.value).toBe("bare");
+    expect(
+      screen.getByRole("combobox", { name: LAYOUT_LABEL }).textContent
+    ).toContain("No header or footer");
   });
 
   it("goes back to This page when the Site tab goes away", async () => {

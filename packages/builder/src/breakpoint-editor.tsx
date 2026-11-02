@@ -463,13 +463,15 @@ export function BreakpointEditor({
            * A REFUSAL outranks the issue count, because they answer different
            * questions and only one of them is news. The count says what the
            * author must fix before saving; a refusal says the save they just
-           * made did not happen. Showing "Every breakpoint is usable." beside
-           * a failed write — which is what the count says at that moment,
-           * truthfully — would read as confirmation.
+           * made did not happen. A silent line beside a failed write would
+           * read as confirmation.
            */}
+          {/* Silent while every breakpoint is usable: the line speaks only
+              when something is wrong. Kept mounted, so what it then says is
+              announced. */}
           {refusal ??
             (issues.length === 0
-              ? "Every breakpoint is usable."
+              ? ""
               : `${issues.length} ${issues.length === 1 ? "problem" : "problems"} to fix before saving.`)}
         </p>
         <div className="flex gap-2">

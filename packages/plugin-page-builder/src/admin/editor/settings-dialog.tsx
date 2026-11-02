@@ -41,6 +41,11 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Tabs,
   TabsContent,
   TabsList,
@@ -475,20 +480,22 @@ function DefaultLayout({
         Pages without a Layout of their own use
       </label>
       <div className="flex flex-wrap items-center gap-3">
-        <select
-          id={selectId}
-          value={shown ?? ""}
+        <Select
+          {...(shown === null ? {} : { value: shown })}
           disabled={!read.mayChooseDefaultLayout || save.kind === "saving"}
-          onChange={event => choose(event.target.value)}
-          className="h-9 min-w-56 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          onValueChange={choose}
         >
-          {read.defaultLayout === null ? <option value="">None</option> : null}
-          {read.layouts.map(layout => (
-            <option key={layout.id} value={layout.id}>
-              {layout.title}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id={selectId} className="w-56">
+            <SelectValue placeholder="None" />
+          </SelectTrigger>
+          <SelectContent>
+            {read.layouts.map(layout => (
+              <SelectItem key={layout.id} value={layout.id}>
+                {layout.title}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <SaveWords save={save} />
       </div>
       {read.mayChooseDefaultLayout ? null : (
