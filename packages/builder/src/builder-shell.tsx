@@ -10,7 +10,7 @@ import {
   useShortcuts,
 } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, PanelLeft, PanelRight } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -490,20 +490,27 @@ function sameZoom(a: CanvasZoom, b: CanvasZoom): boolean {
   return a.kind === "fixed" && b.kind === "fixed" ? a.scale === b.scale : true;
 }
 
+/**
+ * The preferences compared by value. Listed once, so a field added to
+ * `ShellPreferences` is compared by adding it here; one left out reads as
+ * "unchanged" and is dropped on load. `zoom` and `layouts` are compared below.
+ */
+const SCALAR_PREFERENCES = [
+  "leftPanel",
+  "leftPanelView",
+  "leftPanelHidden",
+  "inspectorHidden",
+  "leftPinned",
+  "showEmptyElements",
+  "editingBreakpoint",
+] as const satisfies readonly (keyof ShellPreferences)[];
+
 function shallowEqualPreferences(
   a: ShellPreferences,
   b: ShellPreferences
 ): boolean {
-  if (
-    a.leftPanel !== b.leftPanel ||
-    a.leftPanelView !== b.leftPanelView ||
-    a.leftPinned !== b.leftPinned ||
-    a.showEmptyElements !== b.showEmptyElements ||
-    a.editingBreakpoint !== b.editingBreakpoint ||
-    !sameZoom(a.zoom, b.zoom)
-  ) {
-    return false;
-  }
+  if (SCALAR_PREFERENCES.some(key => a[key] !== b[key])) return false;
+  if (!sameZoom(a.zoom, b.zoom)) return false;
   if (a.layouts === b.layouts) return true;
   const topologies = Object.keys(a.layouts);
   if (topologies.length !== Object.keys(b.layouts).length) return false;
@@ -644,6 +651,34 @@ function shellClaimsRegionCycling(
 }
 
 /**
+ * mod+backslash, hiding or showing both sides of the editor.
+ *
+ * Read through a ref so the binding runs the current toggle, which closes over
+ * this render's panels. Never while typing (a backslash is text there), and
+ * only for the shell the author is in, by the same check F6 uses.
+ */
+function useSidesShortcut(
+  toggle: React.RefObject<() => void>,
+  enabled: boolean,
+  claims: () => boolean
+): void {
+  const latest = React.useRef({ enabled, claims });
+  latest.current = { enabled, claims };
+  useShortcuts(
+    [
+      {
+        keys: "mod+\\",
+        description: "Hide or show the side panels",
+        whenTyping: false,
+        when: () => latest.current.enabled && latest.current.claims(),
+        run: () => toggle.current(),
+      },
+    ],
+    { name: "Builder side panels" }
+  );
+}
+
+/**
  * F6 region cycling, registered with the shared shortcut manager.
  *
  * Through the manager rather than a private key listener, because two
@@ -730,6 +765,140 @@ function focusNextRegion(map: Record<Region, HTMLElement | null> | null): void {
   // recognises.
   const next = present[(currentIndex + 1) % present.length];
   if (next !== undefined) map[next]?.focus();
+}
+
+/**
+ * The top bar's buttons that show or hide each side of the editor, so the
+ * canvas can take the room. Pressed means shown; each keeps its panel's name,
+ * and the pressed state says which way it is.
+ */
+function SidePanelToggles({
+  leftShown,
+  inspectorShown,
+  onLeft,
+  onInspector,
+}: {
+  leftShown: boolean;
+  inspectorShown: boolean;
+  onLeft: () => void;
+  onInspector: () => void;
+}): React.JSX.Element {
+  const toggle = (
+    label: string,
+    shown: boolean,
+    onClick: () => void,
+    Icon: typeof PanelLeft
+  ) => (
+    <button
+      type="button"
+      aria-pressed={shown}
+      aria-label={label}
+      title={`${shown ? "Hide" : "Show"} the ${label.toLowerCase()}`}
+      onClick={onClick}
+      className={cn(
+        "focus-visible:ring-ring rounded-md p-1.5 focus-visible:ring-2 focus-visible:outline-none",
+        shown
+          ? "text-[color:var(--nx-builder-text)]"
+          : "text-[color:var(--nx-builder-text-muted)]"
+      )}
+    >
+      <Icon className="size-4" aria-hidden="true" />
+    </button>
+  );
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      {toggle("Left panel", leftShown, onLeft, PanelLeft)}
+      {toggle("Inspector", inspectorShown, onInspector, PanelRight)}
+    </div>
+  );
+}
+
+/**
+ * Which sides of the editor show, and the actions that change them: the
+ * rail, the top bar's two buttons and mod+backslash.
+ *
+ * `isAvailable` is the shell's one answer to "can the host fill this panel",
+ * so the panel shown here and the item the rail draws cannot disagree.
+ */
+function useSidePanels(
+  preferences: ShellPreferences,
+  update: (change: (current: ShellPreferences) => ShellPreferences) => void,
+  isAvailable: (panel: LeftPanel) => boolean,
+  active: boolean,
+  claims: () => boolean
+): {
+  openPanel: LeftPanel | null;
+  inspectorShown: boolean;
+  leftShown: boolean;
+  selectPanel: (panel: LeftPanel) => void;
+  toggleLeft: () => void;
+  toggleInspector: () => void;
+} {
+  const restored = preferences.leftPanel;
+  // A hidden left side shows no panel, but keeps which one was open.
+  const openPanel =
+    !preferences.leftPanelHidden && restored !== null && isAvailable(restored)
+      ? restored
+      : null;
+  const inspectorShown = !preferences.inspectorHidden;
+  // From the rail. While the left side is hidden, choosing a panel shows it
+  // rather than toggling: the author asked to see that panel.
+  const selectPanel = (panel: LeftPanel) =>
+    update(current =>
+      current.leftPanelHidden
+        ? { ...current, leftPanel: panel, leftPanelHidden: false }
+        : {
+            ...current,
+            leftPanel: panelAfterRailClick(current.leftPanel, panel),
+          }
+    );
+  /*
+   * The top bar's left-panel button. Showing it with no panel chosen opens
+   * Add, the first panel an author needs, where the host offers it.
+   */
+  const leftShown = openPanel !== null;
+  const toggleLeft = () =>
+    update(current => {
+      if (leftShown) return { ...current, leftPanelHidden: true };
+      const chosen =
+        current.leftPanel !== null && isAvailable(current.leftPanel)
+          ? current.leftPanel
+          : isAvailable("add")
+            ? "add"
+            : current.leftPanel;
+      return { ...current, leftPanel: chosen, leftPanelHidden: false };
+    });
+  const toggleInspector = () =>
+    update(current => ({
+      ...current,
+      inspectorHidden: !current.inspectorHidden,
+    }));
+  /*
+   * mod+backslash: hide both sides when either is showing, so one press
+   * always gives the canvas the whole width; show both when neither is.
+   */
+  const toggleSides = () => {
+    const anyShown = leftShown || inspectorShown;
+    update(current => ({
+      ...current,
+      leftPanelHidden: anyShown,
+      inspectorHidden: anyShown,
+      ...(!anyShown && current.leftPanel === null && isAvailable("add")
+        ? { leftPanel: "add" as const }
+        : {}),
+    }));
+  };
+  const toggleSidesRef = React.useRef(toggleSides);
+  toggleSidesRef.current = toggleSides;
+  useSidesShortcut(toggleSidesRef, active, claims);
+  return {
+    openPanel,
+    inspectorShown,
+    leftShown,
+    selectPanel,
+    toggleLeft,
+    toggleInspector,
+  };
 }
 
 /**
@@ -859,24 +1028,24 @@ function ShellRegions({
    * Treated as closed instead, which is the same answer the shell gives for a
    * panel name it no longer recognises.
    */
-  const restored = preferences.leftPanel;
-  const openPanel =
-    restored !== null && isAvailable(restored) ? restored : null;
+  const {
+    openPanel,
+    inspectorShown,
+    leftShown,
+    selectPanel,
+    toggleLeft,
+    toggleInspector,
+  } = useSidePanels(preferences, update, isAvailable, active, claimsKeys);
   // The panel set about to be rendered, named the same way a persisted layout
   // is keyed. Derived from `openPanel` because that is what decides the set;
   // the persisted key is derived from the layout's own ids, and the two meet at
   // `topologyKey` rather than being two spellings of one arrangement.
-  const mountedTopology = topologyKey(
-    openPanel === null
-      ? ["canvas", "inspector"]
-      : ["panel", "canvas", "inspector"]
-  );
+  const mountedTopology = topologyKey([
+    ...(openPanel === null ? [] : ["panel"]),
+    "canvas",
+    ...(inspectorShown ? ["inspector"] : []),
+  ]);
 
-  const selectPanel = (panel: LeftPanel) =>
-    update(current => ({
-      ...current,
-      leftPanel: panelAfterRailClick(current.leftPanel, panel),
-    }));
   const panelView: PanelView = {
     current: preferences.leftPanelView,
     choose: view => update(current => ({ ...current, leftPanelView: view })),
@@ -964,6 +1133,12 @@ function ShellRegions({
           zoom={preferences.zoom}
           appliedScale={appliedScale}
           onChange={onZoomPick}
+        />
+        <SidePanelToggles
+          leftShown={leftShown}
+          inspectorShown={inspectorShown}
+          onLeft={toggleLeft}
+          onInspector={toggleInspector}
         />
       </header>
 
@@ -1137,25 +1312,29 @@ function ShellRegions({
             </div>
           </ResizablePanel>
 
-          <ResizableHandle withGrip aria-label="Canvas and inspector" />
+          {inspectorShown ? (
+            <>
+              <ResizableHandle withGrip aria-label="Canvas and inspector" />
 
-          <ResizablePanel
-            id="inspector"
-            minSize={PANEL_BOUNDS.inspector.min}
-            maxSize={PANEL_BOUNDS.inspector.max}
-            defaultSize={PANEL_BOUNDS.inspector.initial}
-          >
-            <aside
-              ref={element => {
-                regionRefs.current.inspector = element;
-              }}
-              tabIndex={-1}
-              aria-label="Inspector"
-              className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
-            >
-              {inspector}
-            </aside>
-          </ResizablePanel>
+              <ResizablePanel
+                id="inspector"
+                minSize={PANEL_BOUNDS.inspector.min}
+                maxSize={PANEL_BOUNDS.inspector.max}
+                defaultSize={PANEL_BOUNDS.inspector.initial}
+              >
+                <aside
+                  ref={element => {
+                    regionRefs.current.inspector = element;
+                  }}
+                  tabIndex={-1}
+                  aria-label="Inspector"
+                  className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
+                >
+                  {inspector}
+                </aside>
+              </ResizablePanel>
+            </>
+          ) : null}
         </ResizablePanelGroup>
       </div>
 
@@ -1269,6 +1448,7 @@ export function BuilderShell({
     update(current => ({
       ...current,
       leftPanel: panel,
+      leftPanelHidden: false,
       leftPanelView: view ?? current.leftPanelView,
     }));
   }, [openPanelRequest, update, loadedFromCurrentStore]);

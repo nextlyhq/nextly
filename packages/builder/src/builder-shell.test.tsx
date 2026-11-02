@@ -1062,8 +1062,14 @@ describe("the server render and the first client render agree", () => {
     //
     // The rail is plain markup the library never touches, so its `aria-pressed`
     // reflects the preferences the server actually rendered with.
-    expect(markup).toContain('aria-pressed="false"');
-    expect(markup).not.toContain('aria-pressed="true"');
+    // Read off the rail alone: the top bar's side-panel buttons are pressed
+    // whenever a side is shown, which says nothing about the stored panel.
+    const rail =
+      /<nav[^>]*aria-label="Editor panels"[^>]*>[\s\S]*?<\/nav>/.exec(
+        markup
+      )?.[0] ?? "";
+    expect(rail).toContain('aria-pressed="false"');
+    expect(rail).not.toContain('aria-pressed="true"');
     // The control: this render really did produce a shell, so the assertions
     // above are not passing on empty output.
     expect(markup).toContain("Exit editor");
@@ -2002,13 +2008,141 @@ describe("zooming from the keyboard", () => {
 
   it("leaves Shift+1 to a text field, where it types a character", () => {
     // On a layout where the digit needs Shift, Shift+1 is how "1" is typed.
-    const zooms = zoomShell({ zoom: 1.5 });
-    const field = document.createElement("input");
-    document.body.appendChild(field);
+    // The field is inside the shell, so the focus check passes and only the
+    // typing rule can keep the key; a field outside would pass by absence.
+    stubContainerFits(true);
+    const zooms: unknown[] = [];
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, zoom: 1.5 })
+        )}
+        onZoomChange={zoom => zooms.push(zoom)}
+        inspector={<input aria-label="A field in the inspector" />}
+      />
+    );
+    const field = screen.getByRole("textbox", {
+      name: "A field in the inspector",
+    });
     field.focus();
     fireEvent.keyDown(field, { key: "1", shiftKey: true });
     fireEvent.keyDown(field, { key: "!", shiftKey: true });
     expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1.5 });
-    field.remove();
+  });
+});
+
+describe("hiding the side panels", () => {
+  function sidesShell(stored: Record<string, unknown> = {}) {
+    stubContainerFits(true);
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, ...stored })
+    );
+    const view = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        availablePanels={["add", "layers"]}
+        renderPanel={panel => <p>{panel} panel</p>}
+        inspector={<p>inspector body</p>}
+      />
+    );
+    return { store, ...view };
+  }
+  const toggle = (name: RegExp) => screen.getByRole("button", { name });
+  const stored = (store: { value: string | null }) =>
+    JSON.parse(store.value ?? "{}") as Record<string, unknown>;
+
+  it("hides and shows the inspector, and remembers it", () => {
+    const { store } = sidesShell();
+    expect(screen.getByText("inspector body")).toBeTruthy();
+    expect(toggle(/^Inspector$/).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(toggle(/^Inspector$/));
+
+    expect(screen.queryByText("inspector body")).toBeNull();
+    expect(
+      screen.queryByRole("complementary", { name: "Inspector" })
+    ).toBeNull();
+    expect(toggle(/^Inspector$/).getAttribute("aria-pressed")).toBe("false");
+    expect(stored(store).inspectorHidden).toBe(true);
+  });
+
+  it("restores a hidden inspector when nothing else differs from the defaults", () => {
+    sidesShell({ inspectorHidden: true });
+    expect(screen.queryByText("inspector body")).toBeNull();
+    expect(toggle(/^Inspector$/).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("hides the left panel without forgetting which one was open", () => {
+    const { store } = sidesShell({ leftPanel: "layers" });
+    expect(screen.getByText("layers panel")).toBeTruthy();
+
+    fireEvent.click(toggle(/^Left panel$/));
+    expect(screen.queryByText("layers panel")).toBeNull();
+    expect(stored(store)).toMatchObject({
+      leftPanel: "layers",
+      leftPanelHidden: true,
+    });
+
+    fireEvent.click(toggle(/^Left panel$/));
+    expect(screen.getByText("layers panel")).toBeTruthy();
+  });
+
+  it("opens Add when the left panel is shown with none chosen", () => {
+    sidesShell({ leftPanel: null, leftPanelHidden: true });
+    fireEvent.click(toggle(/^Left panel$/));
+    expect(screen.getByText("add panel")).toBeTruthy();
+  });
+
+  it("shows the left side again when the rail is used while it is hidden", () => {
+    sidesShell({ leftPanel: "layers", leftPanelHidden: true });
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const add = rail.querySelector<HTMLButtonElement>('[data-panel="add"]');
+    if (add === null) throw new Error("no Add item on the rail");
+    fireEvent.click(add);
+    expect(screen.getByText("add panel")).toBeTruthy();
+  });
+
+  it("hides both sides on mod+\\, and shows both again", () => {
+    const { store } = sidesShell({ leftPanel: "layers" });
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.queryByText("layers panel")).toBeNull();
+    expect(screen.queryByText("inspector body")).toBeNull();
+    expect(stored(store)).toMatchObject({
+      leftPanelHidden: true,
+      inspectorHidden: true,
+    });
+
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.getByText("layers panel")).toBeTruthy();
+    expect(screen.getByText("inspector body")).toBeTruthy();
+  });
+
+  it("hides both when only one is showing", () => {
+    sidesShell({ leftPanel: "layers", leftPanelHidden: true });
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.queryByText("inspector body")).toBeNull();
+  });
+
+  it("leaves mod+\\ to a text field inside the editor", () => {
+    // Inside the shell, so the focus check passes and only the typing rule
+    // can keep the key: a backslash typed into a field is text.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        inspector={<input aria-label="A field in the inspector" />}
+      />
+    );
+    const field = screen.getByRole("textbox", {
+      name: "A field in the inspector",
+    });
+    field.focus();
+    fireEvent.keyDown(field, { key: "\\", ctrlKey: true });
+    expect(
+      screen.getByRole("textbox", { name: "A field in the inspector" })
+    ).toBeTruthy();
   });
 });

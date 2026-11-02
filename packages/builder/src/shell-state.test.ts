@@ -164,6 +164,9 @@ describe("preferences round-trip", () => {
     // than passing on a default that a read which drops it also produces.
     leftPanelView: "fonts",
     leftPinned: false,
+    // Both non-default, so the round trip carries a hidden side.
+    leftPanelHidden: true,
+    inspectorHidden: true,
     layouts: {
       "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
     },
@@ -250,6 +253,8 @@ describe("preferences round-trip", () => {
       leftPanel: "layers",
       leftPanelView: null,
       leftPinned: DEFAULT_PREFERENCES.leftPinned,
+      leftPanelHidden: false,
+      inspectorHidden: false,
       layouts: { "canvas,inspector": { canvas: 70, inspector: 30 } },
       // Absent from the stored JSON above, so it falls back the same way
       // `leftPinned` does here rather than surfacing as `undefined`.
@@ -353,6 +358,8 @@ describe("preferences saved before panels had parts", () => {
       leftPanel: "layers",
       leftPanelView: null,
       leftPinned: false,
+      leftPanelHidden: false,
+      inspectorHidden: false,
       zoom: { kind: "fixed", scale: 1.5 },
       editingBreakpoint: null,
       layouts: {
