@@ -378,7 +378,18 @@ async function applyHoldingSchemaLock(
   // first, before anything reads the live schema: the push would otherwise meet the rebuild's copy
   // as a table of its own.
   if (dialect === "sqlite") {
-    await recoverInterruptedSqliteRebuilds(db, managedTablesOf(desired));
+    const recovered = await recoverInterruptedSqliteRebuilds(
+      db,
+      managedTablesOf(desired)
+    );
+    // A table dropped or renamed outside the change asked for is said, for whoever later wonders
+    // where it went.
+    const logger = getLoggerFromDI() ?? consoleLogger;
+    for (const line of recovered) {
+      logger.warn(`Before applying the change to "${slug}": ${line}.`, {
+        collection: slug,
+      });
+    }
   }
   // An index the change declares whose name another index already holds is refused before
   // anything changes, naming it.
@@ -522,7 +533,12 @@ async function applyHoldingSchemaLock(
   // The unique index a field that stops being unique still has under a name the push does not
   // declare, as an older table carries, or one an earlier save took on as the field's: dropped,
   // so the column is no longer held unique while the change records it is not.
-  await dropUniquenessLeftOn(adapter, tableName, oldFields, fields);
+  await dropUniquenessLeftOn(
+    adapter,
+    desired.collections[slug],
+    oldFields,
+    fields
+  );
   return result;
 }
 
@@ -596,10 +612,11 @@ async function refuseIndexNamesTaken(
  */
 async function dropUniquenessLeftOn(
   adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
-  tableName: string,
+  collection: DesiredCollection,
   oldFields: readonly FieldDefinition[],
   newFields: readonly FieldDefinition[]
 ): Promise<void> {
+  const { tableName } = collection;
   const stopped = newFields.filter(
     field =>
       field.unique !== true &&
@@ -608,9 +625,18 @@ async function dropUniquenessLeftOn(
   if (stopped.length === 0) return;
   const db = adapter.getDrizzle();
   const dialect = adapter.dialect;
+  // A column the table still keeps unique for its own reasons is left as it is: the system
+  // `slug` column is unique whatever a field of that name says.
+  const stillUnique = new Set(
+    (desiredCollectionTable(collection, dialect).indexes ?? [])
+      .filter(index => index.unique && index.columns.length === 1)
+      .map(index => index.columns[0])
+  );
   const unique = await readUniqueColumns(db, dialect, tableName);
   for (const field of stopped) {
-    const name = unique.get(toSnakeCase(field.name));
+    const column = toSnakeCase(field.name);
+    if (stillUnique.has(column)) continue;
+    const name = unique.get(column);
     // No name: the primary key, or SQLite's index for an inline UNIQUE, which no statement drops.
     if (name === undefined || name === null) continue;
     if (dialect === "postgresql") {

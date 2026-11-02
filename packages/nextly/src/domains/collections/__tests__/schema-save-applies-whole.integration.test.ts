@@ -417,6 +417,41 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     expect(unique.success, JSON.stringify(unique)).toBe(true);
   });
 
+  it("refuses making a field Required while its column is still waiting to be added over entries", async () => {
+    // Outside development the first save only queues the column's ADD. Deployed over the entries
+    // already there, it creates the column empty in every one of them, so the second save's NOT
+    // NULL would fail that deployment part-way: it is refused now, naming the step that works.
+    await postsWith([{ name: "heading", type: "text" }], [{ heading: "One" }]);
+    vi.stubEnv("NODE_ENV", "production");
+    const code = {
+      name: "code",
+      type: "text",
+      options: { variant: "short" },
+      validation: { maxLength: 64 },
+    };
+    const added = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ name: "heading", type: "text" }, code] }
+    );
+    expect(added.success, JSON.stringify(added)).toBe(true);
+    expect(await columnsOf("dc_posts")).not.toContain("code");
+
+    const required = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          { ...code, required: true },
+        ],
+      }
+    );
+
+    expect(required.success).toBe(false);
+    expect(JSON.stringify(required)).toContain(
+      "REQUIRED_COLUMN_NOT_YET_APPLIED"
+    );
+  });
+
   const q = (name: string) =>
     dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
@@ -531,9 +566,9 @@ describeEachDialect("a schema save whose migration fails", dialect => {
       status: true,
     } as Parameters<DynamicCollectionService["generateCollectionUpdate"]>[1]);
 
-    // The file is replayed on databases without the column; only this database skips it.
+    // The file is replayed on databases without the column. This database's own apply is the
+    // push, which diffs the live table and so adds nothing it already has.
     expect(update.migrationSQL).toMatch(/ADD COLUMN .status./);
-    expect(update.localMigrationSQL ?? "").not.toMatch(/ADD COLUMN .status./);
   });
 
   it("turns Draft/Published off when the status column is already gone", async () => {
@@ -694,8 +729,6 @@ describeEachDialect("a schema save whose migration fails", dialect => {
 
     const index = uniqueIndexNameForColumn("dc_posts", "heading");
     expect(on.migrationSQL).toContain(`CREATE UNIQUE INDEX ${q(index)}`);
-    // This database still has the index, so its own run creates none.
-    expect(on.localMigrationSQL ?? "").not.toContain("CREATE UNIQUE INDEX");
   });
 });
 

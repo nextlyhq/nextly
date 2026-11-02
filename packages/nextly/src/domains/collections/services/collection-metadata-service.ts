@@ -801,16 +801,19 @@ export class CollectionMetadataService extends BaseService {
       // migration, a sync, a rename or another save, and the collection it plans from is read
       // inside the lock. Asked conservatively, of the request: a save that changes only labels or
       // admin options writes a registry row and no DDL, and claiming DDL rights for it would
-      // refuse metadata edits on a deployment whose role may not create the lock table.
+      // refuse metadata edits on a deployment whose role may not create the lock table. Outside
+      // development a save writes a migration file and runs none of it, so it issues no DDL
+      // whatever it changes.
       return await withSchemaChangeExcluded(
         {
           adapter: this.adapter,
           logger: this.logger,
           label: `update collection "${params.collectionName}"`,
           issuesDdl:
-            body.fields !== undefined ||
-            body.localized !== undefined ||
-            body.status !== undefined,
+            this.isDevelopment() &&
+            (body.fields !== undefined ||
+              body.localized !== undefined ||
+              body.status !== undefined),
         },
         () => this.updateCollectionExcluded(params, body)
       );

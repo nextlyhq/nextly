@@ -323,4 +323,127 @@ describeEachDialect("a collection's Builder save", dialect => {
 
     expect(await liveItems()).toBe(before);
   }, 120_000);
+
+  /** The items table's columns, by name. */
+  async function itemColumns(): Promise<string[]> {
+    const snapshot = await introspectLiveSnapshot(
+      current.adapter.getDrizzle(),
+      dialect,
+      ["dc_items"]
+    );
+    return (snapshot.tables[0]?.columns ?? []).map(column => column.name);
+  }
+
+  /** A JSON column's value as stored, parsed where the driver hands back its text. */
+  const parsedJson = (value: unknown): unknown =>
+    typeof value === "string" ? JSON.parse(value) : value;
+
+  it("fills the entries already there when Required checkbox, number and date fields are added", async () => {
+    // Each type's empty value, in the encoding its column stores: camelCase names, whose
+    // columns are snake_case, included.
+    await seeded();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "items" },
+      {
+        fields: [
+          ...BEFORE,
+          { name: "isFeatured", type: "checkbox", required: true },
+          { name: "itemCount", type: "number", required: true },
+          { name: "publishedOn", type: "date", required: true },
+        ],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const rows = await query<Record<string, unknown>>(
+      `SELECT ${q("is_featured")} AS f, ${q("item_count")} AS n, ${q("published_on")} AS d FROM ${q("dc_items")}`
+    );
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(Boolean(row.f)).toBe(false);
+      expect(Number(row.n)).toBe(0);
+      expect(row.d).not.toBeNull();
+    }
+  }, 120_000);
+
+  it("drops a relationship's column when it becomes many-to-many", async () => {
+    // The field keeps its name and loses its column to a junction table, so the save answers the
+    // column's drop itself, as it does a removed field's.
+    await seeded();
+    expect(await itemColumns()).toContain("owner");
+
+    const saved = await handler().updateCollection(
+      { collectionName: "items" },
+      {
+        fields: [
+          ...BEFORE.filter(field => field.name !== "owner"),
+          {
+            name: "owner",
+            type: "relationship",
+            options: { target: "people", relationType: "manyToMany" },
+          },
+        ],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await itemColumns()).not.toContain("owner");
+  }, 120_000);
+
+  it("fills the entries already there from a Required JSON field's default", async () => {
+    await seeded();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "items" },
+      {
+        fields: [
+          ...BEFORE,
+          { name: "tags", type: "json", required: true, default: ["a"] },
+        ],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const rows = await query<{ tags: unknown }>(
+      `SELECT ${q("tags")} AS tags FROM ${q("dc_items")}`
+    );
+    expect(rows.map(row => parsedJson(row.tags))).toEqual([["a"], ["a"]]);
+  }, 120_000);
+
+  it("keeps the table's own unique index on slug when a slug field stops being unique", async () => {
+    // A table with a `slug` column keeps it unique whatever a field of that name says, so turning
+    // the field's Unique off leaves the index the table has for its own reasons.
+    current = await createTestNextly({ dialect, collections: [] });
+    const slug = { name: "slug", type: "text" };
+    const created = await handler().createCollection({
+      name: "pages",
+      label: "Page",
+      fields: [
+        { name: "title", type: "text" },
+        { ...slug, unique: true },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "pages" },
+      { fields: [{ name: "title", type: "text" }, slug] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const snapshot = await introspectLiveSnapshot(
+      current.adapter.getDrizzle(),
+      dialect,
+      ["dc_pages"]
+    );
+    expect(
+      (snapshot.tables[0]?.indexes ?? []).some(
+        index =>
+          index.unique &&
+          index.columns.length === 1 &&
+          index.columns[0] === "slug"
+      )
+    ).toBe(true);
+  }, 120_000);
 });

@@ -1012,10 +1012,19 @@ export class DynamicCollectionSchemaService {
    */
   addedColumnFillValue(field: FieldDefinition, now: Date): unknown {
     if (field.default !== undefined) {
+      const value: unknown = field.default;
       // SQLite's driver binds no boolean.
-      return this.dialect === "sqlite" && typeof field.default === "boolean"
-        ? Number(field.default)
-        : field.default;
+      if (this.dialect === "sqlite" && typeof value === "boolean") {
+        return Number(value);
+      }
+      // No driver binds an object or an array as JSON: SQLite refuses one, and PostgreSQL's
+      // driver turns an array into an array literal. A JSON default is bound as its text, which
+      // every dialect's JSON column reads back as written.
+      return value !== null &&
+        typeof value === "object" &&
+        !(value instanceof Date)
+        ? JSON.stringify(value)
+        : value;
     }
     return backfillValueForType(
       {

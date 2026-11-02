@@ -60,6 +60,7 @@ import type {
 } from "../../schema/pipeline/prompt-dispatcher/browser";
 import {
   columnsThatMayHoldNull,
+  fieldProducesColumn,
   getColumnDescriptor,
   systemColumnsForFields,
   toSnakeCase,
@@ -976,9 +977,14 @@ export class DynamicCollectionService extends BaseService {
     renameResolutions: BrowserRenameResolution[];
     legacyResolutions: LegacyResolutionsBundle;
   } {
+    // The fields with a column on the main table, so a field that keeps its name and loses its
+    // column (a relationship becoming many-to-many, a field becoming a group) is a removed column,
+    // and one that gains a column under the same name is an added one.
     const onMain = (fields: FieldDefinition[], localized: boolean) => {
       const translated = new Set(resolveLocalizedFieldNames(fields, localized));
-      return fields.filter(f => !translated.has(f.name));
+      return fields.filter(
+        f => !translated.has(f.name) && fieldProducesColumn(f)
+      );
     };
     const before = onMain(change.oldFields, change.wasLocalized);
     const after = onMain(change.newFields, change.isLocalized);
@@ -1384,15 +1390,17 @@ export class DynamicCollectionService extends BaseService {
       ));
     // The facts the migration file is planned from. What the table IS comes from the fields the
     // registry records, as every database built from the migrations has it, never from this
-    // database's table, which a save refused part-way can have changed. Whether it holds rows, and
-    // which columns hold a null, are this database's entries, which the change is judged against.
+    // database's table, which a save refused part-way can have changed. Whether it holds rows,
+    // which columns hold a null, and which recorded columns it does not have yet are this
+    // database's entries, which the change is judged against: a column whose ADD is still queued
+    // over rows is created holding NULL in every one, so making it Required is refused.
     const historyFacts = async () => {
       const live = await liveTable();
       const recorded = collection.fields ?? [];
       return {
         tableHasRows: live.tableHasRows,
         columnsContainingNull: live.columnsContainingNull,
-        columnsAbsentFromTable: new Set<string>(),
+        columnsAbsentFromTable: live.columnsAbsentFromTable,
         liveColumnTypes: this.schemaService.plannedColumnTypes(recorded),
         ...this.schemaService.plannedAttachments(
           collection.tableName,
