@@ -63,7 +63,16 @@ export interface FieldsLeavingOnReload {
   /** The same fields before the reload: those leaving translation as the registry recorded them. */
   oldFields: readonly LeavingFieldLike[];
   leaving: ReadonlySet<string>;
-  /** Those of `leaving` a unique index in the entity's `indexes` covers. */
+  /**
+   * The unique indexes in the entity's `indexes` that cover a field of `leaving`, by their fields.
+   * Held back from the first apply and created by the settings push once the values are copied.
+   */
+  uniqueIndexes: readonly (readonly string[])[];
+  /**
+   * Those of `leaving` a one-column unique index covers, so each must be unique on its own
+   * (`uniqueIndexes`). One in a wider index is unique only together with its other columns, which
+   * the database judges when the push creates it.
+   */
   uniqueIndexed: ReadonlySet<string>;
 }
 
@@ -189,24 +198,28 @@ async function leavingIn(
         : f
     ),
     leaving,
-    uniqueIndexed: uniqueIndexedOf(e.entity, leaving),
+    ...uniqueIndexesOf(e.entity, leaving),
   };
 }
 
-/** The fields of `leaving` that a unique index the entity declares in `indexes` covers. */
-function uniqueIndexedOf(
+/** The unique indexes the entity declares in `indexes` over a field of `leaving` (see the entry). */
+function uniqueIndexesOf(
   entity: LocalizableEntity,
   leaving: ReadonlySet<string>
-): ReadonlySet<string> {
+): Pick<FieldsLeavingOnReload, "uniqueIndexes" | "uniqueIndexed"> {
   const { indexes } = entity as {
     indexes?: readonly { fields: readonly string[]; unique?: boolean }[];
   };
-  return new Set(
-    (indexes ?? [])
-      .filter(index => index.unique === true)
-      .flatMap(index => index.fields)
-      .filter(field => leaving.has(field))
-  );
+  const uniqueIndexes = (indexes ?? [])
+    .filter(index => index.unique === true)
+    .map(index => index.fields)
+    .filter(fields => fields.some(field => leaving.has(field)));
+  return {
+    uniqueIndexes,
+    uniqueIndexed: new Set(
+      uniqueIndexes.flatMap(fields => (fields.length === 1 ? fields : []))
+    ),
+  };
 }
 
 /**
@@ -340,7 +353,7 @@ export function withLeavingSettingsHeld(
 
 /**
  * `collections` without the unique indexes that cover a field leaving translation
- * (`uniqueIndexed`), which the settings push creates once the values are copied, as it applies a
+ * (`uniqueIndexes`), which the settings push creates once the values are copied, as it applies a
  * field's own Unique.
  */
 function withoutLeavingIndexes(
@@ -355,7 +368,7 @@ function withoutLeavingIndexes(
       const indexes = collection.indexes?.filter(
         index =>
           index.unique !== true ||
-          !index.fields.some(field => entry?.uniqueIndexed.has(field))
+          !index.fields.some(field => entry?.leaving.has(field))
       );
       return [key, indexes ? { ...collection, indexes } : collection];
     })
@@ -454,7 +467,7 @@ async function settleEveryEntity(
   const settings = entries.some(e => {
     const held = withoutLeavingConstraints(e.newFields, e.leaving);
     return (
-      e.uniqueIndexed.size > 0 || held.some((f, i) => f !== e.newFields[i])
+      e.uniqueIndexes.length > 0 || held.some((f, i) => f !== e.newFields[i])
     );
   });
   if (!settings || (await args.push()).success) return true;
@@ -483,6 +496,19 @@ async function dropEveryEntity(
     }
   }
   return stopped;
+}
+
+/**
+ * What a reload says when the translated content of `stopped` stays where it is: after an apply
+ * it publishes nothing, so the running server keeps each entity's fields as they were until it is
+ * reloaded, by a restart or a save that finishes the change.
+ */
+export function translationStaysOn(stopped: readonly string[]): string {
+  return (
+    `[nextly] Translation stays on for ${stopped.join(", ")}: their content could not be ` +
+    `copied out of the translations table, and the content is intact where it is. Fix the error ` +
+    `above. Restart the dev server (or save the collection again) to reload its fields.`
+  );
 }
 
 function notMoved(slug: string, error: unknown): string {

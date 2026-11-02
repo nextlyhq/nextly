@@ -2152,6 +2152,7 @@ async function applyReloadHolding(
     heldFields,
     withLeavingSettingsHeld,
     moveFieldsLeavingOnReload,
+    translationStaysOn,
   } = await import("../domains/i18n/runtime/fields-leaving-on-reload");
   let leaving: Awaited<ReturnType<typeof prepareFieldsLeavingOnReload>>;
 
@@ -2808,11 +2809,7 @@ async function applyReloadHolding(
       })),
     ];
     if (stopped.length > 0) {
-      logger.error(
-        `[nextly] Translation stays on for ${stopped.join(", ")}: their content could not be ` +
-          `copied out of the translations table. Fix the error above and save again — the content ` +
-          `is intact where it is.`
-      );
+      logger.error(translationStaysOn(stopped));
       // Deliberately publishes NOTHING. The DDL landed, so the previous field
       // types are not restored either -- they describe tables that now exist.
       // But this returns ahead of the metadata sync and the runtime-schema

@@ -79,17 +79,22 @@ type Body = {
   titleType?: string;
   /** A unique index on `body` declared in the collection's `indexes`. */
   indexedUnique?: true;
+  /** A unique index on `body` and `title` together declared in the collection's `indexes`. */
+  pairUnique?: true;
 };
 
 /** A translated collection whose `body` is translated or shared, with its settings. */
 const collectionWith = (
   slug: string,
-  { summary, titleType, indexedUnique, ...body }: Body
+  { summary, titleType, indexedUnique, pairUnique, ...body }: Body
 ) =>
   defineCollection({
     slug,
     localized: true,
     ...(indexedUnique ? { indexes: [{ fields: ["body"], unique: true }] } : {}),
+    ...(pairUnique
+      ? { indexes: [{ fields: ["body", "title"], unique: true }] }
+      : {}),
     fields: [
       { name: "title", type: titleType ?? "text", localized: false },
       { name: "body", type: "text", ...body },
@@ -474,6 +479,24 @@ describe.each(getConfiguredTestDialects())(
       await expect(
         handle.adapter.executeQuery(
           `UPDATE ${q(TABLE)} SET ${q("body")} = 'A' WHERE ${q("id")} = 'e2'`
+        )
+      ).rejects.toThrow();
+    });
+
+    // The index holds `body` and `title` together, so English values that repeat under different
+    // titles are what it allows: only the pair is unique.
+    it("moves a field a two-column unique index covers while its English values repeat under different titles", async () => {
+      await seed({ e1: { en: "Same", es: "Uno" }, e2: { en: "Same" } });
+
+      loaded.config = configWith({ localized: false, pairUnique: true });
+      await reloadNextlyConfig();
+
+      expect(await mainBodies()).toEqual({ e1: "Same", e2: "Same" });
+      expect(await columnsOf(COMPANION)).not.toContain("body");
+      // The pair is unique once the values are copied.
+      await expect(
+        handle.adapter.executeQuery(
+          `UPDATE ${q(TABLE)} SET ${q("title")} = 'e1' WHERE ${q("id")} = 'e2'`
         )
       ).rejects.toThrow();
     });
