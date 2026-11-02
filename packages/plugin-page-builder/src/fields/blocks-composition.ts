@@ -529,6 +529,15 @@ async function judgeOwnComposition(args: {
   for (const fault of faults) {
     report.add(fault.code, fault.message);
   }
+  // Every placement's definition, the ones a condition gates included: the
+  // composition never expanded those, and both checks below read them.
+  await readEveryPlacedDefinition(document, library, read, setup.limits);
+  // Past the reader's bound a definition reads as unreadable and its
+  // placement would go unjudged, so the save is refused as unchecked instead.
+  if (read.exhausted()) {
+    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
   await judgePlacedLocks({
     document,
     composed: composed.composition.document,
@@ -541,7 +550,6 @@ async function judgeOwnComposition(args: {
   await judgePlacementValues({
     document,
     library,
-    read,
     limits: setup.limits,
     stored: args.stored,
     report,
@@ -578,6 +586,28 @@ async function judgePlacedLocks(
   }
 }
 
+/**
+ * Read the definition of every component the document places into the library.
+ *
+ * A placement the composition never expanded (one a condition gates) still
+ * stores its values, and is served with them once the condition lifts, so its
+ * component is read too. Stops asking once the reader's bound is spent, which
+ * the caller then refuses as unchecked.
+ */
+async function readEveryPlacedDefinition(
+  document: BlockDocument,
+  library: HeldLibrary,
+  read: BoundedReader,
+  limits: DocumentLimits
+): Promise<void> {
+  for (const id of componentIdsIn(document.nodes, limits.maxNodes)) {
+    if (library.held.has(id) || library.missing.has(id)) continue;
+    const answer = await read(id);
+    if (answer.kind === "document") library.held.set(id, answer.document);
+    else library.missing.add(id);
+  }
+}
+
 /** The issue code for each way a placement's value is refused. */
 const PLACEMENT_VALUE_CODES: Readonly<Record<PlacementValueProblem, string>> = {
   "unknown-field": "PLACEMENT_VALUE_UNKNOWN_FIELD",
@@ -602,27 +632,11 @@ const PLACEMENT_VALUE_CODES: Readonly<Record<PlacementValueProblem, string>> = {
 async function judgePlacementValues(args: {
   document: BlockDocument;
   library: HeldLibrary;
-  read: BoundedReader;
   limits: DocumentLimits;
   stored: () => Promise<StoredRead>;
   report: Report;
 }): Promise<void> {
   const { document, library, limits, report } = args;
-  // A placement the composition never expanded (one a condition gates) still
-  // stores its values, and is served with them once the condition lifts, so
-  // its component is read too.
-  for (const id of componentIdsIn(document.nodes, limits.maxNodes)) {
-    if (library.held.has(id) || library.missing.has(id)) continue;
-    const answer = await args.read(id);
-    if (answer.kind === "document") library.held.set(id, answer.document);
-    else library.missing.add(id);
-  }
-  // Past the reader's bound a definition reads as unreadable and its
-  // placement would go unjudged, so the save is refused as unchecked instead.
-  if (args.read.exhausted()) {
-    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
-    return;
-  }
   const components = lookupOf(library);
   if (placementValueIssues(document, components, [], limits).length === 0) {
     return;

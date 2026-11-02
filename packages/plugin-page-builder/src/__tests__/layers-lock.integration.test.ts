@@ -431,6 +431,34 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("refuses it on a placement a condition gates, which the page does not compose", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const id = await promo(t);
+        const gated = (overrides: object): Node => ({
+          ...placing(id, overrides),
+          visibility: {
+            conditions: [[{ field: "title", op: "eq", value: "Home" }]],
+          },
+        });
+        const save = (nodes: Node[]) =>
+          t.nextly.create({
+            collection: "pages",
+            data: {
+              title: "Home",
+              slug: `home-${String(Math.random()).slice(2, 8)}`,
+              content: pageOf(nodes),
+            },
+            overrideAccess: true,
+          });
+
+        // CONTROL: gated, and given a value for the free block, it saves.
+        await expect(
+          save([gated({ subtitle: "Spring sale" })])
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(save([gated({ title: "Changed" })]));
+      });
+
       it("refuses it on an update too", async () => {
         const { update } = await storedPage([heading("loose")]);
         const id = await promo(current!);

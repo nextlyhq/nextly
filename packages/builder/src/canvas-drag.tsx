@@ -690,6 +690,16 @@ export function useCanvasDrag({
     detachDocument.current = null;
   }, []);
 
+  /** The document listeners a held press's drawn reason ends on, if any. */
+  const detachHeld = React.useRef<(() => void) | null>(null);
+
+  /** Forget the held press, and stop listening for its release. */
+  const stopHolding = React.useCallback(() => {
+    detachHeld.current?.();
+    detachHeld.current = null;
+    heldPress.current = null;
+  }, []);
+
   /**
    * End the gesture and release everything it holds, WITHOUT drawing.
    *
@@ -713,9 +723,10 @@ export function useCanvasDrag({
     }
     gesture.current = null;
     // A palette drag listens on the document, and every way one can end arrives
-    // here.
+    // here. So does a held press's drawn reason, which Escape abandons too.
     stopTrackingDocument();
-  }, [stopTrackingDocument]);
+    stopHolding();
+  }, [stopTrackingDocument, stopHolding]);
 
   const reset = React.useCallback(() => {
     teardown();
@@ -726,6 +737,23 @@ export function useCanvasDrag({
       refusal: null,
     });
   }, [teardown]);
+
+  /** The held press ends, and its reason with it, when its pointer lifts. */
+  const releaseHeld = React.useCallback(
+    (pointerId: number) => {
+      const press = heldPress.current;
+      if (press === null || press.owner !== pointerId) return;
+      stopHolding();
+      if (!press.shown) return;
+      setState({
+        draggingId: null,
+        draggingBlockName: null,
+        target: null,
+        refusal: null,
+      });
+    },
+    [stopHolding]
+  );
 
   const onPointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
@@ -755,6 +783,9 @@ export function useCanvasDrag({
       // Asked through the shared rule rather than by reading the flag here, so
       // this answers as the keyboard moves, the toolbar and Layers do.
       const held = lockBlockingMove(current.document, nodeId);
+      // A held press still down ends with this one: its reason and its
+      // listeners go, rather than being overwritten and left listening.
+      if (heldPress.current !== null) releaseHeld(heldPress.current.owner);
       if (held !== undefined) {
         heldPress.current = {
           owner: event.pointerId,
@@ -798,7 +829,7 @@ export function useCanvasDrag({
       };
       // NOT captured here. See the activation branch in `onPointerMove`.
     },
-    []
+    [releaseHeld]
   );
 
   /**
@@ -996,6 +1027,19 @@ export function useCanvasDrag({
       );
       if (travelled < activationPx) return;
       press.shown = true;
+      // Followed on the documents from here, as a palette drag is: the hand
+      // may leave the canvas once the reason is drawn, and its release there
+      // must still take the reason away. Escape ends it through `reset`.
+      const lifted = (native: PointerEvent): void => {
+        releaseHeld(native.pointerId);
+      };
+      const documents = inputDocuments(frameRef.current);
+      const ups = listenOn(documents, "pointerup", lifted);
+      const cancels = listenOn(documents, "pointercancel", lifted);
+      detachHeld.current = () => {
+        ups();
+        cancels();
+      };
       setState({
         draggingId: null,
         draggingBlockName: press.blockName,
@@ -1007,22 +1051,8 @@ export function useCanvasDrag({
         },
       });
     },
-    [activationPx]
+    [activationPx, releaseHeld]
   );
-
-  /** The held press ends, and its reason with it, when its pointer lifts. */
-  const releaseHeld = React.useCallback((pointerId: number) => {
-    const press = heldPress.current;
-    if (press === null || press.owner !== pointerId) return;
-    heldPress.current = null;
-    if (!press.shown) return;
-    setState({
-      draggingId: null,
-      draggingBlockName: null,
-      target: null,
-      refusal: null,
-    });
-  }, []);
 
   const trackMove = React.useCallback(
     (

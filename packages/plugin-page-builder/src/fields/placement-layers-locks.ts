@@ -21,6 +21,7 @@
  * @module fields/placement-layers-locks
  */
 import {
+  isConditionGated,
   layersLockChanges,
   walkNodes,
   type BlockDocument,
@@ -30,7 +31,11 @@ import {
   type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
 
-import type { BoundedReader, HeldLibrary } from "../composition-reading";
+import {
+  composeWithReads,
+  type BoundedReader,
+  type HeldLibrary,
+} from "../composition-reading";
 
 import {
   composedFormsRead,
@@ -70,6 +75,42 @@ function placedLocksOnly(form: unknown, limits: DocumentLimits): unknown {
       if (!isPlacedLock(node)) delete (node as { locked?: unknown }).locked;
     },
     { maxNodes: limits.maxNodes }
+  );
+  return copy;
+}
+
+/**
+ * The document with every gate a condition puts on its own blocks lifted, or
+ * `undefined` when it holds none. The composition leaves a gated placement,
+ * and every placement inside a gated block, standing unexpanded, since no
+ * reader is served it; but its values are stored, and served once the
+ * condition lifts, so its component's locks hold on them all the same.
+ */
+function withGatesLifted(
+  document: BlockDocument,
+  limits: DocumentLimits
+): BlockDocument | undefined {
+  const bound = { maxNodes: limits.maxNodes };
+  // Asked of the document first: most pages gate no block, and then nothing
+  // is cloned.
+  let gated = false;
+  walkNodes(
+    document.nodes,
+    node => {
+      if (isConditionGated(node)) gated = true;
+    },
+    bound
+  );
+  if (!gated) return undefined;
+  const copy = structuredClone(document);
+  walkNodes(
+    copy.nodes,
+    node => {
+      if (isConditionGated(node)) {
+        delete (node as { visibility?: unknown }).visibility;
+      }
+    },
+    bound
   );
   return copy;
 }
@@ -125,14 +166,30 @@ export async function placedLayersLocks(args: {
   stored: () => Promise<{ forms: BlockDocument[]; readable: boolean }>;
 }): Promise<PlacedLocksAnswer> {
   const { limits } = args.reading;
-  if (placedLockIds(args.composed, limits).size === 0) return NONE;
+  // Gated placements are judged as served once their condition lifts: the
+  // page, its baseline and its stored forms all composed with the gates off.
+  const ungated = withGatesLifted(args.document, limits);
+  const document = ungated ?? args.document;
+  const composed =
+    ungated === undefined
+      ? args.composed
+      : (
+          await composeWithReads({
+            host: ungated,
+            library: args.reading.library,
+            read: args.reading.read,
+            limits,
+            work: args.reading.work,
+          })
+        ).composition.document;
+  if (placedLockIds(composed, limits).size === 0) return NONE;
   const asHeld = await composedFormsRead({
     ...args.reading,
-    hosts: [placementsAsComponentsHoldThem(args.document, limits)],
+    hosts: [placementsAsComponentsHoldThem(document, limits)],
   });
   if (!asHeld.complete) return { kind: "unchecked" };
   const found = layersLockChanges(
-    args.composed,
+    composed,
     placedLocksOnly(asHeld.forms[0], limits)
   );
   if (found.length === 0) return NONE;
@@ -141,7 +198,7 @@ export async function placedLayersLocks(args: {
   // Cut short, a stored form only fails to keep a value: measured strictly.
   const storedComposed = await composedFormsRead({
     ...args.reading,
-    hosts: stored.forms,
+    hosts: stored.forms.map(form => withGatesLifted(form, limits) ?? form),
   });
   const storedForms = storedComposed.forms.map(form => ({
     form: placedLocksOnly(form, limits),
@@ -149,8 +206,6 @@ export async function placedLayersLocks(args: {
   }));
   return {
     kind: "judged",
-    changes: found.filter(
-      change => !keptBy(change, args.composed, storedForms)
-    ),
+    changes: found.filter(change => !keptBy(change, composed, storedForms)),
   };
 }

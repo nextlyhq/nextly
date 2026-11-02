@@ -110,8 +110,8 @@ setting it to `null`, is refused the same way while the page holds a locked bloc
 the data the save's hooks leave: a hook that empties the field is refused as the
 caller would be. A block added before a locked one, or a block removed from before it,
 shifts its position without moving it, so that is allowed; swapping it with a block
-beside it moves it. To change or move a locked block, send it unlocked in the same
-save.
+beside it moves it, and so does swapping a block that holds it with one beside that.
+To change or move a locked block, send it unlocked in the same save.
 
 Deleting is the exception. A locked block can't be deleted in the same save that
 unlocks it, and neither can a block that holds it: unlock it and save first, then
@@ -137,8 +137,8 @@ refused, naming the placement.
 
 A block locked in Layers inside a component holds on every page that places it too. A
 placement's value for an exposed field, or its content for an exposed slot, cannot
-change it, and the save is refused with `layers-lock-changed`, naming the block. A page
-cannot unlock it: remove the value, or unlock the block in the component. A value a page
+change it, even on a placement a visibility condition hides, and the save is refused
+with `layers-lock-changed`, naming the block. A page cannot unlock it: remove the value, or unlock the block in the component. A value a page
 already stores is kept, so locking a block after pages gave it values refuses only a new
 one.
 

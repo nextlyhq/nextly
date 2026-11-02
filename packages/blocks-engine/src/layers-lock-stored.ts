@@ -60,6 +60,8 @@ interface Placed {
   readonly ancestors: readonly string[];
   /** The ids of the blocks in the same list, this one included, in order. */
   readonly siblings: readonly string[];
+  /** Each ancestor's own `siblings`, outermost first, beside `ancestors`. */
+  readonly ancestorSiblings: readonly (readonly string[])[];
 }
 
 /** The usable ids of a list's entries, in order. */
@@ -73,24 +75,47 @@ function idsOf(entries: readonly unknown[]): string[] {
 }
 
 /**
- * Whether a node keeps its place among the siblings that were there before:
+ * Whether a block keeps its place among the siblings that were there before:
  * the same of them before it, in stored and in written form.
  *
  * Only siblings both forms hold are counted, so a block added beside it or one
  * removed shifts its index without moving it, while swapping it with a block
  * that was already there is a move.
  */
-function samePlaceAmongSiblings(stored: Placed, written: Placed): boolean {
-  const kept = new Set(written.siblings);
-  const was = new Set(stored.siblings);
-  const before = (list: readonly string[], present: Set<string>, id: string) =>
+function samePlaceAmongSiblings(
+  id: string,
+  stored: readonly string[],
+  written: readonly string[]
+): boolean {
+  const kept = new Set(written);
+  const was = new Set(stored);
+  const before = (list: readonly string[], present: Set<string>) =>
     list.slice(0, list.indexOf(id)).filter(sibling => present.has(sibling));
-  const storedBefore = before(stored.siblings, kept, stored.id);
-  const writtenBefore = before(written.siblings, was, written.id);
-  const writtenSet = new Set(writtenBefore);
+  const storedBefore = before(stored, kept);
+  const writtenBefore = new Set(before(written, was));
   return (
-    storedBefore.length === writtenBefore.length &&
-    storedBefore.every(id => writtenSet.has(id))
+    storedBefore.length === writtenBefore.size &&
+    storedBefore.every(sibling => writtenBefore.has(sibling))
+  );
+}
+
+/**
+ * Whether a node, and every block around it, keeps its place among the
+ * siblings stored beside it. A lock holds where its block sits on the page,
+ * so reordering an unlocked section that holds it moves it as much as
+ * reordering the block itself. Read only once the chains agree, so the two
+ * ancestries name the same blocks level by level.
+ */
+function samePlaceAtEveryLevel(stored: Placed, written: Placed): boolean {
+  if (!samePlaceAmongSiblings(stored.id, stored.siblings, written.siblings)) {
+    return false;
+  }
+  return stored.ancestors.every((ancestor, level) =>
+    samePlaceAmongSiblings(
+      ancestor,
+      stored.ancestorSiblings[level] ?? [],
+      written.ancestorSiblings[level] ?? []
+    )
   );
 }
 
@@ -129,6 +154,7 @@ function rootsOf(forest: unknown): Placed[] {
       chain: [],
       ancestors: [],
       siblings,
+      ancestorSiblings: [],
     });
   });
   return roots;
@@ -149,6 +175,7 @@ function childrenOf(parent: Placed): Placed[] {
         chain: [...parent.chain, parent.id, slot],
         ancestors: [...parent.ancestors, parent.id],
         siblings,
+        ancestorSiblings: [...parent.ancestorSiblings, parent.siblings],
       });
     });
   }
@@ -294,7 +321,7 @@ function changeOf(
   // Unlocked in this same write: the one way past the lock.
   if (written.node.locked !== true) return undefined;
   if (!sameChain(stored.chain, written.chain)) return "moved";
-  if (!samePlaceAmongSiblings(stored, written)) return "moved";
+  if (!samePlaceAtEveryLevel(stored, written)) return "moved";
   if (!sameApartFromLocks(stored.node, written.node)) return "changed";
   return undefined;
 }

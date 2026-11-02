@@ -280,3 +280,29 @@ describe("the order of a locked block among its siblings", () => {
     ).toEqual([]);
   });
 });
+
+describe("the order of an unlocked block that holds a locked one", () => {
+  /** A container holding the locked hero, then an aside, at the top level. */
+  const container = () =>
+    node("container", {}, [node("hero", { locked: true, name: "Hero" })]);
+  const aside = () => node("aside");
+  const before = () => pageOf([container(), aside()]);
+
+  it("refuses reordering the container among the siblings stored beside it", () => {
+    // The hero keeps its parent and its slot; the container it sits in is
+    // what moved, and the lock holds where its block sits on the page.
+    expect(layersLockChanges(pageOf([aside(), container()]), before())).toEqual(
+      [expect.objectContaining({ kind: "moved", id: "hero" })]
+    );
+  });
+
+  it("accepts a new sibling put before the container", () => {
+    expect(
+      layersLockChanges(pageOf([node("added"), container(), aside()]), before())
+    ).toEqual([]);
+  });
+
+  it("accepts the sibling beside the container being deleted", () => {
+    expect(layersLockChanges(pageOf([container()]), before())).toEqual([]);
+  });
+});
