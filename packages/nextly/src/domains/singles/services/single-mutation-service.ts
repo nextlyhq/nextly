@@ -698,7 +698,9 @@ export class SingleMutationService extends BaseService {
         this.adapter,
         this.singleRegistryService,
         params.slug,
-        this.logger
+        this.logger,
+        // A write: refused in production where the Single was never registered.
+        { intent: "write" }
       );
       const companion = singleMeta ? this.translationsOf(singleMeta) : null;
       // Resolved before the transaction: they take a pooled connection.
@@ -795,7 +797,9 @@ export class SingleMutationService extends BaseService {
       this.adapter,
       this.singleRegistryService,
       params.slug,
-      this.logger
+      this.logger,
+      // A write: refused in production where the Single was never registered.
+      { intent: "write" }
     );
     if (!singleMeta) {
       throw NextlyError.notFound({
@@ -1517,7 +1521,9 @@ export class SingleMutationService extends BaseService {
         this.adapter,
         this.singleRegistryService,
         slug,
-        this.logger
+        this.logger,
+        // A write: refused in production where the Single was never registered.
+        { intent: "write" }
       );
       if (!singleMeta) {
         return {

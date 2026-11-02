@@ -37,6 +37,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { tableNotRegisteredError } from "@nextlyhq/adapter-drizzle/types";
 
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
@@ -52,6 +53,21 @@ import { generateRuntimeSchema } from "../../schema/services/runtime-schema-gene
  * inside.
  */
 const registeredShapes = new WeakMap<object, Map<string, string>>();
+
+/**
+ * The main-table object this helper last registered, per resolver and table.
+ * A production write is refused while the resolver still holds exactly that
+ * object: the table is then known to this instance only because a read
+ * recovered it, never because boot, create time or a reload registered it.
+ * Compared by identity, so a later registration from any of those replaces
+ * the entry's meaning without this helper having to be told.
+ */
+const lazilyRegistered = new WeakMap<object, Map<string, unknown>>();
+
+/** Whether a lookup serves a read or a write. */
+export interface SingleRuntimeTableUse {
+  intent?: "read" | "write";
+}
 
 /** The registry-row slice this helper needs. */
 export interface SingleRuntimeTableMeta {
@@ -100,22 +116,46 @@ function shapeSignature(
     : `f${JSON.stringify(fields)}:${shape}`;
 }
 
+/**
+ * Refuse a production write to a Single this instance never registered of its
+ * own accord: the table is missing from the resolver, or present only because
+ * this helper recovered it for a read. Such an instance started before the
+ * deploy that added or changed the Single, so it may write a row its code no
+ * longer describes. The refusal is the adapter's own not-registered error, so
+ * every write path answers it as it answers the adapter refusing.
+ *
+ * Development keeps recovering instead: another dev worker or an HMR reload
+ * registering the Single is the case the recovery exists for.
+ */
+function refuseUnregisteredProductionWrite(
+  resolver: ResolverLike,
+  tableName: string,
+  use: SingleRuntimeTableUse
+): void {
+  if (use.intent !== "write" || process.env.NODE_ENV !== "production") return;
+  const held = resolver.getTable?.(tableName);
+  const ours = lazilyRegistered.get(resolver)?.get(tableName);
+  if (!held || held === ours) throw tableNotRegisteredError(tableName);
+}
+
 export async function ensureSingleRuntimeTable(
   adapter: DrizzleAdapter,
   singleMeta: SingleRuntimeTableMeta,
-  logger?: Logger
+  logger?: Logger,
+  use: SingleRuntimeTableUse = {}
 ): Promise<void> {
+  const resolver = (adapter as unknown as { tableResolver?: ResolverLike })
+    .tableResolver;
+  if (
+    !resolver ||
+    typeof resolver.getTable !== "function" ||
+    typeof resolver.registerDynamicSchema !== "function"
+  ) {
+    return;
+  }
+  // Before the best-effort block below, which swallows what it throws.
+  refuseUnregisteredProductionWrite(resolver, singleMeta.tableName, use);
   try {
-    const resolver = (adapter as unknown as { tableResolver?: ResolverLike })
-      .tableResolver;
-    if (
-      !resolver ||
-      typeof resolver.getTable !== "function" ||
-      typeof resolver.registerDynamicSchema !== "function"
-    ) {
-      return;
-    }
-
     // Registry rows deserialize `fields` into plain field objects; the same
     // shape both generators below consume (name + type + optional localized).
     const fields = (
@@ -212,6 +252,12 @@ export async function ensureSingleRuntimeTable(
         { status, localized: localized && companionReady }
       );
       resolver.registerDynamicSchema(singleMeta.tableName, table);
+      let ours = lazilyRegistered.get(resolver);
+      if (!ours) {
+        ours = new Map();
+        lazilyRegistered.set(resolver, ours);
+      }
+      ours.set(singleMeta.tableName, table);
     }
 
     // Registering a companion that does not physically exist would give the
@@ -270,10 +316,11 @@ export async function resolveSingleForRequest(
     getSingleBySlug: (slug: string) => Promise<DynamicSingleRecord | null>;
   },
   slug: string,
-  logger?: Logger
+  logger?: Logger,
+  use: SingleRuntimeTableUse = {}
 ): Promise<DynamicSingleRecord | null> {
   const singleMeta = await registry.getSingleBySlug(slug);
   if (!singleMeta) return null;
-  await ensureSingleRuntimeTable(adapter, singleMeta, logger);
+  await ensureSingleRuntimeTable(adapter, singleMeta, logger, use);
   return singleMeta;
 }
