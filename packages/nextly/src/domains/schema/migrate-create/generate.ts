@@ -39,6 +39,7 @@ import {
   companionSpecShell,
   deriveCompanionSpec,
 } from "../../i18n/migration/derive-companion-spec";
+import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field-added-to-translation";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
   type LeavingTranslationRefusal,
@@ -1276,8 +1277,54 @@ function planCompanionMigrations(
       companionExisted,
     });
     if (plan.kind !== "none") entries.push({ spec, plan, entity: entityKind });
+    // A companion that was there and stays: the translated fields it gains.
+    const adds = companionExisted
+      ? addsEntryFor(c, entityKind, prevTable, joining, dialect, defaultLocale)
+      : undefined;
+    if (adds) entries.push(adds);
   }
   return entries;
+}
+
+/**
+ * The `adds` file of a translated entity whose companion is there before this run: its translated
+ * fields with no column there yet, which the previous snapshot doesn't record in the companion
+ * (`localizedColumns`) and which don't join translation (`joining`, whose column is the `joins`
+ * file's). Undefined when there is none, or when the snapshot records no companion columns to
+ * compare with, as one from before the record doesn't.
+ */
+function addsEntryFor(
+  c: MinimalConfigEntity,
+  entityKind: I18nTransitionKind,
+  prevTable: TableSpec | undefined,
+  joining: ReadonlySet<string>,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): CompanionPlanEntry | undefined {
+  if (prevTable?.localizedColumns === undefined) return undefined;
+  const there = new Set([...prevTable.localizedColumns, ...joining]);
+  const translated = c.fields.filter(f => isFieldLocalized(f, true));
+  const isAdded = (f: (typeof translated)[number]) => {
+    const column = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
+    return column != null && !there.has(column.name);
+  };
+  const added = translated.filter(isAdded);
+  if (added.length === 0) return undefined;
+  const { spec, upSql, downSql } = planFieldAddedToTranslationMigration({
+    slug: c.slug,
+    kind: entityKind,
+    tableName: c.tableName,
+    dialect,
+    defaultLocale,
+    status: c.status === true,
+    recorded: translated.filter(f => !isAdded(f)),
+    added,
+  });
+  return {
+    spec,
+    plan: { kind: "adds", spec, upSql, downSql },
+    entity: entityKind,
+  };
 }
 
 /** One entity's fields that stop being translated, and the two files that move their values. */
