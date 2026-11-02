@@ -14,6 +14,7 @@ import {
   type DocumentLimits,
   type LocatedPlacementBreak,
 } from "@nextlyhq/blocks-engine";
+import { deepActiveElement, isHTMLElement } from "@nextlyhq/builder";
 import {
   type NoticeQueue,
   type EditorState,
@@ -94,7 +95,7 @@ type SavePatternVerb = {
  * editor they would be three things to keep in step; here the order is the
  * function body.
  */
-function useSavePatternVerb(
+export function useSavePatternVerb(
   editor: { document: BlockDocument },
   inline: { commit: () => InlineEditOutcome }
 ): SavePatternVerb {
@@ -125,8 +126,11 @@ function useSavePatternVerb(
      */
     const finished = finishInlineEdit(inline, editor.document);
     if (!finished.mayClose) return;
-    const active = window.document.activeElement;
-    setOpenedFrom(active instanceof HTMLElement ? active : null);
+    // Read through any focused frame, and classified by node kind: a control
+    // inside a canvas mounted in an iframe is that window's element, and from
+    // here focus on it reads only as the iframe around it.
+    const active = deepActiveElement(window.document);
+    setOpenedFrom(isHTMLElement(active) ? active : null);
     setDocument(finished.document);
   }, [editor.document, inline]);
 
