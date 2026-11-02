@@ -88,6 +88,17 @@ describe("a batch's stored relations", () => {
     });
   });
 
+  it("read each component's definition once for every document", async () => {
+    const batch = new GoingLiveRelationsBatch(["a", "b"]);
+    const read = vi.fn(() => Promise.resolve([]));
+
+    await batch.componentFields("hero", read);
+    await batch.componentFields("hero", read);
+    await batch.componentFields("card", read);
+
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("are read alone for a document outside the batch", async () => {
     const load = countingLoad();
     const batch = new GoingLiveRelationsBatch(["a"]);

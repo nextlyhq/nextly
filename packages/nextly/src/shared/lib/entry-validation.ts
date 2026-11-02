@@ -27,6 +27,7 @@ import safeRegex from "safe-regex2";
 
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
 import { isVirtualField } from "../../collections/fields/virtual";
+import { omitDirectComponentFields } from "../../domains/field-groups/direct-component-fields";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
@@ -365,7 +366,9 @@ async function validateFieldValue(
   // required password genuinely must be set the first time.
   if (
     field.type === "password" &&
-    options.mode === "update" &&
+    // A stored instance judged as it goes live reads back without its hash,
+    // which no read returns: an absent password there is the stored one.
+    (options.mode === "update" || options.judgeComponentInstances === true) &&
     (value === undefined || (typeof value === "string" && value.trim() === ""))
   ) {
     return;
@@ -976,8 +979,13 @@ async function validateContainedComponents(
     // the value written is the caller's.
     const filled = { ...(instance as Record<string, unknown>) };
     applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
+    // A stored instance never holds a component placed directly among its
+    // fields, which the component write omits, so it is not judged missing.
+    const judged = options.judgeComponentInstances
+      ? omitDirectComponentFields(own)
+      : own;
     await validateFields(
-      attachFieldValidators("fieldGroup", slug, own),
+      attachFieldValidators("fieldGroup", slug, judged),
       filled,
       write,
       at,

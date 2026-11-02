@@ -967,9 +967,30 @@ export class GoingLiveRelationsBatch {
     | Promise<Map<string, Record<string, string[]>>>
     | undefined;
   private readonly rewritten = new Set<string>();
+  private readonly definitions = new Map<
+    string,
+    Promise<FieldConfig[] | null>
+  >();
 
   constructor(entryIds: readonly string[]) {
     this.entryIds = [...new Set(entryIds)];
+  }
+
+  /**
+   * A component's own fields, read once for the batch through `read`: a
+   * batch writes documents, not definitions, so every document is judged
+   * against the same ones.
+   */
+  componentFields(
+    slug: string,
+    read: () => Promise<FieldConfig[] | null>
+  ): Promise<FieldConfig[] | null> {
+    let found = this.definitions.get(slug);
+    if (found === undefined) {
+      found = read();
+      this.definitions.set(slug, found);
+    }
+    return found;
   }
 
   /** The batch has written this document since its relations were read. */
@@ -1229,6 +1250,8 @@ interface EntryValidationArgs {
    * would otherwise go live unjudged.
    */
   goesLive?: boolean;
+  /** The batch the document goes live with, which reads definitions once. */
+  batch?: GoingLiveRelationsBatch;
 }
 
 interface CreateEntryWriteParams {
@@ -2511,6 +2534,18 @@ export class CollectionMutationService extends BaseService {
     args: EntryValidationArgs
   ): Promise<ValidationIssue[]> {
     const view = this.validationView(args.data, args.fields);
+    // A component's fields, on the write's connection, read once for the
+    // whole batch where the document goes live with others.
+    const componentFieldsOf = (componentSlug: string) => {
+      const read = async () =>
+        (await this.fieldGroupDataService?.getComponentFields(
+          componentSlug,
+          args.tx?.getDrizzle()
+        )) ?? null;
+      return args.batch === undefined
+        ? read()
+        : args.batch.componentFields(componentSlug, read);
+    };
     // In the default language, or in any where the document has no
     // translated fields and so is the same document in every language.
     const judgeInstances =
@@ -2530,11 +2565,7 @@ export class CollectionMutationService extends BaseService {
         // Going live, a top-level one too, in the default language.
         componentFields: await containedComponentResolver(
           args.fields as unknown as FieldConfig[],
-          async componentSlug =>
-            (await this.fieldGroupDataService?.getComponentFields(
-              componentSlug,
-              args.tx?.getDrizzle()
-            )) ?? null,
+          componentFieldsOf,
           judgeInstances
         ),
         judgeComponentInstances: judgeInstances,
@@ -2563,8 +2594,7 @@ export class CollectionMutationService extends BaseService {
       document: view,
       fields: args.fields as unknown as FieldConfig[],
       fieldGroups: service && {
-        getComponentFields: componentSlug =>
-          service.getComponentFields(componentSlug, args.tx?.getDrizzle()),
+        getComponentFields: componentFieldsOf,
       },
       executor: args.tx?.getDrizzle(),
       entryId: args.id,
@@ -4249,6 +4279,7 @@ export class CollectionMutationService extends BaseService {
       ),
       id: args.entryId,
       goesLive: true,
+      batch: args.relationsBatch ?? args.reads?.relations,
     });
   }
 
@@ -4289,6 +4320,7 @@ export class CollectionMutationService extends BaseService {
         reader: args.reader,
         readLocale: locale,
         goesLive: true,
+        batch: args.relations.batch,
         localeCtx: componentsRequiredInDefaultLanguage(
           await this.localizedRequiredContext(
             args.collectionName,
@@ -15749,6 +15781,7 @@ export class CollectionMutationService extends BaseService {
           id: entryId,
           tx,
           goesLive: true,
+          batch: params.goingLiveBatch,
         });
       }
 

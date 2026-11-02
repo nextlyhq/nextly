@@ -43,10 +43,19 @@ component is enforced for the default language only, as a translated field's
 `required` is. A bulk publish and a release's readiness read every entry's
 components and relationships together, one read per field, not one per entry.
 
+Each component instance an entry holds is also judged against the rules on
+that component's own fields as they are now: a `required` field, a length or
+range rule, a custom `validate`. An instance is judged when it is written, so a
+rule added or tightened since then let an instance that no longer meets it go
+live; the publish is now refused with an error that names the field inside the
+component (`hero.code`). These rules are also judged for the default language
+only on a localized collection.
+
 Compatibility: custom `validate` functions on top-level component and
 many-to-many fields now also run when an entry is published, with the stored
 value. An entry missing a value such a field requires, or holding one its
 validator refuses as published, can no longer be published until the field is
-fixed.
+fixed; so can an entry whose stored component instance breaks a rule on one of
+the component's fields.
 This lifts the limit an earlier release noted, that a required component or
 relationship missing from storage was not re-checked at publish.

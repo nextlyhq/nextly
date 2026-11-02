@@ -23,6 +23,7 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  password,
   text,
 } from "../../../config";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
@@ -38,6 +39,7 @@ import { FieldGroupDataService } from "../../field-groups/services/field-group-d
 import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
+import { GoingLiveRelationsBatch } from "../services/collection-mutation-service";
 import { CollectionRelationshipService } from "../services/collection-relationship-service";
 import type { CollectionRegistryService } from "../services/collection-registry-service";
 
@@ -109,6 +111,22 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
       defineFieldGroup({ slug: "card", fields: [text({ name: "label" })] }),
       defineFieldGroup({ slug: "aside", fields: [text({ name: "body" })] }),
+      // A required password: stored as a hash, which no read returns.
+      defineFieldGroup({
+        slug: "secured",
+        fields: [
+          text({ name: "label" }),
+          password({ name: "pin", required: true }),
+        ],
+      }),
+      // A component placed directly in a component, which nothing stores.
+      defineFieldGroup({
+        slug: "shell",
+        fields: [
+          text({ name: "label" }),
+          fieldGroup({ name: "core", component: "card", required: true }),
+        ],
+      }),
       // Its values are kept per language, in its translations table.
       defineFieldGroup({
         slug: "note",
@@ -187,6 +205,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               ) ||
               "this hero cannot go live beside this title",
           }),
+        ],
+      }),
+      defineCollection({
+        slug: "vaults",
+        status: true,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "secured", component: "secured" }),
+          fieldGroup({ name: "shell", component: "shell" }),
         ],
       }),
       defineCollection({
@@ -609,6 +636,12 @@ describe.each(getConfiguredTestDialects())(
           ).success
         ).toBe(true);
       }
+      ids.vault = await created(t, "vaults", {
+        title: "vault",
+        status: "draft",
+        secured: { label: "front door", pin: "1234" },
+        shell: { label: "wrapper" },
+      });
       ids.aside = await created(t, "asides", {
         title: "aside",
         status: "draft",
@@ -762,6 +795,14 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("publishes an instance whose required password is stored, and whose unstored direct component is absent", async () => {
+      // A stored password reads back as absent, and a component placed
+      // directly in a component is never stored: neither is a missing value.
+      const result = await publish(t, "vaults", ids.vault);
+
+      expect(result.success, JSON.stringify(result)).toBe(true);
+    });
+
     it("judges a component instance's own rules in the default language only", async () => {
       nestedRuleOn = true;
       try {
@@ -814,6 +855,19 @@ describe.each(getConfiguredTestDialects())(
           reads.restore();
         }
       };
+
+      // The definitions its instances are judged against are asked of the
+      // batch, which reads each once for all its documents.
+      const viaBatch = vi.spyOn(
+        GoingLiveRelationsBatch.prototype,
+        "componentFields"
+      );
+      try {
+        await batchReads("checked", ["nestedBatchA", "nestedBatchB"]);
+        expect(viaBatch).toHaveBeenCalled();
+      } finally {
+        viaBatch.mockRestore();
+      }
 
       // Every document is refused, so each batch can be asked again.
       const pagesTwo = await batchReads("pages", ["count0", "count1"]);
