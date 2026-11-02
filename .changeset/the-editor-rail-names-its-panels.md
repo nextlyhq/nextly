@@ -38,4 +38,5 @@ For hosts of `@nextlyhq/builder` (experimental API):
 - The panel ids changed: `insert` is now `add`, and `tokens`, `classes` and `fonts` are now the tabs of one `design` panel. A stored preference naming an old id opens the panel and tab it became.
 - `renderPanel` receives a second argument, a `PanelView` (`current` and `choose`), for a panel with parts.
 - `openPanelRequest` takes an optional `view`.
+- `ShellPreferences` has a new required field, `leftPanelView` (`string | null`, the open panel's part). Code that builds a `ShellPreferences` value adds it, `null` for none; spreading `DEFAULT_PREFERENCES` covers it. Preferences stored before this change still load, with no part chosen.
 - `RAIL_WIDTH` is 84.

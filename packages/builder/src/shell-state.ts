@@ -72,7 +72,10 @@ function storedPanel(
   if (typeof panel === "string" && Object.hasOwn(RENAMED_PANELS, panel)) {
     return RENAMED_PANELS[panel];
   }
-  return { panel: null, view: null };
+  // No panel open, or one this shell no longer has: the part an author last
+  // chose is kept, so the panel reopens on it, as it does when a panel is
+  // closed and opened again in one session.
+  return { panel: null, view: typeof view === "string" ? view : null };
 }
 
 /**

@@ -34,7 +34,7 @@ const active = [
     layer: "builder-canvas-escape",
   },
   { keys: "mod+s", description: "Save entry", layer: "entry-form" },
-  { keys: "escape", description: "Cancel and go back", layer: "entry-form" },
+  { keys: "Escape", description: "Cancel and go back", layer: "entry-form" },
 ];
 
 describe("helpShortcuts", () => {
@@ -91,5 +91,38 @@ describe("helpShortcuts", () => {
         false
       )
     ).toEqual([]);
+  });
+});
+
+describe("telling two spellings of one key apart", () => {
+  const spelled = [
+    { keys: "mod+k", description: "Open the command palette", layer: "a" },
+    { keys: "ctrl+k", description: "Insert a link", layer: "b" },
+  ];
+
+  it("lists a key once when two layers spell it differently", () => {
+    // Off Apple, mod+k IS Ctrl+K: the first binding takes it, and Help must
+    // not claim Ctrl+K also inserts a link.
+    expect(helpShortcuts(spelled, false).map(row => row.description)).toEqual([
+      "Open the command palette",
+    ]);
+  });
+
+  it("lists both where the spellings are different keys", () => {
+    // On a Mac, mod+k is ⌘K and ctrl+k is Control-K: two keys, two rows.
+    expect(helpShortcuts(spelled, true).map(row => row.description)).toEqual([
+      "Open the command palette",
+      "Insert a link",
+    ]);
+  });
+
+  it("treats a letter's case and its modifier order as the same key", () => {
+    const reordered = [
+      { keys: "shift+mod+z", description: "Redo", layer: "a" },
+      { keys: "Mod+Shift+Z", description: "Something else", layer: "b" },
+    ];
+    expect(helpShortcuts(reordered, false).map(row => row.description)).toEqual(
+      ["Redo"]
+    );
   });
 });

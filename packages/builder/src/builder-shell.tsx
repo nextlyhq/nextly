@@ -477,6 +477,7 @@ function shallowEqualPreferences(
 ): boolean {
   if (
     a.leftPanel !== b.leftPanel ||
+    a.leftPanelView !== b.leftPanelView ||
     a.leftPinned !== b.leftPinned ||
     a.showEmptyElements !== b.showEmptyElements ||
     !sameZoom(a.zoom, b.zoom)

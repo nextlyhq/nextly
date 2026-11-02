@@ -332,6 +332,32 @@ describe("the rail's items, in the order an author meets them", () => {
  * was relabelled. Each is mapped to where its contents live now, explicitly —
  * not dropped as unknown, which would close the panel an author left open.
  */
+describe("preferences saved before panels had parts", () => {
+  it("load whole, with no part chosen", () => {
+    // Written by the editor before the Design panel's tabs existed: no
+    // leftPanelView, and an old panel id. Every other preference must survive.
+    const yesterday = {
+      leftPanel: "layers",
+      leftPinned: false,
+      zoom: 1.5,
+      layouts: {
+        "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
+      },
+      showEmptyElements: false,
+    };
+    expect(readPreferences(memoryStore(JSON.stringify(yesterday)))).toEqual({
+      leftPanel: "layers",
+      leftPanelView: null,
+      leftPinned: false,
+      zoom: { kind: "fixed", scale: 1.5 },
+      layouts: {
+        "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
+      },
+      showEmptyElements: false,
+    });
+  });
+});
+
 describe("a panel stored under an id from before the rail was relabelled", () => {
   it.each([
     ["insert", "add", null],

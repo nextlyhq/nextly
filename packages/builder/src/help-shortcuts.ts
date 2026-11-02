@@ -13,7 +13,14 @@
  *
  * @module help-shortcuts
  */
-import type { ActiveShortcut } from "@nextlyhq/ui";
+import {
+  chordMatches,
+  parseKeys,
+  type ActiveShortcut,
+  type KeyChord,
+  type KeySequence,
+  type ModifierState,
+} from "@nextlyhq/ui";
 
 import { keyHint } from "./key-hint";
 
@@ -23,9 +30,45 @@ export interface ShortcutRow {
   keys: readonly string[];
 }
 
-/** One spelling per key spec, for telling two layers' bindings of a key apart. */
-function specOf(shortcut: ActiveShortcut): string {
-  return shortcut.keys.trim().toLowerCase();
+/** The keystroke a chord describes, as the event that would carry it. */
+function pressOf(chord: KeyChord, apple: boolean): ModifierState {
+  return {
+    ctrlKey: chord.ctrl || (chord.mod && !apple),
+    metaKey: chord.meta || (chord.mod && apple),
+    altKey: chord.alt,
+    shiftKey: chord.shift,
+  };
+}
+
+/**
+ * Whether two bindings take the same keys on this platform.
+ *
+ * Decided by the shortcut manager's own parser and matcher rather than by
+ * comparing the spellings: `mod+k` and `ctrl+k` are one key off Apple and two
+ * on it, and `shift+mod+z` is `Mod+Shift+Z`. Each step of one binding is
+ * pressed as an event and asked of the other's matching step, as the manager
+ * would ask it.
+ */
+function sameKeys(a: KeySequence, b: KeySequence, apple: boolean): boolean {
+  return (
+    a.length === b.length &&
+    a.every((chord, step) => {
+      const other = b[step];
+      return (
+        other !== undefined &&
+        chordMatches(chord, other.key, pressOf(other, apple), apple)
+      );
+    })
+  );
+}
+
+/** A spec as the manager parses it, or null for one it refuses. */
+function sequenceOf(spec: string): KeySequence | null {
+  try {
+    return parseKeys(spec);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -41,12 +84,14 @@ export function helpShortcuts(
   active: readonly ActiveShortcut[],
   apple: boolean
 ): ShortcutRow[] {
-  const taken = new Set<string>();
+  const taken: KeySequence[] = [];
   const rows = new Map<string, string[]>();
   for (const shortcut of active) {
-    const spec = specOf(shortcut);
-    if (taken.has(spec)) continue;
-    taken.add(spec);
+    const sequence = sequenceOf(shortcut.keys);
+    // A spec the parser refuses names no key anyone can press.
+    if (sequence === null) continue;
+    if (taken.some(earlier => sameKeys(earlier, sequence, apple))) continue;
+    taken.push(sequence);
     if (shortcut.description.trim() === "") continue;
     const shown = keyHint(shortcut.keys, apple);
     if (shown === null) continue;

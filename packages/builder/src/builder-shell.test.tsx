@@ -431,6 +431,19 @@ describe("a panel's view", () => {
     return { seen, choose: (view: string) => choose(view), store, ...result };
   }
 
+  it("restores a remembered part when nothing else differs from the defaults", () => {
+    // Choosing Classes and then closing Design leaves a record that differs
+    // from the defaults only in the part. Read back as "unchanged", it was
+    // dropped, and Design reopened on its first tab.
+    const shell = renderWithView(
+      memoryStore(
+        JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanelView: "classes" })
+      )
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Design" }));
+    expect(shell.seen.at(-1)).toBe("classes");
+  });
+
   it("keeps the part an author chose, and stores it with the panel", () => {
     const shell = renderWithView();
     fireEvent.click(screen.getByRole("button", { name: "Design" }));

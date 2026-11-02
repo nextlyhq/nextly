@@ -27,9 +27,18 @@ import { useModalKeyboardHold } from "./modal-keyboard-hold";
  * Keys that are not bindings in any registry, so no registry can report them:
  * the platform's own context-menu key, which the browser turns into the same
  * event a right-click sends. Listed by hand, and only these.
+ *
+ * The row says where it works because it does not work everywhere: the event
+ * comes from whatever holds focus, and reaches a block's menu only when that is
+ * a link or button inside the block. With focus on the canvas or on a block
+ * with no control in it, the key does nothing, and a row promising the menu
+ * would mislead.
  */
 const PLATFORM_KEYS: readonly ShortcutRow[] = [
-  { description: "Open the block's menu", keys: ["Shift+F10", "Menu key"] },
+  {
+    description: "Open the block's menu from a link or button inside it",
+    keys: ["Shift+F10", "Menu key"],
+  },
 ];
 
 function ShortcutList({ rows }: { rows: readonly ShortcutRow[] }) {

@@ -93,7 +93,9 @@ describe("HelpDialog", () => {
     expect(list().textContent).toContain("Duplicate the selected block");
     expect(list().textContent).toContain("Save entry");
     // The platform's menu key is listed by hand.
-    expect(list().textContent).toContain("Open the block's menu");
+    expect(list().textContent).toContain(
+      "Open the block's menu from a link or button inside it"
+    );
   });
 
   it("lists a key both bind once, with the binding the key runs", () => {
