@@ -90,6 +90,14 @@ export {
 } from "./preview-viewports";
 export type { SiteStyleReader } from "./site-style-storage";
 
+// The Layout a stored page is drawn inside, read from the site: its own
+// published Layout, else the site's default, else none. A published route
+// calls it per request; the rule itself is the engine's `resolvePageLayout`.
+export { effectiveLayoutFor } from "./default-layout/effective-layout";
+export type { EffectiveLayoutDeps } from "./default-layout/effective-layout";
+// Where the site's default Layout is recorded.
+export { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
+
 // The class-usage index, the derivation behind it, and the walk that repairs
 // it.
 //
