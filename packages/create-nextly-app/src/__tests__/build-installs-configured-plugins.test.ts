@@ -9,27 +9,90 @@
  * the config imports must be installed. So a template that gains a plugin its
  * build does not install fails here.
  */
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { configuredPlugins } from "../utils/template";
+import type { DatabaseConfig, ProjectType } from "../types";
+import { configuredPlugins, generatePackageJson } from "../utils/template";
 
-import {
-  importedPlugins,
-  relative,
-  removeScaffolds,
-  scaffoldBuild,
-  templateConfigs,
-  TEMPLATES,
-} from "./helpers/scaffolded-build";
+const TEMPLATES = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../../templates"
+);
 
-afterEach(removeScaffolds);
+const sqlite: DatabaseConfig = {
+  type: "sqlite",
+  adapter: "@nextlyhq/adapter-sqlite",
+  databaseDriver: "better-sqlite3",
+  connectionUrl: "file:./data/nextly.db",
+  envExample: "file:./data/nextly.db",
+};
+
+/**
+ * Each config a template can copy into a project as its `nextly.config.ts`:
+ * the template's own, and one per approach in its `configs/`. The plugin
+ * template is a library whose build is `tsdown`, with no production boot.
+ */
+async function templateConfigs(): Promise<
+  { template: string; file: string }[]
+> {
+  const found: { template: string; file: string }[] = [];
+  for (const template of await readdir(TEMPLATES)) {
+    if (template === "plugin") continue;
+    const dir = path.join(TEMPLATES, template);
+    const names = await readdir(dir).catch(() => []);
+    if (names.includes("nextly.config.ts")) {
+      found.push({ template, file: path.join(dir, "nextly.config.ts") });
+    }
+    const configs = await readdir(path.join(dir, "configs")).catch(() => []);
+    for (const name of configs.filter(name => name.endsWith(".config.ts"))) {
+      found.push({ template, file: path.join(dir, "configs", name) });
+    }
+  }
+  return found;
+}
+
+/** A template file's path under `templates/`, with `/` on every platform. */
+const relative = (file: string) =>
+  path.relative(TEMPLATES, file).split(path.sep).join("/");
+
+/** Every plugin package a config imports, the SDK aside. */
+const importedPlugins = (text: string) => [
+  ...new Set(
+    [...text.matchAll(/from\s+"(@nextlyhq\/plugin-[^"]+)"/g)]
+      .map(found => found[1])
+      .filter(pkg => pkg !== "@nextlyhq/plugin-sdk")
+  ),
+];
+
+const dirs: string[] = [];
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 /** The build script a project scaffolded with `config` gets. */
-const buildScript = async (template: string, config: string) =>
-  (await scaffoldBuild(template, config)).script;
+async function buildScript(template: string, config: string) {
+  const dir = await mkdtemp(path.join(tmpdir(), "nextly-build-plugins-"));
+  dirs.push(dir);
+  await writeFile(path.join(dir, "nextly.config.ts"), config);
+  const pkg = JSON.parse(
+    await generatePackageJson(
+      "app",
+      sqlite,
+      true,
+      template as ProjectType,
+      [],
+      dir
+    )
+  );
+  return String(pkg.scripts.build);
+}
 
 describe("a scaffold's build installs the plugins its config registers", () => {
   it("installs every plugin each template config imports, between migrating and building", async () => {
@@ -46,11 +109,11 @@ describe("a scaffold's build installs the plugins its config registers", () => {
       const wanted = importedPlugins(text);
 
       expect(installs, relative(file)).toEqual(
-        wanted.map(pkg => `nextly plugins install ${pkg} --mode production`)
+        wanted.map(pkg => `nextly plugins install ${pkg}`)
       );
       for (const install of installs) {
         expect(steps.indexOf(install)).toBeGreaterThan(
-          steps.indexOf("nextly migrate --mode production")
+          steps.indexOf("nextly migrate")
         );
         expect(steps.indexOf(install)).toBeLessThan(
           steps.indexOf("next build")

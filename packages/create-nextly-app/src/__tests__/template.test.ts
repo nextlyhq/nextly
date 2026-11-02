@@ -188,9 +188,7 @@ describe("generatePackageJson", () => {
     // No search-index step, and no `search:index`, because no template directory was passed —
     // so the generator saw a scaffold that does not receive the Pagefind builder. A template
     // that does ship it is covered in template-search-index.test.ts, against a real tree.
-    expect(result.scripts.build).toBe(
-      "nextly migrate --mode production && next build"
-    );
+    expect(result.scripts.build).toBe("nextly migrate && next build");
     expect(result.scripts["search:index"]).toBeUndefined();
     expect(result.scripts.start).toBe("next start");
     // Next.js 16 removed `next lint`, so that script fails in every project the generator

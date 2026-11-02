@@ -42,12 +42,10 @@ branches on `NODE_ENV` declares the same schema under
 reaches the database prints the mode and the file its `DATABASE_URL` came from
 on standard error, once (none under `--quiet`).
 
-A new project's `build` script runs `nextly migrate` and each
-`nextly plugins install` with `--mode production`, whatever `NODE_ENV` the build
-machine has; `next build` and the search-index step stay as they were.
-
-An existing project keeps its `build` script as it was: add `--mode production`
-to its `nextly migrate` and `nextly plugins install` steps so they read the
-production files and evaluate the configuration as `next build` does. In
-production mode the environment check asks for `NEXTLY_SECRET` and
-`NEXT_PUBLIC_APP_URL`, as the app itself does at build time.
+A project's `build` script runs `nextly migrate` before `next build` with no
+mode, so with `NODE_ENV` unset that step runs in development mode. Add
+`--mode production` to its `nextly migrate` and `nextly plugins install` steps
+so they read the production files and evaluate the configuration as
+`next build` does. In production mode the environment check asks for
+`NEXTLY_SECRET` and `NEXT_PUBLIC_APP_URL`, as the app itself does at build
+time.

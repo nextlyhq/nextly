@@ -1383,16 +1383,9 @@ export async function generatePackageJson(
       // And `|| true` turned a failed index build into a successful one. The
       // search page then ships pointing at an index that was never written,
       // which fails in the browser rather than in CI.
-      //
-      // Each CLI step runs with `--mode production`: `next build` evaluates the
-      // config with NODE_ENV=production and reads the production env files, so
-      // the steps before it migrate and install for that same app, whatever
-      // NODE_ENV the build machine has.
       build: [
-        "nextly migrate --mode production",
-        ...plugins.map(
-          plugin => `nextly plugins install ${plugin} --mode production`
-        ),
+        "nextly migrate",
+        ...plugins.map(plugin => `nextly plugins install ${plugin}`),
         "next build",
         ...(shipsSearchIndex ? ["node scripts/build-search-index.mjs"] : []),
       ].join(" && "),
