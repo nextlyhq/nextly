@@ -4,28 +4,30 @@
 import type { JSX } from "react";
 
 import { Plus } from "@admin/components/icons";
+import { fieldSubject } from "@admin/lib/builder/builder-announcements";
+
+import type { BuilderField } from "../types";
 
 type Props = {
-  /** The lower row's label, which the button names as where the field goes. */
-  beforeLabel: string;
+  /** The lower row's first field, which the button names as where the field goes. */
+  before: BuilderField;
   onClick: () => void;
 };
 
-export function InsertBetweenButton({
-  beforeLabel,
-  onClick,
-}: Props): JSX.Element {
+export function InsertBetweenButton({ before, onClick }: Props): JSX.Element {
   return (
     <div className="flex items-center gap-2">
       <span className="h-px flex-1 bg-border" />
       <button
         type="button"
-        aria-label={`Add a field before ${beforeLabel}`}
-        title={`Add a field before ${beforeLabel}`}
+        // Named by the field it goes before, as the Builder names a field
+        // everywhere it is spoken.
+        aria-label={`Add a field before ${fieldSubject(before)}`}
         onClick={onClick}
-        className="flex h-5 w-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground hover:border-primary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        // 24 px, the smallest touch target WCAG 2.2 sets out.
+        className="flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background text-muted-foreground hover:border-primary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <Plus className="h-3 w-3" />
+        <Plus className="h-3.5 w-3.5" />
       </button>
       <span className="h-px flex-1 bg-border" />
     </div>

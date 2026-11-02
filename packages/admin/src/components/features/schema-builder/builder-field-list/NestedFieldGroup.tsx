@@ -12,12 +12,16 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import type React from "react";
 import type { JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
 import type { LucideIcon } from "@admin/components/icons";
 import { fieldSubject } from "@admin/lib/builder/builder-announcements";
-import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import {
+  positionAfter,
+  type FieldInsertPosition,
+} from "@admin/lib/builder/insert-field";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { WidthField } from "@admin/lib/builder/reflow";
 import { cn } from "@admin/lib/utils";
@@ -27,6 +31,7 @@ import type { BuilderField } from "../types";
 
 import { InsertBetweenButton } from "./InsertBetweenButton";
 import { NestedAddButton } from "./NestedAddButton";
+import { isSlashToAdd } from "./slash-to-add";
 import { isFieldLocked } from "./SortableRow";
 
 type Props = {
@@ -37,8 +42,6 @@ type Props = {
   onDuplicateField: (id: string) => void;
   /** Opens the field picker at a position inside this container. */
   onAddAt: (position: FieldInsertPosition) => void;
-  /** "/" on a field opens the picker right after it. */
-  onAddAfter: (id: string) => void;
 };
 
 const fieldTypeIconName: Record<string, string> = Object.fromEntries(
@@ -59,13 +62,17 @@ export function NestedFieldGroup({
   onDeleteField,
   onDuplicateField,
   onAddAt,
-  onAddAfter,
 }: Props): JSX.Element {
   const children = parentField.fields ?? [];
   const parentLabel = parentField.label || parentField.name || "parent";
   // Nothing is added into a container that is read-only, locked or owned by a
   // plugin, and what it holds is read-only with it, at every depth below.
   const locked = isFieldLocked(parentField, readOnly);
+  // "/" on a field adds right after it, placed from this container's own list.
+  const addAfter = (fieldId: string) => {
+    const position = positionAfter(children, fieldId, parentField.id);
+    if (position) onAddAt(position);
+  };
 
   const rows = packIntoRows<RowItem>(
     children.map(c => ({
@@ -93,7 +100,7 @@ export function NestedFieldGroup({
               <div key={rIdx} className="space-y-1.5">
                 {rIdx > 0 && !locked && (
                   <InsertBetweenButton
-                    beforeLabel={row[0]._field.label || row[0]._field.name}
+                    before={row[0]._field}
                     onClick={() =>
                       onAddAt({
                         parentFieldId: parentField.id,
@@ -112,7 +119,7 @@ export function NestedFieldGroup({
                       onDeleteField={onDeleteField}
                       onDuplicateField={onDuplicateField}
                       onAddAt={onAddAt}
-                      onAddAfter={onAddAfter}
+                      onAddAfter={addAfter}
                     />
                   ))}
                 </div>
@@ -149,6 +156,9 @@ function NestedFieldRow({
   onAddAt: (position: FieldInsertPosition) => void;
   onAddAfter: (id: string) => void;
 }) {
+  // One lock answer per row, as the top-level cards have: a field locked on its
+  // own (plugin-contributed or locked) is inert even in an editable container.
+  const rowLocked = isFieldLocked(field, readOnly);
   const {
     setNodeRef,
     attributes,
@@ -156,7 +166,25 @@ function NestedFieldRow({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: field.id, disabled: readOnly });
+  } = useSortable({ id: field.id, disabled: rowLocked });
+  const interactiveProps = rowLocked
+    ? {}
+    : {
+        role: "button" as const,
+        tabIndex: 0,
+        "aria-keyshortcuts": "/",
+        onClick: () => onEditField(field.id),
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onEditField(field.id);
+          } else if (isSlashToAdd(e)) {
+            // "/" adds a field right after this one, in this container.
+            e.preventDefault();
+            onAddAfter(field.id);
+          }
+        },
+      };
   const Icon = resolveFieldIcon(field.type);
   // Why: Q4 -- only repeater/group recurse. component is a leaf even when
   // it points to a single component definition (children come from the
@@ -178,25 +206,16 @@ function NestedFieldRow({
       className={cn(isContainer ? "w-full" : "")}
     >
       <div
-        role="button"
-        tabIndex={0}
+        {...interactiveProps}
         // Named as the top-level cards are, so a row is found the same way at any depth.
         data-testid={`field-row-${field.name}`}
-        onClick={() => onEditField(field.id)}
-        onKeyDown={e => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onEditField(field.id);
-          } else if (e.key === "/" && !readOnly) {
-            // "/" adds a field right after this one, in this container.
-            e.preventDefault();
-            onAddAfter(field.id);
-          }
-        }}
         // Full-strength hover border, more visible than the resting border, not a fainter alpha.
-        className="border border-border rounded-md px-3 py-2 bg-background hover:border-primary cursor-pointer flex items-center gap-2 group"
+        className={cn(
+          "border border-border rounded-md px-3 py-2 bg-background flex items-center gap-2 group",
+          rowLocked ? "opacity-90" : "hover:border-primary cursor-pointer"
+        )}
       >
-        {!readOnly && (
+        {!rowLocked && (
           <button
             type="button"
             aria-label={`Reorder ${fieldSubject(field)}`}
@@ -220,7 +239,7 @@ function NestedFieldRow({
             {field.name}
           </div>
         </div>
-        {!readOnly && (
+        {!rowLocked && (
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
             <button
               type="button"
@@ -257,7 +276,6 @@ function NestedFieldRow({
           onDeleteField={onDeleteField}
           onDuplicateField={onDuplicateField}
           onAddAt={onAddAt}
-          onAddAfter={onAddAfter}
         />
       )}
     </div>

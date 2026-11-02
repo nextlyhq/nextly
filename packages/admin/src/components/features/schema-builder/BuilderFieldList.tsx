@@ -77,9 +77,8 @@ export function BuilderFieldList({
       <SystemFieldsContainer systemFields={systemFields} />
 
       <div className="space-y-2">
-        {/* PR H feedback 2.2: top header dropped its "+ Add field"
-            button. The sole + Add affordance is the centered/bordered
-            box at the bottom. */}
+        {/* The toolbar's "Add field", a "+" between rows, "/" on a field
+            and the box at the bottom each open the picker at their place. */}
         <div className="text-xs uppercase tracking-wider text-muted-foreground">
           Your fields
         </div>
@@ -115,7 +114,7 @@ export function BuilderFieldList({
                   <div key={`row-${idx}`} className="space-y-2">
                     {idx > 0 && !readOnly && (
                       <InsertBetweenButton
-                        beforeLabel={rowFields[0].label || rowFields[0].name}
+                        before={rowFields[0]}
                         onClick={() =>
                           onAddAt({ beforeFieldId: rowFields[0].id })
                         }
@@ -141,7 +140,6 @@ export function BuilderFieldList({
                         onDeleteField={onDeleteField}
                         onDuplicateField={onDuplicateField}
                         onAddAt={onAddAt}
-                        onAddAfter={addAfter}
                       />
                     )}
                   </div>
@@ -152,11 +150,8 @@ export function BuilderFieldList({
         )}
 
         {!readOnly && userFields.length > 0 && (
-          // Why: PR H feedback 2.2 -- always show the "+ Add field"
-          // affordance as a centered button inside a dashed bordered
-          // box (matches the empty state's visual treatment). The
-          // top header's button was removed since this one is now the
-          // single, prominent affordance.
+          // The end-of-list add, a centered button inside a dashed box that
+          // matches the empty state's.
           <div className="border border-dashed border-border rounded-md p-6 text-center mt-2">
             <Button onClick={() => onAddAt({})}>+ Add field</Button>
           </div>

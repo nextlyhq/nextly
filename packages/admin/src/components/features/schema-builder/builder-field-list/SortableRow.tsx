@@ -25,6 +25,7 @@ import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 import type { BuilderField } from "../types";
 
 import { FieldSourceBadge } from "./FieldSourceBadge";
+import { isSlashToAdd } from "./slash-to-add";
 
 /**
  * A field is locked in the Builder when the whole collection is read-only
@@ -153,12 +154,13 @@ function FieldCard({
     : {
         role: "button" as const,
         tabIndex: 0,
+        ...(onAddAfter ? { "aria-keyshortcuts": "/" } : {}),
         onClick: onEdit,
         onKeyDown: (e: React.KeyboardEvent) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onEdit();
-          } else if (e.key === "/" && onAddAfter) {
+          } else if (onAddAfter && isSlashToAdd(e)) {
             // "/" adds a field right after this one, skipping the toolbar.
             e.preventDefault();
             onAddAfter();

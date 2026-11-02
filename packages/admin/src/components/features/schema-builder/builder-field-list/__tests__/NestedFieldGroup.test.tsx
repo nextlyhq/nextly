@@ -43,7 +43,6 @@ describe("NestedFieldGroup", () => {
         onDeleteField={noop}
         onDuplicateField={noop}
         onAddAt={noop}
-        onAddAfter={noop}
       />
     );
     expect(
@@ -69,7 +68,6 @@ describe("NestedFieldGroup", () => {
         onDeleteField={noop}
         onDuplicateField={noop}
         onAddAt={noop}
-        onAddAfter={noop}
       />
     );
     await userEvent.click(screen.getByText("Title Field"));
@@ -95,7 +93,6 @@ describe("NestedFieldGroup", () => {
         onDeleteField={noop}
         onDuplicateField={noop}
         onAddAt={noop}
-        onAddAfter={noop}
       />
     );
     expect(
@@ -121,7 +118,6 @@ describe("NestedFieldGroup", () => {
         onDeleteField={noop}
         onDuplicateField={noop}
         onAddAt={onAdd}
-        onAddAfter={noop}
       />
     );
     await userEvent.click(
@@ -154,7 +150,6 @@ describe("NestedFieldGroup", () => {
         onDeleteField={noop}
         onDuplicateField={noop}
         onAddAt={noop}
-        onAddAfter={noop}
       />
     );
     expect(
@@ -190,7 +185,6 @@ describe("NestedFieldGroup", () => {
         onDeleteField={noop}
         onDuplicateField={noop}
         onAddAt={noop}
-        onAddAfter={noop}
       />
     );
     expect(

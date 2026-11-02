@@ -226,4 +226,110 @@ describe("picker entry points", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add field" })).toBeNull();
   });
+
+  it('anchors each "+" on the first field of the row below it', async () => {
+    // A system field first, a hidden field, and a half-width pair: the rows a
+    // person sees are not the array's items one for one.
+    const fields: BuilderField[] = [
+      f("title", { isSystem: true }),
+      f("intro"),
+      f("secret", { admin: { hidden: true } }),
+      f("first", { admin: { width: "50%" } }),
+      f("second", { admin: { width: "50%" } }),
+      f("outro"),
+    ];
+    const { onAddAt } = renderList(fields);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add a field before First" })
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add a field before Outro" })
+    );
+    expect(onAddAt.mock.calls).toEqual([
+      [{ beforeFieldId: "first" }],
+      [{ beforeFieldId: "outro" }],
+    ]);
+    // A pair is one row: nothing between its two fields.
+    expect(
+      screen.queryByRole("button", { name: "Add a field before Second" })
+    ).toBeNull();
+  });
+
+  it("keeps everything inside a locked container read-only, at every depth", async () => {
+    const tree: BuilderField[] = [
+      f("intro"),
+      f("seo", {
+        type: "group",
+        source: "plugin",
+        fields: [
+          f("social", {
+            type: "group",
+            fields: [f("og_title"), f("og_image")],
+          }),
+        ],
+      }),
+    ];
+    const { onAddAt } = renderList(tree);
+    expect(
+      screen.queryByRole("button", { name: /add field inside social/i })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Add a field before Og_image" })
+    ).toBeNull();
+    card("og_title").focus();
+    await userEvent.keyboard("/");
+    expect(onAddAt).not.toHaveBeenCalled();
+  });
+
+  it("treats a field locked on its own inside an editable container as the top level does", async () => {
+    const tree: BuilderField[] = [
+      f("details", {
+        type: "group",
+        fields: [f("owned", { source: "plugin" }), f("mine")],
+      }),
+    ];
+    const { onAddAt } = renderList(tree);
+    // Inert: not a button, no actions, no "/".
+    expect(card("owned")).not.toHaveAttribute("role", "button");
+    expect(screen.queryByRole("button", { name: "Delete owned" })).toBeNull();
+    card("owned").focus();
+    await userEvent.keyboard("/");
+    expect(onAddAt).not.toHaveBeenCalled();
+    // Its editable neighbour keeps "/", in the container that holds both.
+    card("mine").focus();
+    await userEvent.keyboard("/");
+    expect(onAddAt).toHaveBeenCalledWith({ parentFieldId: "details" });
+  });
+
+  it('leaves "/" with Ctrl or Cmd, or typed on a drag handle, alone', async () => {
+    const { onAddAt } = renderList();
+    card("title").focus();
+    await userEvent.keyboard("{Control>}/{/Control}{Meta>}/{/Meta}");
+    screen.getAllByRole("button", { name: "Reorder field" })[0].focus();
+    await userEvent.keyboard("/");
+    expect(onAddAt).not.toHaveBeenCalled();
+    // The control: a plain "/" on the card itself does add.
+    card("title").focus();
+    await userEvent.keyboard("/");
+    expect(onAddAt).toHaveBeenCalledWith({ beforeFieldId: "details" });
+  });
+
+  it("puts a field in the container that drew it when a copy shares its ids", async () => {
+    // A duplicated group keeps its fields' ids.
+    const details = TREE[1];
+    const copy = {
+      ...details,
+      id: "details_copy",
+      name: "details_copy",
+      label: "Copy",
+    };
+    const { onAddAt } = renderList([...TREE, copy]);
+    const subtitles = screen.getAllByTestId("field-row-subtitle");
+    subtitles[1].focus();
+    await userEvent.keyboard("/");
+    expect(onAddAt).toHaveBeenCalledWith({
+      parentFieldId: "details_copy",
+      beforeFieldId: "summary",
+    });
+  });
 });
