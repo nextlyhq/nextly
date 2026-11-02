@@ -1161,13 +1161,18 @@ export function componentsRequiredInDefaultLanguage<
     localizedFieldNames: ReadonlySet<string>;
     enforceLocalizedRequired: boolean;
   },
->(context: T, fields: readonly FieldDefinition[]): T {
-  // A document with no translated fields is one document in every language:
-  // its components are as much the default language's as anyone's.
-  if (
-    context.enforceLocalizedRequired ||
-    context.localizedFieldNames.size === 0
-  ) {
+>(
+  context: T,
+  fields: readonly FieldDefinition[],
+  /**
+   * Whether the document differs by language: it has translated fields, or
+   * reaches a localized field group, whose values its own translations hold.
+   * One that does not is one document in every language, its components as
+   * much the default language's as anyone's.
+   */
+  perLanguage: boolean
+): T {
+  if (context.enforceLocalizedRequired || !perLanguage) {
     return context;
   }
   const components = fields
@@ -1238,6 +1243,8 @@ interface EntryValidationArgs {
   localeCtx?: {
     localizedFieldNames: ReadonlySet<string>;
     enforceLocalizedRequired: boolean;
+    /** Whether the document differs by language; see `publishLanguageContext`. */
+    perLanguage?: boolean;
   };
   /** The stored entry's id, on an update. */
   id?: string;
@@ -2552,7 +2559,7 @@ export class CollectionMutationService extends BaseService {
       args.goesLive === true &&
       (args.localeCtx === undefined ||
         args.localeCtx.enforceLocalizedRequired ||
-        args.localeCtx.localizedFieldNames.size === 0);
+        args.localeCtx.perLanguage === false);
     const issues = await validateEntryData(
       view,
       attachFieldValidators("collection", args.collectionName, args.fields),
@@ -2655,6 +2662,38 @@ export class CollectionMutationService extends BaseService {
     fields: FieldDefinition[]
   ): Record<string, unknown> {
     return relationshipValidationView(data, fields as unknown as FieldConfig[]);
+  }
+
+  /**
+   * The language rules a publish judges a document going live in, as
+   * {@link localizedRequiredContext} gives them, with its components'
+   * `required` relaxed outside the default language where the document differs
+   * by language, and whether it does.
+   */
+  private async publishLanguageContext(args: {
+    collectionName: string;
+    locale: string | undefined;
+    fields: FieldDefinition[];
+    tx?: TransactionContext;
+    companion?: CompanionSchema | null;
+  }): Promise<{
+    localizedFieldNames: ReadonlySet<string>;
+    enforceLocalizedRequired: boolean;
+    perLanguage: boolean;
+  }> {
+    const context = await this.localizedRequiredContext(
+      args.collectionName,
+      args.locale,
+      args.tx?.getDrizzle(),
+      args.companion
+    );
+    const perLanguage =
+      context.localizedFieldNames.size > 0 ||
+      (await this.reachesLocalizedFieldGroup(args.fields, args.tx));
+    return {
+      ...componentsRequiredInDefaultLanguage(context, args.fields, perLanguage),
+      perLanguage,
+    };
   }
 
   /**
@@ -4273,15 +4312,12 @@ export class CollectionMutationService extends BaseService {
       user: args.user,
       reader: args.reader,
       readLocale: args.locale,
-      localeCtx: componentsRequiredInDefaultLanguage(
-        await this.localizedRequiredContext(
-          args.collectionName,
-          args.locale,
-          undefined,
-          args.reads?.companion
-        ),
-        args.fields
-      ),
+      localeCtx: await this.publishLanguageContext({
+        collectionName: args.collectionName,
+        locale: args.locale,
+        fields: args.fields,
+        companion: args.reads?.companion,
+      }),
       id: args.entryId,
       goesLive: true,
       batch: args.relationsBatch ?? args.reads?.relations,
@@ -4326,15 +4362,13 @@ export class CollectionMutationService extends BaseService {
         readLocale: locale,
         goesLive: true,
         batch: args.relations.batch,
-        localeCtx: componentsRequiredInDefaultLanguage(
-          await this.localizedRequiredContext(
-            args.collectionName,
-            locale,
-            args.tx?.getDrizzle(),
-            args.reads?.companion
-          ),
-          args.fields
-        ),
+        localeCtx: await this.publishLanguageContext({
+          collectionName: args.collectionName,
+          locale,
+          fields: args.fields,
+          ...(args.tx === undefined ? {} : { tx: args.tx }),
+          companion: args.reads?.companion,
+        }),
         id: args.entryId,
         ...(args.tx === undefined ? {} : { tx: args.tx }),
       });

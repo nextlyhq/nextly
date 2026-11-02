@@ -997,11 +997,10 @@ async function validateContainedComponents(
     if (!storedRow) {
       applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
     }
-    // A stored instance never holds a component placed directly among its
-    // fields, which the component write omits, so it is not judged missing.
-    const judged = options.judgeComponentInstances
-      ? omitDirectComponentFields(own)
-      : own;
+    // A component's own stored row never holds a component placed directly
+    // among its fields, which the component write omits, so it is not judged
+    // missing; held in a container, the whole value is stored and judged.
+    const judged = storedRow ? omitDirectComponentFields(own) : own;
     await validateFields(
       attachFieldValidators("fieldGroup", slug, judged),
       filled,

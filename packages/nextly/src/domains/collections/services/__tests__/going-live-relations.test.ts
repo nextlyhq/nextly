@@ -266,25 +266,29 @@ describe("required components by language", () => {
   it("relaxes a component's required outside the default language, as a translated field's", () => {
     expect(
       [
-        ...componentsRequiredInDefaultLanguage(context(false), [
-          TITLE,
-          HERO,
-          TAGS,
-        ]).localizedFieldNames,
+        ...componentsRequiredInDefaultLanguage(
+          context(false),
+          [TITLE, HERO, TAGS],
+          true
+        ).localizedFieldNames,
       ].sort()
     ).toEqual(["hero", "title"]);
   });
 
-  it("keeps it on a document with no translated fields, whatever the language", () => {
+  it("keeps it on a document that is the same in every language, whatever the language", () => {
     const ctx = {
       localizedFieldNames: new Set<string>(),
       enforceLocalizedRequired: false,
     };
-    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO])).toBe(ctx);
+    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], false)).toBe(
+      ctx
+    );
   });
 
   it("keeps it in the default language", () => {
     const ctx = context(true);
-    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO])).toBe(ctx);
+    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], true)).toBe(
+      ctx
+    );
   });
 });

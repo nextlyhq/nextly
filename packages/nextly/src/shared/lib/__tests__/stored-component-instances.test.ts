@@ -64,6 +64,31 @@ describe("a stored component instance going live", () => {
     expect(issues).toEqual([]);
   });
 
+  it("judges a component placed directly in one held in a group, which is stored with it", async () => {
+    const card = { name: "card", type: "component", component: "card" };
+    const issues = await validateEntryData(
+      { box: { hero: { heading: "Saved" } } },
+      [{ name: "box", type: "group", fields: [hero] }] as ValidatableField[],
+      {
+        mode: "update",
+        judgeComponentInstances: true,
+        componentFields: slug =>
+          slug === "hero"
+            ? ([
+                { name: "heading", type: "text" },
+                { ...card, required: true },
+              ] as ValidatableField[])
+            : slug === "card"
+              ? ([{ name: "label", type: "text" }] as ValidatableField[])
+              : undefined,
+      }
+    );
+
+    expect(issues).toEqual([
+      expect.objectContaining({ path: "box.hero.card", code: "REQUIRED" }),
+    ]);
+  });
+
   it("hands a field type's validator no entry write, as the component's own pass does", async () => {
     registerFieldType({
       type: "standalone",

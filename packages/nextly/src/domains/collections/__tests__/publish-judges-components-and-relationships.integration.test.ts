@@ -111,6 +111,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
       defineFieldGroup({ slug: "card", fields: [text({ name: "label" })] }),
       defineFieldGroup({ slug: "aside", fields: [text({ name: "body" })] }),
+      // Translated, with a rule that, once tightened, refuses a stored value.
+      defineFieldGroup({
+        slug: "memo",
+        localized: true,
+        fields: [
+          text({
+            name: "code",
+            validate: (value: unknown) =>
+              !nestedRuleOn || value !== "retired" || "code is retired",
+          }),
+        ],
+      }),
       // A required password: stored as a hash, which no read returns.
       defineFieldGroup({
         slug: "secured",
@@ -205,6 +217,16 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               ) ||
               "this hero cannot go live beside this title",
           }),
+        ],
+      }),
+      // Translated only through its component: no translated field of its own.
+      defineCollection({
+        slug: "notebooks",
+        status: true,
+        localized: true,
+        fields: [
+          text({ name: "title", localized: false }),
+          fieldGroup({ name: "memo", component: "memo" }),
         ],
       }),
       defineCollection({
@@ -636,6 +658,28 @@ describe.each(getConfiguredTestDialects())(
           ).success
         ).toBe(true);
       }
+      for (const name of ["notebookGerman"]) {
+        ids[name] = await created(
+          t,
+          "notebooks",
+          { title: name, status: "draft", memo: { code: "retired" } },
+          "en"
+        );
+      }
+      // The German translation of the memo holds the same stored value.
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "notebooks",
+              entryId: ids.notebookGerman,
+              overrideAccess: true,
+              locale: "de",
+            },
+            { memo: { code: "retired" } }
+          )
+        ).success
+      ).toBe(true);
       ids.vault = await created(t, "vaults", {
         title: "vault",
         status: "draft",
@@ -814,6 +858,19 @@ describe.each(getConfiguredTestDialects())(
         const english = await publish(t, "guides", ids.englishNested, {}, "en");
         expect(english.success).toBe(false);
         expect(refusedPaths(english)).toContain("hero.code");
+
+        // Translated only through a localized component, with no field of its
+        // own to translate: a publish names no language of its own, so the
+        // document goes live as one, judged in the default language.
+        const germanBook = await publish(
+          t,
+          "notebooks",
+          ids.notebookGerman,
+          {},
+          "de"
+        );
+        expect(germanBook.success).toBe(false);
+        expect(refusedPaths(germanBook)).toContain("memo.code");
       } finally {
         nestedRuleOn = false;
       }
