@@ -60,6 +60,12 @@ expectTypeOf(registerKnownPlugin).toBeFunction();
 
 // Contract types are re-exported on the admin entry.
 expectTypeOf<ComponentPath>().toEqualTypeOf<string>();
+
+// The signed-in user's id, or null when none is known: a plugin keying
+// something per user must handle "nobody" rather than receive a placeholder.
+expectTypeOf(adminEntry.useCurrentUserId).returns.toEqualTypeOf<
+  string | null
+>();
 expectTypeOf<PluginAdminContributions>().toMatchTypeOf<{
   menu?: PluginMenuItem[];
   pages?: PluginAdminPage[];
