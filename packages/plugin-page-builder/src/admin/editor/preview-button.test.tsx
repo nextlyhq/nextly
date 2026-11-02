@@ -33,6 +33,15 @@ describe("PreviewButton", () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
+  it("says Preview in words, not only to a screen reader", () => {
+    // An eye alone is a guess at what the button opens.
+    preview = { open: vi.fn() };
+    render(<PreviewButton />);
+    const button = screen.getByRole("button", { name: "Preview" });
+    expect(button.textContent).toBe("Preview");
+    expect(button.getAttribute("aria-label")).toBeNull();
+  });
+
   it("draws nothing where the editor offers no preview", () => {
     // No preview configured, an entry never saved, or a reader: a button that
     // opens nothing would read as broken.

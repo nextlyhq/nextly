@@ -18,6 +18,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
+import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
@@ -144,7 +145,7 @@ async function saveDraft(page: Page): Promise<void> {
       ["PATCH", "PUT", "POST"].includes(response.request().method()) &&
       response.ok()
   );
-  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await pressSave(page);
   await saved;
 }
 

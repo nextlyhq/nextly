@@ -298,10 +298,16 @@ function foreignContainer(): { doc: Document; container: HTMLDivElement } {
   return { doc, container };
 }
 
-/** The canvas and its toolbar, rendered into another realm's document. */
-function toolbarInFrame() {
+/**
+ * The canvas and its toolbar, rendered into another realm's document.
+ *
+ * `prepare` runs on that document before anything renders, for a case that
+ * has to equip the frame's window first.
+ */
+function toolbarInFrame(prepare?: (doc: Document) => void) {
   registerLeaf();
   const { doc, container } = foreignContainer();
+  prepare?.(doc);
   const editor = editorWith("a");
   render(
     <ShortcutProvider>
@@ -333,24 +339,34 @@ describe("the block toolbar in another realm", () => {
     expect(bar.style.visibility).not.toBe("hidden");
   });
 
-  it("watches that root for size changes", () => {
+  it("watches that root for size changes, with an observer from its window", () => {
+    // Two recorders, one per window: the root's own window is where an
+    // observer of its nodes has to come from, and the editor's is the one a
+    // bare `new ResizeObserver` would have reached for.
     const observed: unknown[] = [];
-    vi.stubGlobal(
-      "ResizeObserver",
+    const strays: unknown[] = [];
+    const recording = (into: unknown[]) =>
       class {
         observe(target: unknown) {
-          observed.push(target);
+          into.push(target);
         }
         unobserve() {}
         disconnect() {}
-      }
-    );
-    const { container } = toolbarInFrame();
+      };
+    vi.stubGlobal("ResizeObserver", recording(strays));
+    const { container } = toolbarInFrame(doc => {
+      const view = doc.defaultView;
+      if (view === null) throw new Error("the frame has no window");
+      Object.defineProperty(view, "ResizeObserver", {
+        value: recording(observed),
+      });
+    });
     const root = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
     expect(root).not.toBeNull();
     // By identity rather than `toContain`, whose failure report cannot print
     // a node from another realm.
     expect(observed.includes(root)).toBe(true);
+    expect(strays.includes(root)).toBe(false);
   });
 
   it("moves focus along its buttons with the arrow keys", () => {

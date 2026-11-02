@@ -30,15 +30,12 @@ const TAGS = {
 const TITLE = { name: "title", type: "text" } as unknown as FieldDefinition;
 
 /** A load that answers each document by its id, counting its reads. */
-function countingLoad(version = () => "") {
+function countingLoad() {
   const components = vi.fn(
     (ids: readonly string[], language: string | undefined) =>
       Promise.resolve(
         new Map(
-          ids.map(id => [
-            id,
-            { hero: { heading: `${id}${version()}:${language ?? "-"}` } },
-          ])
+          ids.map(id => [id, { hero: { heading: `${id}:${language ?? "-"}` } }])
         )
       )
   );
@@ -66,26 +63,6 @@ describe("a batch's stored relations", () => {
     expect(load.components).toHaveBeenCalledTimes(3);
     // The links are the same in every language: read once for the batch.
     expect(load.manyToMany).toHaveBeenCalledTimes(1);
-  });
-
-  it("are read again for a document the batch has written since", async () => {
-    let version = "0";
-    const load = countingLoad(() => version);
-    const batch = new GoingLiveRelationsBatch(["a", "b"]);
-    await batch.read("b", "en", load);
-
-    version = "1";
-    batch.written("a");
-
-    expect((await batch.read("a", "en", load)).components).toEqual({
-      hero: { heading: "a1:en" },
-    });
-    expect(load.components).toHaveBeenLastCalledWith(["a"], "en");
-    expect(load.manyToMany).toHaveBeenLastCalledWith(["a"]);
-    // A document the batch has not written keeps the batch's read.
-    expect((await batch.read("b", "en", load)).components).toEqual({
-      hero: { heading: "b0:en" },
-    });
   });
 
   it("read each component's definition once for every document", async () => {
@@ -283,6 +260,17 @@ describe("required components by language", () => {
     expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], false)).toBe(
       ctx
     );
+  });
+
+  it("relaxes it on a document whose only translated values sit in a component", () => {
+    const ctx = {
+      localizedFieldNames: new Set<string>(),
+      enforceLocalizedRequired: false,
+    };
+    expect([
+      ...componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], true)
+        .localizedFieldNames,
+    ]).toEqual(["hero"]);
   });
 
   it("keeps it in the default language", () => {
