@@ -1208,21 +1208,7 @@ export function insertionCandidates(
   options: { readonly inside?: string; readonly slots?: SlotSource } = {}
 ): InsertionCandidate[] {
   if (options.inside !== undefined) {
-    const container = findNode(document.nodes, options.inside);
-    if (container === undefined) return [];
-    const slot =
-      emptySlotOf(container, options.slots) ??
-      Object.keys(container.slots ?? {})[0];
-    if (slot === undefined) return [];
-    const held = container.slots?.[slot] ?? [];
-    return [
-      {
-        kind: "inside",
-        at: { parentId: container.id, slot, index: held.length },
-        target: { kind: "slot", parentType: container.type, slot },
-        insideId: container.id,
-      },
-    ];
+    return insideCandidates(document, options.inside, options.slots);
   }
   const end: InsertionCandidate = {
     kind: "document-end",
@@ -1235,30 +1221,67 @@ export function insertionCandidates(
   // Bounded by the document's depth: each step moves one parent out.
   while (current !== undefined) {
     const location = locateNode(document.nodes, current);
-    if (location === undefined) break;
-    let here: OpPosition;
-    try {
-      here = positionOf(location);
-    } catch {
-      // A parent with no named slot is no position an op can name.
-      break;
-    }
-    candidates.push({
-      kind: current === selectedId ? "after-selection" : "after-ancestor",
-      at: { ...here, index: here.index + 1 },
-      target:
-        location.parent === undefined
-          ? { kind: "root" }
-          : {
-              kind: "slot",
-              parentType: location.parent.type,
-              slot: location.slot ?? "",
-            },
-      afterId: current,
-    });
+    const after =
+      location === undefined
+        ? undefined
+        : afterCandidate(location, current, current === selectedId);
+    if (location === undefined || after === undefined) break;
+    candidates.push(after);
     current = location.parent?.id;
   }
   return candidates.length === 0 ? [end] : candidates;
+}
+
+/** The end of a container's region the author chose to add into, if it has one. */
+function insideCandidates(
+  document: BlockDocument,
+  insideId: string,
+  slots: SlotSource | undefined
+): InsertionCandidate[] {
+  const container = findNode(document.nodes, insideId);
+  if (container === undefined) return [];
+  const slot =
+    emptySlotOf(container, slots) ?? Object.keys(container.slots ?? {})[0];
+  if (slot === undefined) return [];
+  const held = container.slots?.[slot] ?? [];
+  return [
+    {
+      kind: "inside",
+      at: { parentId: container.id, slot, index: held.length },
+      target: { kind: "slot", parentType: container.type, slot },
+      insideId: container.id,
+    },
+  ];
+}
+
+/**
+ * The place just after one block in its own region, or `undefined` where no op
+ * can name it (a parent with no named slot).
+ */
+function afterCandidate(
+  location: NonNullable<ReturnType<typeof locateNode>>,
+  id: string,
+  selected: boolean
+): InsertionCandidate | undefined {
+  let here: OpPosition;
+  try {
+    here = positionOf(location);
+  } catch {
+    return undefined;
+  }
+  return {
+    kind: selected ? "after-selection" : "after-ancestor",
+    at: { ...here, index: here.index + 1 },
+    target:
+      location.parent === undefined
+        ? { kind: "root" }
+        : {
+            kind: "slot",
+            parentType: location.parent.type,
+            slot: location.slot ?? "",
+          },
+    afterId: id,
+  };
 }
 
 /**
