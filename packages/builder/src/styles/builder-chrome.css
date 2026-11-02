@@ -1366,6 +1366,17 @@
 }
 
 /*
+ * A choice that may not be changed here, under a lock or in a read-only area,
+ * as the admin draws every disabled control: at half strength with a cursor
+ * that says the press will not land. The taken side keeps its fill, so what is
+ * chosen stays readable, but no longer reads as a live control.
+ */
+.nx-style-inspector__toggle > button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/*
  * A prop the panel cannot draw is dimmed rather than hidden — present, and
  * visibly not one of the things an author can change here.
  */

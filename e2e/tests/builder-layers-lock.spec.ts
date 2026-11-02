@@ -226,6 +226,17 @@ test.describe("a block locked in Layers", () => {
       "Locked by Hero"
     );
     await expect(textField(page)).toBeDisabled();
+    // A segmented choice is held too: a click on another level changes
+    // nothing, on screen or stored.
+    const level = page
+      .getByRole("tabpanel", { name: "Content" })
+      .getByRole("radiogroup", { name: "Level" });
+    await expect(level.getByRole("radio", { name: "H1" })).toBeDisabled();
+    await level.getByRole("radio", { name: "H1" }).click({ force: true });
+    await expect(level.getByRole("radio", { name: "H2" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
 
     // The canvas drag: the reason drawn over the block, and nothing moves.
     const from = await boxOf(page, TITLE);
@@ -239,10 +250,11 @@ test.describe("a block locked in Layers", () => {
     await expect(scope.locator(".nx-drop-refusal")).toContainText(AROUND);
     await page.mouse.up();
     await expect(scope.locator(".nx-drop-refusal")).toHaveCount(0);
-    expect((await storedNodes(page.request, id)).map(n => n.id)).toEqual([
-      HERO,
-      FREE,
-    ]);
+    const nodes = await storedNodes(page.request, id);
+    expect(nodes.map(n => n.id)).toEqual([HERO, FREE]);
+    const [title] = (nodes[0]?.slots as { children: Record<string, unknown>[] })
+      .children;
+    expect(title?.props).toEqual({ text: "Locked heading", level: "h2" });
   });
 
   test("saves an unlock and a change to the block in one write, with one Saved, and keeps the history", async ({
