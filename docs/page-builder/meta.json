@@ -1,4 +1,10 @@
 {
   "title": "Page Builder",
-  "pages": ["index", "editor", "locked-areas", "contributed-blocks"]
+  "pages": [
+    "index",
+    "editor",
+    "placement",
+    "locked-areas",
+    "contributed-blocks"
+  ]
 }

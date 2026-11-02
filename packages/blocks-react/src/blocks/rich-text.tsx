@@ -33,7 +33,7 @@ import {
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
-import { RichText } from "../rich-text";
+import { drawsInteractive, RichText } from "../rich-text";
 
 import { CONTENT } from "./categories";
 
@@ -149,5 +149,12 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
       effects: true,
       position: true,
     },
+    // A passage drawing a link or a button is interactive while it does,
+    // decided the way the renderer decides what it draws.
+    contentModel: props =>
+      isRichTextValue(props.content) &&
+      drawsInteractive(props.content.root.children)
+        ? { is: ["flow", "interactive"] }
+        : { is: ["flow"] },
     render: renderRichText,
   });

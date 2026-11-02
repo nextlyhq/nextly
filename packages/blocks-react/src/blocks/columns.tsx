@@ -55,7 +55,11 @@ import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
 import { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
 
 export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
@@ -161,5 +165,7 @@ export const columns: BlockDefinition<ContainerProps, PageContext> =
     },
     baseStyles: COLUMNS_BASE_STYLES,
     supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     render: renderContainer,
   });

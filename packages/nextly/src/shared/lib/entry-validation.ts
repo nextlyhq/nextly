@@ -155,6 +155,14 @@ export interface EntryWriteContext {
   readonly kind: PluginFieldWrite["kind"];
   readonly slug: string;
   readonly id?: string;
+  /** The language the write is judged in; see `PluginFieldWrite.locale`. */
+  readonly locale?: string;
+  /**
+   * The app's default language, so the write handed to a validator says
+   * nothing for it, however the caller spelled it: `locale` is absent for the
+   * default language on every path.
+   */
+  readonly defaultLocale?: string | null;
   readonly inTransaction: boolean;
   readStored(
     allowedType: string,
@@ -167,12 +175,27 @@ function fieldWriteFor(
   write: EntryWriteContext,
   type: string
 ): PluginFieldWrite {
+  // The default language is said as no language, however the caller spelled
+  // it, so validators judge it the same on every path.
+  const locale =
+    write.locale === undefined || write.locale === write.defaultLocale
+      ? undefined
+      : write.locale;
   return {
     kind: write.kind,
     slug: write.slug,
     ...(write.id === undefined ? {} : { id: write.id }),
+    ...(locale === undefined ? {} : { locale }),
     inTransaction: write.inTransaction,
-    readStored: target => write.readStored(type, target),
+    // A read that names no language reads the one the write is judged in, so
+    // every stored value a validator compares with is the same language's.
+    readStored: target =>
+      write.readStored(
+        type,
+        target.locale === undefined && locale !== undefined
+          ? { ...target, locale }
+          : target
+      ),
   };
 }
 

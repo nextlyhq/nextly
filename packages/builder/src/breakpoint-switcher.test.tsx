@@ -98,6 +98,17 @@ describe("which device is shown as being styled", () => {
     expect(checked()[0]?.textContent).toBe("Desktop · 1280px");
   });
 
+  it("lets the chosen device's label give way first on a narrow top bar", () => {
+    // A container query on the top bar hides it; the accessible name keeps
+    // the device and its range.
+    mount({ selected: "tablet" });
+    const label = checked()[0]?.querySelector("span");
+    expect(label?.className).toContain("@max-[1400px]/topbar:hidden");
+    expect(checked()[0]?.getAttribute("aria-label")).toBe(
+      "Tablet, up to 991 pixels"
+    );
+  });
+
   it("names only the chosen device in visible text", () => {
     mount({ selected: "tablet" });
     const unchosen = options().filter(

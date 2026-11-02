@@ -46,7 +46,10 @@ import type {
   DeleteRowLanguages,
   RowVerdict,
 } from "./collection-mutation-service";
-import { isWriteIntegrityFailure } from "./collection-mutation-service";
+import {
+  GoingLiveRelationsBatch,
+  isWriteIntegrityFailure,
+} from "./collection-mutation-service";
 import type { CollectionQueryService } from "./collection-query-service";
 import type {
   BatchOperationResult,
@@ -940,6 +943,9 @@ export class CollectionBulkService extends BaseService {
     // post-update values); failures carry canonical NextlyErrorCode.
     // Per-id updates run concurrently via Promise.allSettled. See
     // bulkDeleteEntries for the rationale on concurrency + per-row hooks.
+    // Where they publish, the documents' components and relationships are
+    // read once for them all, not once for each.
+    const goingLiveBatch = new GoingLiveRelationsBatch(params.ids);
     const outcomes = await Promise.allSettled(
       params.ids.map(
         async (entryId): Promise<PerItemOutcome<Record<string, unknown>>> => {
@@ -959,6 +965,7 @@ export class CollectionBulkService extends BaseService {
                 request: params.request,
                 // Judge the key's own publish/unpublish grant per row.
                 authenticatedScope: params.authenticatedScope,
+                goingLiveBatch,
               },
               params.data
             );
@@ -2484,21 +2491,28 @@ export class CollectionBulkService extends BaseService {
     },
     state: LegacyBatchState
   ): Promise<void> {
+    // Where the batch publishes, its documents' components and relationships
+    // are read once for them all, on its transaction. A document is read
+    // again once the batch has written it, as a batch may name it twice.
+    const goingLiveBatch = new GoingLiveRelationsBatch(
+      entries.map(entry => entry.id)
+    );
     await runLegacyBatch(
       tx,
       entries,
       { ...options, collectionName: params.collectionName },
       state,
       async entry => {
-        const updateResult =
-          await this.mutationService.updateSingleEntryInTransaction(
+        const updateResult = await this.mutationService
+          .updateSingleEntryInTransaction(
             tx,
-            { ...params, transitionAuth },
+            { ...params, transitionAuth, goingLiveBatch },
             entry.id,
             entry.data,
             options.skipHooks,
             options.rowVerdicts?.get(entry) ?? options.rowGate
-          );
+          )
+          .finally(() => goingLiveBatch.written(entry.id));
         return updateResult.success && updateResult.data
           ? {
               ok: true,

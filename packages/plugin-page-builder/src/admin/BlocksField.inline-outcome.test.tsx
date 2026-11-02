@@ -266,6 +266,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
   useDocumentActions: () => null,
   useSuppressAdminChrome: () => {},
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
   useDocumentStatus: () => null,
   useSingleDocument: () => ({
     data: undefined,

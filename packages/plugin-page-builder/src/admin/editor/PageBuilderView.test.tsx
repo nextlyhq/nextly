@@ -283,6 +283,7 @@ function Values({
  */
 function Host({
   field = CONTENT_FIELD,
+  fieldPath,
   readOnly = false,
   stored = {
     body: pageSaying(BODY_TEXT),
@@ -290,6 +291,7 @@ function Host({
   },
 }: {
   field?: DocumentViewProps["field"];
+  fieldPath?: string;
   readOnly?: boolean;
   stored?: FieldValues;
 }): React.JSX.Element {
@@ -300,6 +302,7 @@ function Host({
       <PageBuilderView
         control={control}
         field={field}
+        {...(fieldPath === undefined ? {} : { fieldPath })}
         readOnly={readOnly}
         exit={exit}
       />
@@ -367,6 +370,39 @@ describe("the field the view edits", () => {
     expect(seeded).toEqual([pageSaying(BODY_TEXT)]);
     expect(values?.body).toEqual(EDITED);
     expect(values?.content).toEqual(pageSaying(CONTENT_TEXT));
+  });
+});
+
+describe("a field inside a named group", () => {
+  const HERO_TEXT = "The words in the hero's own page";
+  // The group's field shares its name with a top-level one, so a view that
+  // bound by the declaration's own name would reach a well-formed page and
+  // fail only on its words.
+  const nested = {
+    field: declaration({ name: "body", type: "blocks" }),
+    fieldPath: "hero.body",
+    stored: {
+      body: pageSaying(BODY_TEXT),
+      hero: { body: pageSaying(HERO_TEXT) },
+    },
+  };
+
+  it("edits the field at its path, and leaves the top-level field of that name alone", () => {
+    render(<Host {...nested} />);
+    expect(seeded).toEqual([pageSaying(HERO_TEXT)]);
+
+    act(() => edit?.(EDITED));
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+
+    expect(values?.hero).toEqual({ body: EDITED });
+    expect(values?.body).toEqual(pageSaying(BODY_TEXT));
+  });
+
+  it("draws the page at its path while read-only", () => {
+    const { container } = render(<Host {...nested} readOnly />);
+
+    expect(container.textContent).toContain(HERO_TEXT);
+    expect(container.textContent).not.toContain(BODY_TEXT);
   });
 });
 

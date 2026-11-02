@@ -247,17 +247,33 @@ function CardMenu({
             onSelect={() => onLock(!locked)}
           />
         )}
-        {offered.length === 0 ? null : <DropdownMenuSeparator />}
-        {offered.map(action => (
-          <MenuItem
-            key={action.id}
-            label={action.label}
-            reason={action.enabled ? undefined : (action.reason ?? "")}
-            onSelect={() => verbs?.run(action.id)}
-          />
-        ))}
+        <VerbItems offered={offered} verbs={verbs} />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** The shared block verbs in the card's menu, after a separator. */
+function VerbItems({
+  offered,
+  verbs,
+}: {
+  offered: CardVerbs["actions"];
+  verbs: CardVerbs | undefined;
+}): React.JSX.Element | null {
+  if (offered.length === 0) return null;
+  return (
+    <>
+      <DropdownMenuSeparator />
+      {offered.map(action => (
+        <MenuItem
+          key={action.id}
+          label={action.label}
+          reason={action.enabled ? undefined : (action.reason ?? "")}
+          onSelect={() => verbs?.run(action.id)}
+        />
+      ))}
+    </>
   );
 }
 
@@ -334,47 +350,89 @@ function LockLines({
 export function SelectionCard({
   count,
   lock,
+  unlocking,
+  held,
   onLock,
 }: {
   count: number;
   /** The lock across the set; `mixed` when some are locked. */
   lock: "locked" | "unlocked" | "mixed";
-  /** Lock the set, or unlock it when every block is locked. Omitted withholds the menu. */
+  /** Whether the menu unlocks rather than locks. */
+  unlocking: boolean;
+  /** How many of them sit where their own lock can't change here. */
+  held: number;
+  /** Lock or unlock the blocks it may change; omitted when there are none. */
   onLock: (() => void) | undefined;
 }): React.JSX.Element {
   const title = `${count} blocks`;
+  const verb = unlocking ? "Unlock" : "Lock";
   return (
     <div className="nx-block-card" data-block-card="many">
       <div className="nx-block-card__head">
         <h2 className="nx-block-card__title">{title}</h2>
-        {onLock === undefined ? null : (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="nx-block-card__menu"
-                aria-label={`Actions for ${title}`}
-              >
-                <span aria-hidden="true">⋯</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={onLock}>
-                {lock === "locked" ? "Unlock all" : "Lock all"}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="nx-block-card__menu"
+              aria-label={`Actions for ${title}`}
+            >
+              <span aria-hidden="true">⋯</span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <MenuItem
+              // "the others" only while some can change and some can't.
+              label={
+                held === 0 || held === count
+                  ? `${verb} all`
+                  : `${verb} the others`
+              }
+              reason={onLock === undefined ? SELECTION_LOCK_HELD : undefined}
+              onSelect={() => onLock?.()}
+            />
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
-      {lock === "unlocked" ? null : (
-        <ul className="nx-block-card__status">
-          <li data-lock={lock}>
-            {lock === "locked"
-              ? "All of them are locked."
-              : "Some of them are locked."}
-          </li>
-        </ul>
-      )}
+      <SelectionLockLines lock={lock} held={held} count={count} />
     </div>
   );
+}
+
+/** Why the selection's lock item is held: no block in it may change its lock. */
+const SELECTION_LOCK_HELD = "The area each sits in fixes this.";
+
+/** The selection's lock state, and how many have their lock fixed by an area. */
+function SelectionLockLines({
+  lock,
+  held,
+  count,
+}: {
+  lock: "locked" | "unlocked" | "mixed";
+  held: number;
+  count: number;
+}): React.JSX.Element | null {
+  if (lock === "unlocked" && held === 0) return null;
+  return (
+    <ul className="nx-block-card__status">
+      {lock === "unlocked" ? null : (
+        <li data-lock={lock}>
+          {lock === "locked"
+            ? "All of them are locked."
+            : "Some of them are locked."}
+        </li>
+      )}
+      {held === 0 ? null : <li data-lock="held">{heldWords(held, count)}</li>}
+    </ul>
+  );
+}
+
+/** The held line, in words that agree with how many it is about. */
+function heldWords(held: number, count: number): string {
+  if (held === count) {
+    return "Each sits in an area that fixes its lock, so none can be locked or unlocked here.";
+  }
+  return held === 1
+    ? "1 of them sits in an area that fixes its lock, so it can't be locked or unlocked here."
+    : `${held} of them sit in areas that fix their lock, so they can't be locked or unlocked here.`;
 }

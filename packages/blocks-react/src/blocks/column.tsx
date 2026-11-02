@@ -25,7 +25,11 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
 
 /** The block name a `core/columns` slot accepts, in one place. */
@@ -118,6 +122,8 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
     },
     baseStyles: COLUMN_BASE_STYLES,
     supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     render: renderContainer,
   }
 );

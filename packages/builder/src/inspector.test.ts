@@ -26,6 +26,7 @@ import {
   renameOp,
   SUPPORTED_PROP_TYPES,
   lockStateOf,
+  layersLockChangeable,
   lockStatusOf,
   designIsWritable,
   designReadOnlyReason,
@@ -665,6 +666,57 @@ describe("lockStatusOf and designIsWritable", () => {
   it("answers for the frame itself as unlocked: its own slot holds its children, not it", () => {
     const doc = framed("contentOnly");
     expect(lockStatusOf(doc, "frame").slot).toBeUndefined();
+  });
+  it("prefers a contentOnly area the composed page adds over the page's own arrangement lock", () => {
+    // On the page the text sits in a row locked `all`; composed, a component
+    // places it in a frame locked to its content. The design is held, so the
+    // card must say the contentOnly lock and hold the Layers lock with it.
+    framed("contentOnly");
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/row",
+          editor: { label: "Row" },
+          props: {},
+          slots: {
+            children: { lock: "all", defaultBlock: [{ type: "acme/text" }] },
+          },
+        },
+      ] as never,
+      { source: "inspector-test-row" }
+    );
+    const text = {
+      id: "t",
+      type: "acme/text",
+      version: 1,
+      props: {},
+    } as BlockNode;
+    const page = documentOf([
+      {
+        id: "row",
+        type: "acme/row",
+        version: 1,
+        props: {},
+        slots: { children: [text] },
+      } as BlockNode,
+    ]);
+    const composed = documentOf([
+      {
+        id: "cx-frame",
+        type: "acme/frame",
+        version: 1,
+        props: {},
+        slots: { children: [text] },
+      } as BlockNode,
+    ]);
+
+    // CONTROL: the page alone says the arrangement lock.
+    expect(lockStatusOf(page, "t").slot?.lock).toBe("all");
+    const status = lockStatusOf(page, "t", { composed });
+    expect(designIsWritable(page, "t", { composed })).toBe(false);
+    expect(status.slot).toMatchObject({ lock: "contentOnly", holder: "Frame" });
+    expect(layersLockChangeable(status)).toBe(false);
   });
 });
 

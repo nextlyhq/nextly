@@ -60,7 +60,11 @@ import type { PageContext } from "../context";
 
 import { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
 import { INTERACTIVE } from "./categories";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
 
 export { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
@@ -137,5 +141,7 @@ export const accordion: BlockDefinition<ContainerProps, PageContext> =
     },
     baseStyles: ACCORDION_BASE_STYLES,
     supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     render: renderContainer,
   });

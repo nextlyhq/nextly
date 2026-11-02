@@ -500,6 +500,14 @@ export interface PluginFieldWrite {
    */
   readonly id?: string;
   /**
+   * The language this write is judged in, for a document whose content is
+   * stored per language. Absent for a document that is not, and where the
+   * write is in the app's default language. A validator reading what this
+   * document already stores passes it on as {@link PluginStoredValueTarget}'s
+   * `locale`, so it compares the value with the same language's stored value.
+   */
+  readonly locale?: string;
+  /**
    * Whether the write runs inside a transaction — a batch, an import, or a
    * caller's own. `readStored` sees what it has written; a read on any other
    * connection does not, and can wait on the connection the transaction holds.
@@ -515,17 +523,22 @@ export interface PluginFieldWrite {
    *
    * Scoped to fields of the validator's own type, and refused otherwise: a
    * type may read the values of its own kind wherever they are stored, and
-   * nothing else. Only top-level fields of a collection are readable.
+   * nothing else. Only top-level fields of a collection or a single are
+   * readable.
    */
   readStored(target: PluginStoredValueTarget): Promise<PluginStoredValue>;
 }
 
-/** @experimental Which stored value {@link PluginFieldWrite.readStored} reads. */
-export interface PluginStoredValueTarget {
-  /** The collection's slug. */
-  readonly collection: string;
-  /** The entry's id. */
-  readonly id: string;
+/**
+ * @experimental Which stored value {@link PluginFieldWrite.readStored} reads:
+ * one field of a collection's entry, or of a single.
+ */
+export type PluginStoredValueTarget =
+  | PluginStoredEntryTarget
+  | PluginStoredSingleTarget;
+
+/** @experimental What a stored read names in either kind of document. */
+interface PluginStoredFieldTarget {
   /** A top-level field of the validator's own type. */
   readonly field: string;
   /**
@@ -533,6 +546,28 @@ export interface PluginStoredValueTarget {
    * reads: the pending working draft where one is shown, else the live row.
    */
   readonly form: "published" | "draft";
+  /**
+   * The language to read, for a field stored per language. Absent: the
+   * language the write is judged in (`PluginFieldWrite.locale`), which is the
+   * app's default language for a write in it. A language that stores no value for the field reads as
+   * absent, never as another language's value. A field not stored per
+   * language has one value, which every language reads.
+   */
+  readonly locale?: string;
+}
+
+/** @experimental A field of one entry of a collection. */
+export interface PluginStoredEntryTarget extends PluginStoredFieldTarget {
+  /** The collection's slug. */
+  readonly collection: string;
+  /** The entry's id. */
+  readonly id: string;
+}
+
+/** @experimental A field of a single, which has one document and no id. */
+export interface PluginStoredSingleTarget extends PluginStoredFieldTarget {
+  /** The single's slug. */
+  readonly single: string;
 }
 
 /**

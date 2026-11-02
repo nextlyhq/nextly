@@ -148,6 +148,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
   useDocumentActions: () => null,
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
   useDocumentStatus: () => null,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
