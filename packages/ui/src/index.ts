@@ -478,7 +478,7 @@ export {
  * Renders only the visible window, which is what makes a document of thousands of blocks usable
  * and what forces the flat `aria-level` markup: an item's children may not be in the DOM at all.
  */
-export { TreeView } from "./components/tree-view";
+export { TREE_INDENT_PX, TreeView } from "./components/tree-view";
 /** @experimental The node shape a tree is built from, and the control's props. */
 export type { TreeNode, TreeViewProps } from "./components/tree-view";
 

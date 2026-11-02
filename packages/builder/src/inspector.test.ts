@@ -122,7 +122,8 @@ describe("inspectSelection", () => {
           name: "acme/gallery",
           props: {
             caption: { type: "text" },
-            images: { type: "array" },
+            // A type no control exists for. (Arrays have one now.)
+            images: { type: "acme-gallery-images" },
           },
         },
       ] as never,
@@ -155,6 +156,10 @@ describe("inspectSelection", () => {
       "number",
       "checkbox",
       "select",
+      "media",
+      "richText",
+      "array",
+      "relation",
     ]);
   });
 

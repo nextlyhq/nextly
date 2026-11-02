@@ -24,6 +24,7 @@ import {
 import { compositionRefusalReason } from "./composition-refusal";
 
 import {
+  depthMoveActions,
   TOOLBAR_GAP_PX,
   toolbarActions,
   toolbarPlacement,
@@ -290,6 +291,34 @@ describe("toolbarActions", () => {
     expect(actionOf(actions, "duplicate").enabled).toBe(true);
     expect(actionOf(actions, "delete").enabled).toBe(true);
     expect(actionOf(actions, "delete").reason).toBeUndefined();
+  });
+});
+
+describe("depthMoveActions", () => {
+  it("dims Move in and Move out for a block holding a locked block, and says which", () => {
+    // The op store refuses to relocate a subtree holding a locked block, so
+    // offering either move would be a press that does nothing.
+    const document = documentOf([
+      box("shelf", []),
+      box("outer", [
+        box("mid", [node("kid", "acme/heading", { locked: true })]),
+      ]),
+    ]);
+    const moves = depthMoveActions(document, "outer");
+    expect(moves.map(move => [move.id, move.enabled, move.reason])).toEqual([
+      ["move-in", false, "Heading inside this block is locked."],
+      ["move-out", false, "Heading inside this block is locked."],
+    ]);
+  });
+
+  it("offers Move in for the same block once nothing inside it is locked", () => {
+    // The control: the same shape unlocked, so the refusal above is the lock.
+    const document = documentOf([
+      box("shelf", []),
+      box("outer", [box("mid", [node("kid", "acme/heading")])]),
+    ]);
+    const moveIn = depthMoveActions(document, "outer")[0];
+    expect(moveIn?.enabled).toBe(true);
   });
 });
 

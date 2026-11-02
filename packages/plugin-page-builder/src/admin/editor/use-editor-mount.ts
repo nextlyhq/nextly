@@ -20,8 +20,12 @@ import {
   type EditorState,
   type UseInlineEditingResult,
   CANVAS_ROOT_CLASS,
+  inspectInstance,
+  partOfComponentSentence,
   useEditorState,
+  createOpenPassages,
   useInlineEditing,
+  type OpenPassages,
   useNoticeQueue,
   userPreferenceStore,
   type BuilderShellProps,
@@ -30,6 +34,7 @@ import {
 import {
   loadInlineRichTextEditor,
   useCurrentUserId,
+  useDocumentLocale,
   usePluginClientConfig,
 } from "@nextlyhq/plugin-sdk/admin";
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
@@ -46,6 +51,7 @@ import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
 import { useMayCreatePattern } from "../pattern-capability-client";
 
+import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
 
@@ -241,6 +247,9 @@ export function useEditorMount(
     // rather than seeing the edit silently not happen.
     onPlacementRefused: refusal => notices.raise(placementSentence(refusal)),
   });
+  // A shared style change saved while this editor is open is a step of its
+  // history, so the editor connects the history to the style writers.
+  useConnectStyleHistory(editor.recordStep);
 
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
@@ -267,7 +276,30 @@ export function useEditorMount(
     const problem = inlineEditProblem(outcome);
     if (problem !== null) toast.error(problem);
   }, []);
-  const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
+  /*
+   * A double-click on text a component does not expose selects the placement
+   * (the hook does that) and says whose the text is, with the variant, so the
+   * gesture is never met with nothing. Read against the same library the
+   * canvas draws with. A toast rather than the builder's notice queue, which
+   * holds failures: this is information, and it fades.
+   */
+  const partOf = useCallback(
+    (placementId: string) => {
+      const inspection = inspectInstance(
+        editor.document,
+        placementId,
+        componentLibrary.definitions,
+        componentLibrary.components
+      );
+      if (inspection !== null) toast.info(partOfComponentSentence(inspection));
+    },
+    [editor.document, componentLibrary]
+  );
+  const { inline, passages, locale } = useInlineAndInspector(
+    editor,
+    announce,
+    partOf
+  );
 
   // Whether the save-as-pattern form is up. A boolean here rather than the form
   // itself, because the verb that raises it belongs to the shared chain — the
@@ -301,6 +333,8 @@ export function useEditorMount(
     notices,
     editor,
     inline,
+    passages,
+    locale,
     savePattern,
     mayCreatePattern,
     preferenceStore,
@@ -315,6 +349,10 @@ export type EditorMount = {
   componentLibrary: ComponentLibraryRead;
   notices: NoticeQueue;
   editor: EditorState;
+  /** The inspector's open passages; see `createOpenPassages`. */
+  passages: OpenPassages;
+  /** The language being edited, by code, when the document has one. */
+  locale: string | undefined;
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
@@ -330,4 +368,33 @@ function placementSentence(refusal: LocatedPlacementBreak): string {
   return placementRefusalMessage(refusal.verdict, {
     labelOf: type => blockLabelFrom(type, getBlock(type)),
   });
+}
+
+/**
+ * What the canvas's inline editing and the inspector share:
+ * - the registry the inspector's rich-text fields hold an open passage in,
+ *   lent to the inline editing, whose commit finishes them before a save, and
+ *   to the inspector; one per mounted editor;
+ * - the language being edited, which the inspector's relation searches read
+ *   titles in.
+ */
+function useInlineAndInspector(
+  editor: EditorState,
+  announce: (outcome: InlineEditOutcome) => void,
+  partOf: (placementId: string) => void
+): {
+  inline: UseInlineEditingResult;
+  passages: OpenPassages;
+  locale: string | undefined;
+} {
+  const [passages] = useState(createOpenPassages);
+  const locale = useDocumentLocale()?.code ?? undefined;
+  const inline = useInlineEditing(
+    editor,
+    loadInlineRichTextEditor,
+    announce,
+    partOf,
+    passages
+  );
+  return { inline, passages, locale };
 }

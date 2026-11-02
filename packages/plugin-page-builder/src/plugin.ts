@@ -68,6 +68,7 @@ import {
 } from "./default-layout/install";
 import { makeDefaultRoute } from "./default-layout/make-default-route";
 import { pageBuilderSettingsSingle } from "./default-layout/settings-single";
+import { entriesRoute } from "./entries-route";
 import type { CompositionSetup } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
@@ -1175,6 +1176,10 @@ export const pageBuilder = (
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
         patternCapabilityRoute(),
+        // The relation control's read: a collection's entries as `{ id, title }`,
+        // for the collections a registered block prop names as relation targets,
+        // read as the author asking.
+        entriesRoute(),
         // The one write that chooses the site's default Layout. A route rather
         // than an edit to the settings Single, because choosing a default has
         // preconditions (the Layout is published, the caller may publish

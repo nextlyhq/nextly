@@ -27,7 +27,12 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
+  type OpenPassages,
 } from "@nextlyhq/builder/shell";
+import {
+  loadInlineRichTextEditor,
+  MediaPickerDialog,
+} from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import { useState, type ComponentProps, type JSX } from "react";
 import {
@@ -41,8 +46,10 @@ import {
 import { siteSheet } from "../../site-style";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
+import { findEntries } from "../entries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
+import { SiteStyleHistoryContext } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 import { UnsavedChangesPill } from "../UnsavedChangesPill";
 
@@ -54,6 +61,12 @@ import {
 } from "./editor-panels";
 import { HistoryButtons } from "./history-buttons";
 import { PreviewButton } from "./preview-button";
+import {
+  ConnectStyleHistoryContext,
+  RemountOnStyleReplay,
+  StyleRevisionContext,
+  useSiteStyleHistory,
+} from "./site-style-history";
 import { offerableTokens, siteStyleStatus } from "./site-style-studios";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -237,11 +250,13 @@ function editorTopBar(view: EditorView): {
          * `undefined` comparison is true on success too — the same mistake
          * that once withheld the provenance trace unconditionally.
          */}
-        <BreakpointManager
-          value={canvasRender.styleContext.breakpoints}
-          onSave={saveBreakpoints}
-          status={siteStyleStatus(siteStylePending, siteStyleError)}
-        />
+        <RemountOnStyleReplay>
+          <BreakpointManager
+            value={canvasRender.styleContext.breakpoints}
+            onSave={saveBreakpoints}
+            status={siteStyleStatus(siteStylePending, siteStyleError)}
+          />
+        </RemountOnStyleReplay>
         {/*
          * Beside the manager, and gated on the same read for the same
          * reason it is: until the stored style has answered, the set in
@@ -270,6 +285,64 @@ function editorTopBar(view: EditorView): {
       </>
     ),
   };
+}
+
+type ContentServices = NonNullable<
+  ComponentProps<typeof InspectorPanel>["contentServices"]
+>;
+
+let contentServices: ContentServices | undefined;
+
+/**
+ * What the inspector's Content tab borrows from the admin: the media library,
+ * to choose an image, the shared rich-text editor, and the page builder's
+ * entries route, to find an entry a `relation` prop points at with the
+ * author's own access. Built on first use and
+ * kept for the module's life, so the panel never sees a new object on a
+ * render, and loading this module reads nothing from the admin's surface
+ * until an editor is drawn.
+ */
+function borrowedServices(): ContentServices {
+  contentServices ??= {
+    MediaPicker: MediaPickerDialog,
+    loadRichTextEditor: loadInlineRichTextEditor,
+    findEntries,
+  };
+  return contentServices;
+}
+
+/**
+ * The borrowed services with this editor's open-passage registry and its
+ * language, one object per registry and language so the panel sees the same
+ * one on every render. A relation search reads titles in the language being
+ * edited.
+ */
+const servicesByPassages = new WeakMap<
+  OpenPassages,
+  Map<string, ContentServices>
+>();
+
+function servicesFor(
+  passages: OpenPassages,
+  locale: string | undefined
+): ContentServices {
+  let byLocale = servicesByPassages.get(passages);
+  if (byLocale === undefined) {
+    byLocale = new Map();
+    servicesByPassages.set(passages, byLocale);
+  }
+  const key = locale ?? "";
+  let services = byLocale.get(key);
+  if (services === undefined) {
+    services = {
+      ...borrowedServices(),
+      openPassages: passages,
+      findEntries: query =>
+        findEntries(locale === undefined ? query : { ...query, locale }),
+    };
+    byLocale.set(key, services);
+  }
+  return services;
 }
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
@@ -318,6 +391,7 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
+      contentServices={servicesFor(view.passages, view.locale)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
@@ -563,15 +637,7 @@ function usePageTitle<TFieldValues extends FieldValues>(
  * ask the admin to hide its navigation for every entry form holding a blocks
  * field, open or not.
  */
-export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
-  initialValue,
-  kinds,
-  onCommit,
-  onClose,
-  name,
-  control,
-  openAt,
-}: {
+interface BlocksEditorProps<TFieldValues extends FieldValues> {
   initialValue: unknown;
   /** The kinds the field accepts, so a seeded document is one it will take. */
   kinds: readonly DocumentKind[] | undefined;
@@ -581,7 +647,37 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   control: Control<TFieldValues>;
   /** The section to open at, as the address names it; none opens at the top. */
   openAt?: string | undefined;
-}): JSX.Element {
+}
+
+export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
+  props: BlocksEditorProps<TFieldValues>
+): JSX.Element {
+  /*
+   * A change to the site's shared styles is a step of the editor's undo
+   * history. Provided from here, above the editor's own hooks, because some
+   * of the style writers run in the editor component itself.
+   */
+  const style = useSiteStyleHistory();
+  return (
+    <SiteStyleHistoryContext.Provider value={style.history}>
+      <StyleRevisionContext.Provider value={style.replay}>
+        <ConnectStyleHistoryContext.Provider value={style.connect}>
+          <EditorBody {...props} />
+        </ConnectStyleHistoryContext.Provider>
+      </StyleRevisionContext.Provider>
+    </SiteStyleHistoryContext.Provider>
+  );
+}
+
+function EditorBody<TFieldValues extends FieldValues>({
+  initialValue,
+  kinds,
+  onCommit,
+  onClose,
+  name,
+  control,
+  openAt,
+}: BlocksEditorProps<TFieldValues>): JSX.Element {
   // The field's value as last loaded or saved: the form resets its defaults to
   // what a save stored, so the editor holds an edit to the locks against the
   // same stored copy the next save is judged against.

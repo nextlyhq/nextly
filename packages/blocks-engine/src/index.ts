@@ -431,6 +431,19 @@ export type {
   TrackedPlacement,
 } from "./placement";
 export { placementBreaksIn, placementRefusal } from "./placement-breaks";
+// What a write may store as a placement's own values: ids its component
+// exposes, with values of the type each field takes. Judged by the write path
+// against the definitions it composes with, and by the inspector before a
+// commit.
+export {
+  exposedValueFits,
+  neededFor,
+  placementValueIssues,
+} from "./placement-values";
+export type {
+  PlacementValueIssue,
+  PlacementValueProblem,
+} from "./placement-values";
 export type { LocatedPlacementBreak } from "./placement-breaks";
 export {
   asPermittedList,
@@ -561,7 +574,7 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { BLOCK_ICONS, defineBlock } from "./block";
+export { BLOCK_ICONS, defineBlock, ITEM_SCHEMA_MAX_DEPTH } from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,
