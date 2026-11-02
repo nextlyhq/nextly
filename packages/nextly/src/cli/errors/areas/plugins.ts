@@ -502,6 +502,20 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
+  PLUGIN_UNINSTALL_WOULD_DROP_OTHERS: {
+    cause:
+      "A full uninstall would drop schema another owner built on the plugin's.",
+    from: [
+      {
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+        describe: error =>
+          refusal(error.publicMessage, {
+            nextFrom: 1,
+            why: "Dropping it would delete data that belongs to the app or another plugin, which no consent to this uninstall covers. Nothing was changed.",
+          }),
+      },
+    ],
+  },
   PLUGIN_DEPENDENCY_NOT_INSTALLED: {
     cause:
       "A plugin to install depends on a plugin that is not installed on this database.",

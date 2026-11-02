@@ -1405,6 +1405,13 @@ exports[`each code, as a command ends with it > PLUGIN_UNINSTALL_UNFINISHED 1`] 
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-unfinished  (PLUGIN_UNINSTALL_UNFINISHED)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_UNINSTALL_WOULD_DROP_OTHERS 1`] = `
+"✗ "@acme/seo" cannot be fully uninstalled: dropping its schema would take 1 thing(s) other owners built on it: index "app_idx_on_notes" on notes__items (the app).
+  Why:  Dropping it would delete data that belongs to the app or another plugin, which no consent to this uninstall covers. Nothing was changed.
+  Next: Remove each from its owner's code (and migrate), or run the uninstall with --keep-data, which keeps the tables and drops nothing.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-would-drop-others  (PLUGIN_UNINSTALL_WOULD_DROP_OTHERS)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_WIDGET_SOURCE_COLLISION 1`] = `
 "✗ Widget source "acme/visits" is declared by both "@acme/stats" and "@acme/analytics". Source ids must be unique.
   Why:  A widget finds its data by its source's id, so each id names one source.

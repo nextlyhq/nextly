@@ -418,6 +418,24 @@ export class SchemaEventsRepository {
   }
 
   /**
+   * Delete every ledger row recorded under these module filenames
+   * (`plugin:<name>/<module>`), whatever the event: applies, reverts and
+   * failures alike. A full plugin uninstall forgets the plugin's migrations
+   * so a later install applies them again from the first. `plugin_lifecycle`
+   * rows are never matched, so the record the boot reads stays. No
+   * `RETURNING`, which MySQL lacks.
+   */
+  async deleteModuleRows(filenames: readonly string[]): Promise<void> {
+    if (filenames.length === 0) return;
+    await this.db.delete(this.table).where(
+      sql`filename IN (${sql.join(
+        filenames.map(name => sql`${name}`),
+        sql`, `
+      )}) AND event_type <> 'plugin_lifecycle'`
+    );
+  }
+
+  /**
    * Every `plugin_lifecycle` row, which `plugin-lifecycle-state.ts` reads the
    * newest of per plugin.
    */

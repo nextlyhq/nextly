@@ -229,6 +229,21 @@ export const PLUGIN_CASES = {
         })
       )
     ),
+  PLUGIN_UNINSTALL_WOULD_DROP_OTHERS: () =>
+    thrown(() =>
+      planUninstall(
+        uninstall({
+          dependents: [
+            {
+              kind: "index",
+              name: "app_idx_on_notes",
+              table: "notes__items",
+              owner: "the app",
+            },
+          ],
+        })
+      )
+    ),
   PLUGIN_DEPENDENCY_NOT_INSTALLED: () =>
     thrown(() =>
       assertDependenciesInstalled({

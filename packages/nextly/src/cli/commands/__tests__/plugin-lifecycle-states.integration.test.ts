@@ -38,6 +38,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
+import { pluginSettingsTables } from "../../../schemas/plugin-settings";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import {
@@ -92,6 +93,15 @@ vi.mock("../../utils/adapter", () => ({
 const EVERY_DELETION = resolveDataLossConsent({ flag: true, env: {} });
 
 const PLUGIN = "@acme/lc";
+
+/** What these tests need from a Drizzle handle to write and read settings. */
+interface SettingsInsertDb {
+  insert(table: unknown): {
+    values(row: Record<string, unknown>): Promise<unknown>;
+  };
+  select(): { from(table: unknown): Promise<unknown> };
+}
+
 const context = {
   logger: createLogger({ quiet: true }),
 } as unknown as CommandContext;
@@ -259,11 +269,38 @@ describe.each(getConfiguredTestDialects())(
     it("drops its tables on a full uninstall, refuses the boot, and reinstalls to tables it reads and writes", async () => {
       await install();
       await writeNote("before");
+      const { nextlyPluginSettings } = pluginSettingsTables(dialect);
+      await (db() as unknown as SettingsInsertDb)
+        .insert(nextlyPluginSettings)
+        .values({
+          owner: PLUGIN,
+          key: "apiKey",
+          value: '"secret"',
+          isSecret: true,
+          updatedAt: new Date(),
+        });
 
       await uninstall(false);
 
       expect(await exists("lc__notes")).toBe(false);
       expect(await exists("lc__tags")).toBe(false);
+      // Forgotten whole: no settings, owner rows or migration rows left, so
+      // the reinstall below applies every module from the first.
+      const settings = (await (db() as unknown as SettingsInsertDb)
+        .select()
+        .from(nextlyPluginSettings)) as Array<{ owner: string }>;
+      expect(settings.filter(row => row.owner === PLUGIN)).toEqual([]);
+      const owners = await new SchemaOwnersRepository(db(), dialect).read();
+      expect(owners.filter(row => row.ownerId === PLUGIN)).toEqual([]);
+      const applies = await new SchemaEventsRepository(
+        db(),
+        dialect
+      ).listFileApplies();
+      expect(
+        applies.filter(row =>
+          String(row.filename ?? "").startsWith(`plugin:${PLUGIN}/`)
+        )
+      ).toEqual([]);
       await expect(boot()).rejects.toMatchObject({
         code: "PLUGIN_SCHEMA_UNINSTALLED",
       });
@@ -273,6 +310,32 @@ describe.each(getConfiguredTestDialects())(
       expect(await exists("lc__tags")).toBe(true);
       await writeNote("after");
       expect(await noteIds()).toEqual(["after"]);
+      await expect(boot()).resolves.toBeUndefined();
+    });
+
+    it("refuses a full uninstall while the app's index is on one of its tables, and drops nothing", async () => {
+      await install();
+      await new SchemaOwnersRepository(db(), dialect).upsert([
+        {
+          tableName: "lc__notes",
+          elementKind: "index",
+          elementName: "app_idx_on_notes",
+          ownerKind: "app",
+          ownerId: "app",
+          migratedBy: "app",
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active",
+        },
+      ]);
+
+      await expect(uninstall(false)).rejects.toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+        publicMessage: expect.stringContaining("app_idx_on_notes"),
+      });
+
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await exists("lc__tags")).toBe(true);
       await expect(boot()).resolves.toBeUndefined();
     });
 

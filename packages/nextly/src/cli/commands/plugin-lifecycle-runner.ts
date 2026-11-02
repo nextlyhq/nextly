@@ -25,6 +25,7 @@ import {
   qualifiedFilename,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import {
   asLifecycleCommandBoot,
   readPluginLifecycle,
@@ -765,6 +766,95 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     // refused at once where nobody is there to answer.
     interactive: isInteractiveTerminal(),
     askToDelete: askToDeleteInTerminal,
+    // What other owners built on or into the plugin's schema. Loaded when an
+    // uninstall asks: nothing else in a command needs the dependents' reader.
+    schemaDependents: async (
+      plugin: LifecyclePlugin,
+      owned: readonly OwnerRecord[]
+    ) => {
+      const definition = definitions.find(d => d.name === plugin.name);
+      // The plugin's collections, as the registry stores them, so fields
+      // elsewhere pointing at one are found by the slug they name.
+      const collectionConfigs = [
+        ...(definition?.contributes?.collections ?? []),
+        ...(definition?.collections ?? []),
+      ];
+      const [
+        { databaseDependentsSources },
+        { findUninstallDependents },
+        { resolveCollectionTableName },
+        { installRegistryResolver },
+      ] = await Promise.all([
+        import("../../domains/collections/services/collection-dependents"),
+        import("../../domains/schema/ownership/uninstall-dependents"),
+        import("../../domains/schema/utils/resolve-table-name"),
+        import("../utils/registry-resolver"),
+      ]);
+      // The field registries are read by name through the adapter, which a
+      // command has no boot to teach them to: without a resolver the read
+      // refuses, and the guard, failing closed, would refuse every full
+      // uninstall. Installed on a view of the adapter that shares its
+      // connection, not on the adapter: a resolver naming only core tables
+      // would make the command's later writes by name (the migrate lock row)
+      // refuse a table it does not list.
+      const reader = Object.create(drizzleAdapter) as typeof drizzleAdapter;
+      installRegistryResolver(reader);
+      const slugByTable = new Map(
+        collectionConfigs.map(collection => [
+          resolveCollectionTableName(collection.slug, collection.dbName),
+          collection.slug,
+        ])
+      );
+      const { compileExtensionSchema } = await import(
+        "../../domains/schema/extension/publish"
+      );
+      const extensionSchema = await compileExtensionSchema({
+        dialect,
+        plugins: definitions,
+        config,
+        logger: { warn: m => context.logger.warn(m) },
+      });
+      return findUninstallDependents({
+        pluginName: plugin.name,
+        owned,
+        collectionSlugs: collectionConfigs.map(collection => collection.slug),
+        collectionSlugForTable: table => slugByTable.get(table) ?? null,
+        sources: databaseDependentsSources(reader, () =>
+          Promise.resolve(extensionSchema ?? null)
+        ),
+        recordedRowsOn: tables =>
+          new SchemaOwnersRepository(drizzleAdapter.getDrizzle(), dialect).read(
+            [...tables]
+          ),
+      });
+    },
+    // A fully uninstalled plugin leaves its lifecycle record and nothing
+    // else: its settings, ledger module rows and owner rows go, so a later
+    // install starts from nothing. Each delete is a no-op when run again.
+    forgetPlugin: async (
+      plugin: LifecyclePlugin,
+      ledgerFilenames: readonly string[]
+    ) => {
+      // Loaded here: the settings tables module carries every dialect's.
+      const [{ pluginSettingsTables }, { eq }, { createOwnerRegistry }] =
+        await Promise.all([
+          import("../../schemas/plugin-settings"),
+          import("drizzle-orm"),
+          import("../../domains/schema/ownership/owner-registry"),
+        ]);
+      const { nextlyPluginSettings } = pluginSettingsTables(dialect);
+      await drizzleAdapter
+        .getDrizzle<SettingsDeleteDb>()
+        .delete(nextlyPluginSettings)
+        .where(eq(nextlyPluginSettings.owner, plugin.name));
+      await new SchemaEventsRepository(
+        drizzleAdapter.getDrizzle(),
+        dialect
+      ).deleteModuleRows(ledgerFilenames);
+      await createOwnerRegistry(
+        new SchemaOwnersRepository(drizzleAdapter.getDrizzle(), dialect)
+      ).remove(plugin.name);
+    },
     // Read through the schema pipeline's own introspection, so a column is
     // judged present exactly as a push would see it.
     liveColumns: async (tables: readonly string[]) => {
@@ -784,6 +874,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       );
     },
   };
+}
+
+/** The one statement forgetting a plugin's settings needs from a Drizzle handle. */
+interface SettingsDeleteDb {
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
 
 export async function runPluginInstall(

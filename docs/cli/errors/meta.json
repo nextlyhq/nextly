@@ -108,6 +108,7 @@
     "plugin-entry-unnamed",
     "plugin-extends-outside-its-schema",
     "plugin-has-dependents",
+    "plugin-uninstall-would-drop-others",
     "plugin-hook-changed-schema",
     "plugin-hook-changed-tables",
     "plugin-hook-handlers-running",

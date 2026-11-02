@@ -132,6 +132,9 @@ function depsWithout(
     readAppliedModules: vi.fn(async () => new Set<string>()),
     // Every recorded table still exists, as after an ordinary install.
     liveTables: vi.fn(async (tables: readonly string[]) => new Set(tables)),
+    // Nothing other owners built on the schema, unless a test says so.
+    schemaDependents: vi.fn(async () => []),
+    forgetPlugin: vi.fn(async () => undefined),
     // Both plugins these tests configure, recorded installed.
     readLifecycle: vi.fn(
       async () =>
