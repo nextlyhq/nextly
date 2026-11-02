@@ -995,6 +995,8 @@ function layoutRowReader(
         collection,
         locale,
         budget,
+        // Depth zero, as on the published read below.
+        depth: 0,
       });
     }
     if (!budget.take()) return [];
@@ -1011,6 +1013,11 @@ function layoutRowReader(
           ? "nextly-layouts"
           : `nextly-layouts:${String(options.maxLifetime)}`,
       select: { id: true, areas: true },
+      // Depth zero: a region needs only the component ids `areas` stores, and
+      // the components are read once more, at the route's posture, by the
+      // component read. A populated read would load them, and whatever they
+      // relate to, for nothing.
+      depth: 0,
       ...(options?.maxLifetime === undefined
         ? {}
         : { maxLifetime: options.maxLifetime }),
@@ -1114,9 +1121,11 @@ async function readDraftRows(
     collection: string;
     locale: string | undefined;
     budget: QueryBudget;
+    /** Relationship depth, for a read that needs only the ids it stores. */
+    depth?: number;
   }
 ): Promise<Record<string, unknown>[]> {
-  const { reader, collection, locale, budget } = args;
+  const { reader, collection, locale, budget, depth } = args;
   const rows: Record<string, unknown>[] = [];
   for (const id of wanted) {
     // One claim per QUERY, exactly as the batched path charges. Here that is
@@ -1134,6 +1143,7 @@ async function readDraftRows(
       user: undefined,
       req: undefined,
       ...(locale ? { locale } : {}),
+      ...(depth === undefined ? {} : { depth }),
     });
     if (row !== null && row !== undefined) rows.push(row);
   }
@@ -1160,6 +1170,8 @@ async function readRowsChunk(
     select?: Record<string, boolean>;
     /** A cap, in seconds, on top of the release bound. */
     maxLifetime?: number;
+    /** Relationship depth, for a read that needs only the ids it stores. */
+    depth?: number;
   }
 ): Promise<{ items: Record<string, unknown>[] }> {
   const {
@@ -1171,6 +1183,7 @@ async function readRowsChunk(
     keyName,
     select,
     maxLifetime,
+    depth,
   } = args;
   // How long this read may live, bounded by the next scheduled release —
   // asked for the reason `release-cache-window` states about the two callers
@@ -1199,6 +1212,7 @@ async function readRowsChunk(
         req: undefined,
         ...(locale ? { locale } : {}),
         ...(select === undefined ? {} : { select }),
+        ...(depth === undefined ? {} : { depth }),
       }),
     {
       tags: wanted.map(id => entryIdTag(collection, id)),
@@ -1872,21 +1886,66 @@ function drawWithRegions(args: {
           ),
         };
   return parts.map((part, index) => {
-    const sheet = index === 0 ? emitting : inheriting;
+    const base = index === 0 ? emitting : inheriting;
     if (part === "page") {
-      return createElement(PageRenderer, { ...page, ...sheet, key: "page" });
+      // The page keeps the scope its stored sheet was compiled under, so a
+      // stored artifact still matches; one compiled unscoped gets a scope of
+      // its own here, and is recompiled for it.
+      const pageScope =
+        typeof page.styles?.scope === "string"
+          ? page.styles.scope
+          : PART_SCOPE_PAGE;
+      return createElement(PageRenderer, {
+        ...page,
+        ...scopedSheet(base, shared.styleContext, pageScope),
+        key: "page",
+      });
     }
     return createElement(
       part.area,
       { key: part.area, "data-nextly-region": part.area },
       createElement(PageRenderer, {
         ...shared,
-        ...sheet,
+        ...scopedSheet(base, shared.styleContext, partScope(part.area)),
         document: regionDocument([part]),
         ...(definitions.size === 0 ? {} : { definitions }),
       })
     );
   });
+}
+
+/**
+ * The scope each document drawn on one page compiles under: one per part.
+ *
+ * Node ids are unique within a document, not across documents, so the page and
+ * a region can hold the same id and with it the same generated class; and a
+ * page-level rule is anchored at every page root. Unscoped, one document's
+ * sheet would restyle the other. A distinct scope per part is the compiler's
+ * own mechanism for this (`StyleCompileContext.scope`): every selector it
+ * writes is constrained to the root carrying that class, and the renderer puts
+ * the class on the root it mounts.
+ */
+const PART_SCOPE_PAGE = "nx-pb-part-page";
+
+function partScope(area: LayoutRegion["area"]): string {
+  return `nx-pb-part-${area}`;
+}
+
+/**
+ * `sheet` with `scope` set on its compile context, falling back to the
+ * route's own context for the document that emits the site sheet. A document
+ * with no compile context at all compiles nothing, so there is nothing to
+ * scope.
+ */
+function scopedSheet(
+  sheet: SheetProps,
+  routeContext: StyleCompileContext | undefined,
+  scope: string
+): SheetProps {
+  const context = sheet.styleContext ?? routeContext;
+  return context === undefined
+    ? sheet
+    : { ...sheet, styleContext: { ...context, scope } };
 }
 
 /** How one document on the page treats the site sheet. */

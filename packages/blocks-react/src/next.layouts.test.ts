@@ -12,6 +12,7 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
+  resolveComponentInstances,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { Fragment, type ReactElement } from "react";
@@ -19,6 +20,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { coreBlocks } from "./blocks";
+import { regionDocument } from "./next-layouts";
 import { createBlockResolver } from "./resolver";
 import { throughBoundary } from "./__tests__/through-boundary";
 
@@ -63,6 +65,7 @@ interface FindArgs {
   status?: string;
   locale?: string;
   select?: Record<string, boolean>;
+  depth?: number;
 }
 
 interface LayoutRow {
@@ -308,6 +311,66 @@ describe("a page drawn inside its Layout", () => {
     expect(html).toContain("rgb(1, 2, 3)");
   });
 
+  it("keeps each document's rules to its own root when the page and a region hold the same node id", async () => {
+    // A node id is unique within a document, not across documents. The
+    // header's node is drawn under the id composition gives it, so the page
+    // here holds a node with exactly that id, styled differently: unscoped,
+    // both share one generated class and each sheet would restyle the other.
+    const headerDefinition = definition([
+      {
+        ...heading("a", "Header A"),
+        styles: { base: { base: { color: "rgb(1, 1, 1)" } } },
+      },
+    ]) as BlockDocument;
+    const composed = resolveComponentInstances(
+      regionDocument([{ area: "header", componentId: "main-header" }]),
+      {
+        has: id => id === "main-header",
+        get: id => (id === "main-header" ? headerDefinition : undefined),
+      }
+    ).document;
+    const sharedId = composed.nodes[0]!.id;
+
+    const { html } = await render({
+      page: {
+        content: doc([
+          {
+            ...heading(sharedId, "Page A"),
+            styles: { base: { base: { color: "rgb(2, 2, 2)" } } },
+          },
+        ]),
+      },
+      components: { ...COMPONENTS, "main-header": headerDefinition },
+    });
+
+    // The positive control: the two headings really do share one class.
+    const classOf = (text: string) => {
+      const at = html.indexOf(text);
+      const open = html.lastIndexOf("<h2", at);
+      return /class="([^"]*)"/.exec(html.slice(open, at))?.[1];
+    };
+    expect(classOf("Header A")).toBeDefined();
+    expect(classOf("Header A")).toBe(classOf("Page A"));
+
+    // Each part's root carries its own scope class...
+    const rootOf = (text: string) => {
+      const at = html.indexOf(text);
+      const root = html.lastIndexOf('<div class="nx-pb-page', at);
+      return html.slice(root, html.indexOf(">", root));
+    };
+    expect(rootOf("Header A")).toContain("nx-pb-part-header");
+    expect(rootOf("Page A")).toContain("nx-pb-part-page");
+    // ...and each colour is written only under its own document's scope.
+    const ruleFor = (color: string) => {
+      const at = html.indexOf(color);
+      return html.slice(html.lastIndexOf("}", at) + 1, at);
+    };
+    expect(ruleFor("rgb(1, 1, 1)")).toContain("nx-pb-part-header");
+    expect(ruleFor("rgb(1, 1, 1)")).not.toContain("nx-pb-part-page");
+    expect(ruleFor("rgb(2, 2, 2)")).toContain("nx-pb-part-page");
+    expect(ruleFor("rgb(2, 2, 2)")).not.toContain("nx-pb-part-header");
+  });
+
   it("draws neither region for a page that switches them off, and reads nothing", async () => {
     const { html, calls, tags, readDefault, byId } = await render({
       page: { content: PAGE_BODY, layout: "landing", noHeaderFooter: true },
@@ -429,6 +492,9 @@ describe("a page drawn inside its Layout", () => {
 
     const [read] = layoutReads(calls);
     expect(read?.select).toEqual({ id: true, areas: true });
+    // Only the ids `areas` stores are used; a populated read would load each
+    // region component, and what it relates to, for nothing.
+    expect(read?.depth).toBe(0);
     expect(read?.status).toBe("published");
   });
 
@@ -490,6 +556,7 @@ describe("a page drawn inside its Layout", () => {
         collection: LAYOUTS,
         id: "landing",
         draft: true,
+        depth: 0,
       })
     );
 
