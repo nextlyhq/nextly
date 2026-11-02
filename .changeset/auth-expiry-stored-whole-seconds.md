@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A password-reset, email-verification or invite link, a refresh session and a preview link store their expiry as the whole second the issuer computed. A column that keeps whole seconds — MySQL's `DATETIME` — rounds milliseconds rather than cutting them, which stored such an expiry up to half a second after the instant the code computed, and the checks comparing that stored value with a millisecond clock accepted a password-reset token briefly past its end. An expiry can now end up to a second earlier than its lifetime nominally runs, which is the safe direction.
+A password-reset, email-verification or invite link, an API key, and a refresh session store their expiry as the whole second the issuer computed. A column that keeps whole seconds — MySQL's `DATETIME` — rounds milliseconds rather than cutting them, which stored such an expiry up to half a second after the instant the code computed, and the checks comparing that stored value with a millisecond clock accepted a password-reset token briefly past its end. An expiry can now end up to a second earlier than its lifetime nominally runs, which is the safe direction.

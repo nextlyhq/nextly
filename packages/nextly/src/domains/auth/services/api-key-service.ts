@@ -90,6 +90,7 @@ import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
 import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
 
 import { refuseLinkingPublicRole } from "./public-role";
+import { wholeSecondExpiry } from "./token-account-binding";
 
 /** The three token types that determine how permissions are resolved at request time. */
 export type ApiKeyTokenType = "read-only" | "full-access" | "role-based";
@@ -1481,7 +1482,10 @@ export class ApiKeyService extends BaseService {
     };
     const days = daysMap[expiresIn];
     if (!days) return null;
-    return new Date(Date.now() + days * msPerDay);
+    // The whole second the instant falls in: a column that keeps whole
+    // seconds rounds milliseconds rather than cutting them, which would
+    // store the key as living longer than issued.
+    return wholeSecondExpiry(new Date(Date.now() + days * msPerDay));
   }
 
   private async checkPermissionCeiling(

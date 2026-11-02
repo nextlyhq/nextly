@@ -29,6 +29,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import { consoleLogger } from "../../../../services/shared";
 import { INVITE_TOKEN_EXPIRY_HOURS } from "../../lib/invite-token";
+import type { ApiKeyService } from "../api-key-service";
 import { AuthService } from "../auth-service";
 import { AUTH_TOKEN_LIFETIME_MS } from "../token-account-binding";
 
@@ -38,6 +39,7 @@ const USER_ID = "expiry-whole-user-1";
 const PARKED = new Date("2026-06-01T12:00:00.700Z");
 const REFRESH_TTL_SECONDS = 24 * 60 * 60;
 const INVITE_LIFETIME_MS = INVITE_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000;
+const API_KEY_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface TestDb {
   insert: (table: unknown) => { values: (data: unknown) => Promise<unknown> };
@@ -171,6 +173,29 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       const stored = row.expiresAt as Date;
       expect(stored.getTime()).toBe(
         wholeSecond(computedFrom(REFRESH_TTL_SECONDS * 1000)).getTime()
+      );
+    });
+
+    it("stores an API key expiry as the whole second computed", async () => {
+      const { db } = await setup(dialect);
+      parkClock(PARKED);
+
+      const keys = current!.getService(
+        "apiKeyService"
+      ) as unknown as ApiKeyService;
+      await keys.createApiKey(USER_ID, {
+        name: "Expiry Whole Second Key",
+        tokenType: "read-only",
+        expiresIn: "7d",
+      });
+
+      const [row] = await db
+        .select()
+        .from(tables.apiKeys)
+        .where(eq(tables.apiKeys.userId, USER_ID));
+      const stored = row.expiresAt as Date;
+      expect(stored.getTime()).toBe(
+        wholeSecond(computedFrom(API_KEY_LIFETIME_MS)).getTime()
       );
     });
   });
