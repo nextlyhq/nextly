@@ -288,7 +288,11 @@ export function DocumentViewBody({
     <FormProvider {...form}>
       <div
         data-testid="document-view-frame"
-        className="flex h-dvh min-h-0 flex-col bg-background"
+        // The content area's height, handed down by the split around the
+        // form, rather than the window's: below the desktop breakpoint the
+        // admin keeps a header above that area, and a frame the window's
+        // height was that header taller than the area, which then scrolled.
+        className="flex h-full min-h-0 flex-col bg-background"
       >
         {/* Above the view, in the editor's order: a document somebody else is
             in changes what the view's edits mean, so it is read before the
