@@ -20,6 +20,7 @@ import { useEffect, useCallback, useState, useRef } from "react";
 
 import { HISTORY_ADDRESS_PARAMS } from "@admin/components/features/versions/history-address";
 import {
+  DOCUMENT_VIEW_ADDRESS_PARAMS,
   drawnDocumentView,
   type DocumentKind,
 } from "@admin/lib/plugins/document-view-registry";
@@ -136,13 +137,13 @@ function documentOf(
 }
 
 /**
- * The query without the keys that move within the document: `field`, which
- * picks a view's field, and the history panel's own keys, which open history
- * beside the document and choose a version in it.
+ * The query without the keys that move within the document: a view's own
+ * keys, which pick its field and the part of it it opens at, and the history
+ * panel's, which open history beside the document and choose a version in it.
  */
 function queryBesidesField(search: string): string {
   const params = new URLSearchParams(search);
-  params.delete("field");
+  for (const key of DOCUMENT_VIEW_ADDRESS_PARAMS) params.delete(key);
   for (const key of HISTORY_ADDRESS_PARAMS) params.delete(key);
   return params.toString();
 }
