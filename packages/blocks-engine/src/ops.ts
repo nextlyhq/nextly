@@ -2891,6 +2891,19 @@ function assertKeepsLayersLocks(
   options: ApplyOptions
 ): void {
   if (options.layersLocks === "ignore") return;
+  // Refused rather than exempting the inverse from the lock: see the insert
+  // branch of `applyOp`. With the lock ignored, the inverse is a remove the
+  // same option lets through, so the round trip still holds.
+  if (op.kind === "insert") {
+    const lockedId = lockedWithin(op.node);
+    if (lockedId !== undefined) {
+      throw new OpError(
+        `insert: ${describe(lockedId)} arrives locked, and a locked node cannot be ` +
+          `removed — so this insert could never be undone. Unlock it before ` +
+          `adding it to the document.`
+      );
+    }
+  }
   const broken = layersLockBreak(nodes, op);
   if (broken === undefined) return;
   throw new OpError(layersLockRefusal(op, broken.lockedId, broken.where));
@@ -3252,16 +3265,10 @@ export function applyOp(
         measured(() => treeDepth([op.node]), "insert"),
         "insert"
       );
-      const lockedId = lockedWithin(op.node);
-      if (lockedId !== undefined) {
-        throw new OpError(
-          `insert: ${describe(lockedId)} arrives locked, and a locked node cannot be ` +
-            `removed — so this insert could never be undone. Unlock it before ` +
-            `adding it to the document.`
-        );
-      }
-      // And where it lands: a block put into a locked one changes what the
-      // lock protects as surely as an edit to a block already inside it.
+      // A subtree arriving locked, and where it lands: a block put into a
+      // locked one changes what the lock protects as surely as an edit to a
+      // block already inside it. Both are the Layers lock's, so both stand
+      // down together when the apply is told to ignore it.
       assertKeepsLayersLocks(nodes, op, options);
       // Asked BEFORE the placement, because afterwards the slot exists whether
       // this insert made it or not, and the question cannot be answered.

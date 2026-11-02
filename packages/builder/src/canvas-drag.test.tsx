@@ -541,6 +541,25 @@ describe("useCanvasDrag", () => {
     expect(dragRef?.refusal ?? null).toBeNull();
   });
 
+  it("forgets a held press released outside the canvas before it meant a drag", () => {
+    // The press never travelled far enough to draw the reason, and its
+    // release landed off the canvas: a hover back afterwards is no press.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const locked = { ...node("a", "test/heading"), locked: true } as BlockNode;
+    const { container } = render(
+      <Host document={documentOf([locked, node("b", "test/heading")])} />
+    );
+    layout(container, { a: 100, b: 100 });
+    const root = rootOf(container);
+
+    press(root, blockElement(container, "a"), 200, 10);
+    moveTo(root, 201, 11);
+    fireEvent.pointerUp(document, { pointerId: 1, clientX: 900, clientY: 900 });
+    moveTo(root, 200, 190);
+
+    expect(dragRef?.refusal ?? null).toBeNull();
+  });
+
   it("refuses a drop into a locked block, in the lock's words", () => {
     // The drop indicator asks the editor's lock question, which answers for a
     // block locked in Layers now that its refusal is no longer swallowed.

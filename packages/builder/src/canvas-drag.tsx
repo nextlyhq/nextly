@@ -755,6 +755,26 @@ export function useCanvasDrag({
     [stopHolding]
   );
 
+  /**
+   * Follow a held press on the documents from the moment it is recorded, as a
+   * palette drag is followed: the hand may leave the canvas before or after
+   * the reason is drawn, and its release there must still end the press, or a
+   * later hover would draw the reason for a press long over. Escape ends it
+   * through `reset`.
+   */
+  const holdUntilReleased = React.useCallback(() => {
+    const lifted = (native: PointerEvent): void => {
+      releaseHeld(native.pointerId);
+    };
+    const documents = inputDocuments(frameRef.current);
+    const ups = listenOn(documents, "pointerup", lifted);
+    const cancels = listenOn(documents, "pointercancel", lifted);
+    detachHeld.current = () => {
+      ups();
+      cancels();
+    };
+  }, [releaseHeld]);
+
   const onPointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
       // The primary button only. A right-click opens a context menu and a
@@ -795,6 +815,7 @@ export function useCanvasDrag({
           lock: layersLockFacts(held, nodeId, "move"),
           shown: false,
         };
+        holdUntilReleased();
         return;
       }
 
@@ -829,7 +850,7 @@ export function useCanvasDrag({
       };
       // NOT captured here. See the activation branch in `onPointerMove`.
     },
-    [releaseHeld]
+    [releaseHeld, holdUntilReleased]
   );
 
   /**
@@ -1027,19 +1048,6 @@ export function useCanvasDrag({
       );
       if (travelled < activationPx) return;
       press.shown = true;
-      // Followed on the documents from here, as a palette drag is: the hand
-      // may leave the canvas once the reason is drawn, and its release there
-      // must still take the reason away. Escape ends it through `reset`.
-      const lifted = (native: PointerEvent): void => {
-        releaseHeld(native.pointerId);
-      };
-      const documents = inputDocuments(frameRef.current);
-      const ups = listenOn(documents, "pointerup", lifted);
-      const cancels = listenOn(documents, "pointercancel", lifted);
-      detachHeld.current = () => {
-        ups();
-        cancels();
-      };
       setState({
         draggingId: null,
         draggingBlockName: press.blockName,
@@ -1051,7 +1059,7 @@ export function useCanvasDrag({
         },
       });
     },
-    [activationPx, releaseHeld]
+    [activationPx]
   );
 
   const trackMove = React.useCallback(

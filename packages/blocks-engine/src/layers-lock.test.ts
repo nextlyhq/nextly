@@ -348,6 +348,31 @@ describe("the system bypass", () => {
     ).not.toThrow();
   });
 
+  it("round-trips a bypassed remove of a locked block through its inverse", () => {
+    // The inverse puts back a subtree that arrives locked. With the lock
+    // ignored for the remove, the same option lets its undo through, so a
+    // system transform can always be undone the way it was applied.
+    const ignore = { layersLocks: "ignore" } as const;
+    const removed = applyOp(
+      page(),
+      { kind: "remove", id: "locked-section" },
+      undefined,
+      ignore
+    );
+    const restored = applyOp(
+      removed.document,
+      removed.inverse,
+      undefined,
+      ignore
+    );
+    expect(restored.document).toEqual(page());
+
+    // Without it, a subtree arriving locked is still refused.
+    expect(() => applyOp(removed.document, removed.inverse)).toThrow(
+      /arrives locked/
+    );
+  });
+
   it("enforces the lock for any other option value", () => {
     // Only the exact string lifts it, so a mistyped option fails closed.
     const op: BuilderOp = { kind: "remove", id: "caption" };

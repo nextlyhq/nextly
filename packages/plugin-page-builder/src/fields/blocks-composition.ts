@@ -587,12 +587,15 @@ async function judgePlacedLocks(
 }
 
 /**
- * Read the definition of every component the document places into the library.
+ * Read the definition of every component the document places into the library,
+ * and of every component those definitions place, as deep as composition goes.
  *
  * A placement the composition never expanded (one a condition gates) still
  * stores its values, and is served with them once the condition lifts, so its
- * component is read too. Stops asking once the reader's bound is spent, which
- * the caller then refuses as unchecked.
+ * component is read too; and a gated placement inside a definition is never
+ * expanded either, so the definitions held are surveyed the same way, level by
+ * level, to the composed depth. Stops asking once the reader's bound is spent,
+ * which the caller then refuses as unchecked.
  */
 async function readEveryPlacedDefinition(
   document: BlockDocument,
@@ -600,12 +603,53 @@ async function readEveryPlacedDefinition(
   read: BoundedReader,
   limits: DocumentLimits
 ): Promise<void> {
-  for (const id of componentIdsIn(document.nodes, limits.maxNodes)) {
-    if (library.held.has(id) || library.missing.has(id)) continue;
-    const answer = await read(id);
-    if (answer.kind === "document") library.held.set(id, answer.document);
-    else library.missing.add(id);
+  const surveyed = new Set<string>();
+  let level: readonly unknown[] = [document];
+  for (let depth = 0; depth <= MAX_COMPOSED_DEPTH; depth += 1) {
+    if (level.length === 0 || read.exhausted()) return;
+    level = await readPlacedBy(level, { library, read, limits, surveyed });
   }
+}
+
+/**
+ * One level of {@link readEveryPlacedDefinition}: read what each document
+ * places that is not yet surveyed, and answer the definitions held for them,
+ * which are the next level down.
+ */
+async function readPlacedBy(
+  documents: readonly unknown[],
+  at: {
+    library: HeldLibrary;
+    read: BoundedReader;
+    limits: DocumentLimits;
+    surveyed: Set<string>;
+  }
+): Promise<unknown[]> {
+  const { library, surveyed } = at;
+  const next: unknown[] = [];
+  for (const placing of documents) {
+    if (!isForest(placing)) continue;
+    const nodes = (placing as BlockDocument).nodes;
+    for (const id of componentIdsIn(nodes, at.limits.maxNodes)) {
+      if (surveyed.has(id)) continue;
+      surveyed.add(id);
+      await readInto(library, at.read, id);
+      if (library.held.has(id)) next.push(library.held.get(id));
+    }
+  }
+  return next;
+}
+
+/** One definition into the library, unless it was already asked for. */
+async function readInto(
+  library: HeldLibrary,
+  read: BoundedReader,
+  id: string
+): Promise<void> {
+  if (library.held.has(id) || library.missing.has(id)) return;
+  const answer = await read(id);
+  if (answer.kind === "document") library.held.set(id, answer.document);
+  else library.missing.add(id);
 }
 
 /** The issue code for each way a placement's value is refused. */

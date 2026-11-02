@@ -115,6 +115,28 @@ function withGatesLifted(
   return copy;
 }
 
+/**
+ * The library with every gate lifted in the definitions it holds, or
+ * `undefined` when none gates a block: a gated placement inside a definition
+ * is left unexpanded by the composition just as one on the page is.
+ */
+function libraryWithGatesLifted(
+  library: HeldLibrary,
+  limits: DocumentLimits
+): HeldLibrary | undefined {
+  let lifted = false;
+  const held = new Map<string, unknown>();
+  for (const [id, definition] of library.held) {
+    const nodes = (definition as { nodes?: unknown } | null)?.nodes;
+    const ungated = Array.isArray(nodes)
+      ? withGatesLifted(definition as BlockDocument, limits)
+      : undefined;
+    if (ungated !== undefined) lifted = true;
+    held.set(id, ungated ?? definition);
+  }
+  return lifted ? { held, missing: new Set(library.missing) } : undefined;
+}
+
 /** The ids of the blocks a composed form holds that a component locks. */
 function placedLockIds(form: unknown, limits: DocumentLimits): Set<string> {
   const ids = new Set<string>();
@@ -167,24 +189,21 @@ export async function placedLayersLocks(args: {
 }): Promise<PlacedLocksAnswer> {
   const { limits } = args.reading;
   // Gated placements are judged as served once their condition lifts: the
-  // page, its baseline and its stored forms all composed with the gates off.
+  // page, the definitions it reaches, its baseline and its stored forms all
+  // composed with the gates off.
   const ungated = withGatesLifted(args.document, limits);
+  const library = libraryWithGatesLifted(args.reading.library, limits);
+  const reading =
+    library === undefined ? args.reading : { ...args.reading, library };
   const document = ungated ?? args.document;
   const composed =
-    ungated === undefined
+    ungated === undefined && library === undefined
       ? args.composed
-      : (
-          await composeWithReads({
-            host: ungated,
-            library: args.reading.library,
-            read: args.reading.read,
-            limits,
-            work: args.reading.work,
-          })
-        ).composition.document;
+      : (await composeWithReads({ host: document, ...reading })).composition
+          .document;
   if (placedLockIds(composed, limits).size === 0) return NONE;
   const asHeld = await composedFormsRead({
-    ...args.reading,
+    ...reading,
     hosts: [placementsAsComponentsHoldThem(document, limits)],
   });
   if (!asHeld.complete) return { kind: "unchecked" };
@@ -197,7 +216,7 @@ export async function placedLayersLocks(args: {
   if (!stored.readable) return { kind: "unjudged" };
   // Cut short, a stored form only fails to keep a value: measured strictly.
   const storedComposed = await composedFormsRead({
-    ...args.reading,
+    ...reading,
     hosts: stored.forms.map(form => withGatesLifted(form, limits) ?? form),
   });
   const storedForms = storedComposed.forms.map(form => ({

@@ -459,6 +459,74 @@ describe.each(getConfiguredTestDialects())(
         await expectRefusedNamingHero(save([gated({ title: "Changed" })]));
       });
 
+      it("refuses an outer component's value relayed into it through a gated nested placement", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const inner = await promo(t);
+        // An outer component placing the promo under a condition, and exposing
+        // the promo's own fields as its own, so a page reaches the locked
+        // block only through the outer placement.
+        const outer = await t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Banner",
+            slug: "banner",
+            content: {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: [
+                {
+                  id: "nested",
+                  type: COMPONENT_INSTANCE_TYPE,
+                  version: 1,
+                  props: { componentId: inner },
+                  visibility: {
+                    conditions: [[{ field: "title", op: "eq", value: "Home" }]],
+                  },
+                },
+              ],
+              exposed: [
+                {
+                  id: "headline",
+                  label: "Headline",
+                  nodeId: "nested",
+                  propPath: "overrides.title",
+                  type: "text",
+                },
+                {
+                  id: "strap",
+                  label: "Strap",
+                  nodeId: "nested",
+                  propPath: "overrides.subtitle",
+                  type: "text",
+                },
+              ],
+            },
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        const outerId = String(outer.item.id);
+        const save = (nodes: Node[]) =>
+          t.nextly.create({
+            collection: "pages",
+            data: {
+              title: "Home",
+              slug: `home-${String(Math.random()).slice(2, 8)}`,
+              content: pageOf(nodes),
+            },
+            overrideAccess: true,
+          });
+
+        // CONTROL: a value relayed to the free block saves.
+        await expect(
+          save([placing(outerId, { strap: "Spring sale" })])
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(
+          save([placing(outerId, { headline: "Changed" })])
+        );
+      });
+
       it("refuses it on an update too", async () => {
         const { update } = await storedPage([heading("loose")]);
         const id = await promo(current!);
