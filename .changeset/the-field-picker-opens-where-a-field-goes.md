@@ -28,6 +28,7 @@
 ---
 
 The Schema Builder's field picker now opens from everywhere a field can go:
+
 - the toolbar's "Add field" adds at the end of the list;
 - a "+" between two rows adds before the lower one, at the top level and inside a group or repeater;
 - "/" on a field adds right after it.
