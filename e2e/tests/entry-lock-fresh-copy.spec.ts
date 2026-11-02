@@ -21,7 +21,11 @@ import { uniqueTag } from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
-import { claimedBy, secondEditor } from "./support/two-editors";
+import {
+  claimedBy,
+  SECOND_EDITOR,
+  secondEditor,
+} from "./support/two-editors";
 
 // Creates a second user; see support/locks.ts for what each lock guards. The
 // entry itself is this file's own, created under a unique name.
@@ -105,12 +109,14 @@ test.describe(
         const id = await createPost(page);
         await gotoAdmin(page, `/collections/posts/${id}`);
         await expect(excerpt(page)).toBeEditable({ timeout: 30_000 });
-        // A's claim has landed before B arrives, so B finds it held.
-        await claimedBy(page.request, {
-          scopeKind: "collection",
-          slug: "posts",
-          entryId: id,
-        });
+        // A's claim has landed before B arrives, so B finds it held by A.
+        expect(
+          await claimedBy(page.request, {
+            scopeKind: "collection",
+            slug: "posts",
+            entryId: id,
+          })
+        ).not.toBe(SECOND_EDITOR);
 
         const other = await secondEditor(browser, page, baseURL);
         try {

@@ -13,12 +13,16 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { freeDocument, test } from "./support/test";
 import { uniqueTag } from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
-import { claimedBy, secondEditor } from "./support/two-editors";
+import {
+  claimedBy,
+  SECOND_EDITOR,
+  secondEditor,
+} from "./support/two-editors";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.siteSettings, LOCK.usersRoles] });
@@ -61,6 +65,9 @@ test.describe(
     let before = "";
     let entryId = "";
     test.beforeEach(async ({ page }) => {
+      // Each test ends with B holding the Single, and closing B's page does
+      // not release it, so it is freed before every test, not only the first.
+      await freeDocument(page.request, LOCK.siteSettings);
       before = `Tagline before ${uniqueTag()}`;
       // Its site name is required, so a form save is refused while it is
       // empty, as it is in a fresh database. Kept when it is already set.
@@ -88,12 +95,14 @@ test.describe(
         const saved = `Saved by A ${uniqueTag()}`;
         await gotoAdmin(page, "/singles/site-settings");
         await expect(tagline(page)).toBeEditable({ timeout: 30_000 });
-        // A's claim has landed before B arrives, so B finds it held.
-        await claimedBy(page.request, {
-          scopeKind: "single",
-          slug: "site-settings",
-          entryId,
-        });
+        // A's claim has landed before B arrives, so B finds it held by A.
+        expect(
+          await claimedBy(page.request, {
+            scopeKind: "single",
+            slug: "site-settings",
+            entryId,
+          })
+        ).not.toBe(SECOND_EDITOR);
 
         const other = await secondEditor(browser, page, baseURL);
         try {

@@ -13,7 +13,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { freeDocument, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
@@ -152,6 +152,10 @@ test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
     // The builder's editor reads its page once, as it mounts. Unlocked over
     // the page read while the first person held it, it would go on showing,
     // and then save, the page from before what they saved.
+    //
+    // The test before this one ends with its second editor holding the page,
+    // and closing their page does not release it.
+    await freeDocument(page.request, LOCK.homepage);
     await openBuilder(page);
     await expect(block(page, "first")).toBeVisible({ timeout: 30_000 });
 
