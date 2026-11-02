@@ -102,6 +102,7 @@ function editorSpy(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
   } as unknown as EditorState & {
     apply: ReturnType<typeof vi.fn>;
     select: ReturnType<typeof vi.fn>;

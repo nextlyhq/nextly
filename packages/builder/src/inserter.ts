@@ -49,6 +49,7 @@ import {
   type NestingSource,
   type NestingVerdict,
   type PlacementTarget,
+  type ResolvedComposition,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
@@ -660,19 +661,23 @@ export function compositionRefusal(
   before: BlockDocument,
   after: BlockDocument,
   definitions: ComponentLookup,
-  limits?: DocumentLimits
-): CompositionRefusal | undefined {
-  const options = limits === undefined ? {} : { limits };
-  const standing = new Set(
-    resolveComponentInstances(before, definitions, options).unresolved.map(
-      entry => entry.instanceId
+  limits?: DocumentLimits,
+  /**
+   * How a document is composed, for a caller that already holds compositions:
+   * the editor's store shares one per document between this check and its
+   * lock check. Defaults to composing each document here.
+   */
+  compose: (document: BlockDocument) => ResolvedComposition = document =>
+    resolveComponentInstances(
+      document,
+      definitions,
+      limits === undefined ? {} : { limits }
     )
+): CompositionRefusal | undefined {
+  const standing = new Set(
+    compose(before).unresolved.map(entry => entry.instanceId)
   );
-  const introduced = resolveComponentInstances(
-    after,
-    definitions,
-    options
-  ).unresolved.find(
+  const introduced = compose(after).unresolved.find(
     entry => !standing.has(entry.instanceId) && entry.reason in ROOM_REFUSALS
   );
   if (introduced === undefined) return undefined;

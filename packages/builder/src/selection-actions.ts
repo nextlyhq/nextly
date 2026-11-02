@@ -54,7 +54,16 @@ export function useSelectionActions(editor: EditorState): ToolbarAction[] {
    * hiding it.
    */
   return React.useMemo(
-    () => shared ?? toolbarActions(document, selectedId, selectedIds, nesting),
-    [shared, document, selectedId, selectedIds, nesting]
+    () =>
+      shared ??
+      toolbarActions(
+        document,
+        selectedId,
+        selectedIds,
+        nesting,
+        undefined,
+        editor.lockRefusalFor
+      ),
+    [shared, document, selectedId, selectedIds, nesting, editor.lockRefusalFor]
   );
 }
