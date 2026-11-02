@@ -3404,6 +3404,29 @@ describe("the site's ground and text on the canvas root", () => {
     ).toBe(false);
   });
 
+  it("marks no dark ground when it cannot read the dark value", () => {
+    // A valid colour this engine does not parse says nothing about luminance,
+    // so the canvas keeps the page's light default rather than guessing dark.
+    for (const dark of ["white", "oklch(0.98 0 0)", "var(--elsewhere)"]) {
+      const site: SiteSheetInput = {
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      };
+      expect(rootOf(site)?.hasAttribute("data-nx-site-dark-ground")).toBe(
+        false
+      );
+    }
+  });
+
   it("names nothing when the host serves no site sheet", () => {
     const root = rootOf(false);
     expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");

@@ -246,12 +246,14 @@ function siteSurface(
 
 /**
  * Whether a token value is a dark ground. A value this engine cannot read as a
- * colour — a reference to another property, say — is taken at its word: the
- * site gave its ground a dark-mode value, and a dark ground is what that means.
+ * colour — a named colour, `oklch()`, a reference to another property — says
+ * nothing about how light it is, so it is not called dark: the canvas keeps the
+ * page's light default rather than switching every native control to a dark
+ * scheme over what may be a light ground.
  */
 function isDarkGround(value: string): boolean {
   const rgb = parseColor(value);
-  return rgb === undefined || relativeLuminance(rgb) < DARK_GROUND_LUMINANCE;
+  return rgb !== undefined && relativeLuminance(rgb) < DARK_GROUND_LUMINANCE;
 }
 
 /** Whether an event started inside editor chrome rather than inside the page. */
