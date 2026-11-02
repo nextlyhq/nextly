@@ -45,6 +45,7 @@ import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -351,6 +352,13 @@ export const COMPONENTS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields);
+      // A pair of sibling fields this save would create is refused before anything is planned;
+      // one the entity already holds keeps working (judged against the stored fields).
+      assertNoNewSiblingClashes(
+        { kind: "fieldGroup", slug },
+        fields,
+        component.fields ?? []
+      );
 
       const currentFields = (component.fields ??
         []) as unknown as FieldDefinition[];
@@ -484,6 +492,14 @@ export const COMPONENTS_METHODS: Record<
           // to reconcile it. Refusing them would make the state harder to escape rather than safer,
           // which is the same reason metadata-only edits stay allowed.
           assertNotDiverged(slug, component);
+          // A pair of sibling fields this save would create is refused before any statement or
+          // archive write, against the fields as stored now; one the field group already holds keeps
+          // working. Asked here because this road reaches its DDL through no shared service.
+          assertNoNewSiblingClashes(
+            { kind: "fieldGroup", slug },
+            fields,
+            component.fields ?? []
+          );
 
           // i18n: prefer the request's localized flag over the persisted one (stale on a
           // simultaneous toggle+field-change save); fall back to the registry value.

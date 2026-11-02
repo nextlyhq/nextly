@@ -25,7 +25,7 @@ import {
 type Tabled = ReadonlyArray<{ slug: string; tableName: string }>;
 
 /** The latest snapshot, as far as telling a new address from an existing one needs it. */
-type LatestSnapshot = {
+export type LatestSnapshot = {
   data: {
     snapshot: { tables: ReadonlyArray<{ name: string }> };
     entities?: Record<
@@ -35,7 +35,7 @@ type LatestSnapshot = {
   };
 } | null;
 
-const RECORD_KEY = {
+export const RECORD_KEY = {
   collection: "collections",
   single: "singles",
   fieldGroup: "fieldGroups",
@@ -49,7 +49,7 @@ const RECORD_KEY = {
  * snapshot nothing is known to exist (these commands read files, never the
  * database), so everything is new.
  */
-function isNewAgainst(
+export function isNewAgainst(
   latest: LatestSnapshot,
   kind: AddressKind,
   entity: { slug: string; tableName: string }

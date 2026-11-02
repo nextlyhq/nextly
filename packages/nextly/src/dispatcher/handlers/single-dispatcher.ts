@@ -53,6 +53,7 @@ import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import {
   resolveSingleTableName,
   singleTableFamiliesCollide,
@@ -1109,6 +1110,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields);
+      // A pair of sibling fields this save would create is refused before anything is planned;
+      // one the entity already holds keeps working (judged against the stored fields).
+      assertNoNewSiblingClashes(
+        { kind: "single", slug },
+        fields,
+        single.fields ?? []
+      );
 
       const currentFields = (single.fields ??
         []) as unknown as FieldDefinition[];
@@ -1200,6 +1208,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields);
+      // A pair of sibling fields this save would create is refused before any statement or archive
+      // write; one the entity already holds keeps working. Asked here because this road reaches its
+      // DDL through no shared service that could ask it.
+      assertNoNewSiblingClashes(
+        { kind: "single", slug },
+        fields,
+        single.fields ?? []
+      );
 
       // i18n: prefer the request's localized flag over the persisted one (which may be stale on a
       // simultaneous toggle+field-change save); fall back to the registry value.

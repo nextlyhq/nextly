@@ -58,6 +58,7 @@ import {
   validateAccessShared,
   COLLECTION_ACCESS_KEYS,
   validateFieldBasicsShared,
+  validateSiblingFieldsShared,
 } from "../../shared/base-validator";
 import { isPlainObject } from "../../shared/lib/plain-copy";
 // RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
@@ -415,7 +416,6 @@ function validateField(
   field: unknown,
   path: string,
   errors: ValidationError[],
-  seenNames: Set<string>,
   allCollectionSlugs?: string[]
 ): void {
   if (!field || typeof field !== "object") {
@@ -433,7 +433,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldBasicsShared(f, path, errsBase, seenNames);
+  validateFieldBasicsShared(f, path, errsBase);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
@@ -509,11 +509,9 @@ function validateFieldsArray(
   errors: ValidationError[],
   allCollectionSlugs?: string[]
 ): void {
-  const seenNames = new Set<string>();
-
   fields.forEach((field, index) => {
     const fieldPath = `${basePath}[${index}]`;
-    validateField(field, fieldPath, errors, seenNames, allCollectionSlugs);
+    validateField(field, fieldPath, errors, allCollectionSlugs);
   });
 }
 
@@ -580,7 +578,6 @@ function validateFields(
   //
   // Both keys land on `foo_bar` and the second silently overwrites the first, so one of the two
   // authored values is already gone by the time anything decides which table it belongs to.
-  const columnOwners = new Map<string, string>();
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
     const candidate = field as Record<string, unknown>;
@@ -647,24 +644,8 @@ function validateFields(
       errors.push(statusError);
       return;
     }
-    // Two names that reach one column cannot both be emitted, so the table could never be
-    // created. Checked here rather than in the shared field-name rule because only this level has
-    // columns at all: a repeater or group keeps its children inside a single JSON column, where
-    // two names that convert alike are simply two keys.
-    //
-    // Column-less field types are exempt for the same reason. A component and a many-to-many
-    // relationship store their values in their own tables, keyed by the field's declared name, so
-    // two of them whose names converge stay distinct and nothing is emitted twice.
-    const owner = columnOwners.get(column);
-    if (owner !== undefined) {
-      errors.push({
-        path: `${path}[${index}].name`,
-        message: `Field name '${name}' collides with '${owner}': both become the column '${column}'`,
-        code: "FIELD_NAME_DUPLICATE",
-      });
-      return;
-    }
-    columnOwners.set(column, name);
+    // Two names that reach one column are sibling fields the one sibling rule judges, for the
+    // whole entity at once (`validateSiblingFieldsShared`).
   });
 
   validateFieldsArray(fields, path, errors, allCollectionSlugs);
@@ -789,6 +770,12 @@ export function validateCollectionConfig(
     errors,
     allCollectionSlugs,
     (config as { status?: boolean }).status === true
+  );
+  validateSiblingFieldsShared(
+    "collection",
+    config.slug,
+    config.fields,
+    errsBase
   );
 
   validateIndexes(

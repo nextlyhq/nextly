@@ -99,10 +99,13 @@ describe("validateFieldNames, by the column each name becomes", () => {
     ).not.toThrow();
   });
 
-  it("refuses two names that become one column", () => {
+  // Two names of one column are a pair of sibling fields, which the sibling
+  // rule judges against the stored fields (a pair already held keeps working),
+  // so this check, which sees only the new list, leaves them alone.
+  it("leaves two names that become one column to the sibling rule", () => {
     expect(() =>
       validation.validateFieldNames([field("metaTitle"), field("meta_title")])
-    ).toThrow(/meta_title/);
+    ).not.toThrow();
   });
 
   // The reserved list carries both spellings of every system column
