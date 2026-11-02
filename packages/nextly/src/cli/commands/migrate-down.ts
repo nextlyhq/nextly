@@ -102,6 +102,7 @@ import {
 import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
+import { refuseUnresolvedAppAttempts } from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,
@@ -377,6 +378,14 @@ export interface MigrateDownCoreDeps {
     statementLists: ReadonlyArray<readonly string[]>
   ) => Promise<ReadonlyMap<string, string>>;
   withLock: typeof withMigrateLock;
+  /**
+   * Refuses while an app migration has an unresolved attempt that may have
+   * stopped part-way (`refuseUnresolvedAppAttempts`), its own down section's
+   * included. Asked under the lock before the plan, for the app's stream
+   * only: a plugin's history keeps its own rules. The command supplies it;
+   * absent, a caller with no migrations folder of the app's, nothing is read.
+   */
+  refuseUnresolvedAttempts?: () => Promise<void>;
   /**
    * Whether a person is at a terminal to be asked before a DOWN loses data.
    * Absent reads as no, so a rollback without consent is refused rather than
@@ -809,8 +818,37 @@ export async function migrateDownCore(
 ): Promise<MigrateDownResult> {
   const guarded = await planAndGuard(deps);
   const planned = guarded.planned;
+  const lockOptions = {
+    command: deps.lockCommand ?? "nextly migrate:down",
+    // A held lock is waited for, about a minute, and then the run stops naming its holder.
+    mode: "wait" as const,
+    logger: {
+      warn: (m: string) => deps.logger.warn(m),
+      info: (m: string) => deps.logger.info(m),
+    },
+  };
 
   if (planned.length === 0) {
+    // Nothing to roll back still refuses on an unresolved attempt, judged under
+    // the lock as a run with targets is: the command must not read as having
+    // found the history sound while an attempt stands unresolved.
+    if (
+      !deps.options.dryRun &&
+      deps.options.plugin === undefined &&
+      deps.refuseUnresolvedAttempts !== undefined
+    ) {
+      await deps.withLock(
+        lockAdapter(deps),
+        deps.dialect,
+        async () => {
+          const unresolved = await refusalOfUnresolvedAttempts(deps);
+          if (unresolved !== undefined) throw unresolved;
+        },
+        lockOptions
+      );
+    }
+    // A dry run reports the same refusal, as it does with targets.
+    if (deps.options.dryRun) await reportUnresolvedRefusal(deps);
     deps.logger.info("Nothing to roll back.");
     return { rolledBack: [] };
   }
@@ -821,6 +859,8 @@ export async function migrateDownCore(
   // disagree; so is what a real run would need the data-loss consent for, so
   // the operator can read the DOWN SQL before deciding to give it.
   if (deps.options.dryRun) {
+    // The refusal a real run makes under the lock, reported as the others are.
+    await reportUnresolvedRefusal(deps);
     deps.logger.info(`Would roll back ${planned.length} migration(s):`);
     for (const p of planned) {
       deps.logger.info(`  • ${p.filename}`);
@@ -862,6 +902,11 @@ export async function migrateDownCore(
     lockAdapter(deps),
     deps.dialect,
     async () => {
+      // Before the plan and the first write, from the ledger as it stands
+      // once the lock is held: a DOWN retried over its own stopped attempt
+      // would run statements that already ran.
+      const unresolved = await refusalOfUnresolvedAttempts(deps);
+      if (unresolved !== undefined) throw unresolved;
       // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
       const held = { ...deps, ...(await deps.readOwners?.()) };
       const { planned: current } = await planAndGuard(held, guarded.deletions);
@@ -875,18 +920,40 @@ export async function migrateDownCore(
         deps.logger.success(`Rolled back ${p.filename}`);
       }
     },
-    {
-      command: deps.lockCommand ?? "nextly migrate:down",
-      // A held lock is waited for, about a minute, and then the run stops naming its holder.
-      mode: "wait",
-      logger: {
-        warn: m => deps.logger.warn(m),
-        info: m => deps.logger.info(m),
-      },
-    }
+    lockOptions
   );
 
   return { rolledBack };
+}
+
+/** A dry run's line for the unresolved-attempt refusal a real run would make. */
+async function reportUnresolvedRefusal(
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "options" | "refuseUnresolvedAttempts" | "logger"
+  >
+): Promise<void> {
+  const unresolved = await refusalOfUnresolvedAttempts(deps);
+  if (unresolved === undefined) return;
+  deps.logger.info(
+    `✖ a real run would be refused: ${describeError(unresolved, { context: false })}`
+  );
+}
+
+/**
+ * The unresolved-attempt refusal, or undefined: a real run throws it under the
+ * lock, a dry run reports it. Never for a plugin's stream (`--plugin`).
+ */
+async function refusalOfUnresolvedAttempts(
+  deps: Pick<MigrateDownCoreDeps, "options" | "refuseUnresolvedAttempts">
+): Promise<Error | undefined> {
+  if (deps.options.plugin !== undefined) return undefined;
+  try {
+    await deps.refuseUnresolvedAttempts?.();
+    return undefined;
+  } catch (refusal) {
+    return asError(refusal);
+  }
 }
 
 // ============================================================================
@@ -1183,6 +1250,19 @@ export async function runMigrateDown(
       fileExists: () => Promise.resolve(true),
       readDownSql,
       withLock: withMigrateLock,
+      ...(plugin === undefined
+        ? {
+            refuseUnresolvedAttempts: () =>
+              refuseUnresolvedAppAttempts({
+                adapter,
+                db,
+                dialect,
+                migrationsDir,
+                logger,
+                command: "nextly migrate:down",
+              }),
+          }
+        : {}),
       interactive: isInteractiveTerminal(),
       askToDelete: askToDeleteInTerminal,
     });

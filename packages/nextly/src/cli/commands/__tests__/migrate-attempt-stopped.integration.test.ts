@@ -10,12 +10,17 @@
  *   last, so a stop in between leaves an attempt with no outcome, and the migration's state is
  *   what it was before the attempt. The same holds for `migrate:down` running a down section.
  *
+ * - Such an attempt stops the next `nextly migrate` and `migrate:down`, each once it holds the lock,
+ *   before either changes anything. The refusal judges each statement of the stopped section from
+ *   the live database: done, not done, or unknown for a statement that writes rows. Once
+ *   `migrate:resolve` records what the operator did, the commands go on.
+ *
  * The run is a real second process (`helpers/migration-run-child.ts`), because killing one is the
  * only honest way to show what a dead run leaves behind. Each test runs on a database of its own,
  * because each runs whole commands.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,6 +36,10 @@ import {
   type SchemaEventRow,
 } from "../../../domains/schema/events/schema-events-repository";
 import { ensureSchemaEventsTable } from "../../../domains/schema/events/schema-events-ddl";
+import { resolveMigration } from "../../../domains/schema/migrate/resolve";
+import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
+import { marksNoTransaction } from "../../../domains/schema/migrate/split-sql";
+import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
 import {
   LOCK_DIALECTS,
   lockWorld,
@@ -40,7 +49,8 @@ import {
 } from "../../../domains/schema/pipeline/__tests__/helpers/schema-lock-world";
 import { NextlyError } from "../../../errors/nextly-error";
 import { createLogger } from "../../utils/logger";
-import { migrateCore } from "../migrate";
+import { migrateCore, refuseUnresolvedAppAttempts } from "../migrate";
+import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
 
 const CHILD = join(__dirname, "helpers", "migration-run-child.ts");
 const NAME = "20261029_000001_attempt_stopped";
@@ -103,6 +113,72 @@ describe.each(LOCK_DIALECTS)(
         lockWaitMs: 30_000,
         ensureLedger: () => ensureSchemaEventsTable(adapter),
       });
+    }
+
+    /** `migrate:down --step 1` in this process, as the command builds it. */
+    async function migrateDown() {
+      return migrateDownCore({
+        ...(await downDatabaseDeps({ adapter, dialect })),
+        nodeEnv: "test",
+        logger,
+        options: { step: 1, allowDataLoss: true, yes: true },
+        fileExists: () => Promise.resolve(true),
+        readDownSql: filename => {
+          const content = readFileSync(join(migrationsDir, filename), "utf8");
+          return Promise.resolve({
+            sql: parseSqlSections(content).downSql,
+            transaction: !marksNoTransaction(content),
+          });
+        },
+        refuseUnresolvedAttempts: () =>
+          refuseUnresolvedAppAttempts({
+            adapter: adapter as never,
+            db: adapter.getDrizzle(),
+            dialect,
+            migrationsDir,
+            logger,
+            command: "nextly migrate:down",
+          }),
+        withLock: withMigrateLock,
+      });
+    }
+
+    /** `nextly migrate:resolve` on the file, as the command runs it. */
+    function resolveFile(mode: "applied" | "failed-cleanup") {
+      return resolveMigration({
+        mode,
+        filename: FILE,
+        dialect,
+        repo: new SchemaEventsRepository(adapter.getDrizzle(), dialect),
+        fileExists: () => Promise.resolve(true),
+        loadTargetSnapshot: () => Promise.resolve(null),
+        marksNoTransaction: () =>
+          Promise.resolve(
+            marksNoTransaction(readFileSync(join(migrationsDir, FILE), "utf8"))
+          ),
+        introspectLive: () => Promise.resolve({ tables: [] }),
+      });
+    }
+
+    /** The refusal's judgement of each statement: what the operator is told. */
+    async function refusedWith(
+      work: Promise<unknown>
+    ): Promise<Array<{ verdict: string; reason?: string }>> {
+      const error = await work.then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+      expect(NextlyError.is(error) && error.code).toBe(
+        "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
+      );
+      const attempts = (error as NextlyError).logContext?.attempts as Array<{
+        filename: string;
+        statements: Array<{ verdict: string; reason?: string }>;
+      }>;
+      expect(attempts.map(a => a.filename)).toEqual([FILE]);
+      return (attempts[0]?.statements ?? []).map(({ verdict, reason }) =>
+        reason === undefined ? { verdict } : { verdict, reason }
+      );
     }
 
     /** The migration file in the shape `migrate:create` writes, maybe marked. */
@@ -193,14 +269,6 @@ describe.each(LOCK_DIALECTS)(
       // outside the statement that was waiting).
       expect(run.lines()).not.toContain("ended ok");
       expect(await run.exited).not.toBe(0);
-    }
-
-    /** The error a run refused with, or undefined when it ran. */
-    async function refusal(work: Promise<unknown>): Promise<unknown> {
-      return work.then(
-        () => undefined,
-        (error: unknown) => (NextlyError.is(error) ? error.code : error)
-      );
     }
 
     it("keeps every attempt status in the ledger an existing install created", async () => {
@@ -372,11 +440,15 @@ describe.each(LOCK_DIALECTS)(
       // MySQL commits each schema statement in a transaction too; elsewhere the file is marked.
       const marked = dialect !== "mysql";
 
+      // A data statement last: the database cannot show whether it ran.
+      const data = `INSERT INTO ${one} (id) VALUES (1)`;
+
       beforeEach(() => {
         writeFile(
           [
             `CREATE TABLE ${one} (id integer)`,
             `CREATE TABLE ${two} (id integer)`,
+            data,
           ],
           [`DROP TABLE ${two}`, `DROP TABLE ${one}`],
           marked
@@ -402,16 +474,60 @@ describe.each(LOCK_DIALECTS)(
           expect(migrationState(rows)).toBe("pending");
           expect(hasUnresolvedAttempt(rows)).toBe(true);
 
-          // The lock lapses, and the next run takes it and stops on the attempt,
-          // changing nothing.
+          // The lock lapses, and the next `nextly migrate` and `migrate:down`
+          // each take it and stop on the attempt, changing nothing, judging
+          // each statement from the database as the kill left it.
           const settled = await databaseState();
-          expect(await refusal(migrate())).toBe(
-            "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
-          );
+          const judged = [
+            { verdict: when === "after" ? "done" : "not_done" },
+            { verdict: "not_done" },
+            { verdict: "unknown", reason: "rows" },
+          ];
+          expect(await refusedWith(migrate())).toEqual(judged);
           expect(await databaseState()).toEqual(settled);
+          expect(await refusedWith(migrateDown())).toEqual(judged);
+          expect(await databaseState()).toEqual(settled);
+
+          if (when === "after") {
+            // The operator finishes the file by hand and records it applied.
+            await adapter.executeQuery(`CREATE TABLE ${two} (id integer)`);
+            await adapter.executeQuery(data);
+            await resolveFile("applied");
+            expect((await migrate()).applied).toBe(0);
+          } else {
+            // Nothing of it ran: the attempt is cleared, and the file runs whole.
+            await resolveFile("failed-cleanup");
+            expect((await migrate()).applied).toBe(1);
+          }
+          const resolved = await databaseState();
+          expect(resolved.tables[one]).toBe(1);
+          expect(resolved.tables[two]).toBe(0);
+          expect(migrationState(await fileRows())).toBe("applied");
+          expect(hasUnresolvedAttempt(await fileRows())).toBe(false);
         },
         180_000
       );
+
+      it("refuses once the stopped file is gone from the build, until its attempt is cleared", async () => {
+        await kill(await runUntil("up", "after", firstStatement));
+        // A build that lacks the file: removed, renamed, or never shipped.
+        rmSync(join(migrationsDir, FILE));
+        const settled = await databaseState();
+
+        // The lock lapses; both commands refuse, naming the file, with nothing
+        // of it to judge, and change nothing.
+        expect(await refusedWith(migrate())).toEqual([]);
+        expect(await databaseState()).toEqual(settled);
+        expect(await refusedWith(migrateDown())).toEqual([]);
+        expect(await databaseState()).toEqual(settled);
+
+        // The operator reverses what ran and clears the attempt, which needs
+        // no file: the run goes on, with nothing of the file left to apply.
+        await adapter.executeQuery(`DROP TABLE ${one}`);
+        await resolveFile("failed-cleanup");
+        expect((await migrate()).applied).toBe(0);
+        expect(hasUnresolvedAttempt(await fileRows())).toBe(false);
+      }, 180_000);
 
       it.each(["before", "after"] as const)(
         "records a down section's attempt with no outcome when migrate:down is killed %s its first statement",
@@ -437,9 +553,30 @@ describe.each(LOCK_DIALECTS)(
           expect(migrationState(rows)).toBe("applied");
           expect(hasUnresolvedAttempt(rows)).toBe(true);
 
-          // The lock lapses, and the next run takes it; the file stays applied.
-          expect((await migrate()).applied).toBe(0);
+          // The lock lapses, and the next `nextly migrate` stops on the down
+          // section's attempt, and so does a `migrate:down` retrying it, which
+          // would otherwise run its statements again.
+          const settled = await databaseState();
+          const judged = [
+            { verdict: when === "after" ? "done" : "not_done" },
+            { verdict: "not_done" },
+          ];
+          expect(await refusedWith(migrate())).toEqual(judged);
+          expect(await databaseState()).toEqual(settled);
+          expect(await refusedWith(migrateDown())).toEqual(judged);
+          expect(await databaseState()).toEqual(settled);
+
+          // The operator reverses what of the down section ran and clears its
+          // attempt: the migration stays applied, and both commands go on.
+          if (when === "after") {
+            await adapter.executeQuery(`CREATE TABLE ${two} (id integer)`);
+          }
+          await resolveFile("failed-cleanup");
           expect(migrationState(await fileRows())).toBe("applied");
+          expect(hasUnresolvedAttempt(await fileRows())).toBe(false);
+          expect((await migrate()).applied).toBe(0);
+          expect((await migrateDown()).rolledBack).toEqual([FILE]);
+          expect(migrationState(await fileRows())).toBe("rolled_back");
         },
         180_000
       );

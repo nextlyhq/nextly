@@ -92,6 +92,8 @@ import {
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
+import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
+import { refuseUnresolvedAttempts } from "../../domains/schema/migrate/unresolved-attempt";
 import {
   mergeContributions,
   narrowToContributions,
@@ -717,6 +719,8 @@ export interface MigrateCoreDeps {
   step?: number;
   reconcileCoreFn?: typeof reconcileCore;
   runFileMigrationsFn?: typeof runFileMigrations;
+  /** The unresolved-attempt refusal; injected for tests (`refuseUnresolvedAppAttempts`). */
+  refuseUnresolvedAttemptsFn?: typeof refuseUnresolvedAppAttempts;
   /** Junction tables the config names outright; see `runFileMigrations`. */
   knownJunctions?: ReadonlySet<string>;
   withLock?: typeof withMigrateLock;
@@ -1573,6 +1577,12 @@ export async function migrateCore(
       // a deploy refused after the core reconcile would leave core's tables
       // at a release that never ran.
       await assertPluginHistoriesHold(deps);
+      // Under the lock, so the ledger read is the one no other run changes
+      // before this one writes, and before Phase 1's first write.
+      await (deps.refuseUnresolvedAttemptsFn ?? refuseUnresolvedAppAttempts)({
+        ...deps,
+        command: deps.lockCommand ?? "nextly migrate",
+      });
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does
@@ -1728,6 +1738,65 @@ export async function migrateCore(
     ran: outcome.ran,
     metadata,
   };
+}
+
+/**
+ * Refuses, reading only, while an app migration file in the folder has an
+ * unresolved attempt that may have stopped part-way (`refuseUnresolvedAttempts`):
+ * its statements are judged from the live database, and the operator records
+ * with `migrate:resolve` what they did about them. Every command that runs or
+ * rolls back app migrations asks this before its first write: `nextly migrate`
+ * and the boot migrate step through `migrateCore`, and `migrate:down`.
+ *
+ * A database with no ledger yet has no attempt to refuse on.
+ */
+export async function refuseUnresolvedAppAttempts(args: {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+  logger: CommandContext["logger"];
+  /** The command refusing, as the operator typed it. */
+  command: string;
+}): Promise<void> {
+  const hasLedger = await (
+    args.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+  ).tableExists("nextly_schema_events");
+  if (!hasLedger) return;
+  const repo = new SchemaEventsRepository(args.db, args.dialect);
+  const rows = [
+    ...(await repo.listFileApplies()),
+    ...(await repo.listFailedRollbacks()),
+  ];
+  const files = await discoverMigrations(
+    args.migrationsDir,
+    args.logger,
+    args.dialect,
+    "app"
+  );
+  await refuseUnresolvedAttempts({
+    files: files.map(m => ({
+      filename: `${m.name}.sql`,
+      upSql: m.upSql,
+      downSql: m.downSql,
+      transaction: m.transaction,
+      checksum: m.checksum,
+      // A file moving fields out of translation says exactly how to tell
+      // whether it landed.
+      ...(m.localization?.kind === "shared"
+        ? {
+            advice: sharedFileRecoveryAdvice(
+              `${m.name}.sql`,
+              m.localization.spec
+            ),
+          }
+        : {}),
+    })),
+    rows,
+    dialect: args.dialect,
+    readLive: statements => readLiveSchema(args.db, args.dialect, statements),
+    command: args.command,
+  });
 }
 
 /**

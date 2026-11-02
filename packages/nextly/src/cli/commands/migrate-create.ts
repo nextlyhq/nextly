@@ -85,6 +85,7 @@ import {
   generatePluginMigration,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
+import { assertMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
@@ -554,6 +555,8 @@ export async function runMigrateCreate(
 
   // A new address is judged by the one address rule before anything is written.
   assertMigrationAddresses(merged, latest, logger);
+  // And each new pair of sibling fields, against the fields the latest snapshot records.
+  assertMigrationSiblingFields(merged, latest, logger);
   // The rows as the previous snapshot recorded each Builder entity, for a
   // migration that writes a row for its settings alone to write back on the
   // way down. A snapshot with no settings record has none to offer.

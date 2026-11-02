@@ -80,6 +80,7 @@ import {
 } from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
+import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
@@ -91,6 +92,7 @@ import type {
   NextlySchemaSnapshot,
   Operation,
 } from "../../domains/schema/pipeline/diff/types";
+import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
@@ -463,6 +465,16 @@ export async function runChecks(args: {
   const refused = reportMigrationAddresses(args.entities, latest, logger);
   if (refused.length > 0) {
     return exitWithError(logger, addressRefusalsError(refused));
+  }
+  // Sibling fields, by the one sibling rule: a new pair fails the check; one an entity already
+  // holds (the latest snapshot records it) keeps working and is warned about once.
+  const refusedSiblings = reportMigrationSiblingFields(
+    args.entities,
+    latest,
+    logger
+  );
+  if (refusedSiblings.length > 0) {
+    return exitWithError(logger, siblingClashesErrorFor(refusedSiblings));
   }
 
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
