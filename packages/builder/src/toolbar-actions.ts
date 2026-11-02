@@ -38,6 +38,7 @@
 import {
   findNode,
   lockedWithin,
+  planConvertToComponent,
   registryNestingSource,
   saveAsPatternRefusal,
   type BlockDocument,
@@ -102,6 +103,8 @@ export type ToolbarActionId =
   | "move-down"
   | "duplicate"
   | "save-as-pattern"
+  | "save-as-component"
+  | "convert-to-component"
   | "delete";
 
 /** One button's worth of decision. */
@@ -126,6 +129,91 @@ export interface ToolbarAction {
    * remedy is one field away.
    */
   readonly reason?: string;
+  /**
+   * Offered from a menu rather than as a button of its own: the block
+   * toolbar keeps these behind its "More" button, and the context menu groups
+   * them, so the bar stays one short row however many verbs the host adds.
+   */
+  readonly inMenu?: true;
+}
+
+/**
+ * What the host offers for making components from a selection.
+ *
+ * Absent where the host has no component library to write to, and then
+ * neither verb is offered at all.
+ */
+export interface ComponentVerbsOffer {
+  /**
+   * Whether the author may create and publish components, which both verbs
+   * need: the component is created published. `false` dims both, with
+   * {@link MAKE_COMPONENT_GRANT_REFUSAL}.
+   */
+  readonly mayCreate: boolean;
+}
+
+/** What an author without the grant to make a component is told. */
+const MAKE_COMPONENT_GRANT_REFUSAL =
+  "You do not have permission to create and publish components.";
+
+/** The id a convert is planned under before the component exists. */
+const PLANNED_COMPONENT_ID = "planned-component";
+
+/**
+ * "Save as component" and "Convert to component", each enabled or dimmed with
+ * the reason, both asked of the planners rather than restated. Save shares
+ * the pattern save's selection rules; convert is planned in full, and the
+ * ops it would apply are put to the editor's lock question, since a slot's
+ * lock can refuse the placement that replaces the run.
+ */
+function componentActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  if (offer === undefined) return [];
+  const save: ToolbarAction = {
+    id: "save-as-component",
+    label: "Save as component",
+    enabled: true,
+    inMenu: true,
+  };
+  const convert: ToolbarAction = {
+    id: "convert-to-component",
+    label: "Convert to component",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayCreate) {
+    const reason = MAKE_COMPONENT_GRANT_REFUSAL;
+    return [
+      { ...save, enabled: false, reason },
+      { ...convert, enabled: false, reason },
+    ];
+  }
+  const saving = saveAsPatternRefusal(document, ids, nesting);
+  const converting = planConvertToComponent(
+    document,
+    ids,
+    { collection: "", fields: {} },
+    PLANNED_COMPONENT_ID,
+    {},
+    nesting
+  );
+  return [
+    saving === undefined
+      ? save
+      : { ...save, enabled: false, reason: compositionRefusalReason(saving) },
+    converting.problem === undefined
+      ? heldByLock(convert, ask, converting.pageOps)
+      : {
+          ...convert,
+          enabled: false,
+          reason: compositionRefusalReason(converting),
+        },
+  ];
 }
 
 /**
@@ -354,7 +442,8 @@ function manyBlockActions(
   ids: readonly string[],
   nesting: NestingSource,
   mayCreate: boolean,
-  ask?: LockQuestion
+  ask?: LockQuestion,
+  components?: ComponentVerbsOffer
 ): ToolbarAction[] {
   const many = oneAtATime(ids.length);
   const deleteLock = ids
@@ -378,6 +467,7 @@ function manyBlockActions(
       opsOf(selectionDuplication(document, ids))
     ),
     saveAction(document, ids, nesting, mayCreate),
+    ...componentActions(document, ids, nesting, components, ask),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: true },
@@ -444,7 +534,12 @@ export function toolbarActions(
    * with the lock's reason before it is pressed. Optional for a caller that
    * holds no editor; the editor's apply refuses the same ops regardless.
    */
-  lockRefusalFor?: LockQuestion
+  lockRefusalFor?: LockQuestion,
+  /**
+   * What the host offers for making components, or nothing where it has no
+   * component library: then neither verb appears.
+   */
+  components?: ComponentVerbsOffer
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -459,7 +554,8 @@ export function toolbarActions(
       ids,
       rules,
       mayCreatePattern,
-      lockRefusalFor
+      lockRefusalFor,
+      components
     );
 
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -504,6 +600,7 @@ export function toolbarActions(
         : [{ kind: "insert", node: duplication.node, at: duplication.at }]
     ),
     saveAction(document, ids, rules, mayCreatePattern),
+    ...componentActions(document, ids, rules, components, lockRefusalFor),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: deletion !== null },
