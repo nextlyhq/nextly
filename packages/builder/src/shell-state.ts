@@ -454,10 +454,10 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
         ? record.editingBreakpoint
         : DEFAULT_PREFERENCES.editingBreakpoint,
     layouts: readLayouts(record.layouts),
-    showEmptyElements:
-      typeof record.showEmptyElements === "boolean"
-        ? record.showEmptyElements
-        : DEFAULT_PREFERENCES.showEmptyElements,
+    // Always shown. The editor no longer offers to hide empty containers, so a
+    // stored false, written while it did, is read as shown: otherwise an author
+    // who once hid them would have no way to bring them back.
+    showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
   };
 }
 

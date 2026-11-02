@@ -611,15 +611,13 @@ describe("opening the Add panel from outside the shell", () => {
      * has only been scheduled: the newest preferences this shell has seen are
      * still the defaults. A token applied there computes its write from those
      * defaults and persists them, so the author's panel widths and their
-     * `showEmptyElements` are gone — from the store and from the state — while
+     * zoom are gone — from the store and from the state — while
      * the panel they asked for opens and everything on screen looks right.
      *
      * Every stored field is asserted, plus the panel: a test asserting only
      * that the panel opened passes against exactly that loss, and one
      * asserting only the record passes against a token that never applies at
-     * all. `showEmptyElements` is additionally read off the chrome attribute,
-     * because the store and the state are two separate casualties and the
-     * record alone cannot tell them apart.
+     * all.
      */
     stubContainerFits(true);
     const layouts = { "canvas,panel": { canvas: 3, panel: 1 } };
@@ -627,7 +625,7 @@ describe("opening the Add panel from outside the shell", () => {
       JSON.stringify({
         ...DEFAULT_PREFERENCES,
         leftPinned: false,
-        showEmptyElements: false,
+        zoom: 1.5,
         layouts,
       })
     );
@@ -642,15 +640,10 @@ describe("opening the Add panel from outside the shell", () => {
     );
 
     expect(screen.getByText("add panel")).toBeTruthy();
-    // Queried rather than assumed present: a selector that matched nothing
-    // would make the attribute assertion pass on `undefined`.
-    const chrome = document.querySelector(".nx-builder-chrome");
-    expect(chrome).not.toBeNull();
-    expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
     expect(JSON.parse(store.value as string)).toMatchObject({
       leftPanel: "add",
       leftPinned: false,
-      showEmptyElements: false,
+      zoom: 1.5,
       layouts,
     });
   });
@@ -694,7 +687,7 @@ describe("opening the Add panel from outside the shell", () => {
      * arrives in, the newest preferences this shell has seen are still the
      * OUTGOING store's. A token applied there computes its write from those and
      * persists them through the new store, so one workspace's saved layout and
-     * `showEmptyElements` replace another's. A count of reads cannot see this:
+     * zoom replace another's. A count of reads cannot see this:
      * it is already nonzero from the first store and a swap only takes it
      * higher, so the window is exactly where the count looks safest.
      *
@@ -710,8 +703,9 @@ describe("opening the Add panel from outside the shell", () => {
     const first = memoryStore(
       JSON.stringify({
         ...DEFAULT_PREFERENCES,
+        leftPanel: "layers",
         leftPinned: false,
-        showEmptyElements: false,
+        zoom: 1.5,
         layouts: firstLayouts,
       })
     );
@@ -719,7 +713,6 @@ describe("opening the Add panel from outside the shell", () => {
       JSON.stringify({
         ...DEFAULT_PREFERENCES,
         leftPinned: true,
-        showEmptyElements: true,
         layouts: secondLayouts,
       })
     );
@@ -733,12 +726,7 @@ describe("opening the Add panel from outside the shell", () => {
     );
     // The first store's read has landed before the swap, which is what makes
     // this a test about the SECOND store rather than about a cold mount.
-    expect(document.querySelector(".nx-builder-chrome")).not.toBeNull();
-    expect(
-      document
-        .querySelector(".nx-builder-chrome")
-        ?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)
-    ).toBe("hidden");
+    expect(screen.getByText("layers panel")).toBeTruthy();
 
     rerender(
       <BuilderShell
@@ -753,17 +741,10 @@ describe("opening the Add panel from outside the shell", () => {
     expect(JSON.parse(second.value as string)).toMatchObject({
       leftPanel: "add",
       leftPinned: true,
-      showEmptyElements: true,
+      // The incoming store's own zoom, not the outgoing store's 1.5.
+      zoom: "fit",
       layouts: secondLayouts,
     });
-    // The state the author sees, not only the bytes: the attribute is absent
-    // when empty containers are shown, so the outgoing store's `false` reaching
-    // this render would put it back.
-    expect(
-      document
-        .querySelector(".nx-builder-chrome")
-        ?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)
-    ).toBeNull();
   });
 
   it("does not reopen a manually closed panel when the SAME token survives an unrelated effect re-run", () => {
@@ -886,13 +867,10 @@ describe("preferences", () => {
     expect(screen.queryByText(/panel$/)).toBeNull();
   });
 
-  it("restores a stored showEmptyElements even when every other field matches the default", () => {
-    // The restore-on-load effect gates on `shallowEqualPreferences`, which
-    // compares fields one at a time. A field that comparator does not name
-    // reads as "unchanged" for any two records differing only in it — so a
-    // fresh session, with no panel ever opened and no layout ever dragged,
-    // matches the default on every field THIS store record sets except this
-    // one, and is exactly the case where a missing clause drops it silently.
+  it("shows empty containers even when a stored preference hid them", () => {
+    // The top bar no longer offers to hide them, so an author who once did
+    // would have no way back. A stored false is read as shown: no placeholder
+    // disappears, and the chrome never carries the hiding attribute.
     const store = memoryStore(
       JSON.stringify({ ...DEFAULT_PREFERENCES, showEmptyElements: false })
     );
@@ -900,38 +878,18 @@ describe("preferences", () => {
     render(<BuilderShell onExit={vi.fn()} store={store} />);
 
     // Queried rather than assumed present: a selector that matched nothing
-    // would make the attribute assertion below pass on `undefined`, which is
-    // not the property under test.
+    // would make the attribute assertion below pass on `undefined`.
     const chrome = document.querySelector(".nx-builder-chrome");
     expect(chrome).not.toBeNull();
-    expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
+    expect(chrome?.hasAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe(false);
   });
 
-  it("offers a labelled control for showEmptyElements, reflecting its state", () => {
-    // By NAME and by role, the same way the exit button above is asserted —
-    // an unlabelled control for a visibility affordance would repeat the exact
-    // failure this feature exists to fix.
+  it("offers no control to hide empty containers", () => {
     renderShell();
-
-    const toggle = screen.getByRole("switch", {
-      name: "Show empty containers",
-    });
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-  });
-
-  it("writes showEmptyElements through the store when the control is toggled", () => {
-    const store = memoryStore();
-    stubContainerFits(true);
-    render(<BuilderShell onExit={vi.fn()} store={store} />);
-
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Show empty containers" })
-    );
-
-    expect(store.value).not.toBeNull();
-    expect(JSON.parse(store.value as string)).toMatchObject({
-      showEmptyElements: false,
-    });
+    expect(
+      screen.queryByRole("switch", { name: "Show empty containers" })
+    ).toBeNull();
+    expect(screen.queryByText("Show empty containers")).toBeNull();
   });
 
   it("does not re-invoke onShowEmptyElementsChange when only the host's callback identity changes", () => {
@@ -966,12 +924,9 @@ describe("preferences", () => {
     );
     expect(second).not.toHaveBeenCalled();
 
-    // Toggling the preference must still reach the LATEST callback, proving
-    // the ref is read fresh rather than pinned to the first render's closure.
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Show empty containers" })
-    );
-    expect(second).toHaveBeenCalledWith(false);
+    // The value no longer changes (empty containers are always shown), so
+    // there is no later report for the latest callback to receive; the half
+    // that matters for a host's render loop is the one above.
     expect(first).toHaveBeenCalledTimes(1);
   });
 });

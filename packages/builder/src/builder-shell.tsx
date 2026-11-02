@@ -1,17 +1,12 @@
 "use client";
 
 import {
-  Label,
   PortalProvider,
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
   ShortcutProvider,
-  Switch,
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
   useShortcuts,
 } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
@@ -839,10 +834,6 @@ function ShellRegions({
   useZoomShortcuts(onZoomPick, active, claimsKeys);
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
-  // Pairs the header's visibility-toggle label with its switch. Generated
-  // rather than a literal so two shells mounted on one page — unlikely, but
-  // nothing here forbids it — cannot collide on the same id.
-  const emptyElementsToggleId = React.useId();
 
   /**
    * Whether the host can fill a panel. One predicate, so the rail's items and
@@ -956,61 +947,6 @@ function ShellRegions({
           </button>
         ) : null}
         <div className="flex min-w-0 flex-1 items-center gap-2">{topBar}</div>
-        {/*
-         * The only reachable control for `showEmptyElements` — before this it
-         * changed only by an author editing storage by hand. Lives on the
-         * shell's own chrome rather than inside a switched panel, because it
-         * has to stay visible whichever panel is open or closed, and because
-         * it is this component's own state rather than a slot a host fills.
-         *
-         * A labelled switch rather than an icon: the control governs a
-         * VISIBILITY affordance, and one an author cannot read at a glance
-         * would repeat the exact failure this feature exists to fix.
-         */}
-        <Tooltip>
-          <Label
-            htmlFor={emptyElementsToggleId}
-            className="text-[color:var(--nx-builder-text-muted)] shrink-0"
-          >
-            Show empty containers
-            {/*
-             * The SWITCH is the trigger, not the label around it.
-             *
-             * A label is not focusable, so a tooltip anchored to it is a
-             * pointer-only affordance — and this control is reached by keyboard
-             * like any other. Anchored here, hovering and focusing both reveal
-             * it, and Radix points the control's `aria-describedby` at the
-             * content while it is open.
-             */}
-            <TooltipTrigger asChild>
-              <Switch
-                id={emptyElementsToggleId}
-                checked={preferences.showEmptyElements}
-                onCheckedChange={checked =>
-                  update(current => ({
-                    ...current,
-                    showEmptyElements: checked,
-                  }))
-                }
-              />
-            </TooltipTrigger>
-          </Label>
-          {/*
-           * What the label cannot say in the width a toolbar has.
-           *
-           * "Show empty containers" names the action and not the subject: a
-           * container an author has just added holds nothing, so it renders at
-           * zero height and is invisible on the canvas — which reads as the
-           * block never having been added. The word for that state is what the
-           * control is missing, so the description gives the CONSEQUENCE of
-           * each position rather than restating the label.
-           */}
-          <TooltipContent side="bottom">
-            A container holding no blocks has no height of its own, so it cannot
-            be seen or selected on the canvas. Showing them draws a placeholder
-            in its place.
-          </TooltipContent>
-        </Tooltip>
         {/*
           Rendered by the shell, not handed to the host as a slot, because the
           shell owns preferences and this control edits one. A host drawing its

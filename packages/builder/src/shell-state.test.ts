@@ -167,10 +167,9 @@ describe("preferences round-trip", () => {
     layouts: {
       "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
     },
-    // Non-default like its neighbours above, so the round trip below actually
-    // exercises this field rather than passing on the strength of a default
-    // that both the write and a no-op read would agree on.
-    showEmptyElements: false,
+    // Always shown: the editor no longer offers to hide empty containers, so
+    // there is no other value a round trip could carry.
+    showEmptyElements: true,
     // Non-default for the same reason, and FIXED rather than fit: fit is the
     // default, and it is also what a read falls back to when it cannot make
     // sense of what was stored — so a round trip carrying fit would pass
@@ -288,12 +287,14 @@ describe("the show-empty-elements preference", () => {
     expect(readPreferences(store).showEmptyElements).toBe(true);
   });
 
-  it("reads a stored false", () => {
+  it("reads a stored false as shown, so no empty container disappears", () => {
+    // The control that wrote false is gone, and an author who once hid empty
+    // containers would have no way to bring them back.
     const store = {
       read: () => JSON.stringify({ showEmptyElements: false }),
       write: () => undefined,
     };
-    expect(readPreferences(store).showEmptyElements).toBe(false);
+    expect(readPreferences(store).showEmptyElements).toBe(true);
   });
 
   it("falls back to the default for a non-boolean", () => {
@@ -306,20 +307,8 @@ describe("the show-empty-elements preference", () => {
     expect(readPreferences(store).showEmptyElements).toBe(true);
   });
 
-  it("round-trips through a write", () => {
-    let written = "";
-    const store = {
-      read: () => written,
-      write: (v: string) => {
-        written = v;
-      },
-    };
-    writePreferences(store, {
-      ...DEFAULT_PREFERENCES,
-      showEmptyElements: false,
-    });
-    expect(readPreferences(store).showEmptyElements).toBe(false);
-  });
+  // No round trip of a stored false: hiding empty containers was removed
+  // with its control, so a false written then reads back as shown (above).
 });
 
 describe("the rail's items, in the order an author meets them", () => {
@@ -369,7 +358,7 @@ describe("preferences saved before panels had parts", () => {
       layouts: {
         "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
       },
-      showEmptyElements: false,
+      showEmptyElements: true,
     });
   });
 });
