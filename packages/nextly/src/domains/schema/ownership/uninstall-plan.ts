@@ -154,14 +154,8 @@ function assertNoEnabledDependents(input: UninstallInput): void {
  * give away, so this refuses rather than asking for consent, and names
  * everything at once so it can be cleared in one pass. Keeping the data
  * drops nothing, so `--keep-data` is the way out that needs nobody else.
- *
- * Exported for the uninstall command, which asks again once a lifecycle
- * hook's boot has synced the code-first schema, before the hook and the
- * DOWNs run.
  */
-export function assertNothingOfOthersIsDropped(
-  input: Pick<UninstallInput, "pluginName" | "dependents">
-): void {
+function assertNothingOfOthersIsDropped(input: UninstallInput): void {
   const found = input.dependents ?? [];
   if (found.length === 0) return;
   const named = found

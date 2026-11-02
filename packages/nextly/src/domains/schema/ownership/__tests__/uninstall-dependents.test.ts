@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DependentsSources } from "../../../collections/services/collection-dependents";
+import { enumCheckName } from "../../extension/enum-check";
 import type { ExtensionSchemaRecord } from "../dependent-elements";
 import type { OwnerRecord } from "../owner-registry";
 import {
@@ -324,6 +325,84 @@ describe("findUninstallDependents", () => {
         owner: expect.stringContaining("cannot be read"),
       }),
     ]);
+  });
+
+  it("reads which columns a configured check uses from its expression", async () => {
+    const contributed = row({
+      tableName: "users",
+      elementKind: "column",
+      elementName: "fx_handle",
+    });
+    // The app's checks on its own table, recorded as element rows too.
+    const recordedCheck = (name: string) =>
+      row({
+        tableName: "users",
+        elementKind: "check",
+        elementName: name,
+        ownerKind: "app",
+        ownerId: "app",
+        migratedBy: "app",
+      });
+    const found = await find(
+      [row({}), contributed],
+      sources({
+        extension: schema({
+          specs: [
+            {
+              name: "users",
+              columns: [],
+              checks: [
+                { name: "ck_users_price", sql: '"price" >= 0' },
+                // CONTROL: one naming the contributed column counts.
+                { name: "ck_users_handle", sql: "length(`FX_HANDLE`) > 2" },
+              ],
+            },
+          ] as unknown as ExtensionSchemaRecord["specs"],
+        }),
+      }),
+      [recordedCheck("ck_users_price"), recordedCheck("ck_users_handle")]
+    );
+    expect(found).toEqual([
+      {
+        kind: "check",
+        name: "ck_users_handle",
+        table: "users",
+        owner: expect.stringContaining(
+          'the app, whose expression names column "fx_handle"'
+        ),
+      },
+    ]);
+  });
+
+  it("describes the check an enum column contributed to the table by that column", async () => {
+    const tier = { name: "tier", enumValues: ["a", "b"], contributedBy: SSO };
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          entityColumns: new Map([
+            ["users", [tier]],
+          ]) as unknown as ExtensionSchemaRecord["entityColumns"],
+        }),
+      }),
+      [
+        row({
+          tableName: "users",
+          elementKind: "check",
+          elementName: enumCheckName("users", tier),
+          ownerId: "sso",
+          migratedBy: "plugin:sso",
+        }),
+      ]
+    );
+    expect(found).toEqual([]);
   });
 
   it("CONTROL: never counts the plugin's own schema", async () => {

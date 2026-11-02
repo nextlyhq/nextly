@@ -460,6 +460,182 @@ describe("plugins uninstall asks again what depends on it once the hook's boot i
   });
 });
 
+describe("plugins uninstall decides again over what the hook's boot left", () => {
+  const base = {
+    ownerKind: "plugin",
+    ownerId: "@acme/fx",
+    migratedBy: "plugin:@acme/fx",
+    ownerVersion: null,
+    schemaVersion: null,
+    state: "active",
+  };
+  const tableRow = (tableName: string) => ({
+    ...base,
+    tableName,
+    elementKind: "table",
+    elementName: "",
+  });
+
+  /**
+   * A database recording fx__notes as the plugin's, whose hook path boots,
+   * creating `created` and recording it the plugin's, then runs the hook.
+   */
+  function bootCreating(created: string) {
+    const rows = [tableRow("fx__notes")];
+    const db = {
+      select: () => ({
+        from: () => Object.assign([...rows], { where: () => [...rows] }),
+      }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    };
+    const order: string[] = [];
+    const runLifecycleHook = vi.fn(
+      async (
+        _plugin: LifecyclePlugin,
+        _hook: "onInstall" | "onUninstall",
+        _opts: { keepData: boolean },
+        beforeHook?: () => Promise<void>
+      ) => {
+        order.push("boot");
+        rows.push(tableRow(created));
+        await beforeHook?.();
+        order.push("onUninstall");
+      }
+    );
+    const dropped = droppedByDowns(async (_plugin, down) => {
+      order.push(`down:${down.moduleName}`);
+      return 1;
+    });
+    const liveTables = vi.fn(dropped.liveTables);
+    return {
+      order,
+      liveTables,
+      deps: (over: Partial<PluginLifecycleDeps> = {}) =>
+        deps({
+          db: db as never,
+          runLifecycleHook,
+          runDown: dropped.runDown,
+          liveTables,
+          ...over,
+        }),
+    };
+  }
+
+  it("refuses before the hook and any DOWN when the boot created a table no DOWN drops, and puts the record back", async () => {
+    const boot = bootCreating("fx__extra");
+    const forgetPlugin = vi.fn(async () => undefined);
+    const states: string[] = [];
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: false, consent: EVERY_DELETION },
+        boot.deps({
+          forgetPlugin,
+          recordLifecycle: vi.fn(async (_plugin, record) => {
+            states.push(record.state);
+          }),
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "down-leaves-tables", tables: ["fx__extra"] },
+    });
+    expect(boot.order).toEqual(["boot"]);
+    expect(forgetPlugin).not.toHaveBeenCalled();
+    expect(states).toEqual(["uninstalling", "installed"]);
+  });
+
+  it("checks a table the boot created, and its DOWN drops, is gone before forgetting the plugin", async () => {
+    // 0002's DOWN drops fx__0002_more (see `prepareDowns` above).
+    const boot = bootCreating("fx__0002_more");
+    const forgetPlugin = vi.fn(async () => undefined);
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      boot.deps({ forgetPlugin })
+    );
+    expect(boot.order).toEqual([
+      "boot",
+      "onUninstall",
+      "down:0002_more",
+      "down:0001_init",
+    ]);
+    // The check after the DOWNs read the rebuilt plan's tables.
+    expect(boot.liveTables.mock.calls.at(-1)?.[0]).toEqual([
+      "fx__notes",
+      "fx__0002_more",
+    ]);
+    expect(forgetPlugin).toHaveBeenCalled();
+  });
+});
+
+describe("plugins uninstall with nothing applied to undo what it added elsewhere", () => {
+  // A development push added an index to the app's table and recorded it the
+  // plugin's; no module of the plugin is applied.
+  const row = {
+    tableName: "app_notes",
+    elementKind: "index",
+    elementName: "fx_idx",
+    ownerKind: "plugin",
+    ownerId: "@acme/fx",
+    migratedBy: "plugin:@acme/fx",
+    ownerVersion: null,
+    schemaVersion: null,
+    state: "active",
+  };
+  const db = {
+    select: () => ({
+      from: () => Object.assign([row], { where: () => [row] }),
+    }),
+    insert: () => ({ values: () => Promise.resolve() }),
+  };
+  const nothingApplied = deps({}).plugins.map(p => ({ ...p, modules: [] }));
+
+  it("refuses before the hook and before recording anything while the element is there", async () => {
+    const runLifecycleHook = vi.fn(async () => {});
+    const recordLifecycle = vi.fn(async () => {});
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: false, consent: EVERY_DELETION },
+        deps({
+          db: db as never,
+          plugins: nothingApplied,
+          runLifecycleHook,
+          recordLifecycle,
+          liveElements: vi.fn(
+            async () =>
+              new Map([
+                ["app_notes", [{ kind: "index" as const, name: "fx_idx" }]],
+              ])
+          ),
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      publicMessage: expect.stringContaining(
+        "1 element(s) on other owners' tables"
+      ),
+      logContext: {
+        reason: "no-applied-module",
+        elements: [{ table: "app_notes", kind: "index", name: "fx_idx" }],
+      },
+    });
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(recordLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("CONTROL: forgets it once the element is gone", async () => {
+    const forgetPlugin = vi.fn(async () => undefined);
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({ db: db as never, plugins: nothingApplied, forgetPlugin })
+    );
+    expect(forgetPlugin).toHaveBeenCalled();
+  });
+});
+
 describe("what install reports", () => {
   it("counts tables, not owner rows", async () => {
     // One table, with an index row on it and a column the plugin added to

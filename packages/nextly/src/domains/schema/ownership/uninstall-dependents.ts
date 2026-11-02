@@ -35,6 +35,7 @@ import {
   findCollectionDependents,
   type DependentsSources,
 } from "../../collections/services/collection-dependents";
+import { enumCheckName } from "../extension/enum-check";
 import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
 import {
@@ -95,7 +96,38 @@ interface CompiledUser {
   /** The table the element is on: the asked-about table, or one whose key points into it. */
   table: string;
   columns: readonly string[];
+  /**
+   * A check's SQL. A check names no columns its declaration lists, so the
+   * ones it uses are read from the expression (`expressionMayName`).
+   */
+  expression?: string;
   owner: ElementOnTable["owner"];
+}
+
+/** A name a column could have that an expression could only spell as a word. */
+const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+
+/**
+ * Whether a check's expression may use `column`: whether the column's name
+ * appears in it as a word, quoted or not, in any case. A check can reach a
+ * column only by naming it, so an expression without the name cannot use
+ * it; one that has it, even inside a string literal, counts. A column whose
+ * name is not a plain word cannot be looked for that way, so every check
+ * counts as using it: the guard does not assume what it could not read.
+ */
+function expressionMayName(expression: string, column: string): boolean {
+  if (!PLAIN_IDENTIFIER.test(column)) return true;
+  const words = expression.match(/[A-Za-z_][A-Za-z0-9_$]*/g) ?? [];
+  return words.some(word => word.toLowerCase() === column.toLowerCase());
+}
+
+/** Whether a compiled element uses `column`, by its columns or its expression. */
+function usesColumn(user: CompiledUser, column: string): boolean {
+  return (
+    user.columns.includes(column) ||
+    (user.expression !== undefined &&
+      expressionMayName(user.expression, column))
+  );
 }
 
 /** Who contributed an element to `table`, when the compiled schema records one. */
@@ -140,6 +172,37 @@ function indexUsers(
     owner: contributorOf(schema, table, "index", index.name) ?? tableOwner,
   }));
   return [...onEntity, ...declared];
+}
+
+/**
+ * The checks on `table`: a declared table's, by their expressions, and the
+ * one each enum column contributed to an entity's table implies, by that
+ * column, under the name `enumCheckName` gives it.
+ */
+function checkUsers(
+  schema: ExtensionSchemaRecord,
+  table: string,
+  tableOwner: ElementOnTable["owner"]
+): CompiledUser[] {
+  const spec = schema.specs.find(candidate => candidate.name === table);
+  const declared = (spec?.checks ?? []).map(check => ({
+    kind: "check" as const,
+    name: check.name,
+    table,
+    columns: [],
+    expression: check.sql,
+    owner: contributorOf(schema, table, "check", check.name) ?? tableOwner,
+  }));
+  const ofEnums = (schema.entityColumns.get(table) ?? [])
+    .filter(column => (column.enumValues ?? []).length > 0)
+    .map(column => ({
+      kind: "check" as const,
+      name: enumCheckName(table, column),
+      table,
+      columns: [column.name],
+      owner: column.contributedBy ?? tableOwner,
+    }));
+  return [...declared, ...ofEnums];
 }
 
 /**
@@ -194,6 +257,7 @@ function compiledColumnUsers(
   for (const user of [
     ...indexUsers(schema, table, tableOwner),
     ...keyUsers(schema, table, tableOwner),
+    ...checkUsers(schema, table, tableOwner),
   ]) {
     const key = ownerRecordKey({
       tableName: user.table,
@@ -205,7 +269,11 @@ function compiledColumnUsers(
       key,
       known === undefined
         ? user
-        : { ...known, columns: [...known.columns, ...user.columns] }
+        : {
+            ...known,
+            columns: [...known.columns, ...user.columns],
+            expression: known.expression ?? user.expression,
+          }
     );
   }
   return users;
@@ -309,17 +377,26 @@ function compiledUsersOf(
 ): void {
   for (const user of compiled.values()) {
     if (isThePlugin(user.owner, pluginName)) continue;
-    if (!user.columns.includes(columnName)) continue;
+    if (!usesColumn(user, columnName)) continue;
     found.add({
       kind: kindName(user.kind),
       name: user.name,
       table: user.table,
-      owner:
-        user.table === table
-          ? `${describeOwner(user.owner)}, using column "${columnName}"`
-          : `${describeOwner(user.owner)}, referencing column "${table}.${columnName}"`,
+      owner: `${describeOwner(user.owner)}, ${howItUses(user, table, columnName)}`,
     });
   }
+}
+
+/** How a compiled element uses a column the plugin contributed, for the refusal. */
+function howItUses(
+  user: CompiledUser,
+  table: string,
+  columnName: string
+): string {
+  if (user.table !== table)
+    return `referencing column "${table}.${columnName}"`;
+  if (user.columns.includes(columnName)) return `using column "${columnName}"`;
+  return `whose expression names column "${columnName}" (a check's columns are read from its expression, so a mention counts)`;
 }
 
 /**
