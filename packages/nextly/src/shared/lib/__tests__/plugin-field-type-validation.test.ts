@@ -24,6 +24,7 @@ import type {
   PluginFieldValidationResult,
 } from "../../../plugins/contributions";
 import {
+  issueOrigin,
   validateEntryData,
   type EntryWriteContext,
   type ValidatableField,
@@ -118,6 +119,36 @@ describe("plugin field-type validation", () => {
         code: "CUSTOM",
         message: "Document exceeds the node limit.",
       },
+    ]);
+  });
+
+  it("tells an issue addressed outside the field at its path, and keeps the field that found it", async () => {
+    // The path is the validator's to choose; whether its caller may be told
+    // the issue follows the read rules of the field that found it.
+    registerDocument(() => [
+      { path: "", message: "Whole document refused" },
+      { path: "title", message: "Sibling refused" },
+      { path: "bodyCopy", message: "Look-alike refused" },
+      { path: "body.nodes[0]", message: "Inside refused" },
+    ]);
+
+    const issues = await validateEntryData(
+      { body: { nodes: [] } },
+      [{ name: "body", type: "document" }],
+      { mode: "create" }
+    );
+
+    expect(issues.map(issue => issue.path)).toEqual([
+      "",
+      "title",
+      "bodyCopy",
+      "body.nodes[0]",
+    ]);
+    expect(issues.map(issueOrigin)).toEqual([
+      "body",
+      "body",
+      "body",
+      "body.nodes[0]",
     ]);
   });
 

@@ -38,6 +38,7 @@ import {
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
   validateFieldBasicsShared,
+  validateSiblingFieldsShared,
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
@@ -180,8 +181,7 @@ export const RESERVED_FIELD_GROUP_SLUGS = [
 function validateField(
   field: unknown,
   path: string,
-  errors: FieldGroupValidationError[],
-  seenNames: Set<string>
+  errors: FieldGroupValidationError[]
 ): void {
   if (!field || typeof field !== "object") {
     return;
@@ -198,7 +198,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldBasicsShared(f, path, errsBase, seenNames);
+  validateFieldBasicsShared(f, path, errsBase);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
@@ -271,11 +271,9 @@ function validateFieldsArray(
   basePath: string,
   errors: FieldGroupValidationError[]
 ): void {
-  const seenNames = new Set<string>();
-
   fields.forEach((field, index) => {
     const fieldPath = `${basePath}[${index}]`;
-    validateField(field, fieldPath, errors, seenNames);
+    validateField(field, fieldPath, errors);
   });
 }
 
@@ -412,6 +410,12 @@ export function validateFieldGroupConfig(
   validateSlugShared(config.slug, errsBase, "fieldGroup");
 
   validateFields(config.fields, errors);
+  validateSiblingFieldsShared(
+    "fieldGroup",
+    config.slug,
+    config.fields,
+    errsBase
+  );
 
   return {
     valid: errors.length === 0,

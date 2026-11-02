@@ -221,7 +221,15 @@ export async function queryRows<T>(
   dialect: SupportedDialect,
   text: string
 ): Promise<T[]> {
-  const query = sql.raw(text);
+  return querySqlRows<T>(db, dialect, sql.raw(text));
+}
+
+/** The same reader for a query composed with Drizzle's `sql` template. */
+export async function querySqlRows<T>(
+  db: unknown,
+  dialect: SupportedDialect,
+  query: SQL
+): Promise<T[]> {
   return dialect === "sqlite"
     ? (db as { all(q: unknown): T[] }).all(query)
     : extractRows<T>(await (db as PgMysqlExecute).execute(query), dialect);

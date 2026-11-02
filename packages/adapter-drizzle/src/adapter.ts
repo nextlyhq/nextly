@@ -2895,8 +2895,13 @@ export abstract class DrizzleAdapter {
     return [];
   }
 
-  /** The registered table object, or the error every CRUD method throws without one. */
-  private resolvedTableObject(table: string): Record<string, unknown> {
+  /**
+   * The registered table object, or the error every CRUD method throws without one.
+   * Protected so each dialect's own statement builders (a transaction's insert, a
+   * multi-row insert) refuse a table the resolver does not hold exactly as the
+   * shared methods do, before any SQL is built or run.
+   */
+  protected resolvedTableObject(table: string): Record<string, unknown> {
     const tableObj = this.getTableObject(table);
     if (!tableObj || typeof tableObj !== "object") {
       throw tableNotRegisteredError(table);

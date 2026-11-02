@@ -13,6 +13,7 @@ import {
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
+import { announceMode } from "../environment";
 import { connectionFailure, databaseEnvError } from "../errors/areas/database";
 
 import type { Logger } from "./logger";
@@ -95,6 +96,9 @@ export function detectDialectFromUrl(
  * @returns Validation result with errors if any
  */
 export function validateDatabaseEnv(): DatabaseEnvValidation {
+  // Every command that reaches a database checks its settings here first, so
+  // this is where the run names its mode and where its URL came from.
+  announceMode();
   const errors: string[] = [];
   let problem: DatabaseEnvValidation["problem"];
   const databaseUrl = process.env.DATABASE_URL;
@@ -170,6 +174,9 @@ export async function createCliAdapter(
   options: CreateCliAdapterOptions = {}
 ): Promise<CLIDatabaseAdapter> {
   const { logger } = options;
+  // A command may connect without the settings check first, as
+  // `plugins install` does; it names its mode here instead (once a run).
+  announceMode();
 
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL;
   let dialect = options.dialect;
@@ -216,6 +223,14 @@ export async function createCliAdapter(
     const adapter = await createAdapterFromEnv(
       schema === DEFAULT_POSTGRES_SCHEMA ? undefined : { schema }
     );
+    // The static system tables, resolvable by name from the moment the adapter exists. The
+    // adapter writes only to a table its resolver holds, and several commands install no resolver
+    // of their own before they write one: the schema lock seeds its field-group row through a
+    // transaction insert, inside `migrate:resolve`, `migrate:baseline`, `migrate:down`, `upgrade`
+    // and plugin install and uninstall. A command that installs its own resolver replaces this one.
+    // Loaded here, as the factory is, so the CLI's light entry points do not import the tables.
+    const { installRegistryResolver } = await import("./registry-resolver");
+    installRegistryResolver(adapter);
     return adapter;
   } catch (error) {
     // Read here, once, so every command that opens a database ends with the same code for it.
