@@ -93,8 +93,13 @@ export interface TokensPanelProps {
   /** What the last save said, when it failed. */
   issue?: string;
   /**
-   * Start the preview on Dark whatever the device says. Without it the
-   * preview follows the device's scheme, as the canvas does.
+   * Which mode the preview opens on.
+   *
+   * - `true`: Dark, whatever the device prefers.
+   * - `false`: Light, whatever the device prefers.
+   * - omitted: the device's own scheme, followed live, as the canvas does.
+   *
+   * Either way the author can switch it afterwards.
    */
   prefersDark?: boolean;
   /** Why there are no variables to show: a read in flight, or one that failed. */
@@ -118,14 +123,14 @@ export function TokensPanel({
   supplied,
   issue,
   absence = "pending",
-  prefersDark = false,
+  prefersDark,
   readOnly = false,
   headerActions,
 }: TokensPanelProps): React.JSX.Element {
   // The device's scheme until the author picks one, as the canvas shows it.
   const device = usePrefersDark();
-  const [picked, setMode] = React.useState<TokenMode | null>(
-    prefersDark ? "dark" : null
+  const [picked, setMode] = React.useState<TokenMode | null>(() =>
+    statedPreview(prefersDark)
   );
   const mode: TokenMode = picked ?? (device ? "dark" : "light");
   const [query, setQuery] = React.useState("");
@@ -385,6 +390,15 @@ function searched<
       ),
     }))
     .filter(group => group.entries.length > 0);
+}
+
+/**
+ * The mode a host asked the preview to open on, or `null` to follow the
+ * device: `false` is an explicit choice of light, not an absence.
+ */
+function statedPreview(prefersDark: boolean | undefined): TokenMode | null {
+  if (prefersDark === undefined) return null;
+  return prefersDark ? "dark" : "light";
 }
 
 /**
