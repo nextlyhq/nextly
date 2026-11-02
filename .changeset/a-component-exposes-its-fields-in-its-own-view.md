@@ -41,5 +41,5 @@ content, is refused with the reason.
 
 The engine gains an `envelope` op, so an exposure edit is one undo step like any
 other edit. A new field's id stays clear of every id the component's live
-definition still uses, read from a new `/component-facts` route, which also
-counts the pages that place the component.
+definition still uses or has retired, read from a new `/component-facts`
+route, which also counts the documents that place the component directly.

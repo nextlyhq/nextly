@@ -350,6 +350,14 @@ describe("a component holding a malformed field entry", () => {
       exposed: [
         null,
         { id: 4 },
+        { id: "nopath", label: "No path", nodeId: "c1", type: "text" },
+        {
+          id: "odd",
+          label: "Odd",
+          nodeId: "c1",
+          propPath: "title",
+          type: "odd",
+        },
         {
           id: "title",
           label: "Title",
