@@ -113,9 +113,16 @@ export function BuilderToolbar({
       <div className="ml-auto flex items-center gap-2">
         {/* Adding is an edit, so a read-only entity has no add here. */}
         {!locked && (
-          <Button variant="outline" size="sm" onClick={onAddField}>
+          // Icon only on a phone, so the entity's name keeps its room; the
+          // label stays its accessible name at every width.
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Add field"
+            onClick={onAddField}
+          >
             <Plus className="h-4 w-4" />
-            Add field
+            <span className="hidden sm:inline">Add field</span>
           </Button>
         )}
         {/* Settings stays enabled when locked so the config can be viewed

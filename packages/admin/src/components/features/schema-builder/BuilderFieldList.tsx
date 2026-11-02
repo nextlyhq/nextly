@@ -128,7 +128,10 @@ export function BuilderFieldList({
                       onEditField={onEditField}
                       onDeleteField={onDeleteField}
                       onDuplicateField={onDuplicateField}
-                      onAddAfter={readOnly ? undefined : addAfter}
+                      // Read-only rows take no "/": a locked card has no key
+                      // handling at all (SortableRow's isFieldLocked), so the
+                      // one guard is there rather than a second one here.
+                      onAddAfter={addAfter}
                     />
                     {isContainer && onlyField && (
                       <NestedFieldGroup
