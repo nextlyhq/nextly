@@ -761,6 +761,16 @@ export type {
   SiteTokenSet,
   TokenMode,
 } from "./style/site-tokens";
+// Light and dark across files: the DTCG theme (resolver) file, and one file
+// per mode as Figma imports and exports variables.
+export {
+  RESOLVER_VERSION,
+  modeFilesToTokens,
+  resolverToTokens,
+  tokensToFigma,
+  tokensToResolver,
+} from "./style/dtcg-modes";
+export type { ModeFile } from "./style/dtcg-modes";
 // A colour written as a value rather than through a variable, which the
 // inspector marks as not adapted to dark mode.
 export { isRawColour } from "./style/raw-colour";
@@ -770,6 +780,7 @@ export {
   NEXTLY_EXTENSION,
   dtcgToTokens,
   isKind,
+  resolveAliases,
   tokensToDtcg,
   familyPartKind,
   readFamilyList,

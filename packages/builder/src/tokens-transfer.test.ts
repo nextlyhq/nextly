@@ -20,7 +20,15 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { exportCss, exportDtcg, importDtcg } from "./tokens-transfer";
+import {
+  applyImport,
+  exportCss,
+  exportDtcg,
+  exportDtcgWithTheme,
+  exportForFigma,
+  importDtcg,
+  planImport,
+} from "./tokens-transfer";
 
 /** A site whose second token is RENAMED, so identity and name differ. */
 const SITE: SiteTokenSet = {
@@ -1439,5 +1447,200 @@ describe("a document nested past what the reader can name", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.skipped.join(" ")).toContain("g0.g1.g2.g3.g4.bad");
+  });
+});
+
+describe("an import is planned before anything changes", () => {
+  const MINE: SiteTokenSet = {
+    tokens: [
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      { name: "color.paper", kind: "color", values: { light: "#ffffff" } },
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+    ],
+  };
+  const FILE = exportDtcg({
+    tokens: [
+      // Unchanged.
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      // Changed: adds a dark value the site lacks, clashing with nothing.
+      {
+        name: "color.paper",
+        kind: "color",
+        values: { light: "#ffffff", dark: "#0b0f19" },
+      },
+      // A conflict: both hold a light value, and they differ.
+      { name: "color.ink", kind: "color", values: { light: "#222222" } },
+      // Added.
+      { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+      // Skipped: a composite this site has no kind for.
+      { name: "shadow.card", kind: "custom", values: { light: "x" } },
+    ],
+  }).text;
+
+  it("sorts the file into added, changed, unchanged and conflicts", () => {
+    const plan = planImport(
+      [{ name: "variables.tokens.json", text: FILE }],
+      MINE
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added.map(t => t.name)).toEqual(["color.brand"]);
+    expect(plan.changed.map(t => t.name)).toEqual(["color.paper"]);
+    expect(plan.unchanged.map(t => t.name)).toEqual(["space.4"]);
+    expect(
+      plan.conflicts.map(c => [c.mine.values.light, c.imported.values.light])
+    ).toEqual([["#111111", "#222222"]]);
+  });
+
+  it("changes nothing by itself", () => {
+    const before = JSON.stringify(MINE);
+    planImport([{ name: "variables.tokens.json", text: FILE }], MINE);
+    expect(JSON.stringify(MINE)).toBe(before);
+  });
+
+  it("applies the author's choice per conflict", () => {
+    const plan = planImport(
+      [{ name: "variables.tokens.json", text: FILE }],
+      MINE
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    const ink = (choice: "keep" | "use") => {
+      const result = applyImport(
+        plan,
+        MINE,
+        new Map([[plan.conflicts[0]!.identity, choice]])
+      );
+      if (!result.ok) throw new Error(result.error);
+      return result.tokens.tokens.find(t => t.name === "color.ink")?.values
+        .light;
+    };
+    expect(ink("keep")).toBe("#111111");
+    expect(ink("use")).toBe("#222222");
+  });
+
+  it("takes the imported side of a conflict when no choice was made", () => {
+    const plan = planImport(
+      [{ name: "variables.tokens.json", text: FILE }],
+      MINE
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, MINE, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.tokens.tokens.map(t => t.name)).toEqual([
+      "color.ink",
+      "color.paper",
+      "space.4",
+      "color.brand",
+    ]);
+    expect(
+      result.tokens.tokens.find(t => t.name === "color.paper")?.values.dark
+    ).toBe("#0b0f19");
+  });
+
+  it("lists a composite this site has no kind for as skipped", () => {
+    const plan = planImport(
+      [
+        {
+          name: "type.tokens.json",
+          text: JSON.stringify({
+            heading: {
+              $type: "typography",
+              $value: {
+                fontFamily: "Inter",
+                fontSize: { value: 40, unit: "px" },
+              },
+            },
+            gap: { $type: "dimension", $value: { value: 8, unit: "px" } },
+          }),
+        },
+      ],
+      { tokens: [] }
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added.map(t => t.name)).toEqual(["gap"]);
+    expect(plan.skipped.join(" ")).toMatch(/"heading".*typography/);
+  });
+
+  it("refuses a file that is not JSON, naming it", () => {
+    const plan = planImport([{ name: "broken.json", text: "{" }], MINE);
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.error).toMatch(/broken\.json/);
+  });
+
+  it("reads a token file with its theme file, wherever the theme came from", () => {
+    const made = exportDtcgWithTheme({
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#1d2b6b", dark: "#8fa7ff" },
+        },
+      ],
+    });
+    // As another tool would write it: without this system's own extension,
+    // so the dark value can only come from the theme file.
+    const files = made.map(file => ({
+      name: file.filename,
+      text: file.filename.endsWith(".resolver.json")
+        ? file.text
+        : JSON.stringify(JSON.parse(file.text), (key, value: unknown) =>
+            key === "$extensions" ? undefined : value
+          ),
+    }));
+    const plan = planImport(files, { tokens: [] });
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added[0]?.values).toEqual({
+      light: "#1d2b6b",
+      dark: "#8fa7ff",
+    });
+  });
+
+  it("reads Figma's one file per mode", () => {
+    const made = exportForFigma({
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#1d2b6b", dark: "#8fa7ff" },
+        },
+      ],
+    });
+    const plan = planImport(
+      made.map(file => ({ name: file.filename, text: file.text })),
+      { tokens: [] }
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added[0]?.values).toEqual({
+      light: "#1D2B6B",
+      dark: "#8FA7FF",
+    });
+  });
+});
+
+describe("the exports' files", () => {
+  const DARK: SiteTokenSet = {
+    tokens: [
+      {
+        name: "color.brand",
+        kind: "color",
+        values: { light: "#1d2b6b", dark: "#8fa7ff" },
+      },
+    ],
+  };
+
+  it("adds a theme file to the DTCG export only when there are dark values", () => {
+    expect(exportDtcgWithTheme(DARK).map(f => f.filename)).toEqual([
+      "variables.tokens.json",
+      "variables.resolver.json",
+    ]);
+    expect(exportDtcgWithTheme(SITE).map(f => f.filename)).toEqual([
+      "variables.tokens.json",
+    ]);
+  });
+
+  it("writes one Figma file per mode", () => {
+    expect(exportForFigma(DARK).map(f => f.filename)).toEqual([
+      "light.tokens.json",
+      "dark.tokens.json",
+    ]);
   });
 });
