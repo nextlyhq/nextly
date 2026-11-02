@@ -63,6 +63,11 @@ interface VersionItem {
   author: { kind?: string; id: string | null; name: string | null } | null;
 }
 
+/** The memos collection's slug, one per dialect and storage layout. */
+function memosSlug(dialect: TestDialect, storage: StorageMode): string {
+  return `memos-${dialect}${storage.perLanguageStorage ? "-per-language" : ""}`;
+}
+
 async function boot(
   dialect: TestDialect,
   storage: StorageMode
@@ -99,10 +104,10 @@ async function boot(
           }),
         ],
       }),
-      // Its slug per dialect: an overflow is reported once per process for
-      // each collection, and the dialects share one process.
+      // Its slug per dialect and storage layout: an overflow is reported once
+      // per process for each collection, and they all share one process.
       defineCollection({
-        slug: `memos-${dialect}`,
+        slug: memosSlug(dialect, storage),
         versions: true,
         fields: [text({ name: "title" }), text({ name: "status" })],
       }),
@@ -337,7 +342,7 @@ describe.each(
 
     it("marks a status too long for the column as shortened, keeps it whole in the snapshot, and reports it once", async () => {
       const t = await boot(dialect, storage);
-      const collection = `memos-${dialect}`;
+      const collection = memosSlug(dialect, storage);
       const reader = await keyNamed(t, "Reader", [`read-${collection}`]);
       const error = vi.spyOn(
         t.getService("logger") as { error: (...args: unknown[]) => void },
@@ -405,13 +410,23 @@ describe.each(
       );
       // Two captures over the first version, kept to two: the write that lost
       // the race inserts third and must see the winner's version to remove
-      // the first.
+      // the first. They record the language the create's version did: one
+      // whose values are kept per language is labelled with it, and retention
+      // keeps each language's latest, so an unlabelled capture beside it would
+      // leave the first standing as its own language's latest.
+      const [first] = (
+        await t.adapter.select<{ entryId: string; locale: string | null }>(
+          "nextly_versions",
+          {}
+        )
+      ).filter(row => row.entryId === id);
       await captureConcurrently(t, {
         ref: notesRef(id),
         status: "published",
         snapshot: { title: "x" },
         lifecycle: true,
         maxPerDoc: 2,
+        locale: first?.locale ?? null,
       });
       expect(await versionNumbersOf(t, id)).toEqual([2, 3]);
     }, 120_000);
