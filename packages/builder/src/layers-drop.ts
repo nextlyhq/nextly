@@ -447,6 +447,24 @@ function depthAt(gap: Gap, x: number, left: number): number {
   return Math.max(below?.depth ?? 0, Math.min(wanted, deepest));
 }
 
+/**
+ * Whether a gap and a depth name the place the dragged block already holds:
+ * its own row lies between the rows either side of the gap, and the depth is
+ * its own.
+ */
+function isOwnPlace(
+  rows: readonly LayersRow[],
+  gap: Gap,
+  draggedId: string,
+  depth: number
+): boolean {
+  const own = rows.findIndex(row => row.id === draggedId);
+  if (own === -1 || rows[own]?.depth !== depth) return false;
+  const above = gap.above === undefined ? -1 : rows.indexOf(gap.above);
+  const below = gap.below === undefined ? rows.length : rows.indexOf(gap.below);
+  return above < own && own < below;
+}
+
 /** The move to `to`, judged by the placement rule and then the locks. */
 function judged(
   placement: LayersPlacement,
@@ -492,6 +510,11 @@ export function layersDrop(input: LayersDropInput): LayersDropResult {
   if (gap === undefined) return NONE;
 
   const depth = depthAt(gap, pointer.x, input.left);
+  // The gap the block was lifted from, at the depth it had, is where it
+  // already is. Asked of its own row rather than of the rows either side:
+  // those can sit in two different slots of one container, and either one
+  // would move the block into the wrong slot.
+  if (isOwnPlace(rows, gap, draggedId, depth)) return NONE;
   const aimed = positionFor(document, placement.sources.components, gap, depth);
   const to =
     aimed === undefined

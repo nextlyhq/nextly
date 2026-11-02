@@ -14,7 +14,9 @@
  */
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   registerBlocks,
+  type ComponentLookup,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -117,7 +119,9 @@ beforeAll(() => {
         }) as DOMRect;
       const index = this.getAttribute("data-tree-index");
       if (this.getAttribute("role") === "treeitem" && index !== null) {
-        return box(Number(index) * ROW, ROW);
+        // Moved up by however far the tree has scrolled, as a real one is.
+        const scrolled = this.closest(".nx-layers-panel__tree")?.scrollTop ?? 0;
+        return box(Number(index) * ROW - scrolled, ROW);
       }
       if (
         this.classList.contains("nx-layers-panel__tree") ||
@@ -205,16 +209,20 @@ let editorRef: EditorState | null = null;
 function Host({
   document,
   refuseApply = false,
+  definitions,
 }: {
   document: BlockDocument;
   /** An editor whose apply refuses every op, as one refusing a stale move. */
   refuseApply?: boolean;
+  /** The component definitions the panel judges instances by. */
+  definitions?: ComponentLookup;
 }): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
   return (
     <LayersPanel
       editor={refuseApply ? { ...editor, apply: () => null } : editor}
+      {...(definitions === undefined ? {} : { definitions })}
     />
   );
 }
@@ -421,6 +429,41 @@ describe("dragging a Layers row", () => {
     expect(Number.parseFloat(notice.style.left)).toBeGreaterThanOrEqual(300);
     expect(Number.parseFloat(notice.style.top)).toBeGreaterThanOrEqual(0);
     release(container, X + 20, ROW + 4);
+  });
+
+  it("judges the place again when the component definitions arrive mid-drag", () => {
+    // A placement of a component whose root is a Button, aimed inside a linked
+    // Card. Before the library loads, the placement cannot be read and nothing
+    // refuses it; once it loads, its Button may not go inside a link.
+    const doc = page([
+      node("card", "t/card", { props: { link: "/go" } }),
+      node("promo", COMPONENT_INSTANCE_TYPE, {
+        props: { componentId: "promo-def" },
+      }),
+    ]);
+    const loaded: ComponentLookup = new Map([
+      [
+        "promo-def",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [node("inner-button", "t/button")],
+          slots: {},
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { container, rerender } = render(
+      <Host document={doc} definitions={new Map()} />
+    );
+    press("promo", ROW + 14);
+    moveTo(container, X, ROW + 8);
+    moveTo(container, X + 20, ROW + 4);
+    expect(line(container)?.hasAttribute("data-refused")).toBe(false);
+
+    rerender(<Host document={doc} definitions={loaded} />);
+    expect(line(container)?.hasAttribute("data-refused")).toBe(true);
+    release(container, X + 20, ROW + 4);
+    expect(structure()).toEqual(["card", "promo"]);
   });
 
   it("clears the spoken reason when the drag ends, and speaks it again on the next", () => {
@@ -656,6 +699,27 @@ describe("dragging a Layers row", () => {
     );
     release(container, X + 20, ROW - 4);
     expect(structure()).toEqual(["box", "box>h", "box>inner"]);
+  });
+
+  it("aims again when the tree is scrolled under a still pointer", async () => {
+    const { container } = threeHeadings();
+    const tree = container.querySelector<HTMLElement>(".nx-layers-panel__tree");
+    if (tree === null) throw new Error("no tree rendered");
+    // c over the lower half of a: the gap after a.
+    press("c", 2 * ROW + 14);
+    moveTo(container, X, 2 * ROW + 8);
+    moveTo(container, X, ROW - 4);
+    // A wheel scroll of one row, away from the edges: no pointer event, and
+    // the pointer is now over the lower half of b, the gap c already sits in.
+    tree.scrollTop = ROW;
+    await act(
+      () => new Promise<void>(done => requestAnimationFrame(() => done()))
+    );
+    await act(
+      () => new Promise<void>(done => requestAnimationFrame(() => done()))
+    );
+    release(container, X, ROW - 4);
+    expect(structure()).toEqual(["a", "b", "c"]);
   });
 
   it("scrolls the tree while the pointer rests near its bottom edge", async () => {

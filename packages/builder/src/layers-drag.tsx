@@ -160,7 +160,8 @@ interface Gesture {
   readonly document: BlockDocument;
   /** Every block of that document by id, read once (`placesIn`). */
   readonly places: ReadonlyMap<string, Placed>;
-  readonly verdicts: LayersVerdictCache;
+  /** Replaced, not kept, when the sources it was judged by are replaced. */
+  verdicts: LayersVerdictCache;
   active: boolean;
   clientX: number;
   clientY: number;
@@ -176,6 +177,8 @@ interface Gesture {
   stale: boolean;
   /** The reason this gesture last put in the live region, or "". */
   spoken: string;
+  /** The tree's scroll offset when the gesture last aimed. */
+  seenScroll: number;
   /** Whether a finger drives it, which picks up by a hold, not a distance. */
   readonly touch: boolean;
   /** The hold that picks a touched row up, while it is still being held. */
@@ -538,19 +541,23 @@ export function useLayersDrag({
       reset();
       return;
     }
-    if (drag.stale) {
-      drag.stale = false;
-      aim(drag);
-    }
     const tree = drag.host.querySelector<HTMLElement>(`.${LAYERS_TREE_CLASS}`);
     if (tree !== null) {
       const edges = containerEdges(tree);
       const step = autoscrollStep(drag.clientY, edges.top, edges.bottom);
-      if (step !== 0) {
-        const before = tree.scrollTop;
-        tree.scrollTop = before + step;
-        if (tree.scrollTop !== before) aim(drag);
+      if (step !== 0) tree.scrollTop += step;
+      // Whoever scrolled the tree — this loop, a wheel, a trackpad — the rows
+      // have moved under a pointer that has not, so the aim is read again.
+      // Compared with the offset last aimed at rather than with this frame's
+      // own step, which a scroll from outside never shows up in.
+      if (tree.scrollTop !== drag.seenScroll) {
+        drag.seenScroll = tree.scrollTop;
+        drag.stale = true;
       }
+    }
+    if (drag.stale) {
+      drag.stale = false;
+      aim(drag);
     }
     drag.frame = requestAnimationFrame(pump);
   }, [aim, reset]);
@@ -605,6 +612,9 @@ export function useLayersDrag({
         resting: null,
         stale: false,
         spoken: "",
+        seenScroll:
+          event.currentTarget.querySelector(`.${LAYERS_TREE_CLASS}`)
+            ?.scrollTop ?? 0,
         touch: event.pointerType === "touch",
         hold: null,
         release: null,
@@ -711,6 +721,20 @@ export function useLayersDrag({
     const drag = gesture.current;
     if (drag !== null && drag.document !== editor.document) reset();
   }, [editor.document, reset]);
+
+  /*
+   * The rules or the component definitions were replaced under a drag — the
+   * component library finishing its load, typically. The document is the
+   * same, so the gesture goes on, but every verdict it kept was reached with
+   * the old sources and the store will not ask again on release: they are
+   * dropped and the place under the pointer is judged afresh.
+   */
+  React.useEffect(() => {
+    const drag = gesture.current;
+    if (drag === null) return;
+    drag.verdicts = layersVerdictCache();
+    if (drag.active) aim(drag);
+  }, [definitions, nesting, aim]);
 
   // A panel closed mid-drag must not leave a frame loop or a timer behind.
   React.useEffect(() => teardown, [teardown]);

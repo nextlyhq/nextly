@@ -340,6 +340,52 @@ describe("layersDrop: the gap and the depth", () => {
     );
   });
 
+  it("leaves a block where it was over its own row, at either end of its slot", () => {
+    // Both mirrored layouts of one container whose two slots are drawn as one
+    // run of rows: the dragged block at the END of the first slot, and at the
+    // START of the second. Over its own row at its own depth, nothing moves.
+    registerBlocks(
+      [{ ...base, name: "t/split", slots: { first: {}, second: {} } }] as never,
+      { source: "layers-drop-test-split" }
+    );
+    const layouts = [
+      { first: ["a", "b"], second: ["c"] },
+      { first: ["a"], second: ["b", "c"] },
+    ];
+    for (const layout of layouts) {
+      const doc = page([
+        node("split", "t/split", {
+          slots: {
+            first: layout.first.map(id => node(id, "t/heading")),
+            second: layout.second.map(id => node(id, "t/heading")),
+          },
+        }),
+      ]);
+      const rows = rowsOf(doc, ["split"]);
+      for (const half of ["upper", "lower"] as const) {
+        expect(drop(doc, "b", over(rows, "b", half, 1), ["split"])).toEqual({
+          kind: "none",
+        });
+      }
+    }
+    // The control: aimed past the boundary on purpose, over the lower half of
+    // c, b does cross into `second`, after c.
+    const doc = page([
+      node("split", "t/split", {
+        slots: {
+          first: [node("a", "t/heading"), node("b", "t/heading")],
+          second: [node("c", "t/heading")],
+        },
+      }),
+    ]);
+    expect(
+      drop(doc, "b", over(rowsOf(doc, ["split"]), "c", "lower", 1), ["split"])
+    ).toMatchObject({
+      kind: "drop",
+      to: { parentId: "split", slot: "second", index: 1 },
+    });
+  });
+
   it("answers none outside every row", () => {
     const doc = page([node("a", "t/heading"), node("b", "t/heading")]);
     expect(drop(doc, "a", { x: LEFT, y: -5 })).toEqual({ kind: "none" });
