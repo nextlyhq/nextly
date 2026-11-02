@@ -46,6 +46,7 @@ import {
   type PlacementSources,
   type PlacementVerdict,
 } from "@nextlyhq/blocks-engine";
+import { TREE_INDENT_PX } from "@nextlyhq/ui";
 
 import { placementWording, type RefusalWording } from "./drag-refusal";
 import { movingSubtree } from "./drop-targets";
@@ -59,8 +60,12 @@ import {
 } from "./lock-refusal";
 import type { BuilderOp, OpPosition, SlotAddress } from "./ops";
 
-/** How far right the pointer travels to nest a block one level deeper. */
-export const LAYERS_DEPTH_PX = 20;
+/**
+ * How far right the pointer travels to nest a block one level deeper: the
+ * tree's own indent, so a depth the pointer reaches is drawn exactly where a
+ * row at that depth starts.
+ */
+export const LAYERS_DEPTH_PX: typeof TREE_INDENT_PX = TREE_INDENT_PX;
 
 /** One row on screen, measured, with where its block sits in the document. */
 export interface LayersRow {

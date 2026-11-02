@@ -58,6 +58,7 @@ import {
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
   type DepthMoveAction,
+  type MoveJudge,
   type MovePosition,
   type ToolbarAction,
   type ToolbarActionId,
@@ -632,6 +633,17 @@ export function useBlockKeyboardActions({
     [definitions]
   );
 
+  /*
+   * Whether the placement rule refuses a move, and its words: the one call
+   * the verb below refuses by and the menu's Move in and Move out are dimmed
+   * by, with the same rules and component definitions.
+   */
+  const placementRefusal = React.useCallback<MoveJudge>(
+    (document, id, to) =>
+      nestingRefusalForMove(document, id, to, nestingSource, definitions),
+    [nestingSource, definitions]
+  );
+
   const moveSelected = React.useCallback(
     (direction: MoveDirection) => {
       if (moveSet(direction)) return;
@@ -669,13 +681,7 @@ export function useBlockKeyboardActions({
        * disagree about where a block may go. A keyboard author who could not
        * be refused here would build documents a pointer author cannot.
        */
-      const refusal = nestingRefusalForMove(
-        editorNow.document,
-        selectedId,
-        move.to,
-        nestingSource,
-        definitions
-      );
+      const refusal = placementRefusal(editorNow.document, selectedId, move.to);
       if (refusal !== null) {
         announce(refusalAnnouncement(refusal));
         return;
@@ -719,7 +725,7 @@ export function useBlockKeyboardActions({
       // the block still selected, so a second press continues moving the
       // same block — which is what makes a run of presses walk it across the
     },
-    [announce, moveSet, nestingSource, definitions, movePosition]
+    [announce, moveSet, movePosition, placementRefusal]
   );
 
   /**
@@ -1038,7 +1044,8 @@ export function useBlockKeyboardActions({
         editor.selectedId,
         editor.selection.ids,
         editor.lockRefusalFor,
-        movePosition
+        movePosition,
+        placementRefusal
       ),
     [
       editor.document,
@@ -1046,6 +1053,7 @@ export function useBlockKeyboardActions({
       editor.selection.ids,
       editor.lockRefusalFor,
       movePosition,
+      placementRefusal,
     ]
   );
 

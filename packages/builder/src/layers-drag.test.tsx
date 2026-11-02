@@ -302,6 +302,22 @@ describe("dragging a Layers row", () => {
     expect(structure()).toEqual(["a", "b", "c"]);
   });
 
+  it("marks the row in hand while it is dragged, and only then", () => {
+    const { container } = threeHeadings();
+    const source = () =>
+      label("a").closest(".nx-layer-row")?.hasAttribute("data-nx-drag-source");
+    press("a", 10);
+    expect(source()).toBe(false);
+    moveTo(container, X, 20);
+    expect(source()).toBe(true);
+    // Only the row in hand.
+    expect(
+      label("b").closest(".nx-layer-row")?.hasAttribute("data-nx-drag-source")
+    ).toBe(false);
+    release(container, X, 20);
+    expect(source()).toBe(false);
+  });
+
   it("moves a row dragged down past another, as ONE undo step", () => {
     const { container } = threeHeadings();
     const before = editor().undoDepth;
@@ -368,10 +384,14 @@ describe("dragging a Layers row", () => {
 
     const drawn = line(container);
     expect(drawn?.hasAttribute("data-refused")).toBe(true);
+    // The cursor says no, as it does over a refused place on the canvas.
+    expect(body(container).getAttribute("data-nx-dragging")).toBe("refused");
     const sentence = "A Button can't go inside this Card.";
-    expect(
-      container.querySelector(".nx-layers-drop-refusal")?.textContent
-    ).toContain(sentence);
+    const notice = container.querySelector(".nx-layers-drop-refusal");
+    expect(notice?.textContent).toContain(sentence);
+    // On the notice surface with a warning mark, not the canvas's red fill.
+    expect(notice?.classList.contains("nx-drop-refusal")).toBe(false);
+    expect(notice?.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     expect(screen.getByRole("status").textContent).toContain(sentence);
 
     release(container, X + 20, ROW + 4);
@@ -771,7 +791,9 @@ describe("dragging a Layers row by touch", () => {
       vi.advanceTimersByTime(1);
     });
     expect(body(container).hasAttribute("data-nx-dragging")).toBe(true);
-    expect(container.querySelector(".nx-layers-picked")).not.toBeNull();
+    expect(
+      label("a").closest(".nx-layer-row")?.hasAttribute("data-nx-drag-source")
+    ).toBe(true);
 
     // Once picked up it drags as a mouse does: down past the last row.
     moveTo(container, X, 3 * ROW - 4);

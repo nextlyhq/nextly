@@ -41,6 +41,7 @@ import type {
   ComponentLookup,
   NestingSource,
 } from "@nextlyhq/blocks-engine";
+import { CircleAlert } from "lucide-react";
 import * as React from "react";
 
 import { autoscrollStep } from "./autoscroll";
@@ -86,15 +87,6 @@ export const LAYERS_TOUCH_HOLD_MS = 300;
  */
 export const LAYERS_TOUCH_TOLERANCE_PX = 5;
 
-/**
- * How far the tree indents each level, so the line starts where a row at that
- * depth draws its name. The tree's own figure; drawn wrong it misplaces the
- * line, never the drop, which {@link layersDrop} decides.
- */
-const TREE_INDENT_PX = 12;
-/** Where a top-level row's name starts: the row's padding and its twisty. */
-const TREE_NAME_START_PX = 24;
-
 /** The class the tree's scrolling element carries, set by the panel. */
 export const LAYERS_TREE_CLASS = "nx-layers-panel__tree";
 
@@ -124,12 +116,6 @@ export interface LayersDrawn {
   readonly left: number;
 }
 
-/** Where the picked-up row sits, from the top of the element the drag is on. */
-export interface LayersPicked {
-  readonly top: number;
-  readonly height: number;
-}
-
 export interface LayersDrag {
   /** The handlers the element around the tree must carry. */
   readonly handlers: {
@@ -143,8 +129,6 @@ export interface LayersDrag {
   readonly draggingId: string | null;
   /** What to draw, or null when the pointer aims nowhere. */
   readonly drawn: LayersDrawn | null;
-  /** Where the dragged row is drawn, or null when no row is picked up. */
-  readonly picked: LayersPicked | null;
   /** The live region's text: why the drop under the pointer is refused. */
   readonly announcement: string;
 }
@@ -290,6 +274,27 @@ function holdPage(host: HTMLElement): () => void {
   };
 }
 
+/**
+ * Where a row at depth zero starts its content, measured from a row on screen
+ * and stepped back by the tree's indent: the line for a depth then starts
+ * where a row at that depth draws its icon, with no offset assumed about how
+ * the tree pads a row.
+ */
+function depthStart(host: HTMLElement): number {
+  const content = host.querySelector(".nx-layer-row");
+  const row = content?.closest('[role="treeitem"]');
+  if (
+    content === null ||
+    content === undefined ||
+    row === null ||
+    row === undefined
+  ) {
+    return 0;
+  }
+  const depth = Number(row.getAttribute("aria-level") ?? "1") - 1;
+  return canvasContentRect(content, host).x - depth * LAYERS_DEPTH_PX;
+}
+
 /** Whether a point is inside a rectangle, edges included. */
 function inside(box: Rect, point: Point): boolean {
   return (
@@ -367,8 +372,6 @@ export function useLayersDrag({
   const [draggingId, setDraggingId] = React.useState<string | null>(null);
   const [drawn, setDrawn] = React.useState<LayersDrawn | null>(null);
   const [announcement, setAnnouncement] = React.useState("");
-  // Where the dragged row is drawn, for the mark that says it was picked up.
-  const [picked, setPicked] = React.useState<LayersPicked | null>(null);
 
   // Read at event time, so a handler bound on one render never acts on a
   // document or an option a later render replaced.
@@ -404,7 +407,6 @@ export function useLayersDrag({
     teardown();
     setDraggingId(null);
     setDrawn(null);
-    setPicked(null);
     // The region describes the drag, so it goes quiet when the drag ends; the
     // next drag's reason is then a change it announces, even if identical.
     setAnnouncement("");
@@ -456,14 +458,6 @@ export function useLayersDrag({
       const within =
         tree !== null && inside(canvasContentRect(tree, drag.host), pointer);
       restOn(drag, within ? rowAt(rows, pointer.y) : undefined);
-      const own = rows.find(row => row.id === drag.id);
-      setPicked(previous =>
-        own === undefined
-          ? null
-          : previous?.top === own.top && previous.height === own.height
-            ? previous
-            : { top: own.top, height: own.height }
-      );
       drag.result = within
         ? layersDrop({
             rows,
@@ -491,7 +485,7 @@ export function useLayersDrag({
           : {
               result,
               top: result.line.y,
-              left: TREE_NAME_START_PX + result.line.depth * TREE_INDENT_PX,
+              left: depthStart(drag.host) + result.line.depth * LAYERS_DEPTH_PX,
             };
       setDrawn(previous =>
         drawnKey(previous) === drawnKey(next) ? previous : next
@@ -731,7 +725,6 @@ export function useLayersDrag({
     },
     draggingId,
     drawn,
-    picked,
     announcement,
   };
 }
@@ -746,28 +739,15 @@ export function useLayersDrag({
  */
 export function LayersDropOverlay({
   drawn,
-  picked,
 }: {
   drawn: LayersDrawn | null;
-  picked: LayersPicked | null;
 }): React.JSX.Element | null {
-  // The row in hand, marked where it sits, so a finger that has just been
-  // held sees that the row is picked up before it moves.
-  const mark =
-    picked === null ? null : (
-      <div
-        className="nx-layers-picked"
-        style={{ top: picked.top, height: picked.height }}
-        aria-hidden="true"
-      />
-    );
-  if (drawn === null) return mark;
+  if (drawn === null) return null;
   const { result } = drawn;
   const refused = result.kind === "refused";
   const wording = refused ? layersRefusalWording(result.refusal) : null;
   return (
     <>
-      {mark}
       <div
         className="nx-layers-drop-line"
         data-refused={refused ? "" : undefined}
@@ -775,15 +755,28 @@ export function LayersDropOverlay({
         aria-hidden="true"
       />
       {wording === null ? null : (
+        // The panel's notice surface with a red edge and a warning mark, not
+        // a red fill: the reason is read beside rows of ordinary text.
         <div
-          className="nx-drop-refusal nx-layers-drop-refusal"
+          className="nx-layers-drop-refusal"
           style={{ top: drawn.top + 6, left: drawn.left }}
           aria-hidden="true"
         >
-          <span className="nx-drop-refusal__why">{wording.headline}</span>
-          {wording.remedy === null ? null : (
-            <span className="nx-drop-refusal__takes">{wording.remedy}</span>
-          )}
+          <CircleAlert
+            className="nx-layers-drop-refusal__mark"
+            size={14}
+            aria-hidden="true"
+          />
+          <span className="nx-layers-drop-refusal__text">
+            <span className="nx-layers-drop-refusal__why">
+              {wording.headline}
+            </span>
+            {wording.remedy === null ? null : (
+              <span className="nx-layers-drop-refusal__takes">
+                {wording.remedy}
+              </span>
+            )}
+          </span>
         </div>
       )}
     </>

@@ -47,6 +47,7 @@ import {
 
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
+import type { RefusalWording } from "./drag-refusal";
 import { blockDuplication } from "./duplicate-block";
 import type { Rect } from "./geometry";
 import {
@@ -58,7 +59,7 @@ import { layerLabel, pathTo } from "./layers";
 import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp, OpPosition } from "./ops";
 import {
   isRefusal,
   selectionDeletion,
@@ -154,6 +155,17 @@ export type MovePosition = (
   direction: MoveDirection
 ) => KeyboardMove | null;
 
+/**
+ * Whether the placement rule refuses a block's move to `to`, and its words,
+ * or `null` when it allows it. Passed in by a caller that runs the move, so
+ * an item it offers is judged by the very call its verb judges by.
+ */
+export type MoveJudge = (
+  document: BlockDocument,
+  id: string,
+  to: OpPosition
+) => RefusalWording | null;
+
 const POSITION_WITHOUT_DEFINITIONS: MovePosition = (document, id, direction) =>
   keyboardMovePosition(document.nodes, id, direction);
 
@@ -178,7 +190,8 @@ function singleMove<Id extends string>(
   label: string,
   direction: MoveDirection,
   ask: LockQuestion | undefined,
-  position: MovePosition = POSITION_WITHOUT_DEFINITIONS
+  position: MovePosition = POSITION_WITHOUT_DEFINITIONS,
+  judge?: MoveJudge
 ): Omit<ToolbarAction, "id"> & { readonly id: Id } {
   const moveLock = lockBlockingMove(document, selectedId);
   if (moveLock !== undefined) {
@@ -190,6 +203,14 @@ function singleMove<Id extends string>(
     };
   }
   const to = position(document, selectedId, direction);
+  // The placement rule's refusal, said where the author would press.
+  const refused =
+    to === null || judge === undefined
+      ? null
+      : judge(document, selectedId, to.to);
+  if (refused !== null) {
+    return { id, label, enabled: false, reason: refusalAnnouncement(refused) };
+  }
   return heldByLock(
     { id, label, enabled: to !== null },
     ask,
@@ -656,7 +677,9 @@ export function depthMoveActions(
    * The position the verb these run moves by. A caller that runs them passes
    * its own, so an item is offered exactly when pressing it would move.
    */
-  position?: MovePosition
+  position?: MovePosition,
+  /** The placement rule as the verb asks it, so a refused move is dimmed. */
+  judge?: MoveJudge
 ): DepthMoveAction[] {
   if (selectedId === null || pathTo(document, selectedId).length === 0) {
     return [];
@@ -676,7 +699,8 @@ export function depthMoveActions(
               move.label,
               move.direction,
               lockRefusalFor,
-              position
+              position,
+              judge
             ),
             direction: move.direction,
           }

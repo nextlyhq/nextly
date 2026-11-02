@@ -76,12 +76,14 @@ import { EyeOff, Lock, SlidersHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
 import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
 import {
+  type LayersDrag,
   LAYERS_TREE_CLASS,
   LayersDropOverlay,
   useLayersDrag,
@@ -159,7 +161,8 @@ function iconsByType(): ReadonlyMap<string, string | undefined> {
 /** A layer as a row: its mark, its name, and what is true about it. */
 function rowOf(
   node: LayerNode,
-  icons: ReadonlyMap<string, string | undefined>
+  icons: ReadonlyMap<string, string | undefined>,
+  draggingId: string | null
 ): TreeNode {
   return {
     id: node.id,
@@ -169,7 +172,12 @@ function rowOf(
     // that is not its name.
     textValue: node.label,
     label: (
-      <span className="nx-layer-row">
+      <span
+        className="nx-layer-row"
+        // The block in hand, faded where it sits as the canvas fades its own
+        // drag source; the same attribute, so the two read as one gesture.
+        {...(node.id === draggingId ? { [DRAG_SOURCE_ATTRIBUTE]: "" } : {})}
+      >
         <BlockIconMark icon={icons.get(node.type)} size={14} />
         {/* `data-nx-layer` names the block a row stands for. Labels repeat —
             every paragraph is "Text" — so it is the one stable way to find a
@@ -193,7 +201,14 @@ function rowOf(
         ) : null}
       </span>
     ),
-    children: node.children.map(child => rowOf(child, icons)),
+    // Omitted for a block that holds nothing: the tree draws a twisty and an
+    // open/closed state for any row given a children list, empty or not, and
+    // a twisty that opens onto nothing is a control that does nothing.
+    ...(node.children.length === 0
+      ? {}
+      : {
+          children: node.children.map(child => rowOf(child, icons, draggingId)),
+        }),
   };
 }
 
@@ -220,6 +235,16 @@ const DIRECTION_LABEL: Readonly<Record<MoveDirection, string>> = {
   indent: "Move in",
   outdent: "Move out",
 };
+
+/**
+ * The drag's state as the panel draws it: absent with no drag, "refused"
+ * while the place under the pointer refuses the block — which turns the
+ * cursor to no-drop, as the canvas does — and empty otherwise.
+ */
+function draggingState(drag: LayersDrag): string | undefined {
+  if (drag.draggingId === null) return undefined;
+  return drag.drawn?.result.kind === "refused" ? "refused" : "";
+}
 
 export function LayersPanel({
   editor,
@@ -297,8 +322,8 @@ export function LayersPanel({
 
   const icons = React.useMemo(iconsByType, []);
   const nodes = React.useMemo(
-    () => search.roots.map(root => rowOf(root, icons)),
-    [search.roots, icons]
+    () => search.roots.map(root => rowOf(root, icons, drag.draggingId)),
+    [search.roots, icons, drag.draggingId]
   );
 
   /*
@@ -368,7 +393,7 @@ export function LayersPanel({
       ) : (
         <div
           className="nx-layers-panel__body"
-          data-nx-dragging={drag.draggingId === null ? undefined : ""}
+          data-nx-dragging={draggingState(drag)}
           {...drag.handlers}
         >
           <TreeView
@@ -397,7 +422,7 @@ export function LayersPanel({
             // the tree rather than only readable by someone who can see it below.
             aria-describedby={hints.length === 0 ? undefined : hintId}
           />
-          <LayersDropOverlay drawn={drag.drawn} picked={drag.picked} />
+          <LayersDropOverlay drawn={drag.drawn} />
         </div>
       )}
 

@@ -476,4 +476,18 @@ describe("the canvas's right-click menu", () => {
         .getAttribute("data-disabled")
     ).not.toBeNull();
   });
+
+  it("dims Move in where the placement rule refuses it, and says why", () => {
+    // The block above holds no blocks, so the keystroke would be refused by
+    // the rule. The menu, asked with the same rule, says so before the press.
+    register();
+    const editor = editorSpy(pair(), "b");
+    const { container } = mount(editor);
+    const target = container.querySelector(`[${NODE_ID_ATTRIBUTE}="b"]`);
+    if (target === null) throw new Error("expected block b");
+    fireEvent.contextMenu(target);
+    const moveIn = screen.getByRole("menuitem", { name: /^Move in/ });
+    expect(moveIn.getAttribute("data-disabled")).not.toBeNull();
+    expect(moveIn.textContent).toContain("Leaf can't hold blocks.");
+  });
 });

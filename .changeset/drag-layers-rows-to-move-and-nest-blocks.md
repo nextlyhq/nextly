@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Page builder: drag a row in Layers to move its block, and drag it to the right to put it inside the block above. A closed block opens when you rest on it, and the list scrolls near its edges. A drop the placement rule or a locked area refuses shows a red line with the reason, and the block stays where it was. The block menu gains Move in and Move out, so every move also works from the keyboard or the menu.
+Page builder: drag a row in Layers to move its block, and drag it to the right to put it inside the block above. A closed block opens when you rest on it, and the list scrolls near its edges. A drop the placement rule or a locked area refuses shows a red line with the reason, and the block stays where it was. The block menu gains Move in and Move out, so every move also works from the keyboard or the menu. Layers rows indent 20px a level, the same distance a drag moves to nest, and a selected row is shaded so it stands apart from a hovered one.
