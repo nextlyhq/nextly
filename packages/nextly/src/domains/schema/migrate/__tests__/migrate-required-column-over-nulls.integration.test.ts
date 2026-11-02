@@ -201,6 +201,48 @@ describe.each(LOCK_DIALECTS)(
       });
     }
 
+    /**
+     * The statements that add `column` to `table` holding no value, then make it NOT NULL with
+     * no fill, in this dialect's own form: on SQLite the rebuild carries the new column.
+     */
+    async function addEmptyThenRequire(
+      table: string,
+      column: string
+    ): Promise<string[]> {
+      const add = `ALTER TABLE ${q(table)} ADD COLUMN ${q(column)} text`;
+      if (dialect === "postgresql") {
+        return [
+          add,
+          `ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} SET NOT NULL`,
+        ];
+      }
+      if (dialect === "mysql") {
+        return [
+          add,
+          `ALTER TABLE ${q(table)} MODIFY COLUMN ${q(column)} text NOT NULL`,
+        ];
+      }
+      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+        table,
+      ]);
+      const spec = live.tables[0];
+      const text = spec.columns.find(c => c.name === "subtitle");
+      if (text === undefined) throw new Error("no text column to model on");
+      return [
+        add,
+        ...sqliteTableRebuildStatements({
+          ...spec,
+          columns: [
+            ...spec.columns.map(c => ({
+              ...c,
+              ...(c.name === "id" ? { primaryKey: true } : {}),
+            })),
+            { ...text, name: column, nullable: false },
+          ],
+        }),
+      ];
+    }
+
     /** The file as `migrate:create` writes it. */
     function writeFile(statements: string[]): void {
       writeFileSync(
@@ -276,6 +318,18 @@ describe.each(LOCK_DIALECTS)(
       ]);
       expect(error.publicMessage).toContain(FILE);
       expect(await nullable(POSTS, "subtitle")).toBe(true);
+      expect(await ledger()).toEqual([]);
+    }, 120_000);
+
+    // A column the file adds holding no value is empty in each existing row, so making it
+    // required later in the same file breaks every one of them.
+    it("refuses a file that adds a column empty to a table with rows and then makes it required, counting every row; nothing applied", async () => {
+      writeFile(await addEmptyThenRequire(POSTS, "summary"));
+      const error = await refusal();
+      expect(issues(error)).toEqual([
+        "Collection 'posts': field 'summary' cannot be added as required without a default while 3 rows exist, which would hold no value in it. Give it a default, or add it as optional.",
+      ]);
+      expect(await hasColumn(POSTS, "summary")).toBe(false);
       expect(await ledger()).toEqual([]);
     }, 120_000);
 

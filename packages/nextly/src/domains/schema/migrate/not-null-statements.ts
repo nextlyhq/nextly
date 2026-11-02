@@ -67,6 +67,11 @@ interface TableState {
   origin: string | null;
   /** A renamed or created column: its name before the unit ran, or `null` when the unit made it. */
   columns: Map<string, string | null>;
+  /**
+   * Columns the unit added to this table, which held rows before it, without a value for them:
+   * every one of those rows holds null in the column.
+   */
+  addedEmpty: Set<string>;
   written: boolean;
 }
 
@@ -229,7 +234,12 @@ class UnitReader {
   private state(table: string): TableState {
     let state = this.tables.get(table);
     if (state === undefined) {
-      state = { origin: table, columns: new Map(), written: false };
+      state = {
+        origin: table,
+        columns: new Map(),
+        addedEmpty: new Set(),
+        written: false,
+      };
       this.tables.set(table, state);
     }
     return state;
@@ -252,10 +262,17 @@ class UnitReader {
     const state = this.state(table);
     const columnBefore =
       column === null ? null : this.columnOrigin(state, column);
+    // A column the unit added empty to a table that had rows breaks every one of them, as a
+    // column added NOT NULL without a default does; one it added with a value, or to a table it
+    // created, breaks none the unit did not put there.
     const before =
-      state.origin === null || (column !== null && columnBefore === null)
+      state.origin === null
         ? null
-        : { table: state.origin, column: columnBefore };
+        : column !== null && columnBefore === null
+          ? state.addedEmpty.has(column)
+            ? { table: state.origin, column: null }
+            : null
+          : { table: state.origin, column: columnBefore };
     this.changes.push({
       statement,
       table,
@@ -394,6 +411,7 @@ class UnitReader {
     this.tables.set(table, {
       origin: null,
       columns: new Map(),
+      addedEmpty: new Set(),
       // `CREATE TABLE t AS SELECT ...` writes the rows it creates.
       written: rest.includes("SELECT"),
     });
@@ -478,6 +496,8 @@ class UnitReader {
         this.change(index, table, null, column);
       }
       state.columns.set(column, null);
+      if (definition.hasValue) state.addedEmpty.delete(column);
+      else state.addedEmpty.add(column);
       return undefined;
     }
     if (clause.accept("ALTER")) {
@@ -515,7 +535,10 @@ class UnitReader {
       clause.accept("COLUMN");
       clause.acceptCondition();
       const column = clause.name();
-      if (column !== undefined) state.columns.set(column, null);
+      if (column !== undefined) {
+        state.columns.set(column, null);
+        state.addedEmpty.delete(column);
+      }
     }
     return undefined;
   }
@@ -560,6 +583,8 @@ class UnitReader {
     if (from === to) return;
     state.columns.set(to, this.columnOrigin(state, from));
     state.columns.set(from, null);
+    // A column added empty stays empty under its new name.
+    if (state.addedEmpty.delete(from)) state.addedEmpty.add(to);
   }
 }
 

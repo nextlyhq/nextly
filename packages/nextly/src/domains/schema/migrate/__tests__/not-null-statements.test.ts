@@ -154,6 +154,52 @@ describe("readNotNullChanges: statements that make nothing NOT NULL", () => {
 });
 
 describe("readNotNullChanges: what the statements before a change did", () => {
+  // A column the file adds to a table that already has rows is empty in every one of them unless
+  // the ADD gives it a value, so making it NOT NULL later breaks every existing row.
+  it("a column added empty to an existing table, then made NOT NULL, breaks every row", () => {
+    expect(
+      read(
+        "postgresql",
+        `ALTER TABLE "dc_posts" ADD COLUMN "subtitle" text`,
+        `ALTER TABLE "dc_posts" ALTER COLUMN "subtitle" SET NOT NULL`
+      )
+    ).toEqual([
+      {
+        statement: 1,
+        table: "dc_posts",
+        column: "subtitle",
+        required: "subtitle",
+        before: { table: "dc_posts", column: null },
+        writtenEarlier: false,
+      },
+    ]);
+    expect(
+      read(
+        "mysql",
+        "ALTER TABLE `dc_posts` ADD `subtitle` varchar(255)",
+        "ALTER TABLE `dc_posts` CHANGE `subtitle` `tagline` varchar(255) NOT NULL"
+      )
+    ).toMatchObject([{ before: { table: "dc_posts", column: null } }]);
+  });
+
+  it("a column added with a value, or to a table the file creates, breaks no row", () => {
+    expect(
+      read(
+        "postgresql",
+        `ALTER TABLE "dc_posts" ADD COLUMN "subtitle" text DEFAULT ''`,
+        `ALTER TABLE "dc_posts" ALTER COLUMN "subtitle" SET NOT NULL`
+      )
+    ).toMatchObject([{ before: null }]);
+    expect(
+      read(
+        "postgresql",
+        `CREATE TABLE "dc_new" ("id" text)`,
+        `ALTER TABLE "dc_new" ADD COLUMN "subtitle" text`,
+        `ALTER TABLE "dc_new" ALTER COLUMN "subtitle" SET NOT NULL`
+      )
+    ).toMatchObject([{ before: null }]);
+  });
+
   it("an earlier UPDATE, INSERT or DELETE on the table counts it at its statement", () => {
     for (const write of [
       `UPDATE "dc_posts" SET "subtitle" = '' WHERE "subtitle" IS NULL`,
@@ -214,7 +260,9 @@ describe("readNotNullChanges: what the statements before a change did", () => {
     });
   });
 
-  it("a table or a column the file created holds no row it did not put there", () => {
+  // A table the file creates holds no row it did not put there; a column it adds empty to a table
+  // that had rows is null in each of them, so it is counted as an added column is: every row.
+  it("a table the file created holds no row it did not put there; a column added empty to an existing one breaks every row", () => {
     expect(
       read(
         "postgresql",
@@ -223,7 +271,7 @@ describe("readNotNullChanges: what the statements before a change did", () => {
         `ALTER TABLE "dc_posts" ADD COLUMN "b" text`,
         `ALTER TABLE "dc_posts" ALTER COLUMN "b" SET NOT NULL`
       ).map(c => c.before)
-    ).toEqual([null, null]);
+    ).toEqual([null, { table: "dc_posts", column: null }]);
   });
 
   it("a rebuilt table is the table it rebuilt: a later rebuild counts it before the file", () => {

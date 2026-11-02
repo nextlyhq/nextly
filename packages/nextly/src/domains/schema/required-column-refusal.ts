@@ -57,13 +57,14 @@ function rows(count: number): string {
 /** The sentence a refusal says for one column. */
 export function requiredColumnBreakMessage(b: RequiredColumnBreak): string {
   const subject = `${LABELS[b.entity.kind]} '${b.entity.slug}': field '${b.field}'`;
-  if (b.added) {
-    return `${subject} cannot be added as required without a default while ${rows(b.count)} ${b.count === 1 ? "exists" : "exist"}, which would hold no value in it. Give it a default, or add it as optional.`;
-  }
+  // For a field group, which collections and Singles hold those rows, so each can be named.
   const where =
     b.users === undefined || b.users.length === 0
       ? ""
       : `: ${b.users.map(u => `${u.count} in ${IN_SENTENCE[u.kind]} '${u.slug}'`).join(", ")}`;
+  if (b.added) {
+    return `${subject} cannot be added as required without a default while ${rows(b.count)} ${b.count === 1 ? "exists" : "exist"}, which would hold no value in it${where}. Give it a default, or add it as optional.`;
+  }
   const those = b.count === 1 ? "that row" : "those rows";
   return `${subject} cannot become required while ${rows(b.count)} ${b.count === 1 ? "holds" : "hold"} no value in it${where}. Give ${those} a value first, or keep the field optional.`;
 }

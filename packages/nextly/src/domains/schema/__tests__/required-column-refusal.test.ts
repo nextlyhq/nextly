@@ -66,6 +66,25 @@ describe("requiredColumnBreakMessage", () => {
   });
 });
 
+describe("requiredColumnBreakMessage for a field group's added column", () => {
+  it("names each collection and Single whose rows would hold no value", () => {
+    expect(
+      requiredColumnBreakMessage({
+        entity: { kind: "fieldGroup", slug: "hero" },
+        field: "cta",
+        count: 3,
+        added: true,
+        users: [
+          { kind: "collection", slug: "posts", count: 2 },
+          { kind: "single", slug: "home", count: 1 },
+        ],
+      })
+    ).toBe(
+      "Field group 'hero': field 'cta' cannot be added as required without a default while 3 rows exist, which would hold no value in it: 2 in collection 'posts', 1 in Single 'home'. Give it a default, or add it as optional."
+    );
+  });
+});
+
 describe("requiredColumnOverNullsError", () => {
   it("is one validation error with an entry per field, on the field's path", () => {
     const err = requiredColumnOverNullsError([
