@@ -99,7 +99,7 @@ describe.each(
     }))
   )
 )(
-  "a held draft without languages, compared (integration, %s)",
+  "a held draft without languages, compared (integration, $dialect, $mode)",
   ({ dialect, storage }) => {
     it("is tagged as other saves are, and compares with an earlier save", async () => {
       const { t, reader } = await boot(dialect, storage);

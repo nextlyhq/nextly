@@ -255,7 +255,7 @@ describe.each(
     }))
   )
 )(
-  "version actors, statuses and number clashes (integration, %s)",
+  "version actors, statuses and number clashes (integration, $dialect, $mode)",
   ({ dialect, storage }) => {
     it("names each version's actor: a person, an API key by its own name, and the system for a seed and a plugin", async () => {
       const t = await boot(dialect, storage);

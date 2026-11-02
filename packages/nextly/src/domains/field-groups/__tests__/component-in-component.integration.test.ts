@@ -197,7 +197,7 @@ describe.each(
     }))
   )
 )(
-  "a component inside a component (integration, %s)",
+  "a component inside a component (integration, $dialect, $mode)",
   ({ dialect, storage }) => {
     it("is judged by its own validators when held in a group or a repeater", async () => {
       const t = await boot(dialect, storage);
