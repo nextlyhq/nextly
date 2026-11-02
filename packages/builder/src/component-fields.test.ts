@@ -146,6 +146,27 @@ describe("exposing a prop", () => {
     expect(field?.id).not.toBe("title");
   });
 
+  it("adds nothing while the live definition's ids are not known, and says why", () => {
+    const { state, editor } = editorOver(component());
+    const waiting: FieldEditContext = {
+      editor,
+      component: component(),
+      reserved: { unavailable: "Still checking this component's fields." },
+    };
+    expect(exposeProp(waiting, "c1", "title", "Title")).toEqual({
+      applied: false,
+      reason: "Still checking this component's fields.",
+    });
+    expect(exposeVisibility(waiting, "c1", "Show card")).toEqual({
+      applied: false,
+      reason: "Still checking this component's fields.",
+    });
+    expect(state.ops).toHaveLength(0);
+    expect(
+      reservedIds({ unavailable: "x" }, { properties: ["a"], slots: [] })
+    ).toEqual({ unavailable: "x" });
+  });
+
   it("refuses a non-content prop inside a contentOnly area when it is picked, saying why", () => {
     const { state, at } = context(component());
     const outcome = exposeProp(at, "c2", "tone", "Tone");
@@ -285,7 +306,7 @@ describe("removing a field", () => {
     expect(state.document.variants?.quiet?.overrides).toEqual({});
   });
 
-  it("says how many pages place it, and when that is only a floor", () => {
+  it("says how many documents place it, and when that is only a floor", () => {
     const planned = planFieldRemoval(
       withVariants,
       { kind: "field", id: "tone" },
@@ -298,11 +319,11 @@ describe("removing a field", () => {
         { kind: "field" },
         { count: 3, complete: false }
       ).placements
-    ).toMatch(/placed on at least 3 pages\.$/);
+    ).toMatch(/placed directly in at least 3 documents\.$/);
     expect(
       removalSentences(planned, { kind: "field" }, { count: 1, complete: true })
         .placements
-    ).toMatch(/placed on 1 page\.$/);
+    ).toMatch(/placed directly in 1 document\.$/);
   });
 });
 
@@ -350,8 +371,10 @@ describe("the ids a new field is kept clear of", () => {
 
 describe("the reach phrase", () => {
   it("is a floor while the count is incomplete", () => {
-    expect(reachPhrase({ count: 4, complete: false })).toBe("at least 4 pages");
-    expect(reachPhrase({ count: 4, complete: true })).toBe("4 pages");
+    expect(reachPhrase({ count: 4, complete: false })).toBe(
+      "at least 4 documents"
+    );
+    expect(reachPhrase({ count: 4, complete: true })).toBe("4 documents");
     expect(reachPhrase(undefined)).toBeUndefined();
     expect(reachPhrase({ count: 0, complete: false })).toBeUndefined();
   });

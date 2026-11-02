@@ -26,7 +26,6 @@ import {
   type BlockDocument,
   type ComponentDocument,
   type EnvelopeField,
-  type EnvelopePatch,
   type ExposedProperty,
   type ExposedPropertyType,
   type ExposureEdit,
@@ -51,13 +50,25 @@ export interface ComponentFieldsHost {
    * PUBLISHED definition holds, and every one it has retired. A draft that
    * dropped a published field still has placements holding values under its
    * id, so a new field minted under that id would take them over.
+   *
+   * `unavailable` while the host has not read them, or could not: adding a
+   * field then waits, with that sentence, rather than minting an id the live
+   * definition may still hold. Absent where the host has nothing live to
+   * reserve.
    */
-  readonly reserved?: RetiredExposures;
+  readonly reserved?: RetiredExposures | ReservedUnavailable;
   /**
-   * How many pages place this component, for the removal dialog: `complete`
-   * false makes the number a floor, said as "at least".
+   * How many documents place this component DIRECTLY (pages, Singles, other
+   * components and patterns), for the removal dialog: `complete` false makes
+   * the number a floor, said as "at least". Pages reaching it through another
+   * component are not counted, so it is never said as a count of pages.
    */
   readonly reach?: { readonly count: number; readonly complete: boolean };
+}
+
+/** Why the ids a new field must avoid are not known, said to the author. */
+export interface ReservedUnavailable {
+  readonly unavailable: string;
 }
 
 /** What an exposure is called in a sentence. The engine's names are code. */
@@ -178,7 +189,7 @@ export function envelopeOpFor(
   if (Object.keys(patch).length === 0 && unset.length === 0) return undefined;
   return {
     kind: "envelope",
-    patch: patch,
+    patch,
     ...(unset.length > 0 ? { unset } : {}),
   };
 }
@@ -189,9 +200,10 @@ export function envelopeOpFor(
  * the same name gets a new id rather than the removed one's values.
  */
 export function reservedIds(
-  host: RetiredExposures | undefined,
+  host: RetiredExposures | ReservedUnavailable | undefined,
   seen: RetiredExposures
-): RetiredExposures {
+): RetiredExposures | ReservedUnavailable {
+  if (host !== undefined && "unavailable" in host) return host;
   return {
     properties: [...new Set([...(host?.properties ?? []), ...seen.properties])],
     slots: [...new Set([...(host?.slots ?? []), ...seen.slots])],
@@ -241,7 +253,20 @@ export function applyFieldEdit(
 export interface FieldEditContext {
   readonly editor: Pick<EditorState, "apply" | "lockDefinitions" | "limits">;
   readonly component: ComponentDocument;
-  readonly reserved: RetiredExposures;
+  /** The ids a new field must avoid, or why they are not known yet. */
+  readonly reserved: RetiredExposures | ReservedUnavailable;
+}
+
+/**
+ * The ids an addition must avoid, or the refusal to give while they are not
+ * known: minting without them could take a live field's id.
+ */
+function additionRetired(
+  reserved: FieldEditContext["reserved"]
+): RetiredExposures | { readonly applied: false; readonly reason: string } {
+  return "unavailable" in reserved
+    ? { applied: false, reason: reserved.unavailable }
+    : reserved;
 }
 
 /** Expose one prop of a node as a new field under `label`. */
@@ -251,7 +276,9 @@ export function exposeProp(
   propPath: string,
   label: string
 ): FieldEditOutcome {
-  const { editor, component, reserved } = context;
+  const { editor, component } = context;
+  const retired = additionRetired(context.reserved);
+  if ("reason" in retired) return retired;
   return applyFieldEdit(
     editor,
     component,
@@ -260,7 +287,7 @@ export function exposeProp(
       { nodeId, propPath, label },
       {
         definitions: editor.lockDefinitions,
-        retired: reserved,
+        retired,
         limits: editor.limits,
       }
     )
@@ -273,7 +300,9 @@ export function exposeVisibility(
   nodeId: string,
   label: string
 ): FieldEditOutcome {
-  const { editor, component, reserved } = context;
+  const { editor, component } = context;
+  const retired = additionRetired(context.reserved);
+  if ("reason" in retired) return retired;
   return applyFieldEdit(
     editor,
     component,
@@ -282,7 +311,7 @@ export function exposeVisibility(
       { nodeId, visibility: true, label },
       {
         definitions: editor.lockDefinitions,
-        retired: reserved,
+        retired,
         limits: editor.limits,
       }
     )
@@ -318,15 +347,15 @@ export function planFieldRemoval(
 }
 
 /**
- * "at least 3 pages", "1 page", or nothing when the host could not count. A
- * floor of none says nothing, so it is not said.
+ * "at least 3 documents", "1 document", or nothing when the host could not
+ * count. A floor of none says nothing, so it is not said.
  */
 export function reachPhrase(
   reach: ComponentFieldsHost["reach"]
 ): string | undefined {
   if (reach === undefined) return undefined;
   if (reach.count === 0 && !reach.complete) return undefined;
-  const noun = reach.count === 1 ? "page" : "pages";
+  const noun = reach.count === 1 ? "document" : "documents";
   return reach.complete
     ? `${reach.count} ${noun}`
     : `at least ${reach.count} ${noun}`;
@@ -352,8 +381,8 @@ export function removalSentences(
     where === undefined
       ? ""
       : reach?.count === 0 && reach.complete
-        ? " No page places this component yet."
-        : ` This component is placed on ${where}.`;
+        ? " No document places this component yet."
+        : ` This component is placed directly in ${where}.`;
   const placements =
     removing.kind === "field"
       ? `When you publish this component, every placement that set this field loses its value.${pages}`

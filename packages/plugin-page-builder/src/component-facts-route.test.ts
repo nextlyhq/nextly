@@ -8,7 +8,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { liveIdsOf, readComponentFacts } from "./component-facts-route";
+import {
+  factsQuery,
+  liveIdsOf,
+  readComponentFacts,
+} from "./component-facts-route";
 
 const row = {
   id: "hero",
@@ -93,5 +97,46 @@ describe("the answer", () => {
       field: "content",
     });
     expect(asked).toEqual(["hero"]);
+  });
+});
+
+describe("a component the caller may not read", () => {
+  it("is not counted, so its use is not revealed", async () => {
+    let counted = 0;
+    const facts = await readComponentFacts("secret", {
+      readLive: async () => null,
+      countPlacements: async () => {
+        counted += 1;
+        return { documents: 40, complete: true };
+      },
+      field: "content",
+    });
+    expect(facts).toEqual({ live: { properties: [], slots: [] }, reach: null });
+    expect(counted).toBe(0);
+  });
+});
+
+describe("the query", () => {
+  const at = (query: string) => `http://admin.test/component-facts?${query}`;
+
+  it("names the component, and the language when there is one", () => {
+    expect(factsQuery(at("id=hero"))).toEqual({
+      id: "hero",
+      locale: undefined,
+    });
+    expect(factsQuery(at("id=hero&locale=de"))).toEqual({
+      id: "hero",
+      locale: "de",
+    });
+    expect(factsQuery(at("id=hero&locale="))).toEqual({
+      id: "hero",
+      locale: undefined,
+    });
+  });
+
+  it("is refused without an id, or with one past its bound", () => {
+    expect(() => factsQuery(at(""))).toThrow();
+    expect(() => factsQuery(at("id=%20%20"))).toThrow();
+    expect(() => factsQuery(at(`id=${"x".repeat(257)}`))).toThrow();
   });
 });

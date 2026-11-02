@@ -12,7 +12,7 @@
  * @module admin/component-facts-client
  */
 import type { ComponentFieldsHost } from "@nextlyhq/builder/shell";
-import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { useDocumentLocale, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import { useMemo } from "react";
 
 import {
@@ -21,29 +21,46 @@ import {
   type ComponentFactsResponse,
 } from "../library-contract";
 
+/** Said while the live definition's ids are being read. */
+export const FACTS_PENDING =
+  "Checking which fields this component’s published version uses…";
+
+/** Said when they could not be read. */
+export const FACTS_FAILED =
+  "This component’s published fields could not be read, so a new field can’t be added yet. Reload to try again.";
+
 /**
- * The inspector's component facts, or `undefined` while there are none to
- * give. Until the read answers, the ids the session has seen still keep a new
- * field off every id the editor opened with.
+ * The inspector's component facts, or `undefined` for a document with no live
+ * definition to read.
+ *
+ * Until the read has answered, adding a field WAITS rather than minting from
+ * the ids the draft holds: a draft that dropped a published field no longer
+ * holds its id, and a new field minted under it would take over the values
+ * placements still store. Read in the language being edited, since a
+ * localized definition can expose different fields in each.
  */
 export function useComponentFacts(
   componentId: string | undefined
 ): ComponentFieldsHost | undefined {
+  const locale = useDocumentLocale();
   const read = usePluginRoute<ComponentFactsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: componentFactsPath(componentId ?? ""),
+    path: componentFactsPath(componentId ?? "", locale?.code),
     enabled: componentId !== undefined,
     staleTime: 0,
   });
-  const { data } = read;
-  return useMemo(
-    () =>
-      data === undefined
-        ? undefined
-        : {
-            reserved: data.live,
-            ...(data.reach === null ? {} : { reach: data.reach }),
-          },
-    [data]
-  );
+  const { data, error } = read;
+  const failed = error !== null && error !== undefined;
+  return useMemo(() => {
+    if (componentId === undefined) return undefined;
+    if (data === undefined) {
+      return {
+        reserved: { unavailable: failed ? FACTS_FAILED : FACTS_PENDING },
+      };
+    }
+    return {
+      reserved: data.live,
+      ...(data.reach === null ? {} : { reach: data.reach }),
+    };
+  }, [componentId, data, failed]);
 }
