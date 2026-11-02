@@ -38,6 +38,8 @@
  */
 import {
   emitTokenBlocks,
+  tokenDisplayLabel,
+  tokenLabelIssue,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   tokenNamingProblem,
@@ -472,6 +474,20 @@ export function removeToken(tokens: SiteTokenSet, at: number): SiteTokenSet {
 }
 
 /**
+ * Every custom property the set's names and identities take. A name is folded
+ * in beside the identity because a name is what a later rename freezes into
+ * one.
+ */
+function usedProperties(tokens: SiteTokenSet | undefined): Set<string> {
+  const used = new Set<string>();
+  for (const token of tokens?.tokens ?? []) {
+    used.add(tokenCustomProperty(token.name, ""));
+    used.add(tokenCustomProperty(tokenIdentity(token), ""));
+  }
+  return used;
+}
+
+/**
  * A name nothing in the set is using yet, based on the kind.
  *
  * Suffixed rather than randomised so a second colour token is `color.2` and not
@@ -485,11 +501,7 @@ function freeName(tokens: SiteTokenSet | undefined, kind: TokenKind): string {
   // `--site-color-2`, so a raw-name check hands back a name the emitter will
   // refuse the moment it is written. Names are folded in alongside identities
   // because a name is what a later rename freezes into one.
-  const used = new Set<string>();
-  for (const token of tokens?.tokens ?? []) {
-    used.add(tokenCustomProperty(token.name, ""));
-    used.add(tokenCustomProperty(tokenIdentity(token), ""));
-  }
+  const used = usedProperties(tokens);
   const free = (candidate: string): boolean =>
     !used.has(tokenCustomProperty(candidate, ""));
   const base = kind === "custom" ? "custom" : kind.toLowerCase();
@@ -526,4 +538,329 @@ export function addToken(
     tokens: { ...base, tokens: [...base.tokens, token] },
     at: base.tokens.length,
   };
+}
+
+/* ------------------------------------------------------------------ groups */
+
+/** The groups the Design panel shows variables in, in order. */
+export type VariableGroup = "colours" | "type" | "spacing" | "other";
+
+const VARIABLE_GROUPS: readonly VariableGroup[] = [
+  "colours",
+  "type",
+  "spacing",
+  "other",
+];
+
+/** Each group's heading, in plain words. */
+const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
+  colours: "Colours",
+  type: "Type scale",
+  spacing: "Spacing, radius & shadows",
+  other: "Other",
+};
+
+/** The code-name prefixes of a type size and of its line height. */
+const SIZE_PREFIX = "font-size.";
+const LINE_HEIGHT_PREFIX = "line-height.";
+
+/** Code-name prefixes that put a length in the spacing group. */
+const SPACING_PREFIXES = ["space.", "spacing.", "gap.", "radius."];
+
+/**
+ * Which group a variable belongs in: by kind for colours and shadows, and by
+ * its code name for the lengths, since a size, a gap and a radius are all
+ * dimensions.
+ */
+function variableGroupOf(token: {
+  name: string;
+  kind: TokenKind;
+}): VariableGroup {
+  if (token.kind === "color") return "colours";
+  if (token.kind === "shadow") return "spacing";
+  const lengthish = token.kind === "dimension" || token.kind === "number";
+  if (
+    lengthish &&
+    (token.name.startsWith(SIZE_PREFIX) ||
+      token.name.startsWith(LINE_HEIGHT_PREFIX))
+  ) {
+    return "type";
+  }
+  if (
+    token.kind === "dimension" &&
+    SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
+  ) {
+    return "spacing";
+  }
+  return "other";
+}
+
+/** One row of the Design panel. */
+export interface VariableEntry {
+  /** The variable itself; for a type size, its font size. */
+  readonly row: TokenRow;
+  /** The plain name shown: the label, or one derived from the code name. */
+  readonly label: string;
+  /** A type size's line height, paired by name, when there is one. */
+  readonly lineHeight?: TokenRow;
+}
+
+/**
+ * Every group with its rows, Other included even when empty: the panel
+ * decides what an empty group shows.
+ *
+ * A font size and the line height of the same name are ONE row, so a type
+ * size reads as "16 / 26" the way designers write it. A line height with no
+ * size of its own still gets a row.
+ */
+export function variableGroups(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode = "light"
+): readonly {
+  group: VariableGroup;
+  heading: string;
+  entries: readonly VariableEntry[];
+}[] {
+  const rows = tokenRows(tokens, mode);
+  const stored = tokens?.tokens ?? [];
+  const lineHeights = new Map<string, TokenRow>();
+  for (const row of rows) {
+    if (row.name.startsWith(LINE_HEIGHT_PREFIX)) {
+      lineHeights.set(row.name.slice(LINE_HEIGHT_PREFIX.length), row);
+    }
+  }
+  const paired = new Set<TokenRow>();
+  const byGroup = new Map<VariableGroup, VariableEntry[]>(
+    VARIABLE_GROUPS.map(group => [group, []])
+  );
+  for (const row of rows) {
+    const token = stored[row.at];
+    if (token === undefined) continue;
+    const group = variableGroupOf(row);
+    const lineHeight =
+      group === "type" && row.name.startsWith(SIZE_PREFIX)
+        ? lineHeights.get(row.name.slice(SIZE_PREFIX.length))
+        : undefined;
+    if (lineHeight !== undefined) paired.add(lineHeight);
+    byGroup.get(group)?.push({
+      row,
+      label: tokenDisplayLabel(token),
+      ...(lineHeight === undefined ? {} : { lineHeight }),
+    });
+  }
+  return VARIABLE_GROUPS.map(group => ({
+    group,
+    heading: VARIABLE_GROUP_LABELS[group],
+    entries: (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row)),
+  }));
+}
+
+/* ------------------------------------------------------------------ labels */
+
+/**
+ * Why this label cannot be given to the variable at `at`, or nothing.
+ *
+ * The engine's rule for a label, plus one of the panel's own: two variables
+ * shown under one name cannot be told apart in a list or a picker.
+ */
+export function variableLabelIssue(
+  tokens: SiteTokenSet | undefined,
+  at: number,
+  label: string
+): string | undefined {
+  const trimmed = label.trim();
+  if (trimmed === "") return undefined;
+  const problem = tokenLabelIssue(trimmed);
+  if (problem !== undefined) return problem;
+  const clash = (tokens?.tokens ?? []).find(
+    (token, index) =>
+      index !== at &&
+      tokenDisplayLabel(token).toLowerCase() === trimmed.toLowerCase()
+  );
+  return clash === undefined
+    ? undefined
+    : `Another variable is already called "${tokenDisplayLabel(clash)}".`;
+}
+
+/**
+ * The set with one variable's label changed. A blank label is removed, so the
+ * derived label shows again and nothing is stored for it.
+ */
+export function relabelToken(
+  tokens: SiteTokenSet,
+  at: number,
+  label: string
+): SiteTokenSet {
+  const token = tokens.tokens[at];
+  if (token === undefined) return tokens;
+  const { label: _previous, ...rest } = token;
+  const trimmed = label.trim();
+  return withToken(
+    tokens,
+    at,
+    trimmed === "" ? rest : { ...rest, label: trimmed }
+  );
+}
+
+/* --------------------------------------------------------------- adding */
+
+/** What a group's "+" can add. */
+export type NewVariable =
+  | "colour"
+  | "type size"
+  | "spacing"
+  | "radius"
+  | "shadow"
+  | Exclude<TokenKind, "color" | "shadow">;
+
+/** The code-name prefix, kind and first value of each new variable. */
+const NEW_VARIABLES: Readonly<
+  Record<NewVariable, { prefix: string; kind: TokenKind; value: string }>
+> = {
+  colour: { prefix: "color", kind: "color", value: "#000000" },
+  "type size": { prefix: "font-size", kind: "dimension", value: "16px" },
+  spacing: { prefix: "space", kind: "dimension", value: "16px" },
+  radius: { prefix: "radius", kind: "dimension", value: "4px" },
+  shadow: { prefix: "shadow", kind: "shadow", value: TOKEN_KIND_SEEDS.shadow },
+  dimension: { prefix: "size", kind: "dimension", value: "0px" },
+  fontFamily: { prefix: "font", kind: "fontFamily", value: "sans-serif" },
+  fontWeight: { prefix: "weight", kind: "fontWeight", value: "400" },
+  number: { prefix: "number", kind: "number", value: "0" },
+  duration: { prefix: "duration", kind: "duration", value: "200ms" },
+  custom: { prefix: "custom", kind: "custom", value: "0" },
+};
+
+/** The line height a new type size starts with. */
+const NEW_LINE_HEIGHT = "24px";
+
+/** The words a new variable's code name is made from, before it is named. */
+const NEW_WORDS: Readonly<Record<NewVariable, string>> = {
+  colour: "new-colour",
+  "type size": "new-size",
+  spacing: "new-spacing",
+  radius: "new-radius",
+  shadow: "new-shadow",
+  dimension: "new-size",
+  fontFamily: "new-font",
+  fontWeight: "new-weight",
+  number: "new-number",
+  duration: "new-duration",
+  custom: "new-value",
+};
+
+/**
+ * The set with a new variable for a group's "+", and where it landed.
+ *
+ * Named so its derived label reads in plain words ("New colour") until the
+ * author names it. A type size adds its line height too, under the same
+ * name, which is what pairs them.
+ */
+export function addVariable(
+  tokens: SiteTokenSet | undefined,
+  what: NewVariable
+): { tokens: SiteTokenSet; at: number } {
+  const base = tokens ?? { tokens: [] };
+  const spec = NEW_VARIABLES[what];
+  const words = freeWords(
+    base,
+    spec.prefix,
+    NEW_WORDS[what],
+    what === "type size"
+  );
+  const added: SiteToken[] = [
+    {
+      name: `${spec.prefix}.${words}`,
+      kind: spec.kind,
+      values: { light: spec.value },
+    },
+  ];
+  if (what === "type size") {
+    added.push({
+      name: `${LINE_HEIGHT_PREFIX}${words}`,
+      kind: "dimension",
+      values: { light: NEW_LINE_HEIGHT },
+    });
+  }
+  return {
+    tokens: { ...base, tokens: [...base.tokens, ...added] },
+    at: base.tokens.length,
+  };
+}
+
+/**
+ * The set with a just-added variable labelled, and its code name made from
+ * that label (`Heading 1` gives `font-size.heading-1`), its line height
+ * following.
+ *
+ * Only for a variable created moments ago, which nothing can reference yet:
+ * once a variable may be in use, its code name stays put and only the label
+ * changes, through {@link relabelToken}.
+ */
+export function labelNewVariable(
+  tokens: SiteTokenSet,
+  at: number,
+  label: string
+): SiteTokenSet {
+  const token = tokens.tokens[at];
+  if (token === undefined || token.id !== undefined) {
+    return relabelToken(tokens, at, label);
+  }
+  const relabelled = relabelToken(tokens, at, label);
+  const slug = slugOf(label);
+  if (slug === "") return relabelled;
+  const dot = token.name.indexOf(".");
+  const prefix = dot === -1 ? token.name : token.name.slice(0, dot);
+  const partnerAt = token.name.startsWith(SIZE_PREFIX)
+    ? tokens.tokens.findIndex(
+        other =>
+          other.name ===
+          `${LINE_HEIGHT_PREFIX}${token.name.slice(SIZE_PREFIX.length)}`
+      )
+    : -1;
+  const others = {
+    ...relabelled,
+    tokens: relabelled.tokens.filter(
+      (_, index) => index !== at && index !== partnerAt
+    ),
+  };
+  const words = freeWords(others, prefix, slug, partnerAt !== -1);
+  const next = [...relabelled.tokens];
+  const named = next[at];
+  if (named !== undefined) next[at] = { ...named, name: `${prefix}.${words}` };
+  const partner = partnerAt === -1 ? undefined : next[partnerAt];
+  if (partner !== undefined) {
+    next[partnerAt] = { ...partner, name: `${LINE_HEIGHT_PREFIX}${words}` };
+  }
+  return { ...relabelled, tokens: next };
+}
+
+/** A label as code-name words: lowercase letters, digits and dashes. */
+function slugOf(label: string): string {
+  return label
+    .normalize("NFKD")
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "");
+}
+
+/**
+ * Words free under `prefix` (and under the line-height prefix too, for a type
+ * size), suffixed `-2`, `-3`… when taken. Compared as custom properties, which
+ * is the real uniqueness boundary, against names and identities alike.
+ */
+function freeWords(
+  tokens: SiteTokenSet,
+  prefix: string,
+  words: string,
+  withLineHeight: boolean
+): string {
+  const used = usedProperties(tokens);
+  const free = (candidate: string): boolean =>
+    !used.has(tokenCustomProperty(`${prefix}.${candidate}`, "")) &&
+    (!withLineHeight ||
+      !used.has(tokenCustomProperty(`${LINE_HEIGHT_PREFIX}${candidate}`, "")));
+  if (free(words)) return words;
+  for (let n = 2; ; n += 1) {
+    if (free(`${words}-${n}`)) return `${words}-${n}`;
+  }
 }

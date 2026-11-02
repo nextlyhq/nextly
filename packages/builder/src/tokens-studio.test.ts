@@ -23,6 +23,11 @@ import { describe, expect, it } from "vitest";
 import {
   TOKEN_KIND_LABELS,
   addToken,
+  addVariable,
+  labelNewVariable,
+  relabelToken,
+  variableGroups,
+  variableLabelIssue,
   clearDarkValue,
   removeToken,
   renameToken,
@@ -508,5 +513,117 @@ describe("two names that land on one custom property", () => {
     // The control. A gate refusing every name would satisfy the case above and
     // make the studio unusable.
     expect(tokenNameIssue(pair, 1, "color.primary-light")).toBeUndefined();
+  });
+});
+
+describe("variables, grouped as the Design panel shows them", () => {
+  const SET: SiteTokenSet = {
+    tokens: [
+      { name: "content.width", kind: "dimension", values: { light: "72rem" } },
+      {
+        name: "color.brand",
+        kind: "color",
+        values: { light: "#1d2b6b", dark: "#8fa7ff" },
+      },
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      { name: "font-size.body", kind: "dimension", values: { light: "16px" } },
+      {
+        name: "line-height.body",
+        kind: "dimension",
+        values: { light: "26px" },
+      },
+      { name: "line-height.loose", kind: "number", values: { light: "1.8" } },
+      { name: "radius.card", kind: "dimension", values: { light: "8px" } },
+      {
+        name: "shadow.card",
+        kind: "shadow",
+        values: { light: "0 1px 2px #0002" },
+      },
+      { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
+    ],
+  };
+  const grouped = (set: SiteTokenSet = SET) =>
+    Object.fromEntries(
+      variableGroups(set).map(group => [
+        group.group,
+        group.entries.map(entry => entry.label),
+      ])
+    );
+
+  it("puts each variable in one of four groups, in the panel's order", () => {
+    expect(variableGroups(SET).map(group => group.heading)).toEqual([
+      "Colours",
+      "Type scale",
+      "Spacing, radius & shadows",
+      "Other",
+    ]);
+    expect(grouped()).toEqual({
+      colours: ["Brand"],
+      type: ["Body", "Loose"],
+      spacing: ["Space 4", "Card", "Card"],
+      other: ["Content width", "Body"],
+    });
+  });
+
+  it("pairs a font size with the line height of the same name", () => {
+    const type = variableGroups(SET).find(group => group.group === "type");
+    const body = type?.entries[0];
+    expect(body?.row.identity).toBe("font-size.body");
+    expect(body?.lineHeight?.identity).toBe("line-height.body");
+    // A line height with no size of its own still has a row.
+    expect(type?.entries[1]?.row.identity).toBe("line-height.loose");
+    expect(type?.entries[1]?.lineHeight).toBeUndefined();
+  });
+
+  it("shows an author's label over the derived one", () => {
+    const set = relabelToken(SET, 1, "Brand blue");
+    expect(grouped(set).colours).toEqual(["Brand blue"]);
+    // And clearing it brings the derived label back, storing no label.
+    const cleared = relabelToken(set, 1, "  ");
+    expect(cleared.tokens[1]?.label).toBeUndefined();
+    expect(grouped(cleared).colours).toEqual(["Brand"]);
+  });
+
+  it("refuses a label that cannot be shown, or that another variable has", () => {
+    expect(variableLabelIssue(SET, 1, "Brand blue")).toBeUndefined();
+    expect(variableLabelIssue(SET, 1, "a\nb")).toMatch(/one line/);
+    expect(variableLabelIssue(SET, 1, "Space 4")).toMatch(/already called/);
+    // Its own label is not a clash with itself.
+    expect(variableLabelIssue(SET, 1, "Brand")).toBeUndefined();
+  });
+
+  it("adds a colour to Colours with a plain starting name", () => {
+    const made = addVariable(SET, "colour");
+    expect(made.tokens.tokens[made.at]).toMatchObject({ kind: "color" });
+    expect(grouped(made.tokens).colours).toEqual(["Brand", "New colour"]);
+  });
+
+  it("adds a type size as a size and its line height together", () => {
+    const made = addVariable({ tokens: [] }, "type size");
+    const type = variableGroups(made.tokens).find(g => g.group === "type");
+    expect(type?.entries).toHaveLength(1);
+    expect(type?.entries[0]?.row.value).toBe("16px");
+    expect(type?.entries[0]?.lineHeight?.value).toBe("24px");
+  });
+
+  it("adds spacing, radius and shadow to their shared group", () => {
+    for (const kind of ["spacing", "radius", "shadow"] as const) {
+      const made = addVariable({ tokens: [] }, kind);
+      expect(
+        variableGroups(made.tokens).map(g => [g.group, g.entries.length])
+      ).toContainEqual(["spacing", 1]);
+    }
+  });
+
+  it("names a just-added variable after its label, pair included", () => {
+    const made = addVariable(SET, "type size");
+    const named = labelNewVariable(made.tokens, made.at, "Heading 1");
+    expect(named.tokens.map(t => t.name)).toContain("font-size.heading-1");
+    expect(named.tokens.map(t => t.name)).toContain("line-height.heading-1");
+    const colour = addVariable(SET, "colour");
+    const brand = labelNewVariable(colour.tokens, colour.at, "Brand");
+    // `color.brand` is taken, so the next free name is used.
+    expect(brand.tokens[colour.at]?.name).toBe("color.brand-2");
+    expect(brand.tokens[colour.at]?.label).toBe("Brand");
   });
 });
