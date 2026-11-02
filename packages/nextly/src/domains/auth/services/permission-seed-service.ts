@@ -194,8 +194,9 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     slug: "create-settings",
     action: "create",
     resource: "settings",
+    // Named by the settings a person adds and removes one by one.
     description:
-      "Permission to add settings such as image sizes, user fields and field groups",
+      "Permission to add settings such as user fields and field groups",
   },
   {
     name: "Update Settings",
@@ -209,8 +210,9 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     slug: "delete-settings",
     action: "delete",
     resource: "settings",
+    // Named by the settings a person adds and removes one by one.
     description:
-      "Permission to remove settings such as image sizes, user fields and field groups",
+      "Permission to remove settings such as user fields and field groups",
   },
   {
     name: "Create Email Providers",

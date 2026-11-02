@@ -74,15 +74,13 @@ describe("the card frame", () => {
       <WidgetCard
         title="Recent activity"
         customizing
-        link={{ label: "View all", href: "/a" }}
         quick={<button>30 days</button>}
       >
         <a href="/x">An entry</a>
       </WidgetCard>
     );
     expect(screen.getByText("An entry").closest("[inert]")).not.toBeNull();
-    expect(screen.getByText("View all").closest("[inert]")).not.toBeNull();
-    // The footer dims with the body, so its link does not look usable.
+    // The footer dims with the body, so whatever it holds does not look usable.
     expect(screen.getByTestId("widget-card-footer")).toHaveClass("opacity-55");
     // The quick setting is for using the card, not arranging it: it keeps its
     // place, so the header keeps its shape, and is out of reach.
@@ -158,7 +156,7 @@ describe("the card frame", () => {
     ).toBeNull();
   });
 
-  it("says what an empty card will show, offers at most its one action, and keeps its footer link", () => {
+  it("says what an empty card will show, and offers at most its one action", () => {
     render(
       <WidgetCard
         title="Recent posts"
@@ -170,18 +168,14 @@ describe("the card frame", () => {
             action: { label: "New post", href: "/posts/new" },
           },
         }}
-        link={{ label: "View all posts", href: "/posts" }}
       >
         <p>never shown</p>
       </WidgetCard>
     );
     expect(screen.getByText("No posts yet")).toBeInTheDocument();
-    // The empty state's one action (foundations R-4), and the footer's one
-    // trailing link (R-1), which R-4 withholds only from a failed card: from an
-    // empty one it still leads somewhere.
+    // The empty state's one action (foundations R-4), and no other link.
     expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual([
       "New post",
-      "View all posts",
     ]);
     expect(screen.getByRole("link", { name: "New post" })).toHaveAttribute(
       "href",
@@ -191,11 +185,7 @@ describe("the card frame", () => {
 
   it("says not available in one fixed wording, with no action and no link", () => {
     render(
-      <WidgetCard
-        title="Usage backfill"
-        state={{ kind: "no-access" }}
-        link={{ label: "Open", href: "/u" }}
-      >
+      <WidgetCard title="Usage backfill" state={{ kind: "no-access" }}>
         <p>never shown</p>
       </WidgetCard>
     );

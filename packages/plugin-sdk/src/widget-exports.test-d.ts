@@ -15,6 +15,7 @@ import { expectTypeOf } from "vitest";
 
 import {
   defineAttentionItem,
+  defineWidget,
   formatWidgetChange,
   formatWidgetNumber,
   WIDGET_CONDITIONS,
@@ -28,10 +29,8 @@ import type {
   GridSize,
   WidgetLifecycle,
   WidgetCondition,
-  WidgetDefinition,
   WidgetQuery,
   WidgetSizeDeclaration,
-  WidgetArchetype,
   WidgetSource,
   WidgetSourceField,
   WidgetFieldChoice,
@@ -42,14 +41,14 @@ import type {
   WidgetInterval,
   WidgetAccessGate,
   WidgetRange,
+  AnyWidget,
+  WidgetReadServices,
 } from "@nextlyhq/plugin-sdk";
 
 type _WidgetSurface = [
-  WidgetDefinition,
   WidgetQuery,
   GridSize,
   WidgetSizeDeclaration,
-  WidgetArchetype,
   WidgetSource,
   WidgetSourceField,
   WidgetFieldChoice,
@@ -58,23 +57,20 @@ type _WidgetSurface = [
   WidgetOp,
 ];
 
-// Every contract the published shapes NAME must be nameable too, which is the
-// property a bare `WidgetDefinition` export would not have: `size` is a
-// `WidgetSizeDeclaration` of `GridSize`s, and a `WidgetSource`'s `fields` are
-// `WidgetSourceField`s. Annotating -- not inferring -- is what proves the names
-// are reachable.
+// Every contract the published shapes NAME must be nameable too: a
+// declaration's `size` is a `WidgetSizeDeclaration` of `GridSize`s, and a
+// `WidgetSource`'s `fields` are `WidgetSourceField`s. Annotating -- not
+// inferring -- is what proves the names are reachable.
 const _unit: GridSize = { w: 6, h: 4 };
 const _size: WidgetSizeDeclaration = { default: _unit, max: { w: 12, h: 6 } };
-const _declared: WidgetDefinition["size"] = _size;
 const _field: WidgetSourceField = { name: "title", type: "string" };
 const _op: WidgetOp = "count";
-void _declared;
+void _size;
 void _field;
 void _op;
 
-// The lifecycle pair, both halves. `WidgetDefinition.lifecycle` is a
-// `WidgetLifecycle` and `visibleWhen` a `WidgetCondition`, so an author who
-// cannot name them cannot annotate a declaration they write. The CONSTANTS
+// The lifecycle pair, both halves, a `WidgetLifecycle` and a `WidgetCondition`,
+// so an author who cannot name them cannot annotate a value of either. The CONSTANTS
 // travel too -- a closed set is what an options UI enumerates, and enumerating
 // it by retyping the literals is a copy that stops matching when the set grows.
 const _lifecycle: WidgetLifecycle = "conditional";
@@ -119,5 +115,22 @@ const _interval: WidgetInterval = "week";
 void _access;
 void _range;
 void _interval;
+
+// A widget's own code, written from the SDK alone: a function handing back a
+// declared widget names its type, and a helper its `load` and `summary.count`
+// share names the reads they are handed.
+function _countOrders(services: WidgetReadServices): Promise<number> {
+  return services.count("orders");
+}
+const _widget: AnyWidget = defineWidget({
+  id: "acme/orders",
+  title: "Orders",
+  description: "How many orders there are.",
+  size: { default: { w: 3, h: 2 } },
+  load: async ({ services }) => ({ total: await _countOrders(services) }),
+  view: "figure",
+});
+expectTypeOf<WidgetReadServices["find"]>().toBeFunction();
+void _widget;
 
 export type { _WidgetSurface };

@@ -27,7 +27,7 @@ const NAMESPACE = "nextly";
  * from an over-long slug would never match and its read could never be
  * invalidated. Bound the slug tag below this and fall back to a hash.
  */
-const MAX_TAG_LENGTH = 256;
+export const MAX_TAG_LENGTH = 256;
 
 /**
  * FNV-1a (32-bit), a small deterministic, dependency-free hash that runs the

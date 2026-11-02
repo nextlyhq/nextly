@@ -51,6 +51,8 @@ export class LanguageRegistry {
   }>();
 
   private stored: SanitizedLocalizationConfig | undefined;
+  /** The stored languages Settings removed, kept inactive with their content. */
+  private retainedCodes: readonly string[] = [];
   private fingerprintSeen: string | undefined;
   private checkedAt: number | undefined;
   private inFlight: Promise<void> | undefined;
@@ -81,6 +83,19 @@ export class LanguageRegistry {
     if (this.configured) return this.configured;
     const pinned = this.snapshot.getStore();
     return pinned ? pinned.localization : this.stored;
+  }
+
+  /**
+   * The languages Settings removed and keeps, inactive, so adding one again brings its content
+   * back. No request reads or writes them; a reader that must account for every translation the
+   * database holds, such as the record of which media items content uses, asks for them here.
+   * Always the latest read, never a request's snapshot, and none for a list the configuration
+   * locks.
+   */
+  // Called through `LiveLocalization`, an interface the dead-code gate cannot trace to the class.
+  // fallow-ignore-next-line unused-class-member
+  retained(): readonly string[] {
+    return this.configured ? [] : this.retainedCodes;
   }
 
   /** Runs `operation` with `current()` fixed to the languages as they are now. */
@@ -154,6 +169,7 @@ export class LanguageRegistry {
     if (started !== this.readsStarted) return;
     if (rows) {
       this.stored = localizationFromStoredLanguages(rows);
+      this.retainedCodes = rows.filter(row => !row.active).map(row => row.code);
       this.fingerprintSeen = fingerprint;
     }
     this.checkedAt = this.now();

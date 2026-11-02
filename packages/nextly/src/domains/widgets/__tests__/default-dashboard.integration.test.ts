@@ -34,20 +34,23 @@ import {
 import { ReleasesRepository } from "../../releases/releases-repository";
 import { refreshContentSources } from "../content-sources";
 import { setDefaultLayoutPlan } from "../default-layout";
+import { listWidgets } from "../registry";
 
 /**
- * The agreed default, in order, each at its agreed size, `w` by `h` in grid units. A list card is
- * five rows tall, the height whose body holds five rows. Team is not on the default, even for a
- * person it is offered to.
+ * The agreed default after the onboarding card, in grid order, each at its agreed size, `w` by
+ * `h` in grid units: Needs attention beside Upcoming releases, Continue beside Content, then Team
+ * activity (beside the form-builder plugin's card, where the plugin is installed). Team and
+ * Create are not on the default, even for a person they are offered to.
  */
 const AGREED = [
   ["core/needs-attention", "8x4"],
-  ["core/quick-create", "4x4"],
-  ["core/recently-edited", "6x5"],
-  ["core/recent-activity", "6x5"],
-  ["core/content", "12x4"],
   ["core/upcoming-releases", "4x4"],
+  ["core/continue", "6x4"],
+  ["core/content-table", "6x4"],
+  ["core/team-activity", "6x4"],
 ] as const;
+/** The form-builder plugin's card, which core's default names as optional. */
+const FORM_SUBMISSIONS = "form-builder/new-submissions";
 const AGREED_IDS: ReadonlySet<string> = new Set(AGREED.map(([id]) => id));
 
 /** The agreed cards, in the order given, without one of them. */
@@ -145,12 +148,20 @@ describe.each(getConfiguredTestDialects())(
             access: { read: ({ user }) => user?.id === readerId },
             fields: [text({ name: "title" })],
           }),
+          defineCollection({
+            slug: "dd_posts",
+            fields: [text({ name: "title" })],
+          }),
         ],
       });
-      // The first account of an instance is its super-admin.
+      // The first account of an instance is its super-admin, on a new project.
       const admin = await account(current, "admin@example.com");
       const editor = await account(current, "editor@example.com");
       readerId = await account(current, "reader@example.com");
+      const nobody = await account(current, "nobody@example.com");
+      // An editor of the posts, who may not read releases.
+      await grantTo(current, editor, "read", ["dd_posts"]);
+      await grantTo(current, editor, "update", ["dd_posts"]);
       // A code rule only narrows the permission, so the reader holds read on
       // the notes the rule admits them to.
       await grantTo(current, readerId, "read", ["dd_notes"]);
@@ -165,24 +176,32 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(await defaultFor(admin)).toEqual(without());
       // Team is offered to the administrator, who manages the team, and is
-      // not on their default: they add it from the add panel.
+      // not on their default: they add it from the add panel. Nor is the
+      // form-builder plugin's card, on an install without the plugin, which
+      // started with no fault.
       const followed = await layoutOf(admin);
-      expect(followed.placements.map(p => p.widgetId)).not.toContain(
-        "core/team"
-      );
+      expect(followed.source).toBe("default");
+      for (const absent of [
+        "core/team",
+        "core/quick-create",
+        FORM_SUBMISSIONS,
+      ]) {
+        expect(followed.placements.map(p => p.widgetId)).not.toContain(absent);
+        expect(followed.defaultPlacements.map(p => p.widgetId)).not.toContain(
+          absent
+        );
+      }
 
-      // No grants: nothing to create, count or list, and no releases.
-      expect(await defaultFor(editor)).toEqual([
-        ["core/recently-edited", "6x5"],
-        ["core/recent-activity", "6x5"],
-      ]);
-
-      // One collection to read and none to write in: Needs attention and Content, never Create.
-      expect(await defaultFor(readerId)).toEqual([
+      // Content to read and edit, and no releases: everything but Upcoming releases.
+      const content = without("core/upcoming-releases");
+      expect(await defaultFor(editor)).toEqual(content);
+      // One collection to read, by a rule: the same cards.
+      expect(await defaultFor(readerId)).toEqual(content);
+      // No content and no releases: Needs attention alone. It is placed for everyone, and it is
+      // the card, not the layout, that leaves the dashboard while nothing waits for its reader;
+      // Continue and Team activity are not, since neither has anything it may draw.
+      expect(await defaultFor(nobody)).toEqual([
         ["core/needs-attention", "8x4"],
-        ["core/recently-edited", "6x5"],
-        ["core/recent-activity", "6x5"],
-        ["core/content", "12x4"],
       ]);
     });
 
@@ -201,15 +220,16 @@ describe.each(getConfiguredTestDialects())(
       await refreshContentSources();
       // The default a site's `admin.dashboard.defaultLayout` asks for, as startup sets it.
       setDefaultLayoutPlan({
-        cards: [{ widget: "core/content" }, { widget: "core/team", w: 6 }],
-        suggestions: true,
-        suggested: [],
+        cards: [
+          { widget: "core/content-table" },
+          { widget: "core/team", w: 6 },
+        ],
       });
 
       const following = await layoutOf(admin);
       expect(following.source).toBe("default");
       expect(sized(following.placements)).toEqual([
-        ["core/content", "12x4"],
+        ["core/content-table", "12x4"],
         ["core/team", "6x4"],
       ]);
 
@@ -231,9 +251,7 @@ describe.each(getConfiguredTestDialects())(
 
       // The site's default changes; the saved dashboard does not.
       setDefaultLayoutPlan({
-        cards: [{ widget: "core/team" }, { widget: "core/content" }],
-        suggestions: true,
-        suggested: [],
+        cards: [{ widget: "core/team" }, { widget: "core/content-table" }],
       });
       const saved = await layoutOf(admin);
       expect(saved.source).toBe("own");
@@ -243,11 +261,60 @@ describe.each(getConfiguredTestDialects())(
       // What a reset would return to is the new default.
       expect(sized(saved.defaultPlacements)).toEqual([
         ["core/team", "4x4"],
-        ["core/content", "12x4"],
+        ["core/content-table", "12x4"],
       ]);
     });
 
-    it("gives a super-admin who may read only internal collections no Content and no Create", async () => {
+    it("has no core/content card: it is not registered, and a saved layout naming it is refused", async () => {
+      current = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        // A collection the administrator may read, so the Content table is theirs to place.
+        collections: [
+          defineCollection({
+            slug: "dd_posts",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const admin = await account(current, "admin@example.com");
+      await refreshContentSources();
+
+      const ids = listWidgets().map(widget => widget.id);
+      expect(ids).not.toContain("core/content");
+      // The control: the registry is populated, the table among it.
+      expect(ids).toContain("core/content-table");
+
+      const read = await layoutOf(admin);
+      expect(read.placements.map(p => p.widgetId)).not.toContain(
+        "core/content"
+      );
+      const write = (widgetId: string) => {
+        signedInAs(admin);
+        return putWidgetLayout(
+          new Request("http://localhost/api/dashboard/layout", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              placements: [
+                { id: "content", widgetId, w: 12, h: 4, removed: false },
+              ],
+              version: read.version,
+              scope: read.scope,
+            }),
+          })
+        );
+      };
+      // Refused as any widget nobody can place is, with no conversion to the table.
+      const refused = await write("core/content");
+      expect(refused.status).toBe(400);
+      expect(await refused.text()).toContain("core/content");
+      expect((await layoutOf(admin)).source).toBe("default");
+      // The control: the same write naming the table is accepted.
+      const accepted = await write("core/content-table");
+      expect(accepted.status).toBe(200);
+    });
+
+    it("gives a super-admin who may read only internal collections Needs attention alone", async () => {
       current = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         collections: [
@@ -260,9 +327,11 @@ describe.each(getConfiguredTestDialects())(
       });
       const admin = await account(current, "admin@example.com");
       await refreshContentSources();
-      expect(await defaultFor(admin)).toEqual(
-        without("core/content", "core/quick-create", "core/upcoming-releases")
-      );
+      // No content the dashboard lists and no release made yet: Needs attention alone (placed for
+      // everyone), with no Content, Continue or Team activity.
+      expect(await defaultFor(admin)).toEqual([
+        ["core/needs-attention", "8x4"],
+      ]);
     });
   }
 );

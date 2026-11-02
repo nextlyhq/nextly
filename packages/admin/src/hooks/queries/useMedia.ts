@@ -140,13 +140,15 @@ export function useMedia(
     },
     // A new page, sort or search keeps showing the current results until its
     // own arrive, instead of dropping back to the loading skeleton. A new
-    // folder does not: its heading would sit over the old folder's rows, and
+    // folder or view does not: its heading would sit over the old rows, and
     // their edit and delete controls would act on files the reader just left.
-    placeholderData: (previous, previousQuery) =>
-      (previousQuery?.queryKey[1] as MediaParams | undefined)?.folderId ===
-      params?.folderId
+    placeholderData: (previous, previousQuery) => {
+      const before = previousQuery?.queryKey[1] as MediaParams | undefined;
+      return before?.folderId === params?.folderId &&
+        before?.view === params?.view
         ? previous
-        : undefined,
+        : undefined;
+    },
     ...options,
   });
 }
@@ -929,24 +931,16 @@ export function useSubfolders(
  * useFolderContents - Query hook for fetching a folder's contents (subfolders + media)
  *
  * Asks nothing for the root (`null`). The root has no folder record and no
- * breadcrumbs, and its contents are every file outside a folder, unbounded, so
- * a reader that only wants the folder's name or trail must not download them.
+ * breadcrumbs, so a reader that only wants the folder's name or trail has
+ * nothing to ask it for. `files` is the folder's first page of files, and
+ * `meta.total` how many it holds in all.
  *
  * @param folderId - Folder ID, or null for the root
  * @returns TanStack Query result with folder contents
  */
-export function useFolderContents(folderId: string | null): UseQueryResult<
-  {
-    folder: MediaFolder | null;
-    subfolders: MediaFolder[];
-    files: Media[];
-    breadcrumbs: Array<{
-      id: string;
-      name: string;
-    }>;
-  },
-  Error
-> {
+export function useFolderContents(
+  folderId: string | null
+): UseQueryResult<FolderContentsResponse["data"], Error> {
   return useQuery<FolderContentsResponse["data"], Error>({
     queryKey: ["folders", "contents", folderId],
     queryFn: async () => {

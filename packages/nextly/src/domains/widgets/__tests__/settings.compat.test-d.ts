@@ -69,11 +69,11 @@ type SelectField = Extract<FieldConfig, { type: "select" }>;
 type TextareaField = Extract<FieldConfig, { type: "textarea" }>;
 type DateField = Extract<FieldConfig, { type: "date" }>;
 
-// `quick` and `editor` are the keys allowed beyond the field's: the card's
-// header reads the one, and the settings sheet the other, drawing a setting
-// that names an editor by that editor instead of `FieldRenderer`, so a
-// renderer that ignores either loses nothing.
-type CardOnly = "quick" | "editor";
+// `quick`, `editor` and `section` are the keys allowed beyond the field's: the
+// card's header reads the first, and the settings panel the other two, drawing
+// a setting that names an editor by that editor instead of `FieldRenderer`, in
+// the section it names, so a renderer that ignores all three loses nothing.
+type CardOnly = "quick" | "editor" | "section";
 expectTypeOf<
   Exclude<keyof TextSetting, keyof TextField | CardOnly>
 >().toBeNever();

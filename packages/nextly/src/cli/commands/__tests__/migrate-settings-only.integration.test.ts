@@ -45,7 +45,8 @@ import {
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
-import { parseSqlSections, runMigrate } from "../migrate";
+import { runMigrate } from "../migrate";
+import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import { runMigrateDown } from "../migrate-down";
 import { runMigrateCreate } from "../migrate-create";
 

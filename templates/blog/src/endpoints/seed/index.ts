@@ -1,7 +1,7 @@
 /**
  * Blog Template Seed Script
  *
- * Exports a `seed({ nextly })` function that populates demo content
+ * Exports a `seed({ nextly, config })` function that populates demo content
  * (roles, posts, categories, tags, navigation, site-settings,
  * homepage, newsletter form). Triggered from the auth-gated POST
  * route at `src/app/admin/api/seed/route.ts` — the route validates

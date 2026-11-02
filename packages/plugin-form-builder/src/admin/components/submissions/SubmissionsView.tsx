@@ -191,12 +191,16 @@ export function SubmissionsView({
         setSlugs(resolved);
 
         // Page through ALL forms — a capped single fetch would silently
-        // drop forms from the filter and the per-field column lookup.
+        // drop forms from the filter and the per-field column lookup. The
+        // entries API reads the page size from `limit` and answers its
+        // default page when that is absent, so the size goes there: under
+        // any other name the first page comes back short and the loop below
+        // reads it as the last.
         const allForms: FormOption[] = [];
         const formsPageSize = 200;
         for (let formsPage = 1; ; formsPage += 1) {
           const formsRes = await fetch(
-            `/admin/api/collections/${resolved.forms}/entries?pageSize=${formsPageSize}&page=${formsPage}`,
+            `/admin/api/collections/${resolved.forms}/entries?limit=${formsPageSize}&page=${formsPage}`,
             { credentials: "include" }
           );
           if (!formsRes.ok) break;
@@ -265,9 +269,11 @@ export function SubmissionsView({
       if (statusTab === "all") where.status = { not_equals: "spam" };
       else where.status = { equals: statusTab };
 
+      // `limit`, the entries API's page size: the pager counts pages of
+      // PAGE_SIZE, so a page the server cut to its default would skip rows.
       const params = new URLSearchParams({
         page: String(page),
-        pageSize: String(PAGE_SIZE),
+        limit: String(PAGE_SIZE),
         sortBy: "submittedAt",
         sortOrder: "desc",
         where: JSON.stringify(where),

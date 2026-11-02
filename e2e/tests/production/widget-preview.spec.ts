@@ -1,6 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
-import { includingHidden } from "../support/test";
+import { includingHidden, test } from "../support/visible";
 
 /**
  * The widget preview page's address, and its read, on a PRODUCTION build.

@@ -787,12 +787,12 @@ export const dashboard: DashboardContribution = {
   alternatives: { "acme/recent-orders": "${core}" }, ${MARK}
 };
 `,
-      "core/recently-edit",
-      "core/recently-edited"
+      "core/continu",
+      "core/continue"
     ),
     // 2820 is 2322 with a suggestion: the compiler names the id it meant.
     code: 2820,
-    message: `Did you mean '"core/recently-edited"'?`,
+    message: `Did you mean '"core/continue"'?`,
   },
   {
     name: "where a plugin's widgets are known, it may suggest only its own",
@@ -823,7 +823,7 @@ export const dashboard: DashboardContribution<
   typeof ordersByState | typeof recentOrders
 > = {
   widgets: [ordersByState, recentOrders],
-  alternatives: { "${id}": "core/recently-edited" }, ${MARK}
+  alternatives: { "${id}": "core/continue" }, ${MARK}
 };
 `,
       "acme/revenue",

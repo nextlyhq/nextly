@@ -129,3 +129,34 @@ export interface RecentEntriesWidgetData {
   /** Whether `total` is a floor. */
   atLeast?: boolean;
 }
+
+/**
+ * What a list card answered by one of core's own sources draws (Content,
+ * Continue where you left off, Upcoming releases, Team activity): the source's
+ * rows as JSON carries them, with what the same read counted beside them.
+ *
+ * @internal
+ */
+export interface CoreListWidgetData {
+  /** The rows, in the source's order: one more than the card draws, when more exist. */
+  items: readonly TransportableRow[];
+  /** How many rows the read matched in all, for "View all (N)". */
+  total?: number;
+  /** Whether `total` is a floor. */
+  atLeast?: boolean;
+  /** How `total` divides among the kinds of row (`{ collection: 8, single: 5 }`). */
+  totalByKind?: Readonly<Record<string, number>>;
+  /** The span the source looked at, in whole days back from now. */
+  window?: { days: number };
+}
+
+/**
+ * What the Team card draws: how many people and roles there are, each only
+ * when the reader may see it, so a count withheld is never drawn as zero.
+ *
+ * @internal
+ */
+export interface TeamWidgetData {
+  users?: number;
+  roles?: number;
+}

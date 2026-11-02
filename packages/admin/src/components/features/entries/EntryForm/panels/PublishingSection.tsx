@@ -12,21 +12,31 @@
  * Shown only to someone who may read releases: the list is gated, and a
  * "Not scheduled" said without reading it would be a guess.
  *
+ * Under "Not scheduled", the editor's own "Schedule publish…": the same action
+ * the Publish split offers, run through the editor's action model, so it is
+ * held for the same reasons and says why in the same words.
+ *
  * @module components/features/entries/EntryForm/panels/PublishingSection
  */
 
 import type { JSX } from "react";
+import { useId } from "react";
 
+import { SCHEDULE_OUTCOME_ATTRIBUTE } from "@admin/components/features/releases/dialog-opener";
 import {
   describeRelease,
   formatScheduledAt,
 } from "@admin/components/features/releases/release-schedule";
-import { Skeleton } from "@admin/components/ui";
+import { SCHEDULE_PUBLISH_ACTION_ID } from "@admin/components/features/releases/schedule-publish";
+import { Button, Skeleton } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
-import { useReleasesContaining } from "@admin/hooks/queries/useReleases";
+import { useReleasesContaining } from "@admin/hooks/queries/useReleasesContaining";
 import { useCan } from "@admin/hooks/useCan";
 import type { Release, ReleaseDocumentRef } from "@admin/types/releases";
+
+import { reasonFor } from "../DocumentActionBar";
+import { useDocumentActionsContext } from "../DocumentActionsContext";
 
 import { PanelSection } from "./PanelSection";
 
@@ -47,7 +57,9 @@ export function PublishingSection({
   if (!canRead || document === undefined) return null;
 
   return (
-    <PanelSection title="Publishing">
+    // Takes focus once a schedule made from its own offer lands: the offer
+    // goes with "Not scheduled.", and the section names the release next.
+    <PanelSection title="Publishing" focusTarget={SCHEDULE_OUTCOME_ATTRIBUTE}>
       <PublishingBody
         releases={data?.items}
         isError={isError}
@@ -84,7 +96,12 @@ function PublishingBody({
     );
   }
   if (releases.length === 0) {
-    return <p className="text-sm text-muted-foreground">Not scheduled.</p>;
+    return (
+      <div className="flex flex-col items-start gap-2">
+        <p className="text-sm text-muted-foreground">Not scheduled.</p>
+        <ScheduleButton />
+      </div>
+    );
   }
   return (
     // In the order they fall due, as the list answers them: the last row is
@@ -104,6 +121,49 @@ function PublishingBody({
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * "Schedule publish…", where the editor offers it: the action the page
+ * contributed to the editor's model, run as the split's menu row runs it.
+ * Held with its reason as visible text, as a menu row says it: a disabled
+ * button's title reaches neither a keyboard nor a touch screen.
+ */
+function ScheduleButton() {
+  const reasonId = useId();
+  const documentActions = useDocumentActionsContext();
+  const action = documentActions?.actions.find(
+    each => each.id === SCHEDULE_PUBLISH_ACTION_ID
+  );
+  const binding = documentActions?.bindings[SCHEDULE_PUBLISH_ACTION_ID];
+  if (
+    documentActions === null ||
+    action === undefined ||
+    binding === undefined
+  ) {
+    return null;
+  }
+  const reason = reasonFor(action, binding);
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={reason !== undefined}
+        onClick={() => void documentActions.run(SCHEDULE_PUBLISH_ACTION_ID)}
+        data-action={SCHEDULE_PUBLISH_ACTION_ID}
+        {...(reason === undefined ? {} : { "aria-describedby": reasonId })}
+      >
+        {action.label}
+      </Button>
+      {reason === undefined ? null : (
+        <p id={reasonId} className="text-xs text-muted-foreground">
+          {reason}
+        </p>
+      )}
+    </>
   );
 }
 
