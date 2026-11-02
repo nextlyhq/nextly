@@ -31,6 +31,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import { createTableIfAbsent } from "../../../database/concurrent-create";
 import { safeCode } from "../../../database/errors";
 import { futureExpression, nowExpression } from "../../../database/lease-clock";
 import {
@@ -1286,8 +1287,14 @@ async function ensureLockRow(
   adapter: DrizzleAdapter,
   dialect: MigrationDialect
 ): Promise<void> {
+  // A process of an earlier version can create it at the same moment; see `createTableIfAbsent`.
   for (const statement of getMigrationLockDdl(dialect)) {
-    await adapter.executeQuery(statement);
+    await createTableIfAbsent(
+      adapter,
+      dialect,
+      MIGRATION_LOCK_TABLE,
+      statement
+    );
   }
 
   // Runs unconditionally rather than behind a "does the column exist" probe, because the probe and

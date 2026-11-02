@@ -26,6 +26,10 @@ import {
   type DiscardWorkingDraftResponse,
 } from "@admin/services/versionApi";
 
+import {
+  refreshRemovedFromCodeSchema,
+  removedFromCodeRefusal,
+} from "./removed-from-code-refusal";
 import { singleDocumentKeys } from "./useSingles";
 
 export interface UseDiscardSingleWorkingDraftOptions {
@@ -114,8 +118,14 @@ export function useDiscardSingleWorkingDraft({
     },
 
     onError: (error: Error) => {
+      refreshRemovedFromCodeSchema(queryClient, error);
       if (showToast) {
-        toast.error(`Failed to discard working draft: ${error.message}`);
+        // The refusal for an entity removed from code is a whole sentence of
+        // its own, so nothing goes in front of it.
+        toast.error(
+          removedFromCodeRefusal(error) ??
+            `Failed to discard working draft: ${error.message}`
+        );
       }
       onError?.(error);
     },

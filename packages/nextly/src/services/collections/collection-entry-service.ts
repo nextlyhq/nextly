@@ -928,6 +928,14 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Rebuild the record of which media items every entry of a collection uses,
+   * for `nextly media reindex-usage`. Returns how many entries it read.
+   */
+  async rebuildMediaUsage(collectionName: string): Promise<number> {
+    return this.mutationService.rebuildMediaUsage(collectionName);
+  }
+
+  /**
    * Remove a document's pending working-draft sidecar under the same parent-row
    * lock a draft save takes, so a discard cannot delete a draft that a
    * concurrent save committed after the discard's checks. The discard handler

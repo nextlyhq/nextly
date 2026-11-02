@@ -204,20 +204,54 @@ const PG_ERROR_CODES: Record<string, DatabaseErrorKind> = {
  * and create objects in `public` but may not create schemas would fail to
  * connect over a schema that is already there. Reading `pg_namespace` needs no
  * privilege, so only a schema that is genuinely missing asks for one.
+ *
+ * Created inside a transaction holding an advisory lock on the schema's name,
+ * and looked up again once the lock is held. `IF NOT EXISTS` alone is not safe
+ * against itself: two processes connecting at the same moment can both pass its
+ * check, and the second to commit fails with a unique violation on
+ * `pg_namespace_nspname_index`, which fails its connect. The transaction-scoped
+ * lock makes the second wait for the first to commit, and its lookup, a new
+ * statement with a new snapshot, then finds the schema. The transaction is
+ * read committed whatever the database's or role's default: at repeatable
+ * read or serializable the snapshot is fixed by the first statement, the lock
+ * wait, so the lookup would miss the schema and the CREATE that followed would
+ * ask for the database privilege the first paragraph avoids. Released by the commit
+ * or rollback, so it never outlives this one connection's transaction, and a
+ * transaction-mode pooler keeps all of it on one server connection.
  */
 async function ensureSchemaExists(
   client: PoolClient,
   schema: string
 ): Promise<void> {
   const name = assertSchemaName(schema);
+  if (await schemaExists(client, name)) return;
+  await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+  try {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext('nextly:create-schema'), hashtext($1))",
+      [name]
+    );
+    if (!(await schemaExists(client, name))) {
+      // Still `IF NOT EXISTS`: a process of an earlier version takes no lock.
+      await client.query(`CREATE SCHEMA IF NOT EXISTS ${name}`);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  }
+}
+
+/** Whether the database has a schema of this name. Needs no privilege. */
+async function schemaExists(
+  client: PoolClient,
+  name: string
+): Promise<boolean> {
   const existing = await client.query(
     "SELECT 1 FROM pg_namespace WHERE nspname = $1",
     [name]
   );
-  if (existing.rows.length > 0) return;
-  // Still `IF NOT EXISTS`: another process connecting at the same moment may
-  // create it between the lookup and this statement.
-  await client.query(`CREATE SCHEMA IF NOT EXISTS ${name}`);
+  return existing.rows.length > 0;
 }
 
 /**

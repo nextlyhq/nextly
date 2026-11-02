@@ -35,7 +35,9 @@ import type { Release } from "@admin/types/releases";
  * the reader's own zone for one it cannot use — sensible for rendering, and a
  * lie once a label claims the time is Berlin's.
  */
-export function formatScheduledAt(release: Release): string | null {
+export function formatScheduledAt(
+  release: Pick<Release, "scheduledAt" | "timezone">
+): string | null {
   if (!release.scheduledAt) return null;
   const at = new Date(release.scheduledAt);
   if (Number.isNaN(at.getTime())) return null;

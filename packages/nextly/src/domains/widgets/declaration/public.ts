@@ -30,9 +30,11 @@ export {
   type WidgetRenderSize,
   type WidgetSkeleton,
   type WidgetSummary,
+  type WidgetSummaryCount,
 } from "./define-widget";
 export {
   defineAttentionItem,
+  MAX_ATTENTION_ITEMS_PER_PLUGIN,
   type AdminDashboardConfig,
   type AttentionCount,
   type AttentionItem,
@@ -42,13 +44,7 @@ export {
   type WidgetOverride,
   type WidgetRef,
 } from "./dashboard";
-export type {
-  ComponentDisplay,
-  CoreDisplay,
-  CoreView,
-  WidgetDisplay,
-  WidgetView,
-} from "./displays";
+export type { CoreView, WidgetView } from "./displays";
 export {
   setting,
   type ChartStyle,

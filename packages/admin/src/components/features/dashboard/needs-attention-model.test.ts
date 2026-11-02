@@ -1,188 +1,105 @@
 /**
- * How the Needs attention card reads its slot: which state it draws, which
- * bucket is a kind and which a part, where each link goes, and which numbers
- * are floors.
+ * How the Needs your attention card reads its answer: the server's order kept, counts as the
+ * card writes them, failed items and reasons, and only links inside the admin.
  */
-import type { WidgetSlot } from "nextly/widget-result";
+import { digestTotal } from "nextly/attention-keys";
 import { describe, expect, it } from "vitest";
 
-import { attentionTotal, attentionView } from "./needs-attention-model";
+import { attentionRows } from "./needs-attention-model";
 
-const NOW = Date.parse("2026-10-22T12:00:00Z");
+const item = (fields: Record<string, unknown>) => ({
+  id: "core/overdue-releases",
+  kind: "overdue",
+  label: "Overdue releases",
+  count: 2,
+  severity: "critical",
+  link: "releases?tab=attention&reason=overdue",
+  ...fields,
+});
 
-function grouped(
-  buckets: { value: string; count: number; atLeast?: boolean }[],
-  choices: { value: string; label: string }[] = [],
-  asOf?: string
-): WidgetSlot {
-  return {
-    ok: true,
-    result: {
-      op: "groupBy",
-      buckets,
-      field: { name: "item", label: "Item", type: "string", choices },
-      ...(asOf === undefined ? {} : { asOf }),
-    },
-  };
-}
-
-/** The `where` a link carries, read back. */
-function whereOf(href: string | undefined): unknown {
-  const query = href?.split("?")[1] ?? "";
-  return JSON.parse(new URLSearchParams(query).get("where") ?? "null");
-}
-
-describe("the Needs attention card's view of its slot", () => {
-  it("is loading before the batch answers, and not available for a refused source", () => {
-    expect(attentionView(undefined, NOW)).toEqual({ state: "loading" });
-    expect(
-      attentionView({ ok: false, error: "x", code: "unavailable" }, NOW)
-    ).toEqual({ state: "unavailable" });
-    expect(attentionView({ ok: false, error: "Down" }, NOW)).toEqual({
-      state: "error",
-      message: "Down",
-    });
-  });
-
-  it("is all clear only for an answer with nothing waiting", () => {
-    expect(attentionView(grouped([]), NOW)).toEqual({ state: "clear" });
-  });
-
-  it("orders the kinds as the card names them, whatever order the buckets came in", () => {
-    const view = attentionView(
-      grouped([
-        { value: "overdue", count: 5 },
-        { value: "unpublished", count: 2 },
-        { value: "unpublished:collection:posts", count: 2 },
-      ]),
-      NOW
-    );
-    expect(view.state === "ready" && view.kinds.map(k => k.kind)).toEqual([
-      "unpublished",
-      "overdue",
-    ]);
-  });
-
-  it("links each part to exactly what it counts", () => {
-    const view = attentionView(
-      grouped(
-        [
-          { value: "unpublished", count: 3 },
-          { value: "unpublished:collection:posts", count: 2 },
-          { value: "unpublished:single:homepage", count: 1 },
-          { value: "scheduled", count: 4 },
-          { value: "scheduled:collection:posts", count: 4 },
-          { value: "overdue", count: 1 },
-        ],
-        [
-          { value: "unpublished:collection:posts", label: "Posts" },
-          { value: "unpublished:single:homepage", label: "Homepage" },
-          { value: "scheduled:collection:posts", label: "Posts" },
-        ]
-      ),
-      NOW
-    );
-    if (view.state !== "ready") throw new Error(view.state);
-    const [unpublished, scheduled, overdue] = view.kinds;
-
-    expect(unpublished.parts.map(p => p.label)).toEqual(["Posts", "Homepage"]);
-    expect(unpublished.parts[0].href.split("?")[0]).toBe(
-      "/admin/collections/posts"
-    );
-    expect(whereOf(unpublished.parts[0].href)).toEqual({
-      _pendingChange: true,
-    });
-    // A Single has no list, so it opens itself.
-    expect(unpublished.parts[1].href).toBe("/admin/singles/homepage");
-    // Spread over two places, the kind has no one list of its own.
-    expect(unpublished.href).toBeUndefined();
-
-    // One collection holds the whole kind, so the kind links to its list, with
-    // the week the server counted.
-    expect(whereOf(scheduled.href)).toEqual({
-      _inRelease: { scheduledBefore: "2026-10-29T12:00:00.000Z" },
-    });
-    expect(overdue.href).toBe("/admin/releases?tab=attention&reason=overdue");
-  });
-
-  it("measures this week from the answer's own instant, not the page's clock", () => {
-    const view = attentionView(
-      grouped(
-        [
-          { value: "scheduled", count: 1 },
-          { value: "scheduled:collection:posts", count: 1 },
-        ],
-        [],
-        "2026-10-01T08:30:00.000Z"
-      ),
-      NOW
-    );
-    if (view.state !== "ready") throw new Error(view.state);
-    expect(whereOf(view.kinds[0].parts[0].href)).toEqual({
-      _inRelease: { scheduledBefore: "2026-10-08T08:30:00.000Z" },
-    });
-  });
-
-  it("opens a Single in the language its change was counted in", () => {
-    const view = attentionView(
-      grouped([
-        { value: "unpublished", count: 2 },
-        { value: "unpublished:single:home:fr", count: 1 },
-        { value: "unpublished:single:about", count: 1 },
-      ]),
-      NOW
-    );
-    if (view.state !== "ready") throw new Error(view.state);
-    expect(view.kinds[0].parts.map(p => p.href)).toEqual([
-      "/admin/singles/home?locale=fr",
-      "/admin/singles/about",
-    ]);
-  });
-
-  it("says a kind was not all checked, rather than clear, when nothing was found in the lists it read", () => {
-    const view = attentionView(
-      grouped([{ value: "unpublished", count: 0, atLeast: true }]),
-      NOW
-    );
-    expect(view).toEqual({
-      state: "ready",
-      kinds: [
-        {
-          kind: "unpublished",
-          label: "Unpublished changes",
-          count: 0,
-          atLeast: true,
-          unchecked: true,
-          parts: [],
-        },
+describe("attentionRows", () => {
+  it("keeps the answer's order, which the server ranked, rather than sorting again", () => {
+    // Out of the server's own rank on purpose: a card that sorted would put critical first.
+    const rows = attentionRows({
+      items: [
+        item({ id: "seo/a", label: "A", severity: "warning", count: 1 }),
+        item({ id: "core/stopped-releases", label: "Stopped", count: 9 }),
       ],
     });
-    // A zero that is not a floor is still nothing waiting.
-    expect(
-      attentionView(grouped([{ value: "unpublished", count: 0 }]), NOW)
-    ).toEqual({ state: "clear" });
+    expect(rows.map(row => row.id)).toEqual(["seo/a", "core/stopped-releases"]);
   });
 
-  it("keeps each floor where the source put it", () => {
-    const view = attentionView(
-      grouped([
-        { value: "unpublished", count: 99, atLeast: true },
-        { value: "unpublished:collection:posts", count: 99, atLeast: true },
-        { value: "overdue", count: 1 },
-      ]),
-      NOW
-    );
-    if (view.state !== "ready") throw new Error(view.state);
-    expect(view.kinds.map(k => [k.kind, k.atLeast])).toEqual([
-      ["unpublished", true],
-      ["overdue", false],
+  it("writes each count as the card does: whole, a floor as N+, and 99+ past the cap", () => {
+    const rows = attentionRows({
+      items: [
+        item({ id: "a/1", count: 7 }),
+        item({ id: "a/2", count: 7, atLeast: true }),
+        item({ id: "a/3", count: 150 }),
+      ],
+    });
+    expect(rows.map(row => row.title)).toEqual([
+      "Overdue releases · 7",
+      "Overdue releases · 7+",
+      "Overdue releases · 99+",
     ]);
-    expect(attentionTotal(view.kinds)).toEqual({ count: 100, atLeast: true });
+    expect(rows.map(row => row.spoken)).toEqual([
+      "Overdue releases: 7",
+      "Overdue releases: 7 or more",
+      "Overdue releases: 99 or more",
+    ]);
   });
 
-  it("leaves out a bucket that is not a key it knows", () => {
-    expect(
-      attentionView(grouped([{ value: "plugin:seo", count: 3 }]), NOW)
-    ).toEqual({ state: "clear" });
+  it("draws a failed item by its label alone, with no count", () => {
+    const [row] = attentionRows({ items: [item({ count: 0, failed: true })] });
+    expect(row).toMatchObject({ failed: true, title: "Overdue releases" });
+  });
+
+  it("carries the reason when there is one, and none when there is not", () => {
+    const [given, absent] = attentionRows({
+      items: [
+        item({ reason: "Still scheduled after its time." }),
+        item({ id: "a/2" }),
+      ],
+    });
+    expect(given.reason).toBe("Still scheduled after its time.");
+    expect(absent).not.toHaveProperty("reason");
+  });
+
+  it("links only inside the admin, and leaves out what it cannot draw", () => {
+    const rows = attentionRows({
+      items: [
+        item({ link: "collections/pages" }),
+        item({ id: "a/2", link: "//elsewhere.example/x" }),
+        item({ id: "a/3", link: "javascript:alert(1)" }),
+        { id: "a/4" },
+        "not an item",
+      ],
+    });
+    expect(rows).toHaveLength(3);
+    expect(rows[0].href).toMatch(/\/collections\/pages$/);
+    expect(rows[1]).not.toHaveProperty("href");
+    expect(rows[2]).not.toHaveProperty("href");
+    expect(attentionRows(undefined)).toEqual([]);
+    expect(attentionRows({ items: "x" })).toEqual([]);
+  });
+
+  it("draws exactly the items the dashboard header counts, whatever else the answer holds", () => {
+    // The header's number is `digestTotal` over the same items; the card's
+    // title count is its row count. Undrawable entries of every shape, so a
+    // card that drew one the header skips, or skipped one it counts, differs.
+    const items: unknown[] = [
+      item({ id: "a/1" }),
+      item({ id: "a/2", count: 0, failed: true }),
+      item({ id: "" }),
+      item({ id: "a/4", label: "" }),
+      item({ id: "a/5", label: 7 }),
+      { id: "a/6" },
+      [item({ id: "a/7" })],
+      "not an item",
+      null,
+    ];
+    const rows = attentionRows({ items });
+    expect(rows.map(row => row.id)).toEqual(["a/1", "a/2"]);
+    expect(rows).toHaveLength(digestTotal(items).count);
   });
 });

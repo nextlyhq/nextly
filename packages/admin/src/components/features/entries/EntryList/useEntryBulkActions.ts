@@ -27,18 +27,23 @@ export interface EntryBulkActions {
  * hooks stay unconditional and the answer is "nothing".
  */
 export function useEntryBulkActions(
-  collection: Pick<CollectionForColumns, "slug" | "status"> | undefined
+  collection:
+    | Pick<CollectionForColumns, "slug" | "status" | "removedFromCode">
+    | undefined
 ): EntryBulkActions {
   const slug = collection?.slug ?? "";
   const hasStatus = collection?.status === true;
+  // A collection removed from code refuses every write to its entries, so no
+  // permission offers one here.
+  const writable = collection?.removedFromCode !== true;
   const canDelete = useCan(`delete-${slug}`);
   const canPublish = useCan(`publish-${slug}`);
   const canUnpublish = useCan(`unpublish-${slug}`);
 
   const offered = {
-    delete: slug !== "" && canDelete,
-    publish: hasStatus && canPublish,
-    unpublish: hasStatus && canUnpublish,
+    delete: writable && slug !== "" && canDelete,
+    publish: writable && hasStatus && canPublish,
+    unpublish: writable && hasStatus && canUnpublish,
   };
   return {
     ...offered,
