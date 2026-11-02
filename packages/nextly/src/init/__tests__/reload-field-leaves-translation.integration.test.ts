@@ -261,9 +261,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("finishes a move an earlier reload stopped after adding the main column", async () => {
       await seed({ e1: { en: "Hello", es: "Hola" } });
-      // What the first apply of a stopped move leaves: the main column, nullable and empty.
+      // What the first apply of a stopped move leaves: the main column, nullable and empty, of the
+      // type a code-first text field has (bounded on MySQL).
       await handle.adapter.executeQuery(
-        `ALTER TABLE ${q(TABLE)} ADD COLUMN ${q("body")} TEXT`
+        `ALTER TABLE ${q(TABLE)} ADD COLUMN ${q("body")} ${dialect === "mysql" ? "VARCHAR(255)" : "TEXT"}`
       );
 
       loaded.config = configWith({ localized: false, required: true });
