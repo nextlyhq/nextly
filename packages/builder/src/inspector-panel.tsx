@@ -56,6 +56,7 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
+import { deviceLabel } from "./breakpoint-switcher";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
@@ -750,7 +751,7 @@ function StyleTab({
     */}
       <EditingBar
         target={{ kind: "block" }}
-        device={breakpointLabel(breakpoints, breakpoint ?? BASE_BREAKPOINT)}
+        device={editedDevice(breakpoints, breakpoint ?? BASE_BREAKPOINT)}
         state={state}
         stateControl={
           <StyleStateField
@@ -1213,4 +1214,16 @@ function ManyBlocksPanel({
       </p>
     </div>
   );
+}
+
+/**
+ * The device the Style tab edits, named as the device switcher names it, so
+ * the bar and the switcher beside it agree. A tier the switcher does not offer
+ * (a container tier) is named by its own definition.
+ */
+function editedDevice(
+  breakpoints: BreakpointSet | undefined,
+  id: BreakpointId
+): string {
+  return deviceLabel(breakpoints, id) ?? breakpointLabel(breakpoints, id);
 }

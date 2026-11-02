@@ -387,6 +387,28 @@ describe("the bar that says what an edit changes", () => {
   });
 });
 
+describe("the device the bar names", () => {
+  it("names the unconditional tier as the device switcher does", () => {
+    // A site's breakpoints list only its narrower tiers; the unconditional
+    // one is built in, and the switcher calls it Desktop.
+    const breakpoints = {
+      viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+      container: [],
+    } as never;
+    render(
+      <InspectorPanel
+        editor={editorFor(inside("acme/row"))}
+        breakpoints={breakpoints}
+        breakpoint={BASE_BREAKPOINT}
+        styleState={{ state: "base", onChange: vi.fn() }}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    const device = document.querySelector("[data-edit-device]");
+    expect(device?.textContent).toBe("Desktop");
+  });
+});
+
 describe("Advanced's own write path", () => {
   it("refuses a write once a lock lands after the panel drew", () => {
     // The fieldset makes a locked design read-only; this is the write path

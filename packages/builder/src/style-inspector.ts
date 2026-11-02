@@ -32,6 +32,7 @@
 
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   getBlock,
   getStyleProperty,
   STYLE_CATALOG,
@@ -45,6 +46,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import { isUsableWidth, liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
 import {
   INSPECTOR_SECTIONS,
@@ -335,27 +337,31 @@ function displayOf(
 }
 
 /**
- * This tier and every tier that also applies at it, narrowest first: the
- * wider tiers of its own axis by their upper bound, then the unconditional
- * one. Unknown tiers read as themselves and the unconditional one.
+ * The tiers whose rules apply at the edited one, narrowest first.
+ *
+ * WHICH tiers is the shared resolver's answer (`liveBreakpointsFor`), the one
+ * the provenance dots use, so an axis's unbounded container tier is included
+ * exactly where the compiler applies it. Only the ORDER is added here, by each
+ * tier's upper bound with the unbounded ones last, because reading a node's own
+ * values walks them from the most specific out.
  */
 function tiersFrom(
   breakpoint: BreakpointId,
   breakpoints: BreakpointSet | undefined
 ): BreakpointId[] {
-  if (breakpoint === BASE_BREAKPOINT) return [BASE_BREAKPOINT];
-  const axis = [breakpoints?.viewport ?? [], breakpoints?.container ?? []].find(
-    defs => defs.some(def => def.id === breakpoint)
+  const bound = new Map(
+    breakpointContexts(breakpoints).map(context => [
+      context.id,
+      isUsableWidth(context.maxWidth)
+        ? context.maxWidth
+        : Number.POSITIVE_INFINITY,
+    ])
   );
-  const own = axis?.find(def => def.id === breakpoint)?.maxWidth;
-  const wider =
-    axis === undefined || own === undefined
-      ? []
-      : axis
-          .filter(def => def.maxWidth !== undefined && def.maxWidth > own)
-          .sort((a, b) => (a.maxWidth ?? 0) - (b.maxWidth ?? 0))
-          .map(def => def.id);
-  return [breakpoint, ...wider, BASE_BREAKPOINT];
+  const widthOf = (id: BreakpointId) =>
+    bound.get(id) ?? Number.POSITIVE_INFINITY;
+  return liveBreakpointsFor(breakpoints, breakpoint).sort(
+    (a, b) => widthOf(a) - widthOf(b)
+  );
 }
 
 /** One property's controls and the value they are showing. */

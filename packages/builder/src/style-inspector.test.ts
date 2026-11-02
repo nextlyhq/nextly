@@ -503,6 +503,31 @@ describe("which display the tiers read", () => {
     expect(flexShown(styles, "base", BASE_BREAKPOINT)).toBe(false);
   });
 
+  it("reads the container axis's unbounded tier at a bounded container tier", () => {
+    register({ layout: true });
+    // Every container context applies the axis's unbounded one too, as the
+    // compiler emits it, so flex set there holds at the narrow card tier.
+    const containers = {
+      viewport: [{ id: BASE_BREAKPOINT, label: "Desktop" }],
+      container: [
+        { id: "card", label: "Card" },
+        { id: "card-narrow", label: "Narrow card", maxWidth: 400 },
+      ],
+    } as never;
+    const styles = {
+      base: { card: { display: "flex" } },
+    } as unknown as NodeStyles;
+    const shown = (breakpoint: string) =>
+      inspectStyle(documentOf(styles), "a", {
+        breakpoint: breakpoint as never,
+        breakpoints: containers,
+      })?.sections[0]?.properties.find(p => p.property === "flexDirection")
+        ?.common;
+    expect(shown("card-narrow")).toBe(true);
+    // The control: the viewport's unconditional tier is not on that axis.
+    expect(shown(BASE_BREAKPOINT)).toBe(false);
+  });
+
   it("reads the compiled cascade, so a class's display counts", () => {
     register({ layout: true });
     // The node stores no display; a class it applies makes it a flex row.
