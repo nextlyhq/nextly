@@ -37,4 +37,7 @@ down. A new `relation` prop type (`{ type: "relation", relationTo: "<collection>
 searches one collection's entries by title and stores the chosen entry's id. Its search
 reads through a page builder route, with the signed-in author's own access, and only for a
 collection a registered block's `relation` prop names. `@nextlyhq/plugin-sdk/admin` now
-exports the admin's `MediaPickerDialog` (experimental).
+exports the admin's `MediaPickerDialog` (experimental). A block prop may name itself
+(`label`) and its options (`optionLabels`); the core blocks now use plain wording, and an
+on/off prop is drawn as a switch. The shared rich-text editor no longer loses an edit to a
+passage stored without some of its fields.
