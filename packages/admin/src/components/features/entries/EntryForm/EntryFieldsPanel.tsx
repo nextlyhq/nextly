@@ -24,7 +24,6 @@
 import { FormSection } from "@nextlyhq/ui";
 import type { FieldConfig } from "nextly/config";
 import type * as React from "react";
-import { useWatch } from "react-hook-form";
 
 import { computeFieldsBeside } from "@admin/lib/builder/takeoverLayout";
 
@@ -59,12 +58,6 @@ export interface EntryFieldsPanelProps {
   slugName?: string;
   /** How the fields are framed. Defaults to the panel's sections. */
   presentation?: EntryFieldsPresentation;
-  /**
-   * Where the document is read, as a `{field}` template ("/{slug}"), to show
-   * the full address under the slug in a dialog. Absent, no address is shown:
-   * one built without it could name the wrong page.
-   */
-  urlTemplate?: string;
 }
 
 /**
@@ -133,7 +126,6 @@ export function EntryFieldsPanel({
   mode,
   slugName,
   presentation = "panel",
-  urlTemplate,
 }: EntryFieldsPanelProps): React.JSX.Element {
   if (presentation === "dialog") {
     return (
@@ -144,7 +136,6 @@ export function EntryFieldsPanel({
         readOnly={readOnly}
         mode={mode}
         slugName={slugName}
-        urlTemplate={urlTemplate}
       />
     );
   }
@@ -215,39 +206,6 @@ function relabelled(
   );
 }
 
-/** A `{field}` template filled from the form's values. */
-function addressPath(
-  template: string,
-  values: Record<string, unknown>
-): string {
-  return template.replace(/\{([^}]+)\}/g, (_match, name: string) => {
-    const value = values[name];
-    return typeof value === "string" || typeof value === "number"
-      ? encodeURIComponent(String(value))
-      : "";
-  });
-}
-
-/** The page's full address as the slug makes it now, under the slug field. */
-function AddressLine({
-  slugName,
-  urlTemplate,
-}: {
-  slugName: string;
-  urlTemplate: string;
-}): React.JSX.Element | null {
-  const values = useWatch() as Record<string, unknown>;
-  const slug = values[slugName];
-  if (typeof slug !== "string" || slug === "") return null;
-  const origin = typeof window === "undefined" ? "" : window.location.host;
-  return (
-    <p className="mt-1.5 truncate text-xs text-muted-foreground">
-      {origin}
-      {addressPath(urlTemplate, values)}
-    </p>
-  );
-}
-
 /**
  * The fields flat, for a dialog: the page's own group (its title, and its
  * slug read as the page's address with the full address under it and the
@@ -260,7 +218,6 @@ function FlatEntryFields({
   readOnly,
   mode,
   slugName,
-  urlTemplate,
 }: Omit<EntryFieldsPanelProps, "presentation">): React.JSX.Element {
   // The slug is the field named so, whether or not its address is live yet.
   const slugField = slugName ?? "slug";
@@ -277,12 +234,6 @@ function FlatEntryFields({
             readOnly={readOnly}
             mode={mode}
           />
-          {/* Only where the collection says where it is read: a code-first
-              address the admin cannot see would be guessed wrong here. */}
-          {urlTemplate !== undefined &&
-          page.some(field => field.name === slugField) ? (
-            <AddressLine slugName={slugField} urlTemplate={urlTemplate} />
-          ) : null}
           {/* Warned about only where the address is already live. */}
           {slugName === undefined ? null : (
             <PublicUrlChangeNotice
@@ -322,8 +273,6 @@ export function fieldsBesidePanel(
     hasPublicAddress?: boolean;
     /** How the fields are framed. */
     presentation?: EntryFieldsPresentation;
-    /** Where the document is read, as a `{field}` template. */
-    urlTemplate?: string;
   } = {}
 ): React.ReactNode | null {
   const beside = computeFieldsBeside(allFields, excludePath, options.values);
@@ -342,9 +291,6 @@ export function fieldsBesidePanel(
       {...(options.presentation === undefined
         ? {}
         : { presentation: options.presentation })}
-      {...(options.urlTemplate === undefined
-        ? {}
-        : { urlTemplate: options.urlTemplate })}
       slugName={
         options.hasPublicAddress === true && slug !== undefined
           ? (slug.name ?? "slug")

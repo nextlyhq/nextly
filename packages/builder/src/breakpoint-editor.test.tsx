@@ -371,20 +371,51 @@ describe("a saved breakpoint's id", () => {
     const saved = onSave.mock.calls[0]?.[0] as BreakpointSet;
     expect(saved.viewport.map(def => def.id)).toContain("wide-phone");
 
-    // A second new row with the same name would file styles under one id.
+    // A name that makes no id, or one already taken, still saves: the id
+    // falls back, or is numbered, and the author never sees it.
+    cleanup();
+    const again = open(stored());
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+    );
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+    );
+    const moreNames = screen.getAllByLabelText("Name");
+    const moreWidths = screen.getAllByLabelText("Up to");
+    fireEvent.change(moreNames[moreNames.length - 2] as HTMLElement, {
+      target: { value: "携帯" },
+    });
+    fireEvent.change(moreWidths[moreWidths.length - 2] as HTMLElement, {
+      target: { value: "500" },
+    });
+    fireEvent.change(moreNames[moreNames.length - 1] as HTMLElement, {
+      target: { value: "Tablet!" },
+    });
+    fireEvent.change(moreWidths[moreWidths.length - 1] as HTMLElement, {
+      target: { value: "800" },
+    });
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
+    const ids = (again.mock.calls[0]?.[0] as BreakpointSet).viewport.map(
+      def => def.id
+    );
+    expect(ids).toEqual(expect.arrayContaining(["breakpoint", "tablet-2"]));
+
+    // The same NAME twice is still refused, and said about the name.
     cleanup();
     open(stored());
     fireEvent.click(
       screen.getAllByRole("button", { name: "Add breakpoint" })[0]
     );
-    const again = screen.getAllByLabelText("Name");
-    fireEvent.change(again[again.length - 1] as HTMLElement, {
-      target: { value: "Tablet" },
-    });
+    const twice = screen.getAllByLabelText("Name");
+    const last = twice[twice.length - 1] as HTMLElement;
+    fireEvent.change(last, { target: { value: " tablet" } });
     expect(saveButton().disabled).toBe(true);
+    expect(last.getAttribute("aria-invalid")).toBe("true");
     expect(
-      (again[again.length - 1] as HTMLElement).getAttribute("aria-invalid")
-    ).toBe("true");
+      screen.getByText('Another breakpoint is already called "tablet".')
+    ).toBeTruthy();
   });
 
   it("survives an unrelated edit byte for byte", () => {
@@ -476,5 +507,19 @@ describe("telling the host about a save", () => {
     expect(onSavingChange).toHaveBeenLastCalledWith(true);
     settle(undefined);
     await waitFor(() => expect(onSavingChange).toHaveBeenLastCalledWith(false));
+  });
+});
+
+describe("container widths", () => {
+  it("offers the first one on a site that has none", () => {
+    open(stored());
+    expect(screen.queryByText("Container widths")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add a container width" })
+    );
+    expect(screen.getByText("Container widths")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Add a container width" })
+    ).toBeNull();
   });
 });

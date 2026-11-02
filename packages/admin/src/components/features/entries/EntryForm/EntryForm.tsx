@@ -677,7 +677,6 @@ export function EntryForm({
    * warning the meta strip it covers would have shown. And after the lock,
    * whose read-only answer it shares with every other field.
    */
-  const urlTemplate = collection.admin?.preview?.urlTemplate;
   const renderEntryFields = useCallback(
     (excludePath: string, presentation?: EntryFieldsPresentation) =>
       fieldsBesidePanel(allFields, excludePath, {
@@ -687,7 +686,6 @@ export function EntryForm({
         values: conditionValues,
         hasPublicAddress,
         ...(presentation === undefined ? {} : { presentation }),
-        ...(urlTemplate === undefined ? {} : { urlTemplate }),
       }),
     [
       allFields,
@@ -696,7 +694,6 @@ export function EntryForm({
       mode,
       conditionValues,
       hasPublicAddress,
-      urlTemplate,
     ]
   );
   // One answer for every surface offering a write: the header reads the same

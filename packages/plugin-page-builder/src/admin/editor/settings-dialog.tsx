@@ -307,7 +307,9 @@ function SiteTab({
         // Read with the site permission, as their write is, so a role that
         // may manage them sees them without Design's read.
         value: read.breakpoints ?? breakpoints.value,
-        status: "ready",
+        // Not while the read is refreshing: a cached set opened as a draft
+        // and saved later would overwrite a newer one.
+        status: site.fetching ? "loading" : "ready",
         onSave: async next => {
           const answer = await breakpoints.onSave(next);
           site.refetch();
@@ -442,10 +444,12 @@ function DefaultLayout({
   // The Layout just made the default, held until the read says so too, so the
   // select never shows the old default beside "Saved".
   const [chosen, setChosen] = useState<string | null>(null);
-  const shown =
-    chosen !== null && chosen !== read.defaultLayout
-      ? chosen
-      : read.defaultLayout;
+  const shown = chosen ?? read.defaultLayout;
+  // Once the read says so too, the read is the answer again: a later change
+  // made elsewhere must show.
+  useEffect(() => {
+    if (chosen !== null && read.defaultLayout === chosen) setChosen(null);
+  }, [chosen, read.defaultLayout]);
   const choose = (id: string): void => {
     setSave({ kind: "saving" });
     writePluginRoute({

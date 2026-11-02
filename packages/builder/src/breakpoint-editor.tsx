@@ -6,6 +6,7 @@ import { Plus, Trash2, TriangleAlert } from "lucide-react";
 import * as React from "react";
 
 import {
+  BASE_BREAKPOINT,
   BREAKPOINT_AXES,
   storedLimitFor,
   validateBreakpoints,
@@ -25,6 +26,14 @@ function idFromName(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+/** An id not already taken, numbered after the first that is. */
+function uniqueId(base: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
 }
 
 /**
@@ -264,6 +273,42 @@ export function BreakpointEditor({
     }));
   };
 
+  /**
+   * A new name, and for a row added in this session the id made from it.
+   * Unique across both axes and never the base's, with a fallback for a name
+   * that makes no id (one with no Latin letters or digits), so any name the
+   * engine would accept can be saved without the author ever seeing the id.
+   */
+  const renameRow = (
+    axis: BreakpointAxis,
+    key: string,
+    label: string
+  ): void => {
+    if (saving) return;
+    setDraft(current => {
+      const taken = new Set(
+        BREAKPOINT_AXES.flatMap(other =>
+          current[other].filter(row => row.key !== key).map(row => row.id)
+        )
+      );
+      taken.add(BASE_BREAKPOINT);
+      return {
+        ...current,
+        [axis]: current[axis].map(row =>
+          row.key !== key
+            ? row
+            : {
+                ...row,
+                label,
+                ...(row.isNew
+                  ? { id: uniqueId(idFromName(label) || "breakpoint", taken) }
+                  : {}),
+              }
+        ),
+      };
+    });
+  };
+
   const addRow = (axis: BreakpointAxis): void => {
     if (saving) return;
     setDraft(current => ({
@@ -390,12 +435,7 @@ export function BreakpointEditor({
                         // The id is the name's, and shown nowhere: a clash is
                         // said about the name, in plain words.
                         error={rowIssues.label ?? rowIssues.id}
-                        onChange={label =>
-                          updateRow(axis, row.key, {
-                            label,
-                            ...(row.isNew ? { id: idFromName(label) } : {}),
-                          })
-                        }
+                        onChange={label => renameRow(axis, row.key, label)}
                       />
                       <Field
                         id={`${fieldId}-${row.key}-width`}
@@ -446,6 +486,20 @@ export function BreakpointEditor({
             </section>
           );
         })}
+        {draft.container.length === 0 ? (
+          // The first container width has to start somewhere: a site that has
+          // none sees this in place of the section.
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={saving}
+            onClick={() => addRow("container")}
+          >
+            <Plus className="size-4" />
+            Add a container width
+          </Button>
+        ) : null}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p

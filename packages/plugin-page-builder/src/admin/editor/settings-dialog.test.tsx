@@ -13,13 +13,14 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { cloneElement } from "react";
+import { cloneElement, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SiteSettingsRead } from "../../library-contract";
 
 let siteRead: SiteSettingsRead | undefined;
 let siteError: Error | null = null;
+let siteFetching = false;
 const refetch = vi.fn();
 const writes: Array<{ path: string }> = [];
 let writeAnswer: () => Promise<unknown> = async () => ({});
@@ -29,6 +30,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     data: siteRead,
     pending: false,
     error: siteError,
+    fetching: siteFetching,
     refetch,
   }),
   writePluginRoute: async (write: { path: string }) => {
@@ -41,13 +43,16 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // when editing starts, as the real one does.
 vi.mock("@nextlyhq/builder/shell", () => ({
   BreakpointManager: ({
+    status,
     onEditingChange,
     onSavingChange,
   }: {
+    status?: string;
     onEditingChange?: (editing: boolean) => void;
     onSavingChange?: (saving: boolean) => void;
   }) => (
     <>
+      <output aria-label="Breakpoints status">{status}</output>
       <button type="button" onClick={() => onEditingChange?.(true)}>
         Edit breakpoints
       </button>
@@ -85,8 +90,13 @@ const MANAGER: SiteSettingsRead = {
   ],
 };
 
+/** Renders the dialog again with the current read, as a refetch would. */
+let reshow: () => void = () => {};
+
 function show(onOpenChange = vi.fn()) {
-  render(
+  // Built afresh each time: React skips a child whose element is unchanged,
+  // so re-rendering the same tree would never ask the dialog again.
+  const element = (): ReactElement => (
     <form data-testid="page-form" onSubmit={event => event.preventDefault()}>
       <SettingsDialog
         open
@@ -103,12 +113,15 @@ function show(onOpenChange = vi.fn()) {
       />
     </form>
   );
+  const { rerender } = render(element());
+  reshow = () => rerender(element());
   return onOpenChange;
 }
 
 beforeEach(() => {
   siteRead = MANAGER;
   siteError = null;
+  siteFetching = false;
   writes.length = 0;
   writeAnswer = async () => ({});
   refetch.mockClear();
@@ -309,6 +322,39 @@ describe("the Settings dialog", () => {
     expect(
       screen.getByRole("combobox", { name: LAYOUT_LABEL }).textContent
     ).toContain("No header or footer");
+  });
+
+  it("follows the read once it confirms the choice, so a later change shows", async () => {
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await chooseLayout("No header or footer");
+    await screen.findByText("Saved");
+    siteRead = { ...MANAGER, defaultLayout: "bare" };
+    reshow();
+    // Someone else then puts it back: the held choice must not hide that.
+    siteRead = { ...MANAGER, defaultLayout: "main" };
+    reshow();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("combobox", { name: LAYOUT_LABEL }).textContent
+      ).toContain("Main")
+    );
+  });
+
+  it("holds the breakpoints back while a reopened read is refreshing", async () => {
+    // A cached read shows at once on reopen; editing it as a draft before the
+    // refresh lands would save over a newer set.
+    siteFetching = true;
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    expect(screen.getByLabelText("Breakpoints status").textContent).toBe(
+      "loading"
+    );
+    siteFetching = false;
+    reshow();
+    expect(screen.getByLabelText("Breakpoints status").textContent).toBe(
+      "ready"
+    );
   });
 
   it("goes back to This page when the Site tab goes away", async () => {
