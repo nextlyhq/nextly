@@ -1786,7 +1786,8 @@ export class CollectionRelationshipService extends BaseService {
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
-      localeChain,
+      // A copy: the read's chain is shared and read-only, and the fill takes a list of its own.
+      localeChain: [...localeChain],
       statusValues:
         companion.hasStatus && statusFilter ? statusFilter.values : undefined,
     });
