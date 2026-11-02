@@ -405,6 +405,7 @@ describe("resolveMigration", () => {
       });
       const stopsBeforeRetiring = {
         findFileApplies: (f: string) => repo.findFileApplies(f),
+        findFileRollbacks: (f: string) => repo.findFileRollbacks(f),
         insertEvent: (values: Record<string, unknown>) =>
           repo.insertEvent(values),
         markRolledBack: (id: string, input?: { note?: string | null }) =>

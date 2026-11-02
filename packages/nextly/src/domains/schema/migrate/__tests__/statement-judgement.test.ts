@@ -258,14 +258,14 @@ const CASES: Case[] = [
     dialect: "mysql",
     statements: [
       "ALTER TABLE t CHANGE COLUMN a b int NOT NULL",
-      "ALTER TABLE t CHANGE c c bigint",
-      "ALTER TABLE t RENAME e TO f",
+      "ALTER TABLE x CHANGE c c bigint",
+      "ALTER TABLE x RENAME e TO f",
     ],
     live: { tables: ["t"], columns: ["t.b", "t.c"] },
     expected: [
       done(1, "ALTER TABLE t CHANGE COLUMN a b int NOT NULL"),
-      unknown(2, "ALTER TABLE t CHANGE c c bigint", "unread"),
-      unknown(3, "ALTER TABLE t RENAME e TO f", "unread"),
+      unknown(2, "ALTER TABLE x CHANGE c c bigint", "unread"),
+      unknown(3, "ALTER TABLE x RENAME e TO f", "unread"),
     ],
   },
 
@@ -277,18 +277,18 @@ const CASES: Case[] = [
       "ALTER TABLE t ADD CONSTRAINT t_fk FOREIGN KEY (u_id) REFERENCES u (id)",
       "ALTER TABLE t ADD CONSTRAINT t_uq UNIQUE (slug)",
       "ALTER TABLE t ADD CONSTRAINT t_ck CHECK (n > 0)",
-      "ALTER TABLE t ADD CONSTRAINT t_pk PRIMARY KEY (id)",
-      "ALTER TABLE t ADD UNIQUE (slug)",
-      "ALTER TABLE t ADD PRIMARY KEY (id)",
+      "ALTER TABLE x ADD CONSTRAINT t_pk PRIMARY KEY (id)",
+      "ALTER TABLE x ADD UNIQUE (slug)",
+      "ALTER TABLE x ADD PRIMARY KEY (id)",
     ],
     live: { tables: ["t"], constraints: ["t.t_fk", "t.t_ck"] },
     expected: [
       done(1, "ALTER TABLE t ADD CONSTRAINT t_fk FOREIGN KEY"),
       notDone(2, "ALTER TABLE t ADD CONSTRAINT t_uq UNIQUE"),
       done(3, "ALTER TABLE t ADD CONSTRAINT t_ck CHECK"),
-      unknown(4, "ALTER TABLE t ADD CONSTRAINT t_pk PRIMARY KEY", "unread"),
-      unknown(5, "ALTER TABLE t ADD UNIQUE", "unread"),
-      unknown(6, "ALTER TABLE t ADD PRIMARY KEY", "unread"),
+      unknown(4, "ALTER TABLE x ADD CONSTRAINT t_pk PRIMARY KEY", "unread"),
+      unknown(5, "ALTER TABLE x ADD UNIQUE", "unread"),
+      unknown(6, "ALTER TABLE x ADD PRIMARY KEY", "unread"),
     ],
   },
   {
@@ -299,7 +299,7 @@ const CASES: Case[] = [
       "ALTER TABLE t DROP FOREIGN KEY b",
       "ALTER TABLE t DROP CHECK c",
       "ALTER TABLE t DROP CONSTRAINT d",
-      "ALTER TABLE t DROP PRIMARY KEY",
+      "ALTER TABLE x DROP PRIMARY KEY",
     ],
     live: { tables: ["t"], constraints: ["t.c", "t.d"] },
     expected: [
@@ -307,7 +307,7 @@ const CASES: Case[] = [
       done(2, "ALTER TABLE t DROP FOREIGN KEY b"),
       notDone(3, "ALTER TABLE t DROP CHECK c"),
       notDone(4, "ALTER TABLE t DROP CONSTRAINT d"),
-      unknown(5, "ALTER TABLE t DROP PRIMARY KEY", "unread"),
+      unknown(5, "ALTER TABLE x DROP PRIMARY KEY", "unread"),
     ],
   },
 
@@ -321,7 +321,7 @@ const CASES: Case[] = [
       "ALTER TABLE t DROP INDEX x",
       "ALTER TABLE t DROP KEY y",
       "ALTER TABLE t RENAME INDEX p TO q",
-      "ALTER TABLE t ADD INDEX (c)",
+      "ALTER TABLE x ADD INDEX (c)",
     ],
     live: { tables: ["t"], indexes: ["t.a", "t.y", "t.q"] },
     expected: [
@@ -330,7 +330,7 @@ const CASES: Case[] = [
       done(3, "ALTER TABLE t DROP INDEX x"),
       notDone(4, "ALTER TABLE t DROP KEY y"),
       done(5, "ALTER TABLE t RENAME INDEX p TO q"),
-      unknown(6, "ALTER TABLE t ADD INDEX", "unread"),
+      unknown(6, "ALTER TABLE x ADD INDEX", "unread"),
     ],
   },
   {
@@ -519,18 +519,18 @@ const CASES: Case[] = [
     ],
   },
   {
-    name: "a later statement that writes rows or is unread does not undo an earlier one",
+    name: "a later statement that writes rows does not undo an earlier one; an unread ALTER of another table does not either",
     dialect: "postgresql",
     statements: [
       "CREATE TABLE t (id int)",
       "INSERT INTO t (id) VALUES (1)",
-      "ALTER TABLE t ALTER COLUMN id TYPE bigint",
+      "ALTER TABLE x ALTER COLUMN id TYPE bigint",
     ],
     live: { tables: ["t"] },
     expected: [
       done(1, "CREATE TABLE t"),
       unknown(2, "INSERT INTO t", "rows"),
-      unknown(3, "ALTER TABLE t ALTER COLUMN id TYPE bigint", "unread"),
+      unknown(3, "ALTER TABLE x ALTER COLUMN id TYPE bigint", "unread"),
     ],
   },
   {
@@ -588,6 +588,34 @@ const CASES: Case[] = [
       done(5, "CREATE INDEX `i` ON `t`"),
     ],
   },
+  // A later statement read as rows or unread that still names its table.
+  {
+    name: "a table a later CREATE TABLE ... AS makes again is undone, not read as never dropped",
+    dialect: "mysql",
+    statements: [
+      "DROP TABLE IF EXISTS posts_backup",
+      "CREATE TABLE posts_backup AS SELECT * FROM posts",
+    ],
+    // Both ran: the backup is there again.
+    live: { tables: ["posts", "posts_backup"] },
+    expected: [
+      unknown(1, "DROP TABLE IF EXISTS posts_backup", "undone"),
+      unknown(2, "CREATE TABLE posts_backup AS SELECT * FROM posts", "rows"),
+    ],
+  },
+  {
+    name: "a column a later ALTER with an unread clause changes is undone, not read as never added",
+    dialect: "postgresql",
+    statements: [
+      "ALTER TABLE t ADD COLUMN c int",
+      "ALTER TABLE t DROP COLUMN c, ADD PRIMARY KEY (id)",
+    ],
+    live: { tables: ["t"] },
+    expected: [
+      unknown(1, "ALTER TABLE t ADD COLUMN c int", "undone"),
+      unknown(2, "ALTER TABLE t DROP COLUMN c, ADD PRIMARY KEY", "unread"),
+    ],
+  },
 ];
 
 describe("judgeStatements", () => {
@@ -595,6 +623,19 @@ describe("judgeStatements", () => {
     expect(judgeStatements(statements, dialect, fakeLive(live))).toEqual(
       expected
     );
+  });
+
+  it("judges no claim when the live schema could not be read", () => {
+    expect(
+      judgeStatements(
+        ["CREATE TABLE t (id int)", "INSERT INTO t (id) VALUES (1)"],
+        "postgresql",
+        undefined
+      )
+    ).toEqual([
+      unknown(1, "CREATE TABLE t", "unread"),
+      unknown(2, "INSERT INTO t", "rows"),
+    ]);
   });
 
   it("returns nothing for no statements", () => {

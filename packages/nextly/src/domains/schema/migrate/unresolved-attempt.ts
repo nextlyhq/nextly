@@ -117,12 +117,28 @@ export async function refuseUnresolvedAttempts(
       statements: judgeStatements(
         statements,
         args.dialect,
-        await args.readLive(statements)
+        await readLiveOrNothing(args, statements)
       ),
     });
   }
   if (refused.length === 0) return;
   throw unresolvedAttemptError(args.command, refused);
+}
+
+/**
+ * The live schema, or undefined when it could not be read: the refusal still
+ * names the file and says what to do, with every statement unknown, rather
+ * than ending on the read's own error, which names neither.
+ */
+async function readLiveOrNothing(
+  args: Pick<RefuseUnresolvedAttemptsArgs, "readLive">,
+  statements: readonly string[]
+): Promise<LiveSchema | undefined> {
+  try {
+    return await args.readLive(statements);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

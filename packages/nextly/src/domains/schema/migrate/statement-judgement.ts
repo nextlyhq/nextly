@@ -83,11 +83,17 @@ interface Claim {
   present: boolean;
 }
 
-/** What a statement is, as far as the live schema can judge it. */
+/**
+ * What a statement is, as far as the live schema can judge it. A statement
+ * read as rows or unread may still name the table it changes (`touches`): a
+ * `CREATE TABLE ... AS`, or an `ALTER TABLE` with a clause this reading does
+ * not model. Whatever it does there, an earlier statement's claim on that
+ * table can no longer be read from the database (`judgeStatements`).
+ */
 type Reading =
   | { kind: "schema"; claims: Claim[]; conditional: boolean }
-  | { kind: "rows" }
-  | { kind: "unread" };
+  | { kind: "rows"; touches?: string }
+  | { kind: "unread"; touches?: string };
 
 type Token = string | QuotedToken;
 
@@ -270,7 +276,9 @@ function readCreateTable(cursor: Cursor): Reading {
   cursor.acceptCondition();
   const name = cursor.name();
   if (name === undefined) return UNREAD;
-  if (cursor.isWord("AS") || cursor.isWord("SELECT")) return ROWS;
+  if (cursor.isWord("AS") || cursor.isWord("SELECT")) {
+    return { kind: "rows", touches: name };
+  }
   if (!cursor.isWord("(")) return UNREAD;
   let depth = 0;
   while (!cursor.done()) {
@@ -282,7 +290,7 @@ function readCreateTable(cursor: Cursor): Reading {
       typeof token === "string" &&
       ["AS", "SELECT", "VALUES", "TABLE"].includes(token)
     ) {
-      return ROWS;
+      return { kind: "rows", touches: name };
     }
     cursor.at += 1;
   }
@@ -380,7 +388,7 @@ function readAlterTable(cursor: Cursor, dialect: SupportedDialect): Reading {
   for (const tokens of clauses) {
     const clause = new Cursor(tokens);
     const read = readAlterClause(clause, name, dialect, clauses.length);
-    if (read === undefined) return UNREAD;
+    if (read === undefined) return { kind: "unread", touches: name };
     if (clause.conditional) cursor.conditional = true;
     claims.push(...read);
   }
@@ -600,7 +608,7 @@ function liveHas(live: LiveSchema, object: LiveObject): boolean {
 function verdictOf(
   reading: Reading,
   laterWrites: ReadonlySet<string>,
-  live: LiveSchema
+  live: LiveSchema | undefined
 ): Pick<JudgedStatement, "verdict" | "reason"> {
   const unknown = (reason: UnknownReason) => ({
     verdict: "unknown" as const,
@@ -611,6 +619,7 @@ function verdictOf(
   if (reading.claims.some(c => dependencies(c).some(k => laterWrites.has(k)))) {
     return unknown("undone");
   }
+  if (live === undefined) return unknown("unread");
   const tableMissing = reading.claims.some(claim => {
     const part = tableOf(claim.object);
     return part !== undefined && !live.hasTable(part);
@@ -675,7 +684,8 @@ function labelOf(statement: string, dialect: SupportedDialect): string {
 export function judgeStatements(
   statements: readonly string[],
   dialect: SupportedDialect,
-  live: LiveSchema
+  /** Absent when the live schema could not be read: no claim can be judged. */
+  live: LiveSchema | undefined
 ): JudgedStatement[] {
   const readings = statements.map(statement =>
     readStatement(statement, dialect)
@@ -689,6 +699,8 @@ export function judgeStatements(
     const reading = readings[i];
     if (reading.kind === "schema") {
       after = new Set([...after, ...reading.claims.map(c => keyOf(c.object))]);
+    } else if (reading.touches !== undefined) {
+      after = new Set([...after, keyOf(table(reading.touches))]);
     }
   }
   return readings.map((reading, i) => ({
@@ -716,8 +728,8 @@ const within = (table: string, name: string): string =>
  * (`introspectLiveSnapshot`): columns, indexes, foreign keys and checks, the
  * constraint names as the catalog holds them. On PostgreSQL and SQLite an
  * index is also looked up by name alone (`introspectIndexTables`), for a
- * `DROP INDEX` that names no table, and the same lookup answers for a
- * constraint backed by an index the snapshot leaves out, a primary key's.
+ * `DROP INDEX` that names no table. A constraint is a foreign key, a check
+ * or a unique index of its name, never a plain index (see the loop below).
  */
 export async function readLiveSchema(
   db: unknown,
@@ -756,7 +768,10 @@ export async function readLiveSchema(
     for (const index of spec.indexes ?? []) {
       indexes.add(within(spec.name, index.name));
       indexesAnywhere.add(index.name.toLowerCase());
-      constraints.add(within(spec.name, index.name));
+      // A UNIQUE constraint is held as a unique index of its name. A plain
+      // index is no constraint: MySQL keeps a foreign key's backing index,
+      // under the key's name, after DROP FOREIGN KEY removes the key.
+      if (index.unique) constraints.add(within(spec.name, index.name));
     }
     for (const key of spec.foreignKeys ?? []) {
       constraints.add(within(spec.name, key.name));
@@ -767,7 +782,6 @@ export async function readLiveSchema(
   }
   for (const [index, on] of indexTables) {
     indexes.add(within(on, index));
-    constraints.add(within(on, index));
   }
 
   return {

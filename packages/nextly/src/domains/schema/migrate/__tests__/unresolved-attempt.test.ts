@@ -209,6 +209,32 @@ describe("refuseUnresolvedAttempts", () => {
     );
   });
 
+  it("still names the file and the recovery when the live schema cannot be read", async () => {
+    const error = await refuseUnresolvedAttempts({
+      files: [file(false)],
+      rows: [row("file_apply", "in_progress")],
+      dialect: "mysql",
+      readLive: () => Promise.reject(new Error("connection reset")),
+      command: "nextly migrate",
+    }).then(
+      () => undefined,
+      (thrown: unknown) => thrown
+    );
+    expect(NextlyError.is(error) && error.code).toBe(
+      "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
+    );
+    expect((error as NextlyError).logContext?.attempts).toEqual([
+      {
+        filename: FILE,
+        direction: "up",
+        statements: [
+          { number: 1, verdict: "unknown", reason: "unread" },
+          { number: 2, verdict: "unknown", reason: "unread" },
+        ],
+      },
+    ]);
+  });
+
   it("reads the live database once per refused file, through the reader it is given", async () => {
     const asked: Array<readonly string[]> = [];
     await refuseUnresolvedAttempts({
