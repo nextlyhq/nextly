@@ -246,3 +246,190 @@ describe("a stored set the compiler has to reconcile", () => {
     expect(screen.queryByRole("radio", { name: /Draft/ })).toBeNull();
   });
 });
+
+/**
+ * A site's breakpoints, `count` of them with the base counted as one: the
+ * tiers from the widest down, so the first `count - 1` are taken.
+ */
+function devicesFor(count: number): BreakpointSet {
+  const tiers = [
+    { id: "laptop", label: "Laptop", maxWidth: 1199 },
+    { id: "tablet", label: "Tablet", maxWidth: 991 },
+    { id: "phone-l", label: "Phone L", maxWidth: 767 },
+    { id: "phone", label: "Phone", maxWidth: 575 },
+    { id: "phone-s", label: "Phone S", maxWidth: 375 },
+    { id: "watch", label: "Watch", maxWidth: 280 },
+  ];
+  // Stored narrowest first, so the order on screen is the switcher's own.
+  return { viewport: tiers.slice(0, count - 1).reverse(), container: [] };
+}
+
+const moreDevices = (): HTMLElement | null =>
+  screen.queryByRole("button", { name: /^More devices/ });
+
+function openMore(): HTMLElement[] {
+  const trigger = moreDevices();
+  if (trigger === null) throw new Error("no More devices button");
+  fireEvent.pointerDown(trigger, { pointerType: "mouse" });
+  return screen.getAllByRole("menuitemradio");
+}
+
+const names = (elements: HTMLElement[]): string[] =>
+  elements.map(element => element.getAttribute("aria-label") ?? "");
+
+describe("how many devices are buttons", () => {
+  it("offers nothing on a site with the base breakpoint alone", () => {
+    const { container } = mount({ breakpoints: devicesFor(1) });
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("shows two buttons and no menu for two breakpoints", () => {
+    mount({ breakpoints: devicesFor(2) });
+    expect(names(options())).toEqual([
+      "Desktop, from 1200 pixels",
+      "Laptop, up to 1199 pixels",
+    ]);
+    expect(moreDevices()).toBeNull();
+  });
+
+  it("shows three buttons and no menu for three breakpoints", () => {
+    mount({ breakpoints: devicesFor(3) });
+    expect(options()).toHaveLength(3);
+    expect(moreDevices()).toBeNull();
+  });
+
+  it("puts the fourth breakpoint in a menu, the base and the two widest staying buttons", () => {
+    mount({ breakpoints: devicesFor(4) });
+    expect(names(options())).toEqual([
+      "Desktop, from 1200 pixels",
+      "Laptop, up to 1199 pixels",
+      "Tablet, up to 991 pixels",
+    ]);
+    expect(openMore().map(item => item.textContent)).toEqual([
+      "Phone L · 767px",
+    ]);
+  });
+
+  it("lists every breakpoint past the third in the menu, widest first, for seven", () => {
+    mount({ breakpoints: devicesFor(7) });
+    expect(options()).toHaveLength(3);
+    expect(openMore().map(item => item.textContent)).toEqual([
+      "Phone L · 767px",
+      "Phone · 575px",
+      "Phone S · 375px",
+      "Watch · 280px",
+    ]);
+  });
+
+  it("keeps the menu outside the radio group, as its own button", () => {
+    mount({ breakpoints: devicesFor(4) });
+    const group = screen.getByRole("radiogroup", { name: "Device" });
+    const more = moreDevices();
+    expect(more).not.toBeNull();
+    expect(group.contains(more)).toBe(false);
+  });
+});
+
+describe("a device chosen from the menu", () => {
+  it("emits the breakpoint's id", () => {
+    const { onSelect } = mount({ breakpoints: devicesFor(7) });
+    const phone = openMore().find(item => item.textContent === "Phone · 575px");
+    if (phone === undefined) throw new Error("no Phone item");
+    fireEvent.click(phone);
+    expect(onSelect).toHaveBeenCalledWith("phone");
+  });
+
+  it("shows on the menu's button, with its exact width, while it is the one styled", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone" });
+    const trigger = moreDevices();
+    expect(trigger?.textContent).toBe("Phone · 575px");
+    expect(trigger?.getAttribute("aria-label")).toBe(
+      "More devices, styling Phone, up to 575 pixels"
+    );
+  });
+
+  it("leaves no button checked, and the buttons where they were", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone" });
+    expect(checked()).toEqual([]);
+    expect(names(options())).toEqual([
+      "Desktop, from 1200 pixels",
+      "Laptop, up to 1199 pixels",
+      "Tablet, up to 991 pixels",
+    ]);
+  });
+
+  it("keeps the first button in the tab order when the choice is in the menu", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone" });
+    expect(options().filter(option => option.tabIndex === 0)).toEqual([
+      options()[0],
+    ]);
+  });
+
+  it("is marked as chosen in the open menu", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone-s" });
+    const marked = openMore().filter(
+      item => item.getAttribute("aria-checked") === "true"
+    );
+    expect(marked.map(item => item.textContent)).toEqual(["Phone S · 375px"]);
+  });
+
+  it("names the menu's button plainly while a button is the one styled", () => {
+    mount({ breakpoints: devicesFor(7), selected: "tablet" });
+    expect(moreDevices()?.getAttribute("aria-label")).toBe("More devices");
+    expect(moreDevices()?.textContent).toBe("");
+  });
+
+  it("is inert until the saved breakpoints have been read", () => {
+    mount({ breakpoints: devicesFor(7), status: "loading" });
+    expect((moreDevices() as HTMLButtonElement | null)?.disabled).toBe(true);
+  });
+});
+
+describe("arrow keys with a menu of devices", () => {
+  it("move among the buttons only, wrapping past the last", () => {
+    const { onSelect } = mount({
+      breakpoints: devicesFor(7),
+      selected: "tablet",
+    });
+    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
+    expect(onSelect).toHaveBeenCalledWith("base");
+  });
+
+  it("start from the first button when the choice is in the menu", () => {
+    const { onSelect } = mount({
+      breakpoints: devicesFor(7),
+      selected: "phone",
+    });
+    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
+    expect(onSelect).toHaveBeenCalledWith("laptop");
+  });
+});
+
+describe("the menu's button while a device in it is styled", () => {
+  it("keeps the device and its range in its tooltip, for when its label is hidden", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone" });
+    expect(moreDevices()?.getAttribute("title")).toBe(
+      "Phone, up to 575 pixels"
+    );
+  });
+});
+
+describe("an open menu when the saved breakpoints stop being trusted", () => {
+  it("closes, so nothing in it can be chosen against an untrusted list", () => {
+    const onSelect = vi.fn();
+    const props = {
+      breakpoints: devicesFor(7),
+      selected: "base",
+      onSelect,
+    } as const;
+    const { rerender } = render(
+      <BreakpointSwitcher {...props} status="ready" />
+    );
+    openMore();
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(4);
+
+    rerender(<BreakpointSwitcher {...props} status="loading" />);
+    expect(screen.queryAllByRole("menuitemradio")).toEqual([]);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+});
