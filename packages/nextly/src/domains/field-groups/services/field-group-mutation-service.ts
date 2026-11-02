@@ -13,6 +13,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import { isVirtualField } from "../../../collections/fields/virtual";
 import { toDbError } from "../../../database/errors";
+import { missingSchemaObject } from "../../../database/missing-column";
 // Database failures cross this boundary through `NextlyError.fromDatabaseError`,
 // and rethrow guards use `NextlyError.is(...)` so an error travelling through
 // the shim keeps its original type.
@@ -1658,6 +1659,9 @@ export class FieldGroupMutationService extends BaseService {
             existingByTable.set(meta.tableName, rows);
           }
         } catch (error) {
+          // As in `getExistingInstancesInTx`: an unregistered table is never
+          // taken for one holding no instances.
+          if (isUnregisteredTable(error)) throw error;
           this.logger.debug(
             "Could not load component for multi-component field",
             {
@@ -1873,6 +1877,10 @@ export class FieldGroupMutationService extends BaseService {
         })
       );
     } catch (error) {
+      // A table this running instance has not registered is refused, not
+      // read as empty: taken for empty, the save judges an update a create
+      // and writes a second instance beside the one it could not see.
+      if (isUnregisteredTable(error)) throw error;
       this.logger.debug("Could not query component table in tx", {
         tableName,
         error: error instanceof Error ? error.message : String(error),
@@ -2422,4 +2430,12 @@ export class FieldGroupMutationService extends BaseService {
     }
     return [];
   }
+}
+
+/**
+ * Whether `error` is the refusal of a table this running instance has not
+ * registered, read as every not-migrated answer reads it.
+ */
+function isUnregisteredTable(error: unknown): boolean {
+  return missingSchemaObject(error)?.object === "unregistered";
 }

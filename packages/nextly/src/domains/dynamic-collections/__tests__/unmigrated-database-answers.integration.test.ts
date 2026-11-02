@@ -509,6 +509,26 @@ async function execute(sql: string): Promise<void> {
   ).executeQuery(sql);
 }
 
+/** Read past the model, which cannot be asked about a table it does not hold. */
+async function query(sql: string): Promise<Array<Record<string, unknown>>> {
+  return (await (
+    t().adapter as unknown as {
+      executeQuery(sql: string): Promise<Array<Record<string, unknown>>>;
+    }
+  ).executeQuery(sql)) as Array<Record<string, unknown>>;
+}
+
+async function rowCount(table: string): Promise<number> {
+  const rows = await query(`SELECT COUNT(*) AS n FROM ${table}`);
+  return Number(rows[0]?.n);
+}
+
+/** The Single's stored titles: one row, unless a write added or changed one. */
+async function bannerTitles(): Promise<string[]> {
+  const rows = await query(`SELECT title FROM ${BANNER_TABLE}`);
+  return rows.map(row => String(row.title));
+}
+
 describe.each(getConfiguredTestDialects())(
   "a read or write the database is not migrated for (%s)",
   dialect => {
@@ -777,8 +797,10 @@ describe.each(getConfiguredTestDialects())(
       registry.retractDynamicSchema(POSTS_TABLE);
       const writes = OPERATIONS.filter(operation =>
         [
+          "Direct create",
           "Direct update",
           "Direct delete",
+          "REST create",
           "REST update",
           "REST delete",
         ].includes(operation.name)
@@ -790,6 +812,81 @@ describe.each(getConfiguredTestDialects())(
           names: [`"${slug}"`, `"${table}"`, "not registered"],
         };
       });
+
+      // A create inside a caller's transaction, and a batch of them.
+      const entries = entryService();
+      const params = { collectionName: POSTS, overrideAccess: true };
+      expect
+        .soft(
+          await inTransaction(tx =>
+            entries.createEntryInTransaction(tx, params, { title: "Third" })
+          ),
+          "create in a transaction answers ENTITY_NOT_MIGRATED"
+        )
+        .toMatchObject({
+          success: false,
+          code: "ENTITY_NOT_MIGRATED",
+          publicData: { reason: "unregistered", slug: POSTS },
+        });
+      const batch = (await entries.createEntries(params, [
+        { title: "Fourth" },
+        { title: "Fifth" },
+      ])) as { successful?: number; errors?: Array<{ error?: unknown }> };
+      expect.soft(batch.successful, "a batch creates nothing").toBe(0);
+      for (const failure of batch.errors ?? []) {
+        expect
+          .soft(String(failure.error), "each batch item says why")
+          .toContain("not registered");
+      }
+      // The refusals came before any row: the boot's one entry is all there is.
+      expect(await rowCount(POSTS_TABLE)).toBe(1);
+    }, 120_000);
+
+    it("refuses a production write to a Single this instance has not registered, and writes nothing", async () => {
+      const target = await boot(dialect);
+      const registry = t().getService(
+        "schemaRegistry" as never
+      ) as SchemaRegistry;
+      vi.stubEnv("NODE_ENV", "production");
+      try {
+        registry.retractDynamicSchema(BANNER_TABLE);
+        const writes = OPERATIONS.filter(operation =>
+          ["Direct updateSingle", "REST Single update"].includes(operation.name)
+        );
+        const expected = (operation: Operation) => {
+          const { kind, slug, table } = entityOf(operation);
+          return {
+            data: { reason: "unregistered", kind, slug, table },
+            names: [`"${slug}"`, `"${table}"`, "not registered"],
+          };
+        };
+        await expectEveryAnswer(writes, target, expected);
+        // A read still recovers the table, and the write after it is still
+        // refused: the instance holds the Single only because a read did.
+        await direct().findSingle({ slug: BANNER });
+        await expectEveryAnswer(writes, target, expected);
+        expect(await bannerTitles()).toEqual(["First"]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }, 120_000);
+
+    it("recovers the same Single write in development", async () => {
+      await boot(dialect);
+      const registry = t().getService(
+        "schemaRegistry" as never
+      ) as SchemaRegistry;
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        registry.retractDynamicSchema(BANNER_TABLE);
+        await direct().updateSingle({
+          slug: BANNER,
+          data: { title: "Second" },
+        });
+        expect(await bannerTitles()).toEqual(["Second"]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     }, 120_000);
   }
 );

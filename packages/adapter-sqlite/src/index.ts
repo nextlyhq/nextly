@@ -902,6 +902,10 @@ export class SqliteAdapter extends DrizzleAdapter {
       return [result];
     }
 
+    // Refused as the single-row insert is: a table this instance never
+    // registered may not match what its code would write.
+    const tableObj = this.resolvedTableObject(table);
+
     // Build multi-row INSERT
     const columns = Object.keys(data[0]);
     const params: SqlParam[] = [];
@@ -938,7 +942,6 @@ export class SqliteAdapter extends DrizzleAdapter {
       // SQLite stores a timestamp as an integer and hands it back as one. The
       // Drizzle read paths decode it through the column definition, so without
       // this a bulk insert answers with numbers where a read answers `Date`.
-      const tableObj = this.getTableObject(table);
       return rows.map(r => this.mapRowFromRawSql(tableObj, r));
     } catch (error) {
       throw this.handleQueryError(error, "insertMany", table);
@@ -1092,10 +1095,10 @@ export class SqliteAdapter extends DrizzleAdapter {
         options?: InsertOptions
         // eslint-disable-next-line @typescript-eslint/require-await -- async so a synchronous throw becomes a rejection
       ): Promise<T> => {
-        const mapped = this.mapKeysToSqlColumns(
-          this.getTableObject(table),
-          data
-        );
+        // Refused before any statement, as the pooled insert is: a table this
+        // instance never registered may not match what its code would write.
+        const tableObj = this.resolvedTableObject(table);
+        const mapped = this.mapKeysToSqlColumns(tableObj, data);
         const columns = Object.keys(mapped);
         const values = Object.values(mapped).map(sanitizeSqliteValue);
         const placeholders = values.map(() => "?").join(", ");
@@ -1108,7 +1111,7 @@ export class SqliteAdapter extends DrizzleAdapter {
           const returning =
             !ret || ret === "*"
               ? "*"
-              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
+              : this.mapColumnNamesToSql(tableObj, ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
@@ -1125,7 +1128,7 @@ export class SqliteAdapter extends DrizzleAdapter {
         // Return JS property-named keys AND Drizzle-decoded date values, so a
         // write inside a transaction answers with the same representation a
         // read of the same row gives.
-        return this.mapRowFromRawSql(this.getTableObject(table), rows[0]);
+        return this.mapRowFromRawSql(tableObj, rows[0]);
       },
 
       insertMany: async <T = unknown>(
@@ -1136,7 +1139,8 @@ export class SqliteAdapter extends DrizzleAdapter {
       ): Promise<T[]> => {
         if (data.length === 0) return [];
 
-        const tableObj = this.getTableObject(table);
+        // Refused before any statement, as `insert` above is.
+        const tableObj = this.resolvedTableObject(table);
         const mappedRecords = data.map(r =>
           this.mapKeysToSqlColumns(tableObj, r)
         );
@@ -1161,7 +1165,7 @@ export class SqliteAdapter extends DrizzleAdapter {
           const returning =
             !ret || ret === "*"
               ? "*"
-              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
+              : this.mapColumnNamesToSql(tableObj, ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
