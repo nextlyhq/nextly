@@ -153,7 +153,8 @@ test.describe("the editor inside locked areas", () => {
   }) => {
     await open(page);
     await clickBlock(page, "lk-row-heading");
-    await page.getByRole("button", { name: "Insert" }).click();
+    // The rail's button for the panel holding the inserter.
+    await page.getByRole("button", { name: "Add" }).click();
     // The inserter's own sentence: the toolbar carries the same reason for
     // its dimmed actions, so the page holds it more than once.
     await expect(page.getByRole("listbox").getByText(FIXED)).toBeVisible({
