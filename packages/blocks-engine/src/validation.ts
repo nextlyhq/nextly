@@ -82,6 +82,11 @@ export interface ValidationIssue {
   suggestion?: string;
 }
 
+/** Whether an issue refuses a strict save, as opposed to warning about it. */
+export function isErrorIssue(issue: ValidationIssue): boolean {
+  return issue.severity === "error";
+}
+
 /**
  * A minimal block-type lookup so validation is not coupled to a concrete
  * registry. When a caller supplies one, unregistered node types are reported;
@@ -233,6 +238,8 @@ export const ISSUE_CODES = {
     "An exposed slot names a slot the node it points at does not declare.",
   "variant-unknown-target":
     "A variant names an exposed property or slot the definition does not expose.",
+  "variant-empty":
+    "A variant presets no value, so choosing it shows the component's defaults.",
   "invalid-document": "The document is not an object.",
   "nodes-not-array": "The document nodes field is not an array.",
   "invalid-node": "A node is not an object.",
@@ -2337,8 +2344,9 @@ function validateComponentEnvelope(
  *
  * Every issue it can return is an `error` in both modes — a dangling pointer
  * is a broken reference to this document's own tree rather than a value a
- * future build understands — so a caller may read a non-empty result as a
- * refusal without inspecting severities.
+ * future build understands — except `variant-empty`, a `warning`: a variant a
+ * field's removal emptied is kept and renders the defaults. A caller deciding
+ * whether to refuse reads the errors.
  *
  * Empty for a document that is not a component, matching where the per-kind
  * rules run: a pattern has no envelope to be wrong about, and answering
@@ -2890,15 +2898,19 @@ function checkVariant(
     );
     if (overrideKeys === null) return;
 
+    // A warning, not a refusal. Removing an exposed field prunes it from every
+    // variant in the same save, so a variant whose only value that was is left
+    // empty by a legitimate edit; refusing it would refuse the removal itself.
+    // It renders the component's defaults, and the picker can say so. The
+    // checks after this one still run: a warning ends nothing.
     if (overrideKeys.length === 0) {
       issues.push({
         path: pointer(at, "overrides"),
-        code: "component-envelope-invalid",
-        severity: "error",
-        message: `Variant "${name}" presets nothing, so selecting it would change nothing.`,
-        suggestion: "Give it at least one override, or remove the variant.",
+        code: "variant-empty",
+        severity: "warning",
+        message: `Variant "${name}" presets nothing, so selecting it shows the component's defaults.`,
+        suggestion: "Give it at least one value, or remove the variant.",
       });
-      return;
     }
 
     checkVariantTargets(
