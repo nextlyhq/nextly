@@ -3153,3 +3153,54 @@ describe("the drag in flight is drawn on the canvas", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("a link drawn on the canvas", () => {
+  /*
+   * The canvas draws a block's link as a real anchor, so the browser's own
+   * default for a click on it is to follow it — out of the editor, away from
+   * unsaved work. The click must still select the block.
+   */
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/link",
+          version: 1,
+          description: "A linked block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("a", { className, href: "/signup" }, "Sign up"),
+        },
+      ] as never,
+      { source: "canvas-link-test" }
+    );
+  });
+
+  afterAll(clearBlocks);
+
+  it("selects the block and does not follow the link", () => {
+    const onSelect = vi.fn();
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "cta", type: "acme/link", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        onSelect={onSelect as never}
+      />
+    );
+    const link = container.querySelector("a[href]");
+    if (link === null) throw new Error("expected the block's link");
+
+    // `fireEvent` answers false when a listener cancelled the default.
+    const followed = fireEvent.click(link);
+
+    expect(followed).toBe(false);
+    expect(onSelect).toHaveBeenCalledWith("cta", "replace");
+  });
+});
