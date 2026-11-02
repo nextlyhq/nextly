@@ -522,3 +522,30 @@ describe("reset of a code-supplied type size", () => {
     expect(saved.tokens[3]?.values).toEqual({ light: "24px" });
   });
 });
+
+describe("reset compares the whole variable", () => {
+  it("is offered when only the description or vendor data differs from the code's", async () => {
+    // The stored override keeps any field that differs, so a Reset hidden by
+    // a narrower comparison would leave an override nothing can remove.
+    for (const differs of [
+      { description: "From the brand file" },
+      { extensions: { "com.figma.variableId": "VariableID:1:2" } },
+    ]) {
+      const supplied: SiteTokenSet = {
+        tokens: [{ ...SITE.tokens[1]! }],
+      };
+      const site: SiteTokenSet = {
+        tokens: SITE.tokens.map((token, at) =>
+          at === 1 ? { ...token, ...differs } : token
+        ),
+      };
+      render(<Hosted tokens={site} supplied={supplied} />);
+      const editor = await openEditor(/^Text/);
+      expect(
+        within(editor).getByRole("button", { name: "Reset" }),
+        JSON.stringify(differs)
+      ).toBeDefined();
+      cleanup();
+    }
+  });
+});

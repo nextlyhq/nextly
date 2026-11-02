@@ -784,6 +784,9 @@ export {
   tokensToResolver,
 } from "./style/dtcg-modes";
 export type { ModeFile } from "./style/dtcg-modes";
+// Whether two tokens say the same thing: one answer for a stored override and
+// for an editor's Reset.
+export { sameJsonValue, sameSiteToken } from "./style/same-token";
 // A colour written as a value rather than through a variable, which the
 // inspector marks as not adapted to dark mode.
 export { isRawColour } from "./style/raw-colour";

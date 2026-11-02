@@ -12,7 +12,11 @@
  *
  * @module variable-editor
  */
-import type { SiteToken, SiteTokenSet } from "@nextlyhq/blocks-engine";
+import {
+  sameSiteToken,
+  type SiteToken,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import { Button, ColorPicker, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -434,7 +438,7 @@ function Actions({
     const changed = parts.filter(
       part =>
         part.from !== undefined &&
-        (part.held === undefined || !sameAsSupplied(part.held, part.from))
+        (part.held === undefined || !sameSiteToken(part.held, part.from))
     );
     if (changed.length === 0) return null;
     return (
@@ -516,16 +520,6 @@ function withoutEntry(
     .filter((at): at is number => at !== undefined)
     .sort((a, b) => b - a);
   return positions.reduce(removeToken, tokens);
-}
-
-/** Whether the variable still matches what the site's code supplies. */
-function sameAsSupplied(token: SiteToken, supplied: SiteToken): boolean {
-  return (
-    token.name === supplied.name &&
-    token.label === supplied.label &&
-    token.values.light === supplied.values.light &&
-    token.values.dark === supplied.values.dark
-  );
 }
 
 /** A swatch painted through a custom property, or the empty swatch. */
