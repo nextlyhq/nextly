@@ -543,6 +543,30 @@ describe("dragging a Layers row", () => {
     );
   });
 
+  it("announces a second refused drop afresh, the region cleared in between", () => {
+    const { container } = render(
+      <Host
+        refuseApply
+        document={page([node("a", "core/heading"), node("b", "core/heading")])}
+      />
+    );
+    const region = () => screen.getByRole("status").textContent;
+    const attempt = (): void => {
+      press("a", 10);
+      moveTo(container, X, 20);
+      moveTo(container, X, 2 * ROW - 4);
+    };
+    attempt();
+    release(container, X, 2 * ROW - 4);
+    expect(region()).toBe("Heading could not be moved.");
+    // A new drag starts quiet: the region no longer reports the last one, so
+    // the same sentence after this drag is a change it reads out again.
+    attempt();
+    expect(region()).toBe("");
+    release(container, X, 2 * ROW - 4);
+    expect(region()).toBe("Heading could not be moved.");
+  });
+
   it("starts no drag while a search filters the rows", () => {
     const { container } = threeHeadings();
     fireEvent.change(screen.getByLabelText("Search layers"), {
@@ -901,6 +925,23 @@ describe("dragging a Layers row by touch", () => {
     expect(body(container).hasAttribute("data-nx-dragging")).toBe(false);
     // Nothing holds the page, so the browser may pan it.
     expect(touchMove(container).defaultPrevented).toBe(false);
+  });
+
+  it("survives the pointer's capture moving from the row to the tree", () => {
+    // A touch is captured by the row it lands on; picking the row up moves
+    // the capture to the tree, and the browser reports the row losing it.
+    // That is the drag taking hold, not the browser taking the pointer away.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { container } = threeHeadings();
+    touch("a", 10);
+    act(() => {
+      vi.advanceTimersByTime(LAYERS_TOUCH_HOLD_MS);
+    });
+    fireEvent.lostPointerCapture(label("a"), { pointerId: 1 });
+    expect(body(container).hasAttribute("data-nx-dragging")).toBe(true);
+    moveTo(container, X, 3 * ROW - 4);
+    release(container, X, 3 * ROW - 4);
+    expect(structure()).toEqual(["b", "c", "a"]);
   });
 
   it("keeps the hold through a tremor within the tolerance", () => {

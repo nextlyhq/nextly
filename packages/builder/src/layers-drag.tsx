@@ -572,6 +572,10 @@ export function useLayersDrag({
     (drag: Gesture) => {
       drag.active = true;
       drag.hold = null;
+      // A new drag starts quiet, whatever the last one left in the region —
+      // a refusal, or a move the editor did not make. Its own outcome is then
+      // a change from silence and is read out, even if it repeats the last.
+      setAnnouncement("");
       drag.host.setPointerCapture(drag.owner);
       if (drag.touch) drag.release = holdPage(drag.host);
       latest.current.editor.select(drag.id);
@@ -706,6 +710,11 @@ export function useLayersDrag({
       const drag = gesture.current;
       if (drag === null || !drag.active) return;
       if (drag.owner !== event.pointerId) return;
+      // The tree's OWN capture, and only that. A touch is captured by the row
+      // it lands on, and picking the row up moves the capture to the tree: the
+      // row reports losing it, and that event bubbles here. It is the drag
+      // taking hold, and ending the drag for it would end every touch drag.
+      if (event.target !== drag.host) return;
       reset();
     },
     [reset]
