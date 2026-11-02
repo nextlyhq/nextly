@@ -22,7 +22,7 @@ import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
 import {
   errorFromServiceEnvelope,
-  recordServiceRefusal,
+  type ServiceErrorEnvelope,
 } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -82,8 +82,22 @@ function legacyEnvelopeToFailureFields(result: {
   // its own status table, which sent anything outside 400/403/404/409 to
   // INTERNAL_ERROR -- so an item whose hook threw `rateLimited()` was a rate
   // limit on the single endpoint and an internal error in bulk.
-  const rebuilt = errorFromServiceEnvelope(result);
-  return { code: String(rebuilt.code), message: rebuilt.publicMessage };
+  return failureFieldsOf(errorFromServiceEnvelope(result));
+}
+
+/**
+ * The code and public message one failed item reports, from the error that
+ * answers for it. NextlyError keeps its code and publicMessage; anything else
+ * is INTERNAL_ERROR with a generic message, because an untyped error carries
+ * no public contract and its text may be raw driver output. Every per-item
+ * failure shape in this file derives from this, so a bulk item, a legacy
+ * batch item and the single-item endpoint agree on the code for one failure.
+ */
+function failureFieldsOf(error: unknown): { code: string; message: string } {
+  if (NextlyError.is(error)) {
+    return { code: String(error.code), message: error.publicMessage };
+  }
+  return { code: "INTERNAL_ERROR", message: "An unexpected error occurred." };
 }
 
 /**
@@ -136,18 +150,7 @@ function failureFromThrown(
   id: string,
   error: unknown
 ): { id: string; code: string; message: string } {
-  if (NextlyError.is(error)) {
-    return {
-      id,
-      code: String(error.code),
-      message: error.publicMessage,
-    };
-  }
-  return {
-    id,
-    code: "INTERNAL_ERROR",
-    message: "An unexpected error occurred.",
-  };
+  return { id, ...failureFieldsOf(error) };
 }
 
 /**
@@ -179,29 +182,35 @@ function detailedErrorMessage(error: unknown): string {
  * which belongs in the operator log alone.
  */
 function batchErrorMessage(error: unknown): string {
-  if (NextlyError.is(error)) return error.publicMessage;
-  return "An unexpected error occurred.";
+  return failureFieldsOf(error).message;
 }
 
 /**
- * Rebuild a rolled-back delete's accounting as exactly one error per
- * requested id, in index order. The per-id invariant is asserted here
+ * Rebuild a rolled-back batch's accounting as exactly one error per
+ * requested item, in index order. The per-id invariant is asserted here
  * rather than assumed of the accounting: the rebuild is the last stop
  * before the result, and `errors` exceeding one entry per id would give
  * a client duplicate detail and disagree with `failed`.
  */
-function rebuildRolledBackDeleteErrors(
+function rebuildRolledBackErrors(
   state: LegacyBatchState,
-  ids: string[],
-  rollbackNote: string
+  ids: readonly unknown[],
+  rollbackNote: { error: string; code: string }
 ): void {
-  const byIndex = new Map<number, string>();
+  const byIndex = new Map<number, LegacyBatchError>();
   for (const e of state.errors) {
-    if (!byIndex.has(e.index)) byIndex.set(e.index, e.error);
+    if (!byIndex.has(e.index)) byIndex.set(e.index, e);
   }
   state.errors = [];
   for (let i = 0; i < ids.length; i += 1) {
-    state.errors.push({ index: i, error: byIndex.get(i) ?? rollbackNote });
+    // An item that recorded its own failure keeps its message and code; one
+    // the rollback undid reports the abort, with the abort's code.
+    const own = byIndex.get(i);
+    state.errors.push(
+      own
+        ? { index: i, error: own.error, code: own.code }
+        : { index: i, ...rollbackNote }
+    );
   }
 }
 
@@ -281,9 +290,20 @@ type LegacyBatchVerdict =
   | {
       ok: false;
       message: string;
+      /**
+       * The item's own failed envelope. Rebuilt through the shared converter
+       * into the error that answers for the item: its code is what the item
+       * reports, and an aborting batch throws it.
+       */
+      envelope: ServiceErrorEnvelope;
       eventRecorded?: boolean;
       revalidationIntent?: RevalidationIntent;
     };
+
+/** One failed item in a legacy batch's accounting; every one carries a code. */
+type LegacyBatchError = BatchOperationResult["errors"][number] & {
+  code: string;
+};
 
 /**
  * The accounting one legacy batch accumulates while its items run. Carried as
@@ -294,7 +314,7 @@ interface LegacyBatchState {
   successful: number;
   failed: number;
   ids: string[];
-  errors: Array<{ index: number; error: string }>;
+  errors: LegacyBatchError[];
   /**
    * Tri-state like the public field: unset until an item records, true once
    * one has, false after a rollback clears it.
@@ -304,6 +324,11 @@ interface LegacyBatchState {
   intents: RevalidationIntent[];
   /** Set when the operation's abort policy fired on a thrown error. */
   integrityAbort: boolean;
+  /**
+   * Set when an item answered that the database is not migrated for the
+   * collection, which aborts the batch: see {@link notMigratedAnswer}.
+   */
+  notMigratedAbort?: { error: string; code: string };
 }
 
 function newLegacyBatchState(): LegacyBatchState {
@@ -316,6 +341,18 @@ function newLegacyBatchState(): LegacyBatchState {
     intents: [],
     integrityAbort: false,
   };
+}
+
+/**
+ * Whether an item's answer says the database is not migrated for the
+ * collection (its table or a declared column is missing). That is a fact
+ * about the collection, not the item, so no later item can succeed either,
+ * and on PostgreSQL the failed statement has already aborted the shared
+ * transaction: every statement a later item ran would fail with
+ * `current transaction is aborted` and be reported as an internal error.
+ */
+function notMigratedAnswer(error: unknown): boolean {
+  return NextlyError.is(error) && error.code === "ENTITY_NOT_MIGRATED";
 }
 
 /**
@@ -379,13 +416,20 @@ async function runLegacyBatchItem<TItem>(
     // Returned accounting carries only what the error's public contract
     // allows: a typed NextlyError's envelope message, never the driver
     // detail riding its cause.
-    state.errors.push({
-      index,
+    const failure = {
       error:
         error instanceof Error
           ? batchErrorMessage(error)
           : "Unknown error occurred",
-    });
+      code: failureFieldsOf(error).code,
+    };
+    state.errors.push({ index, ...failure });
+
+    // Aborts whatever the policies say; see notMigratedAnswer.
+    if (notMigratedAnswer(error)) {
+      state.notMigratedAbort = failure;
+      throw error;
+    }
 
     if (abortOnError(error)) {
       state.integrityAbort = true;
@@ -410,18 +454,35 @@ async function runLegacyBatchItem<TItem>(
   }
 
   state.failed++;
-  state.errors.push({ index, error: verdict.message });
+  // The index and the item's own message ride the log context, so an
+  // operator reading an aborted batch learns which item stopped it.
+  const answer = errorFromServiceEnvelope(verdict.envelope, {
+    batchIndex: index,
+    itemMessage: verdict.message,
+  });
+  const failure = {
+    error: verdict.message,
+    code: failureFieldsOf(answer).code,
+  };
+  state.errors.push({ index, ...failure });
+
+  // Aborts whatever stopOnError says, with the item's own answer; see
+  // notMigratedAnswer. A caller-owned transaction is answered the same
+  // ENTITY_NOT_MIGRATED 409 the single-entry write answers.
+  if (notMigratedAnswer(answer)) {
+    state.notMigratedAbort = failure;
+    throw answer;
+  }
 
   if (options.stopOnError) {
-    // A typed internal failure: a returned worker failure may be a hook,
-    // access, or server problem rather than caller input, so the public
-    // message stays generic and the per-index detail rides the cause,
-    // which the wire never serializes. The item above is already recorded
-    // once — this throw is the transaction's abort signal, not a second
-    // failure of the same item, so nothing records it on the way out.
-    throw NextlyError.internal({
-      cause: new Error(`Entry at index ${index} failed: ${verdict.message}`),
-    });
+    // The item's own answer is the abort, so a caller-owned transaction is
+    // answered what the single-entry write answers for the same failure
+    // (ENTITY_NOT_MIGRATED 409, NOT_FOUND 404, ...), never a generic 500.
+    // It was rebuilt through the shared envelope converter, so its public
+    // message is the envelope's own and no driver detail rides it. The item
+    // above is already recorded once — this throw is the transaction's
+    // abort signal, not a second failure of the same item.
+    throw answer;
   }
 }
 
@@ -2094,8 +2155,15 @@ export class CollectionBulkService extends BaseService {
         aborting !== undefined
           ? `Entry at index ${aborting.index} failed: ${aborting.error}`
           : batchErrorMessage(error);
-      const rollbackNote = `Batch rolled back; no entries were deleted: ${abortDetail}`;
-      rebuildRolledBackDeleteErrors(state, ids, rollbackNote);
+      // The note describes the abort, so an undone item carries its code. A
+      // collection the database is not migrated for reports that answer on
+      // every undone item, as a create or update batch does.
+      const rollbackNote = state.notMigratedAbort ?? {
+        error: `Batch rolled back; no entries were deleted: ${abortDetail}`,
+        code:
+          aborting !== undefined ? aborting.code : failureFieldsOf(error).code,
+      };
+      rebuildRolledBackErrors(state, ids, rollbackNote);
     }
     // Delete always reports the outbox signal, even when nothing recorded:
     // the previous shape read its own flag back after commit (true) or after
@@ -2238,7 +2306,21 @@ export class CollectionBulkService extends BaseService {
     // Log lines name WHAT aborted the batch, so read the abort's cause
     // chain: a typed NextlyError's own message is the wire-generic text.
     const errorText = detailedErrorMessage(error);
-    if (state.integrityAbort) {
+    const notMigrated = state.notMigratedAbort;
+    if (notMigrated) {
+      // The collection is not migrated, so no item could be written: an item
+      // that failed first keeps its own answer, and every other reports the
+      // answer that aborted the batch.
+      this.logger.warn(`${operationLabel} rolled back`, {
+        collectionName,
+        successfulBeforeRollback: state.successful,
+        error: errorText,
+      });
+      state.successful = 0;
+      state.ids = [];
+      state.failed = items.length;
+      rebuildRolledBackErrors(state, items, notMigrated);
+    } else if (state.integrityAbort) {
       this.logger.warn(`${operationLabel} rolled back`, {
         collectionName,
         successfulBeforeRollback: state.successful,
@@ -2248,7 +2330,10 @@ export class CollectionBulkService extends BaseService {
       state.ids = [];
       state.failed = items.length;
       const message = "The write could not be completed and was rolled back.";
-      state.errors = items.map((_, index) => ({ index, error: message }));
+      // The generic message describes the integrity abort, so every item
+      // carries the abort's code.
+      const { code } = failureFieldsOf(error);
+      state.errors = items.map((_, index) => ({ index, error: message, code }));
     } else if (stopOnError) {
       if (state.successful > 0) {
         this.logger.warn(`${operationLabel} rolled back due to stopOnError`, {
@@ -2272,8 +2357,8 @@ export class CollectionBulkService extends BaseService {
       state.successful = 0;
       state.ids = [];
       state.failed = items.length;
-      const message = batchErrorMessage(error);
-      state.errors = items.map((_, index) => ({ index, error: message }));
+      const { code, message } = failureFieldsOf(error);
+      state.errors = items.map((_, index) => ({ index, error: message, code }));
     }
   }
 
@@ -2323,6 +2408,7 @@ export class CollectionBulkService extends BaseService {
           : {
               ok: false,
               message: createResult.message,
+              envelope: createResult,
               eventRecorded: createResult.eventRecorded,
               revalidationIntent: createResult.revalidationIntent,
             };
@@ -2407,6 +2493,7 @@ export class CollectionBulkService extends BaseService {
           : {
               ok: false,
               message: updateResult.message,
+              envelope: updateResult,
               eventRecorded: updateResult.eventRecorded,
               revalidationIntent: updateResult.revalidationIntent,
             };
@@ -2465,6 +2552,7 @@ export class CollectionBulkService extends BaseService {
           : {
               ok: false,
               message: deleteResult.message,
+              envelope: deleteResult,
               eventRecorded: deleteResult.eventRecorded,
               revalidationIntent: deleteResult.revalidationIntent,
             };
@@ -2529,13 +2617,16 @@ function everyItemRefused(
   refused: CollectionServiceResult<BatchOperationResult>,
   count: number
 ): BatchOperationResult {
-  recordServiceRefusal(refused);
+  // Rebuilding the refusal through the shared converter records it, once,
+  // and names the code every refused item reports.
+  const { code } = legacyEnvelopeToFailureFields(refused);
   return {
     successful: 0,
     failed: count,
     errors: Array.from({ length: count }, (_, index) => ({
       index,
       error: refused.message,
+      code,
     })),
     ids: [],
   };

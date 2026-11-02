@@ -24,6 +24,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { FieldConfig } from "../../collections/fields/types";
+import {
+  asNotMigrated,
+  collectionRowNotMigrated,
+} from "../../database/with-db-errors";
 import { container } from "../../di/container";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import {
@@ -342,12 +346,21 @@ async function publishedEntries(
   const table = collectionTableName(record, collection);
   if (!(await adapter.tableExists(table))) return published;
   const lifecycle = record.status === true;
-  const rows = await adapter.select<{ id: unknown; status?: unknown }>(table, {
-    columns: lifecycle ? ["id", "status"] : ["id"],
-    where: {
-      and: [{ column: "id", op: "IN", value: [...new Set(entryIds)] }],
-    },
-  });
+  const rows = await adapter
+    .select<{ id: unknown; status?: unknown }>(table, {
+      columns: lifecycle ? ["id", "status"] : ["id"],
+      where: {
+        and: [{ column: "id", op: "IN", value: [...new Set(entryIds)] }],
+      },
+    })
+    .catch(async (error: unknown) => {
+      // A collection this instance has not registered, or whose table the
+      // database lacks, answers as its entry reads do, from the row in hand.
+      throw await asNotMigrated(
+        error,
+        collectionRowNotMigrated(collection, record)
+      );
+    });
   for (const row of rows) {
     published.set(String(row.id), !lifecycle || row.status === "published");
   }
