@@ -19,6 +19,7 @@ import {
   useNoticeQueue,
   type NoticeQueue,
 } from "./builder-notices";
+import { CanvasFrameShortcuts } from "./canvas-frame-context";
 import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
@@ -239,7 +240,7 @@ export interface BuilderShellProps {
    * whatever the sides hold.
    */
   topBarCenter?: React.ReactNode;
-  /** The top bar's end column, before the side-panel buttons: the actions. */
+  /** The top bar's end column, after the side-panel buttons: the actions. */
   topBarEnd?: React.ReactNode;
   /** The ancestor breadcrumb, along the bottom bar. */
   breadcrumb?: React.ReactNode;
@@ -941,13 +942,28 @@ function ShellTopBar({
         data-topbar="end"
         className="flex min-w-0 items-center justify-end gap-2"
       >
-        {topBarEnd}
+        {/* The panel buttons first, then the document's own controls after a
+          thin rule, so the bar ends on the action that leads, as the
+          accepted layout has it. */}
         <SidePanelToggles
           leftShown={leftShown}
           inspectorShown={inspectorShown}
           onLeft={onLeft}
           onInspector={onInspector}
         />
+        {/* `null` and `false` are what a conditional slot gives when it is
+          empty, so they draw no rule either. */}
+        {topBarEnd === undefined ||
+        topBarEnd === null ||
+        topBarEnd === false ? null : (
+          <>
+            <span
+              aria-hidden="true"
+              className="h-5 w-px shrink-0 bg-[color:var(--nx-builder-border)]"
+            />
+            {topBarEnd}
+          </>
+        )}
       </div>
     </header>
   );
@@ -1753,6 +1769,9 @@ export function BuilderShell({
 
   return (
     <ShortcutProvider>
+      {/* The same manager, listening in the canvas's frame as well, so a key
+          pressed with focus inside the page reaches every binding above. */}
+      <CanvasFrameShortcuts />
       {/* Provided here rather than required of the host: the shell's own
           controls carry tooltips, so a shell that renders them depends on this
           and should not make it someone else's setup step. Radix nests

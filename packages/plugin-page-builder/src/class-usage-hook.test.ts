@@ -43,6 +43,7 @@ function harness(
     getCollection?: () => Promise<unknown>;
     draftSplit?: () => Promise<{ eligible: boolean }>;
     locales?: readonly string[];
+    markDirty?: () => Promise<void>;
   } = {}
 ) {
   const registered: string[] = [];
@@ -106,6 +107,9 @@ function harness(
     draftSplit: options.draftSplit ?? (async () => ({ eligible: false })),
     locales: () => options.locales ?? [],
     limits: () => DEFAULT_LIMITS,
+    ...(options.markDirty === undefined
+      ? {}
+      : { markDirty: options.markDirty }),
   });
 
   const fire = (over: Record<string, unknown> = {}) =>
@@ -527,5 +531,64 @@ describe("a Single, which a wildcard registration also receives", () => {
     await fire({ collection: "my:pages" });
 
     expect(api.create).toHaveBeenCalled();
+  });
+});
+
+describe("marking the index dirty when a write fails", () => {
+  it("marks it when a subject cannot be reconciled, and still raises", async () => {
+    // A failed write leaves this document's rows stale, and no later save of
+    // another document repairs them. Unmarked, health kept calling the index
+    // whole and every count over it read as exact.
+    const marks: string[] = [];
+    const { fire, api } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
+
+    await expect(fire()).rejects.toThrow(/1 of 1 subject\(s\)/);
+    expect(marks).toEqual(["dirty"]);
+  });
+
+  it("marks it when a deleted document's rows cannot be forgotten", async () => {
+    const marks: string[] = [];
+    const { fireDelete, api } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+    api.find.mockRejectedValue(new Error("index unreachable"));
+
+    await expect(fireDelete()).rejects.toThrow(/could not forget/);
+    expect(marks).toEqual(["dirty"]);
+  });
+
+  it("still raises the write's own failure when the mark cannot be written", async () => {
+    // The caller must still learn the index is stale; a failing mark is
+    // logged beside it rather than replacing it.
+    const { fire, api, errors } = harness({
+      markDirty: async () => {
+        throw new Error("bookkeeping unavailable");
+      },
+    });
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
+
+    await expect(fire()).rejects.toThrow(/1 of 1 subject\(s\)/);
+    expect(JSON.stringify(errors)).toContain("could not be marked dirty");
+  });
+
+  it("CONTROL: marks nothing on a save every subject reconciles", async () => {
+    // A handler that marked on every save would satisfy the cases above and
+    // keep every index dirty for ever.
+    const marks: string[] = [];
+    const { fire } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+
+    await expect(fire()).resolves.toBeUndefined();
+    expect(marks).toEqual([]);
   });
 });

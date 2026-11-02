@@ -65,6 +65,7 @@
 import type {
   BlockDocument,
   BlockNode,
+  ComponentLookup,
   NestingSource,
   PlacedNode,
   PlacementRefusal,
@@ -76,6 +77,7 @@ import {
   canPlaceIn,
   findNode,
   placementVerdict,
+  registryBlockSource,
 } from "@nextlyhq/blocks-engine";
 
 import type { Point, Rect } from "./geometry";
@@ -532,6 +534,28 @@ export function movingSubtree(
   const node = find(document.nodes);
   if (node !== undefined) subtreeIds(node, ids);
   return ids;
+}
+
+/**
+ * Where the one placement rule reads its answers in the editor: the host's
+ * nesting rules, the registered blocks, and the component definitions the
+ * canvas draws instances from, when it has them.
+ *
+ * One builder for every surface that asks the rule — the canvas drag, the
+ * Layers drag and the keyboard move — so a placement cannot be judged against
+ * one set of sources on one surface and another set beside it.
+ */
+export function placementSources(current: {
+  nesting: NestingSource;
+  definitions?: ComponentLookup;
+}): PlacementSources {
+  return {
+    nesting: current.nesting,
+    definitions: registryBlockSource(),
+    ...(current.definitions === undefined
+      ? {}
+      : { components: current.definitions }),
+  };
 }
 
 /** What {@link resolveDrop} needs to answer a pointer. */

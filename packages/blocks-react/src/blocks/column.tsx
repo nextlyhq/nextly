@@ -96,8 +96,8 @@ export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
       // `article` inside a row is nearly always a mistake the author meant to
       // make one level up. Anything genuinely semantic belongs in the column
       // rather than as the column.
-      as: { type: "select", options: ["div"] },
-      contained: { type: "checkbox" },
+      as: { label: "HTML tag", type: "select", options: ["div"] },
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: COLUMN_DEFAULT_PROPS,
     example: { props: { as: "div" } },

@@ -240,7 +240,13 @@ function assertFieldName(
   field: unknown,
   where: string
 ): asserts field is string {
-  if (typeof field !== "string" || !FIELD_NAME.test(field)) {
+  // `__proto__` matches the pattern but names no field: core refuses it as a
+  // filter key, so it is refused here, before a read is built.
+  if (
+    typeof field !== "string" ||
+    !FIELD_NAME.test(field) ||
+    field === "__proto__"
+  ) {
     refuse(
       "field-invalid",
       `${where} names "${String(field)}", which is not a field name.`

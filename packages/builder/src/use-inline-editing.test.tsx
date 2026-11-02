@@ -28,6 +28,7 @@ import {
 
 import type { EditorState } from "./editor-state";
 import { useInlineEditing } from "./use-inline-editing";
+import { createOpenPassages } from "./open-passages";
 import { useInlineRichText } from "./use-inline-rich-text";
 
 afterEach(() => {
@@ -1926,6 +1927,37 @@ describe("the element the gesture measured", () => {
     });
 
     expect(attach).toHaveBeenCalled();
+  });
+});
+
+describe("a passage an inspector field holds open", () => {
+  it("is finished by commit, which answers the document it wrote", () => {
+    registerArticle();
+    const passages = createOpenPassages();
+    const { result } = renderHook(() =>
+      useInlineEditing(editorState(), undefined, undefined, undefined, passages)
+    );
+    expect(result.current.inspecting).toBe(false);
+
+    const written = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [],
+    } as unknown as BlockDocument;
+    const finish = vi.fn(() => written);
+    act(() => {
+      passages.hold(finish);
+    });
+    // Open in an inspector field is unsaved work, as on the canvas.
+    expect(result.current.inspecting).toBe(true);
+
+    let outcome: unknown;
+    act(() => {
+      outcome = result.current.commit();
+    });
+    expect(finish).toHaveBeenCalledTimes(1);
+    // The document the field's commit wrote, not the one the caller held.
+    expect(outcome).toEqual({ status: "written", document: written });
   });
 });
 

@@ -195,9 +195,9 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       keywords: ["repeat", "query", "entries", "dynamic"],
     },
     props: {
-      collection: { type: "text" },
-      limit: { type: "number", min: 1, max: 100 },
-      sort: { type: "text" },
+      collection: { label: "Collection", type: "text" },
+      limit: { label: "Number of items", type: "number", min: 1, max: 100 },
+      sort: { label: "Sort by", type: "text" },
     },
     defaultProps: { limit: 10 },
     example: { props: { collection: "posts", limit: 3 } },

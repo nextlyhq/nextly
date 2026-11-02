@@ -1,0 +1,114 @@
+/**
+ * The page builder's own tables: the usage indexes' bookkeeping.
+ *
+ * Kept in tables this plugin declares, reached only through its own `ctx.db`,
+ * rather than in collections. A collection has an admin screen, a REST route
+ * and a Direct API path, and a super-admin passes every access rule on all
+ * three, so a progress row written by hand there claimed a scope was walked
+ * and the documents in it were never indexed. A table declared here has none
+ * of those paths: core offers no route to it, and `ctx.db` lets only this
+ * plugin, and a plugin that declares a dependency on it, reach it.
+ *
+ * Created as `page_builder__<name>` on every dialect. The prefix is declared
+ * rather than left to default, because a table's name is permanent once a
+ * migration ships it.
+ *
+ * @module schema/tables
+ */
+import {
+  col,
+  type ColumnBuilder,
+  defineTable,
+  type TableDefinition,
+} from "@nextlyhq/plugin-sdk/schema";
+
+/** The prefix every table of this plugin is created under. */
+export const SCHEMA_PREFIX = "page_builder";
+
+/**
+ * The schema version the database must have applied before the plugin starts.
+ * It moves with every migration module.
+ */
+export const SCHEMA_VERSION = 1;
+
+/** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
+type UsageRunsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly name: ColumnBuilder<string, false, false>;
+  readonly generation: ColumnBuilder<string, false, false>;
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly dirty: ColumnBuilder<boolean, false, true>;
+};
+
+/**
+ * The run the usage indexes are being built under: one row, named `usage`.
+ *
+ * `generation` is the derivation the run walks under (the bounds, the index
+ * slugs and the derivation's revision), and `token` names the run itself. A
+ * new run, with a new token, starts when the generation changes or when a
+ * maintenance write fails. Every write a backfill pass makes checks, in its
+ * own transaction, that its token is still this row's, so a pass a newer run
+ * has replaced writes nothing.
+ *
+ * `dirty` says a maintenance write failed since the last run that walked every
+ * scope. It is set with the token it rotates, and cleared only by that newer
+ * run once it has walked the whole site, never by a later save.
+ */
+export const usageRuns: TableDefinition<"usage_runs", UsageRunsColumns> =
+  defineTable<"usage_runs", UsageRunsColumns>(
+    "usage_runs",
+    {
+      id: col.id(),
+      name: col.varchar(64),
+      generation: col.varchar(512),
+      token: col.char(36),
+      dirty: col.boolean({ default: false }),
+    },
+    // One row per name, so two instances starting the first run at once
+    // cannot both insert one.
+    { indexes: [{ columns: ["name"], unique: true }] }
+  );
+
+/** The columns of {@link usageProgress}, as `defineTable` checks and publishes them. */
+type UsageProgressColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly scopeKey: ColumnBuilder<string, false, false>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+  readonly done: ColumnBuilder<boolean, false, true>;
+};
+
+/**
+ * How far one run has walked one scope.
+ *
+ * `cursor` is the id of the last document the walk finished, so a scope larger
+ * than one job's budget resumes after it on the next tick instead of starting
+ * again. `done` says the whole scope was walked and its orphan rows swept.
+ * Rows of any token but the run's are left over from a replaced run, and are
+ * removed when the run is replaced.
+ */
+export const usageProgress: TableDefinition<
+  "usage_progress",
+  UsageProgressColumns
+> = defineTable<"usage_progress", UsageProgressColumns>(
+  "usage_progress",
+  {
+    id: col.id(),
+    token: col.char(36),
+    scopeKey: col.varchar(512),
+    cursor: col.varchar(255, { nullable: true }),
+    done: col.boolean({ default: false }),
+  },
+  // One row per scope of a run; a pass reads its run's rows by token.
+  { indexes: [{ columns: ["token", "scopeKey"], unique: true }] }
+);
+
+/** Every table this plugin declares, in creation order. */
+export const PAGE_BUILDER_TABLES: readonly [
+  typeof usageRuns,
+  typeof usageProgress,
+] = [usageRuns, usageProgress];

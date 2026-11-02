@@ -30,15 +30,12 @@ const TAGS = {
 const TITLE = { name: "title", type: "text" } as unknown as FieldDefinition;
 
 /** A load that answers each document by its id, counting its reads. */
-function countingLoad(version = () => "") {
+function countingLoad() {
   const components = vi.fn(
     (ids: readonly string[], language: string | undefined) =>
       Promise.resolve(
         new Map(
-          ids.map(id => [
-            id,
-            { hero: { heading: `${id}${version()}:${language ?? "-"}` } },
-          ])
+          ids.map(id => [id, { hero: { heading: `${id}:${language ?? "-"}` } }])
         )
       )
   );
@@ -68,24 +65,15 @@ describe("a batch's stored relations", () => {
     expect(load.manyToMany).toHaveBeenCalledTimes(1);
   });
 
-  it("are read again for a document the batch has written since", async () => {
-    let version = "0";
-    const load = countingLoad(() => version);
+  it("read each component's definition once for every document", async () => {
     const batch = new GoingLiveRelationsBatch(["a", "b"]);
-    await batch.read("b", "en", load);
+    const read = vi.fn(() => Promise.resolve([]));
 
-    version = "1";
-    batch.written("a");
+    await batch.componentFields("hero", read);
+    await batch.componentFields("hero", read);
+    await batch.componentFields("card", read);
 
-    expect((await batch.read("a", "en", load)).components).toEqual({
-      hero: { heading: "a1:en" },
-    });
-    expect(load.components).toHaveBeenLastCalledWith(["a"], "en");
-    expect(load.manyToMany).toHaveBeenLastCalledWith(["a"]);
-    // A document the batch has not written keeps the batch's read.
-    expect((await batch.read("b", "en", load)).components).toEqual({
-      hero: { heading: "b0:en" },
-    });
+    expect(read).toHaveBeenCalledTimes(2);
   });
 
   it("are read alone for a document outside the batch", async () => {
@@ -255,25 +243,40 @@ describe("required components by language", () => {
   it("relaxes a component's required outside the default language, as a translated field's", () => {
     expect(
       [
-        ...componentsRequiredInDefaultLanguage(context(false), [
-          TITLE,
-          HERO,
-          TAGS,
-        ]).localizedFieldNames,
+        ...componentsRequiredInDefaultLanguage(
+          context(false),
+          [TITLE, HERO, TAGS],
+          true
+        ).localizedFieldNames,
       ].sort()
     ).toEqual(["hero", "title"]);
   });
 
-  it("keeps it on a document with no translated fields, whatever the language", () => {
+  it("keeps it on a document that is the same in every language, whatever the language", () => {
     const ctx = {
       localizedFieldNames: new Set<string>(),
       enforceLocalizedRequired: false,
     };
-    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO])).toBe(ctx);
+    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], false)).toBe(
+      ctx
+    );
+  });
+
+  it("relaxes it on a document whose only translated values sit in a component", () => {
+    const ctx = {
+      localizedFieldNames: new Set<string>(),
+      enforceLocalizedRequired: false,
+    };
+    expect([
+      ...componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], true)
+        .localizedFieldNames,
+    ]).toEqual(["hero"]);
   });
 
   it("keeps it in the default language", () => {
     const ctx = context(true);
-    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO])).toBe(ctx);
+    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], true)).toBe(
+      ctx
+    );
   });
 });

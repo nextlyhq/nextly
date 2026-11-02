@@ -41,8 +41,11 @@ export function panelLabel(panel: LeftPanel): string {
   return PANEL_CHROME[panel].label;
 }
 
+// The ring sits off the item by a gap of the rail's own surface: on the open
+// panel's item, filled with the accent, a ring drawn against the fill is the
+// same colour as it and does not show.
 const ITEM_CLASS =
-  "focus-visible:ring-ring flex w-full flex-col items-center gap-1 rounded-md py-1.5 text-xs leading-tight focus-visible:ring-2 focus-visible:outline-none";
+  "focus-visible:ring-ring flex w-full flex-col items-center gap-1 rounded-md py-1.5 text-xs leading-tight focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
 
 function RailItem({
   label,

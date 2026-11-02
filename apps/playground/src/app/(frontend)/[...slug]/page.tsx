@@ -39,6 +39,7 @@
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderLayouts } from "@nextlyhq/plugin-page-builder";
 import { previewDraftGate } from "nextly/runtime";
 
 import {
@@ -100,6 +101,9 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // The one provider, shared with the two single-page routes so all three
   // resolve their tokens the same way. See `SITE_STYLES`.
   siteStyles: SITE_STYLES,
+  // Each page drawn inside its Layout: header, page, footer. Read through the
+  // same reader as the page, so the default comes from the same instance.
+  layouts: pageBuilderLayouts({ nextly: siteReader }),
   metadata: (entry, context, derived) => ({
     title: derived.title ?? (entry.title as string | undefined),
     description: derived.description,
