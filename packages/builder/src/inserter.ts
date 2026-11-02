@@ -12,9 +12,9 @@
  * with the position.** A panel that decides what to OFFER from one reading and
  * inserts against another will show a block, accept the click, and have the op
  * layer refuse it — a refusal the author cannot act on, because the thing they
- * were offered is the thing that was rejected. {@link insertionPointFor}
- * therefore answers both halves at once, and everything downstream takes the
- * target from it rather than recomputing one.
+ * were offered is the thing that was rejected. {@link insertionCandidates}
+ * therefore hands out each place as a position AND the target it implies, and
+ * everything downstream takes the target from it rather than recomputing one.
  *
  * **The nesting rule is CALLED, never restated.** `canBeRoot` and `canNest`
  * come from the engine, which documents itself as the one implementation
@@ -54,6 +54,7 @@ import {
   type PlacementSite,
   type PlacementSources,
   type PlacementTarget,
+  type PlacementVerdict,
   type ResolvedComposition,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
@@ -70,6 +71,17 @@ import { positionOf, type OpPosition } from "./ops";
  * rather than an error state.
  */
 export const UNCATEGORISED = "other";
+
+/**
+ * The one category every component entry falls under, whatever its row says.
+ *
+ * A component is the site's own, placed as a link back to its definition, and
+ * an author looks for it apart from the library's blocks: filing it under the
+ * row's category would scatter the site's components among blocks they look
+ * nothing like. Namespaced so no plugin's free-string category can collide
+ * with it.
+ */
+export const COMPONENT_CATEGORY = "nextly:components";
 
 /**
  * One offerable BLOCK: a block, or a block under one of its named variations.
@@ -354,23 +366,6 @@ export type { PlacementTarget } from "@nextlyhq/blocks-engine";
 export type InsertTarget = PlacementTarget;
 
 /**
- * A position to insert at, with the target that position implies.
- *
- * One value rather than two calls, so the filter and the insert cannot be
- * computed from different readings of the selection.
- *
- * `kind` is carried because the panel says where the block will go, and
- * "after the selected block" and "at the end of the page" are different
- * sentences. Deriving it afterwards by re-inspecting the selection would ask
- * the same question a second time and could answer differently.
- */
-export interface InsertionPoint {
-  readonly kind: "after-selection" | "document-end" | "inside-selection";
-  readonly at: OpPosition;
-  readonly target: PlacementTarget;
-}
-
-/**
  * Build the offerable list from block definitions.
  *
  * Takes definitions rather than reading the registry, matching how the engine
@@ -394,7 +389,12 @@ export function catalogFrom(
   for (const definition of byLabel) {
     const editor = definition.editor;
     const category = editor?.category ?? UNCATEGORISED;
-    const keywords = editor?.keywords ?? [];
+    // A plugin block that names no keywords is still found by its own name,
+    // which is the one word an author searching for it will type.
+    const keywords =
+      editor?.keywords === undefined || editor.keywords.length === 0
+        ? [labelOf(definition)]
+        : editor.keywords;
     // The block's DEFAULTS, overlaid by its EXAMPLE.
     //
     // Defaults alone are what an author was getting, and they are deliberately
@@ -423,7 +423,12 @@ export function catalogFrom(
       id: definition.name,
       blockName: definition.name,
       label: labelOf(definition),
-      description: definition.description,
+      // The engine refuses an empty description at registration; a blank one
+      // still says nothing, so the block's name stands in rather than a gap.
+      description:
+        definition.description.trim() === ""
+          ? labelOf(definition)
+          : definition.description,
       category,
       keywords,
       icon: editor?.icon,
@@ -565,7 +570,10 @@ export function componentEntriesFrom(
       componentId: component.id,
       label: component.title,
       description: component.description ?? "",
-      category: component.category ?? UNCATEGORISED,
+      // Every component under the one components group and with the one
+      // component mark, whatever its row declares: see COMPONENT_CATEGORY.
+      category: COMPONENT_CATEGORY,
+      icon: "component",
       keywords: keywordsOf(component.keywords),
       ...offered,
       ...(component.usedOn === undefined ? {} : { usedOn: component.usedOn }),
@@ -906,41 +914,56 @@ export function blockAllowedAt(
 }
 
 /**
- * The entries a target will actually accept.
- *
- * Refused entries are REMOVED rather than shown disabled. A palette is a list
- * of things you can do; a row that cannot be clicked is a question the author
- * has to answer before every insert, and the answer never changes while the
- * selection stands. The verdict's reason stays available through
- * {@link entryAllowedAt} for surfaces where the author has already committed to
- * a placement — a refused DROP has to say why, because the author aimed there.
+ * The entries a target will actually accept: {@link entryVerdictAt}'s allowed
+ * ones, for a caller that needs the set rather than each reason.
  */
 export function allowedEntries<TEntry extends InsertEntry>(
   entries: readonly TEntry[],
   target: PlacementTarget,
   source: NestingSource,
   definitions?: ComponentLookup,
-  /**
-   * The insertion point as the one placement rule sees it: the site, with what
-   * its ancestors refuse, and what an insert expands a block's starting
-   * children from. Absent, entries are judged by the name rules alone.
-   */
   placement?: EntryPlacement
 ): TEntry[] {
+  // Derived from the verdict rather than asked beside it, so the set and the
+  // reasons the panel shows for what is left out come from one question.
+  return entries.filter(
+    entry =>
+      entryVerdictAt(entry, target, source, definitions, placement).allowed
+  );
+}
+
+/**
+ * Whether one entry may be placed at a target, with the rule's reason when it
+ * may not.
+ *
+ * The verdict rather than a boolean, because the Add panel keeps a refused
+ * entry in view and says why: an author who cannot see a block has no way to
+ * learn where it would go.
+ */
+export function entryVerdictAt(
+  entry: InsertEntry,
+  target: PlacementTarget,
+  source: NestingSource,
+  definitions?: ComponentLookup,
+  /**
+   * The place as the one placement rule sees it: the site, with what its
+   * ancestors refuse, and what an insert expands a block's starting children
+   * from. Absent, the entry is judged by the name rules alone.
+   */
+  placement?: EntryPlacement
+): NestingVerdict | PlacementVerdict {
   // Present, the placement rule is the whole answer: it asks the name rules
   // itself, of the same parent and slot, for a component's roots read through
   // `placement.sources.components`, which is why that has to be the lookup
   // the catalog was built with. Asking `entryAllowedAt` beside it would ask
   // each name rule twice.
-  return entries.filter(entry =>
-    placement === undefined
-      ? entryAllowedAt(entry, target, source, definitions).allowed
-      : canPlace(
-          insertedBy(entry, placement.expansion),
-          placement.site,
-          placement.sources
-        ).allowed
-  );
+  return placement === undefined
+    ? entryAllowedAt(entry, target, source, definitions)
+    : canPlace(
+        insertedBy(entry, placement.expansion),
+        placement.site,
+        placement.sources
+      );
 }
 
 /** What {@link allowedEntries} needs to judge entries by the one placement rule. */
@@ -1074,88 +1097,218 @@ export function groupByCategory<TEntry extends InsertEntry>(
 }
 
 /**
- * Where a new block goes, given what is selected.
+ * The groups the Add panel draws, in its order: the categories the host ranks
+ * (the library's own), then the site's components, then any other category a
+ * plugin declared, then the blocks that declared none.
  *
- * After the selected block, as a sibling in the same region — which is what an
- * author who just clicked a block and reached for the inserter means. Inserting
- * INTO a selected container is a different intention and gets its own gesture
- * on the canvas; guessing between the two from one click would make the same
- * action do two things depending on what kind of block happened to be selected.
- *
- * Falls back to the end of the document when nothing is selected, and when the
- * selection names a node the document no longer has — a stale id after an undo,
- * or a selection made against a document that has since been replaced.
- *
- * Returns `null` only when the selected node sits somewhere no op can name: a
- * parent without a slot. Appending at the end instead would silently insert
- * somewhere the author was not looking, so the caller is told it cannot answer
- * rather than handed a plausible wrong position.
+ * Derived from {@link groupByCategory} rather than grouped again, so the two
+ * cannot disagree about which entries share a heading; this only decides where
+ * the two headings the panel itself names sit. The components follow the
+ * ranked categories because they are what an author reaches for next once the
+ * basic blocks are passed. The uncategorised go last, because "More blocks" is
+ * a remainder and reads as one only at the end.
  */
-export function insertionPointFor(
+export function paletteGroups<TEntry extends InsertEntry>(
+  entries: readonly TEntry[],
+  preferred: readonly string[] = [],
+  blockOrder: readonly string[] = []
+): InsertGroup<TEntry>[] {
+  const groups = groupByCategory(entries, [
+    ...preferred,
+    COMPONENT_CATEGORY,
+  ]).map(group => ({
+    ...group,
+    entries: inBlockOrder(group.entries, blockOrder),
+  }));
+  return [
+    ...groups.filter(group => group.category !== UNCATEGORISED),
+    ...groups.filter(group => group.category === UNCATEGORISED),
+  ];
+}
+
+/**
+ * A group's entries with the blocks the host ranks first, in its order, and
+ * everything else after them as it arrived (by label). A sort that keeps
+ * ties in place, so a block's variations stay right behind it.
+ */
+function inBlockOrder<TEntry extends InsertEntry>(
+  entries: readonly TEntry[],
+  blockOrder: readonly string[]
+): TEntry[] {
+  if (blockOrder.length === 0) return [...entries];
+  const rank = new Map(blockOrder.map((name, index) => [name, index]));
+  const rankOf = (entry: TEntry): number =>
+    (entry.kind === "block" ? rank.get(entry.blockName) : undefined) ??
+    blockOrder.length;
+  return [...entries].sort((a, b) => rankOf(a) - rankOf(b));
+}
+
+/**
+ * The words a category's heading is drawn with.
+ *
+ * The library's category ids are words for code ("content"), so the four it
+ * declares are named as an author reads them; "content" is "Text" because that
+ * is what the blocks under it are. The two groups the panel itself makes are
+ * named here too. A plugin's category is a free string it chose to be read,
+ * so it is drawn as written.
+ */
+export function categoryHeading(category: string): string {
+  return Object.hasOwn(CATEGORY_HEADINGS, category)
+    ? (CATEGORY_HEADINGS[category] ?? category)
+    : category;
+}
+
+/**
+ * The headings {@link categoryHeading} names, keyed by category id. Read with
+ * `Object.hasOwn` because a category is a plugin's free string, and a plain
+ * object would answer "constructor" with an inherited function.
+ */
+const CATEGORY_HEADINGS: Readonly<Record<string, string>> = {
+  layout: "Layout",
+  content: "Text",
+  media: "Media",
+  interactive: "Interactive",
+  [COMPONENT_CATEGORY]: "Your components",
+  [UNCATEGORISED]: "More blocks",
+};
+
+/**
+ * One place a click in the Add panel may put a block, and what it goes after.
+ *
+ * `afterId` names the block the new one follows ("Adding after Heading"), and
+ * is absent at the end of the page and inside a container.
+ */
+export interface InsertionCandidate {
+  readonly kind:
+    | "after-selection"
+    | "after-ancestor"
+    | "document-end"
+    | "inside";
+  readonly at: OpPosition;
+  readonly target: PlacementTarget;
+  readonly afterId?: string;
+  /** The container a block goes inside, for `inside`. */
+  readonly insideId?: string;
+}
+
+/**
+ * Where a click in the Add panel may put a block, in the order they are tried.
+ *
+ * As the editor's rule says (after the selection; inside it only last):
+ * - nothing selected, or a selection the document no longer holds: the end of
+ *   the page;
+ * - otherwise after the selected block, in its own region, then after each
+ *   block it sits in, out to the page, so a block the selection's region
+ *   refuses goes after the nearest container that can hold it; and last,
+ *   inside the selection when it is a container, so a block that only
+ *   belongs inside one (an accordion's item, say) goes where the author
+ *   pointed once nothing after it would take it;
+ * - `inside`, a container the author chose to add into (its "+"): that
+ *   container's region alone, at its end.
+ *
+ * The same list for every block; which place a given block takes is
+ * {@link insertionFor}'s question, asked of the placement rule.
+ */
+export function insertionCandidates(
   document: BlockDocument,
   selectedId: string | null,
-  slots?: SlotSource
-): InsertionPoint | null {
-  const end: InsertionPoint = {
+  options: { readonly inside?: string; readonly slots?: SlotSource } = {}
+): InsertionCandidate[] {
+  if (options.inside !== undefined) {
+    return insideCandidates(document, options.inside, options.slots);
+  }
+  const end: InsertionCandidate = {
     kind: "document-end",
     at: { index: document.nodes.length },
     target: { kind: "root" },
   };
-  if (selectedId === null) return end;
-
-  const location = locateNode(document.nodes, selectedId);
-  if (location === undefined) return end;
-
-  // An EMPTY container takes the block instead of standing beside it.
-  //
-  // Without this a container can be inserted and never filled: every insert
-  // lands as a sibling, so `core/columns` arrives empty and stays empty, and
-  // the seven container blocks in the library are decorative. Selecting an
-  // empty container and adding a block means putting it IN there — there is no
-  // other reading of the gesture.
-  //
-  // Only when empty, which is what keeps a sibling reachable. A container the
-  // author has already filled takes a sibling instead, and adding a third child
-  // to it is done by selecting the second and inserting after that — so both
-  // placements stay available without a second affordance to discover.
-  const selected = findNode(document.nodes, selectedId);
-  const emptySlot =
-    selected === undefined ? null : emptySlotOf(selected, slots);
-  if (selected !== undefined && emptySlot !== null) {
-    return {
-      kind: "inside-selection",
-      at: { parentId: selected.id, slot: emptySlot, index: 0 },
-      target: { kind: "slot", parentType: selected.type, slot: emptySlot },
-    };
+  if (selectedId === null) return [end];
+  const candidates: InsertionCandidate[] = [];
+  let current: string | undefined = selectedId;
+  // Bounded by the document's depth: each step moves one parent out.
+  while (current !== undefined) {
+    const location = locateNode(document.nodes, current);
+    const after =
+      location === undefined
+        ? undefined
+        : afterCandidate(location, current, current === selectedId);
+    if (location === undefined || after === undefined) break;
+    candidates.push(after);
+    current = location.parent?.id;
   }
+  if (candidates.length === 0) return [end];
+  return [
+    ...candidates,
+    ...insideCandidates(document, selectedId, options.slots),
+  ];
+}
 
-  let after: OpPosition;
-  try {
-    const here = positionOf(location);
-    after = { ...here, index: here.index + 1 };
-  } catch {
-    // `positionOf` refuses a parent with no named slot, which is a position the
-    // op vocabulary cannot express. That refusal is about the SELECTED node's
-    // surroundings rather than about anything the author did, so it is reported
-    // as "no answer" rather than raised at them.
-    return null;
-  }
-
-  if (location.parent === undefined) {
-    return { kind: "after-selection", at: after, target: { kind: "root" } };
-  }
-  // `positionOf` has already refused the slot-less case, so a parent here has a
-  // slot. Read it from the location rather than re-deriving from `after`, whose
-  // type permits a top-level position that this branch has excluded.
-  return {
-    kind: "after-selection",
-    at: after,
-    target: {
-      kind: "slot",
-      parentType: location.parent.type,
-      slot: location.slot ?? "",
+/** The end of a container's region the author chose to add into, if it has one. */
+function insideCandidates(
+  document: BlockDocument,
+  insideId: string,
+  slots: SlotSource | undefined
+): InsertionCandidate[] {
+  const container = findNode(document.nodes, insideId);
+  if (container === undefined) return [];
+  const slot =
+    emptySlotOf(container, slots) ?? Object.keys(container.slots ?? {})[0];
+  if (slot === undefined) return [];
+  const held = container.slots?.[slot] ?? [];
+  return [
+    {
+      kind: "inside",
+      at: { parentId: container.id, slot, index: held.length },
+      target: { kind: "slot", parentType: container.type, slot },
+      insideId: container.id,
     },
+  ];
+}
+
+/**
+ * The place just after one block in its own region, or `undefined` where no op
+ * can name it (a parent with no named slot).
+ */
+function afterCandidate(
+  location: NonNullable<ReturnType<typeof locateNode>>,
+  id: string,
+  selected: boolean
+): InsertionCandidate | undefined {
+  let here: OpPosition;
+  try {
+    here = positionOf(location);
+  } catch {
+    return undefined;
+  }
+  return {
+    kind: selected ? "after-selection" : "after-ancestor",
+    at: { ...here, index: here.index + 1 },
+    target:
+      location.parent === undefined
+        ? { kind: "root" }
+        : {
+            kind: "slot",
+            parentType: location.parent.type,
+            slot: location.slot ?? "",
+          },
+    afterId: id,
   };
+}
+
+/**
+ * The place a block takes: the first of the candidates whose region accepts
+ * it, by the caller's reading of the placement rule, or `undefined` when none
+ * does (and the panel says why).
+ */
+export function insertionFor<T>(
+  candidates: readonly InsertionCandidate[],
+  accepts: (candidate: InsertionCandidate) => T | undefined
+): { readonly candidate: InsertionCandidate; readonly answer: T } | undefined {
+  for (const candidate of candidates) {
+    const answer = accepts(candidate);
+    if (answer !== undefined) return { candidate, answer };
+  }
+  return undefined;
 }
 
 /**

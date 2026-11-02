@@ -204,8 +204,11 @@ const IMAGE_PARTS = {
 export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   name: IMAGE_BLOCK,
   version: 1,
-  description:
-    "A picture, resolved through the host's media library so its URL, alt text and intrinsic size stay current.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A picture, resolved through
+  // the host's media library so its URL, alt text and intrinsic size stay
+  // current.
+  description: "A picture from the media library.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.
