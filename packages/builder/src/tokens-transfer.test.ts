@@ -1851,3 +1851,31 @@ describe("what an import applies", () => {
     expect(kept.ok).toBe(false);
   });
 });
+
+describe("an import that changes only a variable's vendor data", () => {
+  it("counts as a change, is previewed as one, and is stored", () => {
+    const site: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      ],
+    };
+    const file = exportDtcg({
+      tokens: [
+        {
+          ...site.tokens[0]!,
+          extensions: { "com.figma.variableId": "VariableID:9:9" },
+        },
+      ],
+    }).text;
+    const plan = planImport([{ name: "ink.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.unchanged).toEqual([]);
+    expect(plan.changed.map(t => t.name)).toEqual(["color.ink"]);
+    const result = applyImport(plan, site, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.imported).toBe(1);
+    expect(result.tokens.tokens[0]?.extensions).toEqual({
+      "com.figma.variableId": "VariableID:9:9",
+    });
+  });
+});

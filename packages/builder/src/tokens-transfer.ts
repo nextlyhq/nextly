@@ -38,6 +38,7 @@ import {
   dtcgToTokens,
   modeFilesToTokens,
   resolverToTokens,
+  sameSiteToken,
   tokensToFigma,
   tokensToResolver,
   tokenCustomProperty,
@@ -162,8 +163,9 @@ export type ImportPlan =
       /** Tokens the site does not have. */
       readonly added: readonly SiteToken[];
       /**
-       * Tokens the file fills in without contradicting the site: a dark value,
-       * a label or a description the site's token lacks.
+       * Tokens the file changes without contradicting the site: a dark value,
+       * a label or a description the site's token lacks, or another tool's
+       * data on it.
        */
       readonly changed: readonly SiteToken[];
       readonly unchanged: readonly SiteToken[];
@@ -322,8 +324,12 @@ function sortAgainst(
     const fields = conflictFields(held, imported);
     if (fields.length > 0) {
       conflicts.push({ identity, mine: held, imported, fields });
-    } else if (fillsIn(held, imported)) changed.push(imported);
-    else unchanged.push(imported);
+    } else if (sameSiteToken(held, imported)) {
+      // The engine's one answer to "has this token changed", vendor data
+      // included: a file adding only another tool's metadata is a change, or
+      // it is dropped and the next export loses it.
+      unchanged.push(imported);
+    } else changed.push(imported);
   }
   return { added, changed, unchanged, conflicts, incoming };
 }
@@ -384,15 +390,6 @@ function conflictFields(mine: SiteToken, imported: SiteToken): ConflictField[] {
     note("Description", mine.description, imported.description);
   }
   return fields;
-}
-
-/** Whether the file states something the site's token leaves unset. */
-function fillsIn(mine: SiteToken, imported: SiteToken): boolean {
-  return (
-    (mine.values.dark === undefined && imported.values.dark !== undefined) ||
-    (mine.label === undefined && imported.label !== undefined) ||
-    (mine.description === undefined && imported.description !== undefined)
-  );
 }
 
 /**
