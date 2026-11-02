@@ -188,10 +188,20 @@ export function useDocumentLock({
   enabled = true,
 }: UseDocumentLockOptions): {
   state: DocumentLockState;
+  /**
+   * How many times this editor has gained a document it was kept out of: a
+   * claim won after a colleague's was reported, by their release, their lease
+   * lapsing or this editor's take-over. The form unlocks then over a copy read
+   * while the colleague held it, so each gain is a reason to load the document
+   * again. Never decreases, across documents too, so a consumer acts on a
+   * change rather than on a value.
+   */
+  gains: number;
   takeOver: () => void;
   requestAccess: () => void;
 } {
   const [state, setState] = useState<DocumentLockState>({ status: "idle" });
+  const [gains, setGains] = useState(0);
 
   // Published by the running effect, which is the only thing that may touch a
   // claim. A stable callback delegating through it keeps the consumer's
@@ -277,6 +287,16 @@ export function useDocumentLock({
     // past its own deadline. The beat then waits for the person rather than
     // re-taking a claim they were just told they had lost.
     let surrendered = false;
+    // Whether a colleague's claim has been reported since this editor last
+    // held the document, and whether it has held it at all in this run. A
+    // claim won after the first, and never the second, is a gain.
+    //
+    // 🔴 Not after holding. An editor who held the document and lost it has
+    // their unsaved work on screen, and a gain would load the document over it.
+    // A failed poll does not clear the first: the form stays read-only through
+    // it while the colleague outlives it.
+    let keptOut = false;
+    let heldHere = false;
 
     // 🔴 Reset before asking. The document may have changed under a mounted
     // editor, and leaving the previous one's answer on screen would name an
@@ -336,12 +356,16 @@ export function useDocumentLock({
       // has to let this claim's own first beat speak. `renewSeq` is deliberately
       // NOT reset: it only ever has to increase.
       awaitedBeat = 0;
+      if (keptOut && !heldHere) setGains(count => count + 1);
+      keptOut = false;
+      heldHere = true;
       setState({ status: "held-by-me", someoneWaiting: false });
     };
 
     /** Store a refusal, quietly when neither the holder nor the ask has moved. */
     const installHeld = (current: DocumentLockHolder, sent: boolean) => {
       token = null;
+      keptOut = true;
       // 🔴 The ask is part of what this state SAYS, so it is part of what decides
       // whether to re-render. Comparing holders alone would leave the button on
       // screen after the request that replaced it landed -- the holder does not
@@ -608,5 +632,5 @@ export function useDocumentLock({
     };
   }, [active, ref]);
 
-  return { state, takeOver, requestAccess };
+  return { state, gains, takeOver, requestAccess };
 }

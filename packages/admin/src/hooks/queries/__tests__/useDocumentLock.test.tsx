@@ -1675,6 +1675,39 @@ describe("useDocumentLock: gaining a document this editor was kept out of", () =
     expect(result.current.gains).toBe(0);
   });
 
+  it("counts no gain for a displaced editor even once a colleague's claim is reported to them", async () => {
+    // Holding the document first is what decides it, not the refusal on the
+    // way back: the work they kept is on screen either way.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "lost", holder: other },
+    });
+    await beat();
+    await waitFor(() => expect(result.current.state.status).toBe("taken-over"));
+
+    post.mockResolvedValue(held);
+    await act(async () => {
+      result.current.requestAccess();
+    });
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
+    await act(async () => {
+      result.current.takeOver();
+    });
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.gains).toBe(0);
+  });
+
   it("counts one gain however many beats renew it, and keeps counting on the next document", async () => {
     // Monotonic across documents, so a gain on the next document is never
     // mistaken for the one already handled on this one.
