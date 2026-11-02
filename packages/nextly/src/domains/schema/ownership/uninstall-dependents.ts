@@ -15,6 +15,9 @@
  * - **elements using a column the plugin contributed** to another owner's
  *   table: an index or key the DOWN would break by dropping the column.
  *
+ * Keys pointing in are read from the database's catalog too, so a key whose
+ * declaration was removed from code while its constraint stayed is found.
+ *
  * The first three are the question a collection delete already asks
  * (`findCollectionDependents`), asked here over the plugin's tables. The
  * recorded element rows outlive the configuration that declared them, so a
@@ -30,6 +33,7 @@
  */
 
 import type { PluginDefinition } from "../../../plugins/plugin-context";
+import type { FieldsAddedByPlugins } from "../../../plugins/schema/apply-contributions";
 import { resolvePluginSelf } from "../../../plugins/self";
 import {
   findCollectionDependents,
@@ -66,8 +70,8 @@ export interface UninstallDependentsInput {
   collectionSlugs: readonly string[];
   /**
    * Its own Singles and field groups, whose fields go with it too, and the
-   * fields its `extend` clauses added to other owners' entities (entity slug
-   * to top-level field names), which go with it as well.
+   * fields it added to other owners' entities by `extend` or a transform
+   * (entity slug to top-level field names), which go with it as well.
    */
   ownEntities?: {
     single?: readonly string[];
@@ -80,6 +84,22 @@ export interface UninstallDependentsInput {
   sources: DependentsSources;
   /** The owner rows recorded on these tables, every owner's. */
   recordedRowsOn: (tables: readonly string[]) => Promise<OwnerRecord[]>;
+  /**
+   * Every foreign key the database holds now, on every table, as its catalog
+   * reports it: what reads a key whose declaration is gone but whose
+   * constraint is still there. Throws rather than answering "none" about a
+   * catalog it could not read.
+   */
+  liveForeignKeys: () => Promise<readonly LiveForeignKey[]>;
+}
+
+/** A foreign key the database holds, as its catalog reports it. */
+export interface LiveForeignKey {
+  /** The table the key is on. */
+  table: string;
+  name: string;
+  referencesTable: string;
+  referencesColumns: readonly string[];
 }
 
 /** Whether an owner is the plugin being uninstalled. */
@@ -515,7 +535,126 @@ export async function findUninstallDependents(
   const found = new Found();
   await onItsTables(input, ownTables, found);
   await onItsContributedColumns(input, new Set(ownTables), found);
+  await liveKeysPointingIn(input, new Set(ownTables), found);
   return found.list;
+}
+
+/** A name as a database that may fold its case compares it. */
+const folded = (name: string): string => name.toLowerCase();
+
+/**
+ * The live keys, on tables the uninstall does not drop, that point into the
+ * plugin's tables or reference a column it contributed to another owner's.
+ */
+function keysPointingIn(
+  keys: readonly LiveForeignKey[],
+  own: ReadonlySet<string>,
+  contributed: readonly OwnerRecord[]
+): LiveForeignKey[] {
+  const ownFolded = new Set([...own].map(folded));
+  const columnsOn = new Map<string, Set<string>>();
+  for (const row of contributed) {
+    const table = folded(row.tableName);
+    const columns = columnsOn.get(table) ?? new Set<string>();
+    columns.add(folded(row.elementName ?? ""));
+    columnsOn.set(table, columns);
+  }
+  return keys.filter(
+    key =>
+      !ownFolded.has(folded(key.table)) &&
+      (ownFolded.has(folded(key.referencesTable)) ||
+        key.referencesColumns.some(
+          column =>
+            columnsOn.get(folded(key.referencesTable))?.has(folded(column)) ===
+            true
+        ))
+  );
+}
+
+/**
+ * Foreign keys the database holds that point into what the uninstall drops
+ * and that nothing compiled declares: a declaration removed from code whose
+ * constraint was never migrated away. Dropping its target strips the key on
+ * PostgreSQL (`CASCADE`) and refuses part way on MySQL, so it counts like
+ * a declared one. A declared key is found from its declaration, and is not
+ * read a second time here. One whose ownership record names the plugin is
+ * its own; any other is counted, and one with no record at all is counted
+ * as having an owner nothing records: the guard does not assume an answer it
+ * could not read.
+ */
+async function liveKeysPointingIn(
+  input: UninstallDependentsInput,
+  own: ReadonlySet<string>,
+  found: Found
+): Promise<void> {
+  const contributed = input.owned.filter(
+    row => row.elementKind === "column" && !own.has(row.tableName)
+  );
+  if (own.size === 0 && contributed.length === 0) return;
+  const pointing = keysPointingIn(
+    await input.liveForeignKeys(),
+    own,
+    contributed
+  );
+  if (pointing.length === 0) return;
+  const schema = await input.sources.extensionSchema();
+  const declared = new Set(
+    (schema?.specs ?? []).flatMap(spec =>
+      (spec.foreignKeys ?? []).map(
+        key => `${folded(spec.name)}\u0000${folded(key.name)}`
+      )
+    )
+  );
+  const undeclared = pointing.filter(
+    key => !declared.has(`${folded(key.table)}\u0000${folded(key.name)}`)
+  );
+  if (undeclared.length === 0) return;
+  const recorded = elementsFromOwnerRows(
+    await input.recordedRowsOn([...new Set(undeclared.map(key => key.table))])
+  );
+  for (const key of undeclared) {
+    const owner = recorded.find(
+      element =>
+        element.kind === "fk" &&
+        folded(element.table) === folded(key.table) &&
+        folded(element.name) === folded(key.name)
+    )?.owner;
+    if (owner !== undefined && isThePlugin(owner, input.pluginName)) continue;
+    found.add({
+      kind: "foreign key",
+      name: key.name,
+      table: key.table,
+      owner:
+        owner === undefined
+          ? "an owner nothing records: the key is in the database, but no configuration or ownership record declares it"
+          : `${describeOwner(owner)}, which no longer declares it`,
+    });
+  }
+}
+
+/**
+ * The top-level fields `pluginName` added to other owners' entities, by
+ * entity slug: those its `extend` clauses declare, and those the fold's
+ * ownership ledgers record it adding, by `extend` or a transform.
+ */
+function addedBy(
+  pluginName: string,
+  ...sources: ReadonlyArray<
+    ReadonlyMap<string, ReadonlyMap<string, string>> | undefined
+  >
+): Map<string, ReadonlySet<string>> {
+  const added = new Map<string, Set<string>>();
+  for (const source of sources) {
+    for (const [slug, fields] of source ?? []) {
+      for (const [field, by] of fields) {
+        if (by !== pluginName) continue;
+        const onEntity = added.get(slug) ?? new Set<string>();
+        onEntity.add(field);
+        added.set(slug, onEntity);
+      }
+    }
+  }
+  return added;
 }
 
 /** What a plugin owns, by the names its rows and fields use. */
@@ -527,21 +666,24 @@ export interface PluginEntities {
   single: string[];
   /** Its field groups' slugs, after a host's renames. */
   fieldGroup: string[];
-  /** Entity slug to the top-level fields its `extend` clauses added there. */
+  /** Entity slug to the top-level fields it added there, by `extend` or a transform. */
   extendedFields: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /**
  * The collections, Singles and field groups a plugin owns, under the names
  * it is stored by: a host's `renameMap` is applied, so a field elsewhere
- * that names a renamed collection is matched to it. And the fields its
- * `extend` clauses added to other owners' entities, which leave with it.
+ * that names a renamed collection is matched to it. And the fields it added
+ * to other owners' entities, which leave with it: those its `extend` clauses
+ * declare, and those `fieldsAdded` (the fold's ownership ledgers, which the
+ * config loader carries out) records it adding, a transform's included.
  *
  * Field groups are renamed, and the extended fields read, by the schema
  * fold's own functions, so they are named here as the fold stored them.
  */
 export async function pluginEntities(
-  definition: PluginDefinition | undefined
+  definition: PluginDefinition | undefined,
+  fieldsAdded?: FieldsAddedByPlugins
 ): Promise<PluginEntities> {
   if (definition === undefined) {
     return {
@@ -569,11 +711,10 @@ export async function pluginEntities(
       resolved(collection.slug),
     ])
   );
-  const extendedFields = new Map<string, ReadonlySet<string>>(
-    [...extendersBySlug([definition])].map(([slug, fields]) => [
-      slug,
-      new Set(fields.keys()),
-    ])
+  const extendedFields = addedBy(
+    definition.name,
+    extendersBySlug([definition]),
+    fieldsAdded
   );
   return {
     collectionSlugs: configs.map(collection => resolved(collection.slug)),

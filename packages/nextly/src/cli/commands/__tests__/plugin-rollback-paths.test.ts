@@ -573,6 +573,26 @@ describe("plugins uninstall refuses to drop what another owner built", () => {
   });
 });
 
+describe("plugins uninstall reads the keys the database holds", () => {
+  it("refuses while a key no configuration declares any more points into one of its tables", async () => {
+    // The app's key into fx__notes, its declaration removed from code and
+    // never migrated away.
+    state.sqlite.exec(
+      "CREATE TABLE app_links (note_id TEXT, CONSTRAINT fk_app_links_note FOREIGN KEY (note_id) REFERENCES fx__notes (id))"
+    );
+    state.migrations = [init, more];
+
+    await expect(uninstall()).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+      publicMessage: expect.stringContaining(
+        '"fk_app_links_note" on app_links'
+      ),
+    });
+    expect(tables()).toContain("fx__notes");
+    expect(await ownerStates()).toEqual(["active"]);
+  });
+});
+
 describe("a full uninstall forgets the plugin", () => {
   it("leaves another owner's rows that share its name", async () => {
     await new SchemaOwnersRepository(state.db, "sqlite").upsert([

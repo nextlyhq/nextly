@@ -406,7 +406,7 @@ describe("plugins uninstall asks again what depends on it once the hook's boot i
       }
     );
 
-  it("refuses before the hook and any DOWN when the boot brought a dependent in, and puts the record back", async () => {
+  it("refuses before the hook and any DOWN when the boot brought a dependent in, recording nothing", async () => {
     const order: string[] = [];
     // Nothing depends on it at either decision; the boot syncs a field in.
     let reads = 0;
@@ -434,9 +434,32 @@ describe("plugins uninstall asks again what depends on it once the hook's boot i
     });
     expect(order).toEqual(["boot"]);
     expect(runDown).not.toHaveBeenCalled();
-    // Found installed, and nothing has changed: recorded installed again,
-    // so the operator may keep the data instead.
-    expect(states).toEqual(["uninstalling", "installed"]);
+    // Found installed, and nothing has changed: nothing is recorded, so the
+    // operator may keep the data instead.
+    expect(states).toEqual([]);
+  });
+
+  it("records nothing when it found no record and the boot brought a dependent in", async () => {
+    // Its modules applied by a plain migrate, so no install was recorded.
+    let reads = 0;
+    const states: string[] = [];
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: false, consent: EVERY_DELETION },
+        deps({
+          readLifecycle: vi.fn(async () => new Map()),
+          schemaDependents: vi.fn(async () => (++reads > 2 ? [dependent] : [])),
+          runLifecycleHook: booting([]),
+          recordLifecycle: vi.fn(async (_plugin, record) => {
+            states.push(record.state);
+          }),
+        })
+      )
+    ).rejects.toMatchObject({ code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS" });
+    // No `uninstalling` left behind, which would refuse --keep-data as an
+    // unfinished uninstall resumed the other way.
+    expect(states).toEqual([]);
   });
 
   it("CONTROL: runs on when the boot brought nothing in, and asks nothing when keeping the data", async () => {
@@ -521,7 +544,7 @@ describe("plugins uninstall decides again over what the hook's boot left", () =>
     };
   }
 
-  it("refuses before the hook and any DOWN when the boot created a table no DOWN drops, and puts the record back", async () => {
+  it("refuses before the hook and any DOWN when the boot created a table no DOWN drops, recording nothing", async () => {
     const boot = bootCreating("fx__extra");
     const forgetPlugin = vi.fn(async () => undefined);
     const states: string[] = [];
@@ -542,7 +565,7 @@ describe("plugins uninstall decides again over what the hook's boot left", () =>
     });
     expect(boot.order).toEqual(["boot"]);
     expect(forgetPlugin).not.toHaveBeenCalled();
-    expect(states).toEqual(["uninstalling", "installed"]);
+    expect(states).toEqual([]);
   });
 
   it("checks a table the boot created, and its DOWN drops, is gone before forgetting the plugin", async () => {
@@ -1449,9 +1472,18 @@ describe("plugins uninstall", () => {
         "@acme/fx",
         { keepData: false, yes: false, consent: EVERY_DELETION },
         deps({
-          runLifecycleHook: vi.fn(async () => {
-            throw new Error("hook failed");
-          }),
+          // The boot is done and the hook fails.
+          runLifecycleHook: vi.fn(
+            async (
+              _plugin: LifecyclePlugin,
+              _hook: "onInstall" | "onUninstall",
+              _opts: { keepData: boolean },
+              beforeHook?: () => Promise<void>
+            ) => {
+              await beforeHook?.();
+              throw new Error("hook failed");
+            }
+          ),
           runDown,
           recordLifecycle: vi.fn(async (_plugin, record) => {
             states.push(record.state);
@@ -2089,9 +2121,17 @@ describe("plugins uninstall records how far it got", () => {
       { keepData: false, yes: false, consent: EVERY_DELETION },
       deps({
         recordLifecycle,
-        runLifecycleHook: vi.fn(async () => {
-          order.push("onUninstall");
-        }),
+        runLifecycleHook: vi.fn(
+          async (
+            _plugin: LifecyclePlugin,
+            _hook: "onInstall" | "onUninstall",
+            _opts: { keepData: boolean },
+            beforeHook?: () => Promise<void>
+          ) => {
+            await beforeHook?.();
+            order.push("onUninstall");
+          }
+        ),
         ...droppedByDowns(async () => {
           order.push("down");
           return 1;

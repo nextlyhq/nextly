@@ -154,7 +154,13 @@ async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
 }
 
 async function connect(options: RunnerOptions, context: CommandContext) {
-  const { config, appConfig, pluginConsent, projectRoot } = await loadConfig({
+  const {
+    config,
+    appConfig,
+    pluginConsent,
+    projectRoot,
+    fieldsAddedByPlugins,
+  } = await loadConfig({
     configPath: options.config,
     cwd: options.cwd,
   });
@@ -791,8 +797,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // refuse a table it does not list.
       const reader = Object.create(drizzleAdapter) as typeof drizzleAdapter;
       installRegistryResolver(reader);
-      // What it owns, by the names a host's renames gave it.
-      const own = await pluginEntities(definition);
+      // What it owns, by the names a host's renames gave it, and the fields
+      // the fold's ledgers record it adding to other owners' entities.
+      const own = await pluginEntities(definition, fieldsAddedByPlugins);
       const { compileExtensionSchema } = await import(
         "../../domains/schema/extension/publish"
       );
@@ -821,6 +828,26 @@ async function connect(options: RunnerOptions, context: CommandContext) {
           new SchemaOwnersRepository(drizzleAdapter.getDrizzle(), dialect).read(
             [...tables]
           ),
+        // Every table's keys, through the schema pipeline's introspection: a
+        // key pointing in can sit on any table, its owner's or nobody's.
+        liveForeignKeys: async () => {
+          const { introspectLiveSnapshot } = await import(
+            "../../domains/schema/pipeline/diff/introspect-live"
+          );
+          const snapshot = await introspectLiveSnapshot(
+            drizzleAdapter.getDrizzle(),
+            dialect,
+            await drizzleAdapter.listTables()
+          );
+          return snapshot.tables.flatMap(table =>
+            (table.foreignKeys ?? []).map(key => ({
+              table: table.name,
+              name: key.name,
+              referencesTable: key.referencesTable,
+              referencesColumns: key.referencesColumns,
+            }))
+          );
+        },
       });
     },
     // A fully uninstalled plugin leaves its lifecycle record and nothing

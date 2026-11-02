@@ -339,6 +339,33 @@ describe.each(getConfiguredTestDialects())(
       await expect(boot()).resolves.toBeUndefined();
     });
 
+    it("refuses a full uninstall while a key nothing declares points into one of its tables, and drops nothing", async () => {
+      await install();
+      // The app's key into lc__notes, its declaration removed from code and
+      // never migrated away. Its column takes lc__notes.id's own type.
+      if (dialect === "sqlite") {
+        await handle.adapter.executeQuery(
+          `CREATE TABLE ${q("app_links")} (${q("note_id")} TEXT, CONSTRAINT ${q("fk_app_links_note")} FOREIGN KEY (${q("note_id")}) REFERENCES ${q("lc__notes")} (${q("id")}))`
+        );
+      } else {
+        await handle.adapter.executeQuery(
+          `CREATE TABLE ${q("app_links")} AS SELECT ${q("id")} AS ${q("note_id")} FROM ${q("lc__notes")} WHERE 1 = 0`
+        );
+        await handle.adapter.executeQuery(
+          `ALTER TABLE ${q("app_links")} ADD CONSTRAINT ${q("fk_app_links_note")} FOREIGN KEY (${q("note_id")}) REFERENCES ${q("lc__notes")} (${q("id")})`
+        );
+      }
+
+      await expect(uninstall(false)).rejects.toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+        publicMessage: expect.stringContaining("fk_app_links_note"),
+      });
+
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await exists("lc__tags")).toBe(true);
+      await expect(boot()).resolves.toBeUndefined();
+    });
+
     it("keeps its records while an index it added to the app's table survives its DOWNs, and forgets it once that is dropped", async () => {
       await install();
       // An index on the app's table recorded as the plugin's, which none of

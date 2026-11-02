@@ -802,13 +802,22 @@ async function executeUninstall(
   const judged = await readTablesAsTheyStand(decided.plan, deps);
   assertIdentitiesReadable(plugin, decided.plan, judged);
 
-  // Before the first change, the hook included: an uninstall that stops part
-  // way leaves this as the plugin's state, which the boot refuses and a run
-  // of the command again finishes.
-  await deps.recordLifecycle(plugin, {
-    state: "uninstalling",
-    keepData: opts.keepData,
-  });
+  // Recorded begun right before the first change, the hook included: an
+  // uninstall that stops part way leaves this as the plugin's state, which
+  // the boot refuses and a run of the command again finishes. Not before the
+  // hook's boot: the decision made again after it can still refuse, having
+  // changed nothing, and the state must then be the one it was, absent
+  // included, so that keeping the data instead is not refused as an
+  // unfinished uninstall resumed the other way. Once only.
+  let begun = false;
+  const recordBegun = async (): Promise<void> => {
+    if (begun) return;
+    begun = true;
+    await deps.recordLifecycle(plugin, {
+      state: "uninstalling",
+      keepData: opts.keepData,
+    });
+  };
 
   // The hook's boot syncs the code-first schema, so once it is done the
   // uninstall is decided again over what it left (`afterTheBoot`), and that
@@ -833,9 +842,12 @@ async function executeUninstall(
           opts,
           deps
         ));
+        await recordBegun();
       }
     );
   }
+  // No hook ran: before the first DOWN.
+  await recordBegun();
   const { plan, downs, owned } = decision;
   await assertHookLeftTables(plugin, plan, beforeHook, deps);
 
@@ -935,12 +947,10 @@ async function afterTheBoot(
 }
 
 /**
- * The full uninstall decided again, or its refusal. Nothing has changed yet
- * but the record that the uninstall began, so on a refusal that record is put
- * back as it was found: the operator can then keep the data instead, which an
- * unfinished full uninstall would refuse. An uninstall keeping its data drops
- * nothing the boot could add, and its owner rows are marked whatever they
- * are, so it is not decided again.
+ * The full uninstall decided again, or its refusal, which comes before the
+ * uninstall is recorded begun and so leaves the state as it was found. An
+ * uninstall keeping its data drops nothing the boot could add, and its owner
+ * rows are marked whatever they are, so it is not decided again.
  */
 async function decideAgainAfterTheBoot(
   decided: UninstallDecision,
@@ -948,21 +958,7 @@ async function decideAgainAfterTheBoot(
   deps: PluginLifecycleDeps
 ): Promise<UninstallDecision> {
   if (decided.plan.finalState !== "uninstalled") return decided;
-  try {
-    return await decideUninstall(
-      decided.plugin.name,
-      opts,
-      deps,
-      decided.deletions
-    );
-  } catch (error) {
-    // A record already `uninstalling` was begun the same way and stays so.
-    const { found } = decided;
-    if (found !== undefined && found.state !== "uninstalling") {
-      await deps.recordLifecycle(decided.plugin, found);
-    }
-    throw error;
-  }
+  return decideUninstall(decided.plugin.name, opts, deps, decided.deletions);
 }
 
 /**
@@ -1150,8 +1146,8 @@ async function assertHookLeftTables(
 
 /**
  * SQLite's schema version could not be read once the hook's boot was done.
- * The plugin is recorded uninstalling by then and its hook has not run, so
- * running the uninstall again picks it up from there.
+ * Neither the hook nor the record that the uninstall began has happened by
+ * then, so running the uninstall again starts it afresh.
  */
 function schemaVersionUnreadableAfterBoot(
   plugin: LifecyclePlugin

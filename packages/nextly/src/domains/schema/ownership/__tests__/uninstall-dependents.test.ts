@@ -13,6 +13,7 @@ import type { OwnerRecord } from "../owner-registry";
 import {
   findUninstallDependents,
   pluginEntities,
+  type LiveForeignKey,
 } from "../uninstall-dependents";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 
@@ -59,7 +60,8 @@ function sources(
 const find = (
   owned: OwnerRecord[],
   src: DependentsSources,
-  recorded: OwnerRecord[] = []
+  recorded: OwnerRecord[] = [],
+  live: LiveForeignKey[] = []
 ) =>
   findUninstallDependents({
     pluginName: "fx",
@@ -69,6 +71,7 @@ const find = (
       table === "fx__notes" ? "fx-notes" : null,
     sources: src,
     recordedRowsOn: () => Promise.resolve(recorded),
+    liveForeignKeys: () => Promise.resolve(live),
   });
 
 describe("findUninstallDependents", () => {
@@ -515,6 +518,112 @@ describe("findUninstallDependents", () => {
     ]);
   });
 
+  it("finds a live foreign key into its table whose declaration is gone", async () => {
+    const live = (table: string, name: string, referencesTable: string) => ({
+      table,
+      name,
+      referencesTable,
+      referencesColumns: ["id"],
+    });
+    const found = await find(
+      [row({})],
+      sources({ extension: schema() }),
+      [
+        // Recorded as sso's, which no longer declares it.
+        row({
+          tableName: "sso__links",
+          elementKind: "fk",
+          elementName: "fk_sso_note",
+          ownerId: "sso",
+          migratedBy: "plugin:sso",
+        }),
+        // CONTROL: one recorded as fx's own goes with it.
+        row({
+          tableName: "fx__tags",
+          elementKind: "fk",
+          elementName: "fk_fx_tag_note",
+        }),
+      ],
+      [
+        live("sso__links", "fk_sso_note", "fx__notes"),
+        // Nothing records it at all.
+        live("app_links", "FK_APP_NOTE", "FX__NOTES"),
+        live("fx__tags", "fk_fx_tag_note", "fx__notes"),
+        // CONTROL: one on its own table goes with the table, and one into
+        // another table is not this uninstall's.
+        live("fx__notes", "fk_fx_self", "fx__notes"),
+        live("app_links", "fk_app_user", "users"),
+      ]
+    );
+    expect(found).toEqual([
+      {
+        kind: "foreign key",
+        name: "fk_sso_note",
+        table: "sso__links",
+        owner: 'plugin "sso", which no longer declares it',
+      },
+      {
+        kind: "foreign key",
+        name: "FK_APP_NOTE",
+        table: "app_links",
+        owner: expect.stringContaining("an owner nothing records"),
+      },
+    ]);
+  });
+
+  it("finds a live foreign key referencing a column it contributed, and reads a declared one once", async () => {
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          specs: [
+            {
+              name: "sso__links",
+              columns: [],
+              foreignKeys: [
+                {
+                  name: "fk_sso_handle",
+                  columns: ["handle"],
+                  referencesTable: "users",
+                  referencesColumns: ["fx_handle"],
+                },
+              ],
+            },
+          ] as unknown as ExtensionSchemaRecord["specs"],
+          owners: new Map([["sso__links", SSO]]),
+        }),
+      }),
+      [],
+      [
+        {
+          table: "app_links",
+          name: "fk_app_handle",
+          referencesTable: "users",
+          referencesColumns: ["FX_HANDLE"],
+        },
+        {
+          table: "sso__links",
+          name: "fk_sso_handle",
+          referencesTable: "users",
+          referencesColumns: ["fx_handle"],
+        },
+      ]
+    );
+    expect(found.map(dependent => dependent.name)).toEqual([
+      "fk_sso_handle",
+      "fk_app_handle",
+    ]);
+    // The declared key keeps its declared owner.
+    expect(found[0]?.owner).toContain('plugin "sso"');
+  });
+
   it("CONTROL: never counts the plugin's own schema", async () => {
     const found = await find(
       [
@@ -600,6 +709,7 @@ describe("what the plugin owns", () => {
         ],
       }),
       recordedRowsOn: () => Promise.resolve([]),
+      liveForeignKeys: () => Promise.resolve([]),
     });
     expect(found).toEqual([]);
   });
@@ -644,6 +754,7 @@ describe("what the plugin owns", () => {
         ],
       }),
       recordedRowsOn: () => Promise.resolve([]),
+      liveForeignKeys: () => Promise.resolve([]),
     });
     expect(found).toEqual([
       expect.objectContaining({
@@ -711,9 +822,58 @@ describe("what the plugin owns", () => {
         ],
       }),
       recordedRowsOn: () => Promise.resolve([]),
+      liveForeignKeys: () => Promise.resolve([]),
     });
     expect(found).toEqual([
       expect.objectContaining({ kind: "relationship field", name: "appNote" }),
+    ]);
+  });
+
+  it("does not count a relationship field its transform added to another owner's entity", async () => {
+    // As the fold's ownership ledgers record it: fx's transform added
+    // `fxNote` to the app's `posts`, and sso's added `ssoNote`.
+    const own = await pluginEntities(
+      {
+        name: "fx",
+        version: "1.0.0",
+        contributes: { collections: [{ slug: "fx-notes", fields: [] }] },
+      } as unknown as PluginDefinition,
+      new Map([
+        [
+          "posts",
+          new Map([
+            ["fxNote", "fx"],
+            ["ssoNote", "sso"],
+          ]),
+        ],
+      ])
+    );
+
+    const found = await findUninstallDependents({
+      pluginName: "fx",
+      owned: [row({})],
+      collectionSlugs: ["fx-notes"],
+      collectionSlugForTable: table =>
+        table === "fx__notes" ? "fx-notes" : null,
+      ownEntities: own,
+      sources: sources({
+        fields: [
+          {
+            entityType: "collection",
+            entitySlug: "posts",
+            fields: [
+              { name: "fxNote", type: "relationship", relationTo: "fx-notes" },
+              // CONTROL: another plugin's field still counts.
+              { name: "ssoNote", type: "relationship", relationTo: "fx-notes" },
+            ],
+          },
+        ],
+      }),
+      recordedRowsOn: () => Promise.resolve([]),
+      liveForeignKeys: () => Promise.resolve([]),
+    });
+    expect(found).toEqual([
+      expect.objectContaining({ kind: "relationship field", name: "ssoNote" }),
     ]);
   });
 });
