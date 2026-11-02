@@ -476,7 +476,8 @@ function readerFor(config: BlocksPageConfig): NextlyContentReader {
  */
 function publicReaderFor(
   config: BlocksPageConfig,
-  locale: string | undefined
+  locale: string | undefined,
+  window: number | false | undefined
 ): BlocksPublicReader {
   const nextly = readerFor(config);
   return createPublicReader(
@@ -491,7 +492,7 @@ function publicReaderFor(
           ],
           // The route's own window bounds it too, so a list read never
           // outlives the page around it.
-          revalidate: await releaseBoundedRevalidate(config.revalidate),
+          revalidate: await releaseBoundedRevalidate(window),
         }),
     },
     locale === undefined ? {} : { locale }
@@ -502,10 +503,11 @@ function publicReaderFor(
 function dataFor(
   factory: BlocksDataProviderFactory | undefined,
   config: BlocksPageConfig,
-  locale: string | undefined
+  locale: string | undefined,
+  window: number | false | undefined
 ): BlocksDataProvider {
   return (factory ?? createDefaultDataProvider)(
-    publicReaderFor(config, locale)
+    publicReaderFor(config, locale, window)
   );
 }
 
@@ -1634,7 +1636,13 @@ function entryPathResolver(
  */
 function blocksRouteConfig(
   config: BlocksPageConfig,
-  isPublic: boolean
+  isPublic: boolean,
+  /**
+   * How long the page's list reads may live: the route's own `revalidate`.
+   * Its own argument because a Single's config withholds `revalidate` from
+   * the page config it borrows, and its lists must not outlive it either.
+   */
+  listWindow: number | false | undefined = config.revalidate
 ): ContentRouteConfig<ReactElement> {
   const {
     field,
@@ -1763,7 +1771,7 @@ function blocksRouteConfig(
         // localized pages that need it.
         locale: context.locale,
         isWorkingDraft: entry[WORKING_DRAFT_KEY] === true,
-        data: dataFor(data, config, context.locale),
+        data: dataFor(data, config, context.locale, listWindow),
         // Fresh for THIS render. `core/collection-loop` claims from it before
         // each read, and an absent budget reads as unlimited — the loop's own
         // check is `ctx.queries?.take() === false` — so a routed page without
@@ -2191,7 +2199,8 @@ function blocksSingleConfig(
       // has nothing to compare against.
       ...(config.draft === true ? { draft: true } : {}),
     },
-    isPublic
+    isPublic,
+    config.revalidate
   );
 
   const contextFor = (context: SingleContext) => ({

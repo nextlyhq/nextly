@@ -146,6 +146,26 @@ describe("a routed page's lists", () => {
     });
   });
 
+  it("on a Single page are cached within the Single's own window", async () => {
+    cached.calls.length = 0;
+    const nextly = {
+      ...instance(),
+      findSingle: vi.fn(async () => ({ title: "Home", content: document })),
+    };
+    const route = createSinglePage({
+      slug: "home",
+      field: "content",
+      revalidate: 90,
+      nextly: nextly as never,
+    });
+    const element = (await throughBoundary(
+      route.SinglePage()
+    )) as ReactElement<PageRendererProps>;
+    await element.props.context?.data?.find({ collection: "posts" });
+    const options = cached.calls.at(-1) as { revalidate: number | false };
+    expect(options.revalidate).toBe(90);
+  });
+
   it("refuse a query that tries to widen the read, whatever the provider passes on", async () => {
     const nextly = instance();
     const context = await renderContext(
