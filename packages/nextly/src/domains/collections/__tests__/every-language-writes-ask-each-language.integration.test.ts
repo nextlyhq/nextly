@@ -466,6 +466,39 @@ describe.each(getConfiguredTestDialects())(
         expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(true);
       });
 
+      it("is refused by the key it names before its row is locked", async () => {
+        const t = await boot(dialect);
+        const { withGerman } = await seed(t, ANY_LANGUAGE);
+        const readKey = apiKeyScope([
+          {
+            slug: `read-${ANY_LANGUAGE}`,
+            action: "read",
+            resource: ANY_LANGUAGE,
+          },
+        ]);
+        let locks = 0;
+
+        const status = await t.adapter.transaction(async tx => {
+          const lockRow = tx.lockRow.bind(tx);
+          tx.lockRow = async (...args: Parameters<typeof lockRow>) => {
+            locks++;
+            return lockRow(...args);
+          };
+          const result = await entriesOf(t).deleteEntryInTransaction(tx, {
+            collectionName: ANY_LANGUAGE,
+            entryId: withGerman,
+            user: { id: AUTHOR },
+            overrideAccess: false,
+            authenticatedScope: readKey,
+          } as never);
+          return (result as { statusCode?: number }).statusCode;
+        });
+
+        expect(status).toBe(403);
+        expect(locks).toBe(0);
+        expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(true);
+      });
+
       it("is refused by the Public role's grants before the entry's languages are read", async () => {
         const t = await boot(dialect);
         const { withGerman } = await seed(t, ANY_LANGUAGE);

@@ -15954,6 +15954,8 @@ export class CollectionMutationService extends BaseService {
           entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
+          // The key the delete is made with, so its own grant is judged.
+          authenticatedScope: params.authenticatedScope,
           executor: tx.getDrizzle(),
         };
         // A batch asked its gate before its transaction opened and hands each
