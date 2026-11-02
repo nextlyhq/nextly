@@ -202,10 +202,10 @@ export function countSpoken(count: number, atLeast: boolean): string {
  * A list's one footer: "View all" to the full list it was drawn from, whenever there is one, so
  * the way there is always in the same place; "(N)" after it when the list holds more than the
  * card draws, N being how many it holds in all. Nothing where there is no list to open: a footer
- * holds a link, never a bare count. Used by every list card, and by a card of tiles. Drawn in the
- * card's footer, where every card's link is.
+ * holds a link, never a bare count. Drawn by `ListCard`, in the card's footer, where every card's
+ * link is.
  */
-export function ListFooter({
+function ListFooter({
   footer,
   href,
 }: {

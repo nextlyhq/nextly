@@ -95,11 +95,9 @@ export function WidgetPreviewsView({
   const definitions = useMemo(
     () =>
       new Map(
-        resolveDashboardWidgets(
-          branding.plugins,
-          branding.widgets,
-          hasPermission
-        ).map(definition => [definition.id, definition] as const)
+        resolveDashboardWidgets(branding.widgets, hasPermission).map(
+          definition => [definition.id, definition] as const
+        )
       ),
     [branding, hasPermission]
   );

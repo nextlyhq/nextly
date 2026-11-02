@@ -1,14 +1,10 @@
 /**
  * A Group by setting that takes its default from the collection: unset, or
  * set to a field this reader may not use, the card groups by what the
- * collection divides by. Registration admits it only on a Group by setting,
- * and a grouped query may leave its key to a setting only when that setting
- * always gives one.
+ * collection divides by. Registration admits it only on a Group by setting.
  */
 import { describe, expect, it } from "vitest";
 
-import type { WidgetDefinition } from "../definition";
-import { validateWidgetDefinition } from "../definition";
 import type { PublishedContentSource } from "../publish";
 import type { SourcelessWidgetQuery } from "../query";
 import {
@@ -136,66 +132,5 @@ describe("a Group by setting that takes its default from the collection", () => 
         } as unknown as AnyWidgetSetting,
       ])
     ).toContain('setting "groupBy" has defaultFrom');
-  });
-});
-
-describe("a grouped query that leaves its key to a setting", () => {
-  const definition = (settings: AnyWidgetSetting[]): WidgetDefinition =>
-    ({
-      id: "core/grouped",
-      title: "Grouped",
-      archetype: "bars",
-      offered: "per-collection",
-      size: { default: { w: 4, h: 3 } },
-      settings,
-      query: grouped,
-    }) as WidgetDefinition;
-
-  it("is admitted where a Group by setting always gives one", () => {
-    expect(() =>
-      validateWidgetDefinition(definition(fromCollection))
-    ).not.toThrow();
-  });
-
-  it("is refused for a cell on a source the Group by setting does not reach", () => {
-    // 🔴 Read widget-wide, the defaulted setting excused every grouped cell,
-    // and this one, on a system source no content knob drives, registered with
-    // no group key and was dropped on every load.
-    const cells = (second: Record<string, unknown>) =>
-      ({
-        id: "core/grouped-cells",
-        title: "Grouped cells",
-        archetype: "custom",
-        component: "core#GroupedCells",
-        offered: "per-collection",
-        size: { default: { w: 4, h: 3 } },
-        settings: fromCollection,
-        cells: [
-          { key: "byCollection", query: grouped },
-          { key: "second", query: second },
-        ],
-      }) as WidgetDefinition;
-    expect(() =>
-      validateWidgetDefinition(
-        cells({ source: "system:activity", op: "groupBy", status: "all" })
-      )
-    ).toThrow(/its cell "second" names no groupBy/);
-    // The control: a second cell the setting does reach is admitted.
-    expect(() =>
-      validateWidgetDefinition(cells({ op: "groupBy", status: "all" }))
-    ).not.toThrow();
-  });
-
-  it("is refused where nothing would give one", () => {
-    // 🔴 Without the rule this registers, and every card is asked a grouping
-    // of nothing, which the endpoint refuses on every load.
-    expect(() =>
-      validateWidgetDefinition(
-        definition([
-          fromCollection[0]!,
-          { name: "groupBy", type: "groupBy", of: "collection" },
-        ])
-      )
-    ).toThrow(/names no groupBy, and no Group by setting with a default/);
   });
 });

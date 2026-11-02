@@ -508,9 +508,12 @@ async function entityCapabilities(
     // Each request whose languages differ from its action's own cell is
     // asked by the same gate, framed by what that request sends.
     for (const [cell, asked] of Object.entries(OPERATION_CELLS[kind])) {
-      answered[cell] = await withRuleLanguage(
-        languageOf(asked.operation, asked.sent),
-        () => capability(caller, asked.action, slug, rules)
+      answered[cell] = await operationCell(
+        caller,
+        asked,
+        slug,
+        rules,
+        languageOf
       );
     }
     answered.publishEveryLanguage = await publishesEveryLanguage(
@@ -532,6 +535,45 @@ async function entityCapabilities(
     byEntity[slug] = { kind, ...answered } as EntityCapabilities;
   }
   return byEntity;
+}
+
+/**
+ * One request answered as a cell of its own: its action asked by the gate, in
+ * the languages that request is told.
+ */
+function operationCell(
+  caller: GateCaller,
+  asked: OperationCell,
+  resource: string,
+  rules: RouteRules,
+  languageOf: LanguageOf
+): Promise<boolean> {
+  return withRuleLanguage(languageOf(asked.operation, asked.sent), () =>
+    capability(caller, asked.action, resource, rules)
+  );
+}
+
+/**
+ * Whether `caller` may create an entry of the collection `resource` with a
+ * request that names no language, which writes the default one: the
+ * `createInDefaultLanguage` cell of {@link routeGateCapabilities}, asked of
+ * one collection. A door that offers a create by that request asks this, so
+ * it and the admin's capability give one answer, a rule that answers by
+ * language included.
+ */
+export function createsInDefaultLanguage(
+  caller: GateCaller,
+  resource: string,
+  rules: RouteRules,
+  languageOf: LanguageOf
+): Promise<boolean> {
+  return operationCell(
+    caller,
+    OPERATION_CELLS.collection.createInDefaultLanguage,
+    resource,
+    rules,
+    languageOf
+  );
 }
 
 /**

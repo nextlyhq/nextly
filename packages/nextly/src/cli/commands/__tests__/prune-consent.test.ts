@@ -44,6 +44,9 @@ function orphanedDatabase() {
       deleteCollection: async (slug: string) => {
         deleted.push(slug);
       },
+      // Nothing depends on these orphans: what a prune refuses when something
+      // does is `deleting-a-collection-something-depends-on.integration.test.ts`.
+      assertNothingDependsOn: async () => {},
     },
     adapter: {
       dialect: "sqlite" as const,

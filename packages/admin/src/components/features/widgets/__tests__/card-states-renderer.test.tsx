@@ -21,7 +21,6 @@ const list: DashboardWidget = {
   title: "Recent posts",
   archetype: "list",
   size: gridBounds(4),
-  query: { source: "collection:posts", op: "list", select: ["title"] },
 };
 
 const unavailable: WidgetSlot = {
@@ -171,7 +170,6 @@ describe("card states from a widget's answer", () => {
         title: "Orders",
         archetype: "custom",
         component: "acme#Orders",
-        serverData: true,
         sketch,
         size: gridBounds(4),
       };
@@ -189,7 +187,6 @@ describe("card states from a widget's answer", () => {
       title: "Orders",
       archetype: "custom",
       component: "acme#Orders",
-      serverData: true,
       size: gridBounds(4),
     };
     render(<WidgetRenderer definition={declared} slot={undefined} />);
@@ -206,7 +203,6 @@ describe("an empty card whose declared action opens its settings", () => {
     title: "Note",
     archetype: "custom",
     size: gridBounds(4),
-    serverData: true,
     component: "core#Note",
     declaredEmpty: {
       title: "Nothing written yet.",

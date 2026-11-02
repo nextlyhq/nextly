@@ -1,7 +1,6 @@
 /**
- * A library tile: the image fitted inside a neutral backdrop, drawn from the
- * smallest stored copy that shows the whole picture, and marked when an image
- * has no alt text.
+ * A library tile: the image fitted inside a neutral backdrop, drawn from its
+ * stored thumbnail, and marked when an image has no alt text.
  *
  * Which copy is chosen is pinned in `lib/media-utils.test.ts`; these check the
  * tile draws what that choice gives, fitted rather than filled.
@@ -33,36 +32,15 @@ function media(overrides: Partial<Media> = {}): Media {
 }
 
 describe("a library tile", () => {
-  it("draws a wide image from its smallest whole-image size, fitted inside the square", () => {
-    render(
-      <MediaCard
-        media={media({
-          sizes: {
-            small: {
-              url: "/uploads/coast-480.jpg",
-              path: "coast-480.jpg",
-              width: 480,
-              height: 200,
-              filesize: 900,
-              mimeType: "image/jpeg",
-              filename: "coast-480.jpg",
-            },
-          },
-        })}
-      />
-    );
+  it("draws the thumbnail whole, fitted inside the square on a neutral backdrop", () => {
+    render(<MediaCard media={media()} />);
     const image = screen.getByRole("img", { name: "Coastline at dusk" });
 
-    expect(image).toHaveAttribute("src", "/uploads/coast-480.jpg");
-    // Fitted, not filled: the whole picture inside the tile's square.
+    expect(image).toHaveAttribute("src", "/uploads/thumb_coast.jpg");
+    // Fitted, not filled: a fitted thumbnail and an older square one both
+    // show whole inside the tile's square.
     expect(image).toHaveClass("object-contain", "h-full", "w-full");
-  });
-
-  it("draws the light thumbnail rather than the original when no whole-image size exists", () => {
-    render(<MediaCard media={media()} />);
-    expect(
-      screen.getByRole("img", { name: "Coastline at dusk" })
-    ).toHaveAttribute("src", "/uploads/thumb_coast.jpg");
+    expect(image.parentElement).toHaveClass("bg-muted");
   });
 
   it("marks an image that has no alt text", () => {

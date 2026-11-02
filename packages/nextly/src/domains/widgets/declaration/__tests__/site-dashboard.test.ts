@@ -24,7 +24,7 @@ import {
   defaultLayoutPlan,
 } from "../../default-layout";
 import { siteDashboardRules } from "../../site-rules";
-import { declaredWidget, resetLegacyIdWarnings } from "../declared-widgets";
+import { declaredWidget } from "../declared-widgets";
 import { SITE_CONFIG, siteDashboardContext } from "../site-dashboard";
 
 import { dashboard, revenue } from "./plugin/widgets";
@@ -60,14 +60,15 @@ function refusal(run: () => void): string {
 }
 
 const warn = vi.fn();
+const error = vi.fn();
 
 beforeEach(() => {
-  resetLegacyIdWarnings();
   warn.mockReset();
+  error.mockReset();
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
     warn,
     info: vi.fn(),
-    error: vi.fn(),
+    error,
     debug: vi.fn(),
   } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
 });
@@ -78,7 +79,7 @@ describe("a site config that names what exists", () => {
       resetWidgetRegistries([shop], {
         hide: ["core/team"],
         overrides: {
-          "core/recently-edited": {
+          "core/continue": {
             title: "Latest edits",
             description: "What changed most recently",
           },
@@ -88,7 +89,7 @@ describe("a site config that names what exists", () => {
           },
         },
         defaultLayout: [
-          "core/recently-edited",
+          "core/continue",
           {
             widget: "acme/orders-by-state",
             w: 4,
@@ -97,17 +98,17 @@ describe("a site config that names what exists", () => {
           },
         ],
         suggestions: false,
-        replace: { "core/recently-edited": "acme/recent-orders" },
+        replace: { "core/continue": "acme/recent-orders" },
       })
     ).not.toThrow();
     // The rules every reading of a widget takes, from the copy checked.
     const rules = siteDashboardRules();
     expect([...rules.hidden]).toEqual(["core/team"]);
     expect([...rules.replaced]).toEqual([
-      ["core/recently-edited", "acme/recent-orders"],
+      ["core/continue", "acme/recent-orders"],
     ]);
     expect([...rules.alternatives]).toEqual(["acme/recent-orders"]);
-    expect(rules.overrides.get("core/recently-edited")).toEqual({
+    expect(rules.overrides.get("core/continue")).toEqual({
       title: "Latest edits",
       description: "What changed most recently",
     });
@@ -163,7 +164,7 @@ describe("a site config that names what exists", () => {
     const told = `which is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to the collection this card showed.`;
     // A Single's card is never told to pick a collection: the widgets with a
     // Collection setting offer collections only.
-    const toldSingle = `which is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`;
+    const toldSingle = `which is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue).`;
     expect(message).toContain(`hide names "single/home-card", ${toldSingle}`);
     expect(message).toContain(
       `overrides names "collection/posts-count", ${told}`
@@ -209,6 +210,25 @@ describe("a site config that names what exists", () => {
       })
     ).not.toThrow();
   });
+
+  it("refuses the retired Create card in defaultLayout, naming what replaced it", () => {
+    // Its id is retired with the card: a site default naming it, optional or
+    // not, is told that creating entries is the header's New button, not
+    // offered a nearest match.
+    for (const optional of [false, true]) {
+      const message = refusal(() =>
+        resetWidgetRegistries([shop], {
+          defaultLayout: [
+            { widget: "core/team" },
+            { widget: "core/quick-create", optional },
+          ],
+        })
+      );
+      expect(message).toContain(
+        `defaultLayout names "core/quick-create", which is a retired card: creating entries now lives in the dashboard header's New button.`
+      );
+    }
+  });
 });
 
 describe("a site config with faults", () => {
@@ -225,7 +245,7 @@ describe("a site config with faults", () => {
           },
         },
         defaultLayout: [{ widget: "acme/orders-by-state", w: 12 }],
-        replace: { "core/recently-edited": "acme/revenue" },
+        replace: { "core/continue": "acme/revenue" },
       })
     );
     for (const expected of [
@@ -236,7 +256,7 @@ describe("a site config with faults", () => {
       'the site config, widget "acme/orders-by-state": overrides.settings sets "colour", which the widget does not declare',
       'the site config, widget "acme/orders-by-state": overrides.settings: setting "top"',
       'the site config, widget "acme/orders-by-state": defaultLayout w is 12, which the widget does not allow (from 4 to 8)',
-      'the site config, widget "core/recently-edited": replace puts "acme/revenue" in place of "core/recently-edited", and no plugin offers it as an alternative to "core/recently-edited"',
+      'the site config, widget "core/continue": replace puts "acme/revenue" in place of "core/continue", and no plugin offers it as an alternative to "core/continue"',
     ]) {
       expect(message).toContain(expected);
     }
@@ -268,14 +288,14 @@ describe("a site config with faults", () => {
       resetWidgetRegistries([shop], {
         hide: ["acme/recent-orders"],
         defaultLayout: ["acme/recent-orders"],
-        replace: { "core/recently-edited": "acme/recent-orders" },
+        replace: { "core/continue": "acme/recent-orders" },
       })
     );
     expect(message).toContain(
       'defaultLayout places "acme/recent-orders", which hide hides'
     );
     expect(message).toContain(
-      'replace puts "acme/recent-orders" in place of "core/recently-edited", and hide hides it'
+      'replace puts "acme/recent-orders" in place of "core/continue", and hide hides it'
     );
   });
 
@@ -520,8 +540,7 @@ describe("a plugin's suggestions and alternatives", () => {
   });
 
   it("refuses a key a plugin's dashboard contribution does not take, naming the one it most likely meant", () => {
-    // 🔴 Dropped, a misspelt `suggest` would never place anything, and
-    // nothing would say so.
+    // 🔴 Dropped, a misspelt key would be ignored, and nothing would say so.
     const message = refusal(() =>
       resetWidgetRegistries([
         plainPlugin("@other/stats", {
@@ -559,7 +578,7 @@ describe("a plugin's suggestions and alternatives", () => {
           widgets: [{ ...revenue, id: "other/revenue" }],
           suggest: ["acme/revenue"],
           alternatives: {
-            "acme/recent-orders": "core/recently-edited",
+            "acme/recent-orders": "core/continue",
             "other/revenue": "core/nothing",
           },
         }),
@@ -579,33 +598,18 @@ describe("a plugin's suggestions and alternatives", () => {
 
 describe("the default the site config asks for", () => {
   it("checks a reload's config against the widgets as declared, not the last boot's overrides", () => {
-    // An older-shape widget, whose facts the check reads from the widget list
-    // the site's overrides apply to (a declared one is read from its declaration).
-    const reports = definePlugin({
-      name: "@acme/reports",
-      version: "1.0.0",
-      nextly: "*",
-      contributes: {
-        admin: {
-          widgets: [
-            {
-              id: "acme/reports",
-              component: "@acme/reports/admin#Reports",
-              size: { default: { w: 6, h: 3 }, max: { w: 12, h: 6 } },
-            },
-          ],
-        },
-      },
-    } as unknown as Parameters<typeof definePlugin>[0]);
-    // The first boot narrows it to half the width.
-    resetWidgetRegistries([reports], {
-      overrides: { "acme/reports": { size: { max: { w: 6, h: 6 } } } },
+    // Team, a widget whose facts the check reads from the widget list the
+    // site's overrides apply to (a declared one is read from its declaration),
+    // as declared from four to six columns wide. The first boot narrows it to
+    // four.
+    resetWidgetRegistries([], {
+      overrides: { "core/team": { size: { max: { w: 4, h: 4 } } } },
     });
-    // The second drops that override and places it at full width, which the
-    // widget as declared allows.
+    // The second drops that override and places it six wide, which the widget
+    // as declared allows.
     expect(() =>
-      resetWidgetRegistries([reports], {
-        defaultLayout: [{ widget: "acme/reports", w: 12 }],
+      resetWidgetRegistries([], {
+        defaultLayout: [{ widget: "core/team", w: 6 }],
       })
     ).not.toThrow();
   });
@@ -639,7 +643,7 @@ describe("the default the site config asks for", () => {
     ]);
   });
 
-  it("is set at startup from the copy checked: its defaultLayout, suggestions off, and what plugins suggest", () => {
+  it("is set at startup from the copy checked: its defaultLayout, with suggestions: false accepted and changing nothing", () => {
     resetWidgetRegistries([shop], {
       defaultLayout: [
         "core/team",
@@ -652,18 +656,24 @@ describe("the default the site config asks for", () => {
         { widget: "core/team" },
         { widget: "acme/orders-by-state", w: 4, settings: { top: 3 } },
       ],
-      suggestions: false,
-      suggested: ["acme/orders-by-state"],
     });
   });
 
-  it("is core's own defaultLayout, with suggestions on, when the site gives none", () => {
+  it("is core's own defaultLayout when the site gives none", () => {
     resetWidgetRegistries([shop], {});
-    expect(defaultLayoutPlan()).toEqual({
-      cards: CORE_DEFAULT_LAYOUT,
-      suggestions: true,
-      suggested: ["acme/orders-by-state"],
-    });
+    expect(defaultLayoutPlan()).toEqual({ cards: CORE_DEFAULT_LAYOUT });
+  });
+
+  it("places nothing a plugin suggests: its widget is offered from the add panel, never placed", () => {
+    // `shop` suggests acme/orders-by-state, declared with `defineWidget`.
+    resetWidgetRegistries([shop], {});
+    const widgets = allWidgets();
+    // The control: the widget is installed, so its absence below is the default's doing.
+    expect(widgets.map(widget => widget.id)).toContain("acme/orders-by-state");
+    const placed = defaultLayoutPlacements(widgets).map(p => p.widgetId);
+    // And the default did materialise: core's own cards are there.
+    expect(placed).toContain("core/continue");
+    expect(placed).not.toContain("acme/orders-by-state");
   });
 
   it("starts, saying nothing, with an optional card whose widget is not installed", () => {
@@ -677,6 +687,32 @@ describe("the default the site config asks for", () => {
     expect(defaultLayoutPlan().cards).toEqual([
       { widget: "acme/orders-by-state", optional: true },
       { widget: "core/team" },
+    ]);
+  });
+
+  it("starts on core's own default without the form-builder plugin, leaving its optional card out and logging nothing", () => {
+    // Core's default names New form submissions, a widget only that plugin declares.
+    expect(() => resetWidgetRegistries([], {})).not.toThrow();
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    // The plan still names it, as optional: the entry is skipped where the default is built.
+    expect(defaultLayoutPlan().cards).toContainEqual({
+      widget: "form-builder/new-submissions",
+      w: 6,
+      h: 4,
+      optional: true,
+    });
+    const widgets = allWidgets();
+    expect(widgets.map(widget => widget.id)).not.toContain(
+      "form-builder/new-submissions"
+    );
+    const placed = defaultLayoutPlacements(widgets).map(p => p.widgetId);
+    expect(placed).not.toContain("form-builder/new-submissions");
+    // The control: the rest of the default resolved, in order around the missing card.
+    expect(placed.slice(-3)).toEqual([
+      "core/continue",
+      "core/content-table",
+      "core/team-activity",
     ]);
   });
 
@@ -726,8 +762,8 @@ describe("a list with an empty slot", () => {
   it("is refused in each list of the site config, naming the list", () => {
     const message = refusal(() =>
       resetWidgetRegistries([shop], {
-        hide: holed(3, { 0: "core/team", 2: "core/content" }),
-        defaultLayout: holed(3, { 0: "core/content", 2: "core/team" }),
+        hide: holed(3, { 0: "core/team", 2: "core/content-table" }),
+        defaultLayout: holed(3, { 0: "core/content-table", 2: "core/team" }),
         widgets: holed(2, { 0: { ...revenue, id: "site/revenue" } }),
       })
     );
@@ -775,35 +811,6 @@ describe("a plugin that adds only Needs attention items", () => {
     ).toContain(
       'plugin "@other/inbox", widget "(none)": its dashboard widgets must be a list of widget declarations'
     );
-  });
-});
-
-describe("startup's warnings", () => {
-  it("go through the registration's logger, and never the process-wide one", () => {
-    const registration = { warn: vi.fn() };
-    // Two plugins declaring one widget id in the old shape: startup keeps the
-    // first and warns.
-    const oldShape = (name: string) =>
-      definePlugin({
-        name,
-        version: "1.0.0",
-        nextly: "*",
-        contributes: {
-          admin: {
-            widgets: [{ id: "shared/card", component: `${name}/admin#Card` }],
-          },
-        } as unknown as PluginContributions,
-      });
-    resetWidgetRegistries(
-      [oldShape("@one/a"), oldShape("@two/b")],
-      { widgets: [{ ...revenue, id: "site/revenue" }] },
-      registration
-    );
-    expect(registration.warn).toHaveBeenCalledWith(
-      expect.stringContaining('each declare a widget "shared/card"'),
-      expect.objectContaining({ kind: "widget-id-shared-old-shape" })
-    );
-    expect(warn).not.toHaveBeenCalled();
   });
 });
 

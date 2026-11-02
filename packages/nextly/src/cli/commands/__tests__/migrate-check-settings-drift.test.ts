@@ -41,13 +41,6 @@ vi.mock("../../program", () => ({
   }),
 }));
 
-// `migrate` is the largest command module. `migrate:check` reads it only for
-// `parseSqlSections`, to warn about statements a run would refuse, which this
-// file does not test: every file it checks is one `migrate:create` wrote.
-vi.mock("../migrate", () => ({
-  parseSqlSections: () => ({ upSql: "", downSql: "" }),
-}));
-
 vi.mock("../../utils/config-loader", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/config-loader")>()),
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),

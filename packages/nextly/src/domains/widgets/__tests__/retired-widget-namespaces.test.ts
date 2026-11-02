@@ -43,7 +43,13 @@ describe("what a retired card is told", () => {
         { slug: "home", label: "Home" },
       ])
     ).toBe(
-      "is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited)."
+      "is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue)."
+    );
+  });
+
+  it("tells the retired Create card where creating entries lives now", () => {
+    expect(retiredWidgetReplacement("core/quick-create")).toBe(
+      "is a retired card: creating entries now lives in the dashboard header's New button."
     );
   });
 

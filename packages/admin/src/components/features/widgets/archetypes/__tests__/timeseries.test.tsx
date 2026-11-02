@@ -16,22 +16,17 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { sizeChartsInTests } from "../../charts/__tests__/chart-env";
-import { pointLabel, timeseriesAccepts, timeseriesBody } from "../timeseries";
+import { pointLabel, timeseriesBody } from "../timeseries";
 import { CardEmpty } from "../../frame/states";
 import { gridBounds } from "../../__tests__/grid-bounds";
 
+// A declared card, answered on the server by its card id.
 const widget = (): DashboardWidget =>
   ({
     id: "acme/over-time",
     title: "Entries over time",
     archetype: "timeseries",
     size: gridBounds(6),
-    query: {
-      source: "collection:posts",
-      op: "timeseries",
-      dateField: "createdAt",
-      interval: "day",
-    },
   }) as DashboardWidget;
 
 const series = (
@@ -62,18 +57,6 @@ describe("the timeseries archetype", () => {
     );
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.message).toContain("groupBy");
-  });
-
-  it("needs a query, and says so by name", () => {
-    expect(
-      timeseriesAccepts({ archetype: "timeseries", title: "Over time" })
-    ).toContain("Over time");
-    expect(
-      timeseriesAccepts({
-        archetype: "timeseries",
-        query: { op: "timeseries" },
-      })
-    ).toBeUndefined();
   });
 
   it("labels a bucket by its UTC date whatever zone the install is set to", () => {

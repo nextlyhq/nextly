@@ -11,11 +11,31 @@
  */
 import { createRequire } from "node:module";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { withNextly } from "../next";
 
 type Includes = Record<string, string[]>;
+
+/**
+ * `withNextly()` warns about the Cache Components options these configs leave
+ * off, and with no app logger installed that line waits on `globalThis` for
+ * one. Cleared after each case, unsent, so the next file's logger does not
+ * receive a line this file said.
+ */
+afterEach(() => {
+  const holder = globalThis as Record<symbol, { timer?: unknown } | undefined>;
+  for (const key of [
+    Symbol.for("nextly/cache-components-queued-warnings"),
+    Symbol.for("nextly/cache-components-off-warned"),
+  ]) {
+    const held = holder[key];
+    if (held && typeof held === "object" && "timer" in held) {
+      clearTimeout(held.timer as ReturnType<typeof setTimeout>);
+    }
+    delete holder[key];
+  }
+});
 
 const PG = "./node_modules/pg/**/*";
 

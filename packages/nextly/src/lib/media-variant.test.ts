@@ -36,29 +36,28 @@ afterEach(() => setNextlyLogger(undefined));
 describe("normalizeMediaUrls", () => {
   it("hands back local URLs as stored, whatever NEXT_PUBLIC_APP_URL holds", () => {
     mockEnv.NEXT_PUBLIC_APP_URL = "http://localhost:3000";
-    const row = {
-      url: "/uploads/a.jpg",
-      thumbnailUrl: "/uploads/a-thumb.jpg",
-      sizes: { card: { url: "/uploads/a-card.jpg", width: 400 } },
-    };
+    const row = { url: "/uploads/a.jpg", thumbnailUrl: "/uploads/a-thumb.jpg" };
     expect(normalizeMediaUrls(row)).toEqual(row);
   });
 
   it("hands back cloud URLs as stored", () => {
-    const row = {
-      url: "https://cdn.example.com/a.jpg",
-      sizes: { card: { url: "https://cdn.example.com/a-card.jpg" } },
-    };
+    const row = { url: "https://cdn.example.com/a.jpg" };
     expect(normalizeMediaUrls(row)).toEqual(row);
   });
 
-  it("preserves sizes: null, and omits sizes when the row has none", () => {
-    expect(
-      normalizeMediaUrls({ url: "/uploads/a.jpg", sizes: null }).sizes
-    ).toBeNull();
-    expect("sizes" in normalizeMediaUrls({ url: "/uploads/a.jpg" })).toBe(
-      false
-    );
+  // Image sizes are no longer made or offered. A row stored before then still
+  // carries its `sizes` column, in whichever form its dialect returns it, and
+  // no reader hands it on.
+  it.each([
+    ["an object", { card: { url: "/uploads/a-card.jpg", width: 400 } }],
+    ["a JSON string (SQLite)", JSON.stringify({ card: { url: "/c.jpg" } })],
+    ["null", null],
+  ])("leaves out stored sizes held as %s", (_form, sizes) => {
+    const out = normalizeMediaUrls({ url: "/uploads/a.jpg", sizes });
+    expect("sizes" in out).toBe(false);
+    // The control: the row's own URL still comes through, so the absence is
+    // the key being dropped rather than the row being lost.
+    expect(out.url).toBe("/uploads/a.jpg");
   });
 
   it("does not mutate the input row, and keeps its other fields", () => {
@@ -73,7 +72,6 @@ describe("normalizeMediaUrls", () => {
     expect(out.id).toBe("abc");
   });
 
-  // SQLite stores `media.sizes` as TEXT, and the driver returns it unparsed.
   // A local storage `baseUrl` written without its leading slash (`uploads`)
   // stores `uploads/<key>`, which a page at `/admin/media` would resolve to
   // `/admin/media/uploads/<key>`. Read as a path from the site's root.
@@ -81,12 +79,10 @@ describe("normalizeMediaUrls", () => {
     const row = normalizeMediaUrls({
       url: "uploads/2026/10/a.png",
       thumbnailUrl: "uploads/2026/10/a-thumb.png",
-      sizes: { small: { url: "uploads/2026/10/a-small.webp", width: 4 } },
     });
 
     expect(row.url).toBe("/uploads/2026/10/a.png");
     expect(row.thumbnailUrl).toBe("/uploads/2026/10/a-thumb.png");
-    expect(row.sizes?.small?.url).toBe("/uploads/2026/10/a-small.webp");
   });
 
   it.each([
@@ -94,32 +90,9 @@ describe("normalizeMediaUrls", () => {
     "https://cdn.example.com/a.png",
     "//cdn.example.com/a.png",
   ])("leaves %s as it is", url => {
-    const row = normalizeMediaUrls({ url, thumbnailUrl: url, sizes: null });
+    const row = normalizeMediaUrls({ url, thumbnailUrl: url });
     expect(row.url).toBe(url);
     expect(row.thumbnailUrl).toBe(url);
-  });
-
-  describe("string-encoded sizes (SQLite)", () => {
-    it("parses a JSON-encoded sizes string into an object", () => {
-      const sizes = {
-        card: { url: "/uploads/a-card.jpg", width: 400, height: 300 },
-      };
-      const out = normalizeMediaUrls({
-        url: "/uploads/a.jpg",
-        sizes: JSON.stringify(sizes),
-      });
-      expect(out.sizes).toEqual(sizes);
-    });
-
-    it("normalises unparseable or non-object sizes to null", () => {
-      expect(
-        normalizeMediaUrls({ url: "/a.jpg", sizes: "not-json" }).sizes
-      ).toBeNull();
-      expect(
-        normalizeMediaUrls({ url: "/a.jpg", sizes: JSON.stringify(["card"]) })
-          .sizes
-      ).toBeNull();
-    });
   });
 });
 

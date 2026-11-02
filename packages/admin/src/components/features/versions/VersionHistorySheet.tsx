@@ -108,6 +108,11 @@ export interface VersionHistorySheetProps {
    */
   canRestore?: boolean;
   /**
+   * The document's writes are refused: its collection or Single was removed
+   * from code. Its versions are still shown, but none is marked seen.
+   */
+  writesRefused?: boolean;
+  /**
    * Status of the LIVE document, which is what a restore is about to change.
    * The selected version's own status describes the past and says nothing
    * about whether this change is publicly visible.
@@ -166,6 +171,7 @@ export function VersionHistorySheet({
   onOpenChange,
   scope,
   canRestore = false,
+  writesRefused = false,
   liveStatus = null,
   entityLocalized,
   liveDirty = false,
@@ -255,7 +261,8 @@ export function VersionHistorySheet({
       !viewedLoading &&
       viewedError === null
       ? selected
-      : null
+      : null,
+    { writesRefused }
   );
 
   // Returning to the live document from Back to current clears the selection here

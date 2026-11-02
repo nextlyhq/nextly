@@ -151,10 +151,12 @@ export interface ServiceOpts {
 /**
  * What resolving a caller needs from the outside: the roles a user holds, by
  * slug. Injectable so the translation is tested without a database; the facade
- * wrapper supplies the real lookup.
+ * wrapper supplies the real lookup. `executor` is the transaction a call runs
+ * in, when it runs in one: its roles are read there, as its writes and its
+ * access check are, so a role the transaction took away is gone from them.
  */
 export interface ServiceOptsDeps {
-  listRoleSlugs: (userId: string) => Promise<string[]>;
+  listRoleSlugs: (userId: string, executor?: unknown) => Promise<string[]>;
 }
 
 /**
@@ -197,7 +199,10 @@ const REAL_DEPS: ServiceOptsDeps = {
  */
 export async function resolveServiceOpts(
   opts: ServiceOpts,
-  deps: ServiceOptsDeps = REAL_DEPS
+  deps: ServiceOptsDeps = REAL_DEPS,
+  // The transaction-bound executor of a call made inside a transaction, which
+  // the caller's roles are read on; see `ServiceOptsDeps`.
+  executor?: unknown
 ): Promise<{
   user?: RequestContext["user"];
   authenticatedScope?: AuthenticatedScope;
@@ -289,7 +294,7 @@ export async function resolveServiceOpts(
         // mutable shape every consumer of it is typed against.
         authenticatedScope?.roles
           ? [...authenticatedScope.roles]
-          : await deps.listRoleSlugs(user.id)
+          : await deps.listRoleSlugs(user.id, executor)
       ),
       ...carried,
       ...(authenticatedScope ? { authenticatedScope } : {}),
@@ -465,11 +470,17 @@ const PLUGIN_COLLECTION_METHODS = [
   "deleteEntryInTransaction",
 ] as const satisfies readonly (keyof CollectionService)[];
 
-/** The methods that take the transaction `withTransaction` opened. */
-type InTransactionMethod =
-  | "createEntryInTransaction"
-  | "updateEntryInTransaction"
-  | "deleteEntryInTransaction";
+/**
+ * The methods that take the transaction `withTransaction` opened, as their
+ * first argument. Listed once, for the type and for the runtime check alike.
+ */
+const IN_TRANSACTION_METHODS = [
+  "createEntryInTransaction",
+  "updateEntryInTransaction",
+  "deleteEntryInTransaction",
+] as const;
+type InTransactionMethod = (typeof IN_TRANSACTION_METHODS)[number];
+const IN_TRANSACTION: ReadonlySet<string> = new Set(IN_TRANSACTION_METHODS);
 
 declare const pluginTransactionBrand: unique symbol;
 
@@ -678,7 +689,17 @@ function translateServiceOpts(
       ];
       const accessCall = async (args: unknown[]) => {
         const opts = (args[idx] as ServiceOpts | undefined) ?? {};
-        const resolved = await resolveServiceOpts(opts, deps);
+        // A transactional write's caller is resolved on its transaction: read
+        // on the pool, its roles would be another connection's, blind to a
+        // role the transaction changed, and a field rule reading
+        // `req.user.roles` would judge the write by them.
+        const resolved = await resolveServiceOpts(
+          opts,
+          deps,
+          IN_TRANSACTION.has(prop as string)
+            ? (args[0] as TransactionContext).getDrizzle()
+            : undefined
+        );
         // Nothing past the context travels. The context is the last argument
         // a plugin may name; a parameter the service accepts after it (the
         // delete's `actor`) is the service's own, and an extra argument

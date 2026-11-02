@@ -10,7 +10,7 @@
 
 import { CliError } from "../cli-error";
 import { defineCodes } from "../define";
-import { deepestMessage } from "../messages";
+import { asSentence, deepestMessage } from "../messages";
 
 /** `count` with its noun, as the commands print it: `1 error`, `2 errors`. */
 function counted(count: number, noun: string): string {
@@ -100,6 +100,10 @@ export const COMMAND_CODES = defineCodes({
     cause:
       "`nextly media orphans --apply` was run from outside the project `--cwd` names, so the database settings it read may be another project's.",
   },
+  MEDIA_REINDEX_OUTSIDE_PROJECT: {
+    cause:
+      "`nextly media reindex-usage` was run from outside the project `--cwd` names, or given a configuration from outside it, so the database it would rebuild or the content it would read may be another project's.",
+  },
   SETUP_IN_PROGRESS: {
     cause:
       "Another setup holds this install's setup claim, so the command changed nothing.",
@@ -138,6 +142,10 @@ export const COMMAND_CODES = defineCodes({
   PASSWORD_CLEAR_UNCONFIRMED: {
     cause:
       "`nextly users:clear-plaintext-passwords --apply` was run without `--confirm-default-hasher`.",
+  },
+  WIDGET_GENERATE_CANCELLED: {
+    cause:
+      "A prompt of `nextly generate:widget` was cancelled, so it wrote no widget.",
   },
 });
 
@@ -361,6 +369,30 @@ export function mediaApplyOutsideProject(cwd: string): CliError {
   });
 }
 
+/**
+ * `nextly media reindex-usage` from another folder than the one `--cwd`
+ * names, or with a configuration from outside that project.
+ */
+export function mediaReindexOutsideProject(
+  cwd: string,
+  configPath?: string
+): CliError {
+  return new CliError(
+    "MEDIA_REINDEX_OUTSIDE_PROJECT",
+    configPath === undefined
+      ? {
+          what: `Nothing was rebuilt: the command was run from outside ${cwd}.`,
+          why: `The database settings were read before --cwd named ${cwd}, so they may be another project's.`,
+          next: `Run the command from ${cwd} to rebuild its record.`,
+        }
+      : {
+          what: `Nothing was rebuilt: the config ${configPath} is outside ${cwd}.`,
+          why: `${cwd}'s database would be rebuilt from the collections that config names, which may be another project's.`,
+          next: "Run the command from that config's project, or pass a config inside this one.",
+        }
+  );
+}
+
 // ── nextly setup-token and nextly users:create-admin ───────────────────────
 
 /** The two commands that change setup, by what each would have changed. */
@@ -490,5 +522,28 @@ export function componentMapOutOfDate(report: {
     what: `The component map is out of date (${report.files}).`,
     why: report.disagreements.join("\n"),
     next: "Run `npx nextly generate:types` and commit both files.",
+  });
+}
+
+// ── nextly generate:widget ──────────────────────────────────────────────────
+
+/** The author closed a prompt; the prompt printed its own cancel line first. */
+export function widgetGenerateCancelled(): CliError {
+  return new CliError("WIDGET_GENERATE_CANCELLED", {
+    what: "`nextly generate:widget` was cancelled, and wrote no widget.",
+    why: "A prompt was closed before it was answered.",
+    next: "Run `nextly generate:widget` again and answer its prompts, or give the answers as flags, as in `nextly generate:widget open-orders --view figure --no-collection`.",
+  });
+}
+
+/**
+ * The command refused what it was given, or what it found, and wrote nothing; `reason` says which.
+ * It is an input refusal like any other, so it ends under `INPUT_REFUSED`.
+ */
+export function widgetNotGenerated(reason: string): CliError {
+  return new CliError("INPUT_REFUSED", {
+    what: "`nextly generate:widget` did not generate the widget.",
+    why: asSentence(reason),
+    next: "Fix what it names, then run `nextly generate:widget` again.",
   });
 }

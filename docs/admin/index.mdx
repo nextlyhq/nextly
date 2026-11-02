@@ -30,7 +30,7 @@ The top-level sections (in order) are:
 | Media Library | `/admin/media` | Upload, browse, and edit files referenced by `upload` fields |
 | Plugins | `/admin/plugins` | Only visible when at least one plugin is installed and registers admin pages |
 | Users | `/admin/users` | Users, Roles, Custom user fields |
-| Settings | `/admin/settings` | General, API keys, Email providers, Email templates, Email layout, Image sizes |
+| Settings | `/admin/settings` | General, API keys, Email providers, Email templates, Email layout |
 
 Collection and Single icons are added to the primary sidebar dynamically as you register collections / singles in `nextly.config.ts` (or create them via the Visual Schema Builder). The Builder icon is always present but can be hidden in production; see [Schema Builder visibility](/docs/admin/branding#schema-builder-visibility) for the `admin.branding.showBuilder` toggle.
 
@@ -65,7 +65,7 @@ The Settings inner sidebar is split into sub-groups:
 - **System.** General (site-wide settings) and API Keys.
 - **Email.** Email Providers (Resend, SMTP, etc.), Email Templates, and Email Layout.
 
-Image-size presets and the (programmatic) Permissions page also live under settings.
+The (programmatic) Permissions page also lives under settings.
 
 ## Permissions
 
