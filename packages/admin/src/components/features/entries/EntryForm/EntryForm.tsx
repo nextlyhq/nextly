@@ -1118,6 +1118,9 @@ export function EntryForm({
               // Nor for a reader, who is offered no preview: an open pane
               // closes once the user may no longer change the entry.
               open={previewOnScreen}
+              // A document view is a full-height screen: the closed split
+              // hands it the content area's height to fill.
+              fill={documentView !== undefined}
               onClose={() => setPreviewOpen(false)}
               scope={{
                 collection: collection.name,

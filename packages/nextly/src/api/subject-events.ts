@@ -37,6 +37,7 @@ import { getService } from "../di";
 import { container } from "../di/container";
 import { fieldTrustOf } from "../domains/collections/services/collection-query-service";
 import { mayReadDeletedDocument } from "../domains/content-events/deleted-document-access";
+import { nameTakeoverHolders } from "../domains/content-events/named-takeovers";
 import type { ContentEventSubject } from "../domains/content-events/record";
 import {
   assertPageSize,
@@ -211,7 +212,9 @@ export async function readSubjectEvents(
         )
       : { items: page.items, nextBefore: page.nextBefore };
   return {
-    items,
+    // A takeover keeps its displaced holder by id; they are named here, as
+    // they are now, so a deleted account is never named from the record.
+    items: await nameTakeoverHolders(items),
     // A cursor walk: page and total describe the window returned, and the
     // next page passes the last item's id as `before`.
     meta: {

@@ -31,36 +31,92 @@ import { isForest } from "./blocks-document";
 
 /**
  * The field's stored forms, the live one and the draft an editor's preview
- * reads, as the write reads them.
+ * reads, as the write reads them, in the language the write is judged in.
  *
- * Empty for a create, for a single, which has no entry id to read by, and
- * where a form cannot be read: each then measures the document against its
- * starting blocks alone, which refuses more and never less.
+ * Empty for a create, for a language that stores no value yet, and where a
+ * form cannot be read: each then measures the document against its starting
+ * blocks alone, which refuses more and never less.
  */
 export async function storedFormsOf(
   write: PluginFieldWrite | undefined,
   field: string
 ): Promise<BlockDocument[]> {
-  if (write === undefined || write.kind !== "collection") return [];
-  const id = write.id;
-  if (id === undefined) return [];
+  // Forgiving, as it always was for the lock baselines it feeds: a form that
+  // cannot be read measures against the starting blocks alone.
+  try {
+    return (await readStoredForms(write, field)).forms;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The stored forms, and whether they could be read at all.
+ *
+ * Two different empties. A create has nothing stored, so every placement break
+ * in it is the write's own; a field whose stored value cannot be read (a
+ * localized one whose language store is not ready) may already hold a break,
+ * so a break in it may be one the page already held. The placement rule
+ * refuses the first and only warns about the second. A single and a localized
+ * field are read like any other, in the language the write is judged in.
+ */
+export async function readStoredForms(
+  write: PluginFieldWrite | undefined,
+  field: string,
+  /**
+   * The lifecycle forms the write changes, by `formsChangedBy`'s answer (true
+   * is the draft): a draft-only write is measured against the draft alone, so
+   * a break only the published form holds is not passed off as the draft's.
+   */
+  changed: readonly boolean[] = [false, true],
+  /**
+   * Whether the field is localized. Its stored value is read in the write's
+   * language, and the read is refused while that language's store is not
+   * ready: such a refusal makes it unreadable rather than failing the write.
+   * Any other failure to read is an error and propagates rather than passing
+   * a write.
+   */
+  localized = false
+): Promise<{ forms: BlockDocument[]; readable: boolean }> {
+  const document = storedDocumentOf(write);
+  if (write === undefined || document === undefined) {
+    return { forms: [], readable: true };
+  }
   const forms: BlockDocument[] = [];
-  for (const form of ["published", "draft"] as const) {
+  for (const draft of changed) {
+    const form = draft ? "draft" : "published";
+    let read;
     try {
-      const read = await write.readStored({
-        collection: write.slug,
-        id,
+      read = await write.readStored({
+        ...document,
         field,
         form,
+        ...(write.locale === undefined ? {} : { locale: write.locale }),
       });
-      if (read.kind === "value" && isForest(read.value)) {
-        forms.push(read.value as BlockDocument);
-      }
-    } catch {
-      // Unreadable: measured against the starting blocks, as for a create.
+    } catch (error) {
+      if (localized) return { forms: [], readable: false };
+      throw error;
+    }
+    if (read.kind === "value" && isForest(read.value)) {
+      forms.push(read.value as BlockDocument);
     }
   }
-  return forms;
+  return { forms, readable: true };
+}
+
+/**
+ * Which stored document the write is to: a single by its slug, or a
+ * collection's entry by its id; `undefined` for a create, which stores nothing
+ * yet to read.
+ */
+function storedDocumentOf(
+  write: PluginFieldWrite | undefined
+): { single: string } | { collection: string; id: string } | undefined {
+  if (write === undefined) return undefined;
+  if (write.kind === "single") return { single: write.slug };
+  return write.id === undefined
+    ? undefined
+    : { collection: write.slug, id: write.id };
 }
 
 /**
@@ -82,14 +138,42 @@ export async function lockBaselines(args: {
   limits: DocumentLimits;
   work: WorkAllowance;
 }): Promise<unknown[]> {
+  const read = await composedFormsRead({
+    ...args,
+    hosts: [
+      ...args.stored,
+      placementsAsComponentsHoldThem(args.document, args.limits),
+    ],
+  });
+  return read.forms;
+}
+
+/**
+ * Each host composed with the same reader, library and allowance as the page,
+ * and whether every one composed whole. Where the allowance runs out, what was
+ * composed is returned: a lock baseline missing only measures more strictly,
+ * but a placement baseline cut short may lack a break the stored page holds,
+ * so a caller telling old breaks from new must not read its absence as new.
+ *
+ * The stored forms alone are what a placement break is measured against: the
+ * page as its components hold it is the page being saved, so a break it
+ * composes to would read as one the page already held.
+ */
+export async function composedFormsRead(args: {
+  hosts: readonly BlockDocument[];
+  library: HeldLibrary;
+  read: BoundedReader;
+  limits: DocumentLimits;
+  work: WorkAllowance;
+}): Promise<{ forms: unknown[]; complete: boolean }> {
   const { library, read, limits, work } = args;
-  const hosts = [
-    ...args.stored,
-    placementsAsComponentsHoldThem(args.document, limits),
-  ];
-  const baselines: unknown[] = [];
-  for (const host of hosts) {
-    if (read.exhausted() || work.left <= 0) break;
+  const forms: unknown[] = [];
+  let complete = true;
+  for (const host of args.hosts) {
+    if (read.exhausted() || work.left <= 0) {
+      complete = false;
+      break;
+    }
     const composed = await composeWithReads({
       host,
       library,
@@ -97,9 +181,10 @@ export async function lockBaselines(args: {
       limits,
       work,
     });
-    baselines.push(composed.composition.document);
+    if (composed.incomplete || composed.stoppedShort) complete = false;
+    forms.push(composed.composition.document);
   }
-  return baselines;
+  return { forms, complete };
 }
 
 /**

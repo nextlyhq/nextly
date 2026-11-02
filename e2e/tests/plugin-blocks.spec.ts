@@ -167,7 +167,8 @@ test.describe("blocks a plugin contributes", () => {
     await expect(fixture(page, "custom")).toHaveText("Edited headline");
 
     // What every block keeps beside its own inspector.
-    await page.getByRole("tab", { name: "Advanced" }).click();
+    // Content's last section, where the CSS id and attributes live.
+    await page.getByText("Advanced", { exact: true }).click();
     const cssId = page.getByRole("textbox", { name: "CSS id" });
     await cssId.fill("fixture-anchor");
     await cssId.press("Enter");
@@ -180,8 +181,9 @@ test.describe("blocks a plugin contributes", () => {
     await value.press("Tab");
 
     await page.getByRole("tab", { name: "Style" }).click();
+    // Colour sits in Typography, its first and only section here.
     const color = page
-      .getByRole("region", { name: "Color" })
+      .getByRole("region", { name: /^Typography/ })
       .getByRole("textbox", { name: "Color", exact: true });
     await color.fill("#1155cc");
     await color.press("Enter");

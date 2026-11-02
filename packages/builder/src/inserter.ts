@@ -27,12 +27,14 @@
 import {
   allBlocks,
   expandSlotDefaults,
+  blockLabelFrom,
   findNode,
   patternRefusal,
   getBlock,
   locateNode,
   makeNode,
   placementTypesOf,
+  canPlace,
   placementVerdict,
   composedRootTypes,
   readableDefinition,
@@ -48,6 +50,9 @@ import {
   type DocumentLimits,
   type NestingSource,
   type NestingVerdict,
+  type PlacedNode,
+  type PlacementSite,
+  type PlacementSources,
   type PlacementTarget,
   type ResolvedComposition,
   type SlotDefaultSource,
@@ -769,36 +774,17 @@ export function blockLabel(
   type: string,
   lookup: (type: string) => AnyBlockDefinition | undefined = getBlock
 ): string {
-  const definition = lookup(type);
-  // An unregistered type still has to read as something. Humanising its
-  // identity is the same fallback a registered-but-unlabelled block gets, so a
+  // An unregistered type still has to read as something: its name made
+  // readable, the same fallback a registered-but-unlabelled block gets, so a
   // block that disappears from the registry does not change what it is called
-  // in the middle of an editing session.
-  return definition === undefined ? humanise(type) : labelOf(definition);
+  // in the middle of an editing session. The engine words it, so a refusal
+  // from a save names a block the way the editor does.
+  return blockLabelFrom(type, lookup(type));
 }
 
+/** A registered definition's label, as {@link blockLabel} reads it. */
 function labelOf(definition: AnyBlockDefinition): string {
-  const declared = definition.editor?.label;
-  if (declared !== undefined && declared !== "") return declared;
-  return humanise(definition.name);
-}
-
-/**
- * Turn a namespaced block name into something readable.
- *
- * The namespace is dropped because it answers "who shipped this", which a
- * palette groups by rather than repeats on every row. Separators become spaces
- * and only the first letter is capitalised — title-casing every word would
- * render "Collection Loop", which reads like a proper noun for a thing that is
- * a description.
- */
-function humanise(name: string): string {
-  const local = name
-    .slice(name.indexOf("/") + 1)
-    .replace(/[-_]+/g, " ")
-    .trim();
-  if (local === "") return name;
-  return local.charAt(0).toUpperCase() + local.slice(1);
+  return blockLabelFrom(definition.name, definition);
 }
 
 /**
@@ -933,11 +919,67 @@ export function allowedEntries<TEntry extends InsertEntry>(
   entries: readonly TEntry[],
   target: PlacementTarget,
   source: NestingSource,
-  definitions?: ComponentLookup
+  definitions?: ComponentLookup,
+  /**
+   * The insertion point as the one placement rule sees it: the site, with what
+   * its ancestors refuse, and what an insert expands a block's starting
+   * children from. Absent, entries are judged by the name rules alone.
+   */
+  placement?: EntryPlacement
 ): TEntry[] {
   return entries.filter(
-    entry => entryAllowedAt(entry, target, source, definitions).allowed
+    entry =>
+      entryAllowedAt(entry, target, source, definitions).allowed &&
+      (placement === undefined ||
+        canPlace(
+          insertedBy(entry, placement.expansion),
+          placement.site,
+          placement.sources
+        ).allowed)
   );
+}
+
+/** What {@link allowedEntries} needs to judge entries by the one placement rule. */
+export interface EntryPlacement {
+  readonly site: PlacementSite;
+  readonly sources: PlacementSources;
+  /**
+   * The pair a click insert hands {@link nodeForEntry}, so a block is judged
+   * with exactly the children its insert seeds.
+   */
+  readonly expansion: {
+    readonly definitions: SlotDefaultSource;
+    readonly nesting: NestingSource | undefined;
+  };
+}
+
+/**
+ * What an entry would insert, as the placement rule reads it: a block as
+ * {@link nodeForEntry} builds it, starting children included, a pattern's
+ * blocks, or a component placement.
+ *
+ * A block is built by the insert's own function rather than described as its
+ * type and props: a block whose slot starts with a clickable child is refused
+ * under a linked card for that child, and judging the empty shell would offer
+ * a row whose click the store then refuses.
+ */
+function insertedBy(
+  entry: InsertEntry,
+  expansion: EntryPlacement["expansion"]
+): readonly PlacedNode[] {
+  switch (entry.kind) {
+    case "block":
+      return [nodeForEntry(entry, expansion.definitions, expansion.nesting)];
+    case "pattern":
+      return entry.document.nodes;
+    case "component":
+      return [
+        {
+          type: COMPONENT_INSTANCE_TYPE,
+          props: { componentId: entry.componentId },
+        },
+      ];
+  }
 }
 
 /**

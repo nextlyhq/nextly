@@ -351,6 +351,10 @@ export type { BlockInspectorProps } from "@nextlyhq/blocks-engine";
  * one key is written as `BlockSupports["spacing"]`, which is checked, and a
  * whole object goes through `blockSupports()`.
  *
+ * `ContentKind` and `ContentModel` are what `contentModel(props)` answers
+ * with, so a block author declares what their block is as HTML content
+ * without importing the engine.
+ *
  * @experimental Carried by the same freeze as `defineBlock`.
  */
 export type {
@@ -363,6 +367,8 @@ export type {
   BlockSeoImage,
   BlockVariation,
   ComponentPath,
+  ContentKind,
+  ContentModel,
   NodeStyles,
   SlotLock,
   SlotSpec,

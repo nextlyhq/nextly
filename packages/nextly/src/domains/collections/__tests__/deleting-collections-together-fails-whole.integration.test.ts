@@ -23,7 +23,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
@@ -64,8 +64,9 @@ const notes = defineCollection({
   ],
 });
 
-/** Where the harness writes the Builder's drop migrations (gitignored). */
-const DROP_MIGRATIONS_DIR = path.resolve("src/db/migrations/dynamic");
+/** Where the Builder writes an instance's drop migrations: below the instance's own directory. */
+const dropMigrationsDir = (t: TestNextly) =>
+  path.join(t.basePath, "src/db/migrations/dynamic");
 
 let current: TestNextly | undefined;
 
@@ -221,14 +222,21 @@ async function failureOf(attempt: Promise<unknown>): Promise<NextlyError> {
   return outcome;
 }
 
-/** Drop migrations written since `since` that name `table`. */
-function dropMigrationsNaming(table: string, since: number): string[] {
-  return readdirSync(DROP_MIGRATIONS_DIR).filter(name => {
+/**
+ * Drop migrations written since `since` that name `table`. A folder the
+ * Builder never created holds none.
+ */
+function dropMigrationsNaming(
+  t: TestNextly,
+  table: string,
+  since: number
+): string[] {
+  const dir = dropMigrationsDir(t);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter(name => {
     const stamp = Number(name.split("_")[0]);
     if (!(stamp >= since)) return false;
-    return readFileSync(path.join(DROP_MIGRATIONS_DIR, name), "utf8").includes(
-      table
-    );
+    return readFileSync(path.join(dir, name), "utf8").includes(table);
   });
 }
 
@@ -245,7 +253,7 @@ describeEachDialect("deleting collections together fails whole", dialect => {
     }
     expect(await stateOf(t, TAGS, TAGS_TABLE)).toEqual(INTACT);
     expect(await stateOf(t, NOTES, NOTES_TABLE)).toEqual(INTACT);
-    expect(dropMigrationsNaming(NOTES_TABLE, since)).toEqual([]);
+    expect(dropMigrationsNaming(t, NOTES_TABLE, since)).toEqual([]);
   }
 
   /** The delete run again without the failure: it writes its drop migration and removes both. */
@@ -257,7 +265,9 @@ describeEachDialect("deleting collections together fails whole", dialect => {
     if (development) vi.stubEnv("NODE_ENV", "development");
     await builderBulkDelete([TAGS, NOTES]);
     vi.unstubAllEnvs();
-    expect(dropMigrationsNaming(NOTES_TABLE, since).length).toBeGreaterThan(0);
+    expect(dropMigrationsNaming(t, NOTES_TABLE, since).length).toBeGreaterThan(
+      0
+    );
     for (const [slug, table] of [
       [TAGS, TAGS_TABLE],
       [NOTES, NOTES_TABLE],

@@ -95,8 +95,49 @@ describe("document lock route", () => {
 
     expect(service.acquire).toHaveBeenCalledWith(
       ref,
-      { ownerId: "u1", ownerLabel: "Ada" },
+      {
+        ownerId: "u1",
+        ownerLabel: "Ada",
+        actor: { type: "user", id: "u1" },
+        personName: "Ada",
+      },
       { takeover: false, requestAccess: false }
+    );
+  });
+
+  it("credits a takeover to the key that made it, and never names a person by email", async () => {
+    // A takeover's history event names its actor from these. A key credited
+    // as its maker, or a person named by the label's email fallback, would
+    // put in history what history keeps out.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    requireAuthentication.mockResolvedValueOnce({
+      userId: "maker",
+      userEmail: "maker@example.com",
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+    });
+    await acquireLock(post({ ...ref, takeover: true }));
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({
+        actor: { type: "apiKey", id: "key-1" },
+        personName: null,
+      }),
+      expect.anything()
+    );
+
+    requireAuthentication.mockResolvedValueOnce({
+      userId: "u3",
+      userEmail: "noname@example.com",
+    });
+    await acquireLock(post({ ...ref, takeover: true }));
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({
+        actor: { type: "user", id: "u3" },
+        personName: null,
+      }),
+      expect.anything()
     );
   });
 

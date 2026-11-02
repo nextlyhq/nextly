@@ -387,6 +387,51 @@ export type {
 export { canNest, canBeRoot, canNestInSlot } from "./nesting";
 export { placementVerdict } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
+// The one placement rule over the nesting rule above: declared slots, the
+// HTML content model a block's settings give it, and component placements'
+// exposed slots. Every placement path asks it, editor and server alike, and
+// one wording says its refusals in both.
+export {
+  CONTENT_KINDS,
+  UNDECLARED_CONTENT_MODEL,
+  contentModelKey,
+  resolveContentModel,
+} from "./content-model";
+export type {
+  ContentKind,
+  ContentModel,
+  ResolvedContentModel,
+} from "./content-model";
+export {
+  canPlace,
+  canPlaceIn,
+  contentModelKeyOf,
+  declaredSlotNames,
+  placementSiteIn,
+  placementTracker,
+} from "./placement";
+export type {
+  ContentRefuser,
+  PlacedNode,
+  PlacementPosition,
+  PlacementRefusal,
+  PlacementRefused,
+  PlacementSite,
+  PlacementSources,
+  PlacementTracker,
+  PlacementVerdict,
+  TrackedPlacement,
+} from "./placement";
+export { placementBreaksIn, placementRefusal } from "./placement-breaks";
+export type { LocatedPlacementBreak } from "./placement-breaks";
+export {
+  asPermittedList,
+  blockLabelFrom,
+  permittedLabel,
+  placementRefusalMessage,
+  placementRefusalWording,
+} from "./placement-wording";
+export type { PlacementWording, WordingContext } from "./placement-wording";
 // What a composed document breaks that no stored document breaks alone: the
 // nesting rule across a placement, and depth counted from the document's own
 // root. Exported for the write path, which has to refuse what the renderer
@@ -440,6 +485,10 @@ export type {
 export { lockBreaksIn, lockRefusal } from "./lock-breaks";
 export type { LocatedLockBreak, LockSources } from "./lock-breaks";
 export { lockRepairRule, planRepair } from "./repair-plan";
+// The placement rule's repair, appended after the lock rule when planning, so
+// a page holding blocks where the placement rule refuses them is offered a
+// move to the nearest place it allows.
+export { placementRepairRule } from "./placement-repair";
 export type {
   RepairContext,
   RepairPlan,
