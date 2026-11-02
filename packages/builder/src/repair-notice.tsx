@@ -45,7 +45,10 @@ export function RepairNotice({
   const [refused, setRefused] = React.useState<string | undefined>();
   const headingId = React.useId();
 
-  if (plan.steps.length === 0) return null;
+  // Nothing to say on a page every lock allows. A page whose only breaks
+  // are ones the plan can't repair still says so, with nothing to confirm:
+  // hiding the notice would read as a page the next save accepts.
+  if (plan.steps.length === 0 && plan.remaining.length === 0) return null;
 
   const confirm = () => {
     // Planned again at the moment of confirming, against the store's current
@@ -80,7 +83,9 @@ export function RepairNotice({
         Some locked areas on this page hold blocks or settings their lock
         doesn’t allow.
       </p>
-      {reviewing ? (
+      {plan.steps.length === 0 ? (
+        <UnrepairableNote />
+      ) : reviewing ? (
         <RepairReview
           plan={plan}
           editor={editor}
@@ -133,10 +138,7 @@ function RepairReview({
       {plan.remaining.length === 0 ? null : (
         // Said before the author confirms, so a repair that leaves a break is
         // never taken for one that fixes the page.
-        <p className="nx-inspector__note">
-          Some locked areas can’t be repaired here: a block they hold has
-          nowhere else it may go. Those stay as they are.
-        </p>
+        <UnrepairableNote />
       )}
       {refused === undefined ? null : (
         <p className="nx-inspector__note" role="alert">
@@ -152,6 +154,16 @@ function RepairReview({
         </Button>
       </div>
     </>
+  );
+}
+
+/** That some breaks have no repair here, whatever else is repaired. */
+function UnrepairableNote(): React.JSX.Element {
+  return (
+    <p className="nx-inspector__note">
+      Some locked areas can’t be repaired here: a block they hold has nowhere
+      else it may go. Those stay as they are.
+    </p>
   );
 }
 

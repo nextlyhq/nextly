@@ -460,7 +460,11 @@ export function InspectorPanel({
     cascade,
     previewContainer,
   });
-  const inspection = inspectSelection(editor.document, editor.selectedId);
+  const inspection = inspectSelection(
+    editor.document,
+    editor.selectedId,
+    editor.composed()
+  );
   /*
    * Asked beside the block inspection rather than instead of it, and the two
    * cannot both answer: a node is an instance or a registered block, never
@@ -771,7 +775,7 @@ function CustomInspector({
   const commit = React.useCallback(
     (name: string, value: unknown): void => {
       const { editor: current, document } = live.current;
-      if (!propIsWritable(document, nodeId, name)) return;
+      if (!propIsWritable(document, nodeId, name, current.composed())) return;
       const next = commitProp(current, document, nodeId, name, value);
       if (next !== null) live.current = { editor: current, document: next };
     },

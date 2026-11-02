@@ -60,8 +60,10 @@ export type RepairStep =
       /**
        * Every id the added block brings, its own first, then the starting
        * blocks inside it in depth-first order: what `result` holds there.
+       * The lock rule always names them. Optional, so a rule written before
+       * the field existed still returns a step of this type.
        */
-      readonly nodeIds: readonly string[];
+      readonly nodeIds?: readonly string[];
     }
   | {
       /** The slot's blocks put back in their starting order. */

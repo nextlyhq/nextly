@@ -1069,6 +1069,46 @@ describe("the locks an edit is held to", () => {
     }
   });
 
+  it("hands out the composed page, where a placement's content keeps its own id", () => {
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [holding("acme/fixed-row", "items", [headline("own")])],
+      slots: { extra: { label: "Extra", nodeId: "holder", slot: "items" } },
+    } as unknown as BlockDocument;
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo" },
+            slots: { extra: [headline("given")] },
+          } as BlockNode,
+        ]),
+        definitions: new Map([["promo", promo]]),
+      })
+    );
+    const ids: string[] = [];
+    const walk = (nodes: readonly BlockNode[]) => {
+      for (const node of nodes) {
+        ids.push(node.id);
+        for (const children of Object.values(node.slots ?? {})) walk(children);
+      }
+    };
+    walk(result.current.composed()?.nodes ?? []);
+
+    // Inside the component's own row, beside the row's own headline.
+    expect(ids).toContain("given");
+    expect(ids).not.toContain("i1");
+    // No library, nothing composed.
+    const bare = renderHook(() =>
+      useEditorState({ initialDocument: doc([headline("h")]) })
+    );
+    expect(bare.result.current.composed()).toBeUndefined();
+  });
+
   it("refuses content a placement gives a component's locked slot, judged on the composed page", () => {
     // The component exposes its own row, locked "all", for each placement to
     // fill. One headline is what the row starts with; a second is a block the

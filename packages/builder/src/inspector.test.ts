@@ -17,8 +17,10 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import {
+  designLockOf,
   inspectSelection,
   lockOp,
+  propIsWritable,
   propPatch,
   renameOp,
   SUPPORTED_PROP_TYPES,
@@ -308,6 +310,32 @@ describe("a block inside an area locked to its content", () => {
         false,
       ]);
     }
+  });
+
+  it("holds a block a placement puts under a component's lock, which only the composed page shows", () => {
+    withLockedAreas();
+    // On the page the headline is placement content, under no lock of the
+    // page's own; composed, it sits in the component's hero, locked to its
+    // content, and keeps its id.
+    const page = documentOf([headline("t")]);
+    const composed = documentOf([
+      holder("cx-h", "acme/hero", "body", headline("t")),
+    ]);
+
+    // CONTROL: the page alone holds nothing read-only.
+    expect(designLockOf(page, "t")).toBeUndefined();
+    expect(designLockOf(page, "t", composed)).toBeDefined();
+    expect(propIsWritable(page, "t", "align", composed)).toBe(false);
+    expect(propIsWritable(page, "t", "text", composed)).toBe(true);
+    expect(
+      inspectSelection(page, "t", composed)?.props.map(prop => [
+        prop.name,
+        prop.readOnly,
+      ])
+    ).toEqual([
+      ["text", false],
+      ["align", true],
+    ]);
   });
 });
 

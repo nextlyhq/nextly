@@ -299,12 +299,14 @@ export function selectionIsInspectable(
 
 export function inspectSelection(
   document: BlockDocument,
-  selectedId: string | null
+  selectedId: string | null,
+  /** The document with its placements composed in; see `contentOnlyAreaOf`. */
+  composed?: BlockDocument
 ): BlockInspection | null {
   const selected = selectedBlock(document, selectedId);
   if (selected === null) return null;
   const { node, definition } = selected;
-  const designLock = designLockOf(document, node.id);
+  const designLock = designLockOf(document, node.id, composed);
   // Content stays editable under the lock; the rest is read-only. The same
   // set the save's lock rule keeps, read from the same declaration.
   const content = contentPropsOf(definition.props);
@@ -395,10 +397,11 @@ export function blockIsReadOnly(document: BlockDocument, id: string): boolean {
 export function propIsWritable(
   document: BlockDocument,
   id: string,
-  name: string
+  name: string,
+  composed?: BlockDocument
 ): boolean {
   if (blockIsReadOnly(document, id)) return false;
-  const held = contentOnlyAreaOf(document, id);
+  const held = contentOnlyAreaOf(document, id, composed);
   if (held === undefined) return true;
   return contentPropsOf(getBlock(held.type)?.props).has(name);
 }
@@ -415,9 +418,10 @@ export function propIsWritable(
  */
 export function designLockOf(
   document: BlockDocument,
-  nodeId: string
+  nodeId: string,
+  composed?: BlockDocument
 ): RefusalWording | undefined {
-  const held = contentOnlyAreaOf(document, nodeId);
+  const held = contentOnlyAreaOf(document, nodeId, composed);
   if (held === undefined) return undefined;
   return lockRefusalWording({
     code: "locked-slot-content-only",
@@ -434,13 +438,24 @@ export function designLockOf(
  * so the controls the inspector holds read-only and the commits it refuses
  * are the same set. Read from the engine's `nodeLocks` against the live
  * registry, the walk validation applies on save.
+ *
+ * Asked of the page first, then of `composed`, the page with its component
+ * placements composed in: content a page gives a component's exposed slot
+ * keeps its own id there, and sits under the component's locks, which the
+ * page alone does not hold. The save judges the composed page too.
  */
 function contentOnlyAreaOf(
   document: BlockDocument,
-  id: string
+  id: string,
+  composed?: BlockDocument
 ): (NodeLock & { readonly area: NonNullable<NodeLock["area"]> }) | undefined {
-  const held = nodeLocks(document.nodes, registryBlockSource()).get(id);
-  return held?.area === undefined ? undefined : { ...held, area: held.area };
+  for (const tree of composed === undefined
+    ? [document]
+    : [document, composed]) {
+    const held = nodeLocks(tree.nodes, registryBlockSource()).get(id);
+    if (held?.area !== undefined) return { ...held, area: held.area };
+  }
+  return undefined;
 }
 
 /**

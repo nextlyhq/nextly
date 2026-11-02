@@ -601,7 +601,8 @@ export function SpacingOverlay({
    * bands stay, for the reason above.
    */
   const designHeld =
-    selectedId !== null && designLockOf(document, selectedId) !== undefined;
+    selectedId !== null &&
+    designLockOf(document, selectedId, editor.composed()) !== undefined;
 
   /*
    * Measured before the browser paints, so the bands never appear over the

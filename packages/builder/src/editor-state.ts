@@ -116,6 +116,14 @@ export interface EditorState {
    * applies it as one edit. No steps when there is nothing to repair.
    */
   planRepair: () => RepairPlan;
+  /**
+   * The document as it stands with every component placement composed in,
+   * through the composition the edits themselves are judged on (each document
+   * composed once); `undefined` where no component library is known. What a
+   * surface reads to show the locks a placement's content sits under inside
+   * its component, which the page alone does not hold.
+   */
+  composed: () => BlockDocument | undefined;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
@@ -299,7 +307,7 @@ function lockBreakAdded(
   stored: BlockDocument,
   judgement: LockJudgement
 ): LockRefusalFacts | undefined {
-  const sources = lockSourcesOf(judgement.locks, stored);
+  const sources = lockSourcesOf(judgement.locks, stored, judgement.limits);
   return (
     lockRefusal(before, after, sources) ??
     composedLockAdded(before, after, stored, sources, judgement)
@@ -380,11 +388,14 @@ function atApply(
 function useLockQuestions(
   latestDocument: { current: BlockDocument },
   composition: { current: AtApply },
-  limits: DocumentLimits
+  limits: DocumentLimits,
+  /** The document as last saved, as this render holds it. */
+  baseline: BlockDocument
 ): {
   composerNow: () => Composer | undefined;
   lockRefusalFor: EditorState["lockRefusalFor"];
   planRepair: EditorState["planRepair"];
+  composed: EditorState["composed"];
 } {
   const composerNow = useComposer(composition, limits);
   const lockRefusalFor = useCallback(
@@ -401,11 +412,19 @@ function useLockQuestions(
     (): RepairPlan =>
       planDocumentRepair(
         latestDocument.current,
-        lockSourcesOf(composition.current.locks, composition.current.stored)
+        lockSourcesOf(composition.current.locks, baseline, limits)
       ),
-    [latestDocument, composition]
+    // The baseline as a value, not through the ref: a save that changes it
+    // without changing the document gives the callback, and so the store, a
+    // new identity, and a surface planning once per store plans again.
+    [latestDocument, composition, limits, baseline]
   );
-  return { composerNow, lockRefusalFor, planRepair };
+  const composed = useCallback(
+    (): BlockDocument | undefined =>
+      composerNow()?.(latestDocument.current).document,
+    [composerNow, latestDocument]
+  );
+  return { composerNow, lockRefusalFor, planRepair, composed };
 }
 
 /**
@@ -524,16 +543,20 @@ function heldKey(lock: NonNullable<CompositionFault["lock"]>): string {
 
 /**
  * What every lock question here is judged by: the host's definitions and
- * nesting rules, or the live registry's, and the document as last saved.
+ * nesting rules, or the live registry's, the document as last saved, and the
+ * caps every edit is applied under, so a lock walk and a repair plan are
+ * bounded as the apply they stand for is.
  */
 function lockSourcesOf(
   locks: UseEditorStateArgs["locks"],
-  stored: BlockDocument
+  stored: BlockDocument,
+  limits: DocumentLimits
 ): LockSources {
   return {
     definitions: locks?.definitions ?? registryBlockSource(),
     nesting: locks?.nesting ?? registryNestingSource(),
     stored: [stored],
+    limits,
   };
 }
 
@@ -589,11 +612,13 @@ export function useEditorState({
    * is the more expensive of the two.
    */
   const latestDocument = useRef(document);
-  const { composerNow, lockRefusalFor, planRepair } = useLockQuestions(
-    latestDocument,
-    composition,
-    limits
-  );
+  const { composerNow, lockRefusalFor, planRepair, composed } =
+    useLockQuestions(
+      latestDocument,
+      composition,
+      limits,
+      composition.current.stored
+    );
   latestDocument.current = document;
 
   // READONLY groups. A recorded inverse describes the document as it stood when
@@ -785,6 +810,7 @@ export function useEditorState({
       applyAll,
       lockRefusalFor,
       planRepair,
+      composed,
       undo,
       redo,
       canUndo: depths.undo > 0,
@@ -800,6 +826,7 @@ export function useEditorState({
       applyAll,
       lockRefusalFor,
       planRepair,
+      composed,
       undo,
       redo,
       depths,
