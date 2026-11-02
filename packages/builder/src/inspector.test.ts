@@ -159,6 +159,7 @@ describe("inspectSelection", () => {
       "media",
       "richText",
       "array",
+      "relation",
     ]);
   });
 
