@@ -969,6 +969,18 @@ describe("a placement locked in Layers", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
+  it("holds the discard of a value no longer exposed as well", () => {
+    mount({
+      ...instance({ overrides: { subtitle: "Gone now" } }),
+      locked: true,
+    });
+    expect(
+      screen
+        .getByRole("button", { name: "Discard the stored value for subtitle" })
+        .closest("fieldset")?.disabled
+    ).toBe(true);
+  });
+
   it("leaves the rows editable when it is not locked", () => {
     mount(instance());
     expect(

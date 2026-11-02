@@ -504,6 +504,17 @@
 }
 
 /*
+ * The parts of a selected component placement an author can edit: its exposed
+ * values, dashed in the accent a component wears, so they stand apart from
+ * the component's own design around them. Outside the element, unlike the
+ * selection ring, so the two never draw over each other.
+ */
+.nx-canvas [data-nx-exposed] {
+  outline: 1px dashed var(--nx-primary);
+  outline-offset: 2px;
+}
+
+/*
  * A block that draws nothing still has to be selectable and visible when it is.
  * `core/spacer` is deliberate empty space and `core/divider` is a single rule,
  * so an outline is the only thing distinguishing "selected" from "not there" —
