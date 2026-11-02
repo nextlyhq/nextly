@@ -48,7 +48,11 @@ import * as React from "react";
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
 import { deviceLabel } from "./breakpoint-switcher";
-import { contentControlFor, type ContentServices } from "./content-controls";
+import {
+  contentControlFor,
+  UnsupportedField,
+  type ContentServices,
+} from "./content-controls";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
@@ -56,7 +60,6 @@ import type { SavedComponent } from "./inserter";
 import {
   blockIsReadOnly,
   designReadOnlyReason,
-  propLabel,
   inspectSelection,
   lockOp,
   lockStateOf,
@@ -1034,26 +1037,7 @@ function PropField({
   const Control = contentControlFor(prop.schema.type);
 
   if (Control === undefined) {
-    return (
-      <div className="nx-inspector__field" data-unsupported="">
-        {/*
-          Listed rather than omitted. A block declaring a prop this panel cannot
-          draw is still a block with that prop, and hiding it presents an
-          incomplete block as a complete one — an author would conclude the
-          field does not exist rather than that it is edited elsewhere.
-
-          Named in plain text, not by a label: a label names a control, and
-          one pointing at nothing reads to a screen reader as a field nobody
-          can reach.
-        */}
-        <p className="nx-inspector__field-name">
-          {propLabel(prop.name, prop.schema)}
-        </p>
-        <p className="nx-inspector__note">
-          Not editable here ({prop.schema.type}).
-        </p>
-      </div>
-    );
+    return <UnsupportedField prop={prop} />;
   }
 
   return (

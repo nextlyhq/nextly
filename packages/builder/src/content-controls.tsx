@@ -682,10 +682,19 @@ function ArrayControl({
   const list = Array.isArray(prop.value) ? prop.value : [];
   const records = prop.schema.of === "object";
   const fields = records ? itemSchemaOf(prop.schema) : undefined;
-  const write = (next: unknown[]) => onCommit(prop.name, next);
+  // The list as last written, not as this render drew it. Clicking an
+  // action blurs the item being typed in first, and that blur commits it; an
+  // action built from the drawn list would then write over the words just
+  // committed. Every write goes through here and every action reads from it.
+  const latest = React.useRef(list);
+  latest.current = list;
+  const write = (next: unknown[]) => {
+    latest.current = next;
+    onCommit(prop.name, next);
+  };
   const position = (index: number) => `${label}, item ${index + 1}`;
   const move = (index: number, by: -1 | 1) => {
-    const next = [...list];
+    const next = [...latest.current];
     const [taken] = next.splice(index, 1);
     next.splice(index + by, 0, taken);
     write(next);
@@ -731,7 +740,9 @@ function ArrayControl({
                       disabled={disabled}
                       onCommit={(_, value) =>
                         write(
-                          list.map((each, at) => (at === index ? value : each))
+                          latest.current.map((each, at) =>
+                            at === index ? value : each
+                          )
                         )
                       }
                     />
@@ -739,7 +750,9 @@ function ArrayControl({
                     fields.map(([name, schema]) => {
                       const Control = contentControlFor(schema.type);
                       const record = recordOf(item);
-                      return Control === undefined ? null : (
+                      return Control === undefined ? (
+                        <UnsupportedField key={name} prop={{ name, schema }} />
+                      ) : (
                         <Control
                           key={name}
                           id={`${id}-${index}-${name}`}
@@ -748,7 +761,7 @@ function ArrayControl({
                           services={services}
                           onCommit={(field, value) =>
                             write(
-                              list.map((each, at) => {
+                              latest.current.map((each, at) => {
                                 if (at !== index) return each;
                                 const next = { ...recordOf(each) };
                                 if (value === undefined) delete next[field];
@@ -789,7 +802,9 @@ function ArrayControl({
                     variant="ghost"
                     disabled={disabled}
                     aria-label={`Remove ${position(index)}`}
-                    onClick={() => write(list.filter((_, at) => at !== index))}
+                    onClick={() =>
+                      write(latest.current.filter((_, at) => at !== index))
+                    }
                   >
                     <Trash2 aria-hidden="true" />
                   </Button>
@@ -802,13 +817,40 @@ function ArrayControl({
               variant="outline"
               disabled={disabled}
               aria-label={`Add to ${label}`}
-              onClick={() => write([...list, records ? {} : ""])}
+              onClick={() => write([...latest.current, records ? {} : ""])}
             >
               Add
             </Button>
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A prop this panel has no control for, listed rather than omitted, at the
+ * top level and inside a list's items alike. A block declaring a prop the
+ * panel cannot draw is still a block with that prop, and hiding it presents
+ * an incomplete block as a complete one: an author would conclude the field
+ * does not exist rather than that it is edited elsewhere.
+ *
+ * Named in plain text, not by a label: a label names a control, and one
+ * pointing at nothing reads to a screen reader as a field nobody can reach.
+ */
+export function UnsupportedField({
+  prop,
+}: {
+  prop: Pick<EditableProp, "name" | "schema">;
+}): React.JSX.Element {
+  return (
+    <div className="nx-inspector__field" data-unsupported="">
+      <p className="nx-inspector__field-name">
+        {propLabel(prop.name, prop.schema)}
+      </p>
+      <p className="nx-inspector__note">
+        Not editable here ({prop.schema.type}).
+      </p>
     </div>
   );
 }

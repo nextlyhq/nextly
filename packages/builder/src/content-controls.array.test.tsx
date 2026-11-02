@@ -68,6 +68,7 @@ function register(): void {
               label: { type: "text" },
               type: { type: "select", options: ["text", "email"] },
               required: { type: "checkbox" },
+              when: { type: "datetime" },
             },
           },
           loose: { type: "array", of: "object" },
@@ -130,6 +131,23 @@ describe("a list of text", () => {
     expect(written(editor).items).toEqual(["One", "Deux"]);
   });
 
+  it("keeps the words just typed when an action follows the blur that commits them", () => {
+    // Clicking Move blurs the item first; the blur writes its text, and the
+    // move must start from that write, not from the list the panel drew.
+    register();
+    const editor = editorFor({ items: ["One", "Two"] });
+    render(<InspectorPanel editor={editor} />);
+    const first = group("Items").getByRole("textbox", {
+      name: "Items, item 1",
+    });
+    fireEvent.change(first, { target: { value: "Uno" } });
+    fireEvent.blur(first);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Items, item 1 down" })
+    );
+    expect(written(editor).items).toEqual(["Two", "Uno"]);
+  });
+
   it("adds, removes and moves items, one write each", () => {
     register();
     const editor = editorFor({ items: ["One", "Two"] });
@@ -138,14 +156,16 @@ describe("a list of text", () => {
       group("Items").getByRole("button", { name: "Add to Items" })
     );
     expect(written(editor).items).toEqual(["One", "Two", ""]);
+    // Each action starts from the list as last written, as it does when the
+    // editor redraws between them: this stand-in's document never changes.
     fireEvent.click(
       group("Items").getByRole("button", { name: "Remove Items, item 1" })
     );
-    expect(written(editor).items).toEqual(["Two"]);
+    expect(written(editor).items).toEqual(["Two", ""]);
     fireEvent.click(
       group("Items").getByRole("button", { name: "Move Items, item 2 up" })
     );
-    expect(written(editor).items).toEqual(["Two", "One"]);
+    expect(written(editor).items).toEqual(["", "Two"]);
     expect(editor.apply).toHaveBeenCalledTimes(3);
   });
 });
@@ -173,6 +193,18 @@ describe("a list of records", () => {
     expect(second.getByRole("switch", { name: "Required" })).toBeDefined();
     // Two short options: a row of radio buttons rather than a menu.
     expect(second.getByRole("radiogroup", { name: "Type" })).toBeDefined();
+  });
+
+  it("lists an item field it has no control for, as the top level does", () => {
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor({ fields: [{ label: "Name", type: "text" }] })}
+      />
+    );
+    const item = group("Fields, item 1");
+    expect(item.getByText("When")).toBeDefined();
+    expect(item.getByText(/Not editable here \(datetime\)/)).toBeDefined();
   });
 
   it("says a list without an item schema can't be edited here", () => {
