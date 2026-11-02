@@ -30,9 +30,8 @@
  * loudly, since nothing clears the store between two registrations in one pass.
  *
  * Registered rather than special-cased into `publishableWidgets`, so they are
- * ordinary rows a plugin can `extendWidget` or `overrideWidget` like any other.
- * Core going through the same door as a plugin is the whole reason the door is
- * worth trusting.
+ * ordinary rows like a plugin's. Core going through the same door as a plugin
+ * is the whole reason the door is worth trusting.
  *
  * @module di/registrations/register-widgets
  */
@@ -44,21 +43,21 @@ import {
   clearAttentionItems,
   registerAttentionItems,
 } from "../../domains/widgets/attention/items";
-import { setContributedWidgets } from "../../domains/widgets/canonical";
 import {
+  CORE_CONDITIONS,
   CORE_DECLARATIONS,
   CORE_WIDGET_IDS,
-  CORE_WIDGETS,
 } from "../../domains/widgets/core-widgets";
+import { provideCoreSourceRead } from "../../domains/widgets/core-widgets/system-read";
 import { setAdminComponentPlugins } from "../../domains/widgets/declaration/component-map-store";
 import {
   clearDeclaredWidgets,
   CORE_OWNER,
-  NEXTLY_STARTUP_LOGGER,
   registerDashboardWidgets,
   type DeclaredWidgetGroup,
-  type StartupLogger,
 } from "../../domains/widgets/declaration/declared-widgets";
+import type { WidgetReadServices } from "../../domains/widgets/declaration/define-widget";
+import { boundCaller } from "../../domains/widgets/declaration/read-services";
 import {
   SITE_CONFIG,
   siteDashboardContext,
@@ -68,34 +67,38 @@ import {
   siteDefaultLayoutPlan,
 } from "../../domains/widgets/declaration/site-dashboard";
 import { setDefaultLayoutPlan } from "../../domains/widgets/default-layout";
+import type { WidgetQuery } from "../../domains/widgets/query";
 import { clearWidgets } from "../../domains/widgets/registry";
+import type { ResolverOptions } from "../../domains/widgets/resolved-sources";
+import type { WidgetResult } from "../../domains/widgets/result";
+import { registerSetupCard } from "../../domains/widgets/setup-card";
 import {
   clearSiteDashboardRules,
   setSiteDashboardRules,
 } from "../../domains/widgets/site-rules";
 import { clearSources } from "../../domains/widgets/sources";
-import { clearSystemResolvers } from "../../domains/widgets/system-sources";
+import {
+  clearSystemResolvers,
+  systemResolver,
+} from "../../domains/widgets/system-sources";
+import { NextlyError } from "../../errors/nextly-error";
 import {
   pluginAlternatives,
   pluginDashboardSnapshots,
-  pluginLegacyWidgetIds,
   pluginSuggestionFaults,
-  pluginSuggestions,
   pluginWidgetDeclarationGroups,
 } from "../../plugins/dashboard-declarations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
-import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
 import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
-import { registerRecentEditsWidgetSource } from "../../services/dashboard/recent-edits-widget-source";
+import { registerContinueWidgetSource } from "../../services/dashboard/continue-widget-source";
 import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
+import { registerSystemHealthSource } from "../../services/dashboard/system-health-source";
 
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = [],
   // The site config's `admin.dashboard`, as given: startup checks it.
-  dashboard?: unknown,
-  // The registration's logger, which every startup warning here goes through.
-  logger: StartupLogger = NEXTLY_STARTUP_LOGGER
+  dashboard?: unknown
 ): void {
   clearWidgets();
   // Cleared with the registry it publishes into, so a reload's declarations
@@ -126,13 +129,6 @@ export function resetWidgetRegistries(
   // the pass that earns the right to, and retains it when the sync fails. See
   // `publishBootDeferrals` in `di/register`.
 
-  // The OTHER channel a widget arrives by. A contribution never passes through
-  // `registerWidget`, so without this the server's canonical set holds core's
-  // cards alone -- and every server-side question about which widgets exist
-  // answers differently from the grid, which has always resolved both.
-  // Replaced rather than merged, for the same reason the registry is cleared
-  // above: a hot reload must not accumulate the previous boot's plugins.
-  setContributedWidgets(contributedWidgetSummaries(plugins));
   // The resolved list the admin's component-map check reads, so it judges
   // the generated map against the plugins this boot runs, and the dashboard
   // as registered here, a widget a plugin's setup() adds included.
@@ -152,15 +148,22 @@ export function resetWidgetRegistries(
   // Needs attention's source, which combines the releases' and versions' reads
   // with the entry list's counts and so belongs to no one domain.
   registerAttentionWidgetSource();
+  // The setup card's reads, which reach the permission and database graph.
+  registerSetupCard();
+  // System health's read, which the card and the attention digest share.
+  registerSystemHealthSource();
   registerSummaryWidgetSources();
-  registerRecentEditsWidgetSource();
+  registerContinueWidgetSource();
+  // Core's own cards read the sources above in their `load`, each as the
+  // caller its read services were bound for: handed here, from the binding
+  // the batch makes, so the widget list imports none of those services.
+  provideCoreSourceRead(readSystemSourceAsCard);
 
-  // Every widget, through the one call: core's own list, the plugins' widgets
-  // declared with `defineWidget()`, and the site's. Each is checked together
+  // Every widget, through the one call: core's own declarations, the plugins'
+  // widgets declared with `defineWidget()`, and the site's. Each is checked together
   // with everything that names one (the site config's dashboard, the plugins'
-  // suggestions and alternatives), and startup stops on any fault of any owner,
-  // all of them reported at once, before any widget is kept; today's shape is
-  // passed for the id rules it still keeps (`declared-widgets.ts`). Each
+  // `suggest` lists and alternatives), and startup stops on any fault of any owner,
+  // all of them reported at once, before any widget is kept. Each
   // plugin's contribution and the site config are read once, here, and every
   // check reads the copy. The site's own widgets are checked with the plugins'
   // but not registered yet. Core's ids are derived ONCE, here, and handed to
@@ -169,16 +172,20 @@ export function resetWidgetRegistries(
   const dashboards = pluginDashboardSnapshots(plugins);
   const site = siteDashboardSnapshot(dashboard);
   registerDashboardWidgets({
-    core: CORE_WIDGETS,
     // Core's own declarations first, through the same checks as a plugin's,
     // so a plugin claiming one of their ids is the one named.
     groups: [
-      { owner: CORE_OWNER, core: true, declarations: CORE_DECLARATIONS },
+      {
+        owner: CORE_OWNER,
+        core: true,
+        declarations: CORE_DECLARATIONS,
+        // When each is offered, published on its definition: core's alone.
+        conditions: CORE_CONDITIONS,
+      },
       ...pluginWidgetDeclarationGroups(dashboards),
       // The site's own widgets last, kept and published as a plugin's are.
       ...siteWidgetGroup(site),
     ],
-    legacy: pluginLegacyWidgetIds(plugins),
     references: (declared, groups) => [
       ...pluginSuggestionFaults(dashboards, groups, coreIds),
       ...attentionItemFaults(dashboards),
@@ -187,15 +194,13 @@ export function resetWidgetRegistries(
         siteDashboardContext(declared, pluginAlternatives(dashboards), coreIds)
       ),
     ],
-    logger,
   });
   // Only once the check above found no fault, so every item kept is whole.
   registerAttentionItems(dashboards);
   // The one default dashboard, from the copies just checked: the site's
-  // `defaultLayout` or core's, and the plugins' suggestions after it.
-  setDefaultLayoutPlan(
-    siteDefaultLayoutPlan(site, pluginSuggestions(dashboards))
-  );
+  // `defaultLayout` or core's. A plugin's `suggest` is checked above and places
+  // nothing; the add panel offers its widgets.
+  setDefaultLayoutPlan(siteDefaultLayoutPlan(site));
   // What the site keeps off the dashboard, replaces and overrides, from the
   // same checked copies: read wherever a widget is offered, drawn or described.
   setSiteDashboardRules(
@@ -214,6 +219,25 @@ export function resetWidgetRegistries(
   // sources HERE, first, so a plugin naming a built-in id is refused by
   // `registerSource` on the PLUGIN's registration -- naming the plugin an
   // operator can act on, rather than dying inside core's own publication.
+}
+
+/**
+ * A `system:` source's answer to `query`, read by its registered resolver as
+ * the caller `services` were bound for: how core's own cards read the sources
+ * registered above. A source nothing registered is a fault of the install.
+ */
+function readSystemSourceAsCard(
+  query: WidgetQuery,
+  services: WidgetReadServices,
+  opts: ResolverOptions
+): Promise<WidgetResult> {
+  const resolve = systemResolver(query.source);
+  if (resolve === undefined) {
+    throw NextlyError.internal({
+      logContext: { reason: "core-source-unregistered", source: query.source },
+    });
+  }
+  return resolve(query, boundCaller(services), opts);
 }
 
 /**

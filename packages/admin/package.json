@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/admin",
-  "version": "0.0.2-alpha.72",
+  "version": "0.0.2-alpha.73",
   "description": "Nextly - Admin dashboard and management interface",
   "license": "MIT",
   "type": "module",
@@ -42,6 +42,7 @@
     "check:published-build": "node scripts/check-published-build.mjs",
     "report:bundle": "node scripts/bundle-report.mjs",
     "check:budgets": "node scripts/check-bundle-budgets.mjs",
+    "check:consumer-bundle": "node scripts/check-consumer-bundle.mjs",
     "test": "node scripts/ensure-dist.mjs && vitest run",
     "test:watch": "node scripts/ensure-dist.mjs && vitest",
     "test:ui": "node scripts/ensure-dist.mjs && vitest --ui",
@@ -55,7 +56,7 @@
   "peerDependencies": {
     "@nextlyhq/ui": "workspace:^",
     "next": "^16.4.1",
-    "nextly": "0.0.2-alpha.72",
+    "nextly": "0.0.2-alpha.73",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

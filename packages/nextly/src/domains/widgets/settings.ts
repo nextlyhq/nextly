@@ -51,8 +51,6 @@ import { textLength } from "../../shared/text-length";
 import { quote } from "./declaration/quote";
 import type { PublishedContentSource } from "./published-content-source";
 import {
-  isTimeseriesRange,
-  RELATIVE_SPANS,
   whereFieldNames,
   type RelativeSpan,
   type TimeseriesRange,
@@ -62,6 +60,20 @@ import {
   sourceKindFromId,
   type WidgetSourceFilter,
 } from "./sources";
+
+/**
+ * Where a card's settings panel draws a setting: with what the card reads
+ * (`data`), with how it shows it (`display`), or folded away under Advanced
+ * (`advanced`).
+ */
+export type SettingSection = "data" | "display" | "advanced";
+
+/** Every section, in the order the settings panel draws them. */
+const SETTING_SECTIONS: readonly SettingSection[] = [
+  "data",
+  "display",
+  "advanced",
+];
 
 /** What every setting carries, whatever kind it is. */
 export interface WidgetSettingBase {
@@ -82,7 +94,8 @@ export interface WidgetSettingBase {
   admin?: { description?: string };
   /**
    * Whether the setting sits on the card itself, changeable without opening
-   * the settings sheet, as Over time's date range does. At most one per widget.
+   * the settings sheet, as Over time's date range does. At most three per
+   * widget, held by the card's quick popover; its header draws the first.
    *
    * A top-level key the field configs do not have, deliberately: it is read by
    * the card's header, never by `FieldRenderer`, which ignores it.
@@ -111,6 +124,16 @@ export interface WidgetSettingBase {
    * @experimental
    */
   editor?: { component: string };
+  /**
+   * The section of the card's settings panel the setting is drawn in. Absent,
+   * a setting over the card's content (its Collection, Filter, Sort, Group by
+   * and Field) and a date range are drawn under Data, and every other setting
+   * under Display; a setting is folded under Advanced only when it says so.
+   *
+   * A top-level key the field configs do not have, like `quick`: read by the
+   * panel, never by `FieldRenderer`.
+   */
+  section?: SettingSection;
 }
 
 /**
@@ -505,16 +528,9 @@ function fail(message: string): never {
 /**
  * Why this declaration cannot be used, or `undefined` when it can.
  *
- * 🔴 Returns the problem rather than throwing it, because the two channels into
- * the registry need the same rules in different shapes: `registerWidget` throws
- * on a bad definition, while `validatedAdminWidgets` walks a list of rules that
- * each return a sentence and names the plugin that shipped the widget. Written
- * as a throwing validator, only the registry could call it — which is exactly
- * what happened: a contributed `settings` reached the admin having passed no
- * settings rule at all, and `settings: {}` from an untyped declaration got as
- * far as the grid before failing, taking the dashboard down instead of the
- * install. One rule set answering both channels is the thing
- * `plugins/__tests__/channel-divergence` exists to protect.
+ * Returns the problem rather than throwing it, so each caller reports it in its
+ * own shape: `registerWidget` throws on a bad definition, and a declaration's
+ * startup check names the owner and the widget beside every other fault.
  */
 export function widgetSettingsProblem(
   settings: unknown,
@@ -607,17 +623,23 @@ export function widgetSettingsProblems(settings: unknown): string[] {
 }
 
 /**
+ * The most settings one widget may mark quick: what a card's quick popover holds of them, beside
+ * the card's Collection. The admin's popover caps at this same number.
+ */
+export const MAX_QUICK_SETTINGS = 3;
+
+/**
  * Why a widget's settings mark too many as quick, or nothing when they do not.
  *
- * A card's header holds one quick setting: two would each take the
- * header's one place, and which one a person saw would depend on the order
+ * A card's quick popover holds at most three settings: more would turn it into
+ * the settings sheet, and which of them a person saw would depend on the order
  * they were declared in.
  */
 function quickProblems(settings: readonly AnyWidgetSetting[]): string[] {
   const quick = settings.filter(setting => setting.quick === true);
-  if (quick.length <= 1) return [];
+  if (quick.length <= MAX_QUICK_SETTINGS) return [];
   return [
-    `settings ${quick.map(setting => `"${setting.name}"`).join(", ")} are all marked quick; a widget may mark at most one`,
+    `settings ${quick.map(setting => `"${setting.name}"`).join(", ")} are all marked quick; a widget may mark at most three`,
   ];
 }
 
@@ -676,38 +698,6 @@ function dependencyProblems(
 }
 
 /**
- * Why a widget's Fields setting cannot work on what it asks, or `undefined`:
- * only a list returns rows for its fields to fill. On a grouped or timeseries
- * query a chosen field would be refused by the query's own check, and on a
- * count it would be ignored, so a control that breaks the card or changes
- * nothing is never offered. A widget whose data core builds on the server
- * (`serverData`) asks no query here: its own `load` reads the setting, as
- * `widgetSettingsProblem` admits its other content settings.
- */
-export function fieldsSettingQueryProblem(widget: {
-  settings?: unknown;
-  query?: unknown;
-  serverData?: unknown;
-}): string | undefined {
-  if (!Array.isArray(widget.settings)) return undefined;
-  if (widget.serverData === true) return undefined;
-  const fields = (widget.settings as unknown[]).find(
-    (setting): setting is { name: unknown } =>
-      typeof setting === "object" &&
-      setting !== null &&
-      (setting as { type?: unknown }).type === "fields"
-  );
-  if (fields === undefined) return undefined;
-  const op =
-    typeof widget.query === "object" && widget.query !== null
-      ? (widget.query as { op?: unknown }).op
-      : undefined;
-  return op === "list"
-    ? undefined
-    : `setting ${quote(fields.name)} is a Fields setting, which only a list query's rows can show; this widget asks ${quote(op)}`;
-}
-
-/**
  * The fault for a setting that is not an object at all. Named so a caller that
  * can say which setting it was, as a declaration keyed by name can, puts its
  * own words in place of this one.
@@ -741,6 +731,8 @@ function settingProblem(
     options?: unknown;
     min?: unknown;
     max?: unknown;
+    rows?: unknown;
+    section?: unknown;
   };
 
   if (typeof name !== "string" || name === "") {
@@ -756,12 +748,7 @@ function settingProblem(
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${quote(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
-  const flags = flagsProblem(
-    type,
-    quick,
-    (rest as { rows?: unknown }).rows,
-    defaultFrom
-  );
+  const flags = flagsProblem(type, quick, rest, defaultFrom);
   if (flags !== undefined) return `setting "${name}" ${flags}`;
   const editor = editorProblem((rest as { editor?: unknown }).editor);
   if (editor !== undefined) return `setting "${name}" ${editor}`;
@@ -787,11 +774,23 @@ function editorProblem(editor: unknown): string | undefined {
     : 'editor must be { component: "<module>#<Export>" }, naming where the admin loads its editor from';
 }
 
-/** Why a setting's `quick`, `rows` or `defaultFrom` is unusable, or `undefined`. */
+/**
+ * Why a setting's `section` is unusable, or `undefined`. Refused rather than
+ * ignored: a misspelt section would otherwise draw the setting somewhere the
+ * author did not ask for, with no fault pointing at the declaration.
+ */
+function sectionProblem(section: unknown): string | undefined {
+  if (section === undefined) return undefined;
+  return SETTING_SECTIONS.some(known => known === section)
+    ? undefined
+    : `has section ${quote(section)}; expected one of ${SETTING_SECTIONS.map(known => `"${known}"`).join(", ")}`;
+}
+
+/** Why a setting's `quick`, `rows`, `section` or `defaultFrom` is unusable, or `undefined`. */
 function flagsProblem(
   type: AnyWidgetSetting["type"],
   quick: unknown,
-  rows: unknown,
+  rest: { rows?: unknown; section?: unknown },
   defaultFrom: unknown
 ): string | undefined {
   if (quick !== undefined && typeof quick !== "boolean") {
@@ -806,7 +805,7 @@ function flagsProblem(
   ) {
     return `has defaultFrom ${quote(defaultFrom)}; only a Group by setting takes it, as "collection"`;
   }
-  return rowsProblem(type, rows);
+  return rowsProblem(type, rest.rows) ?? sectionProblem(rest.section);
 }
 
 /**
@@ -1184,7 +1183,7 @@ export interface KnobSource {
  *
  * @experimental The shape may grow while the content widgets are built.
  */
-export function knobSourceFor(id: string): KnobSource {
+function knobSourceFor(id: string): KnobSource {
   const filters = getSource(id)?.filters;
   return filters === undefined ? { id } : { id, filters: [...filters] };
 }
@@ -1260,18 +1259,6 @@ function filterOnlyCellSetting(
 }
 
 /** The knob source a query declares, or `undefined` when it names none. */
-/**
- * Whether a knob drives `setting` on `query`, the source it declares or none
- * yet: the table's own answer, for a rule that must know which of a widget's
- * queries a setting reaches, not merely that some knob takes it.
- */
-export function drivesQuery(
-  setting: AnyWidgetSetting,
-  query: unknown
-): boolean {
-  return knobFor(setting, declaredKnobSource(query)) !== undefined;
-}
-
 function declaredKnobSource(query: unknown): KnobSource | undefined {
   const source =
     typeof query === "object" && query !== null
@@ -1336,22 +1323,6 @@ interface KnobQuery {
   where?: Record<string, unknown>;
   sort?: string;
   groupBy?: string;
-}
-
-/**
- * Whether `setting` sets how many rows a card asks for: a number setting named
- * `limit`. The limit knob drives it, and a widget whose query has a range may
- * not declare it (`rangedLimitSettingProblem`), both by this one test.
- *
- * @experimental While the content widgets are being built.
- */
-export function isLimitSetting(setting: unknown): boolean {
-  return (
-    typeof setting === "object" &&
-    setting !== null &&
-    (setting as { type?: unknown }).type === "number" &&
-    (setting as { name?: unknown }).name === "limit"
-  );
 }
 
 /**
@@ -1468,14 +1439,6 @@ function withReaderFilter(
   return { ...declared, and: [...joined, filter] };
 }
 
-/** Whether a value is one of the query's window spans. */
-function isRelativeSpan(value: unknown): value is RelativeSpan {
-  return (RELATIVE_SPANS as readonly unknown[]).includes(value);
-}
-
-/** The ops a window bounds: a count, and a timeseries. */
-const WINDOWED_OPS: ReadonlySet<string> = new Set(["count", "timeseries"]);
-
 /**
  * The most fields a list's rows may be set to show after their title: as many
  * as a row's meta line holds, so every field chosen shows at every size, the
@@ -1537,16 +1500,12 @@ export function namedCollection(value: unknown): string | undefined {
  * drives changes nothing the card asks, so registration refuses it rather than
  * drawing a control that does nothing (`CONTENT_SETTING_NOT_DRAWN`).
  *
- * `limit` is matched by NAME as well as type, as it always was: a number
- * setting called `limit` sets how many rows the card asks for, and a number
- * setting of any other name drives nothing. The content kinds are matched by
- * type alone, since each type has one meaning for a query.
+ * Each is matched by the setting's TYPE alone, since each content type has one
+ * meaning for a query. No setting drives a query because of its name: a
+ * declared widget's settings reach its `load`, which reads them as it chooses
+ * (a list card's "Number of items" sizes the rows its load asks for).
  */
 const QUERY_KNOBS: readonly QueryKnob[] = [
-  {
-    drives: isLimitSetting,
-    apply: (query, value) => ({ ...query, limit: value as number }),
-  },
   {
     // The collection a card reads becomes its source, replacing the one the
     // widget declared, which is how a widget offered per collection reads the
@@ -1566,31 +1525,6 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
         return { ...query, where: { ...query.where, collection } };
       }
       return readingCollection(query, collection, setting, ctx);
-    },
-  },
-  {
-    // A card's Date range is how far back its read reaches, for a select that
-    // offers only the query's own spans: its value becomes `since` as is, on an
-    // op a window bounds. A select of the same name offering anything else is
-    // the widget's own, and leaves the query as it was declared.
-    //
-    // A chart over a range declares its `range`, and there the value becomes
-    // the range instead, when it is one: a range and a `since` each name a
-    // window, so the declared range is never joined by a `since`.
-    drives: (setting, source) =>
-      setting.type === "select" &&
-      setting.name === "dateRange" &&
-      setting.options.every(option => isRelativeSpan(option.value)) &&
-      readsACollection(source),
-    apply: (query, value) => {
-      if (query.range !== undefined) {
-        return isTimeseriesRange(value) ? { ...query, range: value } : query;
-      }
-      return isRelativeSpan(value) &&
-        query.op !== undefined &&
-        WINDOWED_OPS.has(query.op)
-        ? { ...query, since: value }
-        : query;
     },
   },
   {
@@ -1656,20 +1590,6 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
           field.groupable !== false
       ),
     apply: (query, value) => ({ ...query, groupBy: value as string }),
-  },
-  {
-    // Only mine: the reader's own rows, on a source that narrows by it. The
-    // query says only that it is on; who "mine" is, the source reads from the
-    // caller, so no id travels in it. Matched by NAME as well as type, as
-    // `limit` is, since a checkbox has no meaning of its own for a query.
-    drives: (setting, source) =>
-      setting.type === "checkbox" &&
-      setting.name === "onlyMine" &&
-      narrowsBy(source, "onlyMine"),
-    apply: (query, value) =>
-      value === true
-        ? { ...query, where: { ...query.where, onlyMine: true } }
-        : { ...query },
   },
 ];
 

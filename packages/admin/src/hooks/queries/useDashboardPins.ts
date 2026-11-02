@@ -19,6 +19,8 @@ import { useCallback } from "react";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
+import { WIDGET_QUERIES_KEY } from "./widget-queries-key";
+
 /** The one query key this feature owns, so a pin can invalidate exactly it. */
 const DASHBOARD_PINS_KEY = ["dashboard", "pins"] as const;
 
@@ -57,8 +59,12 @@ function useDashboardPins() {
   });
 }
 
-/** Pin or unpin a target, then read the reader's pins again. */
-function useSetPinned(): UseMutationResult<
+/**
+ * Pin or unpin a target, then read the reader's pins again, and ask the
+ * dashboard's cards again: a card listing pins (Continue where you left off)
+ * draws them from its own answer, which a pin changes.
+ */
+export function useSetPinned(): UseMutationResult<
   unknown,
   Error,
   { target: PinTarget; pinned: boolean }
@@ -70,7 +76,10 @@ function useSetPinned(): UseMutationResult<
         ? protectedApi.post(PINS_PATH, target)
         : protectedApi.delete(PINS_PATH, target),
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: DASHBOARD_PINS_KEY }),
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: DASHBOARD_PINS_KEY }),
+        queryClient.invalidateQueries({ queryKey: WIDGET_QUERIES_KEY }),
+      ]),
   });
 }
 

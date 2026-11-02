@@ -70,6 +70,17 @@ export function isLocaleSelector(locale: string): boolean {
 export const NO_FALLBACK = "none";
 
 /**
+ * A component read's `fallbackLocale` that reads the language named exactly as
+ * the database stores it, with nothing standing in for it, whether or not the
+ * site has that language active. For a reader that has to see every
+ * translation kept, a removed language's included, such as the record of which
+ * media items content uses. A symbol, so no request can spell it.
+ */
+export const EXACT_STORED_LANGUAGE: unique symbol = Symbol(
+  "exact-stored-language"
+);
+
+/**
  * Whether a string can be configured as a locale code at all.
  *
  * Every spelling the core reads as an instruction rather than a language: the

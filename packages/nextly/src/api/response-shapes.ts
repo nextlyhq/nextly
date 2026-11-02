@@ -68,6 +68,14 @@ export type PaginationMeta = {
     labels?: { singular: string; plural: string };
   }>;
   /**
+   * Records on this page the caller may not read, as one number naming no
+   * scope: for a read whose records span collections and Singles the caller
+   * may not even know of, where `hidden`'s scope would name them.
+   *
+   * Optional, and sent only by those reads, every time, 0 included.
+   */
+  hiddenCount?: number;
+  /**
    * The `before` to pass for the next page of a read walked by cursor, when
    * there is a next page.
    *

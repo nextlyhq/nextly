@@ -231,6 +231,7 @@ describe("folder contents", () => {
       subfolders: [],
       files: [{ id: "m1" }, { id: "m2" }, { id: "m3" }],
       breadcrumbs: [],
+      meta: { total: 3, page: 1, limit: 24, totalPages: 1 },
     });
 
     render(
@@ -246,6 +247,29 @@ describe("folder contents", () => {
     expect(await screen.findByText(/3 media files/)).toBeInTheDocument();
   });
 
+  it("the delete dialog counts every file the folder holds, not the page it was sent", async () => {
+    api.getFolderContents.mockResolvedValue({
+      folder: folder("f1", "Blog"),
+      subfolders: [],
+      // The first page of a folder holding thirty files.
+      files: [{ id: "m1" }, { id: "m2" }],
+      breadcrumbs: [],
+      meta: { total: 30, page: 1, limit: 2, totalPages: 15 },
+    });
+
+    render(
+      <DeleteFolderDialog
+        open
+        onOpenChange={vi.fn()}
+        folderId="f1"
+        folderName="Blog"
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(await screen.findByText(/30 media files/)).toBeInTheDocument();
+  });
+
   it("the delete dialog counts the folder's files as they are when it opens", async () => {
     useAdminFreshness();
     // Read once (the folder was entered), then a file was uploaded to it.
@@ -255,12 +279,14 @@ describe("folder contents", () => {
         subfolders: [],
         files: [],
         breadcrumbs: [],
+        meta: { total: 0, page: 1, limit: 24, totalPages: 0 },
       })
       .mockResolvedValueOnce({
         folder: folder("f1", "Blog"),
         subfolders: [],
         files: [{ id: "m1" }, { id: "m2" }],
         breadcrumbs: [],
+        meta: { total: 2, page: 1, limit: 24, totalPages: 1 },
       });
     const { result } = renderHook(() => useFolderContents("f1"), {
       wrapper: Wrapper,

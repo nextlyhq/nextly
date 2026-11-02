@@ -25,6 +25,9 @@ import type {
 } from "@admin/types/dashboard/widgets";
 import { MAX_PLACEMENTS } from "nextly/config";
 
+import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
+import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
+import { FrameState } from "../../frame/card-state";
 import { WidgetGrid } from "../../WidgetGrid";
 import { DRAG_INSTRUCTIONS } from "../drag/drag-messages";
 import {
@@ -33,12 +36,21 @@ import {
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
 
+import { galleryFromLayout, isGalleryPath } from "./gallery-read";
+
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 let layoutRejects = false;
 
+// The header's New button reads collections and permissions of its own,
+// which this test does not set up; it is a marker here.
+vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
+  NewSplitButton: () => <div data-testid="dashboard-new" />,
+}));
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useAppName: () => "Acme Site",
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -47,6 +59,18 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
+}));
+// The page's header beside the grid holds Customize: its own reads stubbed.
+vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
+  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
+  useDashboardSummary: () => ({ data: undefined }),
+}));
+vi.mock("@admin/hooks/useDashboardUser", () => ({
+  useDashboardUser: () => ({
+    user: { id: "u1", name: "Dev User", email: "dev@example.com" },
+    isLoading: false,
+    error: null,
+  }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: {
@@ -65,6 +89,14 @@ vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
 
 const api = vi.mocked(protectedApi);
 
+/**
+ * How many times the arrangement was read. The dashboard's header also reads the setup card's
+ * own state (`/dashboard/setup`), which is not the arrangement.
+ */
+const layoutReads = () =>
+  api.get.mock.calls.filter(([path]) => path.startsWith("/dashboard/layout"))
+    .length;
+
 /** Full width three rows high by default, resizable from 3 by 2 up to 12 by 6. */
 const RESIZABLE = {
   default: { w: 12, h: 3 },
@@ -79,7 +111,10 @@ const BOUNDED = {
   max: { w: 8, h: 4 },
 };
 
-/** Registered widgets, drawn by a component so no query is issued. */
+/**
+ * Registered widgets, each drawn by its own component, which this file registers: every card is
+ * asked for by its id and answered (see the `post` stand-in below).
+ */
 function branding(
   ids: string[],
   patch: Record<string, Record<string, unknown>> = {}
@@ -96,14 +131,10 @@ function branding(
   } as unknown as AdminBranding;
 }
 
-/**
- * Facts for a widget, one card only unless told otherwise. Listed in the add panel's Overview
- * group, as core lists every widget a reader may see under one of its groups.
- */
+/** Facts for a widget, one card only unless told otherwise. */
 function facts(patch: Partial<WidgetLayoutFacts> = {}): WidgetLayoutFacts {
   return {
     allowsSeveral: false,
-    group: "overview",
     ...patch,
   };
 }
@@ -128,6 +159,8 @@ function layout(
     defaultPlacements: [],
     version: 3,
     source: "own",
+    // A row of dismissals at most: the reader still follows the default.
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...patch,
@@ -147,13 +180,37 @@ function renderGrid() {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
+  // The page's header and grid, as the page composes them: Customize is the header's.
+  return {
+    client,
+    ...render(
+      <DashboardChromeProvider>
+        <WelcomeHeader />
+        <WidgetGrid />
+      </DashboardChromeProvider>,
+      { wrapper: Wrapper }
+    ),
+  };
 }
+
+// The cards' own component, so each card draws its answer rather than a missing component's
+// error, which the grid would count and announce as a failure.
+registerCoreComponent("core#Whatever", () => <p>Body</p>);
 
 beforeEach(() => {
   // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
   stubDashboardWidth();
   vi.clearAllMocks();
+  // Every card answered with data of nothing in particular, so its component draws; a case
+  // about what a card shows answers its own.
+  api.post.mockImplementation((_path: string, body: unknown) =>
+    Promise.resolve({
+      results: (body as { queries: unknown[] }).queries.map(() => ({
+        ok: true,
+        result: { op: "data", data: null },
+      })),
+    })
+  );
   layoutRejects = false;
   mockBranding = branding(["core/a", "core/b", "core/c"]);
   layoutResponse = layout([
@@ -161,11 +218,16 @@ beforeEach(() => {
     { id: "p2", widgetId: "core/b" },
     { id: "p3", widgetId: "core/c" },
   ]);
-  api.get.mockImplementation(() =>
-    layoutRejects
-      ? Promise.reject(new Error("layout unavailable"))
-      : Promise.resolve(layoutResponse)
-  );
+  api.get.mockImplementation((path: string) => {
+    if (layoutRejects) return Promise.reject(new Error("layout unavailable"));
+    // The gallery read the layout fixture implies, read when the add panel opens.
+    if (isGalleryPath(path) && layoutResponse !== undefined) {
+      return Promise.resolve(
+        galleryFromLayout(layoutResponse, mockBranding?.widgets ?? [])
+      );
+    }
+    return Promise.resolve(layoutResponse);
+  });
   api.put.mockResolvedValue({ message: "ok", item: {} });
   api.delete.mockResolvedValue({ message: "ok" });
 });
@@ -729,7 +791,26 @@ describe("dragging a card from the keyboard", () => {
   });
 });
 
+/**
+ * Answers the dashboard's first batch and leaves every batch after it on its way, so the grid's
+ * live region says only what the reader's own change did, never a later batch's news beside it.
+ */
+function answerFirstBatchOnly(): void {
+  api.post.mockImplementation((_path: string, body: unknown) =>
+    api.post.mock.calls.length > 1
+      ? new Promise(() => undefined)
+      : Promise.resolve({
+          results: (body as { queries: unknown[] }).queries.map(() => ({
+            ok: true,
+            result: { op: "data", data: null },
+          })),
+        })
+  );
+}
+
 describe("removing a card", () => {
+  beforeEach(answerFirstBatchOnly);
+
   it("takes it off the grid, says so, and offers Undo", async () => {
     renderGrid();
     const user = await beginEditing();
@@ -854,7 +935,7 @@ describe("removing a card", () => {
     const headings = within(panel)
       .getAllByRole("heading", { level: 3 })
       .map(heading => heading.textContent);
-    expect(headings[0]).toBe("Removed from your dashboard 1");
+    expect(headings[0]).toBe("Removed 1");
     await user.click(
       within(panel).getByRole("button", { name: "Add back Widget core/a" })
     );
@@ -862,7 +943,7 @@ describe("removing a card", () => {
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
     // The panel says it, since a modal sheet hides the grid's own region.
     expect(within(panel).getByTestId("add-panel-live")).toHaveTextContent(
-      "Added back Widget core/a at position 1 of 3."
+      "Added back Widget core/a."
     );
     // Putting back the card the notice offered to undo answers the notice.
     expect(screen.queryByTestId("removal-notice")).toBeNull();
@@ -914,7 +995,7 @@ describe("adding a widget", () => {
       "@min-[1024px]/dashboard:col-span-4"
     );
     expect(screen.getByTestId("add-panel-live")).toHaveTextContent(
-      "Added Widget core/d at position 2 of 2."
+      "Added Widget core/d."
     );
 
     await closeAddPanel(user);
@@ -968,7 +1049,7 @@ describe("adding a widget", () => {
       screen.getByRole("button", { name: "Add another Widget core/d" })
     );
     expect(screen.getAllByTestId("widget-cell-core/d")).toHaveLength(2);
-    expect(screen.getByTestId("add-panel-row-core/d")).toHaveTextContent(
+    expect(screen.getByTestId("add-panel-tile-core/d")).toHaveTextContent(
       "2 on your dashboard"
     );
 
@@ -993,7 +1074,7 @@ describe("adding a widget", () => {
     );
   });
 
-  it("rings the card just added, and closing sends focus to its menu", async () => {
+  it("rings the card just added, scrolls it into view, and closing sends focus to its menu", async () => {
     mockBranding = branding(["core/a", "core/d"]);
     layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
       available: ["core/d"],
@@ -1003,10 +1084,18 @@ describe("adding a widget", () => {
     const user = await beginEditing();
 
     await openAddPanel(user);
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
     await user.click(screen.getByTestId("add-panel-add-core/d"));
     expect(screen.getByTestId("widget-cell-core/d")).toHaveAttribute(
       "data-highlighted"
     );
+    // Brought into view while the panel stays open, focus still in it.
+    await waitFor(() =>
+      expect(scrolled.mock.contexts).toContain(
+        screen.getByTestId("widget-cell-core/d")
+      )
+    );
+    scrolled.mockRestore();
     expect(screen.getByTestId("widget-cell-core/a")).not.toHaveAttribute(
       "data-highlighted"
     );
@@ -1167,7 +1256,7 @@ describe("the guards a save is sent against", () => {
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["dashboard", "layout"] });
     });
-    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(layoutReads()).toBe(2);
 
     await user.click(screen.getByTestId("dashboard-edit-save"));
 
@@ -1283,6 +1372,7 @@ describe("a conflict", () => {
 
 describe("resetting to the default dashboard", () => {
   beforeEach(() => {
+    answerFirstBatchOnly();
     layoutResponse = layout(
       [
         { id: "p3", widgetId: "core/c", w: 3, h: 3 },
@@ -1436,6 +1526,7 @@ describe("resetting to the default dashboard", () => {
   it("is not offered when there is no stored row at all", async () => {
     layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
       source: "default",
+      arranged: false,
       version: 0,
     });
     renderGrid();
@@ -1554,22 +1645,22 @@ describe("when the schema changes underneath an open dashboard", () => {
   it("re-reads the arrangement, so the add panel knows what exists now", () => {
     renderGrid();
 
-    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+    return waitFor(() => expect(layoutReads()).toBe(1)).then(() => {
       act(() => {
         window.dispatchEvent(new Event("nextly:schema-updated"));
       });
-      return waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+      return waitFor(() => expect(layoutReads()).toBe(2));
     });
   });
 
   it("does not re-read on an unrelated event", () => {
     renderGrid();
 
-    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+    return waitFor(() => expect(layoutReads()).toBe(1)).then(() => {
       act(() => {
         window.dispatchEvent(new Event("nextly:something-else"));
       });
-      expect(api.get).toHaveBeenCalledTimes(1);
+      expect(layoutReads()).toBe(1);
     });
   });
 });
@@ -1729,7 +1820,6 @@ describe("an arrangement whose every card is not shown for its reader", () => {
       "acme/posts": {
         archetype: "list",
         component: undefined,
-        query: { source: "collection:posts", op: "list", select: ["title"] },
       },
     });
     layoutResponse = layout([{ id: "p1", widgetId: "acme/posts" }]);
@@ -1745,6 +1835,51 @@ describe("an arrangement whose every card is not shown for its reader", () => {
     expect(screen.getByTestId("hidden-while-empty")).toHaveTextContent(
       "Not shown for you right now"
     );
+  });
+});
+
+describe("an arrangement whose every card leaves by its own empty answer", () => {
+  /**
+   * One card of a widget drawn by its own component at `component`, which hides while empty and
+   * which the layout read names as leaving by its own answer.
+   */
+  function quietCard(component: string) {
+    mockBranding = branding(["acme/quiet"], {
+      "acme/quiet": { component, hidesWhenEmpty: true },
+    });
+    layoutResponse = layout([{ id: "p1", widgetId: "acme/quiet" }], {
+      hiddenWhenAnswerEmpty: ["acme/quiet"],
+    });
+    renderGrid();
+    return screen.findByTestId("widget-cell-acme/quiet");
+  }
+
+  it("tells the reader their dashboard is empty at rest, counting the card as it hid itself", async () => {
+    // The component reports its answer empty to the frame, which only the card can see: counted
+    // from the answer instead, the card was on show and the grid was left blank.
+    registerCoreComponent("core#ReportsEmpty", () => (
+      <FrameState
+        state={{ kind: "empty", empty: { title: "Nothing waiting" } }}
+      />
+    ));
+    const cell = await quietCard("core#ReportsEmpty");
+    expect(within(cell).getByRole("region")).toHaveAttribute(
+      "data-hidden-empty"
+    );
+    expect(await screen.findByTestId("widget-grid-empty")).toBeInTheDocument();
+  });
+
+  it("does not while the card has something to draw", async () => {
+    // The control: a grid that said every such dashboard was empty would pass the case above.
+    registerCoreComponent("core#DrawsALine", () => <p>One order waiting</p>);
+    const cell = await quietCard("core#DrawsALine");
+    expect(
+      await within(cell).findByText("One order waiting")
+    ).toBeInTheDocument();
+    expect(within(cell).getByRole("region")).not.toHaveAttribute(
+      "data-hidden-empty"
+    );
+    expect(screen.queryByTestId("widget-grid-empty")).toBeNull();
   });
 });
 
@@ -1775,56 +1910,5 @@ describe("an arrangement with nothing left on it", () => {
       within(panel).getByRole("button", { name: "Add back Widget core/b" })
     );
     expect(drawnOrder()).toEqual(["core/b"]);
-  });
-});
-
-describe("a card's rows follow its reader's settings", () => {
-  it("draws the number of items its reader chose, not the declared number", async () => {
-    // Declared at five, set to six by the reader. The batch asks for six and one more; the card
-    // must draw the six it asked for, not slice to the declaration's five and say more exist.
-    // Six grid rows tall, its body holds seven rows, so six is the reader's number and not the
-    // body's.
-    stubDashboardWidth(1200, { cardWidth: 1200 });
-    mockBranding = branding(["acme/posts"], {
-      "acme/posts": {
-        archetype: "list",
-        component: undefined,
-        query: {
-          source: "collection:posts",
-          op: "list",
-          select: ["title"],
-          limit: 5,
-        },
-        settings: [
-          { name: "limit", type: "number", label: "Items", defaultValue: 5 },
-        ],
-      },
-    });
-    layoutResponse = layout([
-      { id: "p1", widgetId: "acme/posts", h: 6, config: { limit: 6 } },
-    ]);
-    api.post.mockResolvedValue({
-      results: [
-        {
-          ok: true,
-          result: {
-            op: "list",
-            items: Array.from({ length: 7 }, (_, i) => ({
-              title: `Post ${i + 1}`,
-            })),
-          },
-        },
-      ],
-    });
-    renderGrid();
-
-    await waitFor(() =>
-      expect(screen.getAllByTestId("entity-row")).toHaveLength(6)
-    );
-    // The latest request: one may leave before the reader's layout is read, asked as declared.
-    const asked = api.post.mock.calls.at(-1)?.[1] as {
-      queries: Array<{ limit?: number }>;
-    };
-    expect(asked.queries[0].limit).toBe(7);
   });
 });

@@ -34,7 +34,12 @@ test("draws a collection reached from the dashboard as a direct load draws it", 
   expect(await mainColumnBox(page)).toEqual(direct);
 
   // On the wide layout the rail's Content entry opens its panel in place; the column stays put.
-  await page.getByRole("button", { name: "Content", exact: true }).click();
+  // Found in the navigation: a dashboard card's title is the button that opens its quick
+  // settings, so the Content card draws a second button named "Content" in the main column.
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Content", exact: true })
+    .click();
   const posts = panel.getByRole("link", { name: "Posts" });
   await expect(posts).toBeVisible();
   expect(await mainColumnBox(page)).toEqual(direct);

@@ -45,6 +45,7 @@ import { drawnSize, drawnSpan, isOneColumn } from "../../sizes";
 import type { ArrangedWidget } from "../useDashboardArrangement";
 import type { DashboardFocus } from "../useDashboardFocus";
 
+import { CELL_PLACEMENT_ATTRIBUTE } from "./cell-placement";
 import { DRAG_INSTRUCTIONS, dragMessages } from "./drag-messages";
 import {
   dropLineFor,
@@ -53,9 +54,6 @@ import {
   type DrawnCard,
   type DropLine,
 } from "./drop-geometry";
-
-/** The attribute each cell carries its placement in, so a drag can measure the cards drawn. */
-export const CELL_PLACEMENT_ATTRIBUTE = "data-placement-id";
 
 /** How far a pointer moves before a press on the handle becomes a drag, so a click stays one. */
 const ACTIVATION_DISTANCE_PX = 5;

@@ -385,7 +385,10 @@ describe("the transactional writes take ServiceOpts, as the plain writes do", ()
       roles: ["super-admin"],
     },
   } as unknown as ServiceOpts;
-  const TX = { adapterTransaction: true };
+  // The adapter's transaction, with the transaction-bound handle a lookup on
+  // it is handed.
+  const TX_HANDLE = { transactionHandle: true };
+  const TX = { adapterTransaction: true, getDrizzle: () => TX_HANDLE };
 
   function mockTransactional() {
     return {
@@ -438,6 +441,27 @@ describe("the transactional writes take ServiceOpts, as the plain writes do", ()
     expect(ctx.user.roles).toEqual([]);
     expect(ctx.user.role).toBe("");
     expect(ctx).toEqual(await plainContext(forgedUser));
+  });
+
+  it("reads a transactional write's caller's roles on its transaction, and a plain write's on the pool", async () => {
+    const m = mockTransactional();
+    const listRoleSlugs = vi.fn(async () => [] as string[]);
+    const facade = wrap(m as never, { listRoleSlugs });
+    const user = { as: "user", user: { id: "u1", email: "u@x" } } as const;
+    await facade.withTransaction(async tx => {
+      await facade.createEntryInTransaction(tx, "vault", { a: 1 }, user);
+      await facade.updateEntryInTransaction(tx, "vault", "1", { a: 1 }, user);
+      await facade.deleteEntryInTransaction(tx, "vault", "1", user);
+    });
+    expect(listRoleSlugs.mock.calls).toEqual([
+      ["u1", TX_HANDLE],
+      ["u1", TX_HANDLE],
+      ["u1", TX_HANDLE],
+    ]);
+    // CONTROL: outside a transaction there is none to read on.
+    listRoleSlugs.mockClear();
+    await facade.updateEntry("vault", "1", { a: 1 }, user);
+    expect(listRoleSlugs.mock.calls).toEqual([["u1", undefined]]);
   });
 
   it("deleteEntryInTransaction: translated, and an actor passed past it is dropped", async () => {

@@ -1,7 +1,7 @@
 /**
- * A placed widget as its batch asks it: the reader's Collection and Only mine
- * reach the query's `where` on a source that narrows by them, as the widget's
- * `sourceFilters` say, and replace the source on a collection source.
+ * A placed widget as its reader's settings ask it: the settings its component
+ * is handed, the title it is drawn under, and whether a card set to a
+ * collection reads anything there, as its widget's `load` would.
  */
 import type { PublishedContentSource } from "nextly/config";
 import { describe, expect, it } from "vitest";
@@ -13,72 +13,15 @@ import {
   askableWith,
   settingsAsAsked,
   titleAsAsked,
-  widgetAsAsked,
 } from "../widget-as-asked";
 import { gridBounds } from "./grid-bounds";
 
-const settings: DashboardWidget["settings"] = [
-  {
-    name: "onlyMine",
-    label: "Only mine",
-    type: "checkbox",
-    defaultValue: false,
-  },
-  { name: "collection", label: "Collection", type: "collection" },
-];
-
-const recentlyEdited: DashboardWidget = {
-  id: "core/recently-edited",
-  title: "Recently edited",
-  archetype: "list",
-  size: gridBounds(4),
-  query: { source: "system:recent-edits", op: "list", limit: 5 },
-  settings,
-  sourceFilters: ["collection", "onlyMine"],
-};
-
-describe("a widget as it is asked", () => {
-  it("narrows a filtering source by the reader's Collection and Only mine", () => {
-    const asked = widgetAsAsked(recentlyEdited, {
-      collection: "pages",
-      onlyMine: true,
-    });
-    expect(asked.query?.source).toBe("system:recent-edits");
-    expect(asked.query?.where).toEqual({ collection: "pages", onlyMine: true });
-  });
-
-  it("asks a source without declared filters by its collection instead", () => {
-    // 🔴 The must-differ case: the same settings without `sourceFilters` take
-    // the collection knob's other branch, so the card's source is replaced.
-    const { sourceFilters: _filters, ...unfiltered } = recentlyEdited;
-    const asked = widgetAsAsked(
-      {
-        ...unfiltered,
-        query: { source: "collection:posts", op: "list", limit: 5 },
-      },
-      { collection: "pages", onlyMine: true }
-    );
-    expect(asked.query?.source).toBe("collection:pages");
-    expect(asked.query?.where).toBeUndefined();
-  });
-
-  it("keeps the widget itself when nothing is chosen", () => {
-    expect(widgetAsAsked(recentlyEdited, {}).query?.where).toBeUndefined();
-  });
-});
-
-describe("a custom card asking through cells", () => {
+describe("a card set to a collection", () => {
   const posts: PublishedContentSource = {
     collection: "posts",
     label: "Posts",
     lifecycle: true,
     fields: [{ name: "title", label: "Title", type: "string" }],
-  };
-  const pages: PublishedContentSource = {
-    ...posts,
-    collection: "pages",
-    label: "Pages",
-    lifecycle: false,
   };
   const count: DashboardWidget = {
     id: "core/count",
@@ -89,52 +32,9 @@ describe("a custom card asking through cells", () => {
       { name: "collection", label: "Collection", type: "collection" },
       { name: "filter", label: "Filter", type: "filter", of: "collection" },
     ],
-    cells: [
-      {
-        key: "split",
-        when: "lifecycle",
-        query: { op: "groupBy", groupBy: "status", status: "all" },
-      },
-      { key: "total", when: "no-lifecycle", query: { op: "count" } },
-    ],
   } as DashboardWidget;
-  const keys = (widget: DashboardWidget) => widget.cells?.map(cell => cell.key);
 
-  it("asks the cells the collection it is set to answers", () => {
-    expect(
-      keys(widgetAsAsked(count, { collection: "posts" }, [posts, pages]))
-    ).toEqual(["split"]);
-    expect(
-      keys(widgetAsAsked(count, { collection: "pages" }, [posts, pages]))
-    ).toEqual(["total"]);
-  });
-
-  it("judges a cell by the collection it declares, with no Collection setting set", () => {
-    // 🔴 Judged by the Collection setting alone, an unset one reads as no
-    // lifecycle and drops the split this cell reads of posts.
-    const declared = {
-      ...count,
-      cells: [
-        {
-          key: "split",
-          when: "lifecycle",
-          query: {
-            source: "collection:posts",
-            op: "groupBy",
-            groupBy: "status",
-          },
-        },
-        {
-          key: "total",
-          when: "no-lifecycle",
-          query: { source: "collection:posts", op: "count" },
-        },
-      ],
-    } as DashboardWidget;
-    expect(keys(widgetAsAsked(declared, {}, [posts]))).toEqual(["split"]);
-  });
-
-  it("hands the card the Filter its cells were asked with, not a stored one they set aside", () => {
+  it("hands the card the Filter it is read with, not a stored one set aside", () => {
     const stored = { collection: "posts", filter: { salary: { gt: 1 } } };
     expect(settingsAsAsked(count, stored, [posts]).filter).toBeUndefined();
     const kept = { collection: "posts", filter: { title: { equals: "a" } } };
@@ -159,7 +59,7 @@ describe("a custom card asking through cells", () => {
     expect(titleAsAsked(count, {}, [posts])).toEqual({ title: "Count" });
   });
 
-  it("names its quick select's choice after its widget's name, so the subtitle says what the control set", () => {
+  it("names its quick select's choice in its automatic title, with its widget's name beneath", () => {
     const overTime: DashboardWidget = {
       ...count,
       id: "core/over-time",
@@ -179,13 +79,33 @@ describe("a custom card asking through cells", () => {
         },
       ],
     } as DashboardWidget;
+    // Untouched, a new card's title is its subject and its 30-day range.
     expect(titleAsAsked(overTime, { collection: "posts" }, [posts])).toEqual({
-      title: "Posts",
-      subtitle: "Over time · last 30 days",
+      title: "Posts · last 30 days",
+      subtitle: "Over time",
     });
     expect(
       titleAsAsked(overTime, { collection: "posts", dateRange: "90d" }, [posts])
-    ).toEqual({ title: "Posts", subtitle: "Over time · last 90 days" });
+    ).toEqual({ title: "Posts · last 90 days", subtitle: "Over time" });
+  });
+
+  it("takes the title its reader gave it in place of the automatic one, keeping its widget's name beneath", () => {
+    expect(
+      titleAsAsked(count, { collection: "posts" }, [posts], "  Our posts ")
+    ).toEqual({ title: "Our posts", subtitle: "Count" });
+    // A card set to no collection keeps the widget's name beneath its own title too.
+    expect(titleAsAsked(count, {}, [posts], "Everything")).toEqual({
+      title: "Everything",
+      subtitle: "Count",
+    });
+    // A title of only spaces is no title: the automatic one stands.
+    expect(titleAsAsked(count, { collection: "posts" }, [posts], "  ")).toEqual(
+      { title: "Posts", subtitle: "Count" }
+    );
+    // The widget's own name as the title draws it once, never twice.
+    expect(titleAsAsked(count, {}, [posts], "Count")).toEqual({
+      title: "Count",
+    });
   });
 
   it("names no quick toggle's On or Off, which says nothing on its own", () => {
@@ -219,84 +139,12 @@ describe("whether a card can be asked", () => {
       fields: [{ name: "title", type: "string" }],
     },
   ];
-  const breakdown = {
-    id: "core/breakdown",
-    title: "Breakdown",
-    archetype: "bars",
-    settings: [
-      { name: "collection", type: "collection" },
-      {
-        name: "groupBy",
-        type: "groupBy",
-        of: "collection",
-        defaultFrom: "collection",
-      },
-    ],
-    query: { op: "groupBy", status: "all" },
-  } as unknown as DashboardWidget;
-
-  it("is asked where its collection gives it a source and a group key", () => {
-    expect(
-      widgetAsAsked(breakdown, { collection: "posts" }, sources).query
-    ).toMatchObject({ source: "collection:posts", groupBy: "status" });
-    expect(askableWith(breakdown, { collection: "posts" }, sources)).toBe(true);
-  });
-
-  it("is not asked where the collection has nothing to divide by", () => {
-    // 🔴 The query has a source, so a test of the source alone sends it, and
-    // the endpoint refuses a grouping of nothing.
-    expect(
-      widgetAsAsked(breakdown, { collection: "notes" }, sources).query?.source
-    ).toBe("collection:notes");
-    expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
-      false
-    );
-  });
-
-  it("is not asked where every cell it declares falls away on the collection", () => {
-    // Its only cell needs a lifecycle: on Notes nothing is left to ask.
-    const lifecycleOnly = {
-      id: "core/lifecycle-only",
-      title: "Lifecycle only",
-      archetype: "custom",
-      settings: [{ name: "collection", type: "collection" }],
-      cells: [
-        {
-          key: "split",
-          when: "lifecycle",
-          query: { op: "groupBy", groupBy: "status", status: "all" },
-        },
-      ],
-    } as unknown as DashboardWidget;
-    // 🔴 Read from the cells as asked, an empty list fell through to "no
-    // query, so askable", and the card was offered asking nothing.
-    expect(askableWith(lifecycleOnly, { collection: "notes" }, sources)).toBe(
-      false
-    );
-    // The control: where the cell applies, it is asked.
-    expect(askableWith(lifecycleOnly, { collection: "posts" }, sources)).toBe(
-      true
-    );
-  });
-
-  it("judges each collection from the declaration, not from a card already asked", () => {
-    // What the settings sheet must be handed: the card as asked on Posts has
-    // Posts' group key, which a test of Notes would then carry along.
-    const asked = widgetAsAsked(breakdown, { collection: "posts" }, sources);
-    expect(asked.query?.groupBy).toBe("status");
-    expect(askableWith(asked, { collection: "notes" }, sources)).toBe(true);
-    expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
-      false
-    );
-  });
-
   // Core's declared Breakdown and Recent entries, as the registry publishes them: no query, their
-  // data answered on the server, so the batch asks them nothing to judge by.
+  // data answered on the server, so each is judged by what its `load` would read.
   const declaredBreakdown = {
     id: "core/breakdown",
     title: "Breakdown",
     archetype: "custom",
-    serverData: true,
     settings: [
       { name: "collection", type: "collection" },
       {
@@ -311,7 +159,6 @@ describe("whether a card can be asked", () => {
     id: "core/recent-entries",
     title: "Recent entries",
     archetype: "custom",
-    serverData: true,
     settings: [{ name: "collection", type: "collection", rows: "titled" }],
   } as unknown as DashboardWidget;
   const titled: PublishedContentSource[] = [
@@ -332,8 +179,8 @@ describe("whether a card can be asked", () => {
     expect(
       askableWith(declaredBreakdown, { collection: "posts" }, sources)
     ).toBe(true);
-    // 🔴 With no query to judge, every declared card read as askable, and a
-    // Breakdown was offered on a collection it divides by nothing.
+    // 🔴 With no query to judge, a test of the query alone read every card as
+    // askable, and a Breakdown was offered on a collection it divides by nothing.
     expect(
       askableWith(declaredBreakdown, { collection: "notes" }, sources)
     ).toBe(false);
@@ -354,7 +201,6 @@ describe("whether a card can be asked", () => {
       id: "core/note",
       title: "Note",
       archetype: "custom",
-      serverData: true,
       settings: [{ name: "text", type: "textarea" }],
     } as unknown as DashboardWidget;
     expect(askableWith(note, {}, sources)).toBe(true);

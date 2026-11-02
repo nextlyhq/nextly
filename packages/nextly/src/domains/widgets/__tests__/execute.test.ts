@@ -171,6 +171,20 @@ describe("executeWidgetQuery", () => {
     expect(result).toMatchObject({ op: "list", total: 42 });
   });
 
+  it("reads a list at depth 0 only when its options ask, and at core's default otherwise", async () => {
+    // A declared widget's data read may ask for its links as stored ids. The
+    // depth reaches core's own `find` as `find` takes it; a read that asks
+    // nothing names no depth at all, so core's default expansion stands.
+    const q = validateWidgetQuery({ source: "collection:posts", op: "list" });
+
+    await executeWidgetQuery(q, caller, { depth: 0 });
+    await executeWidgetQuery(q, caller);
+
+    expect(find).toHaveBeenCalledTimes(2);
+    expect(find.mock.calls[0][0]).toMatchObject({ depth: 0 });
+    expect(find.mock.calls[1][0]).not.toHaveProperty("depth");
+  });
+
   it("describes the selected fields, in the order they were selected", async () => {
     // The rows carry both selected keys, which is what a read returns when
     // neither field is denied -- the columns follow `select`, not the row's own

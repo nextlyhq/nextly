@@ -149,9 +149,6 @@ export const ROUTES = {
   // rather than in the rail because it is machinery an operator watches, not
   // editorial work — the same reasoning that puts webhooks there.
   SETTINGS_BACKGROUND_JOBS: "/admin/settings/background-jobs",
-  SETTINGS_IMAGE_SIZES: "/admin/settings/image-sizes",
-  SETTINGS_IMAGE_SIZES_CREATE: "/admin/settings/image-sizes/create",
-  SETTINGS_IMAGE_SIZES_EDIT: "/admin/settings/image-sizes/edit/[id]",
 
   // Plugin routes
   PLUGINS: "/admin/plugins",

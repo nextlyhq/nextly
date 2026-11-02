@@ -23,6 +23,10 @@ import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
 import { auditTables } from "./audit";
 import { authTokenTables } from "./auth-tokens";
+import {
+  CACHE_TAG_EXPIRIES_TABLE,
+  cacheTagExpiriesTables,
+} from "./cache-tag-expiries";
 import { contentEventsTables } from "./content-events";
 import { dashboardPinsTables } from "./dashboard-pins";
 import { dashboardPreferencesTables } from "./dashboard-preferences";
@@ -40,6 +44,7 @@ import { jobsTables } from "./jobs";
 import { languagesTables } from "./languages";
 import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
 import { mediaTables } from "./media";
+import { mediaUsageTables } from "./media-usage";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
 import { noticesTables } from "./notices";
@@ -198,6 +203,11 @@ export function getCoreSchema(
     // neighbours: a table outside this set is never created on a real
     // installation, however completely its own module declares it.
     ...Object.values(limitStoreTables(dialect)),
+    // `nextly_cache_tag_expiries` — when each cache tag last expired, written by
+    // every process that changes content and read by every instance's cache
+    // handlers. Declared here for the same reason as its neighbours: a table
+    // outside this set is never created on a real installation.
+    ...Object.values(cacheTagExpiriesTables(dialect)),
     // `nextly_spent_challenges` — the two-factor challenges already answered,
     // so an answer is accepted once on every instance. Declared here for the
     // same reason as its neighbours: a table outside this set is never created
@@ -266,6 +276,9 @@ export function getCoreSchema(
     // snapshot for the reason every table above is.
     ...Object.values(dashboardPinsTables(dialect)),
     ...Object.values(dashboardPreferencesTables(dialect)),
+    // `nextly_media_usage` — which media items each document uses. In the
+    // snapshot for the reason every table above is.
+    ...Object.values(mediaUsageTables(dialect)),
     // `email_brand` — the site's email brand settings, one row. In the
     // snapshot for the reason every table above is.
     ...Object.values(emailBrandTables(dialect)),
@@ -317,7 +330,6 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "activity_log",
   "media",
   "media_folders",
-  "image_sizes",
   "nextly_meta",
   // Read by live introspection. Absent here, the table is created and then invisible to every
   // snapshot, so the drift check proposes adding it again on every run.
@@ -329,6 +341,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   PLUGIN_SETTINGS_TABLE,
   ONE_TIME_SECRETS_TABLE,
   LIMIT_STORE_TABLE,
+  CACHE_TAG_EXPIRIES_TABLE,
   SPENT_CHALLENGES_TABLE,
   SCHEMA_OWNERS_TABLE,
   "nextly_widget_layout",
@@ -362,6 +375,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_notices",
   "nextly_dashboard_pins",
   "nextly_dashboard_preferences",
+  "nextly_media_usage",
 ] as const;
 
 /**

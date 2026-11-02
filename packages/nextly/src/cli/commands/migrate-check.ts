@@ -61,7 +61,10 @@ import {
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
+import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
+import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
+import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -130,10 +133,6 @@ import {
   isBuilderWrittenMigration,
   selectVariant,
 } from "../utils/migration-discovery";
-
-import { parseSqlSections } from "./migrate";
-import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
-import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 
 // ============================================================================
 // Types
