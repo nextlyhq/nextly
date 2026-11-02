@@ -453,8 +453,9 @@ export interface ComponentFactsResponse {
    * The field and slot ids the component has retired: removed by a published
    * definition, and never to be minted again, since a host may still hold a
    * value under one until it is next written. `null` where retirements are not
-   * recorded (a localized component store), so a new field cannot be kept
-   * clear of them and the editor adds none.
+   * recorded (a localized component store, or a host rendering components
+   * from its own source), so a new field cannot be kept clear of them and the
+   * editor adds none.
    */
   readonly retired: {
     readonly properties: readonly string[];

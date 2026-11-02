@@ -1197,11 +1197,11 @@ export const pageBuilder = (
             });
           },
           // The ids a published removal retired, from the store the write
-          // hooks record them in; none where those hooks are not registered.
+          // hooks record them in. Where those hooks are not registered (the
+          // host renders components from a source of its own), nothing is
+          // recorded, so `null`, and the editor adds no field.
           readRetired: ctx => async id => {
-            if (opts.componentReadiness === false) {
-              return { properties: [], slots: [] };
-            }
+            if (opts.componentReadiness === false) return null;
             // A localized store records no retirements (see the write hooks),
             // so none can be reported: `null`, and the editor adds no field.
             if (

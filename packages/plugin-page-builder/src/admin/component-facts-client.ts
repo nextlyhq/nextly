@@ -11,8 +11,16 @@
  *
  * @module admin/component-facts-client
  */
+import {
+  isComponentDocument,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import type { ComponentFieldsHost } from "@nextlyhq/builder/shell";
-import { useDocumentLocale, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentIdentity,
+  useDocumentLocale,
+  usePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
 import { useMemo, useState } from "react";
 
 import {
@@ -27,7 +35,7 @@ export const FACTS_PENDING =
 
 /** Said where the store records no retired ids, so none can be avoided. */
 export const FACTS_UNRECORDED =
-  "This component is stored per language, where removed fields aren’t recorded yet, so a new field can’t be added here. Rename or remove the fields it has.";
+  "Removed fields aren’t recorded for where this component is stored (per language, or outside the Components collection), so a new field can’t be added here. Rename or remove the fields it has.";
 
 /** Said when they could not be read. */
 export const FACTS_FAILED =
@@ -84,4 +92,18 @@ export function useComponentFacts(
 /** A token unique to one mount of the editor. */
 function mountToken(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * The facts of the component a document view edits: asked only of a
+ * component with a row, since a page has no fields to expose and a component
+ * not yet saved has no live definition.
+ */
+export function useEditedComponentFacts(
+  document: BlockDocument
+): ComponentFieldsHost | undefined {
+  const identity = useDocumentIdentity();
+  return useComponentFacts(
+    isComponentDocument(document) ? identity?.documentId : undefined
+  );
 }

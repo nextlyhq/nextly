@@ -8,7 +8,6 @@
 import {
   blockLabelFrom,
   getBlock,
-  isComponentDocument,
   placementRefusalMessage,
   type BlockDocument,
   type DocumentKind,
@@ -34,7 +33,6 @@ import {
 import {
   loadInlineRichTextEditor,
   useCurrentUserId,
-  useDocumentIdentity,
   usePluginClientConfig,
 } from "@nextlyhq/plugin-sdk/admin";
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
@@ -43,7 +41,7 @@ import {
 import { toast } from "@nextlyhq/ui";
 import { useCallback, useMemo, useState } from "react";
 
-import { useComponentFacts } from "../component-facts-client";
+import { useEditedComponentFacts } from "../component-facts-client";
 import {
   useComponentLibrary,
   type ComponentLibraryRead,
@@ -317,12 +315,9 @@ export function useEditorMount(
    * three places would be three requests answering one question.
    */
   const mayCreatePattern = useMayCreatePattern();
-  // Asked only of a component with a row: what its live definition holds and
-  // how many documents place it, which its own document cannot say.
-  const identity = useDocumentIdentity();
-  const componentFacts = useComponentFacts(
-    isComponentDocument(initialDocument) ? identity?.documentId : undefined
-  );
+  // What the component being edited holds live and how many documents place
+  // it, which its own document cannot say; nothing for a page.
+  const componentFacts = useEditedComponentFacts(initialDocument);
 
   /*
    * Where the shell keeps this author's panel, device and zoom: under their
