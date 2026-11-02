@@ -152,6 +152,47 @@ function glyphOf(option: DeviceOption): React.ComponentType<{
  * these, with the same label a chosen button shows; otherwise it is a plain
  * "More devices".
  */
+/**
+ * How the menu's button reads: plain, or naming the device being styled when
+ * that device is in the menu. Its tooltip keeps the device and its range, as
+ * the buttons keep theirs, because the label beside the glyph is hidden on a
+ * narrow bar.
+ */
+function moreDevicesTrigger(chosen: DeviceOption | undefined): {
+  name: string;
+  title: string;
+  tone: string;
+} {
+  if (chosen === undefined) {
+    return {
+      name: "More devices",
+      title: "More devices",
+      tone: "text-muted-foreground",
+    };
+  }
+  return {
+    name: `More devices, styling ${chosen.label}, ${chosen.range}`,
+    title: `${chosen.label}, ${chosen.range}`,
+    tone: "bg-accent text-accent-foreground",
+  };
+}
+
+/** The device being styled, on the menu's button: its glyph and its label. */
+function ChosenDevice({ device }: { device: DeviceOption }): React.JSX.Element {
+  const Glyph = glyphOf(device);
+  return (
+    <>
+      <Glyph className="size-3.5" aria-hidden="true" />
+      <span
+        aria-hidden="true"
+        className="tabular-nums @max-[1400px]/topbar:hidden"
+      >
+        {shownLabel(device)}
+      </span>
+    </>
+  );
+}
+
 function MoreDevices({
   devices,
   chosen,
@@ -163,7 +204,7 @@ function MoreDevices({
   ready: boolean;
   onSelect: (breakpoint: BreakpointId) => void;
 }): React.JSX.Element {
-  const Glyph = chosen === undefined ? undefined : glyphOf(chosen);
+  const trigger = moreDevicesTrigger(chosen);
   /*
    * Held here so a menu already open closes when the saved breakpoints stop
    * being trusted: disabling the trigger alone leaves an open menu choosing
@@ -174,36 +215,14 @@ function MoreDevices({
     <DropdownMenu open={open && ready} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         disabled={!ready}
-        aria-label={
-          chosen === undefined
-            ? "More devices"
-            : `More devices, styling ${chosen.label}, ${chosen.range}`
-        }
-        // The device and its range while it is the one styled, as the buttons
-        // keep theirs: the label beside the glyph is hidden on a narrow bar.
-        title={
-          chosen === undefined
-            ? "More devices"
-            : `${chosen.label}, ${chosen.range}`
-        }
+        aria-label={trigger.name}
+        title={trigger.title}
         className={cn(
           "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs disabled:opacity-40",
-          chosen === undefined
-            ? "text-muted-foreground"
-            : "bg-accent text-accent-foreground"
+          trigger.tone
         )}
       >
-        {Glyph === undefined || chosen === undefined ? null : (
-          <>
-            <Glyph className="size-3.5" aria-hidden="true" />
-            <span
-              aria-hidden="true"
-              className="tabular-nums @max-[1400px]/topbar:hidden"
-            >
-              {shownLabel(chosen)}
-            </span>
-          </>
-        )}
+        {chosen === undefined ? null : <ChosenDevice device={chosen} />}
         <ChevronDown className="size-3.5" aria-hidden="true" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
