@@ -124,7 +124,7 @@
 .nx-builder-tokens,
 .nx-builder-chrome {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
-     the canvas uses that, and the frame must read as a layer behind it. */
+     raised surfaces use that, and the frame must read as a layer behind them. */
   --nx-builder-surface: var(--nx-muted);
   --nx-builder-surface-raised: var(--nx-background);
   --nx-builder-border: var(--nx-border);
@@ -136,6 +136,68 @@
   /* How far a block in mid-drag fades where it sits, on the canvas and in
      Layers alike, so the thing in hand reads the same on both. */
   --nx-builder-drag-source-opacity: 0.4;
+  /*
+   * The admin's colour scheme, as a value chrome can be handed back: chrome
+   * drawn inside the canvas sits under the page's own scheme and takes the
+   * admin's from here.
+   */
+  --nx-builder-scheme: light;
+  /* The editing colours, picked for the admin's theme — see below. */
+  --nx-builder-select: var(--nx-builder-select-on-light);
+  --nx-builder-component: var(--nx-builder-component-on-light);
+  --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
+  --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
+}
+
+/*
+ * The colours of editing itself: what is selected, what a drag will land on,
+ * and what belongs to a component.
+ *
+ * `--nx-primary` cannot carry these. It is black in the light theme and white
+ * in the dark one, and the marks it painted sit ON the author's page, whose
+ * colours are the site's: a white ring vanished on a white page in the dark
+ * theme and a black one on every dark section in the light theme. A hue reads
+ * as "selected" rather than as focus, and against both ends of a page.
+ *
+ * Each hue is stated once per GROUND it is drawn on, and a theme only picks
+ * between the two. The admin's theme picks for chrome on admin surfaces; the
+ * canvas picks by the page's own scheme instead, because its marks are drawn
+ * on the site's colours — see `.nx-canvas`. Declared on the canvas as well as
+ * the chrome, because the canvas is also mounted on its own, without the shell.
+ *
+ * Written as values rather than references, deliberately. The blue is the
+ * design system's blue 600 and 400, but that scale is declared `@theme inline`,
+ * which copies values into utilities and emits no custom property, so
+ * `var(--color-blue-600)` resolves to nothing at runtime. The halo is
+ * mode-invariant white, because it is drawn against site content rather than
+ * against the admin.
+ */
+.nx-builder-tokens,
+.nx-builder-chrome,
+.nx-canvas {
+  --nx-builder-select-on-light: #2563eb; /* design-lint-ok: blue 600; no runtime variable */
+  --nx-builder-select-on-dark: #60a5fa; /* design-lint-ok: blue 400; no runtime variable */
+  --nx-builder-component-on-light: #7a00df; /* design-lint-ok: component purple; no admin token */
+  --nx-builder-component-on-dark: #c99bff; /* design-lint-ok: component purple; no admin token */
+  --nx-builder-halo: #ffffff; /* design-lint-ok: mode-invariant halo on site content */
+}
+
+/*
+ * The dark theme's picks: the lighter hues, which hold contrast against the
+ * admin's dark surfaces, and a deeper ink so the bar still reads as a layer
+ * above them.
+ *
+ * Keyed on the admin's `.dark` class wherever it sits, on an ancestor or on the
+ * scope itself, exactly as the admin's own tokens are.
+ */
+.dark .nx-builder-tokens,
+.dark .nx-builder-chrome,
+.nx-builder-tokens.dark,
+.nx-builder-chrome.dark {
+  --nx-builder-scheme: dark;
+  --nx-builder-select: var(--nx-builder-select-on-dark);
+  --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
 }
 
 .nx-builder-chrome {
@@ -483,10 +545,21 @@
  * A NEGATIVE offset draws the ring just inside the element's edge. Outside it,
  * a block flush against the canvas edge has its indicator clipped, and adjacent
  * blocks' rings overlap into what reads as one thick line between them.
+ *
+ * TWO tones, because the ring is drawn on the site's content and no single
+ * colour reads on all of it: the select blue disappears on a blue section, and
+ * a white mark on a white one. An inset white band directly inside the blue is
+ * the halo — on a white ground the blue carries it, on a blue or a photograph
+ * the white does, and on a dark section both do. The band is an inset shadow
+ * the 2px outline covers half of, so it changes no geometry either.
+ *
+ * A block whose own styles set a `box-shadow` keeps it — an author's rule
+ * outweighs this one — and then shows the blue ring alone.
  */
 .nx-canvas [data-nx-selected] {
-  outline: 2px solid var(--nx-primary);
+  outline: 2px solid var(--nx-builder-select);
   outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px var(--nx-builder-halo);
 }
 
 /*
@@ -504,6 +577,19 @@
  */
 .nx-canvas [data-nx-selected=""] {
   outline-width: 1px;
+  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
+}
+
+/*
+ * A component placement, selected: the same ring in the component colour.
+ *
+ * The marker sits only on the elements a component's DEFINITION owns, and the
+ * outermost of them is what a placement selects — so this colours the
+ * placement and never the page-owned content passed into its slots, which is
+ * selected, and outlined, as the page's own.
+ */
+.nx-canvas [data-nx-selected][data-nx-instance] {
+  outline-color: var(--nx-builder-component);
 }
 
 /*
@@ -1479,23 +1565,58 @@
 .nx-canvas {
   position: relative;
   /*
-   * The page's own surface.
+   * The page's own surface, in the SITE's colours rather than the admin's.
    *
-   * The frame is `--nx-builder-surface`, a shade off the background so it
-   * recedes behind the canvas. With no surface of its own the canvas INHERITS
-   * that frame, so the page being composed is drawn on the editor's grey — and
-   * a block declares no background, so the grey shows through the document
-   * itself. What an author edits then looks nothing like what a visitor loads,
-   * which is the one thing this canvas exists to show.
+   * Everything this element does not state it inherits from the editor around
+   * it: the frame's grey, the admin's text colour and the admin's
+   * `color-scheme`. A block declares no background or text colour of its own,
+   * so whatever the canvas inherits shows through the document itself — in the
+   * admin's dark theme, a white site was drawn solid black with light text.
+   * What an author edits then looks nothing like what a visitor loads, which is
+   * the one thing this canvas exists to show.
    *
-   * The token rather than a literal, so a host re-theming the admin moves the
-   * page with it, exactly as the frame already does.
+   * So all three are stated here, from the SITE's own tokens: its background
+   * and text colour tokens, which the canvas root names under the site's token
+   * prefix as `--nx-canvas-site-ground` and `--nx-canvas-site-ink` (see
+   * `canvas.tsx`). Those flip by themselves when the site's dark values apply,
+   * because the token emitter switches them by the site's strategy. Without a
+   * site sheet they fall back to the browser's default canvas, `Canvas` and
+   * `CanvasText`, which is what a published page shows where nothing paints.
+   * The system colours are the one place this sheet names a colour that is not
+   * an `--nx-*` token, because the value is the browser's own default rather
+   * than a choice of the admin's palette, and an admin token here is the
+   * defect: it repaints the page whenever the admin changes theme.
+   *
+   * `color-scheme` decides those two keywords and how native controls and
+   * scrollbars inside the page are drawn, so it is reset to light too. Only a
+   * dark GROUND among the site's dark values turns it dark — see the rules
+   * below.
    *
    * The frame only becomes visible BESIDE the page where the canvas is
    * bounded: at full width the page is the region, and there are no edges to
    * frame. A narrower tier, or zooming out, reveals it.
    */
-  background-color: var(--nx-builder-surface-raised);
+  color-scheme: light;
+  background-color: var(--nx-canvas-site-ground, Canvas);
+  color: var(--nx-canvas-site-ink, CanvasText);
+  /*
+   * The page's type, which the canvas would otherwise take from the admin's
+   * own face: the site's body font token. Its custom property depends on the
+   * prefix the site's tokens are emitted under, which only the site sheet
+   * knows, so the canvas root states the reference inline as
+   * `--nx-canvas-site-font` (see `canvas.tsx`). Without a site sheet it falls
+   * back to the system face the default token states. The published page takes
+   * its face from the host application around it, which the canvas cannot
+   * read.
+   */
+  font-family: var(--nx-canvas-site-font, system-ui), sans-serif;
+  /*
+   * The editing marks drawn on the page take the hue for the page's ground, not
+   * for the admin's theme: they sit on the site's colours, and the dark theme's
+   * lighter blue is 2.5:1 on a white page where the deeper one is 5.2:1.
+   */
+  --nx-builder-select: var(--nx-builder-select-on-light);
+  --nx-builder-component: var(--nx-builder-component-on-light);
   /*
    * A SHEET, not a region that happens to be a different colour.
    *
@@ -1593,6 +1714,67 @@
 }
 
 /*
+ * The site's OWN dark mode, which is the one thing that darkens the page.
+ *
+ * A site's dark token values apply under one of two strategies: under
+ * `[data-nx-theme="dark"]` on an ancestor the host chooses, or with the
+ * viewer's system on a site whose strategy is `media`. The page's ground and
+ * text already follow those values through the tokens; what these rules add
+ * is the SCHEME. The canvas root states the strategy as
+ * `data-nx-site-dark-ground`, and only when the site's dark values include a
+ * dark ground — the strategy says when dark values apply, not that the page
+ * turns dark, so a site whose dark set keeps a light background keeps light
+ * native controls. Each path is keyed on that stated strategy, so a host's
+ * attribute does not darken the page of a site that follows the system.
+ * The admin's `.dark` class is a different switch and reaches nothing here.
+ */
+[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground="attribute"] {
+  color-scheme: dark;
+  --nx-builder-select: var(--nx-builder-select-on-dark);
+  --nx-builder-component: var(--nx-builder-component-on-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  .nx-canvas[data-nx-site-dark-ground="media"] {
+    color-scheme: dark;
+    --nx-builder-select: var(--nx-builder-select-on-dark);
+    --nx-builder-component: var(--nx-builder-component-on-dark);
+  }
+}
+
+/*
+ * The editor's chrome drawn ON the page keeps the ADMIN's theme.
+ *
+ * The rules above reset the canvas to the site's scheme, text colour and
+ * face, and all three inherit — so a toolbar or a notice drawn inside the page
+ * would take the site's light scheme for its native controls, and its text the
+ * page's colour and font, on an admin-coloured surface. The admin's `--nx-*`
+ * tokens are custom properties inherited from the admin's own root, so they
+ * need no help; these inherited values are what has to be handed back.
+ *
+ * ONE list of what the editor draws inside the page. `[data-nx-chrome]` marks
+ * the controls whose clicks must not reach the page; the spacing overlay and
+ * the drop line are chrome too but take no pointer events, so they are named
+ * here rather than given that marker, which would change what a click does.
+ *
+ * In the BASE layer, so it yields to everything the chrome states for itself:
+ * any unlayered rule, such as the refusal notice's destructive foreground, and
+ * any utility class, wins whatever its weight, and only what would otherwise
+ * be inherited from the page is replaced. The scheme is the admin's token
+ * rather than a light rule and a `.dark` twin, so the theme decides it in the
+ * one place the other builder tokens are picked.
+ */
+@layer base {
+  .nx-canvas [data-nx-chrome],
+  .nx-canvas .nx-spacing-overlay,
+  .nx-canvas .nx-drop-indicator {
+    color-scheme: var(--nx-builder-scheme);
+    color: var(--nx-builder-text);
+    font-family: var(--font-sans, system-ui, sans-serif);
+  }
+}
+
+/*
  * Where a dragged block will land.
  *
  * The same accent as the selection ring, because both answer "this is what the
@@ -1602,11 +1784,15 @@
  * inline, because how far the line runs is a measurement rather than a style.
  * A region stacking children downward gets a horizontal rule; a row gets a
  * vertical one.
+ *
+ * Haloed like the ring, for the same reason: the line crosses the site's
+ * content, and on a blue section the blue alone is not there to see.
  */
 .nx-drop-indicator {
   position: absolute;
   z-index: 2;
-  background: var(--nx-primary);
+  background: var(--nx-builder-select);
+  box-shadow: 0 0 0 1px var(--nx-builder-halo);
   border-radius: 1px;
   /*
    * Never a drop target itself. The element sits under the pointer by
@@ -1646,7 +1832,8 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--nx-primary);
+  background: var(--nx-builder-select);
+  box-shadow: 0 0 0 1px var(--nx-builder-halo);
 }
 
 .nx-drop-indicator[data-axis="y"]::before {
@@ -1786,7 +1973,7 @@
  * one would change the layout it is describing.
  */
 .nx-canvas [data-nx-drop-parent] {
-  outline: 2px dashed var(--nx-primary);
+  outline: 2px dashed var(--nx-builder-select);
   outline-offset: 2px;
 }
 
@@ -2147,17 +2334,26 @@
   align-items: center;
   gap: 0.125rem;
   padding: 0.125rem;
-  border: 1px solid var(--nx-builder-border);
-  border-radius: 0.375rem;
-  background: var(--nx-builder-surface-raised);
   /*
-   * The elevation is drawn in the border's own colour rather than in a
-   * translucent black. An alpha-blended shadow's contrast depends on whatever
-   * the page happens to render behind it, and the page here is the author's —
-   * so the one value that would need checking is the one value this component
-   * cannot know.
+   * A DARK bar in both themes, drawn on the author's page rather than on the
+   * admin. The admin's raised surface is white in the light theme and near
+   * black in the dark one, so it melted into a white page or a dark section in
+   * turn; a fixed dark ink with light text reads the same on any page, and
+   * reads as the editor's rather than as part of the site.
+   *
+   * The edge is the ink's own text colour, faint, so the bar still separates
+   * from a page or section as dark as it is. The elevation is drawn in that
+   * edge colour rather than a translucent black: an alpha-blended shadow's
+   * contrast depends on whatever the page renders behind it, which is the one
+   * value this component cannot know.
    */
-  box-shadow: 0 1px 3px var(--nx-builder-border);
+  border: 1px solid
+    color-mix(in srgb, var(--nx-builder-ink-text) 15%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-ink);
+  color: var(--nx-builder-ink-text);
+  box-shadow: 0 1px 3px
+    color-mix(in srgb, var(--nx-builder-ink) 40%, transparent);
 }
 
 /*
@@ -2172,18 +2368,20 @@
   width: 1.75rem;
   height: 1.75rem;
   border: none;
-  border-radius: 0.25rem;
+  border-radius: var(--radius-sm);
   background: none;
-  color: var(--nx-builder-text);
+  color: var(--nx-builder-ink-text);
   cursor: pointer;
 }
 
 .nx-block-toolbar__button:hover {
-  background: var(--nx-builder-surface);
+  background: color-mix(in srgb, var(--nx-builder-ink-text) 12%, transparent);
 }
 
+/* The ink's own light text as the ring: the admin's accent is black in the
+   light theme, which is no ring at all on a dark bar. */
 .nx-block-toolbar__button:focus-visible {
-  outline: 2px solid var(--nx-builder-accent);
+  outline: 2px solid var(--nx-builder-ink-text);
   outline-offset: -2px;
 }
 
@@ -2194,7 +2392,7 @@
  * the press will not land.
  */
 .nx-block-toolbar__button[aria-disabled="true"] {
-  color: var(--nx-builder-text-muted);
+  color: color-mix(in srgb, var(--nx-builder-ink-text) 55%, transparent);
   cursor: not-allowed;
 }
 
@@ -2212,8 +2410,8 @@
  * BASE tokens rather than the `--nx-builder-*` set above. Those are declared on
  * `.nx-builder-chrome`, and the canvas is mounted without the shell in the
  * harness a browser drives it through, so a builder token would resolve to
- * nothing exactly where the overlay is under test. The drop indicator reaches
- * for `--nx-primary` for the same reason.
+ * nothing exactly where the overlay is under test. The drop indicator's select
+ * hue resolves there only because the canvas declares it on itself.
  */
 .nx-spacing-overlay {
   position: absolute;
@@ -3950,7 +4148,9 @@ fieldset.nx-inspector__fields {
   content: "";
   position: absolute;
   inset: 0;
-  background-color: var(--nx-primary);
+  /* The select hue, as every mark drawn on the page: the admin's primary is
+     white in the dark theme and vanished on a white page. */
+  background-color: var(--nx-builder-select);
   opacity: 0;
   transition: opacity 120ms ease-out;
 }
