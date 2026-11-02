@@ -14,22 +14,14 @@
  *
  * @module tests/entry-lock-fresh-copy
  */
-import {
-  expect,
-  type Browser,
-  type BrowserContext,
-  type Page,
-} from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
-import {
-  createSignedInUser,
-  superAdminRoleId,
-  uniqueTag,
-} from "./support/accounts";
+import { uniqueTag } from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
+import { claimedBy, secondEditor } from "./support/two-editors";
 
 // Creates a second user; see support/locks.ts for what each lock guards. The
 // entry itself is this file's own, created under a unique name.
@@ -52,25 +44,6 @@ async function createPost(page: Page): Promise<string> {
   expect(created.ok(), await created.text()).toBe(true);
   const { item } = (await created.json()) as { item: { id: string } };
   return String(item.id);
-}
-
-/**
- * A second super-admin in a context of its own, so the two pages are two lock
- * holders.
- */
-async function secondEditor(
-  browser: Browser,
-  first: Page,
-  baseURL: string | undefined
-): Promise<{ context: BrowserContext; page: Page }> {
-  if (!baseURL) throw new Error("The suite configures no baseURL.");
-  const { storageState } = await createSignedInUser(first.request, baseURL, {
-    email: `second-editor-${uniqueTag()}@nextly.local`,
-    name: "Second Editor",
-    roleIds: [await superAdminRoleId(first.request)],
-  });
-  const context = await browser.newContext({ baseURL, storageState });
-  return { context, page: await context.newPage() };
 }
 
 function excerpt(page: Page) {
@@ -132,6 +105,12 @@ test.describe(
         const id = await createPost(page);
         await gotoAdmin(page, `/collections/posts/${id}`);
         await expect(excerpt(page)).toBeEditable({ timeout: 30_000 });
+        // A's claim has landed before B arrives, so B finds it held.
+        await claimedBy(page.request, {
+          scopeKind: "collection",
+          slug: "posts",
+          entryId: id,
+        });
 
         const other = await secondEditor(browser, page, baseURL);
         try {
