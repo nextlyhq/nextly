@@ -135,7 +135,7 @@ test.describe(
             // editor unmounts.
             await page
               .getByRole("navigation", { name: "Breadcrumb" })
-              .locator('a[href="/admin/singles"]')
+              .getByRole("link", { name: "Singles", exact: true })
               .click();
             await page.waitForURL(/\/singles$/);
           } else {
