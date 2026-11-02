@@ -49,6 +49,7 @@ import { blockDuplication } from "./duplicate-block";
 import { lockOp } from "./inspector";
 import { keyboardMovePosition } from "./keyboard-move";
 import { layerLabel } from "./layers";
+import { lockedBlockSentence } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
 import type { BuilderOp } from "./ops";
 import { normalizeSelection } from "./selection";
@@ -149,13 +150,7 @@ function lockRefusal(
   for (const id of ids) {
     const blocked = lockBlockingDelete(document, id);
     if (blocked === undefined) continue;
-    const name = layerLabel(blocked);
-    return {
-      reason:
-        blocked.id === id
-          ? `${name} is locked. Unlock it to delete it.`
-          : `The selection contains ${name}, which is locked. Unlock it to delete.`,
-    };
+    return { reason: lockedBlockSentence(blocked, id, "delete") };
   }
   return null;
 }
@@ -348,9 +343,8 @@ const SPLIT_REFUSAL: SelectionRefusal = {
  *
  * Separate from the deletion refusal because the verb reaches the author: a
  * lock that forbids moving is not the same sentence as one that forbids
- * deleting, and `lockBlockingMove` and `lockBlockingDelete` do not answer alike
- * either — a locked child blocks a delete while the parent around it may still
- * be reordered.
+ * deleting, though `lockBlockingMove` and `lockBlockingDelete` find the same
+ * locked block.
  */
 function moveLockRefusal(
   document: BlockDocument,
@@ -359,13 +353,7 @@ function moveLockRefusal(
   for (const id of ids) {
     const blocked = lockBlockingMove(document, id);
     if (blocked === undefined) continue;
-    const name = layerLabel(blocked);
-    return {
-      reason:
-        blocked.id === id
-          ? `${name} is locked. Unlock it to move it.`
-          : `The selection contains ${name}, which is locked. Unlock it to move.`,
-    };
+    return { reason: lockedBlockSentence(blocked, id, "move") };
   }
   return null;
 }

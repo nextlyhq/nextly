@@ -112,7 +112,14 @@ allowed. To change or move a locked block, send it unlocked in the same save.
 
 Deleting is the exception. A locked block can't be deleted in the same save that
 unlocks it, and neither can a block that holds it: unlock it and save first, then
-delete it in a second save.
+delete it in a second save. The editor says so: until the unlock is saved, Delete is
+greyed with "Save first: this block is still locked on the saved page."
+
+In the editor, a locked block shows a lock in Layers and "Locked" on its toolbar. Every
+block inside it shows "Locked by" the block's name, and its controls are read-only.
+Moving, deleting or changing any of them is refused before it happens, with the reason:
+in Layers, on the canvas, on the toolbar, from the keyboard and in the inspector. A
+click still selects a locked block, so you can unlock it from the block's menu.
 
 Some saves can't be checked, and are kept with a line in the server log saying so:
 

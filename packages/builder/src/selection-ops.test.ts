@@ -114,6 +114,24 @@ describe("selectionDeletion", () => {
     );
   });
 
+  it("refuses for a lock AROUND a selected block, naming the block that holds it", () => {
+    register();
+    const document = documentOf([
+      node("box", {
+        type: "acme/box",
+        locked: true,
+        name: "Hero",
+        slots: { children: [node("kid")] },
+      } as Partial<BlockNode>),
+    ]);
+
+    const plan = selectionDeletion(document, ["kid"]);
+
+    expect(isRefusal(plan) ? plan.reason : "").toBe(
+      "This block is inside Hero, which is locked. Unlock Hero to delete this block."
+    );
+  });
+
   it("refuses for a lock INSIDE a selected container, naming it", () => {
     register();
     const document = documentOf([
@@ -126,7 +144,7 @@ describe("selectionDeletion", () => {
     const plan = selectionDeletion(document, ["box"]);
 
     expect(isRefusal(plan) ? plan.reason : "").toBe(
-      "The selection contains Caption, which is locked. Unlock it to delete."
+      "Caption inside this block is locked. Unlock Caption to delete this block."
     );
   });
 

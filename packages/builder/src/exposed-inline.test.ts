@@ -17,6 +17,7 @@ import {
   type BlockNode,
   type ComponentDocument,
   type ResolvedBlockNode,
+  walkNodes,
 } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -124,6 +125,31 @@ describe("composedTextAt", () => {
     expect(
       composedTextAt(document, composed, headingOf("p1"), "text")?.kind
     ).toBe("part-of");
+  });
+
+  it("answers exposed text of a placement inside a block locked in Layers as part of it", () => {
+    // The lock covers everything inside the block that holds it, a placement
+    // included, so its exposed text is not editable in place either.
+    const frame = (locked: boolean): BlockNode => ({
+      id: "frame",
+      type: "acme/heading",
+      version: 1,
+      props: {},
+      ...(locked ? { locked: true } : {}),
+      slots: { children: [placed("p1")] },
+    });
+    const kindIn = (locked: boolean) => {
+      const { document, composed } = setUp(frame(locked));
+      let heading = "";
+      walkNodes(composed.nodes, entry => {
+        if ((entry as ResolvedBlockNode).instanceOf === "p1")
+          heading = entry.id;
+      });
+      return composedTextAt(document, composed, heading, "text")?.kind;
+    };
+    expect(kindIn(true)).toBe("part-of");
+    // The control: the same placement with nothing locked around it.
+    expect(kindIn(false)).toBe("exposed");
   });
 
   it("leaves the page's own nodes to the ordinary inline edit", () => {

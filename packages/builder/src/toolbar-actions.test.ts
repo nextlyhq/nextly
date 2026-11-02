@@ -22,6 +22,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { compositionRefusalReason } from "./composition-refusal";
+import { layersLockRefusalFor } from "./lock-refusal";
 
 import {
   depthMoveActions,
@@ -234,9 +235,9 @@ describe("toolbarActions", () => {
     const actions = toolbarActions(document, "a");
 
     expect(actionOf(actions, "move-down").enabled).toBe(false);
-    expect(actionOf(actions, "move-down").reason).toBe("This block is locked.");
+    expect(actionOf(actions, "move-down").reason).toBe("Heading is locked.");
     expect(actionOf(actions, "delete").enabled).toBe(false);
-    expect(actionOf(actions, "delete").reason).toBe("This block is locked.");
+    expect(actionOf(actions, "delete").reason).toBe("Heading is locked.");
   });
 
   it("a lock does NOT stop a duplicate", () => {
@@ -268,6 +269,48 @@ describe("toolbarActions", () => {
     expect(actionOf(actions, "delete").enabled).toBe(false);
     expect(actionOf(actions, "delete").reason).toBe(
       "Heading inside this block is locked."
+    );
+  });
+
+  it("a lock AROUND a block stops its move and its delete, naming the holder", () => {
+    // The block itself is unlocked, but it sits inside a locked one, which
+    // covers it: moving or deleting it out would change what that lock keeps.
+    const document = documentOf([
+      box("outer", [node("kid"), node("sibling")], {
+        locked: true,
+        name: "Hero",
+      }),
+    ]);
+    const actions = toolbarActions(document, "kid");
+
+    expect(actionOf(actions, "move-down").enabled).toBe(false);
+    expect(actionOf(actions, "move-down").reason).toBe(
+      "This block is inside Hero, which is locked."
+    );
+    expect(actionOf(actions, "delete").enabled).toBe(false);
+    expect(actionOf(actions, "delete").reason).toBe(
+      "This block is inside Hero, which is locked."
+    );
+  });
+
+  it("dims a duplicate the lock around the block would refuse, through the editor's question", () => {
+    // A copy goes beside the original, inside the locked block. The verb asks
+    // the editor's lock question, which now answers for a Layers lock too.
+    const document = documentOf([
+      box("outer", [node("kid")], { locked: true, name: "Hero" }),
+    ]);
+    const actions = toolbarActions(
+      document,
+      "kid",
+      undefined,
+      undefined,
+      true,
+      ops => layersLockRefusalFor(document, ops)
+    );
+
+    expect(actionOf(actions, "duplicate").enabled).toBe(false);
+    expect(actionOf(actions, "duplicate").reason).toBe(
+      "Hero is locked. Unlock it to add blocks to it."
     );
   });
 
@@ -511,9 +554,7 @@ describe("toolbarActions for MORE than one block", () => {
     const actions = toolbarActions(document, "a", ["a", "b"]);
 
     expect(actionOf(actions, "delete").enabled).toBe(false);
-    expect(actionOf(actions, "delete").reason).toBe(
-      "Pinned is locked. Unlock it to delete."
-    );
+    expect(actionOf(actions, "delete").reason).toBe("Pinned is locked.");
     // Still duplicable: the originals stay where they are.
     expect(actionOf(actions, "duplicate").enabled).toBe(true);
   });

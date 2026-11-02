@@ -83,7 +83,11 @@ import {
   type CanvasPointerPoints,
 } from "./geometry-dom";
 import { placementTypesOf, type SlotSource } from "./inserter";
-import type { LockDropRefusal, LockRefusalFacts } from "./lock-refusal";
+import {
+  layersLockFacts,
+  type LockDropRefusal,
+  type LockRefusalFacts,
+} from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
 import type { OpPosition } from "./ops";
 import {
@@ -376,6 +380,19 @@ function lockVerdictAt(
     : editor.lockRefusalFor([{ kind: "insert", node, at }]);
 }
 
+/**
+ * A press on a block a Layers lock holds in place: whose pointer, where it
+ * began, the block, the lock's facts, and whether its reason is drawn.
+ */
+interface HeldPress {
+  readonly owner: number;
+  readonly originClient: { readonly x: number; readonly y: number };
+  readonly nodeId: string;
+  readonly blockName: string;
+  readonly lock: LockRefusalFacts;
+  shown: boolean;
+}
+
 /** What a drag needs to remember, none of which renders. */
 interface Gesture {
   readonly subject: DragSubject;
@@ -564,6 +581,8 @@ export function useCanvasDrag({
 
   // Read at event time rather than closed over, so a handler bound on one render
   // never patches a document that a later edit has already replaced.
+  /** A press on a block a Layers lock holds in place, if one is down. */
+  const heldPress = React.useRef<HeldPress | null>(null);
   const latest = React.useRef({ editor, slots, nesting, definitions });
   latest.current = { editor, slots, nesting, definitions };
 
@@ -635,15 +654,25 @@ export function useCanvasDrag({
       const node = findNode(current.document.nodes, nodeId);
       if (node === undefined) return;
 
-      // A locked block is one the author has asked the editor not to move. The
-      // press is left alone rather than swallowed, so it still selects.
+      // A block a Layers lock holds in place: locked itself, holding a locked
+      // block, or inside one. The press is left alone rather than swallowed,
+      // so it still selects, and is remembered so that, if the hand goes on to
+      // drag, the reason is drawn over the block rather than nothing happening.
       //
-      // Asked through the shared rule rather than by reading the flag here: the
-      // keyboard moves and delete ask the same question, and delete's answer
-      // differs — it checks the whole subtree, because removing a container
-      // destroys what is inside it. Three inline reads of `node.locked` would
-      // agree until one of them gained that distinction.
-      if (lockBlockingMove(current.document, nodeId) !== undefined) return;
+      // Asked through the shared rule rather than by reading the flag here, so
+      // this answers as the keyboard moves, the toolbar and Layers do.
+      const held = lockBlockingMove(current.document, nodeId);
+      if (held !== undefined) {
+        heldPress.current = {
+          owner: event.pointerId,
+          originClient: { x: event.clientX, y: event.clientY },
+          nodeId,
+          blockName: node.type,
+          lock: layersLockFacts(held, nodeId, "move"),
+          shown: false,
+        };
+        return;
+      }
 
       const rects = snapshotRects(root);
       gesture.current = {
@@ -840,6 +869,49 @@ export function useCanvasDrag({
    * never reach the canvas at all. Both arrive here, and nothing below can tell
    * which did — which is the whole of what "one engine" buys.
    */
+  /**
+   * A press on a held block that has travelled far enough to mean a drag: the
+   * lock's reason, drawn over the block the way a refused drop is drawn over
+   * the container that refused it. Once per press.
+   */
+  const showHeld = React.useCallback(
+    (clientX: number, clientY: number, pointerId: number) => {
+      const press = heldPress.current;
+      if (press === null || press.owner !== pointerId || press.shown) return;
+      const travelled = Math.hypot(
+        clientX - press.originClient.x,
+        clientY - press.originClient.y
+      );
+      if (travelled < activationPx) return;
+      press.shown = true;
+      setState({
+        draggingId: null,
+        draggingBlockName: press.blockName,
+        target: null,
+        refusal: {
+          regionId: `held:${press.nodeId}`,
+          parentId: press.nodeId,
+          lock: press.lock,
+        },
+      });
+    },
+    [activationPx]
+  );
+
+  /** The held press ends, and its reason with it, when its pointer lifts. */
+  const releaseHeld = React.useCallback((pointerId: number) => {
+    const press = heldPress.current;
+    if (press === null || press.owner !== pointerId) return;
+    heldPress.current = null;
+    if (!press.shown) return;
+    setState({
+      draggingId: null,
+      draggingBlockName: null,
+      target: null,
+      refusal: null,
+    });
+  }, []);
+
   const trackMove = React.useCallback(
     (
       clientX: number,
@@ -932,6 +1004,7 @@ export function useCanvasDrag({
 
   const onPointerMove = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
+      showHeld(event.clientX, event.clientY, event.pointerId);
       trackMove(
         event.clientX,
         event.clientY,
@@ -939,7 +1012,7 @@ export function useCanvasDrag({
         event.currentTarget
       );
     },
-    [trackMove]
+    [showHeld, trackMove]
   );
 
   /**
@@ -1140,9 +1213,10 @@ export function useCanvasDrag({
 
   const onPointerUp = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
+      releaseHeld(event.pointerId);
       endGesture(event.pointerId, event.currentTarget);
     },
-    [endGesture]
+    [endGesture, releaseHeld]
   );
 
   const beginInsertDrag = React.useCallback(
@@ -1319,7 +1393,10 @@ export function useCanvasDrag({
       onPointerUp,
       // Routed through the same ownership check every other ending uses, so a
       // second contact being withdrawn cannot end a drag it does not own.
-      onPointerCancel: event => cancelGesture(event.pointerId),
+      onPointerCancel: event => {
+        releaseHeld(event.pointerId);
+        cancelGesture(event.pointerId);
+      },
     },
   };
 }

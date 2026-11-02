@@ -519,6 +519,44 @@ describe("LayersPanel", () => {
     );
   });
 
+  it("names a row inside a locked block as locked BY that block, quieter than its own", () => {
+    // A lock covers everything inside the block: each row inside says so in
+    // words, naming the block to unlock, and only the locked block's own row
+    // carries the stronger badge.
+    render(
+      <Host
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              node("hero", "core/heading", {
+                locked: true,
+                name: "Hero",
+                slots: {
+                  children: [
+                    node("inner", "core/heading", {
+                      slots: { children: [node("deep", "core/heading")] },
+                    }),
+                  ],
+                },
+              }),
+            ],
+          } as BlockDocument
+        }
+      />
+    );
+    register();
+    fireEvent.keyDown(screen.getAllByRole("treeitem")[0]!, { key: "*" });
+
+    const [hero, inner] = screen.getAllByRole("treeitem");
+    expect(hero?.querySelector('[data-tone="strong"]')?.textContent).toBe(
+      "Locked"
+    );
+    expect(inner?.textContent).toContain("Locked by Hero");
+    expect(inner?.querySelector('[data-tone="strong"]')).toBeNull();
+  });
+
   it("offers to open only the rows that hold something", () => {
     // A row that opens onto nothing would show a twisty that does nothing,
     // and announce itself as a closed branch to a screen reader.

@@ -39,7 +39,6 @@ import {
   DEFAULT_SLOT,
   findNode,
   locateNode,
-  lockedWithin,
   type BlockDocument,
   type BlockNode,
   type PlacementRefused,
@@ -58,6 +57,7 @@ import {
   lockRefusalWording,
   type LockRefusalFacts,
 } from "./lock-refusal";
+import { lockBlockingMove } from "./locking";
 import type { BuilderOp, OpPosition, SlotAddress } from "./ops";
 
 /**
@@ -162,7 +162,12 @@ export type LayersRefusal =
    * op layer relocates no subtree holding a locked block, so this refuses
    * every place, before release rather than by an apply that does nothing.
    */
-  | { readonly kind: "held"; readonly locked: BlockNode };
+  | {
+      readonly kind: "held";
+      readonly locked: BlockNode;
+      /** The dragged block, which the locked one is, holds or sits inside. */
+      readonly movingId: string;
+    };
 
 /** What the pointer means right now. */
 export type LayersDropResult =
@@ -202,7 +207,7 @@ export function layersRefusalWording(refusal: LayersRefusal): RefusalWording {
     case "lock":
       return lockRefusalWording(refusal.lock);
     case "held":
-      return lockedBlockWording(refusal.locked);
+      return lockedBlockWording(refusal.locked, refusal.movingId);
     case "placement":
       return placementWording(
         refusal.verdict,
@@ -472,13 +477,16 @@ function judged(
   to: OpPosition,
   line: LayersLine
 ): LayersDropResult {
-  // The op layer's own question first (`lockedWithin`), which every place
-  // answers the same way for this block.
-  const lockedId = lockedWithin(moving);
-  const held =
-    lockedId === undefined ? undefined : findNode([moving], lockedId);
+  // The editor's own question first (`lockBlockingMove`): a locked block,
+  // one inside the dragged block or one it sits inside holds it wherever it
+  // would go, so every place answers the same way.
+  const held = lockBlockingMove(placement.document, moving.id);
   if (held !== undefined) {
-    return { kind: "refused", refusal: { kind: "held", locked: held }, line };
+    return {
+      kind: "refused",
+      refusal: { kind: "held", locked: held, movingId: moving.id },
+      line,
+    };
   }
   const refused = placementRefusal(placement, moving, to);
   if (refused !== undefined) return { kind: "refused", refusal: refused, line };

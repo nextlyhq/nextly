@@ -543,14 +543,23 @@ export function InspectorPanel({
         name={block.identity.name}
         description={block.description}
         lock={lock}
-        onRename={name => editor.apply(renameOp(block.nodeId, name))}
+        // Withheld while a Layers lock holds the block, its own or one around
+        // it: renaming is a change like any other, and the op layer refuses it.
+        onRename={
+          lock.layers || lock.inheritedFrom !== undefined
+            ? undefined
+            : name => editor.apply(renameOp(block.nodeId, name))
+        }
         onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
         // Held inside a `contentOnly` area, which pins the node's own lock
-        // with its design: the save would refuse the change.
+        // with its design: the save would refuse the change. Held too inside a
+        // block locked in Layers, whose lock is the one to lift.
         lockHeld={
-          layersLockChangeable(lock)
-            ? undefined
-            : "The area it sits in fixes this."
+          !layersLockChangeable(lock)
+            ? "The area it sits in fixes this."
+            : lock.inheritedFrom !== undefined && !lock.layers
+              ? `Locked by ${lock.inheritedFrom}. Unlock ${lock.inheritedFrom} first.`
+              : undefined
         }
         verbs={verbs}
         reasonId={reasonId}

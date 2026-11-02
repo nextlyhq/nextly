@@ -194,6 +194,36 @@ describe("useBlockKeyboardActions", () => {
     );
   });
 
+  it("refuses moving a block out of a locked one, naming the block that holds it", () => {
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          locked: true,
+          name: "Hero",
+          slots: {
+            children: [
+              { id: "kid", type: "acme/text", version: 1, props: {} },
+              { id: "next", type: "acme/text", version: 1, props: {} },
+            ],
+          },
+        },
+      ] as BlockDocument["nodes"]),
+      "kid"
+    );
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toBe(
+      "This block is inside Hero, which is locked. Unlock Hero to move this block."
+    );
+  });
+
   it("REFUSES moving a container that holds a locked block, before applying", () => {
     /*
      * A locked block does not move until it is unlocked, and moving the
@@ -230,7 +260,7 @@ describe("useBlockKeyboardActions", () => {
 
     expect(editor.apply).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent ?? "").toMatch(
-      /is locked\. unlock it to move it/i
+      /text inside this block is locked\. unlock text to move this block/i
     );
   });
 
@@ -959,7 +989,7 @@ describe("useBlockKeyboardActions", () => {
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent ?? "").toMatch(
-      /contains .*which is locked/i
+      /text inside this block is locked\. unlock text to delete this block/i
     );
   });
 

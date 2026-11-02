@@ -123,12 +123,18 @@ export interface LayersPanelProps {
 function Badge({
   icon,
   text,
+  tone,
 }: {
   icon: React.ReactNode;
   text: string;
+  /** `strong` for a fact the author set on this block itself. */
+  tone?: "strong";
 }): React.JSX.Element {
   return (
-    <span className="nx-layer-row__badge">
+    <span
+      className="nx-layer-row__badge"
+      {...(tone === undefined ? {} : { "data-tone": tone })}
+    >
       {/*
         The icon is decorative and the word is the fact. A title attribute would
         reach a pointer and nothing else, and an icon alone announces as an
@@ -186,7 +192,17 @@ function rowOf(
         <span className="nx-layer-row__label" data-nx-layer={node.id}>
           {node.label}
         </span>
-        {node.locked ? <Badge icon={<Lock size={12} />} text="Locked" /> : null}
+        {/* A block's own lock in the text colour, and a lock it is held by
+            from a block around it quieter, in the muted one: both say so in
+            words, and the inherited one names the block to unlock. */}
+        {node.locked ? (
+          <Badge icon={<Lock size={12} />} text="Locked" tone="strong" />
+        ) : node.lockedBy === undefined ? null : (
+          <Badge
+            icon={<Lock size={11} />}
+            text={`Locked by ${node.lockedBy}`}
+          />
+        )}
         {node.breakpointHidden ? (
           <Badge
             icon={<EyeOff size={12} />}
