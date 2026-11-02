@@ -68,6 +68,7 @@ import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { guardCanvasNavigation } from "./canvas-link-guard";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
+import { isElement, isHTMLElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
 import { canvasContentRect, scrollableAncestor } from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
@@ -179,7 +180,9 @@ export function contextMenuTargetOf(
   root: Element
 ): string | null {
   if (isEditableTarget(target) || isChrome(target)) return null;
-  if (!(target instanceof Element)) return null;
+  // By node kind rather than `instanceof Element`: a press inside a canvas
+  // mounted in an iframe targets an element that window built.
+  if (!isElement(target)) return null;
   const owner = target.closest(`[${NODE_ID_ATTRIBUTE}]`);
   if (owner === null) return null;
   /*
@@ -215,7 +218,7 @@ export function contextMenuTargetOf(
  * block again rather than text.
  */
 function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
+  if (!isElement(target)) return false;
   const editable = target.closest("[contenteditable]");
   return (
     editable !== null && editable.getAttribute("contenteditable") !== "false"
@@ -223,10 +226,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 function isChrome(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest(`[${CHROME_ATTRIBUTE}]`) !== null
-  );
+  return isElement(target) && target.closest(`[${CHROME_ATTRIBUTE}]`) !== null;
 }
 
 /**
@@ -256,7 +256,8 @@ function isChrome(target: EventTarget | null): boolean {
  * lands on the wrong node with nothing to indicate it.
  */
 export function nodeIdFromEvent(target: EventTarget | null): string | null {
-  if (!(target instanceof Element)) return null;
+  // Any realm's element, for the reason `contextMenuTargetOf` gives.
+  if (!isElement(target)) return null;
   const owner = target.closest(`[${NODE_ID_ATTRIBUTE}]`);
   if (owner === null) return null;
   // Inside THIS canvas, not merely inside something carrying the attribute. A
@@ -1797,7 +1798,9 @@ function DropRefusalNotice({
     const element = notice.current;
     if (element === null) return;
     const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) return;
+    // Asked by node kind: a root rendered into an iframe is built by that
+    // window, and `instanceof HTMLElement` would leave the notice unplaced.
+    if (!isHTMLElement(root)) return;
     const measure = (): void => {
       // The root itself when the refusal is at the page level: there is no
       // container node to point at, which is the whole of what
