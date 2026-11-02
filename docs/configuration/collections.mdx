@@ -475,6 +475,9 @@ before that change. An effect that must describe the row exactly as deleted
 can take it from the delete's webhook event, which is written from the locked
 row in the delete's own transaction (see
 [Delivery, retries and the outbox](/docs/webhooks#delivery-retries-and-the-outbox)).
+The event is recorded only while recording is on: an enabled webhook endpoint
+exists or `webhooks.audit` is on, and the collection hasn't set `webhooks: false`
+or `webhooks: { record: false }` (see [Retention](/docs/webhooks/retention)).
 
 A delete made with `deleteEntryInTransaction` inside a plugin's
 [`collections.withTransaction`](/docs/plugins/services#collection-transactions)
@@ -565,7 +568,7 @@ hooks: {
 - `beforeRead` - modify query filters (multi-tenant scoping, soft-delete filtering).
 - `afterRead` - shape the response (compute virtual fields, redact sensitive properties).
 - `beforeDelete` - block deletes when there are dependents. Checks only: it can run for a delete that is then refused (see [A delete's hooks and outside effects](#a-deletes-hooks-and-outside-effects)).
-- `afterDelete` - cascade cleanup (delete files, revoke tokens, audit log), and effects outside Nextly such as an email or a call to another service.
+- `afterDelete` - cascade cleanup (delete files, revoke tokens, audit log), and effects outside Nextly such as an email or a call to another service. Inside a plugin's `collections.withTransaction` it runs before that transaction commits, so make such effects once `withTransaction` resolves (see [A delete's hooks and outside effects](#a-deletes-hooks-and-outside-effects)).
 
 ## Next steps
 
