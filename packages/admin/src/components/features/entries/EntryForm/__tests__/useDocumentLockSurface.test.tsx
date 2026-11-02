@@ -189,7 +189,10 @@ describe("loading the latest document before a gain unlocks the form", () => {
     ["the colleague releases it", [gained()]],
     [
       "the colleague's lease lapses, through a failed poll",
-      [{ state: { status: "unavailable" }, gains: 0, takeOver, requestAccess }, gained()],
+      [
+        { state: { status: "unavailable" }, gains: 0, takeOver, requestAccess },
+        gained(),
+      ],
     ],
     ["this editor takes it over", [gained()]],
   ];

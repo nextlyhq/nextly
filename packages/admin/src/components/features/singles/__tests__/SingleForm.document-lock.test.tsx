@@ -339,11 +339,13 @@ describe("SingleForm when it gains a Single a colleague held", () => {
     rerender(
       <SingleForm
         schema={schema}
-        document={{
-          ...document,
-          updatedAt: "2026-01-01T00:05:00.000Z",
-          heroTitle: "Bob's hero",
-        } as unknown as SingleDocumentData}
+        document={
+          {
+            ...document,
+            updatedAt: "2026-01-01T00:05:00.000Z",
+            heroTitle: "Bob's hero",
+          } as unknown as SingleDocumentData
+        }
         onSubmit={vi.fn()}
         latest={{ readAt: 2, reload }}
       />

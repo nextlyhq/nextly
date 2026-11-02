@@ -193,11 +193,7 @@ export function useDocumentLockSurface({
       ? readOnlyBecause === "removed-from-code"
         ? READ_ONLY_REMOVED_FROM_CODE
         : readerAffordances(holder)
-      : documentLockAffordances(
-          state,
-          lastKnownHolder.current,
-          gainLoad.load
-        )),
+      : documentLockAffordances(state, lastKnownHolder.current, gainLoad.load)),
     takeOver,
     requestAccess,
     retryLoad: gainLoad.retry,

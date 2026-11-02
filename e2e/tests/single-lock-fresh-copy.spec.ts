@@ -18,11 +18,7 @@ import { uniqueTag } from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
-import {
-  claimedBy,
-  SECOND_EDITOR,
-  secondEditor,
-} from "./support/two-editors";
+import { claimedBy, SECOND_EDITOR, secondEditor } from "./support/two-editors";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.siteSettings, LOCK.usersRoles] });

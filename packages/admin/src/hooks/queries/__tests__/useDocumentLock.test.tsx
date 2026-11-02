@@ -1527,9 +1527,7 @@ describe("useDocumentLock: gaining a document this editor was kept out of", () =
   /** Hold the document for a colleague until `released()` is called. */
   function heldUntilReleased() {
     let free = false;
-    post.mockImplementation(async () =>
-      free ? acquired : held
-    );
+    post.mockImplementation(async () => (free ? acquired : held));
     return {
       released: () => {
         free = true;
@@ -1716,7 +1714,8 @@ describe("useDocumentLock: gaining a document this editor was kept out of", () =
     // mistaken for the one already handled on this one.
     const holder = heldUntilReleased();
     const { result, rerender } = renderHook(
-      ({ entryId }: { entryId: string }) => useDocumentLock({ ...ref, entryId }),
+      ({ entryId }: { entryId: string }) =>
+        useDocumentLock({ ...ref, entryId }),
       { initialProps: { entryId: "42" } }
     );
     await waitFor(() =>

@@ -21,11 +21,7 @@ import { uniqueTag } from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
-import {
-  claimedBy,
-  SECOND_EDITOR,
-  secondEditor,
-} from "./support/two-editors";
+import { claimedBy, SECOND_EDITOR, secondEditor } from "./support/two-editors";
 
 // Creates a second user; see support/locks.ts for what each lock guards. The
 // entry itself is this file's own, created under a unique name.
