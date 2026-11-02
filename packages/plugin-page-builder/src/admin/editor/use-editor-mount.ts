@@ -254,6 +254,58 @@ export function useEditorMount(
   // history, so the editor connects the history to the style writers.
   useConnectStyleHistory(editor.recordStep);
 
+  const inline = useCanvasInlineEditing(editor, componentLibrary);
+
+  // Whether the save-as-pattern form is up. A boolean here rather than the form
+  // itself, because the verb that raises it belongs to the shared chain — the
+  // toolbar, the context menu and the palette all reach it — while everything
+  // the form needs is mounted only while it is up. See `SavePatternPrompt`.
+  const savePattern = useSavePatternVerb(editor, inline);
+  /*
+   * Whether this author may create a pattern at all, read EAGERLY here.
+   *
+   * Beside the verb it gates rather than inside it: the toolbar, the context
+   * menu and the command palette all offer the verb from one shared action
+   * list, so the answer has to exist before any of them draws — and asking in
+   * three places would be three requests answering one question.
+   */
+  const mayCreatePattern = useMayCreatePattern();
+  const { componentFacts, componentVariants } =
+    useStoredComponentHosts(initialDocument);
+
+  /*
+   * Where the shell keeps this author's panel, device and zoom: under their
+   * own id, so two authors of one browser each get their own. While no one is
+   * known it keeps nothing; the shell moves to the author's store once their
+   * id arrives.
+   */
+  const userId = useCurrentUserId();
+  const preferenceStore = useMemo(() => userPreferenceStore(userId), [userId]);
+
+  return {
+    initialDocument,
+    clientConfig,
+    documentLimits,
+    componentLibrary,
+    notices,
+    editor,
+    inline,
+    savePattern,
+    mayCreatePattern,
+    componentFacts,
+    componentVariants,
+    preferenceStore,
+  };
+}
+
+/**
+ * Typing a block's text on the canvas, with what the author is told when an
+ * edit does not save and when the text belongs to a component.
+ */
+function useCanvasInlineEditing(
+  editor: EditorState,
+  componentLibrary: ComponentLibraryRead
+): UseInlineEditingResult {
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
    * may be typed into is the block's own declaration, read by the builder, and
@@ -298,59 +350,26 @@ export function useEditorMount(
     },
     [editor.document, componentLibrary]
   );
-  const inline = useInlineEditing(
-    editor,
-    loadInlineRichTextEditor,
-    announce,
-    partOf
-  );
+  return useInlineEditing(editor, loadInlineRichTextEditor, announce, partOf);
+}
 
-  // Whether the save-as-pattern form is up. A boolean here rather than the form
-  // itself, because the verb that raises it belongs to the shared chain — the
-  // toolbar, the context menu and the palette all reach it — while everything
-  // the form needs is mounted only while it is up. See `SavePatternPrompt`.
-  const savePattern = useSavePatternVerb(editor, inline);
-  /*
-   * Whether this author may create a pattern at all, read EAGERLY here.
-   *
-   * Beside the verb it gates rather than inside it: the toolbar, the context
-   * menu and the command palette all offer the verb from one shared action
-   * list, so the answer has to exist before any of them draws — and asking in
-   * three places would be three requests answering one question.
-   */
-  const mayCreatePattern = useMayCreatePattern();
-  // Asked only of a component with a row: what its live definition holds and
-  // how many documents place it, which its own document cannot say.
+/**
+ * What the inspector is told about a component with a row: what its live
+ * definition holds and how many documents place it, and how many placements
+ * chose each variant. Its own document cannot say either. Nothing is asked of
+ * a page, or of a component not yet saved.
+ */
+function useStoredComponentHosts(initialDocument: BlockDocument): {
+  componentFacts: ComponentFieldsHost | undefined;
+  componentVariants: ComponentVariantsHost | undefined;
+} {
   const identity = useDocumentIdentity();
   const storedComponent = isComponentDocument(initialDocument)
     ? identity?.documentId
     : undefined;
-  const componentFacts = useComponentFacts(storedComponent);
-  // The count the variant delete dialog shows, for the same stored component.
-  const componentVariants = useVariantUse(storedComponent);
-
-  /*
-   * Where the shell keeps this author's panel, device and zoom: under their
-   * own id, so two authors of one browser each get their own. While no one is
-   * known it keeps nothing; the shell moves to the author's store once their
-   * id arrives.
-   */
-  const userId = useCurrentUserId();
-  const preferenceStore = useMemo(() => userPreferenceStore(userId), [userId]);
-
   return {
-    initialDocument,
-    clientConfig,
-    documentLimits,
-    componentLibrary,
-    notices,
-    editor,
-    inline,
-    savePattern,
-    mayCreatePattern,
-    componentFacts,
-    componentVariants,
-    preferenceStore,
+    componentFacts: useComponentFacts(storedComponent),
+    componentVariants: useVariantUse(storedComponent),
   };
 }
 
