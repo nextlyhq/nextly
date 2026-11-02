@@ -335,6 +335,25 @@ Startup is refused, naming the plugins involved, when a view's `path`:
 - belongs to a field-type view scoped to a field type the plugin does not
   contribute.
 
+### Who is signed in
+
+`useCurrentUserId()` from `@nextlyhq/plugin-sdk/admin` answers the signed-in user's id, for a
+plugin that keeps something per user, such as its own preferences on a browser several
+people share. It reads what the admin already knows about the user, so it makes no request.
+
+It answers `null` while that isn't known yet, when no one is signed in, and when the read
+failed. Keep nothing then, rather than keeping it for a guess.
+
+```tsx
+import { useCurrentUserId } from "@nextlyhq/plugin-sdk/admin";
+
+const userId = useCurrentUserId();
+const key = userId === null ? null : `my-plugin.layout:${userId}`;
+```
+
+This hook is experimental while its first consumer settles. Its name and its
+`string | null` answer are meant to stay.
+
 ## Dashboard widgets
 
 A plugin adds dashboard widgets under `contributes.dashboard.widgets`, each declared with

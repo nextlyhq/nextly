@@ -81,7 +81,6 @@ import { NextlyError } from "../../errors/nextly-error";
 import { DOCUMENT_LOCK_TABLE } from "../../schemas/document-lock";
 
 import { documentLockKey } from "./lock-key";
-import { recordTakeoverEvent } from "./takeover-event";
 import {
   DOCUMENT_LOCK_RENEW_MARGIN_SECONDS,
   DOCUMENT_LOCK_TTL_SECONDS,
@@ -315,6 +314,12 @@ async function recordIfDisplaced(
   existing: LockRow
 ): Promise<void> {
   if (!existing.live || existing.ownerId === claimant.ownerId) return;
+  // Loaded when a takeover happens, not with the repository: the service
+  // registry loads this repository at boot, and the event's kind sits beside
+  // the history reader that names the displaced holder, which reads the users
+  // table. Every boot and every lock claim would otherwise load both for an
+  // act that is rare.
+  const { recordTakeoverEvent } = await import("./takeover-event");
   await recordTakeoverEvent(ctx, adapter, ref, claimant, existing.ownerId);
 }
 
