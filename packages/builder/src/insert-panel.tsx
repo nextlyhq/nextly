@@ -1106,6 +1106,7 @@ export function InsertPanel({
    */
   const paletteView = (
     <Command
+      className="nx-insert-panel__palette"
       shouldFilter={false}
       label="Insert a block"
       onKeyDown={event => {
@@ -1120,6 +1121,7 @@ export function InsertPanel({
       <PlacementLine document={editor.document} candidate={firstPlace} />
       <LibraryNotices library={library} />
       <CommandList
+        className="nx-insert-panel__list"
         // A pointer that leaves the tiles returns the panel to rest; a
         // keyboard highlight stays where the author left it.
         onPointerLeave={() => {

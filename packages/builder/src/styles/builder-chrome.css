@@ -334,6 +334,25 @@
   margin: 0;
 }
 
+/*
+ * The palette fills the tab, and its list takes the height left under the
+ * search and the placement line and scrolls within it. The shared list caps
+ * itself at 400px for a menu; in a full-height panel that cut the grid off
+ * mid-row with empty panel below it.
+ */
+.nx-insert-panel .nx-insert-panel__palette {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.nx-insert-panel .nx-insert-panel__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
 /* A closed tab's panel holds nothing and takes no room. */
 .nx-insert-panel__tab[hidden] {
   display: none;
