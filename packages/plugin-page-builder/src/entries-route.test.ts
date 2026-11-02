@@ -9,6 +9,7 @@
  *
  * @module entries-route.test
  */
+import { ITEM_SCHEMA_MAX_DEPTH } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
@@ -516,5 +517,40 @@ describe("the language a read names", () => {
     expect(
       parseEntriesQuery(url({ collection: "posts", locale: "" })).locale
     ).toBeUndefined();
+  });
+
+  it("matches nothing, after the gate's read, for a title field that is neither text nor a number", async () => {
+    // contains on a boolean, a date or JSON fails on PostgreSQL alone.
+    const r = reads({
+      collection: {
+        fields: [{ name: "featured", type: "checkbox" }],
+        admin: { useAsTitle: "featured" },
+      },
+      rows: [{ id: "p1" }],
+    });
+
+    const answer = await readEntries(
+      { collection: "posts", search: "yes", limit: 10 },
+      r
+    );
+
+    expect(answer.items).toEqual([]);
+    expect(r.finds).toEqual([
+      { collection: "posts", select: { id: true }, limit: 1 },
+    ]);
+  });
+
+  it("follows item schemas as deep as the engine's bound, and no deeper", () => {
+    const nest = (depth: number): Record<string, unknown> =>
+      depth === 0
+        ? { post: { type: "relation", relationTo: `level-${depth}` } }
+        : {
+            list: { type: "array", of: "object", item: nest(depth - 1) },
+            post: { type: "relation", relationTo: `level-${depth}` },
+          };
+    const found = relationTargets([{ props: nest(ITEM_SCHEMA_MAX_DEPTH + 1) }]);
+    // The relation at the bound itself is reached; one level past it is not.
+    expect(found.has("level-1")).toBe(true);
+    expect(found.has("level-0")).toBe(false);
   });
 });

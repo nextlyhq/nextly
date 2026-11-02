@@ -39,7 +39,7 @@
  *
  * @module entries-route
  */
-import { allBlocks } from "@nextlyhq/blocks-engine";
+import { allBlocks, ITEM_SCHEMA_MAX_DEPTH } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList, type PaginationMeta, type WhereFilter } from "nextly";
 import { entryTitleField, readableTitleText } from "nextly/config";
@@ -185,13 +185,6 @@ export function relationTargets(
 }
 
 /**
- * How deep a list's item schemas are followed. A list of records holding
- * lists is as deep as the inspector draws; past that a declaration is not
- * one an author can reach, and the walk over untrusted schemas stays bounded.
- */
-const MAX_SCHEMA_DEPTH = 4;
-
-/**
  * Add every relation target a record of prop schemas names, including those
  * inside a list's `item` schema: the inspector draws a list item's fields
  * with the same controls, so a relation there searches this route too.
@@ -201,7 +194,9 @@ function collectTargets(
   targets: Set<string>,
   depth: number
 ): void {
-  if (depth > MAX_SCHEMA_DEPTH) return;
+  // As deep as the inspector draws item schemas, and no deeper: the bound is
+  // the engine's one, so a relation it draws is one a search may read.
+  if (depth > ITEM_SCHEMA_MAX_DEPTH) return;
   if (typeof props !== "object" || props === null) return;
   for (const schema of Object.values(props)) {
     if (typeof schema !== "object" || schema === null) continue;
@@ -350,11 +345,20 @@ function refusal(collection: string): NextlyError {
  * A declared target whose collection does not exist is refused exactly as an
  * undeclared one is, so the answer never says which of the two it was.
  */
-/** The field that names a collection's entries, and whether it holds a number. */
+/** The field that names a collection's entries, and how a search may match it. */
 interface TitleField {
   readonly name: string;
-  readonly numeric: boolean;
+  readonly kind: TitleKind;
 }
+
+/**
+ * How a search matches a title field: `text` by `contains`, `number` exactly,
+ * and `other` (a checkbox, a date, JSON, a multi-value select) not at all.
+ * `contains` lower-cases its column, which PostgreSQL refuses for anything
+ * but text while MySQL and SQLite convert it, so applying it more widely
+ * would fail on one dialect alone.
+ */
+type TitleKind = "text" | "number" | "other";
 
 async function titleFieldOf(
   slug: string,
@@ -378,13 +382,28 @@ async function titleFieldOf(
     fieldNames(fields)
   );
   if (name === undefined) return undefined;
-  return { name, numeric: NUMERIC_FIELD_TYPES.has(fieldType(fields, name)) };
+  return { name, kind: titleKind(fieldType(fields, name)) };
 }
 
-/** The field types that hold a number, which a text search cannot match. */
-const NUMERIC_FIELD_TYPES: ReadonlySet<string | undefined> = new Set([
-  "number",
+/** The field types whose stored value is text, which `contains` matches. */
+const TEXT_FIELD_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "textarea",
+  "email",
+  "url",
+  "phone",
+  "slug",
 ]);
+
+/**
+ * A title field's kind, by its declared type. A field declared without a type
+ * is read as text, the shape every conventional title name (`title`, `name`)
+ * takes.
+ */
+function titleKind(type: string | undefined): TitleKind {
+  if (type === undefined || TEXT_FIELD_TYPES.has(type)) return "text";
+  return type === "number" ? "number" : "other";
+}
 
 /** A top-level field's declared type, or `undefined` when it has none. */
 function fieldType(fields: unknown, name: string): string | undefined {
@@ -440,17 +459,15 @@ const NO_MATCH = Symbol("no match");
 /**
  * The condition one search puts on the title field.
  *
- * A text field is matched by `contains`. A number field is matched exactly,
- * and only by a search that is a number: `contains` lower-cases its column,
- * which PostgreSQL refuses for a number while MySQL and SQLite convert it, so
- * a text match there would fail on one dialect alone.
+ * A text field is matched by `contains`; a number field exactly, and only by
+ * a search that is a number; any other kind by nothing. See {@link TitleKind}.
  */
 function searchOn(
   search: string,
   title: TitleField | undefined
 ): WhereFilter | typeof NO_MATCH {
-  if (title === undefined) return NO_MATCH;
-  if (!title.numeric) return { [title.name]: { contains: search } };
+  if (title === undefined || title.kind === "other") return NO_MATCH;
+  if (title.kind === "text") return { [title.name]: { contains: search } };
   const value = Number(search);
   return search.trim() !== "" && Number.isFinite(value)
     ? { [title.name]: { equals: value } }
