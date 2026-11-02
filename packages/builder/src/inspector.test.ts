@@ -26,6 +26,10 @@ import {
   renameOp,
   SUPPORTED_PROP_TYPES,
   lockStateOf,
+  layersLockChangeable,
+  lockStatusOf,
+  designIsWritable,
+  designReadOnlyReason,
 } from "./inspector";
 
 const base = {
@@ -541,5 +545,202 @@ describe("lockStateOf", () => {
 
   it("reads an empty set as unlocked", () => {
     expect(lockStateOf(docWith([]), [])).toBe("unlocked");
+  });
+});
+
+describe("lockStatusOf and designIsWritable", () => {
+  /** A frame whose one slot carries the given lock, holding one text block. */
+  function framed(
+    lock: "all" | "insert" | "contentOnly",
+    child: Partial<BlockNode> = {}
+  ) {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/text",
+          editor: { label: "Text" },
+          props: {
+            body: { type: "text", role: "content" },
+            tone: { type: "text" },
+          },
+        },
+        {
+          ...base,
+          name: "acme/frame",
+          editor: { label: "Frame" },
+          props: {},
+          slots: { children: { lock, defaultBlock: [{ type: "acme/text" }] } },
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    return documentOf([
+      {
+        id: "frame",
+        type: "acme/frame",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            {
+              id: "t",
+              type: "acme/text",
+              version: 1,
+              props: {},
+              ...child,
+            } as BlockNode,
+          ],
+        },
+      } as BlockNode,
+    ]);
+  }
+
+  it("reports no lock for a free block, and its design writable", () => {
+    const doc = withHeading();
+    expect(lockStatusOf(doc, "a")).toEqual({ layers: false, slot: undefined });
+    expect(designIsWritable(doc, "a")).toBe(true);
+  });
+
+  it("reports the Layers lock, and the design read-only under it", () => {
+    const doc = documentOf([
+      {
+        id: "a",
+        type: "acme/heading",
+        version: 1,
+        props: {},
+        locked: true,
+      } as BlockNode,
+    ]);
+    withHeading();
+    expect(lockStatusOf(doc, "a").layers).toBe(true);
+    expect(designIsWritable(doc, "a")).toBe(false);
+  });
+
+  it("names the block whose slot fixes a contentOnly area, and keeps its design read-only", () => {
+    const doc = framed("contentOnly");
+    expect(lockStatusOf(doc, "t")).toEqual({
+      layers: false,
+      slot: {
+        lock: "contentOnly",
+        holder: "Frame",
+        // The lock refusal's own wording: one sentence for the read-only
+        // reason and a refused edit.
+        reason:
+          "This area of Frame is locked to its content. Text's design and settings can't change here.",
+      },
+    });
+    expect(designIsWritable(doc, "t")).toBe(false);
+    expect(designReadOnlyReason(doc, "t")).toBe(
+      "This area of Frame is locked to its content. Text's design and settings can't change here."
+    );
+  });
+
+  it("leaves the design writable in a slot locked all or insert, and still names the holder", () => {
+    for (const lock of ["all", "insert"] as const) {
+      clearBlocks();
+      const doc = framed(lock);
+      expect(lockStatusOf(doc, "t").slot).toMatchObject({
+        lock,
+        holder: "Frame",
+      });
+      expect(lockStatusOf(doc, "t").slot?.reason).toMatch(
+        /^Frame fixes which blocks it holds/
+      );
+      expect(designIsWritable(doc, "t")).toBe(true);
+    }
+  });
+
+  it("keeps both locks apart when a block carries its own and sits in a locked slot", () => {
+    const doc = framed("contentOnly", { locked: true });
+    expect(lockStatusOf(doc, "t")).toMatchObject({
+      layers: true,
+      slot: { lock: "contentOnly", holder: "Frame" },
+    });
+  });
+
+  it("answers for the frame itself as unlocked: its own slot holds its children, not it", () => {
+    const doc = framed("contentOnly");
+    expect(lockStatusOf(doc, "frame").slot).toBeUndefined();
+  });
+  it("prefers a contentOnly area the composed page adds over the page's own arrangement lock", () => {
+    // On the page the text sits in a row locked `all`; composed, a component
+    // places it in a frame locked to its content. The design is held, so the
+    // card must say the contentOnly lock and hold the Layers lock with it.
+    framed("contentOnly");
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/row",
+          editor: { label: "Row" },
+          props: {},
+          slots: {
+            children: { lock: "all", defaultBlock: [{ type: "acme/text" }] },
+          },
+        },
+      ] as never,
+      { source: "inspector-test-row" }
+    );
+    const text = {
+      id: "t",
+      type: "acme/text",
+      version: 1,
+      props: {},
+    } as BlockNode;
+    const page = documentOf([
+      {
+        id: "row",
+        type: "acme/row",
+        version: 1,
+        props: {},
+        slots: { children: [text] },
+      } as BlockNode,
+    ]);
+    const composed = documentOf([
+      {
+        id: "cx-frame",
+        type: "acme/frame",
+        version: 1,
+        props: {},
+        slots: { children: [text] },
+      } as BlockNode,
+    ]);
+
+    // CONTROL: the page alone says the arrangement lock.
+    expect(lockStatusOf(page, "t").slot?.lock).toBe("all");
+    const status = lockStatusOf(page, "t", { composed });
+    expect(designIsWritable(page, "t", { composed })).toBe(false);
+    expect(status.slot).toMatchObject({ lock: "contentOnly", holder: "Frame" });
+    expect(layersLockChangeable(status)).toBe(false);
+  });
+});
+
+describe("what the card shows", () => {
+  it("carries the block's own description and icon from its definition", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/quote",
+          description: "A quotation with its source.",
+          editor: { label: "Quote", icon: "quote" },
+          props: {},
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    const doc = documentOf([
+      { id: "q", type: "acme/quote", version: 1, props: {} } as BlockNode,
+    ]);
+    const inspection = inspectSelection(doc, "q");
+    expect(inspection?.description).toBe("A quotation with its source.");
+    expect(inspection?.icon).toBe("quote");
+  });
+
+  it("leaves the icon unset for a block that names none", () => {
+    const inspection = inspectSelection(withHeading(), "a");
+    expect(inspection?.icon).toBeUndefined();
+    expect(inspection?.description).toBe("A block.");
   });
 });

@@ -504,6 +504,9 @@ export function buildLocalizedOrderExpr(args: {
     code =>
       sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate}), '')`
   );
+  // One language, as a read with fallback off asks: its value alone. SQLite
+  // refuses COALESCE with a single argument.
+  if (perLocale.length === 1) return perLocale[0];
   return sql`COALESCE(${sql.join(perLocale, sql`, `)})`;
 }
 

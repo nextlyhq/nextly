@@ -32,7 +32,9 @@ import {
   compositionFaults,
   DEFAULT_LIMITS,
   lockRefusal,
+  lockRepairRule,
   placementRefusal,
+  placementRepairRule,
   planRepair as planDocumentRepair,
   registryBlockSource,
   registryNestingSource,
@@ -114,10 +116,11 @@ export interface EditorState {
   lockRefusalFor: (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;
   /**
    * The repair of everything the document holds that the engine's repair
-   * rules put right (today, its lock breaks), planned by the engine's one
-   * repair planner against the baseline `apply` judges by. Nothing is
-   * applied: a surface shows the plan's steps and, once the author confirms,
-   * applies it as one edit. No steps when there is nothing to repair.
+   * rules put right (its lock breaks, then its placement breaks), planned by
+   * the engine's one repair planner against the baseline `apply` judges by.
+   * Nothing is applied: a surface shows the plan's steps and, once the
+   * author confirms, applies it as one edit. No steps when there is nothing
+   * to repair.
    */
   planRepair: () => RepairPlan;
   /**
@@ -456,6 +459,9 @@ function useLockDefinitions(
   return useMemo(() => host ?? registryBlockSource(), [host]);
 }
 
+/** The rules a repair runs, in order. */
+const REPAIR_RULES = [lockRepairRule, placementRepairRule] as const;
+
 /**
  * The store's lock questions, asked of the document as it stands and the
  * baseline as last saved, with the composer the room check shares.
@@ -492,9 +498,12 @@ function useLockQuestions(
   );
   const planRepair = useCallback(
     (): RepairPlan =>
+      // The lock rule first and the placement rule after it, so a block a
+      // lock repair moves is judged where the lock rule put it.
       planDocumentRepair(
         latestDocument.current,
-        lockSourcesOf(hostLocksOf(definitions, nesting), baseline, limits)
+        lockSourcesOf(hostLocksOf(definitions, nesting), baseline, limits),
+        REPAIR_RULES
       ),
     [latestDocument, limits, baseline, definitions, nesting]
   );

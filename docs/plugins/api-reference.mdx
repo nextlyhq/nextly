@@ -291,7 +291,8 @@ createTestNextly(opts: {
   dialect?: "sqlite" | "postgresql" | "mysql";  // default sqlite (in-memory)
   serverUrl?: string;                           // else TEST_POSTGRES_URL / TEST_MYSQL_URL
   pluginConsent?: { rawSql: readonly string[] }; // @experimental; the test's db.rawSqlPlugins
-}): Promise<{ nextly; getService; hooks; events; adapter; destroy }>;
+  basePath?: string;                            // where generated files go; else a temporary folder
+}): Promise<{ nextly; getService; hooks; events; adapter; basePath; destroy }>;
 
 getConfiguredTestDialects(): TestDialect[];  // sqlite, plus any whose server URL is set
 ```

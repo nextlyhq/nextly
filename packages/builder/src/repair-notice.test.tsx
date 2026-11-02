@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
 /**
- * The repair of a locked area, as an author meets it: a notice while the page
- * holds what a lock doesn't allow, the steps shown before anything changes,
- * and one confirmed edit that undo takes back.
+ * The repair of a page, as an author meets it: a notice while the page holds
+ * what a lock doesn't allow or a block where the placement rule refuses it,
+ * the steps shown before anything changes, and one confirmed edit that undo
+ * takes back.
  *
  * Driven through the real store, so the plan, the apply and the undo are the
  * ones the editor runs; a spy store would agree with any notice.
@@ -24,6 +25,7 @@ import {
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type ContentModel,
 } from "@nextlyhq/blocks-engine";
 
 import { useEditorState, type EditorState } from "./editor-state";
@@ -68,6 +70,42 @@ beforeEach(() => {
         slots: {
           items: { defaultBlock: [{ type: "acme/headline" }], lock: "all" },
         },
+      },
+      // A panel whose `link` prop makes it render an `<a>`, which refuses the
+      // Button, an interactive block, anywhere beneath it.
+      {
+        ...base,
+        name: "acme/panel",
+        editor: { label: "Panel" },
+        slots: { children: {} },
+        contentModel: (props: { link?: string }): ContentModel =>
+          typeof props.link === "string"
+            ? {
+                is: ["flow", "interactive"],
+                accepts: { without: ["interactive"] },
+              }
+            : { is: ["flow"] },
+      },
+      {
+        ...base,
+        name: "acme/button",
+        editor: { label: "Button" },
+        contentModel: (): ContentModel => ({
+          is: ["flow", "phrasing", "interactive"],
+        }),
+      },
+      // A linked card that starts with a Button in a locked slot: the Button
+      // breaks the placement rule, and moving it out would break the lock.
+      {
+        ...base,
+        name: "acme/locked-panel",
+        slots: {
+          body: { defaultBlock: [{ type: "acme/button" }], lock: "all" },
+        },
+        contentModel: (): ContentModel => ({
+          is: ["flow", "interactive"],
+          accepts: { without: ["interactive"] },
+        }),
       },
     ] as never,
     { source: "lock-repair-test" }
@@ -119,10 +157,33 @@ function mount(document: BlockDocument) {
 
 const topLevel = (editor: EditorState) => editor.document.nodes.map(n => n.id);
 
+const button = (id: string): BlockNode =>
+  ({ id, type: "acme/button", version: 1, props: {} }) as BlockNode;
+
+/** A linked panel holding a headline and a Button, which the link refuses. */
+function linkedPanel(...extra: BlockNode[]): BlockDocument {
+  return {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "panel",
+        type: "acme/panel",
+        version: 1,
+        props: { link: "/go" },
+        slots: { children: [headline("title"), button("cta")] },
+      },
+      ...extra,
+    ],
+  } as BlockDocument;
+}
+
 describe("RepairNotice", () => {
   it("says nothing on a page every lock allows", () => {
     mount(rowHolding());
-    expect(screen.queryByRole("region", { name: "Locked areas" })).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Repair this page" })
+    ).toBeNull();
   });
 
   it("shows the steps before anything changes", () => {
@@ -145,11 +206,15 @@ describe("RepairNotice", () => {
 
     expect(topLevel(editor())).toEqual(["row", "extra"]);
     expect(editor().undoDepth).toBe(1);
-    expect(screen.queryByRole("region", { name: "Locked areas" })).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Repair this page" })
+    ).toBeNull();
 
     act(() => editor().undo());
     expect(topLevel(editor())).toEqual(["row"]);
-    expect(screen.getByRole("region", { name: "Locked areas" })).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Repair this page" })
+    ).toBeTruthy();
   });
 
   it("applies a repair that adds a block the slot starts with", () => {
@@ -233,7 +298,9 @@ describe("RepairNotice", () => {
       } as BlockNode)
     );
 
-    expect(screen.getByRole("region", { name: "Locked areas" })).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Repair this page" })
+    ).toBeTruthy();
     expect(screen.getByText(/can’t be repaired here/)).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Review the repair" })
@@ -273,11 +340,15 @@ describe("RepairNotice", () => {
     }
     // Stored as it stands: the design it holds is the page's own, so kept.
     const { rerender } = render(<Host stored={card("right")} />);
-    expect(screen.queryByRole("region", { name: "Locked areas" })).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Repair this page" })
+    ).toBeNull();
 
     // A save stores the starting design, which the page no longer holds.
     rerender(<Host stored={card("left")} />);
-    expect(screen.getByRole("region", { name: "Locked areas" })).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Repair this page" })
+    ).toBeTruthy();
   });
 
   it("plans under the caps the editor applies edits under", () => {
@@ -308,5 +379,96 @@ describe("RepairNotice", () => {
     render(<Host />);
 
     expect(seen.editor!.planRepair().steps).toEqual([]);
+  });
+});
+
+describe("RepairNotice: placement", () => {
+  it("names a block where it isn't allowed, and words its move for placement", () => {
+    const editor = mount(linkedPanel());
+    expect(
+      screen.getByText(
+        "Some blocks on this page sit where they aren’t allowed."
+      )
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review the repair" }));
+
+    expect(
+      screen.getByText(
+        "Move Button out of Panel, where it isn't allowed, to just after Panel."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/locked area/)).toBeNull();
+    expect(topLevel(editor())).toEqual(["panel"]);
+    expect(editor().undoDepth).toBe(0);
+  });
+
+  it("repairs a placement as one edit, which undo takes back", () => {
+    // Two Buttons, so two moves: still one edit.
+    const page = linkedPanel();
+    page.nodes[0]!.slots!.children!.push(button("cta2"));
+    const editor = mount(page);
+    fireEvent.click(screen.getByRole("button", { name: "Review the repair" }));
+    fireEvent.click(screen.getByRole("button", { name: "Repair" }));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(topLevel(editor())).toEqual(["panel", "cta", "cta2"]);
+    expect(editor().undoDepth).toBe(1);
+    expect(
+      screen.queryByRole("region", { name: "Repair this page" })
+    ).toBeNull();
+
+    act(() => editor().undo());
+    expect(topLevel(editor())).toEqual(["panel"]);
+    expect(editor().document.nodes[0]!.slots!.children!.map(n => n.id)).toEqual(
+      ["title", "cta", "cta2"]
+    );
+    expect(
+      screen.getByRole("region", { name: "Repair this page" })
+    ).toBeTruthy();
+  });
+
+  it("names both kinds, the lock's steps first, when the page breaks a lock and a placement", () => {
+    mount({
+      ...linkedPanel(),
+      nodes: [...rowHolding(headline("extra")).nodes, ...linkedPanel().nodes],
+    } as BlockDocument);
+    expect(
+      screen.getByText(
+        "Some locked areas on this page hold blocks or settings their lock doesn’t allow, and some blocks sit where they aren’t allowed."
+      )
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review the repair" }));
+
+    expect(
+      screen.getAllByRole("listitem").map(item => item.textContent)
+    ).toEqual([
+      "Move Headline out of Row's locked area, to just after Row.",
+      "Move Button out of Panel, where it isn't allowed, to just after Panel.",
+    ]);
+  });
+
+  it("warns, with nothing to confirm, when a misplaced block has nowhere it may go", () => {
+    mount({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "locked",
+          type: "acme/locked-panel",
+          version: 1,
+          props: {},
+          slots: { body: [button("cta")] },
+        },
+      ],
+    } as BlockDocument);
+
+    expect(
+      screen.getByRole("region", { name: "Repair this page" })
+    ).toBeTruthy();
+    expect(screen.getByText(/Some blocks can’t be repaired here/)).toBeTruthy();
+    expect(screen.queryByText(/locked areas can’t be repaired/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Review the repair" })
+    ).toBeNull();
   });
 });
