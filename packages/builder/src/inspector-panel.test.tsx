@@ -397,6 +397,16 @@ describe("InspectorPanel block card", () => {
     expect(card.querySelector(".nx-block-icon")).not.toBeNull();
   });
 
+  it("leaves the editor around the card's menu in the accessibility tree", () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    mount();
+    openCardMenu("Heading");
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
   it("titles the card by type alone when the block has no label", () => {
     mount();
     expect(screen.getByRole("heading", { name: "Heading" })).toBeDefined();

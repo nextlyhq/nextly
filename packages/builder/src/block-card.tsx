@@ -216,7 +216,9 @@ function CardMenu({
     return null;
   }
   return (
-    <DropdownMenu>
+    // Not modal: a modal menu marks the editor around it aria-hidden while
+    // its controls stay focusable (axe: aria-hidden-focus).
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -377,7 +379,8 @@ export function SelectionCard({
     <div className="nx-block-card" data-block-card="many">
       <div className="nx-block-card__head">
         <h2 className="nx-block-card__title">{title}</h2>
-        <DropdownMenu>
+        {/* Not modal, as the single block's card menu above. */}
+        <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
