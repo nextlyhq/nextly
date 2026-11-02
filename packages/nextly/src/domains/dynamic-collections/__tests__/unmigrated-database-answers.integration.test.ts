@@ -852,6 +852,47 @@ describe.each(getConfiguredTestDialects())(
       expect(await rowCount(POSTS_TABLE)).toBe(1);
     }, 120_000);
 
+    // Not on MySQL: transactions in Nextly's MySQL context carry no
+    // savepoints, so a caller that catches the refusal and commits keeps the
+    // entry row there (stated in the pull request as a limit).
+    it.skipIf(dialect === "mysql")(
+      "keeps no entry row when a create's translation table is unregistered and the caller commits",
+      async () => {
+        // An instance whose registry holds the collection's main table but not
+        // its translation table: the create's first write is allowed and a
+        // later one refused. A caller's transaction that catches the refusal and
+        // commits, as a plugin's may, keeps nothing from the refused create.
+        await boot(dialect);
+        const registry = t().getService(
+          "schemaRegistry" as never
+        ) as SchemaRegistry;
+        registry.retractDynamicSchema(`dc_${PUB}_locales`);
+        const before = await rowCount(`dc_${PUB}`);
+        const entries = entryService();
+        let answer: Record<string, unknown> | undefined;
+        await t().adapter.transaction(async tx => {
+          answer = await entries
+            .createEntryInTransaction(
+              tx,
+              { collectionName: PUB, overrideAccess: true, locale: "en" },
+              { title: "Second" }
+            )
+            .catch((error: unknown) => ({ success: false, error }));
+          // The transaction is still usable after the refused create: a write
+          // after it is kept when the caller commits.
+          await entries.createEntryInTransaction(
+            tx,
+            { collectionName: POSTS, overrideAccess: true },
+            { title: "After" }
+          );
+        });
+        expect(answer?.success).toBe(false);
+        expect(await rowCount(`dc_${PUB}`)).toBe(before);
+        expect(await rowCount(POSTS_TABLE)).toBe(2);
+      },
+      120_000
+    );
+
     it("refuses a production write to a Single this instance has not registered, and writes nothing", async () => {
       const target = await boot(dialect);
       const registry = t().getService(

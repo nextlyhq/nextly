@@ -115,78 +115,78 @@ const canConnect = async (url: string): Promise<boolean> => {
   return ok;
 };
 
-describe("MySQL insert into a table the resolver does not hold", async () => {
-  const available = TEST_DB_URL ? await canConnect(TEST_DB_URL) : false;
+// Gated on a reachable server, as the suite needs one: unset or unreachable
+// TEST_MYSQL_URL skips the whole suite rather than failing it.
+const available = TEST_DB_URL ? await canConnect(TEST_DB_URL) : false;
 
-  if (!available) {
-    it.skip("Skipping: TEST_MYSQL_URL not set or unreachable", () => {});
-    return;
-  }
+describe.skipIf(!available)(
+  "MySQL insert into a table the resolver does not hold",
+  () => {
+    let adapter: MySqlAdapter;
 
-  let adapter: MySqlAdapter;
+    const count = async (table: string): Promise<number> => {
+      const rows = await adapter.executeQuery<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM ${table}`
+      );
+      return Number(rows[0]?.n);
+    };
 
-  const count = async (table: string): Promise<number> => {
-    const rows = await adapter.executeQuery<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM ${table}`
+    beforeAll(async () => {
+      adapter = createMySqlAdapter({ url: TEST_DB_URL as string });
+      await adapter.connect();
+      for (const table of [KNOWN, UNKNOWN]) {
+        await adapter.executeQuery(`DROP TABLE IF EXISTS ${table}`);
+        await adapter.createTable(definition(table));
+      }
+      adapter.setTableResolver({
+        getTable: (name: string) => (name === KNOWN ? known : null),
+      });
+    });
+
+    beforeEach(async () => {
+      await adapter.executeQuery(`DELETE FROM ${KNOWN}`);
+      await adapter.executeQuery(`DELETE FROM ${UNKNOWN}`);
+    });
+
+    afterAll(async () => {
+      for (const table of [KNOWN, UNKNOWN]) {
+        await adapter.executeQuery(`DROP TABLE IF EXISTS ${table}`);
+      }
+      await adapter.disconnect();
+    });
+
+    it.each(ROADS)(
+      "%s is refused, naming the table, and writes nothing",
+      async (_road, insert) => {
+        const refusal = await insert(adapter, UNKNOWN).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        expect(refusal).toMatchObject({ code: TABLE_NOT_REGISTERED_CODE });
+        expect((refusal as Error).message).toContain(`"${UNKNOWN}"`);
+        expect(await count(UNKNOWN)).toBe(0);
+      }
     );
-    return Number(rows[0]?.n);
-  };
 
-  beforeAll(async () => {
-    adapter = createMySqlAdapter({ url: TEST_DB_URL as string });
-    await adapter.connect();
-    for (const table of [KNOWN, UNKNOWN]) {
-      await adapter.executeQuery(`DROP TABLE IF EXISTS ${table}`);
-      await adapter.createTable(definition(table));
-    }
-    adapter.setTableResolver({
-      getTable: (name: string) => (name === KNOWN ? known : null),
-    });
-  });
+    it.each(ROADS)(
+      "%s still writes a table the resolver holds",
+      async (_road, insert) => {
+        await insert(adapter, KNOWN);
+        expect(await count(KNOWN)).toBeGreaterThan(0);
+      }
+    );
 
-  beforeEach(async () => {
-    await adapter.executeQuery(`DELETE FROM ${KNOWN}`);
-    await adapter.executeQuery(`DELETE FROM ${UNKNOWN}`);
-  });
-
-  afterAll(async () => {
-    for (const table of [KNOWN, UNKNOWN]) {
-      await adapter.executeQuery(`DROP TABLE IF EXISTS ${table}`);
-    }
-    await adapter.disconnect();
-  });
-
-  it.each(ROADS)(
-    "%s is refused, naming the table, and writes nothing",
-    async (_road, insert) => {
-      const refusal = await insert(adapter, UNKNOWN).then(
-        () => undefined,
-        (error: unknown) => error
-      );
-      expect(refusal).toMatchObject({ code: TABLE_NOT_REGISTERED_CODE });
-      expect((refusal as Error).message).toContain(`"${UNKNOWN}"`);
+    it("refuses before any statement, so the transaction can go on and commit", async () => {
+      await adapter.transaction(async tx => {
+        const refusal = await tx.insert(UNKNOWN, { id: "a", title: "A" }).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        expect(refusal).toMatchObject({ code: TABLE_NOT_REGISTERED_CODE });
+        await tx.insert(KNOWN, { id: "b", title: "B" }, { returning: [] });
+      });
+      expect(await count(KNOWN)).toBe(1);
       expect(await count(UNKNOWN)).toBe(0);
-    }
-  );
-
-  it.each(ROADS)(
-    "%s still writes a table the resolver holds",
-    async (_road, insert) => {
-      await insert(adapter, KNOWN);
-      expect(await count(KNOWN)).toBeGreaterThan(0);
-    }
-  );
-
-  it("refuses before any statement, so the transaction can go on and commit", async () => {
-    await adapter.transaction(async tx => {
-      const refusal = await tx.insert(UNKNOWN, { id: "a", title: "A" }).then(
-        () => undefined,
-        (error: unknown) => error
-      );
-      expect(refusal).toMatchObject({ code: TABLE_NOT_REGISTERED_CODE });
-      await tx.insert(KNOWN, { id: "b", title: "B" }, { returning: [] });
     });
-    expect(await count(KNOWN)).toBe(1);
-    expect(await count(UNKNOWN)).toBe(0);
-  });
-});
+  }
+);
