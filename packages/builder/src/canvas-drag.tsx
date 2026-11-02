@@ -48,7 +48,6 @@ import {
   COMPONENT_INSTANCE_TYPE,
   declaredSlotNames,
   findNode,
-  registryBlockSource,
   type PlacedNode,
   type PlacementSources,
 } from "@nextlyhq/blocks-engine";
@@ -69,6 +68,7 @@ import {
 import {
   collectRegions,
   movingSubtree,
+  placementSources,
   resolveDrop,
   type DropRefusal,
   type DropRegion,
@@ -1508,20 +1508,6 @@ export function DropIndicator({
       aria-hidden="true"
     />
   );
-}
-
-/** Where the one placement rule reads its answers, for this canvas. */
-function placementSources(current: {
-  nesting: NestingSource;
-  definitions?: ComponentLookup;
-}): PlacementSources {
-  return {
-    nesting: current.nesting,
-    definitions: registryBlockSource(),
-    ...(current.definitions === undefined
-      ? {}
-      : { components: current.definitions }),
-  };
 }
 
 /**
