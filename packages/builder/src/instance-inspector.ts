@@ -23,20 +23,28 @@
  */
 
 import {
+  contentPropsOf,
   findNode,
   instanceExposure,
   isComponentInstance,
+  nodeLocks,
   readableDefinition,
   type BlockDocument,
   type BlockNode,
+  type ComponentDocument,
   type ComponentLookup,
   type ExposedPropertyType,
   type ExposedValueSource,
+  type NodeLock,
   type OverrideValue,
+  type ResolvedBlockNode,
+  type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import type { RefusalWording } from "./drag-refusal";
 import type { SavedComponent } from "./inserter";
-import type { BlockIdentity } from "./inspector";
+import { lockSourceOf, type BlockIdentity, type LockView } from "./inspector";
+import { lockRefusalWording } from "./lock-refusal";
 import type { BuilderOp, NodePatch } from "./ops";
 
 /**
@@ -103,6 +111,13 @@ export interface ExposedRow {
    * than pointing at an id an author has never seen.
    */
   readonly shadowedBy?: { readonly id: string; readonly label: string };
+  /**
+   * Why this row is read-only, when a `contentOnly` lock holds what it drives:
+   * a value that is not content, inside an area locked to its content. The
+   * same rule a save applies to the composed page, so the panel holds exactly
+   * what the store would refuse. Absent where the row may change.
+   */
+  readonly heldBy?: RefusalWording;
 }
 
 /**
@@ -134,6 +149,12 @@ export interface InstanceInspection {
   /** How many pages place this component, when the library can say. */
   readonly usedOn?: number;
   /**
+   * The variant this placement chose, by its stored key, with the label the
+   * definition gives it; `label` is absent when the definition no longer
+   * offers that variant. Absent when the placement chose none.
+   */
+  readonly variant?: { readonly key: string; readonly label?: string };
+  /**
    * Whether the lookup holds a definition for this instance.
    *
    * `false` is a state the panel has to draw rather than an error: the
@@ -163,7 +184,12 @@ export function inspectInstance(
   document: BlockDocument,
   selectedId: string | null,
   definitions: ComponentLookup,
-  components: readonly SavedComponent[]
+  components: readonly SavedComponent[],
+  /**
+   * The editor's lock source and composed page, for the rows a `contentOnly`
+   * lock holds. Absent, no row is held by one.
+   */
+  view?: LockView
 ): InstanceInspection | null {
   if (selectedId === null) return null;
   const node = findNode(document.nodes, selectedId);
@@ -178,6 +204,8 @@ export function inspectInstance(
   const definition = readableDefinition(definitions.get(componentId));
   const found = definition !== undefined;
   const exposure = found ? instanceExposure(definition, node) : undefined;
+  const variant = variantOf(node, definition);
+  const held = heldRows(node.id, view);
 
   return {
     nodeId: node.id,
@@ -185,13 +213,163 @@ export function inspectInstance(
     identity: { name: node.name ?? "", locked: node.locked === true },
     label: row?.title ?? componentId,
     ...(row?.usedOn === undefined ? {} : { usedOn: row.usedOn }),
+    ...(variant === undefined ? {} : { variant }),
     definitionFound: found,
-    rows: exposure === undefined ? [] : rowsOf(exposure.properties, node),
+    rows:
+      exposure === undefined
+        ? []
+        : rowsOf(exposure.properties, node).map(entry => {
+            const reason = held(entry);
+            return reason === undefined ? entry : { ...entry, heldBy: reason };
+          }),
     orphaned:
       exposure === undefined
         ? []
         : orphanedOf(exposure.orphanedOverrideIds, node),
   };
+}
+
+/**
+ * What an author is told after double-clicking text a component does not
+ * expose: whose it is, with the variant the placement uses, and where its
+ * editable fields are. The placement is selected, so the panel beside it is
+ * the one this points to.
+ */
+export function partOfComponentSentence(
+  inspection: Pick<InstanceInspection, "label" | "variant" | "rows">
+): string {
+  const variant =
+    inspection.variant?.label === undefined
+      ? ""
+      : `, ${inspection.variant.label} variant`;
+  const where =
+    inspection.rows.length === 0
+      ? "Its content is edited on the component itself."
+      : "Its exposed fields are in the panel; the rest is edited on the component itself.";
+  return `Part of ${inspection.label}${variant}. ${where}`;
+}
+
+/**
+ * The variant the placement chose, with the definition's label for it.
+ *
+ * Read off the definition's own record by the stored key, own keys only, as
+ * the resolver reads it: a key the definition no longer offers is still the
+ * placement's choice, and the panel says it is gone rather than hiding it.
+ */
+function variantOf(
+  node: BlockNode,
+  definition: ComponentDocument | undefined
+): InstanceInspection["variant"] {
+  const key = instanceProps(node).variant;
+  if (typeof key !== "string" || key === "") return undefined;
+  const variants: unknown = definition?.variants;
+  const chosen =
+    typeof variants === "object" &&
+    variants !== null &&
+    Object.hasOwn(variants, key)
+      ? (variants as Record<string, unknown>)[key]
+      : undefined;
+  const label =
+    typeof chosen === "object" && chosen !== null
+      ? (chosen as { label?: unknown }).label
+      : undefined;
+  return typeof label === "string" && label.trim() !== ""
+    ? { key, label }
+    : chosen === undefined
+      ? { key }
+      : { key, label: key };
+}
+
+/**
+ * Which rows of this placement a `contentOnly` lock holds, and why.
+ *
+ * Asked of the COMPOSED page, where the placement's values land inside its
+ * component's nodes: the resolver's exposure map names the node and prop each
+ * exposure drives there, and the node's lock comes from the engine's
+ * `nodeLocks`, the walk a save applies. A prop the block declares
+ * `role: "content"` stays editable under the lock, and anything else is held,
+ * as D19 judges by the target prop's declared role.
+ *
+ * A visibility row drives no prop, so the map has no node for it; it is held
+ * when the placement itself sits in such an area, which is where its node is.
+ */
+function heldRows(
+  placementId: string,
+  view: LockView | undefined
+): (row: ExposedRow) => RefusalWording | undefined {
+  const composed = view?.composed;
+  if (composed === undefined) return () => undefined;
+  const source = lockSourceOf(view);
+  const locks = nodeLocks(composed.nodes, source);
+  const targets = new Map<string, { node: ResolvedBlockNode; path: string }>();
+  let placementArea: NodeLock | undefined;
+  for (const composedNode of composedNodesOf(composed.nodes, placementId)) {
+    const lock = locks.get(composedNode.id);
+    if (lock?.area !== undefined) placementArea ??= lock;
+    const fed = composedNode.exposedProps;
+    if (fed === undefined) continue;
+    for (const path of Object.keys(fed)) {
+      const id = fed[path];
+      if (typeof id === "string") targets.set(id, { node: composedNode, path });
+    }
+  }
+  return row => {
+    const target = targets.get(row.id);
+    if (target === undefined) {
+      return row.type === "visibility"
+        ? contentOnlyWording(placementArea, undefined)
+        : undefined;
+    }
+    const lock = locks.get(target.node.id);
+    const prop = target.path.split(".")[0] ?? target.path;
+    if (contentPropsOf(propsOf(source, target.node.type)).has(prop)) {
+      return undefined;
+    }
+    return contentOnlyWording(lock, target.node.type);
+  };
+}
+
+/** A block type's declared props, from the lock source the editor judges by. */
+function propsOf(
+  source: SlotDefaultSource,
+  type: string
+): Parameters<typeof contentPropsOf>[0] {
+  return source.get(type)?.props;
+}
+
+/** The sentence a held row points to, naming the area by its holder. */
+function contentOnlyWording(
+  lock: NodeLock | undefined,
+  childType: string | undefined
+): RefusalWording | undefined {
+  if (lock?.area === undefined) return undefined;
+  return lockRefusalWording({
+    code: "locked-slot-content-only",
+    holderType: lock.area.holderType,
+    lock: "contentOnly",
+    ...(childType === undefined ? {} : { childType }),
+  });
+}
+
+/** The composed nodes a placement contributed, in document order. */
+function composedNodesOf(
+  nodes: readonly ResolvedBlockNode[],
+  placementId: string
+): ResolvedBlockNode[] {
+  const found: ResolvedBlockNode[] = [];
+  const queue = [...nodes];
+  for (let head = 0; head < queue.length; head += 1) {
+    const entry = queue[head];
+    if (typeof entry !== "object" || entry === null) continue;
+    if (entry.instanceOf === placementId) found.push(entry);
+    const slots: unknown = entry.slots;
+    if (typeof slots !== "object" || slots === null) continue;
+    for (const children of Object.values(slots as Record<string, unknown>)) {
+      if (Array.isArray(children))
+        queue.push(...(children as ResolvedBlockNode[]));
+    }
+  }
+  return found;
 }
 
 /**

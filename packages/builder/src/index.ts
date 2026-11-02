@@ -302,6 +302,7 @@ export {
   EDITABLE_EXPOSED_TYPES,
   inspectInstance,
   overridesPatch,
+  partOfComponentSentence,
   resetOverrideOp,
   setOverrideOp,
   type ExposedRow,

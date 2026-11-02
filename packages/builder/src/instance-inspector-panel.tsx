@@ -29,9 +29,11 @@
  */
 
 import {
+  exposedValueFits,
   findNode,
   isRichTextValue,
   isUnsetOverride,
+  neededFor,
   richTextToPlainText,
   type OverrideValue,
 } from "@nextlyhq/blocks-engine";
@@ -46,9 +48,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import { CircleSlash, Layers, Link2, PenLine } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
+import { HeldByLock } from "./held-by-lock";
 import { IdentityFields } from "./identity-fields";
 import {
   resetOverrideOp,
@@ -57,6 +62,7 @@ import {
   type InstanceInspection,
   type OrphanedOverride,
 } from "./instance-inspector";
+import { refusalAnnouncement } from "./move-refusal";
 import { useStoredDraft } from "./stored-draft";
 
 /**
@@ -70,6 +76,27 @@ const SOURCE_LABEL: Readonly<Record<ExposedRow["source"], string>> = {
   variant: "From variant",
   instance: "Overridden",
 };
+
+/**
+ * The badge's icon for each state, beside its words, so the four states differ
+ * by shape as well as by label and never by colour alone: "Cleared" (a value
+ * deliberately removed) and "Inherited" (nothing set here) are the pair an
+ * author most needs to tell apart, and the one a colour-blind author could
+ * not tell apart by tint.
+ */
+const SOURCE_ICON: Readonly<
+  Record<ExposedRow["source"] | "cleared", LucideIcon>
+> = {
+  definition: Link2,
+  variant: Layers,
+  instance: PenLine,
+  cleared: CircleSlash,
+};
+
+/** The words a row's badge shows: its source, or "Cleared". */
+function sourceBadgeLabel(row: Pick<ExposedRow, "source" | "cleared">): string {
+  return row.cleared ? "Cleared" : SOURCE_LABEL[row.source];
+}
 
 /**
  * The control's spelling of a definition's option value, and back.
@@ -139,6 +166,10 @@ export function InstanceInspectorPanel({
   );
 
   const headingId = React.useId();
+  // The sentence every held row points to while the placement is locked in
+  // Layers. Its own lock control stays live above, so it can be unlocked.
+  const lockedReasonId = React.useId();
+  const locked = inspection.identity.locked;
 
   return (
     <div className="nx-inspector" data-instance="">
@@ -156,6 +187,7 @@ export function InstanceInspectorPanel({
       */}
       <p className="nx-inspector__meta">
         Component
+        {variantPhrase(inspection.variant)}
         {inspection.usedOn === undefined
           ? null
           : ` · used on ${inspection.usedOn} ${inspection.usedOn === 1 ? "page" : "pages"}`}
@@ -197,21 +229,29 @@ export function InstanceInspectorPanel({
           <h3 id={headingId} className="nx-inspector__heading">
             Exposed properties
           </h3>
-          <div className="nx-inspector__fields">
-            {inspection.rows.map(row => (
-              <ExposedField
-                // Keyed by node AND property, for the reason the block
-                // inspector keys its fields: a bare id would let React reuse
-                // one instance's field for the next instance's same-named
-                // property, and the input would keep the previous one's
-                // uncommitted text.
-                key={`${inspection.nodeId}:${row.id}`}
-                row={row}
-                onSet={set}
-                onReset={reset}
-              />
-            ))}
-          </div>
+          {locked ? (
+            <p id={lockedReasonId} className="nx-inspector__note" role="status">
+              This component is locked, so its fields can&apos;t change. Unlock
+              it to edit them.
+            </p>
+          ) : null}
+          <HeldByLock reasonId={locked ? lockedReasonId : undefined}>
+            <div className="nx-inspector__fields">
+              {inspection.rows.map(row => (
+                <ExposedField
+                  // Keyed by node AND property, for the reason the block
+                  // inspector keys its fields: a bare id would let React reuse
+                  // one instance's field for the next instance's same-named
+                  // property, and the input would keep the previous one's
+                  // uncommitted text.
+                  key={`${inspection.nodeId}:${row.id}`}
+                  row={row}
+                  onSet={set}
+                  onReset={reset}
+                />
+              ))}
+            </div>
+          </HeldByLock>
         </section>
       )}
 
@@ -220,6 +260,18 @@ export function InstanceInspectorPanel({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The variant this placement uses, as a phrase after "Component", or nothing.
+ * A variant the component no longer offers is said to be gone, since the
+ * placement then shows the component's own values.
+ */
+function variantPhrase(variant: InstanceInspection["variant"]): string {
+  if (variant === undefined) return "";
+  return variant.label === undefined
+    ? " · variant removed, showing defaults"
+    : ` · ${variant.label} variant`;
 }
 
 /**
@@ -247,42 +299,53 @@ function ExposedField({
   // A label points at a control, and two kinds of row draw none: the label
   // then names the row without claiming to label an input that is not there.
   const hasControl = row.shadowedBy === undefined && row.supported;
+  const state = row.cleared ? "cleared" : row.source;
+  const Icon = SOURCE_ICON[state];
+  const reasonId = `${id}-held`;
 
   return (
     <div
       className="nx-inspector__field nx-inspector__field--exposed"
-      data-source={row.cleared ? "cleared" : row.source}
+      data-source={state}
     >
       <Label {...(hasControl ? { htmlFor: id } : {})}>{row.label}</Label>
       <div className="nx-inspector__exposed">
-        <ExposedControl id={id} row={row} onSet={onSet} />
-        <div className="nx-inspector__provenance">
-          {/*
+        {row.heldBy === undefined ? null : (
+          <p id={reasonId} className="nx-inspector__note">
+            {refusalAnnouncement(row.heldBy)}
+          </p>
+        )}
+        <HeldByLock reasonId={row.heldBy === undefined ? undefined : reasonId}>
+          <ExposedControl id={id} row={row} onSet={onSet} />
+          <div className="nx-inspector__provenance">
+            {/*
             The badge is VISIBLE, and it is a badge rather than the label's
             styling: "Overridden" beside a value is what tells an author the
             reset below undoes their own edit rather than the component's
             design.
           */}
-          <span
-            className="nx-inspector__source"
-            data-source={row.cleared ? "cleared" : row.source}
-          >
-            {row.cleared ? "Cleared" : SOURCE_LABEL[row.source]}
-          </span>
-          {overridden ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              // Named for the row, because six rows each offering "Reset"
-              // are six identical controls to a screen reader.
-              aria-label={`Reset ${row.label} to the component's value`}
-              onClick={() => onReset(row.id)}
-            >
-              Reset
-            </Button>
-          ) : null}
-        </div>
+            <span className="nx-inspector__source" data-source={state}>
+              <Icon aria-hidden="true" className="nx-inspector__source-icon" />
+              {sourceBadgeLabel(row)}
+            </span>
+            {overridden ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                // Named for the row, because six rows each offering "Reset"
+                // are six identical controls to a screen reader. "Inherited"
+                // rather than "the component's", because under a variant the
+                // value a reset returns to is the variant's.
+                aria-label={`Reset ${row.label} to inherited value`}
+                title="Reset to inherited value"
+                onClick={() => onReset(row.id)}
+              >
+                Reset
+              </Button>
+            ) : null}
+          </div>
+        </HeldByLock>
       </div>
     </div>
   );
@@ -463,29 +526,52 @@ function ExposedTextField({
   // this, an untouched field writes nothing.
   const stored = storedText(row.value);
   const [draft, setDraft] = useStoredDraft(stored);
+  // A value the store would refuse is held here with the reason rather than
+  // written: a link the renderer would not draw is the case a text field can
+  // produce. The draft stays, so the author can correct it.
+  const [problem, setProblem] = React.useState<string | null>(null);
+  const problemId = `${id}-problem`;
 
   const send = () => {
-    if (draft === stored) return;
-    onSet(row.id, draft === "" ? { $unset: true } : draft);
+    if (draft === stored) {
+      setProblem(null);
+      return;
+    }
+    const next = draft === "" ? { $unset: true } : draft;
+    if (!exposedValueFits(row, next)) {
+      setProblem(`${row.label} ${neededFor(row)}.`);
+      return;
+    }
+    setProblem(null);
+    onSet(row.id, next);
   };
 
   return (
-    <Input
-      id={id}
-      value={draft}
-      // Keyed for an address when the exposure is one, as the block inspector
-      // keys a url prop: the value is the same string either way.
-      inputMode={row.type === "link" ? "url" : undefined}
-      onChange={event => setDraft(event.target.value)}
-      onBlur={send}
-      // Enter commits as well as blur, as every single-line field here does.
-      onKeyDown={event => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          send();
-        }
-      }}
-    />
+    <>
+      <Input
+        id={id}
+        value={draft}
+        aria-invalid={problem === null ? undefined : true}
+        aria-describedby={problem === null ? undefined : problemId}
+        // Keyed for an address when the exposure is one, as the block inspector
+        // keys a url prop: the value is the same string either way.
+        inputMode={row.type === "link" ? "url" : undefined}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={send}
+        // Enter commits as well as blur, as every single-line field here does.
+        onKeyDown={event => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            send();
+          }
+        }}
+      />
+      {problem === null ? null : (
+        <p id={problemId} className="nx-inspector__problem" role="alert">
+          {problem}
+        </p>
+      )}
+    </>
   );
 }
 

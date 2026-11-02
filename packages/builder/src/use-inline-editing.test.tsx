@@ -17,10 +17,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   registerBlocks,
+  resolveComponentInstances,
   RICH_TEXT_PROP_TYPE,
   type BlockDocument,
   type BlockNode,
+  type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
@@ -1923,5 +1926,118 @@ describe("the element the gesture measured", () => {
     });
 
     expect(attach).toHaveBeenCalled();
+  });
+});
+
+describe("a double-click on a component's text", () => {
+  /** A header placed once, its heading exposing `text` and not `kicker`. */
+  function placedHeader() {
+    registerBlocks(
+      [
+        {
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: () => null,
+          name: "acme/heading",
+          props: {
+            text: { type: "text", inline: true },
+            kicker: { type: "text", inline: true },
+          },
+        },
+      ] as never,
+      { source: "use-inline-editing-test" }
+    );
+    const header: ComponentDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "h",
+          type: "acme/heading",
+          version: 1,
+          props: { text: "Site name", kicker: "Hello" },
+        },
+      ],
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "h",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    };
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "p1",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    } as BlockDocument;
+    const composed = resolveComponentInstances(
+      page,
+      new Map([["header", header as BlockDocument]]),
+      { exposures: true }
+    ).document;
+    const heading = composed.nodes[0];
+    document.body.innerHTML = `
+      <h2 data-nx-node="${heading?.id ?? ""}" data-nx-instance="p1">
+        <small data-nx-prop="kicker">Hello</small>
+        <span data-nx-prop="text">Site name</span>
+      </h2>`;
+    const editor = {
+      document: page,
+      selectedId: null,
+      apply: vi.fn(() => page),
+      select: vi.fn(),
+      composed: () => composed,
+    } as unknown as EditorState & {
+      apply: ReturnType<typeof vi.fn>;
+      select: ReturnType<typeof vi.fn>;
+    };
+    const onPartOf = vi.fn();
+    const hook = renderHook(() =>
+      useInlineEditing(editor, undefined, undefined, onPartOf)
+    );
+    return { ...hook, editor, onPartOf };
+  }
+
+  it("on text it does not expose, selects the placement and says whose it is", () => {
+    const { result, editor, onPartOf } = placedHeader();
+
+    act(() => result.current.onDoubleClick(doubleClickOn("kicker")));
+
+    expect(editor.select).toHaveBeenCalledWith("p1");
+    expect(onPartOf).toHaveBeenCalledWith("p1");
+    expect(result.current.editing).toBeNull();
+  });
+
+  it("on exposed text, edits it in place and stores it on the placement", () => {
+    const { result, editor, onPartOf } = placedHeader();
+
+    act(() => result.current.onDoubleClick(doubleClickOn("text")));
+    expect(result.current.editing?.exposure?.exposureId).toBe("title");
+    expect(onPartOf).not.toHaveBeenCalled();
+
+    const element = document.querySelector('[data-nx-prop="text"]');
+    if (element === null) throw new Error("no element");
+    element.textContent = "Acme";
+    act(() => {
+      result.current.commit();
+    });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "p1",
+      patch: { props: { componentId: "header", overrides: { title: "Acme" } } },
+    });
   });
 });

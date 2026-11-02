@@ -44,6 +44,7 @@ import {
   MAX_COMPOSED_DEPTH,
   contentModelKeyOf,
   nodeLocks,
+  placementValueIssues,
   registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
@@ -56,6 +57,7 @@ import {
   type DocumentLimits,
   type LockedExposure,
   type NodeLock,
+  type PlacementValueProblem,
   type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -505,6 +507,56 @@ async function judgeOwnComposition(args: {
   );
   for (const fault of faults) {
     report.add(fault.code, fault.message);
+  }
+  await judgePlacementValues({
+    document,
+    components: lookupOf(library),
+    limits: setup.limits,
+    stored: args.stored,
+    report,
+  });
+}
+
+/** The issue code for each way a placement's value is refused. */
+const PLACEMENT_VALUE_CODES: Readonly<Record<PlacementValueProblem, string>> = {
+  "unknown-field": "PLACEMENT_VALUE_UNKNOWN_FIELD",
+  "wrong-type": "PLACEMENT_VALUE_WRONG_TYPE",
+};
+
+/**
+ * Refuse a value the write sets on a placement that its component does not
+ * accept: an id the component does not expose, or a value of the wrong type
+ * for its field. Judged against the definitions this form composes with, so
+ * every write path that validates the field, an import included, is held to
+ * what the inspector can write.
+ *
+ * A value the stored document already holds is kept, so a field removed from
+ * a component does not make every page placing it unsavable; the stored forms
+ * are read only once something is found. Where they cannot be read (a single,
+ * a localized field), an id the component lacks may be one the stored value
+ * already held, so only a wrong type is refused there: a field's type never
+ * changes under its id, so no stored value can hold the wrong one.
+ */
+async function judgePlacementValues(args: {
+  document: BlockDocument;
+  components: ComponentLookup;
+  limits: DocumentLimits;
+  stored: () => Promise<StoredRead>;
+  report: Report;
+}): Promise<void> {
+  const { document, components, limits, report } = args;
+  if (placementValueIssues(document, components, [], limits).length === 0) {
+    return;
+  }
+  const stored = await args.stored();
+  const issues = placementValueIssues(
+    document,
+    components,
+    stored.forms,
+    limits
+  ).filter(issue => stored.readable || issue.problem === "wrong-type");
+  for (const issue of issues) {
+    report.add(PLACEMENT_VALUE_CODES[issue.problem], issue.message);
   }
 }
 

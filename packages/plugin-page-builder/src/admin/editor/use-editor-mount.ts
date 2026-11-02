@@ -19,6 +19,8 @@ import {
   type EditorState,
   type UseInlineEditingResult,
   CANVAS_ROOT_CLASS,
+  inspectInstance,
+  partOfComponentSentence,
   useEditorState,
   useInlineEditing,
   useNoticeQueue,
@@ -260,7 +262,31 @@ export function useEditorMount(
     const problem = inlineEditProblem(outcome);
     if (problem !== null) toast.error(problem);
   }, []);
-  const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
+  /*
+   * A double-click on text a component does not expose selects the placement
+   * (the hook does that) and says whose the text is, with the variant, so the
+   * gesture is never met with nothing. Read against the same library the
+   * canvas draws with. A toast rather than the builder's notice queue, which
+   * holds failures: this is information, and it fades.
+   */
+  const partOf = useCallback(
+    (placementId: string) => {
+      const inspection = inspectInstance(
+        editor.document,
+        placementId,
+        componentLibrary.definitions,
+        componentLibrary.components
+      );
+      if (inspection !== null) toast.info(partOfComponentSentence(inspection));
+    },
+    [editor.document, componentLibrary]
+  );
+  const inline = useInlineEditing(
+    editor,
+    loadInlineRichTextEditor,
+    announce,
+    partOf
+  );
 
   // Whether the save-as-pattern form is up. A boolean here rather than the form
   // itself, because the verb that raises it belongs to the shared chain — the

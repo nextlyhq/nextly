@@ -163,6 +163,20 @@ export interface ResolvedBlockNode extends BlockNode {
    * nothing to act on.
    */
   unresolvedComponent?: ComponentUnresolvedReason;
+  /**
+   * Which of the placement's exposures feeds each prop of this node, as prop
+   * path to exposure id. Recorded only when a resolution asks for it
+   * ({@link ResolveComponentOptions.exposures}), so a page served to a reader
+   * never carries it.
+   *
+   * The editor's address for a value inside a component: the node itself is
+   * re-identified and absent from the stored page, so an edit on the canvas
+   * reaches the value through `instanceOf` and this id, and is written as the
+   * placement's own value. Only the HOST placement's component is mapped: a
+   * component nested inside it is reached through that component's own
+   * fields, never directly.
+   */
+  exposedProps?: Readonly<Record<string, string>>;
   slots?: Record<string, ResolvedBlockNode[]>;
 }
 
@@ -243,6 +257,12 @@ export interface ResolveComponentOptions {
    * already bounds it. Omitted, a resolution is bounded by its limits alone.
    */
   work?: WorkAllowance;
+  /**
+   * Record on each composed node which exposure feeds each of its props
+   * ({@link ResolvedBlockNode.exposedProps}). For an editor only: a render
+   * leaves it off, and its output carries no map.
+   */
+  exposures?: boolean;
 }
 
 /** One instance that was left standing, and why. */
@@ -929,6 +949,7 @@ export function resolveComponentInstances(
     maxDepth: limits.maxDepth,
     maxNodes: limits.maxNodes,
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
+    exposures: options.exposures === true,
     // What is LEFT under the cap, not the cap itself. `maxNodes` bounds a
     // document, and the composed tree IS the document every later pass walks —
     // the style compiler, the renderer, the SEO derivation. Starting a fresh
@@ -976,6 +997,8 @@ interface ResolveRun {
    */
   maxNodes: number;
   maxComposedDepth: number;
+  /** Whether composed nodes record the exposures that feed them. */
+  exposures: boolean;
   /** Nodes this resolution may still produce, across every instance. */
   budget: number;
   /**
@@ -1738,12 +1761,18 @@ function inlinedDefinition(
   const supplied = owned
     ? suppliedSlots(instance, definition, run)
     : presupplied;
+  const plans = planEdits(definition, instance, supplied, !owned);
+  // The host placement's own exposures only. A nested instance's fields are
+  // reached through the host component's exposures, so its nodes carry none.
+  if (run.exposures && owner === undefined) {
+    planExposedProps(definition, instance, plans);
+  }
   const ctx: InlineContext = {
     run,
     scopeKey: instance.id,
     owner: owner ?? instance.id,
     domIds: new Map<string, string>(),
-    plans: planEdits(definition, instance, supplied, !owned),
+    plans,
     scope: {
       depth: scope.depth + 1,
       onPath: new Set(scope.onPath).add(componentId),
@@ -2350,6 +2379,8 @@ interface NodePlan {
   visible?: boolean;
   /** Instance content, keyed by the slot NAME on this node. */
   slots?: Map<string, PlannedSlot>;
+  /** Prop path to the host placement's exposure that feeds it, in editor mode. */
+  exposedProps?: Record<string, string>;
 }
 
 /**
@@ -2382,6 +2413,40 @@ function planEdits(
     planSlots(definition.slots, supplied, plans, composed);
   }
   return plans;
+}
+
+/**
+ * Record, on each planned node, which exposure feeds each of its props.
+ *
+ * One exposure per prop: where two point at the same prop, the one the page
+ * shows is the last declared that the placement or its variant sets, else the
+ * last declared, which is the order the writes apply in. An edit through any
+ * other would change a value nobody sees. Visibility drives no prop, so it is
+ * not mapped.
+ */
+function planExposedProps(
+  definition: ComponentDocument,
+  instance: ResolvedBlockNode,
+  plans: Map<string, NodePlan>
+): void {
+  const set = effectiveOverrides(definition, instance);
+  const chosen = new Map<string, { id: string; set: boolean }>();
+  for (const property of usableExposures(definition.exposed)) {
+    if (property.type === "visibility") continue;
+    if (property.nodeId === "" || !isUsablePropPath(property.propPath)) {
+      continue;
+    }
+    const key = `${property.nodeId}\u0000${property.propPath}`;
+    const isSet = set.has(property.id);
+    const held = chosen.get(key);
+    if (held !== undefined && held.set && !isSet) continue;
+    chosen.set(key, { id: property.id, set: isSet });
+  }
+  for (const [key, { id }] of chosen) {
+    const [nodeId = "", path = ""] = key.split("\u0000");
+    const plan = planFor(plans, nodeId);
+    plan.exposedProps = { ...plan.exposedProps, [path]: id };
+  }
 }
 
 /**
@@ -3516,6 +3581,13 @@ function scopeNode(
   if (plan?.visible === true) delete scoped.visibility;
   if (plan !== undefined && plan.props.length > 0) {
     scoped.props = editedProps(node.props, plan.props);
+  }
+  // Only this pass may say which exposure feeds a node, as with `instanceOf`:
+  // a map stored on a definition's node is dropped, and the one planned for
+  // this placement, if any, put in its place.
+  delete scoped.exposedProps;
+  if (plan?.exposedProps !== undefined) {
+    scoped.exposedProps = plan.exposedProps;
   }
   applyScopedDomIds(scoped, ctx);
   return scoped;

@@ -306,7 +306,12 @@ function composerFrom(
   return document => {
     let composed = byDocument.get(document);
     if (composed === undefined) {
-      composed = resolveComponentInstances(document, components, { limits });
+      // With the exposure map: the editor's composition is never rendered or
+      // saved, and the canvas reaches a value inside a component through it.
+      composed = resolveComponentInstances(document, components, {
+        limits,
+        exposures: true,
+      });
       byDocument.set(document, composed);
     }
     return composed;

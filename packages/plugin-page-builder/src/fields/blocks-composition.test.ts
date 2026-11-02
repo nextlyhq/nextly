@@ -1977,3 +1977,97 @@ function listing(hosts: HostRef[]) {
   const hostsOf: HostFinder = { whole: async () => true, placing: lookups };
   return { hostsOf, lookups };
 }
+
+describe("a placement's own values", () => {
+  const header = component([node("t", "acme/quote")], {
+    exposed: [
+      {
+        id: "title",
+        label: "Title",
+        nodeId: "t",
+        propPath: "words",
+        type: "text",
+      },
+    ],
+  });
+  const valued = (overrides: Node) =>
+    placing("p", "header", { props: { componentId: "header", overrides } });
+
+  it("refuses a value of the wrong type, naming the field", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    const issues = await judge(
+      page([valued({ title: 7 })]),
+      write(readStored, "pages", "home")
+    );
+    expect(issues).toEqual([
+      expect.objectContaining({
+        code: "PLACEMENT_VALUE_WRONG_TYPE",
+        message: "Title needs text.",
+      }),
+    ]);
+  });
+
+  it("refuses an id the component does not expose when the write sets it", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    expect(
+      codes(
+        await judge(
+          page([valued({ subtitle: "Hi" })]),
+          write(readStored, "pages", "home")
+        )
+      )
+    ).toEqual(["PLACEMENT_VALUE_UNKNOWN_FIELD"]);
+  });
+
+  it("keeps an unknown id the stored page already held", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+      pages: { home: { published: page([valued({ subtitle: "Hi" })]) } },
+    });
+    expect(
+      await judge(
+        page([valued({ subtitle: "Hi", title: "New" })]),
+        write(readStored, "pages", "home")
+      )
+    ).toEqual([]);
+  });
+
+  it("on a single, which it cannot read, refuses a wrong type but keeps an unknown id", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    const single: PluginFieldWrite = {
+      kind: "single",
+      slug: "homepage",
+      inTransaction: false,
+      readStored,
+    };
+    expect(
+      codes(await judge(page([valued({ subtitle: "Hi", title: 7 })]), single))
+    ).toEqual(["PLACEMENT_VALUE_WRONG_TYPE"]);
+  });
+
+  it("accepts a cleared field and a value of the field's type", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    expect(
+      await judge(
+        page([
+          valued({ title: "Hello" }),
+          placing("q", "header", {
+            props: {
+              componentId: "header",
+              overrides: { title: { $unset: true } },
+            },
+          }),
+        ]),
+        write(readStored, "pages", "home")
+      )
+    ).toEqual([]);
+  });
+});
