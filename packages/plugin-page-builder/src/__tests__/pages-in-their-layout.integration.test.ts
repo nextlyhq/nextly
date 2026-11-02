@@ -46,7 +46,7 @@ import {
 } from "nextly/runtime";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
@@ -149,20 +149,26 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** Render one page through the real route, recording what it is cached under. */
-    async function render(slug: string): Promise<string> {
+    async function render(
+      slug: string,
+      settingsReader: Parameters<typeof pageBuilderLayouts>[0] = {
+        nextly: t.nextly,
+      },
+      recordAs = slug
+    ): Promise<string> {
       const route = createPublicBlocksPage({
         collections: ["pages"],
         field: "content",
         nextly: t.nextly as never,
         blocks: createBlockResolver(coreBlocks),
-        layouts: pageBuilderLayouts({ nextly: t.nextly }),
+        layouts: pageBuilderLayouts(settingsReader),
       });
       recording = new Set();
       try {
         const element = (await route.ContentPage({
           params: { slug: [slug] },
         })) as ReactElement;
-        pageTags.set(slug, recording);
+        pageTags.set(recordAs, recording);
         return renderToStaticMarkup(element);
       } finally {
         recording = undefined;
@@ -188,9 +194,12 @@ describe.each(getConfiguredTestDialects())(
       );
       // The app's cached-read function, as Cache Components registers it:
       // record the tags, then read through the registered reader.
+      // record the tags of a read that succeeded, as a cache stores an entry
+      // only for a function that returned.
       registerCachedRead(async (key, tags) => {
+        const value = await runRegisteredRead(key);
         for (const tag of tags) recording?.add(tag);
-        return await runRegisteredRead(key);
+        return value;
       }, true);
 
       t = await createTestNextly({
@@ -271,6 +280,31 @@ describe.each(getConfiguredTestDialects())(
         // it depended on the default, which is what this write must reach.
         "names-unpublished": 1,
       });
+    });
+
+    it("a page cached while the settings could not be read is rebuilt by the next settings write", async () => {
+      // The provider fails, so the page renders with no regions. What it is
+      // cached on must still carry the settings tag: otherwise it would stay
+      // headerless after the settings recover, with nothing to rebuild it.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const html = await render(
+        "names-nothing",
+        {
+          nextly: {
+            findSingle: async () => {
+              throw new Error("settings unavailable");
+            },
+          },
+        },
+        "names-nothing-unreadable"
+      );
+      warn.mockRestore();
+      expect(html).toContain("Body of names-nothing");
+      expect(html).not.toContain("data-nextly-region");
+
+      expired.length = 0;
+      await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: main });
+      expect(hits()["names-nothing-unreadable"]).toBe(1);
     });
   }
 );

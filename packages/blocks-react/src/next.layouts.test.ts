@@ -25,6 +25,11 @@ import { createBlockResolver } from "./resolver";
 import { throughBoundary } from "./__tests__/through-boundary";
 
 const cached = vi.fn();
+/**
+ * The reads that SUCCEEDED, with their options. A cache stores nothing for a
+ * read whose function threw, so only these become entries a page is built on.
+ */
+const settled = vi.fn();
 const routeConfigs = vi.fn();
 
 vi.mock("nextly/runtime", async importActual => {
@@ -36,7 +41,9 @@ vi.mock("nextly/runtime", async importActual => {
         cached(options);
         // The real one runs the reader on a miss, so the double must too, or
         // the assertions below would pass over a read that never happened.
-        return await reader();
+        const value = await reader();
+        settled(options);
+        return value;
       }
     ),
     releaseBoundedRevalidate: vi.fn(async () => 42),
@@ -217,6 +224,7 @@ async function render(
   } = {}
 ) {
   cached.mockClear();
+  settled.mockClear();
   routeConfigs.mockClear();
   const r = siteReader(site);
   const layouts = provider(
@@ -677,6 +685,37 @@ describe("a page with no usable default", () => {
         }
       });
     }
+  });
+
+  it("caches a provider that throws as no default, for at most a minute and under the settings tag", async () => {
+    // The page still renders, with no regions. What it is cached on must be a
+    // stored answer that expires within the bound and that a write to the
+    // settings reaches: a failure caught outside every cached read leaves the
+    // page cached headerless with nothing to invalidate it.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failing = {
+      readDefault: vi.fn(async () => {
+        throw new Error("settings unavailable");
+      }),
+      singles: [SETTINGS],
+    };
+    await withRelease(false, async () => {
+      const { html } = await render(
+        { page: { content: PAGE_BODY } },
+        { extra: { layouts: failing } }
+      );
+      expect(html).toContain("Page body");
+      expect(html).not.toContain("data-nextly-region");
+      const answered = settled.mock.calls
+        .map(call => call[0] as { tags: string[]; revalidate?: number | false })
+        .filter(read => read.tags.includes(settingsTag));
+      expect(answered).toHaveLength(1);
+      expect(bounded(answered[0]!.revalidate)).toBe(true);
+    });
+    expect(failing.readDefault).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("could not be read")
+    );
   });
 
   it("keeps a sooner release bound", async () => {

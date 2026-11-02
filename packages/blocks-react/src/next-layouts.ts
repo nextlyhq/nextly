@@ -272,9 +272,22 @@ function isSwitchedOff(resolution: LayoutResolution): boolean {
  * for the default's change to reach the page. Read only for a page that
  * depends on the default, which is what keeps those tags off every other page.
  *
- * A provider that throws is reported and read as no default, so a failing
- * settings read costs the regions rather than the page. The failure is caught
- * OUTSIDE the cached read, so it is never stored as an answer.
+ * A provider that throws costs the regions, never the page, and how the
+ * failure is cached depends on which read met it:
+ *
+ * - The ordinary read lets the error out of its cached function, so it is
+ *   never stored, let alone under the ordinary lifetime. Read as no default,
+ *   it sends `regionsFor` to the bounded read below.
+ * - The bounded read (`maxLifetime`, NO_DEFAULT_REVALIDATE_SECONDS) catches it
+ *   INSIDE its cached function and answers null. That answer is a successful
+ *   cache entry living at most that long and carrying the provider's Single
+ *   tags, so the page built on it is rebuilt within the bound once the
+ *   provider recovers, or at once by a write to the settings. A failure
+ *   caught outside every cached read would leave the page cached headerless
+ *   with nothing to invalidate it.
+ *
+ * Reported once per read that meets it: by the bounded read, which every
+ * failing ordinary read is followed by.
  */
 async function readDefaultLayout(
   args: RegionsForArgs,
@@ -283,36 +296,48 @@ async function readDefaultLayout(
   const { provider, budget, cacheScope } = args;
   // A read is a read, charged like every other one this render makes.
   if (!budget.take()) return null;
+  const bounded = maxLifetime !== undefined;
+  const read = async (): Promise<string | null> => {
+    try {
+      return relationId(await provider.readDefault());
+    } catch (error) {
+      if (!bounded) throw error;
+      reportUnreadableDefault(error);
+      return null;
+    }
+  };
   try {
     const release = await releaseBoundedRevalidate(undefined);
-    const revalidate =
-      maxLifetime === undefined
-        ? release
-        : cappedLifetime(release, maxLifetime);
-    return await cachedFind(
-      async () => relationId(await provider.readDefault()),
-      {
-        tags: provider.singles.flatMap(slug => nextlySingleTags(slug)),
-        keyParts: [
-          // A bounded read is its own entry, so the cap applies to it alone
-          // and an ordinary read of the same default keeps its lifetime.
-          maxLifetime === undefined
-            ? "nextly-layout-default"
-            : `nextly-layout-default:${String(maxLifetime)}`,
-          // The tenant discriminator, as every other cached read on this route
-          // keys it, so two deployments never serve each other's default.
-          cacheScope ?? "",
-          ...provider.singles,
-        ],
-        revalidate,
-      }
-    );
+    const revalidate = bounded ? cappedLifetime(release, maxLifetime) : release;
+    return await cachedFind(read, {
+      tags: provider.singles.flatMap(slug => nextlySingleTags(slug)),
+      keyParts: [
+        // A bounded read is its own entry, so the cap applies to it alone and
+        // an ordinary read of the same default keeps its lifetime.
+        bounded
+          ? `nextly-layout-default:${String(maxLifetime)}`
+          : "nextly-layout-default",
+        // The tenant discriminator, as every other cached read on this route
+        // keys it, so two deployments never serve each other's default.
+        cacheScope ?? "",
+        ...provider.singles,
+      ],
+      revalidate,
+    });
   } catch (error) {
-    console.warn(
-      `[nextly] The site's default Layout could not be read, so this page is drawn with no header or footer: ${error instanceof Error ? error.message : String(error)}`
-    );
+    // What reaches here is never stored. The ordinary read's provider failure
+    // is reported by the bounded read that follows it; anything else (the
+    // cache itself failing) is reported now.
+    if (bounded) reportUnreadableDefault(error);
     return null;
   }
+}
+
+/** Say that the provider could not answer, and what that costs the page. */
+function reportUnreadableDefault(error: unknown): void {
+  console.warn(
+    `[nextly] The site's default Layout could not be read, so this page is drawn with no header or footer: ${error instanceof Error ? error.message : String(error)}`
+  );
 }
 
 /**
