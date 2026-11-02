@@ -84,6 +84,8 @@ const REFUSAL_COPY: Record<PlanProblem, string> = {
   "not-a-component": "That library entry is not a component.",
   "condition-gated":
     "This selection is shown conditionally and holds conditions of its own. Simplify one of them first.",
+  "composed-depth":
+    "As a component, this selection would nest deeper than the page allows. Select less, or fewer components inside it.",
 };
 
 /**

@@ -16,8 +16,10 @@
  * is retried from the beginning for ever, never finishing and never recording
  * that it got anywhere.
  *
- * One scope is the smallest unit a rebuild can be asked to complete, so it is
- * the largest one that is certain to make progress.
+ * A scope can itself be larger than one tick, so a walk also stops inside it
+ * once the budget is spent, after recording the last document it finished.
+ * The next pass resumes after that document rather than at the start, which is
+ * what lets a scope of any size finish.
  *
  * ## Why completion is recomputed rather than latched
  *
@@ -33,24 +35,64 @@
 import { backfillScopeKey, type BackfillScope } from "./usage-backfill-scope";
 
 /**
- * Where completed scopes are recorded.
+ * Where one run's progress is recorded.
  *
  * Injected rather than owned, for the reason every store in this plugin is:
  * the rules about what counts as finished are testable against values, and the
  * decision about WHERE the rows live belongs to the caller that holds the
- * Direct API.
+ * database. A store is bound to ONE run, so every write it makes is fenced by
+ * that run's token: once a newer run has started, each of them is refused.
  */
 export interface BackfillStateStore {
-  /** Every scope key already recorded as walked. */
+  /** Every scope key this run has recorded as walked whole. */
   completed(): Promise<ReadonlySet<string>>;
   /**
    * Record one scope as walked.
    *
-   * Called only after its rebuild resolved. A scope recorded before the walk
-   * finishes is one a crash leaves marked done and permanently unindexed,
-   * which is the failure this whole module exists to prevent.
+   * Called only after its walk reached the end. A scope recorded before the
+   * walk finishes is one a crash leaves marked done and permanently
+   * unindexed, which is the failure this whole module exists to prevent.
    */
   record(key: string): Promise<void>;
+  /**
+   * The id of the last document this run's walk of an unfinished scope
+   * finished, or `undefined` when the walk has not started.
+   */
+  cursorOf(key: string): string | undefined;
+  /** Record where the walk of a scope got to, so the next tick resumes there. */
+  checkpoint(key: string, cursor: string): Promise<void>;
+  /**
+   * Run an index write only while this run is current, so a pass a newer run
+   * replaced writes nothing.
+   */
+  fenced<T>(write: () => Promise<T>): Promise<T>;
+  /**
+   * Called once every scope is walked: clear the dirty mark a failed
+   * maintenance write left, if this run started after it.
+   */
+  finish(): Promise<void>;
+}
+
+/** What a walk of one scope is handed, beyond the scope itself. */
+export interface ScopeWalk {
+  /** Resume after this document id; absent, start at the beginning. */
+  after?: string;
+  /** Record that every document up to and including `cursor` is done. */
+  checkpoint(cursor: string): Promise<void>;
+  /**
+   * Whether the tick's budget is spent. Asked after each document, so a walk
+   * always finishes at least one before it stops and a tick never ends with
+   * nothing done.
+   */
+  stop(): boolean;
+  /** Run one index write, fenced by the run. */
+  fenced<T>(write: () => Promise<T>): Promise<T>;
+}
+
+/** What one walk of a scope reached. */
+export interface ScopeWalkOutcome {
+  /** Whether the walk reached the scope's end; false when it stopped for the budget. */
+  finished: boolean;
 }
 
 /** What one pass of the backfill did. */
@@ -74,6 +116,11 @@ export interface BackfillPass {
    * and on a site of many small ones that is most of what the drain does.
    */
   completed: ReadonlySet<string>;
+  /**
+   * Whether the scope this pass walked reached its end. False when the tick's
+   * budget ran out inside it; the next pass resumes it.
+   */
+  finished: boolean;
 }
 
 /**
@@ -108,8 +155,13 @@ export async function advanceBackfill(args: {
   /** Every scope that exists now, from the current configuration. */
   scopes: readonly BackfillScope[];
   state: BackfillStateStore;
-  /** Repairs one scope, walking every document in it. */
-  rebuild: (scope: BackfillScope) => Promise<void>;
+  /** Repairs one scope, resuming where an earlier tick's walk of it stopped. */
+  rebuild: (scope: BackfillScope, walk: ScopeWalk) => Promise<ScopeWalkOutcome>;
+  /**
+   * Whether the tick's budget is spent, asked inside the walk. Absent, the
+   * walk runs to the scope's end.
+   */
+  stop?: () => boolean;
   /**
    * What is already recorded, when the caller has just been told.
    *
@@ -130,11 +182,26 @@ export async function advanceBackfill(args: {
     // absence of an outstanding scope is exactly the condition
     // `backfillComplete` tests - asking twice would be a second implementation
     // of one question.
-    return { walked: null, complete: true, completed };
+    return { walked: null, complete: true, completed, finished: true };
   }
 
-  await args.rebuild(outstanding);
-  await args.state.record(backfillScopeKey(outstanding));
+  const key = backfillScopeKey(outstanding);
+  const cursor = args.state.cursorOf(key);
+  const walk = await args.rebuild(outstanding, {
+    ...(cursor === undefined ? {} : { after: cursor }),
+    checkpoint: next => args.state.checkpoint(key, next),
+    stop: args.stop ?? (() => false),
+    fenced: write => args.state.fenced(write),
+  });
+
+  // Stopped inside the scope for the budget. Its cursor is recorded, so the
+  // next tick resumes after the last document this one finished; nothing is
+  // recorded as walked, because nothing finished.
+  if (!walk.finished) {
+    return { walked: outstanding, complete: false, completed, finished: false };
+  }
+
+  await args.state.record(key);
 
   // Recomputed against the set this pass started from, plus the scope it just
   // finished. Re-reading the store would be a second round trip to learn
@@ -142,10 +209,11 @@ export async function advanceBackfill(args: {
   // recorded meanwhile - which is not wrong, but makes the answer depend on
   // timing rather than on this pass.
   const after = new Set(completed);
-  after.add(backfillScopeKey(outstanding));
+  after.add(key);
   return {
     walked: outstanding,
     complete: backfillComplete(args.scopes, after),
     completed: after,
+    finished: true,
   };
 }

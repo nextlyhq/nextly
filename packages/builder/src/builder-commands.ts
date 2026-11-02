@@ -50,6 +50,10 @@ export interface CommandVerbs {
    * phrase; when there is a second host it can be designed against that.
    */
   readonly saveAsPattern: () => void;
+  /** Begin saving the selection as a component; the host owns the form. */
+  readonly saveAsComponent?: () => void;
+  /** Begin converting the selection into a component placement. */
+  readonly convertToComponent?: () => void;
 }
 
 /** Everything the command list is built from. */
@@ -110,6 +114,14 @@ const BLOCK_COMMAND_COPY: Record<
     // that before they can find it.
     keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
   },
+  "save-as-component": {
+    label: "Save as component",
+    keywords: ["save", "component", "library", "reuse", "symbol", "synced"],
+  },
+  "convert-to-component": {
+    label: "Convert to component",
+    keywords: ["convert", "component", "turn into", "symbol", "synced", "link"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -145,6 +157,8 @@ export function blockActionRunners(
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
     "save-as-pattern": verbs.saveAsPattern,
+    "save-as-component": () => verbs.saveAsComponent?.(),
+    "convert-to-component": () => verbs.convertToComponent?.(),
     delete: verbs.delete,
   };
 }
