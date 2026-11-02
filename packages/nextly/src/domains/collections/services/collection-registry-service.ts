@@ -405,7 +405,10 @@ export class CollectionRegistryService extends BaseRegistryService<
       assertNoNewSiblingClashes(
         { kind: "collection", slug },
         data.fields,
-        existing.fields ?? []
+        existing.fields ?? [],
+        // The configuration's and plugins' sync writes `define*` output, with its added
+        // system fields; every other caller writes fields as it was sent.
+        isPipelineSource(options?.source) ? { definedInCode: "collection" } : {}
       );
     }
 

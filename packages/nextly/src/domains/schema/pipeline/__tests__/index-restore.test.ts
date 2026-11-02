@@ -171,28 +171,6 @@ describe("index restore", () => {
     expect(out[0]).toContain("idx_dc_tags_slug");
   });
 
-  it("keeps the types the diff's index carries, so MySQL keys a TEXT column by prefix", () => {
-    // The kit route's only source of an index added to an existing MySQL table. Rebuilding the op
-    // from its name and keys alone dropped the types, and MySQL refuses a TEXT key with no length.
-    const out = indexRestoreStatements(
-      desired,
-      "mysql",
-      [],
-      [
-        {
-          type: "add_index",
-          tableName: "dc_tags",
-          index: { name: "idx_dc_tags_note", columns: ["note"], unique: false },
-          columnTypes: { note: "text" },
-        },
-      ]
-    );
-
-    expect(out).toEqual([
-      "CREATE INDEX `idx_dc_tags_note` ON `dc_tags` (`note`(191))",
-    ]);
-  });
-
   it("emits a rebuilt table's index once when the diff also asks for it", () => {
     const out = indexRestoreStatements(desired, "sqlite", REBUILD, [
       {

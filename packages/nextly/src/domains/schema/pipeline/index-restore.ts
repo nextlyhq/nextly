@@ -20,7 +20,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { AddIndexOp, NextlySchemaSnapshot, Operation } from "./diff/types";
+import type { IndexSpec, NextlySchemaSnapshot, Operation } from "./diff/types";
 import { rebuiltTableNames } from "./filter-unsafe-statements";
 import { generateSQL } from "./sql-templates";
 
@@ -47,13 +47,20 @@ export function indexRestoreStatements(
   const emitted = new Set<string>();
   const out: string[] = [];
 
-  const add = (op: AddIndexOp): void => {
+  const add = (tableName: string, index: IndexSpec): void => {
     // Same index can arrive from both sources — a rebuilt table whose diff
     // also asked for one of its indexes. Emit it once.
-    const key = `${op.tableName.toLowerCase()}::${op.index.name.toLowerCase()}`;
+    const key = `${tableName.toLowerCase()}::${index.name.toLowerCase()}`;
     if (emitted.has(key)) return;
     emitted.add(key);
-    out.push(generateSQL(op, dialect));
+    // The desired tables carry each column's type, which MySQL needs to key a TEXT/BLOB by prefix.
+    out.push(
+      generateSQL(
+        { type: "add_index", tableName, index },
+        dialect,
+        desired.tables
+      )
+    );
   };
 
   // A rebuilt table lost every index it had, so all of them are replayed.
@@ -61,9 +68,7 @@ export function indexRestoreStatements(
     if (!rebuilt.has(table.name.toLowerCase())) continue;
     // `undefined` means the snapshot never tracked indexes, which is not the
     // same as the table having none. Only an explicit list is actionable.
-    for (const index of table.indexes ?? []) {
-      add({ type: "add_index", tableName: table.name, index });
-    }
+    for (const index of table.indexes ?? []) add(table.name, index);
   }
 
   // An `add_index` op is the diff stating the index is absent, so creating it
@@ -73,11 +78,9 @@ export function indexRestoreStatements(
   // report success while the index stayed missing. Callers on the fast-path
   // route MUST pass no ops: that route's emitter already issued every
   // add_index, and replaying one is fatal on MySQL (no IF NOT EXISTS).
-  // The op itself, not one rebuilt from its name and keys: it carries the keyed
-  // columns' types, which MySQL needs to key a TEXT column by prefix.
   for (const op of ops) {
     if (op.type !== "add_index") continue;
-    add(op);
+    add(op.tableName, op.index);
   }
 
   return out;

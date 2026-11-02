@@ -36,6 +36,7 @@ import {
   type SchemaEventRow,
 } from "../../../domains/schema/events/schema-events-repository";
 import { ensureSchemaEventsTable } from "../../../domains/schema/events/schema-events-ddl";
+import { checksumOf } from "../../../domains/schema/migrate/applied-checksums";
 import { resolveMigration } from "../../../domains/schema/migrate/resolve";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import { marksNoTransaction } from "../../../domains/schema/migrate/split-sql";
@@ -155,6 +156,10 @@ describe.each(LOCK_DIALECTS)(
         marksNoTransaction: () =>
           Promise.resolve(
             marksNoTransaction(readFileSync(join(migrationsDir, FILE), "utf8"))
+          ),
+        fileChecksum: () =>
+          Promise.resolve(
+            checksumOf(readFileSync(join(migrationsDir, FILE), "utf8"))
           ),
         introspectLive: () => Promise.resolve({ tables: [] }),
       });

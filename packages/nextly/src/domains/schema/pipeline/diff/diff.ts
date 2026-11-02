@@ -117,8 +117,7 @@ export function diffSnapshots(
         prevT.indexes,
         curT.indexes,
         textColumnsOf(prevT.columns),
-        textColumnsOf(curT.columns),
-        curT.columns
+        textColumnsOf(curT.columns)
       );
       const rekeyedNames = new Set(
         indexOps
@@ -287,8 +286,7 @@ function diffIndexes(
   prev: IndexSpec[] | undefined,
   cur: IndexSpec[] | undefined,
   prevColumns: ColumnCastContext,
-  curColumns: ColumnCastContext,
-  curTableColumns: readonly ColumnSpec[]
+  curColumns: ColumnCastContext
 ): Operation[] {
   if (prev === undefined || cur === undefined) return [];
   const ops: Operation[] = [];
@@ -296,19 +294,9 @@ function diffIndexes(
   // text to integer keeps its authored `::text` on the new side.
   const prevByKey = new Map(prev.map(i => [indexKey(i, prevColumns), i]));
   const curByKey = new Map(cur.map(i => [indexKey(i, curColumns), i]));
-  // The rendered type of each column on the side the index is added to, so the
-  // statement can key a MySQL TEXT column by prefix, as a new table's indexes
-  // are keyed (`createIndexSql`).
-  const curTypes = new Map(curTableColumns.map(c => [c.name, renderedType(c)]));
   for (const [key, idx] of curByKey) {
     if (!prevByKey.has(key)) {
-      const columnTypes = Object.fromEntries(
-        idx.columns.flatMap(column => {
-          const type = curTypes.get(column);
-          return type === undefined ? [] : [[column, type]];
-        })
-      );
-      ops.push({ type: "add_index", tableName, index: idx, columnTypes });
+      ops.push({ type: "add_index", tableName, index: idx });
     }
   }
   for (const [key, idx] of prevByKey) {

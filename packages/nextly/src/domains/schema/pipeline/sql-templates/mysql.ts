@@ -16,11 +16,12 @@ import type {
   DropIndexOp,
   DropTableOp,
   Operation,
+  TableSpec,
 } from "../diff/types";
 import { referenceConversionStatements } from "../reference-list-conversion";
 
 import { commonStatementSql, dropConstraintSql } from "./common-statements";
-import { createIndexSql } from "./create-index";
+import { createIndexSql, tableColumnTypes } from "./create-index";
 import {
   changeForeignKeyActionSql,
   unsupportedOperation,
@@ -29,7 +30,15 @@ import { quoteIdent } from "./identifier-quoting";
 
 const q = (n: string) => quoteIdent(n, "mysql");
 
-export function generateMysqlSQL(op: Operation): string {
+/**
+ * `tables` is the schema the statement leads to, where the caller has it. An `add_index` names only
+ * columns, and MySQL keys a TEXT/BLOB column only by prefix, so the index reads its columns' types
+ * from the table there; without it every column is keyed whole.
+ */
+export function generateMysqlSQL(
+  op: Operation,
+  tables: readonly TableSpec[] = []
+): string {
   // The three dialect dispatchers are switches over the SAME `Operation`
   // union, so their arms line up one for one and their tails are identical
   // text. That parallelism is the safety property, not an accident: each
@@ -69,11 +78,10 @@ export function generateMysqlSQL(op: Operation): string {
         q
       );
     case "add_index":
-      // The keyed columns' types travel with the op, so a TEXT column is keyed
-      // by prefix here as it is in a new table's CREATE; MySQL refuses a TEXT
-      // key without a length.
       return createIndexSql(op.tableName, op.index, "mysql", q, {
-        columnTypes: new Map(Object.entries(op.columnTypes ?? {})),
+        columnTypes: tableColumnTypes(
+          tables.find(table => table.name === op.tableName)
+        ),
       });
     case "drop_index":
       return generateDropIndex(op);

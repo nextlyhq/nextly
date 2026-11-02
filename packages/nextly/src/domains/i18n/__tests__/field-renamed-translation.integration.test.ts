@@ -1201,10 +1201,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a Single's schema is saved",
-      // Saved through the schema service's own ALTER, which on SQLite renders no column
-      // modification (`generateAlterTableMigration`), so the NOT NULL a Required setting adds
-      // once the values are shared is not applied there.
-      sqliteSkipsColumnModification: true,
+      // On SQLite the save rebuilds the table to apply the NOT NULL a Required setting adds once
+      // the values are shared, which the schema service's ALTER cannot express there.
+      sqliteSkipsColumnModification: false,
       table: "single_hero",
       seed: seedSingle,
       change: async (fields: unknown[]) => {
