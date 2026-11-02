@@ -72,7 +72,11 @@ export const ENTRIES_PARAMS = {
   search: "search",
   ids: "ids",
   limit: "limit",
+  locale: "locale",
 } as const;
+
+/** The longest language code the route accepts, past any real BCP 47 tag. */
+export const ENTRIES_LOCALE_MAX = 35;
 
 /** One entry as a relation control shows it: its id and its title, nothing else. */
 export interface EntryItem {
@@ -99,6 +103,11 @@ export interface EntriesQuery {
   readonly ids?: readonly string[];
   /** How many to return; capped at {@link ENTRIES_LIMIT_MAX}. */
   readonly limit?: number;
+  /**
+   * The language being edited, so titles are searched and named in it. Left
+   * out, the site's default language, as every Direct API read without one.
+   */
+  readonly locale?: string;
 }
 
 /**
@@ -120,6 +129,9 @@ export function entriesPath(query: EntriesQuery): string {
   }
   if (query.limit !== undefined) {
     params.set(ENTRIES_PARAMS.limit, String(query.limit));
+  }
+  if (query.locale !== undefined && query.locale !== "") {
+    params.set(ENTRIES_PARAMS.locale, query.locale);
   }
   return `${ENTRIES_ROUTE_PATH}?${params.toString()}`;
 }

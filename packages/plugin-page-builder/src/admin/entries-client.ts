@@ -49,6 +49,8 @@ export interface FindEntriesQuery {
   readonly limit?: number;
   /** Abandons the read, as a newer question replaces this one. */
   readonly signal?: AbortSignal;
+  /** The language being edited, so titles are searched and named in it. */
+  readonly locale?: string;
 }
 
 /**
@@ -77,6 +79,7 @@ export async function findEntries(
       ...(query.limit === undefined
         ? {}
         : { limit: Math.min(query.limit, ENTRIES_LIMIT_MAX) }),
+      ...(query.locale === undefined ? {} : { locale: query.locale }),
     }),
     ...(query.signal === undefined ? {} : { signal: query.signal }),
   });

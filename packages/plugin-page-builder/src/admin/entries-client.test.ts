@@ -110,4 +110,12 @@ describe("findEntries", () => {
       );
     }
   });
+
+  it("asks in the language being edited, when there is one", async () => {
+    readPluginRoute.mockResolvedValue({ items: [], meta: {} });
+
+    await findEntries({ collection: "posts", locale: "de" });
+
+    expect(queryOf(asked().path).locale).toBe("de");
+  });
 });

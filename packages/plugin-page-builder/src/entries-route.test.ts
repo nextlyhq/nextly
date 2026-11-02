@@ -378,8 +378,11 @@ describe("one read", () => {
     });
   });
 
-  it("matches nothing for a search on a collection with no title field, without reading", async () => {
-    const r = reads({ collection: { fields: [{ name: "body" }] } });
+  it("matches nothing for a search on a collection with no title field, after only the gate's read", async () => {
+    const r = reads({
+      collection: { fields: [{ name: "body" }] },
+      rows: [{ id: "p1" }],
+    });
 
     const answer = await readEntries(
       { collection: "posts", search: "x", limit: 10 },
@@ -387,7 +390,25 @@ describe("one read", () => {
     );
 
     expect(answer.items).toEqual([]);
-    expect(r.finds).toEqual([]);
+    // Only the smallest read core's gate can judge: no filter, id alone.
+    expect(r.finds).toEqual([
+      { collection: "posts", select: { id: true }, limit: 1 },
+    ]);
+  });
+
+  it("refuses a caller who may not read the collection, even for a search that cannot match", async () => {
+    // Whether a search can match must not decide whether access is checked.
+    const r = reads({ collection: { fields: [{ name: "body" }] } });
+    const refusing = {
+      ...r,
+      find: async () => {
+        throw NextlyError.forbidden();
+      },
+    };
+
+    await expect(
+      readEntries({ collection: "posts", search: "x", limit: 10 }, refusing)
+    ).rejects.toSatisfy(NextlyError.isForbidden);
   });
 
   it("lists a collection with no title field by id alone, selecting no other field", async () => {
@@ -460,12 +481,40 @@ describe("one read", () => {
     await readEntries({ collection: "posts", search: "42", limit: 10 }, r);
     expect(r.finds[0]?.where).toEqual({ issue: { equals: 42 } });
 
-    // Words cannot match a number, so nothing is read.
+    // Words cannot match a number: no filter is sent, only the gate's read.
     const words = await readEntries(
       { collection: "posts", search: "launch", limit: 10 },
       r
     );
     expect(words.items).toEqual([]);
-    expect(r.finds).toHaveLength(1);
+    expect(r.finds[1]).toEqual({
+      collection: "posts",
+      select: { id: true },
+      limit: 1,
+    });
+  });
+
+  it("reads in the language being edited, the gate's read included", async () => {
+    const r = reads({
+      collection: { fields: [{ name: "body" }] },
+      rows: [{ id: "p1" }],
+    });
+    await readEntries({ collection: "posts", limit: 10, locale: "de" }, r);
+    await readEntries(
+      { collection: "posts", search: "x", limit: 10, locale: "de" },
+      r
+    );
+    expect(r.finds.map(find => find.locale)).toEqual(["de", "de"]);
+  });
+});
+
+describe("the language a read names", () => {
+  it("is parsed from the query, and an empty one is none", () => {
+    expect(
+      parseEntriesQuery(url({ collection: "posts", locale: "de" })).locale
+    ).toBe("de");
+    expect(
+      parseEntriesQuery(url({ collection: "posts", locale: "" })).locale
+    ).toBeUndefined();
   });
 });

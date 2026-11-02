@@ -312,16 +312,35 @@ function borrowedServices(): ContentServices {
 }
 
 /**
- * The borrowed services with this editor's open-passage registry, one object
- * per registry so the panel sees the same one on every render.
+ * The borrowed services with this editor's open-passage registry and its
+ * language, one object per registry and language so the panel sees the same
+ * one on every render. A relation search reads titles in the language being
+ * edited.
  */
-const servicesByPassages = new WeakMap<OpenPassages, ContentServices>();
+const servicesByPassages = new WeakMap<
+  OpenPassages,
+  Map<string, ContentServices>
+>();
 
-function servicesFor(passages: OpenPassages): ContentServices {
-  let services = servicesByPassages.get(passages);
+function servicesFor(
+  passages: OpenPassages,
+  locale: string | undefined
+): ContentServices {
+  let byLocale = servicesByPassages.get(passages);
+  if (byLocale === undefined) {
+    byLocale = new Map();
+    servicesByPassages.set(passages, byLocale);
+  }
+  const key = locale ?? "";
+  let services = byLocale.get(key);
   if (services === undefined) {
-    services = { ...borrowedServices(), openPassages: passages };
-    servicesByPassages.set(passages, services);
+    services = {
+      ...borrowedServices(),
+      openPassages: passages,
+      findEntries: query =>
+        findEntries(locale === undefined ? query : { ...query, locale }),
+    };
+    byLocale.set(key, services);
   }
   return services;
 }
@@ -372,7 +391,7 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(view.passages)}
+      contentServices={servicesFor(view.passages, view.locale)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}

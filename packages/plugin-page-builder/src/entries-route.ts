@@ -50,6 +50,7 @@ import {
   ENTRIES_IDS_MAX,
   ENTRIES_LIMIT_DEFAULT,
   ENTRIES_LIMIT_MAX,
+  ENTRIES_LOCALE_MAX,
   ENTRIES_PARAMS,
   ENTRIES_ROUTE_PATH,
   ENTRIES_SEARCH_MAX,
@@ -76,6 +77,8 @@ export interface EntriesRequest {
   readonly ids?: readonly string[];
   /** Between 1 and {@link ENTRIES_LIMIT_MAX}. */
   readonly limit: number;
+  /** The language being edited; an unknown code resolves to the default in core. */
+  readonly locale?: string;
 }
 
 /**
@@ -88,6 +91,12 @@ export interface EntriesRequest {
  */
 const querySchema = z.object({
   [ENTRIES_PARAMS.collection]: z.string().trim().min(1),
+  [ENTRIES_PARAMS.locale]: z
+    .string()
+    .trim()
+    .max(ENTRIES_LOCALE_MAX)
+    .optional()
+    .transform(value => (value === "" ? undefined : value)),
   [ENTRIES_PARAMS.search]: z
     .string()
     .trim()
@@ -148,8 +157,10 @@ export function parseEntriesQuery(url: string | URL): EntriesRequest {
   const query = parsed.data;
   const ids = query[ENTRIES_PARAMS.ids];
   const search = query[ENTRIES_PARAMS.search];
+  const locale = query[ENTRIES_PARAMS.locale];
   return {
     collection: query[ENTRIES_PARAMS.collection],
+    ...(locale === undefined ? {} : { locale }),
     ...(search === undefined ? {} : { search }),
     ...(ids === undefined || ids.length === 0 ? {} : { ids }),
     limit: query[ENTRIES_PARAMS.limit] ?? ENTRIES_LIMIT_DEFAULT,
@@ -212,6 +223,8 @@ export interface EntriesFindArgs {
   readonly where?: WhereFilter;
   readonly select: Record<string, boolean>;
   readonly limit: number;
+  /** The language to read titles in, when the request named one. */
+  readonly locale?: string;
 }
 
 /** What one list read answers: the rows and the read's pagination. */
@@ -252,12 +265,28 @@ export async function readEntries(
     throw refusal(request.collection);
   }
   const title = await titleFieldOf(request.collection, reads);
+  // Read in the language being edited, so a localized title is searched and
+  // named as the author sees it.
+  const inLocale =
+    request.locale === undefined ? {} : { locale: request.locale };
   const titleField = title?.name;
   const where = whereFor(request, title);
   // A search nothing can match — no title field to search, or a number field
   // and words — matches nothing, rather than falling back to a field the
   // collection never said names its entries.
-  if (where === NO_MATCH) return { items: [], meta: emptyMeta(request.limit) };
+  if (where === NO_MATCH) {
+    // Still asked of core's gate, with the smallest read it can judge, so a
+    // caller who may not read the collection is refused here as for any other
+    // search: whether a search can match must not decide whether access is
+    // checked, or the answer would tell a refused caller about the schema.
+    await reads.find({
+      collection: request.collection,
+      select: { id: true },
+      limit: 1,
+      ...inLocale,
+    });
+    return { items: [], meta: emptyMeta(request.limit) };
+  }
   let page: EntriesPage;
   try {
     page = await reads.find({
@@ -273,6 +302,7 @@ export async function readEntries(
       // A resolve answers in one page whatever limit was asked, since the ids
       // already bound it.
       limit: request.ids?.length ?? request.limit,
+      ...inLocale,
     });
   } catch (error) {
     // A caller who may read the entries but not their title field cannot
@@ -518,6 +548,7 @@ function directEntriesReads(ctx: EntriesRouteContext): EntriesReads {
         ...(args.where === undefined ? {} : { where: args.where }),
         select: args.select,
         limit: args.limit,
+        ...(args.locale === undefined ? {} : { locale: args.locale }),
       });
       return { items: result.items, meta: result.meta };
     },
