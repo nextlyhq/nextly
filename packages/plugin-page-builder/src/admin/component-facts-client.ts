@@ -61,8 +61,14 @@ export function useComponentFacts(
     // A failed read, even one holding an earlier answer, is not trusted.
     if (failed) return { reserved: { unavailable: FACTS_FAILED } };
     if (data === undefined) return { reserved: { unavailable: FACTS_PENDING } };
+    // Both lists, for the reason each is reserved: placements may hold values
+    // under a live id the draft dropped, and under a retired one until their
+    // next write strips it.
     return {
-      reserved: data.live,
+      reserved: {
+        properties: [...data.live.properties, ...data.retired.properties],
+        slots: [...data.live.slots, ...data.retired.slots],
+      },
       ...(data.reach === null ? {} : { reach: data.reach }),
     };
   }, [componentId, data, failed]);

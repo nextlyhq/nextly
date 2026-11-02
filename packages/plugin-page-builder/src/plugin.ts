@@ -1139,6 +1139,22 @@ export const pageBuilder = (
               ),
             });
           },
+          // The ids a published removal retired, from the store the write
+          // hooks record them in; none where those hooks are not registered.
+          readRetired: ctx => async id => {
+            if (opts.componentReadiness === false) {
+              return { properties: [], slots: [] };
+            }
+            const store = retiredStore({
+              nextly: () => requireInstalled().nextly(),
+              collection:
+                ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+                COMPONENT_RETIRED_SLUG,
+            });
+            return (
+              (await store.of([id])).get(id) ?? { properties: [], slots: [] }
+            );
+          },
         }),
       ],
 

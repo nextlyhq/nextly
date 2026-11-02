@@ -64,7 +64,11 @@ describe("the component's facts", () => {
 
   it("trust no earlier answer while a read failed", () => {
     answering(
-      { live: { properties: ["title"], slots: [] }, reach: null },
+      {
+        live: { properties: ["title"], slots: [] },
+        retired: { properties: [], slots: [] },
+        reach: null,
+      },
       new Error("Forbidden")
     );
     const { result } = renderHook(() => useComponentFacts("hero"));
@@ -79,14 +83,15 @@ describe("the component's facts", () => {
     expect(new Set(paths).size).toBe(2);
   });
 
-  it("reserve the live ids and carry the count once answered", () => {
+  it("reserve the live and retired ids and carry the count once answered", () => {
     answering({
       live: { properties: ["title"], slots: [] },
+      retired: { properties: ["subtitle"], slots: ["aside"] },
       reach: { count: 2, complete: false },
     });
     const { result } = renderHook(() => useComponentFacts("hero"));
     expect(result.current).toEqual({
-      reserved: { properties: ["title"], slots: [] },
+      reserved: { properties: ["title", "subtitle"], slots: ["aside"] },
       reach: { count: 2, complete: false },
     });
   });

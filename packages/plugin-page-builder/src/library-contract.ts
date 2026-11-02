@@ -405,6 +405,9 @@ export const COMPONENT_FACTS_ROUTE_PATH = "/component-facts";
 /** The query parameter naming the component, by id. */
 export const COMPONENT_FACTS_ID_PARAM = "id";
 
+/** The query parameter carrying an asker's mount token, which the route ignores. */
+const COMPONENT_FACTS_MOUNT_PARAM = "mount";
+
 /**
  * The facts route's path for one component, in the language being edited, as
  * the client requests it. No language is the app default, as everywhere in
@@ -427,9 +430,6 @@ export function componentFactsPath(
   return `${COMPONENT_FACTS_ROUTE_PATH}?${query.toString()}`;
 }
 
-/** The query parameter carrying an asker's mount token, which the route ignores. */
-export const COMPONENT_FACTS_MOUNT_PARAM = "mount";
-
 /**
  * What the component editor is told about the component it edits.
  *
@@ -446,6 +446,15 @@ export interface ComponentFactsResponse {
    * field must never be minted under any of these.
    */
   readonly live: {
+    readonly properties: readonly string[];
+    readonly slots: readonly string[];
+  };
+  /**
+   * The field and slot ids the component has retired: removed by a published
+   * definition, and never to be minted again, since a host may still hold a
+   * value under one until it is next written.
+   */
+  readonly retired: {
     readonly properties: readonly string[];
     readonly slots: readonly string[];
   };

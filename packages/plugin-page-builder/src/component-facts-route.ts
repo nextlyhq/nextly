@@ -24,7 +24,7 @@
  *
  * @module component-facts-route
  */
-import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import { isPlainRecord, type RetiredExposures } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   type PluginRouteContext,
@@ -53,6 +53,11 @@ export interface ComponentFactsSources {
   readonly readLive: (id: string) => Promise<unknown>;
   /** How many documents place the component. */
   readonly countPlacements: (id: string) => Promise<UsageCount>;
+  /**
+   * The ids the component has retired. A failure here fails the answer: the
+   * editor then waits rather than minting without them.
+   */
+  readonly readRetired: (id: string) => Promise<RetiredExposures>;
   /** The field of the row the definition lives in. */
   readonly field: string;
 }
@@ -95,20 +100,24 @@ export async function readComponentFacts(
 ): Promise<ComponentFactsResponse> {
   const row = await sources.readLive(id);
   if (row === null || row === undefined) {
-    return { live: { properties: [], slots: [] }, reach: null };
+    return { live: NONE, retired: NONE, reach: null };
   }
+  const retired = await sources.readRetired(id);
   const count = await sources.countPlacements(id).then(
     found => found,
     () => null
   );
   return {
     live: liveIdsOf(row, sources.field),
+    retired: { properties: [...retired.properties], slots: [...retired.slots] },
     reach:
       count === null
         ? null
         : { count: count.documents, complete: count.complete },
   };
 }
+
+const NONE: ComponentFactsResponse["live"] = { properties: [], slots: [] };
 
 /**
  * The query this route reads, parsed at the boundary: the component's id and,
@@ -186,6 +195,9 @@ export function componentFactsRoute(args: {
   countPlacements: (
     ctx: PluginRouteContext
   ) => (id: string) => Promise<UsageCount>;
+  readRetired: (
+    ctx: PluginRouteContext
+  ) => (id: string) => Promise<RetiredExposures>;
 }): {
   method: "GET";
   path: string;
@@ -206,6 +218,7 @@ export function componentFactsRoute(args: {
         await readComponentFacts(id, {
           readLive: liveRowReader(ctx, slug, locale),
           countPlacements: args.countPlacements(ctx),
+          readRetired: args.readRetired(ctx),
           field: args.store.field,
         })
       );
