@@ -65,6 +65,7 @@ import {
 } from "react";
 
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
+import { guardCanvasNavigation } from "./canvas-link-guard";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isElement, isHTMLElement } from "./dom-kind";
@@ -1963,6 +1964,16 @@ export function Canvas({
       onRoot?.(null);
     };
   }, [rootRef, onRoot]);
+
+  // A link or form the page draws selects its block here and never takes the
+  // editor anywhere: see `canvas-link-guard`. Same element, same lifetime as
+  // the effect above, so it is installed once per mount.
+  useEffect(() => {
+    const element = root.current;
+    return element === null
+      ? undefined
+      : guardCanvasNavigation(element, `[${CHROME_ATTRIBUTE}]`);
+  }, []);
 
   /*
    * What to mark. The primary alone when a host has not adopted the set yet,
