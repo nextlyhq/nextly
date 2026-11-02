@@ -606,6 +606,8 @@ export class CollectionsHandler {
     collectionName: string;
     /** Page number (1-indexed, default: 1) */
     page?: number;
+    /** Rows to skip before the first returned, instead of a page. */
+    offset?: number;
     /** Number of documents per page (default: 10, max: 500) */
     limit?: number;
     /** Search query to filter entries by searchable fields */
@@ -628,7 +630,8 @@ export class CollectionsHandler {
      * Prefix with `-` for descending.
      * @example '-createdAt' for descending, 'title' for ascending
      */
-    sort?: string;
+    /** One key or several, in order; see the query service's `sort`. */
+    sort?: string | readonly string[];
     /** User context for access control */
     user?: UserContext;
     /** When true, bypass all access control checks */

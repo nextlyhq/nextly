@@ -498,6 +498,10 @@ export type {
 export { lockBreaksIn, lockRefusal } from "./lock-breaks";
 export type { LocatedLockBreak, LockSources } from "./lock-breaks";
 export { lockRepairRule, planRepair } from "./repair-plan";
+// The placement rule's repair, appended after the lock rule when planning, so
+// a page holding blocks where the placement rule refuses them is offered a
+// move to the nearest place it allows.
+export { placementRepairRule } from "./placement-repair";
 export type {
   RepairContext,
   RepairPlan,

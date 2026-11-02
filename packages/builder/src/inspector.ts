@@ -19,8 +19,10 @@ import {
   contentPropsOf,
   getBlock,
   findNode,
+  locateNode,
   nodeLocks,
   registryBlockSource,
+  type ActiveSlotLock,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
@@ -35,6 +37,7 @@ import type { EditorState } from "./editor-state";
 import { blockLabel } from "./inserter";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
+import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp, NodePatch } from "./ops";
 
 /**
@@ -138,6 +141,13 @@ export interface BlockInspection {
   readonly html: BlockHtml;
   /** What to title the panel: the block's label, or its name. */
   readonly label: string;
+  /**
+   * The block's one-line description, from its definition, for the card under
+   * the title. Every definition declares one.
+   */
+  readonly description: string;
+  /** The concept its icon names, from `editor.icon`, if it names one. */
+  readonly icon: string | undefined;
   /**
    * Props in the order the definition declares them.
    *
@@ -351,6 +361,14 @@ export function inspectSelection(
     // only for blocks which declare a label: an unlabelled third-party block
     // was "Collection loop" in the palette and `acme/collection-loop` here.
     label: blockLabel(node.type),
+    // Narrowed for the reason the inspector component is: a definition
+    // registered from JavaScript never had its type checked.
+    description:
+      typeof definition.description === "string" ? definition.description : "",
+    icon:
+      typeof definition.editor?.icon === "string"
+        ? definition.editor.icon
+        : undefined,
     props,
     inspector: inspectorOf(definition),
     designLock,
@@ -486,6 +504,172 @@ export function lockViewOf(
     definitions: editor.lockDefinitions,
     ...(composed === undefined ? {} : { composed }),
   };
+}
+
+/**
+ * The locks that hold one block, each kept apart from the other.
+ *
+ * Two kinds, and the inspector says each in its own words because they are
+ * lifted in different places:
+ *
+ * - `layers` is the block's own lock, set from Layers or the inspector's menu.
+ *   It is an edit of the page, so whoever may edit the page may lift it.
+ * - `slot` is the lock of the slot the block sits in, which the block that
+ *   declares that slot sets in code. Nothing on the page can lift it.
+ */
+export interface BlockLockStatus {
+  readonly layers: boolean;
+  /**
+   * The lock of the slot the block sits in, and the label of the block that
+   * sets it, or `undefined` where no slot lock applies.
+   */
+  readonly slot:
+    | {
+        readonly lock: ActiveSlotLock;
+        readonly holder: string;
+        /** What the lock fixes, in the words a refused edit uses. */
+        readonly reason: string;
+      }
+    | undefined;
+}
+
+/**
+ * What a slot locked `all` or `insert` fixes, in an author's words. A
+ * `contentOnly` area's reason is the lock refusal's own wording instead.
+ */
+const ARRANGEMENT_LOCK_WORDS = {
+  all: "fixes which blocks it holds and their order, so this one can't be moved or removed",
+  insert:
+    "fixes which blocks it holds, so this one can't be removed or moved out",
+} as const;
+
+/**
+ * Whether the block's own Layers lock may be set or lifted here. Not inside a
+ * `contentOnly` area, which pins the node's `locked` field with its design, so
+ * the save would refuse the change.
+ */
+export function layersLockChangeable(status: BlockLockStatus): boolean {
+  return status.slot?.lock !== "contentOnly";
+}
+
+/**
+ * Which locks hold a block.
+ *
+ * The slot lock is read through the engine's own `nodeLocks`, the walk a save
+ * is judged by, so the inspector and the save cannot disagree about it.
+ *
+ * A `contentOnly` area wins wherever one applies, in the page or in the page
+ * composed around it, and is found by the same reading that holds the design
+ * read-only ({@link designLockOf}): a block an `all` slot holds on the page and
+ * a component's `contentOnly` slot holds once composed is design-locked, and a
+ * card naming only the arrangement lock would offer a Layers lock the save
+ * refuses. Otherwise the first tree with a lock gives it, and the holder is the
+ * nearest ancestor whose slot declares it, the block whose definition says so.
+ */
+export function lockStatusOf(
+  document: BlockDocument,
+  id: string,
+  view?: LockView
+): BlockLockStatus {
+  const node = findNode(document.nodes, id);
+  const layers = node !== undefined && isLocked(node);
+  const area = contentOnlyAreaOf(document, id, view);
+  if (area !== undefined) {
+    const held = designLockOf(document, id, view);
+    return {
+      layers,
+      slot: {
+        lock: "contentOnly",
+        holder: blockLabel(area.area.holderType),
+        reason:
+          held === undefined
+            ? `${blockLabel(area.area.holderType)} fixes this block's design.`
+            : refusalAnnouncement(held),
+      },
+    };
+  }
+  // The page first, then the document the editor composes around it (a
+  // Layout's regions, a component's contents), each judged with the view's
+  // definitions: the same trees and source a save and the canvas use.
+  const source = lockSourceOf(view);
+  const trees =
+    view?.composed === undefined ? [document] : [document, view.composed];
+  const found = trees
+    .map(tree => ({ tree, at: nodeLocks(tree.nodes, source).get(id) }))
+    .find(({ at }) => at?.lock !== undefined);
+  const lock = found?.at?.lock;
+  if (found === undefined || lock === undefined || lock === "contentOnly") {
+    return { layers, slot: undefined };
+  }
+  const holderType = declaringAncestor(found.tree, id, source);
+  const holder =
+    holderType === undefined ? "The block it sits in" : blockLabel(holderType);
+  return {
+    layers,
+    slot: {
+      lock,
+      holder,
+      reason: `${holder} ${ARRANGEMENT_LOCK_WORDS[lock]}.`,
+    },
+  };
+}
+
+/**
+ * The type of the nearest ancestor whose own slot declares a lock over the
+ * block, walking up one parent at a time. A slot that declares nothing passes
+ * its parent's lock down, so the declaration may be several levels up.
+ */
+function declaringAncestor(
+  document: BlockDocument,
+  id: string,
+  source: SlotDefaultSource
+): string | undefined {
+  let current = id;
+  // Bounded by the document's depth: each step moves one parent up.
+  for (;;) {
+    const location = locateNode(document.nodes, current);
+    const parent = location?.parent;
+    if (parent === undefined || location?.slot === undefined) return undefined;
+    const declared = source.get(parent.type)?.slots?.[location.slot]?.lock;
+    if (declared !== undefined && declared !== false) return parent.type;
+    current = parent.id;
+  }
+}
+
+/** What the inspector says while a block's own Layers lock holds it. */
+const LAYERS_LOCK_REASON =
+  "Locked: it can't be moved, deleted or edited. Unlock it from the block's menu.";
+
+/**
+ * Why a block's design may not be changed here, in an author's words, or
+ * `undefined` while it may: its styles, classes, CSS id and attributes.
+ *
+ * Not on a block its Layers lock holds, and not inside a `"contentOnly"` area,
+ * where the save refuses every one of them. Asked of the live document at the
+ * moment of a write as well as when drawing, as {@link propIsWritable} is.
+ */
+export function designReadOnlyReason(
+  document: BlockDocument,
+  id: string,
+  view?: LockView
+): string | undefined {
+  if (findNode(document.nodes, id) === undefined) {
+    return "This block is no longer on the page.";
+  }
+  if (lockStatusOf(document, id, view).layers) return LAYERS_LOCK_REASON;
+  // A `contentOnly` area's reason is the lock refusal's own wording, so the
+  // inspector, a refused move and a refused save say one thing.
+  const held = designLockOf(document, id, view);
+  return held === undefined ? undefined : refusalAnnouncement(held);
+}
+
+/** Whether a block's design may be changed: {@link designReadOnlyReason}, as a yes or no. */
+export function designIsWritable(
+  document: BlockDocument,
+  id: string,
+  view?: LockView
+): boolean {
+  return designReadOnlyReason(document, id, view) === undefined;
 }
 
 /**

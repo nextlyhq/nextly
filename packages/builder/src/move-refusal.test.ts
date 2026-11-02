@@ -20,10 +20,12 @@ import type {
   NestingSource,
 } from "@nextlyhq/blocks-engine";
 import {
+  clearBlocks,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
+  registerBlocks,
 } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { refusalAnnouncement, nestingRefusalForMove } from "./move-refusal";
 
@@ -247,5 +249,47 @@ describe("the announced sentence", () => {
      * as a message that was cut off rather than one that had nothing to add.
      */
     expect(refusalAnnouncement({ headline: "No.", remedy: null })).toBe("No.");
+  });
+});
+
+describe("moving into a block that holds none", () => {
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  it("refuses an indent under a Heading and says it can't hold blocks", () => {
+    // A heading declares no slots, so a block filed under it is stored and
+    // never drawn. The keyboard's indent names the default slot; the rule
+    // refuses it and the author hears why.
+    registerBlocks(
+      [
+        {
+          version: 1,
+          description: "A heading.",
+          example: { props: {} },
+          render: () => null,
+          name: "acme/heading",
+          editor: { label: "Heading" },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "h", type: "acme/heading", version: 1, props: {} },
+        { id: "text", type: "acme/text", version: 1, props: {} },
+      ],
+    } as BlockDocument;
+
+    const refusal = nestingRefusalForMove(
+      document,
+      "text",
+      { parentId: "h", slot: "children", index: 0 },
+      PERMISSIVE
+    );
+
+    expect(refusal?.headline).toBe("Heading can't hold blocks.");
   });
 });

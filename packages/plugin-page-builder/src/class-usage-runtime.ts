@@ -35,7 +35,8 @@ export interface ClassUsageDirectApi {
     where?: Record<string, unknown>;
     limit?: number;
     page?: number;
-    sort?: string;
+    /** One key or several in order, as the Direct API takes it. */
+    sort?: string | string[];
     locale?: string;
     fallbackLocale?: false | string;
     status?: "published" | "draft" | "all";

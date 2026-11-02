@@ -216,6 +216,9 @@ for (const dialect of getConfiguredTestDialects()) {
       current = await createTestNextly({
         ...config,
         adapter: database.adapter as never,
+        // The app under test's folder, which `migrationFiles` reads: absent,
+        // the instance would write to a temporary folder of its own.
+        basePath: projectRoot,
       });
       return current;
     }
