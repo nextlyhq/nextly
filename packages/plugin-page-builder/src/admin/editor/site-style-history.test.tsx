@@ -170,4 +170,52 @@ describe("useSiteStyleHistory", () => {
       vi.useRealTimers();
     }
   });
+
+  it("stays settling when asking for the read again fails, and asks again", async () => {
+    // A failed fetch leaves the read the replay replaced: unlocking on it
+    // would let the next edit write that value back.
+    vi.useFakeTimers();
+    try {
+      refetch.mockImplementationOnce(() =>
+        Promise.reject(new Error("offline"))
+      );
+      // And a fetch that answers with an error, as a query reports a failure.
+      refetch.mockImplementationOnce(() =>
+        Promise.resolve({ isError: true } as never)
+      );
+      const { result } = renderHook(() => useSiteStyleHistory());
+      const recorded: EditorStep[] = [];
+      act(() => result.current.connect(record(recorded)));
+      act(() => result.current.history.record(step(true)));
+      const before = result.current.replay.revision;
+      await act(async () => {
+        await recorded[0]?.undo();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(5100);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(refetch).toHaveBeenCalledTimes(1);
+      expect(result.current.replay.settling).toBe(true);
+      expect(result.current.replay.revision).toBe(before);
+      await act(async () => {
+        vi.advanceTimersByTime(5100);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(refetch).toHaveBeenCalledTimes(2);
+      expect(result.current.replay.settling).toBe(true);
+      await act(async () => {
+        vi.advanceTimersByTime(5100);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(refetch).toHaveBeenCalledTimes(3);
+      expect(result.current.replay.settling).toBe(false);
+      expect(result.current.replay.revision).toBe(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

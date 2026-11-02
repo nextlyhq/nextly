@@ -575,4 +575,35 @@ describe("a save inside the editor, as a step of its history", () => {
     });
     expect(writes.at(-1)).toEqual({ classes: theirs });
   });
+
+  it("drops an undo and redo queued behind a save that is then refused", async () => {
+    // Undone and redone while the save was in flight: once it is refused,
+    // neither may store anything, or a change would land with no step left
+    // to take it back.
+    let refuse: (reason: unknown) => void = () => {};
+    writeBehaviour = () =>
+      new Promise((_, no) => {
+        refuse = no;
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.save("tokens", { tokens: [] });
+    });
+    const [step] = steps;
+    let undoing: Promise<unknown> = Promise.resolve();
+    let redoing: Promise<unknown> = Promise.resolve();
+    act(() => {
+      undoing = step?.undo() ?? undoing;
+      redoing = step?.redo() ?? redoing;
+    });
+    await waitFor(() => expect(writes).toHaveLength(1));
+    writeBehaviour = async () => ({ id: "1" });
+    await act(async () => {
+      refuse(new Error("refused"));
+      await Promise.all([saving, undoing, redoing]);
+    });
+    expect(writes).toHaveLength(1);
+  });
 });
