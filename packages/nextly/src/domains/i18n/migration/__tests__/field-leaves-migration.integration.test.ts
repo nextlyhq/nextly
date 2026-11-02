@@ -37,10 +37,10 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  parseSqlSections,
   previewMigrate,
   runFileMigrations,
 } from "../../../../cli/commands/migrate";
+import { parseSqlSections } from "../../../schema/migrate/sql-sections";
 import {
   downDatabaseDeps,
   migrateDownCore,

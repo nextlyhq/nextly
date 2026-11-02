@@ -3,10 +3,10 @@
  * each state its answer can put it in, in either colour scheme.
  */
 import { cleanup, render, screen } from "@testing-library/react";
-import type { WidgetDefinition } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { widgetCardElement } from "./testing";
+import type { RegisteredWidgetMeta } from "./types/branding";
 
 /** A figure widget as the registry publishes it. */
 const OPEN_ORDERS = {
@@ -19,8 +19,7 @@ const OPEN_ORDERS = {
     min: { w: 3, h: 2 },
     max: { w: 12, h: 6 },
   },
-  serverData: true,
-} as unknown as WidgetDefinition;
+} as unknown as RegisteredWidgetMeta;
 
 afterEach(cleanup);
 

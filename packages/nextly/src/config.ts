@@ -242,34 +242,19 @@ export type { JsonValue } from "./plugins/admin-contributions";
 // A pure interface of strings, so this costs the browser nothing.
 export type { HookWarning } from "./hooks/side-effect-warnings";
 
-// The admin CONTRIBUTION shapes, published so the admin panel can DERIVE its
-// `/admin-meta` types from the declaration the server serializes rather than
-// restating them. `buildPluginAdminMeta` copies a contributed widget verbatim
-// into that payload, so the two were one shape declared twice -- and they
-// drifted, twice: `component` was optional on one side and required on the
-// other, and the whole declarative half (`title`, `archetype`, `size`,
-// `query`, `link`, ...) was added here and never on the admin's copy, so admin
-// code reading a property that was present on the wire got a type error.
-//
-// This subpath rather than the root, and that is the load-bearing part. The
-// admin's tsconfig maps the bare `nextly` specifier to `../nextly/src`, so
-// importing from `"nextly"` shadows the package exports and pulls core's whole
-// source tree in behind internal `@nextly/*` aliases that project does not
-// declare. `nextly/config` is not covered by that mapping, so it resolves
-// through the export map to the built declaration bundle the way any consumer's
-// would -- which is what makes the derivation reachable at all.
+// The admin panel reads its widget types from this subpath rather than the
+// root, and that is the load-bearing part. The admin's tsconfig maps the bare
+// `nextly` specifier to `../nextly/src`, so importing from `"nextly"` shadows
+// the package exports and pulls core's whole source tree in behind internal
+// `@nextly/*` aliases that project does not declare. `nextly/config` is not
+// covered by that mapping, so it resolves through the export map to the built
+// declaration bundle the way any consumer's would.
 //
 // Types only: `export type` carries no runtime binding, so nothing here adds a
 // byte to the config entry point's bundle.
 export type {
   ComponentPath,
-  DeclarativeWidgetArchetype,
   HeaderButtonId,
-  PluginAdminCustomWidget,
-  PluginAdminDataWidget,
-  PluginAdminDeclarativeWidget,
-  PluginAdminQuerylessWidget,
-  PluginAdminWidget,
 } from "./plugins/admin-contributions";
 //
 // Taken from the leaf modules rather than from `domains/widgets/index.ts`: that
@@ -277,21 +262,10 @@ export type {
 // is exactly the weight this entry point exists to keep out of a
 // `nextly.config.ts`.
 //
-// `WidgetDefinition` is here for the same derivation reason as the contribution
-// shapes above: `/api/admin-meta/workspace` serializes the registry verbatim, so
-// the admin reads exactly this shape off the wire and restating it there would
-// be one contract declared twice.
-export type {
-  WidgetArchetype,
-  DataWidgetArchetype,
-  QuerylessWidgetArchetype,
-  CellWidgetArchetype,
-  WidgetDefinition,
-  WidgetSetting,
-  WidgetAction,
-  WidgetStatCell,
-  WidgetQueryCell,
-} from "./domains/widgets/definition";
+// A widget is declared with `defineWidget`, never written as the shape the
+// registry publishes, so that shape has no name here: the admin reads it as
+// `nextly/widget-result`'s `PublishedWidget`, the wire type for it.
+export type { WidgetSetting } from "./domains/widgets/definition";
 // The workspace payload's `widgetSources`, read off the wire as it is
 // serialized, for the same reason. A type only, so it carries nothing of the
 // module that builds it into a `nextly.config.ts`.
@@ -302,7 +276,7 @@ export {
   startsAtDefault,
   unfitContentField,
 } from "./domains/widgets/published-content-source";
-// The lifecycle pair `WidgetDefinition` and `PluginAdminWidget` both name. A
+// The lifecycle pair a published widget carries. A
 // leaf with no imports of its own, so it costs a `nextly.config.ts` nothing,
 // and without it the two fields have types no config author can write down.
 export {
@@ -311,32 +285,32 @@ export {
   type WidgetLifecycle,
   type WidgetCondition,
 } from "./domains/widgets/lifecycle";
-// The onboarding step ids the dashboard checklist draws. Published here rather
-// than only from the root because the admin reads this entry point, and a
-// union it restates instead of importing is a contract with nothing holding
-// the two halves together.
-export {
-  ONBOARDING_STEPS,
-  isOnboardingStepId,
-  type OnboardingStepId,
-  type OnboardingStep,
-} from "./domains/widgets/onboarding-steps";
 /**
- * The Get started steps the layout read answers, for the card that draws them:
- * the admin names each kind of step, and restating the shapes there would be
- * a second answer to the host's.
+ * The setup steps the setup card's `load` answers, for the card that draws
+ * them: the admin names each kind of step, and restating the shapes there would
+ * be a second answer to the host's.
  *
  * @experimental The card is new, and these shapes may change before it settles.
  */
 export {
-  GET_STARTED_SKIPPABLE_KINDS,
-  GET_STARTED_STEP_KINDS,
-  GET_STARTED_WIDGET_ID,
-  type GetStartedAnswer,
-  type GetStartedStep,
-  type GetStartedStepKind,
-  type GetStartedStepStatus,
-} from "./domains/widgets/get-started-steps";
+  SETUP_SKIPPABLE_KINDS,
+  SETUP_STEP_KINDS,
+  drawnSetup,
+  isSkippableKind,
+  setupAllSet,
+  stepFinished,
+  talliedSetup,
+  type SampleRoute,
+  type SampleRun,
+  type SampleSetupStep,
+  type SetupAnswer,
+  type SetupCardData,
+  type SetupSingle,
+  type SetupStep,
+  type SetupStepKind,
+  type SetupStepStatus,
+  type SkippableSetupStepKind,
+} from "./domains/widgets/setup-steps";
 export type {
   SourcelessWidgetQuery,
   TimeseriesRange,
@@ -352,6 +326,8 @@ export {
   effectiveWidgetSettings,
   // How many fields a Fields setting may choose: the settings sheet stops at it.
   MAX_CHOSEN_FIELDS,
+  // How many settings a widget may mark quick: the card's quick popover holds that many.
+  MAX_QUICK_SETTINGS,
   naturalGroupBy,
   resolveWidgetSettings,
   // The rule a stored value is read back by, asked before it is kept: the
@@ -397,6 +373,10 @@ export { MAX_QUERIES_PER_REQUEST } from "./domains/widgets/batch-limit";
 // From the import-free `layout-limits.ts`, not `layout.ts`: that module
 // imports `node:crypto`, and this entry is published as safe for a browser.
 export { MAX_PLACEMENTS } from "./domains/widgets/layout-limits";
+// The most a reader's own title for a card may hold, which the layout write
+// refuses past: the settings panel bounds its Title field by the same number,
+// so a title it lets a reader type is one the write accepts.
+export { MAX_CARD_TITLE_LENGTH } from "./domains/widgets/layout-limits";
 // The endpoint's own size check, so the editor can trim a save to what the
 // endpoint accepts by bytes as well as by count. From `layout-payload.ts`,
 // which reaches only `layout-limits.ts`, for the reason above.
@@ -498,6 +478,9 @@ export {
   DEFAULT_ALLOWED_MIME_TYPES,
 } from "./services/upload-validation/mime";
 export type { AcceptedFormat } from "./services/upload-validation/mime";
+// The most media items one delete may name: the admin refuses a larger
+// selection before asking, from the number the endpoint enforces.
+export { MEDIA_DELETE_LIMIT } from "./domains/media/media-delete-limit";
 export type { WebFontFormat } from "./services/upload-validation/web-fonts";
 
 // The API-key authorization policy. Exported here so the admin's route guards

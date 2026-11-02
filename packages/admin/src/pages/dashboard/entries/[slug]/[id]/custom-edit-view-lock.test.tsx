@@ -58,6 +58,9 @@ vi.mock("@admin/components/features/releases/ScheduledReleaseBanner", () => ({
 vi.mock("@admin/components/features/releases/AddToReleaseAction", () => ({
   useAddToReleaseAction: () => ({ dialog: null, contributed: null }),
 }));
+vi.mock("@admin/components/features/releases/SchedulePublishAction", () => ({
+  useSchedulePublishAction: () => ({ dialog: null, contributed: null }),
+}));
 
 let collectionSchema: Record<string, unknown> = {};
 vi.mock("@admin/hooks/queries/useCollections", () => ({

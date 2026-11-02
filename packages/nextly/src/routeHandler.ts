@@ -49,16 +49,22 @@ import {
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import { handleContentEventsRequest } from "./api/content-events";
 import {
-  getDashboardOnboarding,
   getDashboardStats,
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
+import { getDashboardGallery } from "./api/dashboard-gallery";
+import {
+  getDashboardNewTypes,
+  postDashboardNewType,
+} from "./api/dashboard-new-types";
 import {
   deleteDashboardPin,
   getDashboardPins,
   postDashboardPin,
 } from "./api/dashboard-pins";
+import { getDashboardSetup, putDashboardSetup } from "./api/dashboard-setup";
+import { getDashboardSummary } from "./api/dashboard-summary";
 import {
   acquireLock,
   readLock,
@@ -70,13 +76,6 @@ import {
   getGeneralSettings,
   updateGeneralSettings,
 } from "./api/general-settings";
-import {
-  listImageSizes,
-  getImageSizeById,
-  createImageSize,
-  updateImageSize,
-  deleteImageSize,
-} from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { changeLanguages, getLanguages } from "./api/languages";
@@ -135,6 +134,10 @@ import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { hasAuthRateLimit } from "./auth/handlers/router";
 import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
+import {
+  isSampleContentPath,
+  sampleContentNotShipped,
+} from "./database/seeders/sample-content";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
 import {
@@ -153,7 +156,6 @@ import {
 } from "./domains/i18n/configured-locales";
 import { hasLifecycle } from "./domains/versions/recorded-status";
 import { collectionDefaultForReader } from "./domains/widgets/collection-cards";
-import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
   publishableContentSources,
@@ -187,11 +189,8 @@ import {
 } from "./middleware/rest-limit-gate";
 import { createRestLimits, restLimitCounts } from "./middleware/rest-limits";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
-import type { PluginAdminWidget } from "./plugins/admin-contributions";
-import {
-  buildPluginAdminMeta,
-  type PluginAdminMeta,
-} from "./plugins/admin-meta";
+import { buildPluginAdminMeta } from "./plugins/admin-meta";
+import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,
   restLimitTargetOf,
@@ -204,7 +203,6 @@ import {
   pluginRouteBootDecision,
 } from "./plugins/routes/should-register";
 import { settingsWritePermission } from "./plugins/settings-permission";
-import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
 import { assertDocumentViews } from "./plugins/validate-document-views";
 import {
@@ -395,7 +393,6 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "languages",
   "previewLinks",
   "previewUrl",
-  "imageSizes",
   "dashboard",
   "documentLock",
   "translations",
@@ -508,40 +505,6 @@ async function handleGeneralSettingsRequest(
   }
 }
 
-/**
- * Delegate image sizes requests to the named handlers.
- * Handlers manage their own auth + body parsing.
- */
-async function handleImageSizesRequest(
-  req: Request,
-  httpMethod: string,
-  imageId?: string
-): Promise<Response> {
-  switch (httpMethod) {
-    case "GET":
-      return imageId ? getImageSizeById(req, imageId) : listImageSizes(req);
-    case "POST":
-      return createImageSize(req);
-    case "PATCH":
-      if (!imageId)
-        return new Response(JSON.stringify({ error: "ID required" }), {
-          status: 400,
-        });
-      return updateImageSize(req, imageId);
-    case "DELETE":
-      if (!imageId)
-        return new Response(JSON.stringify({ error: "ID required" }), {
-          status: 400,
-        });
-      return deleteImageSize(req, imageId);
-    default:
-      return new Response(JSON.stringify({ error: "Method not allowed" }), {
-        status: 405,
-        headers: { "Content-Type": "application/json" },
-      });
-  }
-}
-
 // ============================================================================
 // Dashboard Direct Dispatch
 // ============================================================================
@@ -550,7 +513,7 @@ async function handleImageSizesRequest(
  * Delegate a dashboard request directly to the named handler.
  *
  * Dashboard handlers manage their own auth (requireAuthentication) and read
- * their own bodies (the layout's and a pin's). Intercepting here — before
+ * their own bodies (the layout's, a pin's and the setup card's). Intercepting here — before
  * req.text() — keeps the pattern consistent with API keys and general settings.
  */
 async function handleDashboardRequest(
@@ -560,8 +523,6 @@ async function handleDashboardRequest(
   switch (method) {
     case "getDashboardStats":
       return getDashboardStats(req);
-    case "getDashboardOnboarding":
-      return getDashboardOnboarding(req);
     case "getDashboardRecentEntries":
       return getDashboardRecentEntries(req);
     case "getDashboardActivity":
@@ -570,6 +531,10 @@ async function handleDashboardRequest(
       return postWidgetQuery(req);
     case "getWidgetLayout":
       return getWidgetLayout(req);
+    case "getDashboardGallery":
+      return getDashboardGallery(req);
+    case "getDashboardSummary":
+      return getDashboardSummary(req);
     case "putWidgetLayout":
       return putWidgetLayout(req);
     case "deleteWidgetLayout":
@@ -580,6 +545,14 @@ async function handleDashboardRequest(
       return postDashboardPin(req);
     case "deleteDashboardPin":
       return deleteDashboardPin(req);
+    case "getDashboardNewTypes":
+      return getDashboardNewTypes(req);
+    case "postDashboardNewType":
+      return postDashboardNewType(req);
+    case "getDashboardSetup":
+      return getDashboardSetup(req);
+    case "putDashboardSetup":
+      return putDashboardSetup(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
@@ -1093,7 +1066,7 @@ async function resolveAuthorization(
     }
     // Definition mutations (create/update/delete collection). The grant is
     // declared once, in `auth/collection-definition-policy`, because the
-    // onboarding checklist asks the same question to decide whether to OFFER
+    // setup card asks the same question to decide whether to OFFER
     // the step -- and a copy there would go on asking for a grant this route
     // had stopped requiring.
     return requireAllPermissions(req, COLLECTION_DEFINITION_PERMISSIONS);
@@ -1556,6 +1529,15 @@ async function serveServiceRequest(
     );
     if (rootAnswer) return rootAnswer;
 
+    // The project's sample-content route, where the project ships none: a
+    // missing route, which the setup card's probe reads as "no sample
+    // content", rather than a malformed one.
+    if (isSampleContentPath(params)) {
+      return withinBuiltInLimit(() =>
+        Promise.resolve(sampleContentNotShipped(req))
+      );
+    }
+
     return withinBuiltInLimit(() =>
       Promise.resolve(
         new Response(
@@ -1711,28 +1693,6 @@ async function serveServiceRequest(
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================
   if (service === "generalSettings") {
     return handleGeneralSettingsRequest(req, httpMethod);
-  }
-
-  // ==================== IMAGE SIZES DIRECT DISPATCH ====================
-  if (service === "imageSizes") {
-    // Handle regeneration sub-routes
-    // Regeneration endpoints return "not yet available" until the service
-    // can actually download and reprocess original images from all adapters.
-    if (method === "regenerationStatus" || method === "regenerate") {
-      return Response.json(
-        {
-          data: {
-            pending: 0,
-            total: 0,
-            inProgress: false,
-            message: "Batch regeneration coming soon",
-          },
-        },
-        { status: 200 }
-      );
-    }
-    const imageId = routeParams?.imageId;
-    return handleImageSizesRequest(req, httpMethod, imageId);
   }
 
   // ==================== DASHBOARD DIRECT DISPATCH ====================
@@ -2041,35 +2001,24 @@ const NO_WIDGETS: WidgetAudience = {
 };
 
 /**
- * One declaration with the actions this reader may not see withheld.
+ * One declaration with the empty-state action this reader may not take
+ * withheld.
  *
- * An `actions` widget's shortcuts each carry a gate of their own, and a
- * shortcut is a label and an href: shipped whole and hidden by the browser
- * afterwards, the protected ones are readable from the payload regardless.
- * A declared widget's empty-state action is the same kind of thing, and is
- * withheld the same way. Filtered on the same reading the card's own gate
- * gets. A declaration with neither passes through untouched.
+ * The action is a label and a link: shipped whole and hidden by the browser
+ * afterwards, a protected one is readable from the payload regardless, so it
+ * is filtered on the same reading the card's own gate gets. A declaration
+ * with none passes through untouched.
  */
 function actionsForAudience<
   W extends {
     id: string;
-    actions?: readonly WidgetAction[];
     empty?: { message?: string; action?: object };
   },
 >(widget: W, audience: WidgetAudience): W {
   const withheldEmpty = emptyForAudience(widget.empty, audience);
-  if (widget.actions === undefined && withheldEmpty === widget.empty) {
-    return widget;
-  }
+  if (withheldEmpty === widget.empty) return widget;
   return {
     ...widget,
-    ...(widget.actions === undefined
-      ? {}
-      : {
-          actions: widget.actions.filter(action =>
-            audience.holds(action.requiredPermission)
-          ),
-        }),
     ...(withheldEmpty === undefined ? {} : { empty: withheldEmpty }),
   };
 }
@@ -2094,43 +2043,6 @@ function emptyForAudience<E extends { message?: string; action?: object }>(
   if (audience.holds(gate)) return empty;
   const { action: _withheld, ...rest } = empty;
   return rest as E;
-}
-
-/**
- * One plugin's projection with the widgets this reader may not see withheld.
- *
- * 🔴 Withheld HERE, on the server, because a contributed widget is its whole
- * declaration: a `text` widget carries its prose and an `actions` widget its
- * links. The browser applies the same gate before drawing, and that is not a
- * control -- the payload is JSON, and reading it is the bypass. The key is
- * dropped rather than left as an empty array, which is the shape the
- * projection gives a plugin that contributed none.
- *
- * 🔴 And ONLY the declaration that won its id. Two plugins may contribute the
- * same id; `canonicalWidgets` and the admin's resolver both keep the FIRST,
- * so the first is the one the reader's verdict is about -- and a later
- * duplicate, gated on something the reader lacks and carrying its own prose,
- * would ship under the winner's clearance if the payload were filtered by id
- * alone. `shipped` runs across the plugins in the order they were declared,
- * which is the order both resolvers walk.
- */
-function widgetsForAudience(
-  plugin: PluginAdminMeta,
-  audience: WidgetAudience,
-  readable: ReadonlySet<string>,
-  shipped: Set<string>
-): PluginAdminMeta {
-  if (plugin.widgets === undefined) return plugin;
-  const { widgets, ...rest } = plugin;
-  const visible: PluginAdminWidget[] = [];
-  for (const widget of widgets) {
-    if (!audience.declared.has(widget.id) || shipped.has(widget.id)) continue;
-    shipped.add(widget.id);
-    visible.push(
-      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
-    );
-  }
-  return visible.length > 0 ? { ...rest, widgets: visible } : rest;
 }
 
 /**
@@ -2249,15 +2161,11 @@ async function buildAdminMeta(
   // Collect plugin metadata from registered plugins with host override
   // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
-  const shipped = new Set<string>();
   // The collections this reader may read, as the layout judges them: a widget
-  // declaration below ships its Collection setting's default only when it
-  // names one of them (`collectionDefaultForReader`).
+  // below ships its Collection setting's default only when it names one of
+  // them (`collectionDefaultForReader`).
   const readable = audience.readableCollections;
-  const plugins = buildPluginAdminMeta(
-    config?.plugins ?? [],
-    pluginOverrides
-  ).map(plugin => widgetsForAudience(plugin, audience, readable, shipped));
+  const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
   if (plugins.length > 0) {
     workspace.plugins = plugins;
 
@@ -2287,26 +2195,17 @@ async function buildAdminMeta(
     }
   }
 
-  // The widget REGISTRY, beside the contributions above. The two are different
-  // channels to the same grid and neither subsumes the other: a contribution is
-  // DECLARED in `contributes.admin.widgets` and travels with the plugin's
-  // config, while a registration is an imperative `registerWidget` call made
-  // during boot. Serializing only the first left an app that used the public
-  // registration API invisible to the renderer built around that registry --
-  // its card never drew and its query never entered the batch.
+  // The widget registry: every widget core, a plugin's
+  // `contributes.dashboard.widgets` or the site config declared, as published.
   //
   // Only this half of the payload can carry it. The registry is populated
   // during boot, and `handleAdminMetaWorkspaceRequest` is the caller that
   // awaits `ensureServicesInitialized()` first; the public branding route is
-  // served without it and would answer from an empty store. That the workspace
-  // half already describes the RUNNING installation rather than the configured
-  // one -- `showBuilder` from the live resolver, `customGroups` from the
-  // database -- is the same property this relies on.
+  // served without it and would answer from an empty store.
   //
-  // 🔴 Filtered for the reader, like the contributions above. A registration
-  // is a whole declaration -- a `text` widget's prose, an `actions` widget's
-  // links -- so shipping every one and leaving the browser to hide the gated
-  // cards hands a reader the contents of a card they may not see.
+  // 🔴 Filtered for the reader: shipping every widget and leaving the browser
+  // to hide the gated cards hands a reader the declaration of a card they may
+  // not see, and an empty state's action they may not take.
   const widgets = publishableWidgets()
     .filter(widget => audience.declared.has(widget.id))
     .map(widget =>
@@ -2321,7 +2220,7 @@ async function buildAdminMeta(
   if (widgetSources.length > 0) {
     workspace.widgetSources = widgetSources;
   }
-  // The audience both widget channels above were filtered for, as the layout
+  // The audience the widgets above were filtered for, as the layout
   // read also reports it: the admin compares the two to learn that a payload
   // it has held for minutes was built for a different reader than the layout
   // in front of it -- a grant, a role change -- and reads it again.
@@ -2765,11 +2664,9 @@ export function createDynamicHandlers(options?: {
     // instead of at startup. This module runs when the route file is imported,
     // which is the earliest deterministic point the config exists.
     assertClientConfigs(options.config.plugins ?? []);
-    // And the widgets beside it. `/api/admin-meta/workspace` serializes both
-    // halves through one `JSON.stringify`, so a widget carrying a bigint takes
-    // the whole authenticated workspace payload down for every admin -- a
-    // wider failure than a bad `clientConfig`, reached the same way.
-    assertAdminWidgets(options.config.plugins ?? []);
+    // And a plugin still adding widgets through a key Nextly no longer reads,
+    // refused at the same point and for the same reason.
+    assertNoRemovedWidgetKeys(options.config.plugins ?? []);
     // And the document views: two screens claiming one address on one
     // document would leave the admin drawing whichever it reached first.
     assertDocumentViews(options.config.plugins ?? []);

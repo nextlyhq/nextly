@@ -11,6 +11,10 @@ import {
 } from "@admin/constants/query";
 import { shouldRetryMutation } from "@admin/lib/api/mutation-retry";
 
+/** Whether the query devtools are drawn: unless a development build opts out of them. */
+const SHOW_QUERY_DEVTOOLS =
+  process.env.NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS !== "off";
+
 /**
  * QueryProvider - Provides TanStack Query context to the application
  *
@@ -54,7 +58,10 @@ import { shouldRetryMutation } from "@admin/lib/api/mutation-retry";
  * ## Development Tools
  *
  * Includes ReactQueryDevtools for development (auto-excluded in production builds).
- * Access devtools via the floating icon in the bottom-right corner.
+ * Access devtools via the floating icon in the bottom-right corner. Set
+ * `NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS=off` to leave them out of a development
+ * build too, as the browser suite does: its floating icon sits over the
+ * bottom-right corner, where toasts and their Undo are drawn.
  *
  * @example
  * ```tsx
@@ -103,7 +110,7 @@ export function QueryProvider({
   return (
     <QueryClientProvider client={queryClient}>
       {children}
-      <ReactQueryDevtools initialIsOpen={false} />
+      {SHOW_QUERY_DEVTOOLS && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>
   );
 }

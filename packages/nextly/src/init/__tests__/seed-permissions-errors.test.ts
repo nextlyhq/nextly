@@ -16,6 +16,7 @@ const seedSystemPermissions = vi.fn();
 const seedRolePresets = vi.fn();
 const seedPublicRole = vi.fn();
 const seedPublicReadGrants = vi.fn();
+const recordPublicReadNotice = vi.fn();
 const withdrawUndeclaredPluginGrants = vi.fn();
 const seedPluginRoles = vi.fn();
 const rolesHoldingRetiredManage = vi.fn();
@@ -55,6 +56,7 @@ vi.mock("../../domains/auth/services/public-role", () => ({
   seedPublicRole,
 }));
 vi.mock("../../domains/auth/services/public-read-grant", () => ({
+  recordPublicReadNotice,
   seedPublicReadGrants,
   withdrawUndeclaredPluginGrants,
 }));
@@ -86,12 +88,53 @@ beforeEach(() => {
   seedRolePresets.mockResolvedValue(undefined);
   seedPublicRole.mockResolvedValue({ made: true });
   seedPublicReadGrants.mockResolvedValue(undefined);
+  recordPublicReadNotice.mockResolvedValue(undefined);
   seedPluginRoles.mockResolvedValue(undefined);
   rolesHoldingRetiredManage.mockResolvedValue([]);
 });
 
 describe("seedPermissionsAndRolePresets", () => {
+  it("records whether the site is told which reads visitors lost before seeding anything", async () => {
+    // Decided by whether an earlier boot made the preset roles, so it must be
+    // read before this boot makes them.
+    await seedPermissionsAndRolePresets();
+
+    const [recorded] = recordPublicReadNotice.mock.invocationCallOrder;
+    expect(recorded).toBeLessThan(
+      seedSystemPermissions.mock.invocationCallOrder[0]
+    );
+    expect(recorded).toBeLessThan(seedRolePresets.mock.invocationCallOrder[0]);
+  });
+
+  it("makes no Public role until the notice's record is written, and tries again", async () => {
+    // Made without the record, the next boot would find the role made and
+    // record the site as not due, so it would never be told.
+    vi.useFakeTimers();
+    try {
+      recordPublicReadNotice.mockRejectedValueOnce(
+        new Error("connection reset")
+      );
+      await seedPermissionsAndRolePresets();
+      expect(seedPublicRole).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0]?.[0]).toContain(
+        "Seeding public read notice failed"
+      );
+      // POPULATION CONTROL: the rest of the seeding still runs.
+      expect(seedRolePresets).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await awaitBootSeeding();
+
+      expect(recordPublicReadNotice).toHaveBeenCalledTimes(2);
+      expect(seedPublicRole).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps quiet about a table that does not exist yet, in every step", async () => {
+    recordPublicReadNotice.mockRejectedValue(missingTable());
     seedSystemPermissions.mockRejectedValue(missingTable());
     seedRolePresets.mockRejectedValue(missingTable());
     seedPublicRole.mockRejectedValue(missingTable());

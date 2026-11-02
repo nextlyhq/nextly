@@ -18,11 +18,14 @@
  */
 import { widgetCardElement } from "@nextlyhq/admin/testing";
 import type { AnyWidget, WidgetData } from "nextly";
+// The card helpers' own entry, not `nextly/testing`: that entry's harness
+// refuses to load where `window` is defined, so a card test under jsdom could
+// not import this module through it.
 import {
   publishedWidgetDefinition,
   widgetCardSlot,
   type WidgetLoadResult,
-} from "nextly/testing";
+} from "nextly/testing/widget-card";
 import type { ComponentType, JSX } from "react";
 
 /** A card's states: each a load can answer, and `loading`, which only a card shows. */

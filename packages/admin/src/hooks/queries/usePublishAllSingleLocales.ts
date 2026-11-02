@@ -23,6 +23,10 @@ import {
 import { toast } from "@admin/components/ui";
 import { singleApi } from "@admin/services/singleApi";
 
+import {
+  refreshRemovedFromCodeSchema,
+  removedFromCodeRefusal,
+} from "./removed-from-code-refusal";
 import { singleDocumentKeys } from "./useSingles";
 
 export interface UsePublishAllSingleLocalesOptions {
@@ -55,8 +59,15 @@ export function usePublishAllSingleLocales({
       });
       if (!silent) toast.success("All languages published.");
     },
-    onError: () => {
-      if (!silent) toast.error("Couldn't publish all languages.");
+    onError: error => {
+      // A Single removed from code refuses in a sentence that says what to do
+      // next, so that is shown in place of the general one.
+      refreshRemovedFromCodeSchema(queryClient, error);
+      if (!silent) {
+        toast.error(
+          removedFromCodeRefusal(error) ?? "Couldn't publish all languages."
+        );
+      }
     },
   });
 }

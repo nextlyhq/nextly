@@ -23,6 +23,7 @@ import { registerCreateAdminCommand } from "./commands/create-admin";
 import { registerDbSyncCommand } from "./commands/db-sync";
 import { registerGenerateManifestCommand } from "./commands/generate-manifest";
 import { registerGenerateTypesCommand } from "./commands/generate-types";
+import { registerGenerateWidgetCommand } from "./commands/generate-widget";
 import { registerI18nRestoreCommand } from "./commands/i18n-restore";
 import { registerInitCommand } from "./commands/init";
 import { createMediaCommand } from "./commands/media";
@@ -113,6 +114,7 @@ ${pc.bold("Examples:")}
   ${pc.gray("$")} next dev                      ${pc.gray("# Start the dev server (Nextly boots in-process)")}
   ${pc.gray("$")} nextly generate:types         ${pc.gray("# Generate TypeScript types")}
   ${pc.gray("$")} nextly generate:manifest --check ${pc.gray("# Fail if the committed block manifest is stale")}
+  ${pc.gray("$")} nextly generate:widget open-orders ${pc.gray("# Scaffold a dashboard widget and its test")}
   ${pc.gray("$")} nextly migrate                ${pc.gray("# Run pending migrations")}
   ${pc.gray("$")} nextly migrate:status         ${pc.gray("# Show migration status")}
 
@@ -176,6 +178,7 @@ function registerCommands(program: Command): void {
 
   // Type generation commands
   registerGenerateTypesCommand(program);
+  registerGenerateWidgetCommand(program); // scaffold a dashboard widget and its test
   registerGenerateSchemaCommand(program);
   // The manifest is also written by generate:types; this stands alone so CI can
   // check it is current without paying for type and Zod generation.

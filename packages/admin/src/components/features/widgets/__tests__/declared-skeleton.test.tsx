@@ -27,7 +27,6 @@ const declared = (sketch: string): DashboardWidget => ({
   title: "Orders",
   archetype: "custom",
   component: "acme#Orders",
-  serverData: true,
   sketch,
   size: gridBounds(6),
 });

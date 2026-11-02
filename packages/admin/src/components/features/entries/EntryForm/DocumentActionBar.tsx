@@ -31,7 +31,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { Loader2, MoreHorizontal } from "lucide-react";
+import { ChevronDown, Loader2, MoreHorizontal } from "lucide-react";
 import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
@@ -40,7 +40,7 @@ import {
   actionsAt,
   menuGroups,
   withContributedActions,
-  type DocumentAction,
+  type EditorDocumentAction,
 } from "./document-actions";
 
 /** What a host wires an action to, and why it might not run right now. */
@@ -78,9 +78,27 @@ export interface ActionBinding {
  * makes the omission unrepresentable.
  */
 export interface ContributedAction {
-  action: DocumentAction;
-  binding: ActionBinding;
+  action: EditorDocumentAction;
+  binding: ContributedBinding;
 }
+
+/**
+ * A contribution's control. Told, when it is chosen, the document as the form
+ * holds it: the page that contributes it sits above the form, so the saved
+ * entry is all it has, and an edit not yet saved (a title being typed) lives
+ * only in the form.
+ */
+export interface ContributedBinding extends Omit<ActionBinding, "onSelect"> {
+  onSelect: (document: DocumentAsEdited) => void;
+}
+
+/** The document as the editor holds it, unsaved edits included. */
+export interface DocumentAsEdited {
+  values: Record<string, unknown>;
+}
+
+/** What a host with no form to read hands a contribution. */
+const NO_VALUES = (): Record<string, unknown> => ({});
 
 /**
  * The built-in actions and bindings with a host's contributions folded in.
@@ -99,11 +117,16 @@ export interface ContributedAction {
  * the first change to either.
  */
 export function acceptContributions(
-  built: readonly DocumentAction[],
+  built: readonly EditorDocumentAction[],
   builtBindings: Readonly<Record<string, ActionBinding | undefined>>,
-  contributed: readonly ContributedAction[]
+  contributed: readonly ContributedAction[],
+  /**
+   * The form's values, read at the moment a contribution is chosen rather
+   * than when the editor drew, so an edit made since the last render counts.
+   */
+  currentValues: () => Record<string, unknown> = NO_VALUES
 ): {
-  actions: DocumentAction[];
+  actions: EditorDocumentAction[];
   bindings: Record<string, ActionBinding | undefined>;
 } {
   const actions = withContributedActions(
@@ -115,13 +138,16 @@ export function acceptContributions(
   };
   for (const entry of contributed) {
     if (actions.includes(entry.action))
-      bindings[entry.action.id] = entry.binding;
+      bindings[entry.action.id] = {
+        ...entry.binding,
+        onSelect: () => entry.binding.onSelect({ values: currentValues() }),
+      };
   }
   return { actions, bindings };
 }
 
 export interface DocumentActionBarProps {
-  actions: readonly DocumentAction[];
+  actions: readonly EditorDocumentAction[];
   /** Keyed by action id. An action with no entry is not drawn. */
   bindings: Readonly<Record<string, ActionBinding | undefined>>;
   /** Whether a mutation is in flight, which shows on the leading action. */
@@ -206,14 +232,14 @@ function ActionRow({
  * for exactly the same reasons.
  */
 export function reasonFor(
-  action: DocumentAction,
+  action: EditorDocumentAction,
   binding: ActionBinding
 ): string | undefined {
   return action.disabledReason ?? binding.disabledReason;
 }
 
 /** An action and what it is wired to. */
-type Bound = { action: DocumentAction; binding: ActionBinding };
+type Bound = { action: EditorDocumentAction; binding: ActionBinding };
 
 /**
  * The actions a host actually wired, paired with their bindings.
@@ -222,7 +248,7 @@ type Bound = { action: DocumentAction; binding: ActionBinding };
  * toolbar while the menu believes it does not exist.
  */
 function bound(
-  actions: readonly DocumentAction[],
+  actions: readonly EditorDocumentAction[],
   bindings: DocumentActionBarProps["bindings"]
 ): Bound[] {
   const out: Bound[] = [];
@@ -245,7 +271,15 @@ export function DocumentActionBar({
   const primary = bound(actionsAt(available, "primary"), bindings)[0];
   const toolbar = bound(actionsAt(available, "toolbar"), bindings);
   const groups = menuGroups(available);
-  const documentItems = bound(groups.document, bindings);
+  const publishItems = bound(actionsAt(available, "publish-menu"), bindings);
+  // The other ways to publish hang off the primary action only when it is
+  // Publish. Where saving leads (a clean published document) or nothing
+  // does, they lead More's document rows instead: an arrow on Save would
+  // offer scheduling as a kind of saving.
+  const publishLeads = primary?.action.id === PUBLISH_ACTION_ID;
+  const documentItems = publishLeads
+    ? bound(groups.document, bindings)
+    : [...publishItems, ...bound(groups.document, bindings)];
   const dangerItems = bound(groups.danger, bindings);
   const wideMenu = documentItems.length > 0 || dangerItems.length > 0;
   // A menu is drawn when it has a row to hold, folded controls included.
@@ -285,27 +319,11 @@ export function DocumentActionBar({
       ))}
 
       {primary === undefined ? null : (
-        <Button
-          size="sm"
-          {...(primary.binding.submitForm === undefined
-            ? { type: "button" as const, onClick: primary.binding.onSelect }
-            : { type: "submit" as const, form: primary.binding.submitForm })}
-          disabled={reasonFor(primary.action, primary.binding) !== undefined}
-          /*
-            The reason is the title when there is one, so a control an author
-            cannot use says why. Three separate permissions and several document
-            states decide these, and a dead button with no explanation reads as
-            broken rather than as forbidden.
-          */
-          title={
-            reasonFor(primary.action, primary.binding) ?? primary.action.label
-          }
-          data-action={primary.action.id}
-          data-primary="true"
-        >
-          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-          {primary.action.label}
-        </Button>
+        <PrimaryAction
+          primary={primary}
+          options={publishLeads ? publishItems : []}
+          pending={pending}
+        />
       )}
 
       {hasMenu ? (
@@ -316,6 +334,88 @@ export function DocumentActionBar({
           wideMenu={wideMenu}
         />
       ) : null}
+    </div>
+  );
+}
+
+/** The built-in Publish's id, under both "Publish" and "Publish changes". */
+const PUBLISH_ACTION_ID = "publish";
+
+/** What the arrow beside the primary action is called, and opens. */
+const PUBLISH_OPTIONS_LABEL = "More ways to publish";
+
+/**
+ * The one leading action, and where there are other ways to publish, the
+ * arrow that opens them, joined to it as one control.
+ */
+function PrimaryAction({
+  primary,
+  options,
+  pending,
+}: {
+  primary: Bound;
+  options: Bound[];
+  pending: boolean;
+}) {
+  const reason = reasonFor(primary.action, primary.binding);
+  const press = (
+    <Button
+      size="sm"
+      {...(primary.binding.submitForm === undefined
+        ? { type: "button" as const, onClick: primary.binding.onSelect }
+        : { type: "submit" as const, form: primary.binding.submitForm })}
+      disabled={reason !== undefined}
+      /*
+        The reason is the title when there is one, so a control an author
+        cannot use says why. Three separate permissions and several document
+        states decide these, and a dead button with no explanation reads as
+        broken rather than as forbidden.
+      */
+      title={reason ?? primary.action.label}
+      data-action={primary.action.id}
+      data-primary="true"
+      className={cn(options.length > 0 && "rounded-r-none")}
+    >
+      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+      {primary.action.label}
+    </Button>
+  );
+  if (options.length === 0) return press;
+  return (
+    <div className="flex items-center" data-publish-split="">
+      {press}
+      {/* Usable while the press is held: each option carries its own reason,
+        and scheduling or adding to a release writes nothing to the form. */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            size="sm"
+            className="rounded-l-none border-l-primary-foreground/25 px-1.5"
+            aria-label={PUBLISH_OPTIONS_LABEL}
+            title={PUBLISH_OPTIONS_LABEL}
+          >
+            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-56">
+          {options.map(({ action, binding }) => (
+            <DropdownMenuItem
+              key={action.id}
+              disabled={reasonFor(action, binding) !== undefined}
+              // `onSelect`, which Radix withholds from a disabled item.
+              onSelect={binding.onSelect}
+              data-action={action.id}
+              {...reasonAttributes(reasonFor(action, binding))}
+            >
+              <ActionRow
+                label={action.label}
+                reason={reasonFor(action, binding)}
+              />
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
