@@ -32,6 +32,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
+import { canvasFrame } from "./support/canvas-frame";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
 /** The unknown-block placeholder's marker, from `@nextlyhq/blocks-react`. */
@@ -117,7 +118,7 @@ async function saveDraft(page: Page): Promise<void> {
 
 /** One drawn fixture block on the canvas. */
 function fixture(page: Page, kind: "plain" | "custom" | "teaser") {
-  return page.locator(`.nx-canvas [data-fixture="${kind}"]`);
+  return canvasFrame(page).locator(`.nx-canvas [data-fixture="${kind}"]`);
 }
 
 test.describe("blocks a plugin contributes", () => {

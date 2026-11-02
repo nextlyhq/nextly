@@ -24,6 +24,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { contrastRatio, gotoAdmin, toRgb, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { canvasFrame, canvasLayer } from "./support/canvas-frame";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.homepage] });
@@ -97,7 +98,7 @@ async function seed(page: Page): Promise<void> {
 
 /** The text block's element on the canvas. */
 function canvasText(page: Page): Locator {
-  return page.locator('.nx-canvas [data-nx-node="lead"]').first();
+  return canvasFrame(page).locator('.nx-canvas [data-nx-node="lead"]').first();
 }
 
 async function openBuilder(page: Page, theme: Theme): Promise<void> {
@@ -158,7 +159,7 @@ for (const theme of ["dark", "light"] as const) {
       const site = await published(await context.newPage());
 
       await openBuilder(page, theme);
-      const canvas = page.locator(".nx-canvas");
+      const canvas = canvasFrame(page).locator(".nx-canvas");
 
       expect(
         await toRgb(page, await groundBehind(canvas)),
@@ -212,7 +213,8 @@ for (const theme of ["dark", "light"] as const) {
       await openBuilder(page, theme);
       await canvasText(page).click();
 
-      const toolbar = page.locator(".nx-canvas .nx-block-toolbar");
+      // Drawn over the canvas's frame, in the admin's document.
+      const toolbar = canvasLayer(page).locator(".nx-block-toolbar");
       await expect(toolbar).toBeVisible({ timeout: 15_000 });
 
       expect(
@@ -229,18 +231,21 @@ for (const theme of ["dark", "light"] as const) {
        */
       const selected = canvasText(page);
       await expect(selected).toHaveAttribute("data-nx-selected", /.*/);
+      // The ring is a mark drawn over the block, in the editor's layer.
+      const mark = canvasLayer(page).locator(
+        '.nx-canvas-mark[data-mark="selected"]'
+      );
+      await expect(mark).toHaveCount(1);
       const ring = await toRgb(
         page,
-        await selected.evaluate(
-          element => getComputedStyle(element).outlineColor
-        )
+        await mark.evaluate(element => getComputedStyle(element).outlineColor)
       );
       expect(ring, "the selection ring is the select blue").toEqual([
         37, 99, 235,
       ]);
       const ground = await toRgb(
         page,
-        await groundBehind(page.locator(".nx-canvas"))
+        await groundBehind(canvasFrame(page).locator(".nx-canvas"))
       );
       expect(
         contrastRatio(ring, ground),
@@ -283,8 +288,8 @@ for (const theme of ["dark", "light"] as const) {
       ).toContain("Geist");
       // So do the spacing overlay's value chips, which are chrome without the
       // chrome marker: they take no pointer events.
-      const chip = page
-        .locator(".nx-canvas .nx-spacing-overlay__value")
+      const chip = canvasLayer(page)
+        .locator(".nx-spacing-overlay__value")
         .first();
       await expect(chip).toBeVisible();
       expect(
@@ -324,7 +329,7 @@ test.describe("with the system in dark mode", () => {
     ).toBeLessThan(1.5);
 
     await openBuilder(page, "light");
-    const canvas = page.locator(".nx-canvas");
+    const canvas = canvasFrame(page).locator(".nx-canvas");
     expect(
       await canvas.evaluate(element => getComputedStyle(element).colorScheme)
     ).toBe("dark");

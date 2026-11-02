@@ -31,9 +31,10 @@ import {
 } from "@playwright/test";
 
 import { gotoAdmin } from "../support/admin";
+import { CANVAS_FRAME } from "../support/canvas-frame";
 
-/** The frame the canvas will render in, by the title the editor gives it. */
-export const CANVAS_FRAME = 'iframe[title^="Page canvas"]';
+/** The frame the canvas renders in, by the title the editor gives it. */
+export { CANVAS_FRAME };
 
 const HOMEPAGE = "/admin/api/singles/homepage";
 

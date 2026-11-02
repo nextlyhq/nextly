@@ -22,6 +22,7 @@ import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+import { canvasFrame } from "./support/canvas-frame";
 
 // Reads the site's devices, which a spec storing breakpoints changes.
 test.describe.configure({ lock: [LOCK.siteStyle] });
@@ -131,7 +132,7 @@ async function select(
   id: string,
   at: "centre" | "corner" = "centre"
 ): Promise<void> {
-  await page
+  await canvasFrame(page)
     .locator(`.nx-canvas [data-nx-node="${id}"]`)
     .first()
     .click(at === "corner" ? { position: { x: 4, y: 4 } } : {});

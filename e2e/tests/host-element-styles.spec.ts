@@ -24,6 +24,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+import { canvasFrame } from "./support/canvas-frame";
 
 // The canvas test writes the homepage's layout, which other specs share; see
 // support/locks.ts. A lock holds for the whole file.
@@ -233,7 +234,7 @@ test("the Page Builder's canvas takes the site's element rules, and the rest of 
   // In the canvas: drawn as the site draws an `h2`.
   await gotoAdmin(page, "/singles/homepage");
   await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
-  const canvasHeading = page
+  const canvasHeading = canvasFrame(page)
     .locator(".nx-canvas h2")
     .filter({ hasText: heading })
     .first();

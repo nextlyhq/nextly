@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 
+import { CANVAS_FRAME, canvasLayer } from "../support/canvas-frame";
 import { includingHidden, test } from "../support/test";
 
 import {
@@ -47,6 +48,10 @@ async function undoDepth(page: Page): Promise<number> {
 
 async function open(page: Page, seed?: "broken"): Promise<void> {
   await page.goto(seed === undefined ? ROUTE : `${ROUTE}?seed=${seed}`);
+  // The canvas's frame first: the driver decides once per call whether the
+  // blocks are in a frame, and a call made before the frame is mounted would
+  // look for them on the page for the rest of the wait.
+  await expect(page.locator(CANVAS_FRAME)).toHaveCount(1, { timeout: 30_000 });
   // On screen before anything is aimed at it, as the editor suite waits.
   await expect(await block(page, "lk-free-text")).toBeVisible({
     timeout: 30_000,
@@ -114,8 +119,9 @@ test.describe("the editor inside locked areas", () => {
       steps: 20,
     });
 
-    // Refused while the pointer is still over it, in the lock's words.
-    await expect(page.locator(".nx-drop-refusal")).toContainText(
+    // Refused while the pointer is still over it, in the lock's words, drawn
+    // over the frame in the editor's document.
+    await expect(canvasLayer(page).locator(".nx-drop-refusal")).toContainText(
       "This area of Fixed row is locked."
     );
     await page.mouse.up();
