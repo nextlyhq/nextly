@@ -560,17 +560,21 @@ describe("an allow entry is held to the block-type grammar", () => {
   });
 });
 
-describe("a variant presets something", () => {
-  it("refuses a variant whose overrides map is empty", () => {
-    // The picker would offer a control that does nothing when chosen.
-    expect(
-      codesFrom(
-        componentDoc({
-          exposed: [goodExposure],
-          variants: { compact: { label: "Compact", overrides: {} } },
-        })
-      )
-    ).toEqual(["component-envelope-invalid"]);
+describe("a variant that presets nothing", () => {
+  it("is warned about, not refused, by a strict publish", () => {
+    // Removing a component's field prunes it from every variant, so a variant
+    // whose only value that was is left empty by a legitimate edit. Refusing it
+    // would refuse the removal; it renders the component's defaults instead.
+    const issues = issuesFrom(
+      componentDoc({
+        exposed: [goodExposure],
+        variants: { compact: { label: "Compact", overrides: {} } },
+      })
+    );
+
+    expect(issues.map(i => [i.code, i.severity, i.path])).toEqual([
+      ["variant-empty", "warning", "/variants/compact/overrides"],
+    ]);
   });
 });
 
