@@ -36,7 +36,7 @@
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
-import { isHostStore } from "./component-from-selection-route";
+import { isHostStore } from "./composition-route-kit";
 import {
   CAPABILITY_ROUTE_PATH,
   type PatternCapabilityResponse,
@@ -111,6 +111,23 @@ export async function mayCreateComponent(
 }
 
 /**
+ * Whether this caller may replace a pattern's content from a selection:
+ * `read` (to choose the pattern and for the route's own read of it),
+ * `update` and `publish` on the collection the host resolved.
+ */
+export async function mayUpdatePattern(
+  ctx: CapabilityRouteContext
+): Promise<boolean> {
+  if (ctx.caller === null) return false;
+  const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
+  return (
+    (await ctx.caller.can("read", slug)) &&
+    (await ctx.caller.can("update", slug)) &&
+    (await ctx.caller.can("publish", slug))
+  );
+}
+
+/**
  * The route declaration.
  *
  * No `public: true`, so it is authenticated: the answer is about the caller and
@@ -133,6 +150,7 @@ export function patternCapabilityRoute(
       Response.json({
         ...(await readPatternCapability(ctx)),
         mayCreateComponent: await mayCreateComponent(ctx, store),
+        mayUpdatePattern: await mayUpdatePattern(ctx),
       } satisfies PatternCapabilityResponse),
   };
 }

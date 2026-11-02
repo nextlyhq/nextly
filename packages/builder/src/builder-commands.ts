@@ -54,6 +54,12 @@ export interface CommandVerbs {
   readonly saveAsComponent?: () => void;
   /** Begin converting the selection into a component placement. */
   readonly convertToComponent?: () => void;
+  /** Begin detaching the selected placement from its component. */
+  readonly detachComponent?: () => void;
+  /** Begin duplicating the selected placement's component. */
+  readonly duplicateComponent?: () => void;
+  /** Begin replacing a pattern's content with the selection. */
+  readonly updatePattern?: () => void;
 }
 
 /** Everything the command list is built from. */
@@ -122,6 +128,18 @@ const BLOCK_COMMAND_COPY: Record<
     label: "Convert to component",
     keywords: ["convert", "component", "turn into", "symbol", "synced", "link"],
   },
+  "detach-component": {
+    label: "Detach from component",
+    keywords: ["detach", "unlink", "component", "plain", "break"],
+  },
+  "duplicate-component": {
+    label: "Duplicate component",
+    keywords: ["duplicate", "copy", "component", "fork", "variant"],
+  },
+  "update-pattern": {
+    label: "Update a pattern from the selection",
+    keywords: ["update", "pattern", "replace", "overwrite", "save over"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -159,6 +177,9 @@ export function blockActionRunners(
     "save-as-pattern": verbs.saveAsPattern,
     "save-as-component": () => verbs.saveAsComponent?.(),
     "convert-to-component": () => verbs.convertToComponent?.(),
+    "detach-component": () => verbs.detachComponent?.(),
+    "duplicate-component": () => verbs.duplicateComponent?.(),
+    "update-pattern": () => verbs.updatePattern?.(),
     delete: verbs.delete,
   };
 }

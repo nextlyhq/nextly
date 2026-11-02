@@ -17,9 +17,9 @@
  * This draws a labelled "+" over each such container instead. Pressing one
  * only reports the container's id through
  * {@link EmptyContainerAppendersProps.onAppend}; it does not select anything
- * or open an inserter. Once a container IS selected, `insertionPointFor`
- * already reads {@link emptySlotOf} to decide that a new block goes INSIDE it
- * rather than beside it — so wiring a press to select-then-open needs no new
+ * or open an inserter. The host hands that id to the Add panel as its
+ * `inside`, and `insertionCandidates` reads {@link emptySlotOf} to put a new
+ * block in the container's empty region — so wiring a press needs no new
  * targeting path, and this component needs no knowledge of the editor at all.
  *
  * ## One question, answered once
@@ -111,8 +111,8 @@
  *
  * The consequence is that a container carrying no visual affordance gets no
  * control either, which is the point rather than a shortfall — it is still
- * fillable, because selecting it and inserting routes through `emptySlotOf`
- * in `insertionPointFor` exactly as before.
+ * fillable, by dropping a block onto it on the canvas or moving one into it in
+ * Layers; only the Add panel's explicit "inside" goes through this control.
  *
  * ## Never outside its own container
  *

@@ -202,6 +202,10 @@ export interface BlockActions {
    */
   readonly saveAsComponent?: () => void;
   readonly convertToComponent?: () => void;
+  /** Detach the selected placement, duplicate its component, update a pattern. */
+  readonly detachComponent?: () => void;
+  readonly duplicateComponent?: () => void;
+  readonly updatePattern?: () => void;
 }
 
 /**
@@ -426,6 +430,34 @@ export interface BlockKeyboardActionsOptions {
 export interface ComponentVerbsHost extends ComponentVerbsOffer {
   readonly onSaveAsComponent: () => void;
   readonly onConvertToComponent: () => void;
+  /** Detach the selected placement. Absent, with no definitions, Detach is not offered. */
+  readonly onDetachComponent?: () => void;
+  readonly onDuplicateComponent?: () => void;
+  /** Update a pattern. Absent, with no `mayUpdatePattern`, it is not offered. */
+  readonly onUpdatePattern?: () => void;
+}
+
+/** The verbs the host runs for the menu's component group. */
+type ComponentVerbId =
+  | "save-as-component"
+  | "convert-to-component"
+  | "detach-component"
+  | "duplicate-component"
+  | "update-pattern";
+
+/** The host's gesture for one component verb, if it offers it. */
+function componentVerbRunner(
+  host: ComponentVerbsHost,
+  id: ComponentVerbId
+): (() => void) | undefined {
+  const runners: Record<ComponentVerbId, (() => void) | undefined> = {
+    "save-as-component": host.onSaveAsComponent,
+    "convert-to-component": host.onConvertToComponent,
+    "detach-component": host.onDetachComponent,
+    "duplicate-component": host.onDuplicateComponent,
+    "update-pattern": host.onUpdatePattern,
+  };
+  return runners[id];
 }
 
 /** What the hook hands back: the region's text, and the verbs behind the keys. */
@@ -1034,11 +1066,19 @@ export function useBlockKeyboardActions({
     () =>
       components === undefined
         ? undefined
-        : { mayCreate: components.mayCreate },
+        : {
+            mayCreate: components.mayCreate,
+            ...(components.definitions === undefined
+              ? {}
+              : { definitions: components.definitions }),
+            ...(components.mayUpdatePattern === undefined
+              ? {}
+              : { mayUpdatePattern: components.mayUpdatePattern }),
+          },
     [components]
   );
   const runComponentVerb = React.useCallback(
-    (id: "save-as-component" | "convert-to-component") => {
+    (id: ComponentVerbId) => {
       if (components === undefined) return;
       const offered = toolbarActions(
         editor.document,
@@ -1054,8 +1094,7 @@ export function useBlockKeyboardActions({
         if (offered.reason !== undefined) announce(offered.reason);
         return;
       }
-      if (id === "save-as-component") components.onSaveAsComponent();
-      else components.onConvertToComponent();
+      componentVerbRunner(components, id)?.();
     },
     [
       components,
@@ -1108,6 +1147,9 @@ export function useBlockKeyboardActions({
       saveAsPattern: saveSelectionAsPattern,
       saveAsComponent: () => runComponentVerb("save-as-component"),
       convertToComponent: () => runComponentVerb("convert-to-component"),
+      detachComponent: () => runComponentVerb("detach-component"),
+      duplicateComponent: () => runComponentVerb("duplicate-component"),
+      updatePattern: () => runComponentVerb("update-pattern"),
     }),
     [
       moveSelected,

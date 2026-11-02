@@ -469,4 +469,42 @@ describe("the rich-text control", () => {
     expect(detach).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/could not be saved/)).toBeNull();
   });
+
+  it("lets a refused passage go when its field goes, rather than holding the editor", async () => {
+    register();
+    const editor = editorFor({ body: { root: "stored" } });
+    editor.apply.mockReturnValue(null);
+    const detach = vi.fn();
+    const attach = vi.fn(() => ({
+      status: "attached",
+      session: {
+        focus: vi.fn(),
+        read: () => ({ root: "too long" }),
+        detach,
+        hold: vi.fn(),
+      },
+    }));
+    const passages = createOpenPassages();
+    const view = render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{
+          loadRichTextEditor: fakeEditor(attach),
+          openPassages: passages,
+        }}
+      />
+    );
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    fireEvent.blur(field);
+    // Refused and kept, while the field is on screen.
+    expect(detach).not.toHaveBeenCalled();
+    expect(passages.isOpen()).toBe(true);
+
+    view.unmount();
+    expect(detach).toHaveBeenCalledTimes(1);
+    expect(passages.isOpen()).toBe(false);
+  });
 });

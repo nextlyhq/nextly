@@ -48,7 +48,6 @@
 import {
   applyOps,
   DEFAULT_LIMITS,
-  sameStoredValue,
   planConvertToComponent,
   planSaveAsComponent,
   registryNestingSource,
@@ -67,12 +66,9 @@ import {
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
-import { slugify } from "nextly";
 import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
-import type { CommittedWriteReconciler } from "./class-usage-hook";
-import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { MOST_COMPOSED_NODES } from "./component-cycle-guard";
 import {
@@ -82,6 +78,22 @@ import {
   type ComponentSource,
 } from "./composition-reading";
 import {
+  actingCaller,
+  asCaller,
+  blocksDocumentOf,
+  createdId,
+  derivedSlug,
+  planRefusal,
+  readBodyWith,
+  readOrNull,
+  reconcileAfterCommit,
+  requirePluginStore,
+  requireUnchangedPage,
+  storeOf,
+  type CompositionRouteContext,
+  type CompositionRouteSetup,
+} from "./composition-route-kit";
+import {
   COMPONENT_FROM_SELECTION_ROUTE_PATH,
   DRY_RUN_COMPONENT_ID,
   type ComponentApplyMode,
@@ -90,7 +102,7 @@ import {
   type ComponentFromSelectionResult,
   type StoredPageAddress,
 } from "./library-contract";
-import { readingAsUser, type ComponentStore } from "./library-route";
+import { readingAsUser } from "./library-route";
 
 /** The status a new component is created with. */
 const CREATED_STATUS = "published";
@@ -147,22 +159,8 @@ const RequestBody = z
 
 type ParsedBody = z.infer<typeof RequestBody>;
 
-/** The capabilities this route uses, named rather than imported whole. */
-export type ComponentFromSelectionContext = Pick<
-  PluginRouteContext,
-  "self" | "user" | "caller" | "authenticatedScope"
-> & {
-  services: {
-    collections: Pick<
-      PluginRouteContext["services"]["collections"],
-      | "createEntry"
-      | "withTransaction"
-      | "createEntryInTransaction"
-      | "updateEntryInTransaction"
-      | "warmLocalizedReadiness"
-    >;
-  };
-};
+/** The capabilities this route uses. */
+export type ComponentFromSelectionContext = CompositionRouteContext;
 
 /** What the route reads besides its context: pages and definitions. */
 export interface ComponentFromSelectionReads {
@@ -176,18 +174,9 @@ export interface ComponentFromSelectionReads {
 }
 
 /** Where the route stores components, and what it reads and reconciles. */
-export interface ComponentFromSelectionSetup {
-  readonly store?: ComponentStore;
-  readonly limits?: () => DocumentLimits;
+export interface ComponentFromSelectionSetup extends CompositionRouteSetup {
   readonly reads?: ComponentFromSelectionReads;
-  /** Reconcile the usage indexes after a `stored` convert commits. */
-  readonly reconcile?: () => CommittedWriteReconciler | undefined;
-  /** The Direct API the reconciliation reads through; the booted one by default. */
-  readonly directApi?: () => ClassUsageDirectApi;
 }
-
-/** Who ran the action, as the answer reports it. */
-type RunBy = ComponentFromSelectionResult["by"];
 
 /**
  * Make a component from a selection, as the module docblock describes.
@@ -198,8 +187,10 @@ export async function componentFromSelection(
   setup: ComponentFromSelectionSetup = {}
 ): Promise<Response> {
   requirePluginStore(ctx, setup);
-  const by = await requireComponentPublisher(ctx, setup);
-  const body = await readBody(req);
+  const by = await actingCaller(ctx, [
+    ["publish", storeOf(ctx, setup).collection],
+  ]);
+  const body = await readBodyWith(req, RequestBody, "component-from-selection");
   const apply: ComponentApplyMode = body.apply ?? "library";
   const store = storeOf(ctx, setup);
   const reads = setup.reads ?? directReads(store);
@@ -228,7 +219,8 @@ export async function componentFromSelection(
     });
 
   const preview = planFor(DRY_RUN_COMPONENT_ID);
-  if (preview.problem !== undefined) throw refusal(preview);
+  if (preview.problem !== undefined)
+    throw planRefusal(preview, "component-from-selection");
 
   const fields = fieldsToStore(body.fields);
   // The definition is the one stored: each plan re-identifies the run, so
@@ -269,7 +261,8 @@ export async function componentFromSelection(
     );
     const id = createdId(created.item);
     const plan = planFor(id);
-    if (plan.problem !== undefined) throw refusal(plan);
+    if (plan.problem !== undefined)
+      throw planRefusal(plan, "component-from-selection");
     return respondMutation<ComponentFromSelectionResult>(
       "Component created.",
       answer(id, plan, false),
@@ -384,8 +377,12 @@ async function convertStored(
     const id = createdId(created);
     const plan = args.planFor(id);
     // Throwing rolls the create back with the transaction.
-    if (plan.problem !== undefined) throw refusal(plan);
-    await requireUnchangedPage(ctx, args.reads, args.page);
+    if (plan.problem !== undefined)
+      throw planRefusal(plan, "component-from-selection");
+    await requireUnchangedPage(
+      () => args.reads.page(args.page.address, ctx),
+      args.page.document
+    );
     const converted = applyOps(
       args.page.document,
       plan.pageOps,
@@ -403,89 +400,6 @@ async function convertStored(
 }
 
 /**
- * Whether the configured store is a collection of the host's own: one named,
- * and not this plugin's own components under the name the host resolved.
- */
-export function isHostStore(
-  ctx: {
-    readonly self: { readonly collections: Record<string, string | undefined> };
-  },
-  store: Pick<ComponentStore, "collection"> | undefined
-): boolean {
-  const named = store?.collection;
-  if (named === undefined) return false;
-  return named !== (ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG);
-}
-
-/**
- * Refuse a host whose components live in a collection of its own: that store
- * promises only the document field, not the title, slug and publish workflow
- * a new component is created with here.
- */
-function requirePluginStore(
-  ctx: Pick<ComponentFromSelectionContext, "self">,
-  setup: ComponentFromSelectionSetup
-): void {
-  if (!isHostStore(ctx, setup.store)) return;
-  throw new NextlyError({
-    code: "BUSINESS_RULE_VIOLATION",
-    publicMessage:
-      "Components on this site are kept in a collection of its own, so they are made there rather than from a selection.",
-    logMessage: "Refused a component-from-selection request for a host store",
-    logContext: { reason: "component-from-selection-host-store" },
-  });
-}
-
-/**
- * Refuse, rolling the create back, when the page changed since the convert
- * was planned against it. The write has no compare-and-swap on the page's
- * version, so the page is read again as late as the write allows: an edit
- * landing between this read and the update is still overwritten, a window of
- * one statement rather than the whole request.
- */
-async function requireUnchangedPage(
-  ctx: ComponentFromSelectionContext,
-  reads: ComponentFromSelectionReads,
-  page: StoredPage
-): Promise<void> {
-  const now = await reads.page(page.address, ctx);
-  if (now !== null && sameStoredValue(now, page.document)) return;
-  throw NextlyError.conflict({
-    reason: "state",
-    message:
-      "The page changed while it was being converted. Nothing was written; try again.",
-    logContext: { reason: "component-from-selection-page-changed" },
-  });
-}
-
-/**
- * The caller, once shown to be allowed to publish components, as the answer
- * reports them; otherwise the refusal. `create` is the route's declared
- * permission, judged before the handler runs, and is not asked again.
- */
-async function requireComponentPublisher(
-  ctx: ComponentFromSelectionContext,
-  setup: ComponentFromSelectionSetup
-): Promise<RunBy> {
-  const { user, caller } = ctx;
-  const collection = storeOf(ctx, setup).collection;
-  if (
-    user === null ||
-    caller === null ||
-    !(await caller.can("publish", collection))
-  ) {
-    throw NextlyError.forbidden({
-      logContext: { reason: "component-from-selection-needs-publish" },
-    });
-  }
-  return caller.authMethod === "api-key"
-    ? {
-        kind: "api-key",
-        userId: user.id,
-        ...(caller.apiKeyId === undefined ? {} : { apiKeyId: caller.apiKeyId }),
-      }
-    : { kind: "user", userId: user.id };
-}
 
 /**
  * The stored page the request names, read as the caller, and refused for a
@@ -554,38 +468,6 @@ async function placedDefinitions(
   };
 }
 
-/** The store components are created in: the configured one, or this plugin's. */
-function storeOf(
-  ctx: Pick<ComponentFromSelectionContext, "self">,
-  setup: ComponentFromSelectionSetup
-): { collection: string; field: string } {
-  return {
-    collection:
-      setup.store?.collection ??
-      ctx.self.collections[COMPONENTS_SLUG] ??
-      COMPONENTS_SLUG,
-    field: setup.store?.field ?? DEFAULT_COMPONENT_FIELD,
-  };
-}
-
-/** The field the plugin's own components collection stores a definition in. */
-const DEFAULT_COMPONENT_FIELD = "content";
-
-/**
- * The write options every write here runs with: as the caller, key and all,
- * in the language named when the page's blocks field is translated.
- */
-function asCaller(ctx: ComponentFromSelectionContext, locale?: string) {
-  return {
-    ...(locale === undefined ? {} : { locale }),
-    as: "user" as const,
-    user: ctx.user ?? undefined,
-    ...(ctx.authenticatedScope === undefined
-      ? {}
-      : { authenticatedScope: ctx.authenticatedScope }),
-  };
-}
-
 /** The component's metadata as stored, with a slug when none was given. */
 function fieldsToStore(
   fields: ParsedBody["fields"]
@@ -598,30 +480,6 @@ function fieldsToStore(
     ...(description === undefined || description === "" ? {} : { description }),
     ...(category === undefined || category === "" ? {} : { category }),
   };
-}
-
-/**
- * A slug from the title, with a random suffix so two components named alike
- * never collide on the unique column; a title `slugify` cannot spell yields
- * the suffix alone.
- */
-function derivedSlug(title: string): string {
-  const suffix = crypto.randomUUID().slice(0, 8);
-  const derived = slugify(title);
-  return derived === "" ? `component-${suffix}` : `${derived}-${suffix}`;
-}
-
-/** The id of a row the collection service created, or the failure it is. */
-function createdId(item: unknown): string {
-  const id = (item as { id?: unknown } | null)?.id;
-  if (typeof id === "string" && id !== "") return id;
-  if (typeof id === "number") return String(id);
-  throw new NextlyError({
-    code: "INTERNAL_ERROR",
-    publicMessage: "The component was created but could not be identified.",
-    logMessage: "createEntry returned no usable id for a new component",
-    logContext: { reason: "component-from-selection-no-id" },
-  });
 }
 
 /** The page address with its field defaulted. */
@@ -647,68 +505,6 @@ function documentOf(value: unknown): BlockDocument {
     throw malformed("document");
   }
   return value as BlockDocument;
-}
-
-/** Bring the indexes in line with each written document, after the commit. */
-async function reconcileAfterCommit(
-  setup: ComponentFromSelectionSetup,
-  written: readonly { slug: string; documentId: string }[]
-): Promise<void> {
-  const reconcile = setup.reconcile?.();
-  if (reconcile === undefined) return;
-  const nextly = setup.directApi?.() ?? requireNextly();
-  for (const target of written) {
-    await reconcile({ ...target, nextly });
-  }
-}
-
-/**
- * The error a planner refusal answers with: 422, with the planner's own cause
- * as the code, for the reason the save-as-pattern route gives.
- */
-function refusal(refused: PlanRefusal): NextlyError {
-  return new NextlyError({
-    code: "BUSINESS_RULE_VIOLATION",
-    publicMessage: "The selection cannot be made into a component.",
-    publicData: {
-      errors: [
-        ...(refused.issues ?? []).map(issue => ({
-          path: `exposure${issue.path}`,
-          code: refused.problem,
-          message: issue.message,
-        })),
-        {
-          path: "selectedIds",
-          code: refused.problem,
-          message: "The selection cannot be made into a component.",
-        },
-      ],
-    },
-    logMessage: "Refused a component-from-selection request",
-    logContext: {
-      reason: "component-from-selection-refused",
-      problem: refused.problem,
-    },
-  });
-}
-
-/** The request body, or the refusal naming the part that is wrong. */
-async function readBody(req: Request): Promise<ParsedBody> {
-  let raw: unknown;
-  try {
-    raw = await req.json();
-  } catch {
-    throw malformed("body");
-  }
-  const parsed = RequestBody.safeParse(raw);
-  if (parsed.success) return parsed.data;
-  throw NextlyError.validation({
-    errors: parsed.error.issues.map(issue => ({
-      path: issue.path.join(".") || "body",
-      code: "INVALID",
-      message: issue.message,
-    })),
-  });
 }
 
 /** What a request this route cannot read answers with. */
@@ -767,26 +563,6 @@ function directReads(store: {
       }
     },
   };
-}
-
-/** A read, or `null` when the row is missing or the caller may not read it. */
-async function readOrNull(read: () => Promise<unknown>): Promise<unknown> {
-  try {
-    return await read();
-  } catch (error) {
-    if (NextlyError.isNotFound(error) || NextlyError.isForbidden(error)) {
-      return null;
-    }
-    throw error;
-  }
-}
-
-/** A row's blocks field, or `null` when it holds none. */
-function blocksDocumentOf(row: unknown, field: string): BlockDocument | null {
-  const value = (row as Record<string, unknown> | null)?.[field];
-  return value === undefined || value === null
-    ? null
-    : (value as BlockDocument);
 }
 
 /**

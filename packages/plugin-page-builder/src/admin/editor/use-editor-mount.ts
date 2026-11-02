@@ -10,6 +10,7 @@ import {
   getBlock,
   placementRefusalMessage,
   type BlockDocument,
+  type DefinitionsById,
   type DocumentKind,
   type DocumentLimits,
   type LocatedPlacementBreak,
@@ -49,12 +50,13 @@ import {
   useComponentLibrary,
   type ComponentLibraryRead,
 } from "../component-library-client";
-import type { ComponentRequest } from "../ComponentFromSelectionPrompt";
+import type { ComponentActionRequest } from "../ComponentActionPrompt";
 import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
 import {
   useMayCreateComponent,
   useMayCreatePattern,
+  useMayUpdatePattern,
 } from "../pattern-capability-client";
 
 import { useConnectStyleHistory } from "./site-style-history";
@@ -174,29 +176,38 @@ export function useSavePatternVerb(
 
 /** What {@link useMakeComponentVerb} returns, handed on as `makeComponent`. */
 type MakeComponentVerb = {
-  /** What the author asked for, or `null` while the form is not up. */
-  readonly request: ComponentRequest | null;
+  /** What the author asked for, or `null` while no form is up. */
+  readonly request: {
+    readonly action: ComposeAction;
+    readonly document: BlockDocument;
+  } | null;
   readonly returnFocusTo: () => HTMLElement | null;
-  readonly open: (action: ComponentFromSelectionAction) => void;
+  readonly open: (action: ComposeAction) => void;
   readonly close: () => void;
   /** The verbs as the shared verb chain takes them, with the author's grant. */
   readonly verbs: ComponentVerbsHost;
 };
 
+/** Every composition verb whose form the editor raises. */
+type ComposeAction =
+  | ComponentFromSelectionAction
+  | ComponentActionRequest["action"];
+
 /**
- * Raising the make-component form: the same gesture as the pattern form's
- * (the open passage committed first, the opener remembered), plus which of
- * the two verbs was asked for.
+ * Raising a composition form: the same gesture as the pattern form's (the
+ * open passage committed first, the opener remembered), plus which verb was
+ * asked for.
  */
 function useMakeComponentVerb(
   editor: { document: BlockDocument },
-  inline: { commit: () => InlineEditOutcome }
+  inline: { commit: () => InlineEditOutcome },
+  definitions: DefinitionsById
 ): MakeComponentVerb {
   const gesture = useSavePatternVerb(editor, inline);
-  const [action, setAction] = useState<ComponentFromSelectionAction>("save-as");
+  const [action, setAction] = useState<ComposeAction>("save-as");
   const openGesture = gesture.open;
   const open = useCallback(
-    (next: ComponentFromSelectionAction) => {
+    (next: ComposeAction) => {
       setAction(next);
       openGesture();
     },
@@ -208,13 +219,19 @@ function useMakeComponentVerb(
     [action, gesture.document]
   );
   const mayCreate = useMayCreateComponent();
+  const mayUpdatePattern = useMayUpdatePattern();
   const verbs = useMemo(
     () => ({
       mayCreate,
+      mayUpdatePattern,
+      definitions,
       onSaveAsComponent: () => open("save-as"),
       onConvertToComponent: () => open("convert"),
+      onDetachComponent: () => open("detach"),
+      onDuplicateComponent: () => open("duplicate"),
+      onUpdatePattern: () => open("update-pattern"),
     }),
-    [mayCreate, open]
+    [mayCreate, mayUpdatePattern, definitions, open]
   );
   return {
     request,
@@ -390,7 +407,11 @@ export function useEditorMount(
    */
   const mayCreatePattern = useMayCreatePattern();
   // The make-component verbs, and whether this author holds their grants.
-  const makeComponent = useMakeComponentVerb(editor, inline);
+  const makeComponent = useMakeComponentVerb(
+    editor,
+    inline,
+    componentLibrary.definitions
+  );
   /*
    * Where the shell keeps this author's panel, device and zoom: under their
    * own id, so two authors of one browser each get their own. While no one is

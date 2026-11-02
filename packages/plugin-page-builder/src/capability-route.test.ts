@@ -12,7 +12,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { mayCreateComponent, readPatternCapability } from "./capability-route";
+import {
+  mayCreateComponent,
+  mayUpdatePattern,
+  readPatternCapability,
+} from "./capability-route";
 import { PATTERNS_SLUG } from "./collections/patterns";
 
 /** What was asked, so a test can assert the question and not only the answer. */
@@ -170,5 +174,38 @@ describe("whether the caller may make a component", () => {
     expect(
       await mayCreateComponent(configured, { collection: "blocks_lib" })
     ).toBe(false);
+  });
+});
+
+describe("whether the caller may update a pattern from a selection", () => {
+  function grants(held: Record<string, boolean>) {
+    return {
+      self: { collections: { [PATTERNS_SLUG]: "site_patterns" } },
+      caller: {
+        can: (action: string, resource: string) =>
+          Promise.resolve(held[`${action}-${resource}`] === true),
+      },
+    };
+  }
+
+  it("asks for read, update AND publish on the patterns the host resolved", async () => {
+    expect(
+      await mayUpdatePattern(grants({ "update-site_patterns": true }))
+    ).toBe(false);
+    // Without read, the author could choose no pattern to update.
+    expect(
+      await mayUpdatePattern(
+        grants({ "update-site_patterns": true, "publish-site_patterns": true })
+      )
+    ).toBe(false);
+    expect(
+      await mayUpdatePattern(
+        grants({
+          "read-site_patterns": true,
+          "update-site_patterns": true,
+          "publish-site_patterns": true,
+        })
+      )
+    ).toBe(true);
   });
 });

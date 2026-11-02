@@ -48,6 +48,8 @@ const CARD_VERBS: readonly ToolbarActionId[] = [
   "duplicate",
   "save-as-component",
   "convert-to-component",
+  "detach-component",
+  "duplicate-component",
   "delete",
 ];
 

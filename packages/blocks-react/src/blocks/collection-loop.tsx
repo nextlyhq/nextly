@@ -142,8 +142,12 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
   defineBlock({
     name: "core/collection-loop",
     version: 1,
-    description:
-      "Repeats its children once per entry in a collection. Renders its template once while no collection is chosen, and renders empty when the data source cannot be reached.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: Repeats its children
+    // once per entry in a collection. Renders its template once while no
+    // collection is chosen, and renders empty when the data source cannot be
+    // reached.
+    description: "Repeats its contents for each entry in a collection.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
