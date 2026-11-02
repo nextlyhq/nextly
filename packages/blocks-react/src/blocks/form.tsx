@@ -379,7 +379,18 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
   props: {
     action: { type: "url" },
     method: { type: "select", options: [...FORM_METHODS] },
-    fields: { type: "array", of: "object" },
+    // Each field's own settings, so the inspector can draw a control for
+    // each. Description only: the stored shape is the same list of records.
+    fields: {
+      type: "array",
+      of: "object",
+      item: {
+        label: { type: "text" },
+        name: { type: "text" },
+        type: { type: "select", options: [...FORM_FIELD_TYPES] },
+        required: { type: "checkbox" },
+      },
+    },
     submitText: { role: "content", type: "text" },
   },
   defaultProps: { method: "post", submitText: "Submit", fields: [] },

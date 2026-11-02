@@ -88,6 +88,11 @@ export interface ContentControlProps {
   readonly onCommit: (name: string, value: unknown) => void;
   /** What the host lends, for the controls that need the admin. */
   readonly services?: ContentServices | undefined;
+  /**
+   * The label to show, when it is not the prop's own name: an item of a list
+   * is labelled by its list and its position.
+   */
+  readonly label?: string | undefined;
 }
 
 /** A content control: a label and the field it names. */
@@ -116,6 +121,7 @@ function TextishControl({
   prop,
   disabled,
   onCommit,
+  label,
 }: ContentControlProps): React.JSX.Element {
   // Only a primitive becomes text. `String({})` is "[object Object]", and a
   // field showing that would COMMIT it on blur — turning a prop the panel
@@ -156,7 +162,7 @@ function TextishControl({
       className="nx-inspector__field"
       data-content-control={prop.schema.type}
     >
-      <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
+      <Label htmlFor={id}>{label ?? fieldLabel(prop.name)}</Label>
       {prop.schema.type === "textarea" ? (
         <Textarea {...shared} rows={3} />
       ) : (
@@ -185,6 +191,7 @@ function CheckboxControl({
   prop,
   disabled,
   onCommit,
+  label,
 }: ContentControlProps): React.JSX.Element {
   return (
     <div
@@ -197,7 +204,7 @@ function CheckboxControl({
         checked={prop.value === true}
         onCheckedChange={checked => onCommit(prop.name, checked === true)}
       />
-      <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
+      <Label htmlFor={id}>{label ?? fieldLabel(prop.name)}</Label>
     </div>
   );
 }
@@ -208,10 +215,11 @@ function SelectControl({
   prop,
   disabled,
   onCommit,
+  label,
 }: ContentControlProps): React.JSX.Element {
   return (
     <div className="nx-inspector__field" data-content-control="select">
-      <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
+      <Label htmlFor={id}>{label ?? fieldLabel(prop.name)}</Label>
       <Select
         disabled={disabled}
         value={typeof prop.value === "string" ? prop.value : undefined}
@@ -428,6 +436,192 @@ function RichTextControl({
   );
 }
 
+/** An item field as a control sees it: a prop of its own, read from one record. */
+function itemProp(
+  name: string,
+  schema: EditableProp["schema"],
+  value: unknown
+): EditableProp {
+  const options = Array.isArray(schema.options)
+    ? schema.options.filter(
+        (option): option is string => typeof option === "string"
+      )
+    : [];
+  return {
+    name,
+    schema,
+    value,
+    supported: hasContentControl(schema.type),
+    options,
+  };
+}
+
+/** A record's own fields, or none for a value that is not a plain record. */
+function recordOf(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/** An item schema's fields, when the prop declares one. */
+function itemSchemaOf(
+  schema: EditableProp["schema"]
+): readonly [string, EditableProp["schema"]][] | undefined {
+  const item = schema.item;
+  if (typeof item !== "object" || item === null || Array.isArray(item))
+    return undefined;
+  const fields = Object.entries(item).filter(
+    (entry): entry is [string, EditableProp["schema"]] =>
+      typeof entry[1] === "object" &&
+      entry[1] !== null &&
+      typeof entry[1].type === "string"
+  );
+  return fields.length > 0 ? fields : undefined;
+}
+
+/**
+ * A list: of plain text (`of: "text"`), or of records an item schema
+ * describes (`of: "object"` with `item`). Each item is edited with the
+ * registry's own controls, and every change — an edit, an add, a removal, a
+ * move — writes the whole list once, so each is one entry in the history.
+ */
+function ArrayControl({
+  id,
+  prop,
+  disabled,
+  onCommit,
+  services,
+}: ContentControlProps): React.JSX.Element {
+  const label = fieldLabel(prop.name);
+  const list = Array.isArray(prop.value) ? prop.value : [];
+  const records = prop.schema.of === "object";
+  const fields = records ? itemSchemaOf(prop.schema) : undefined;
+  const write = (next: unknown[]) => onCommit(prop.name, next);
+  const position = (index: number) => `${label}, item ${index + 1}`;
+  const move = (index: number, by: -1 | 1) => {
+    const next = [...list];
+    const [taken] = next.splice(index, 1);
+    next.splice(index + by, 0, taken);
+    write(next);
+  };
+
+  return (
+    <div className="nx-inspector__field" data-content-control="array">
+      <p className="nx-inspector__field-name" id={`${id}-label`}>
+        {label}
+      </p>
+      <div
+        className="nx-inspector__array"
+        role="group"
+        aria-labelledby={`${id}-label`}
+      >
+        {records && fields === undefined ? (
+          <p className="nx-inspector__note">
+            These items can&apos;t be edited here.
+          </p>
+        ) : (
+          <>
+            {list.map((item, index) => (
+              <div
+                // Positions are what identify an item: a list holds no ids.
+                key={index}
+                className="nx-inspector__array-item"
+                role="group"
+                aria-label={position(index)}
+              >
+                {fields === undefined ? (
+                  <TextishControl
+                    id={`${id}-${index}`}
+                    prop={itemProp(
+                      `${prop.name}.${index}`,
+                      { type: "text" },
+                      item
+                    )}
+                    label={position(index)}
+                    disabled={disabled}
+                    onCommit={(_, value) =>
+                      write(
+                        list.map((each, at) => (at === index ? value : each))
+                      )
+                    }
+                  />
+                ) : (
+                  fields.map(([name, schema]) => {
+                    const Control = contentControlFor(schema.type);
+                    const record = recordOf(item);
+                    return Control === undefined ? null : (
+                      <Control
+                        key={name}
+                        id={`${id}-${index}-${name}`}
+                        prop={itemProp(name, schema, record[name])}
+                        disabled={disabled}
+                        services={services}
+                        onCommit={(field, value) =>
+                          write(
+                            list.map((each, at) => {
+                              if (at !== index) return each;
+                              const next = { ...recordOf(each) };
+                              if (value === undefined) delete next[field];
+                              else next[field] = value;
+                              return next;
+                            })
+                          )
+                        }
+                      />
+                    );
+                  })
+                )}
+                <div className="nx-inspector__array-actions">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={disabled || index === 0}
+                    aria-label={`Move ${position(index)} up`}
+                    onClick={() => move(index, -1)}
+                  >
+                    Up
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={disabled || index === list.length - 1}
+                    aria-label={`Move ${position(index)} down`}
+                    onClick={() => move(index, 1)}
+                  >
+                    Down
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={disabled}
+                    aria-label={`Remove ${position(index)}`}
+                    onClick={() => write(list.filter((_, at) => at !== index))}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={disabled}
+              aria-label={`Add to ${label}`}
+              onClick={() => write([...list, records ? {} : ""])}
+            >
+              Add
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** Each type's control. Total over the list, so neither can gain a member alone. */
 const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   text: TextishControl,
@@ -438,6 +632,7 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   select: SelectControl,
   media: MediaControl,
   richText: RichTextControl,
+  array: ArrayControl,
 };
 
 /**
