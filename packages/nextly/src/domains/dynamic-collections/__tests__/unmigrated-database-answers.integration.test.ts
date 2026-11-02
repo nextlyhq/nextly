@@ -854,7 +854,7 @@ describe.each(getConfiguredTestDialects())(
 
     // Not on MySQL: transactions in Nextly's MySQL context carry no
     // savepoints, so a caller that catches the refusal and commits keeps the
-    // entry row there (stated in the pull request as a limit).
+    // entry row there, a known limit on that dialect.
     it.skipIf(dialect === "mysql")(
       "keeps no entry row when a create's translation table is unregistered and the caller commits",
       async () => {

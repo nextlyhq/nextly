@@ -32,12 +32,12 @@ import {
 } from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { createContext, type CommandContext } from "../context";
 import { exitWithError } from "../errors";
 import {
   restoreCollectionRequired,
   restoreEntityRefusal,
 } from "../errors/areas/sync";
-import { createContext, type CommandContext } from "../context";
 import { withAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
