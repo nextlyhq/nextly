@@ -1,4 +1,4 @@
-import type { Nextly } from "./nextly";
+import type { Nextly, nextly as convenience } from "./nextly";
 
 // What `findSingle` resolves to, by what the call says about `createIfMissing`.
 // `null` is possible only when the call may pass `false`, so the existing call
@@ -44,6 +44,32 @@ export async function _readSingles(): Promise<void> {
     createIfMissing: false,
   });
   const _either = await nextly.findSingle({
+    slug: "site-settings",
+    createIfMissing: maybe,
+  });
+
+  assertType<Exact<typeof _default, Row>>(true);
+  assertType<Exact<typeof _creating, Row>>(true);
+  assertType<Exact<typeof _notCreating, Row | null>>(true);
+  assertType<Exact<typeof _either, Row | null>>(true);
+}
+
+// The `nextly` convenience object delegates to the method, and must answer the
+// same type for the same call: an inferred delegate once answered `never` for a
+// call leaving `createIfMissing` out, which no row assertion on the class sees.
+declare const convenient: typeof convenience;
+
+export async function _readSinglesThroughTheConvenienceObject(): Promise<void> {
+  const _default = await convenient.findSingle({ slug: "site-settings" });
+  const _creating = await convenient.findSingle({
+    slug: "site-settings",
+    createIfMissing: true,
+  });
+  const _notCreating = await convenient.findSingle({
+    slug: "site-settings",
+    createIfMissing: false,
+  });
+  const _either = await convenient.findSingle({
     slug: "site-settings",
     createIfMissing: maybe,
   });
