@@ -109,6 +109,7 @@ import type {
 } from "./style-controls";
 import {
   inspectStyle,
+  type StyleInspectionOptions,
   type InspectedStyleProperty,
   type StyleSection,
   type StyleInspection,
@@ -477,6 +478,13 @@ function SelectedNodeClasses({
   libraryAbsence: ClassSelectorProps["libraryAbsence"];
   onCreateClass: ClassSelectorProps["onCreateClass"] | undefined;
 }): React.JSX.Element | null {
+  /*
+   * The editor as it stands NOW. A class creation resolves through the
+   * callback of the render that began it, and a lock set while it was in
+   * flight lives only in a later render's editor.
+   */
+  const live = React.useRef(editor);
+  live.current = editor;
   if (onCreateClass === undefined) return null;
   return (
     <ClassSelector
@@ -491,15 +499,22 @@ function SelectedNodeClasses({
       library={library}
       libraryAbsence={libraryAbsence}
       nodeClassIds={findNode(editor.document.nodes, nodeId)?.classes ?? []}
-      onNodeClassesChange={classIds =>
+      onNodeClassesChange={classIds => {
+        const now = live.current;
+        // The lock is asked of the live document at the moment of the write,
+        // as a style value's write does: the store does not refuse an update
+        // to a block only because the block's own lock is set.
+        if (!designIsWritable(now.document, nodeId, lockViewOf(now))) {
+          return "refused";
+        }
         // `applyAll` answers null when the store refuses — a document at its
         // byte limit rejects an edit the class rules found perfectly valid.
         // Reported back so the selector keeps the draft rather than clearing
         // it as though the write had landed.
-        editor.applyAll([nodeClassesOp(nodeId, classIds)]) === null
+        return now.applyAll([nodeClassesOp(nodeId, classIds)]) === null
           ? "refused"
-          : "applied"
-      }
+          : "applied";
+      }}
       onCreateClass={onCreateClass}
     />
   );
@@ -555,6 +570,19 @@ export function StyleInspectorPanel({
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
   // anywhere changes both the document and the values shown.
+  /*
+   * ONE subject for the whole panel, and one live-breakpoint set.
+   *
+   * Every control on this panel asks about the SAME node, so building either per
+   * control would walk the document per control — which is the cost this file's
+   * own comments say the indicator must not pay. The inspection reads it too,
+   * to judge which tier's controls show by the display the cascade applies.
+   *
+   * Recomputed each render rather than memoised, exactly as the inspection is:
+   * both are only valid against the document they were read from, and an edit
+   * anywhere changes the document and the values shown together.
+   */
+  const subject = selectedSubject(editor, cascade, renderedTag);
   const inspection = inspectStyle(editor.document, editor.selectedId, {
     ...policy,
     state,
@@ -562,6 +590,7 @@ export function StyleInspectorPanel({
     variantAt: (property, path) => chosenForms[formKey(property, path)],
     media: rendersMedia(renderedTag),
     breakpoints,
+    cascade: cascadeFor(cascade, subject),
   });
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
@@ -591,18 +620,6 @@ export function StyleInspectorPanel({
   if (!availability.available) return availability.reason;
   const inspected = availability.inspection;
 
-  /*
-   * ONE subject for the whole panel, and one live-breakpoint set.
-   *
-   * Every control on this panel asks about the SAME node, so building either per
-   * control would walk the document per control — which is the cost this file's
-   * own comments say the indicator must not pay.
-   *
-   * Recomputed each render rather than memoised, exactly as the inspection above
-   * is: both are only valid against the document they were read from, and an
-   * edit anywhere changes the document and the values shown together.
-   */
-  const subject = selectedSubject(editor, cascade, renderedTag);
   /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
@@ -1633,6 +1650,18 @@ function selectedSubject(
   // anyone reading a logged subject.
   if (subject === undefined || tag === undefined) return subject;
   return { ...subject, tag };
+}
+
+/**
+ * The cascade as the inspection reads it, or `undefined` where there is no
+ * cascade or no subject in it: both are needed to ask what applies here.
+ */
+function cascadeFor(
+  cascade: PageStyleCascade | undefined,
+  subject: StyleSubject | undefined
+): StyleInspectionOptions["cascade"] {
+  if (cascade === undefined || subject === undefined) return undefined;
+  return { trace: cascade.entries, subject };
 }
 
 /**

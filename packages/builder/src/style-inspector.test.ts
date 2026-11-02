@@ -502,4 +502,59 @@ describe("which display the tiers read", () => {
     // The control: at the unconditional tier itself, block applies.
     expect(flexShown(styles, "base", BASE_BREAKPOINT)).toBe(false);
   });
+
+  it("reads the compiled cascade, so a class's display counts", () => {
+    register({ layout: true });
+    // The node stores no display; a class it applies makes it a flex row.
+    const trace = [
+      {
+        origin: { kind: "class", id: "c1", slug: "row" },
+        property: "display",
+        value: "flex",
+        state: "base",
+        breakpoint: BASE_BREAKPOINT,
+      },
+    ] as never;
+    const shown = (classIds: readonly string[]) =>
+      inspectStyle(documentOf(), "a", {
+        cascade: { trace, subject: { nodeId: "a", classIds } },
+      })?.sections[0]?.properties.find(p => p.property === "flexDirection")
+        ?.common;
+    expect(shown(["c1"])).toBe(true);
+    // The control: a node that does not apply the class is not flex.
+    expect(shown([])).toBe(false);
+    // And without a cascade only what the node stores is read.
+    expect(
+      inspectStyle(documentOf(), "a")?.sections[0]?.properties.find(
+        p => p.property === "flexDirection"
+      )?.common
+    ).toBe(false);
+  });
+
+  it("reads a block default at a wider tier through the cascade", () => {
+    register({ layout: true });
+    const trace = [
+      {
+        origin: { kind: "blockType", type: "acme/box" },
+        property: "display",
+        value: "flex",
+        state: "base",
+        breakpoint: "tablet",
+        atRule: "@media (max-width: 1024px)",
+      },
+    ] as never;
+    const shown = (breakpoint: string) =>
+      inspectStyle(documentOf(), "a", {
+        breakpoint: breakpoint as never,
+        breakpoints,
+        cascade: {
+          trace,
+          subject: { nodeId: "a", blockType: "acme/box" },
+        },
+      })?.sections[0]?.properties.find(p => p.property === "flexDirection")
+        ?.common;
+    expect(shown("mobile")).toBe(true);
+    // The control: the tablet rule does not apply at the unconditional tier.
+    expect(shown(BASE_BREAKPOINT)).toBe(false);
+  });
 });

@@ -477,6 +477,59 @@ describe("the class selector, mounted above the style sections", () => {
       patch: { classes: ["id-new"] },
     });
   });
+
+  it("refuses a created class once the block was locked while it was in flight", async () => {
+    /*
+     * The creation resolves through the callback of the render that began it.
+     * The block is locked in a LATER render, by a new editor object, the way
+     * the store hands one down; the write must ask that one, not the editor
+     * the pending callback closed over.
+     */
+    register({ spacing: true });
+    const node = { id: "a", type: "acme/box", version: 1, props: {} };
+    const free = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node] as BlockNode[],
+    } as BlockDocument);
+    let settle: (value: { ok: true; classId: string }) => void = () => {};
+    const onCreateClass = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(resolve => {
+          settle = resolve;
+        })
+    );
+    const { rerender } = render(
+      <StyleInspectorPanel
+        editor={free}
+        onCreateClass={onCreateClass}
+        classLibrary={LIBRARY}
+      />
+    );
+    const field = () => screen.getByRole("combobox", { name: /add a class/i });
+    fireEvent.change(field(), { target: { value: "call-to-action" } });
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(onCreateClass).toHaveBeenCalledTimes(1);
+
+    const locked = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ ...node, locked: true }] as BlockNode[],
+    } as BlockDocument);
+    rerender(
+      <StyleInspectorPanel
+        editor={locked}
+        onCreateClass={onCreateClass}
+        classLibrary={LIBRARY}
+      />
+    );
+    await React.act(async () => {
+      settle({ ok: true, classId: "id-new" });
+    });
+
+    expect(free.applyAll).not.toHaveBeenCalled();
+    expect(locked.applyAll).not.toHaveBeenCalled();
+  });
 });
 
 describe("sections", () => {

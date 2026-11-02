@@ -273,6 +273,78 @@ describe("both locks at once", () => {
   });
 });
 
+describe("several blocks, some inside a contentOnly area", () => {
+  /** A frame's text `t` plus free texts beside it, all of them selected. */
+  function selected(free: readonly string[]) {
+    const page = inside("acme/frame");
+    const document = {
+      ...page,
+      nodes: [
+        ...page.nodes,
+        ...free.map(
+          id =>
+            ({
+              id,
+              type: "acme/text",
+              version: 1,
+              props: {},
+            }) as BlockNode
+        ),
+      ],
+    } as BlockDocument;
+    const editor = editorFor(document);
+    editor.selection = { ids: ["t", ...free], primary: "t" } as never;
+    render(<InspectorPanel editor={editor} />);
+    return editor;
+  }
+
+  function openSelectionMenu(count: number): void {
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: `Actions for ${count} blocks` }),
+      { key: "Enter" }
+    );
+  }
+
+  it("locks only the blocks whose own lock may change, and says why", () => {
+    // The held block is left out of the edit: it is applied as one group, and
+    // the save refusing the held one would change none of the others.
+    const editor = selected(["free"]);
+    expect(document.querySelector('[data-lock="held"]')?.textContent).toBe(
+      "1 of them sits in an area that fixes its lock, so it can't be locked or unlocked here."
+    );
+    openSelectionMenu(2);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Lock the others" }));
+    expect(editor.applyAll).toHaveBeenCalledWith([
+      { kind: "update", id: "free", patch: { locked: true } },
+    ]);
+  });
+
+  it("holds the item, with the reason, when none of them may change", () => {
+    const editor = editorFor(inside("acme/frame"));
+    const frame = editor.document.nodes[0] as BlockNode;
+    const t = (frame.slots?.children ?? [])[0] as BlockNode;
+    editor.document = {
+      ...editor.document,
+      nodes: [
+        {
+          ...frame,
+          slots: { children: [t, { ...t, id: "t2" }] },
+        } as BlockNode,
+      ],
+    } as BlockDocument;
+    editor.selection = { ids: ["t", "t2"], primary: "t" } as never;
+    render(<InspectorPanel editor={editor} />);
+
+    openSelectionMenu(2);
+    const item = screen.getByRole("menuitem", { name: /^Lock all/ });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain("The area each sits in fixes this.");
+    expect(document.querySelector('[data-lock="held"]')?.textContent).toMatch(
+      /^Each sits in an area/
+    );
+  });
+});
+
 describe("the bar that says what an edit changes", () => {
   it("names this block, the device and the state, following its props", () => {
     const document = inside("acme/row");

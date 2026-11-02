@@ -556,10 +556,15 @@ export function layersLockChangeable(status: BlockLockStatus): boolean {
  * Which locks hold a block.
  *
  * The slot lock is read through the engine's own `nodeLocks`, the walk a save
- * is judged by, so the inspector and the save cannot disagree about it. Only
- * the holder is found here: the `contentOnly` area names its outermost slot's
- * block, and an `all` or `insert` lock names the nearest ancestor whose slot
- * declares it, which is the block whose definition says so.
+ * is judged by, so the inspector and the save cannot disagree about it.
+ *
+ * A `contentOnly` area wins wherever one applies, in the page or in the page
+ * composed around it, and is found by the same reading that holds the design
+ * read-only ({@link designLockOf}): a block an `all` slot holds on the page and
+ * a component's `contentOnly` slot holds once composed is design-locked, and a
+ * card naming only the arrangement lock would offer a Layers lock the save
+ * refuses. Otherwise the first tree with a lock gives it, and the holder is the
+ * nearest ancestor whose slot declares it, the block whose definition says so.
  */
 export function lockStatusOf(
   document: BlockDocument,
@@ -568,6 +573,21 @@ export function lockStatusOf(
 ): BlockLockStatus {
   const node = findNode(document.nodes, id);
   const layers = node !== undefined && isLocked(node);
+  const area = contentOnlyAreaOf(document, id, view);
+  if (area !== undefined) {
+    const held = designLockOf(document, id, view);
+    return {
+      layers,
+      slot: {
+        lock: "contentOnly",
+        holder: blockLabel(area.area.holderType),
+        reason:
+          held === undefined
+            ? `${blockLabel(area.area.holderType)} fixes this block's design.`
+            : refusalAnnouncement(held),
+      },
+    };
+  }
   // The page first, then the document the editor composes around it (a
   // Layout's regions, a component's contents), each judged with the view's
   // definitions: the same trees and source a save and the canvas use.
@@ -577,29 +597,19 @@ export function lockStatusOf(
   const found = trees
     .map(tree => ({ tree, at: nodeLocks(tree.nodes, source).get(id) }))
     .find(({ at }) => at?.lock !== undefined);
-  const at = found?.at;
-  if (found === undefined || at?.lock === undefined) {
+  const lock = found?.at?.lock;
+  if (found === undefined || lock === undefined || lock === "contentOnly") {
     return { layers, slot: undefined };
   }
-  const holderType =
-    at.lock === "contentOnly" && at.area !== undefined
-      ? at.area.holderType
-      : declaringAncestor(found.tree, id, source);
+  const holderType = declaringAncestor(found.tree, id, source);
   const holder =
     holderType === undefined ? "The block it sits in" : blockLabel(holderType);
-  const held =
-    at.lock === "contentOnly" ? designLockOf(document, id, view) : undefined;
   return {
     layers,
     slot: {
-      lock: at.lock,
+      lock,
       holder,
-      reason:
-        at.lock === "contentOnly"
-          ? held === undefined
-            ? `${holder} fixes this block's design.`
-            : refusalAnnouncement(held)
-          : `${holder} ${ARRANGEMENT_LOCK_WORDS[at.lock]}.`,
+      reason: `${holder} ${ARRANGEMENT_LOCK_WORDS[lock]}.`,
     },
   };
 }
