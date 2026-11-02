@@ -410,6 +410,21 @@ describe("Help", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(help);
   });
+
+  it("closes when the editor gives way to its narrow-window notice", async () => {
+    // The editor stays mounted, hidden and inert, behind the notice. A Help
+    // left open there would still trap focus and hold the keyboard, with the
+    // notice's Exit button outside its reach.
+    renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "Help" }));
+    await screen.findByRole("dialog", { name: "Help" });
+
+    act(() => stubContainerFits(false));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    act(() => stubContainerFits(true));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
 });
 
 describe("a panel's view", () => {

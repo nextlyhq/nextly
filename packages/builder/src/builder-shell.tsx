@@ -862,6 +862,16 @@ function ShellRegions({
   };
   const [helpOpen, setHelpOpen] = React.useState(false);
   const helpOpener = React.useRef<HTMLElement | null>(null);
+  /*
+   * Help closes when the editor gives way to the narrow-window notice. The
+   * regions stay mounted there, hidden and inert, and a modal left open would
+   * keep its focus trap and its hold on the keyboard over a notice whose Exit
+   * button it would then keep out of reach. Closed rather than hidden, so
+   * widening the window again does not bring back a dialog nobody reopened.
+   */
+  React.useEffect(() => {
+    if (!active) setHelpOpen(false);
+  }, [active]);
 
   return (
     <div
