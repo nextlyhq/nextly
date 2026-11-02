@@ -244,7 +244,12 @@ function VariantRow({
           aria-label={`${open ? "Hide" : "Show"} the values of ${option.label}`}
           onClick={onToggle}
         >
-          <ChevronRight size={14} aria-hidden="true" />
+          <ChevronRight
+            size={14}
+            aria-hidden="true"
+            className="nx-variants__chevron"
+            data-open={open ? "" : undefined}
+          />
         </Button>
         <VariantName
           context={context}

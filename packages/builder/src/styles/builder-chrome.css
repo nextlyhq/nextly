@@ -4053,7 +4053,7 @@ fieldset.nx-inspector__fields {
 /* The heading at the size the exposed fields' heading above it takes. */
 .nx-variants__header .nx-inspector__heading {
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .nx-variants__list {
@@ -4086,16 +4086,16 @@ fieldset.nx-inspector__fields {
 }
 
 /* The chevron turns to point down while the variant's values are open. */
-.nx-variants__toggle svg {
+.nx-variants__chevron {
   transition: transform 150ms ease;
 }
 
-.nx-variants__item[data-open] .nx-variants__toggle svg {
+.nx-variants__chevron[data-open] {
   transform: rotate(90deg);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nx-variants__toggle svg {
+  .nx-variants__chevron {
     transition: none;
   }
 }
@@ -4118,7 +4118,7 @@ fieldset.nx-inspector__fields {
   margin-top: 0.4rem;
   padding: 0 0.375rem;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   line-height: 1.5;
   white-space: nowrap;
