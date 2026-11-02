@@ -1227,17 +1227,28 @@ describe("what scrolls a canvas in a frame", () => {
     const view = inner.defaultView;
     if (view === null) throw new Error("no frame window");
     Object.defineProperty(view, "innerHeight", { value: 640 });
+    Object.defineProperty(view, "innerWidth", { value: 900 });
 
-    expect(containerEdges(scroller)).toEqual({ top: 0, bottom: 640 });
+    expect(containerEdges(scroller)).toEqual({
+      top: 0,
+      bottom: 640,
+      left: 0,
+      right: 900,
+    });
   });
 
   it("still measures an ordinary scroller by its own rectangle", () => {
     const region = document.createElement("section");
     region.getBoundingClientRect = () =>
-      ({ top: 56, bottom: 856, height: 800 }) as DOMRect;
+      ({ top: 56, bottom: 856, height: 800, left: 12, width: 300 }) as DOMRect;
     document.body.appendChild(region);
 
-    expect(containerEdges(region)).toEqual({ top: 56, bottom: 856 });
+    expect(containerEdges(region)).toEqual({
+      top: 56,
+      bottom: 856,
+      left: 12,
+      right: 312,
+    });
   });
 
   it("hears a viewport's scroll on its document, and an element's on the element", () => {
