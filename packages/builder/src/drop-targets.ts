@@ -65,10 +65,13 @@
 import type {
   BlockDocument,
   BlockNode,
-  NestingRefusal,
   NestingSource,
+  PlacedNode,
+  PlacementRefusal,
+  PlacementRefused,
+  PlacementSources,
 } from "@nextlyhq/blocks-engine";
-import { placementVerdict } from "@nextlyhq/blocks-engine";
+import { canPlaceIn, placementVerdict } from "@nextlyhq/blocks-engine";
 
 import type { Point, Rect } from "./geometry";
 import type { PlacementTarget, SlotSource } from "./inserter";
@@ -199,8 +202,24 @@ export interface DropRefusal {
    * from one that needs a container to exist first.
    */
   readonly parentId?: string;
-  readonly reason: NestingRefusal;
+  readonly reason: PlacementRefusal;
   readonly permitted: readonly string[];
+  /**
+   * The one placement rule's whole answer, when the drop was judged by it, so
+   * its words can name a slot the container lacks or the linked block that
+   * refuses what is being dropped.
+   */
+  readonly verdict?: PlacementRefused;
+}
+
+/**
+ * What the one placement rule needs to judge a drop: the document, the blocks
+ * being placed with everything inside them, and where it reads its answers.
+ */
+export interface DropPlacement {
+  readonly nodes: readonly unknown[];
+  readonly placing: readonly PlacedNode[];
+  readonly sources: PlacementSources;
 }
 
 /**
@@ -290,13 +309,19 @@ export function axisOfRects(rects: readonly Rect[]): DropAxis {
 export function collectRegions(
   document: BlockDocument,
   slots: SlotSource,
-  rects: RectSource
+  rects: RectSource,
+  /**
+   * The slots a NODE declares, where its type alone cannot say: a component
+   * placement declares the slots its component exposes. Absent, or answering
+   * undefined, the type's slots are read.
+   */
+  slotsOfNode?: (node: BlockNode) => readonly string[] | undefined
 ): DropRegion[] {
   const regions: DropRegion[] = [];
 
   const walk = (nodes: readonly BlockNode[], depth: number): void => {
     for (const node of nodes) {
-      const declared = slots.slotsOf(node.type) ?? [];
+      const declared = slotsOfNode?.(node) ?? slots.slotsOf(node.type) ?? [];
       for (const slot of declared) {
         const rect = rects.rectOf(node.id);
         if (rect === undefined) continue;
@@ -482,6 +507,11 @@ export interface DropQuery {
   readonly regions: readonly DropRegion[];
   readonly nesting: NestingSource;
   readonly rects: RectSource;
+  /**
+   * The blocks being placed, judged by the one placement rule. Absent, the
+   * drop is judged by the name rules alone, as before the rule existed.
+   */
+  readonly placement?: DropPlacement;
 }
 
 /**
@@ -537,29 +567,16 @@ export function resolveDrop(query: DropQuery, pointer: Point): DropResolution {
   const region = regionAt(query.regions, pointer, query.forbiddenParents);
   if (region === undefined) return { kind: "none" };
 
-  const verdict = placementVerdict(
-    query.blockNames,
-    region.target,
-    query.nesting
-  );
+  const verdict = judgeRegion(query, region);
   if (!verdict.allowed) {
     return {
       kind: "refused",
       refusal: {
         regionId: region.id,
-        // Taken from the region rather than parsed back out of its id: the
-        // region is the richer value and it is already in hand here.
-        //
-        // SPREAD rather than assigned, so the root case has no `parentId` key
-        // at all. Writing `parentId: undefined` creates an own property whose
-        // value is undefined, which reads the same through `?.` and differently
-        // through `in`, `Object.keys` and a strict comparison — and the type
-        // documents the field as absent at the root rather than as present and
-        // empty. A shape that only matches its documentation under the loosest
-        // reading is one nobody can rely on.
         ...(region.parentId === undefined ? {} : { parentId: region.parentId }),
         reason: verdict.reason,
-        permitted: verdict.permitted,
+        permitted: "permitted" in verdict ? verdict.permitted : [],
+        ...(query.placement === undefined ? {} : { verdict }),
       },
     };
   }
@@ -583,4 +600,39 @@ export function resolveDrop(query: DropQuery, pointer: Point): DropResolution {
   // unusable coordinates would resolve to one of them.
   if (best === undefined) return { kind: "none" };
   return { kind: "target", target: best };
+}
+
+/**
+ * Whether the dragged blocks may go into a region: the one placement rule at
+ * the region's position when the query carries the placement, the name rules
+ * otherwise.
+ */
+function judgeRegion(
+  query: DropQuery,
+  region: DropRegion
+): PlacementRefused | { readonly allowed: true } {
+  const { placement } = query;
+  if (placement === undefined) {
+    const verdict = placementVerdict(
+      query.blockNames,
+      region.target,
+      query.nesting
+    );
+    return verdict.allowed
+      ? { allowed: true }
+      : {
+          allowed: false,
+          reason: verdict.reason,
+          blockType: query.blockNames[0] ?? "",
+          permitted: verdict.permitted,
+        };
+  }
+  return canPlaceIn(
+    placement.nodes,
+    placement.placing,
+    region.parentId === undefined
+      ? { kind: "root" }
+      : { kind: "slot", parentId: region.parentId, slot: region.slot ?? "" },
+    placement.sources
+  );
 }

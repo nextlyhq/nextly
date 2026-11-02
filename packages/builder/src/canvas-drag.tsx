@@ -41,12 +41,17 @@
  * @module canvas-drag
  */
 
-import type {
-  BlockNode,
-  ComponentLookup,
-  NestingSource,
+import {
+  type BlockNode,
+  type ComponentLookup,
+  type NestingSource,
+  declaredSlotNames,
+  findNode,
+  getBlock,
+  registryBlockSource,
+  type PlacedNode,
+  type PlacementSources,
 } from "@nextlyhq/blocks-engine";
-import { findNode } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
@@ -351,6 +356,12 @@ interface Gesture {
    * resolves against do not change mid-gesture.
    */
   readonly blockNames: readonly string[];
+  /**
+   * The blocks being placed, with everything inside them, which the one
+   * placement rule judges. Empty when an insert cannot make its block yet;
+   * the name rules then judge `blockNames` as before.
+   */
+  readonly placing: readonly PlacedNode[];
   /** False until the pointer has travelled far enough to mean a drag. */
   active: boolean;
   switchState: TargetSwitchState;
@@ -558,11 +569,17 @@ export function useCanvasDrag({
         owner: event.pointerId,
         origin: canvasContentPoint(event.clientX, event.clientY, root),
         originClient: { x: event.clientX, y: event.clientY },
-        regions: collectRegions(current.document, latest.current.slots, rects),
+        regions: collectRegions(
+          current.document,
+          latest.current.slots,
+          rects,
+          slotsOfNode(placementSources(latest.current))
+        ),
         rects,
         forbiddenParents: movingSubtree(current.document, nodeId),
         blockName: node.type,
         blockNames: placementTypesOf(node, latest.current.definitions),
+        placing: [node],
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
@@ -602,6 +619,15 @@ export function useCanvasDrag({
           regions: drag.regions,
           rects: drag.rects,
           nesting: latest.current.nesting,
+          ...(drag.placing.length === 0
+            ? {}
+            : {
+                placement: {
+                  nodes: latest.current.editor.document.nodes,
+                  placing: drag.placing,
+                  sources: placementSources(latest.current),
+                },
+              }),
         },
         // CONTENT coordinates: the rects were snapshotted in that space at drag
         // start, and a scroll deliberately does not invalidate them.
@@ -1059,7 +1085,12 @@ export function useCanvasDrag({
         },
         origin: canvasContentPoint(event.clientX, event.clientY, root),
         originClient: { x: event.clientX, y: event.clientY },
-        regions: collectRegions(current.document, slots, rects),
+        regions: collectRegions(
+          current.document,
+          slots,
+          rects,
+          slotsOfNode(placementSources(latest.current))
+        ),
         rects,
         // EMPTY, and this is the other place the kinds differ. Forbidden
         // parents exist to stop a node being dropped inside itself; nothing is
@@ -1067,6 +1098,9 @@ export function useCanvasDrag({
         forbiddenParents: new Set<string>(),
         blockName: entry.blockName,
         blockNames: [entry.blockName],
+        // The block as its type starts, judged without making it: the drop
+        // makes the one node it inserts, at the release.
+        placing: [startingNode(entry.blockName)],
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
@@ -1240,4 +1274,30 @@ export function DropIndicator({
       aria-hidden="true"
     />
   );
+}
+
+/** Where the one placement rule reads its answers, for this canvas. */
+function placementSources(current: {
+  nesting: NestingSource;
+  definitions?: ComponentLookup;
+}): PlacementSources {
+  return {
+    nesting: current.nesting,
+    definitions: registryBlockSource(),
+    ...(current.definitions === undefined
+      ? {}
+      : { components: current.definitions }),
+  };
+}
+
+/** The slots a node declares, a component placement's included. */
+function slotsOfNode(
+  sources: PlacementSources
+): (node: BlockNode) => readonly string[] | undefined {
+  return node => declaredSlotNames(node, sources);
+}
+
+/** A block as its type starts: its default props, before it holds anything. */
+function startingNode(type: string): PlacedNode {
+  return { type, props: getBlock(type)?.defaultProps ?? {} };
 }
