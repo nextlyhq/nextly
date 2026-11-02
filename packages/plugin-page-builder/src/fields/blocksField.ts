@@ -26,17 +26,37 @@ import type {
   PluginFieldType,
 } from "@nextlyhq/plugin-sdk";
 
+import { formsChangedBy } from "../component-cycle-guard";
 import { siteBreakpoints } from "../site-style";
 
-import { compositionIssues, type CompositionSetup } from "./blocks-composition";
+import {
+  compositionIssues,
+  documentOf,
+  type CompositionSetup,
+} from "./blocks-composition";
 import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
 import { blocksOptionsOf } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
-import { storedFormsOf } from "./lock-baselines";
+import { readStoredForms } from "./lock-baselines";
 
 /** The engine's issue for a child of a contentOnly slot changed besides content. */
 const CONTENT_ONLY_BREAK: IssueCode = "locked-slot-content-only";
+
+/**
+ * The engine's placement-rule issues. A stored page may already hold one, and
+ * a write that leaves it where it was must still save, so finding one reads
+ * the stored page to tell an old break from a new one.
+ */
+const PLACEMENT_BREAKS: ReadonlySet<string> = new Set<IssueCode>([
+  "wrong-parent",
+  "not-allowed-in-slot",
+  "restricted-at-root",
+  "undeclared-slot",
+  "holds-no-blocks",
+  "phrasing-only",
+  "content-model",
+]);
 
 /** The field type id. Was a built-in token; now this plugin's to own. */
 export const BLOCKS_TYPE = "blocks";
@@ -123,14 +143,40 @@ export function blocksFieldType(
       if (issues.length === 0) return composed();
       // A contentOnly slot may keep what the document's stored version already
       // holds, so a part a block's changed defaults left behind is not refused
-      // with nobody having changed it. Read only once such a break is found.
-      if (!issues.some(issue => issue.code === CONTENT_ONLY_BREAK)) {
+      // with nobody having changed it; and a placement break the stored page
+      // already held is kept with a warning rather than refused. Read only once
+      // such a break is found.
+      if (
+        !issues.some(
+          issue =>
+            issue.code === CONTENT_ONLY_BREAK ||
+            PLACEMENT_BREAKS.has(issue.code)
+        )
+      ) {
         return issues;
       }
-      return storedFormsOf(args.write, args.path).then(stored => {
-        if (stored.length === 0) return issues;
-        const again = judge(stored);
-        return again.length > 0 ? again : composed();
+      const status = (args.data as { status?: unknown } | undefined)?.status;
+      return readStoredForms(
+        args.write,
+        args.path,
+        formsChangedBy(typeof status === "string" ? status : undefined),
+        (args.field as { localized?: unknown }).localized === true
+      ).then(stored => {
+        const again = stored.forms.length === 0 ? issues : judge(stored.forms);
+        // A stored value this cannot read may already hold every placement
+        // break found, so none is refused; the server log says what was kept
+        // until the page can be judged against it.
+        const kept = stored.readable
+          ? again
+          : again.filter(issue => !PLACEMENT_BREAKS.has(issue.code));
+        if (kept.length < again.length) {
+          composition?.()?.onPlacementUnjudged?.({
+            field: args.path,
+            ...documentOf(args.write),
+            breaks: again.length - kept.length,
+          });
+        }
+        return kept.length > 0 ? kept : composed();
       });
     },
 

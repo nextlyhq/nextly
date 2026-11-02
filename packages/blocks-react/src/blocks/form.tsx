@@ -407,5 +407,7 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // Its fields and its submit button are interactive, and it is a form.
+  contentModel: () => ({ is: ["flow", "form", "interactive"] }),
   render: renderForm,
 });
