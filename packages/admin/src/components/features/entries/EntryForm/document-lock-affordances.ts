@@ -40,7 +40,14 @@ export interface DocumentLockNotice {
    * `awaited`, which is the only one that is not about a loss at all: the reader
    * holds the document and is simply being told a colleague would like it.
    */
-  readonly tone: "held" | "surrendered" | "unchecked" | "awaited" | "reader";
+  readonly tone:
+    | "held"
+    | "surrendered"
+    | "unchecked"
+    | "awaited"
+    | "reader"
+    | "loading"
+    | "unloaded";
   /** A whole sentence: the banner is read on its own, without the chrome. */
   readonly message: string;
   /** Present when the editor may claim the document. */
@@ -57,6 +64,11 @@ export interface DocumentLockNotice {
    * `unchecked` nobody has been reported to ask.
    */
   readonly accessRequest: DocumentAccessRequest | null;
+  /**
+   * Present when the latest version of the document could not be loaded after
+   * this editor gained it: what asking for it again says.
+   */
+  readonly retryLabel?: string;
 }
 
 export interface DocumentLockAffordances {
@@ -216,10 +228,54 @@ function accessRequestFor(
 }
 
 /**
+ * Whether the document on screen is the latest one, as far as gaining it goes.
+ *
+ * `current` everywhere but a gain: an editor who gains a document they were
+ * kept out of read it while a colleague held it, and is `loading` until reads
+ * made since reach the document, or `failed` when they could not be made.
+ */
+export type LatestDocumentLoad = "current" | "loading" | "failed";
+
+/**
+ * A gained document whose latest version is on its way. Withheld like a
+ * colleague's claim, because a save from here would write the copy read while
+ * they held it, which may be older than what they saved.
+ */
+const LOADING_LATEST: DocumentLockAffordances = {
+  readOnly: true,
+  actionsDisabled: true,
+  notice: {
+    tone: "loading",
+    message: "Loading the latest version of this document before you edit it.",
+    takeOverLabel: null,
+    accessRequest: null,
+  },
+};
+
+/**
+ * A gained document whose latest version could not be loaded: it stays
+ * read-only, and says so, rather than unlocking the copy it has.
+ */
+const LATEST_UNLOADED: DocumentLockAffordances = {
+  readOnly: true,
+  actionsDisabled: true,
+  notice: {
+    tone: "unloaded",
+    message:
+      "We couldn't load the latest version of this document, so you can't edit it yet.",
+    takeOverLabel: null,
+    accessRequest: null,
+    retryLabel: "Try again",
+  },
+};
+
+/**
  * Turn a claim's state into the editor's behaviour.
  *
  * `lastKnownHolder` is the colleague this editor was last told about, which
  * outlives a failed refresh. Null when nobody has ever been reported.
+ * `latest` says whether a document this editor gained is the latest one; it
+ * matters only while they hold it.
  *
  * Decisions here that are not the obvious one:
  *
@@ -262,7 +318,8 @@ function accessRequestFor(
  */
 export function documentLockAffordances(
   state: DocumentLockState,
-  lastKnownHolder: DocumentLockHolder | null = null
+  lastKnownHolder: DocumentLockHolder | null = null,
+  latest: LatestDocumentLoad = "current"
 ): DocumentLockAffordances {
   switch (state.status) {
     case "idle":
@@ -270,6 +327,10 @@ export function documentLockAffordances(
       return UNLOCKED;
 
     case "held-by-me":
+      // 🔴 Before the courtesy notice: a colleague waiting withholds nothing,
+      // and a copy that may be out of date withholds everything.
+      if (latest === "loading") return LOADING_LATEST;
+      if (latest === "failed") return LATEST_UNLOADED;
       return state.someoneWaiting ? AWAITED : UNLOCKED;
 
     case "held-by-other":

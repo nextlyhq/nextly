@@ -13,19 +13,21 @@
  */
 
 import type { DocumentLockHolder } from "nextly/document-lock";
-import { useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   useDocumentLock,
   type UseDocumentLockOptions,
 } from "@admin/hooks/queries/useDocumentLock";
 import { useDocumentLockHolder } from "@admin/hooks/queries/useDocumentLockHolder";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 
 import {
   documentLockAffordances,
   readerAffordances,
   READ_ONLY_REMOVED_FROM_CODE,
   type DocumentLockAffordances,
+  type LatestDocumentLoad,
 } from "./document-lock-affordances";
 
 export interface DocumentLockSurface extends DocumentLockAffordances {
@@ -39,6 +41,8 @@ export interface DocumentLockSurface extends DocumentLockAffordances {
    * beat re-states it until this editor has the document or leaves.
    */
   readonly requestAccess: () => void;
+  /** Ask again for the latest version of a gained document that failed to load. */
+  readonly retryLoad: () => void;
 }
 
 export interface DocumentLockSurfaceOptions extends UseDocumentLockOptions {
@@ -56,6 +60,93 @@ export interface DocumentLockSurfaceOptions extends UseDocumentLockOptions {
    * document banner carries instead of the reader's sentence.
    */
   readOnlyBecause?: "access" | "removed-from-code";
+  /**
+   * When the document on screen was read, and how to read it again: from the
+   * reads that feed the form. Given, a document this editor gains after being
+   * kept out of it stays read-only until reads made since reach it. Absent, a
+   * gain unlocks the copy on screen at once.
+   */
+  latest?: DocumentLatest;
+}
+
+/** A load of the latest document, asked for when this editor gained it. */
+interface GainLoad {
+  readonly phase: "loading" | "failed";
+  /** When the document on screen had been read as the load was asked for. */
+  readonly from: number | undefined;
+  /** Which load this is, so a late answer to an earlier one changes nothing. */
+  readonly attempt: number;
+}
+
+/**
+ * Whether the document on screen is the latest one, given the gains the claim
+ * has reported and the load that the last of them asked for.
+ *
+ * 🔴 Answered in render, from facts in hand, and not by an effect that sets
+ * "loading" after the gain: the render in between would unlock the copy read
+ * while the colleague held it, and the Page Builder reads its document once,
+ * as its editor mounts, so it would go on showing that copy.
+ */
+function latestLoad(
+  latest: DocumentLatest | undefined,
+  gainUnhandled: boolean,
+  load: GainLoad | null
+): LatestDocumentLoad {
+  if (latest === undefined) return "current";
+  if (gainUnhandled) return "loading";
+  if (load === null || latest.readAt !== load.from) return "current";
+  return load.phase;
+}
+
+/**
+ * Load the latest document each time the claim reports a gain, and say how far
+ * that load has got.
+ *
+ * 🔴 Done when the document on screen comes from reads made since the gain,
+ * not when the reload answers: the answer resolves before the reads reach the
+ * form, and two reads that disagree are read again before either is shown.
+ * `readAt` moving is a change, not an ordering, so a clock that moves backwards
+ * cannot hold the form shut.
+ */
+function useGainLoad(
+  gains: number,
+  latest: DocumentLatest | undefined,
+  claiming: boolean
+): { load: LatestDocumentLoad; retry: () => void } {
+  const [handled, setHandled] = useState(gains);
+  const [load, setLoad] = useState<GainLoad | null>(null);
+  const attempts = useRef(0);
+  const latestRef = useRef(latest);
+  latestRef.current = latest;
+
+  const start = useCallback(() => {
+    const reads = latestRef.current;
+    if (reads === undefined) return;
+    const attempt = (attempts.current += 1);
+    setLoad({ phase: "loading", from: reads.readAt, attempt });
+    reads.reload().catch(() => {
+      setLoad(current =>
+        current?.attempt === attempt ? { ...current, phase: "failed" } : current
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    if (gains === handled) return;
+    setHandled(gains);
+    start();
+  }, [gains, handled, start]);
+
+  // A new document is a new claim, and nothing loaded for the last one
+  // describes it.
+  useEffect(() => {
+    if (claiming) setLoad(null);
+  }, [claiming]);
+
+  return {
+    load: latestLoad(latest, gains !== handled, load),
+    retry: start,
+  };
 }
 
 export function useDocumentLockSurface({
@@ -64,13 +155,15 @@ export function useDocumentLockSurface({
   ...options
 }: DocumentLockSurfaceOptions): DocumentLockSurface {
   const enabled = options.enabled ?? true;
-  const { state, takeOver, requestAccess } = useDocumentLock({
-    ...options,
+  const { latest, ...lockOptions } = options;
+  const { state, gains, takeOver, requestAccess } = useDocumentLock({
+    ...lockOptions,
     enabled: enabled && !readOnlyForReader,
   });
+  const gainLoad = useGainLoad(gains, latest, state.status === "acquiring");
   // A reader claims nothing and is told who holds the document instead.
   const holder = useDocumentLockHolder({
-    ...options,
+    ...lockOptions,
     enabled: enabled && readOnlyForReader,
   });
 
@@ -100,8 +193,13 @@ export function useDocumentLockSurface({
       ? readOnlyBecause === "removed-from-code"
         ? READ_ONLY_REMOVED_FROM_CODE
         : readerAffordances(holder)
-      : documentLockAffordances(state, lastKnownHolder.current)),
+      : documentLockAffordances(
+          state,
+          lastKnownHolder.current,
+          gainLoad.load
+        )),
     takeOver,
     requestAccess,
+    retryLoad: gainLoad.retry,
   };
 }

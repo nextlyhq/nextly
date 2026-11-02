@@ -25,7 +25,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { FieldConfig } from "nextly/config";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import {
   populatedAmongStored,
@@ -133,6 +133,21 @@ interface Merge<T> {
   stored: Doc;
   fields: FieldConfig[];
   document: T;
+  /** When the older of the two reads was made. */
+  readAt: number;
+}
+
+/**
+ * When the document an editor shows was read, and how to read it again.
+ *
+ * `readAt` moves only when reads made since reach the document, including reads
+ * that found it unchanged; it is undefined while there is no document.
+ * `reload` reads both again, replacing any read already on its way, and
+ * rejects when either fails.
+ */
+export interface DocumentLatest {
+  readAt: number | undefined;
+  reload: () => Promise<unknown>;
 }
 
 export interface StoredReferencesResult<T> {
@@ -140,6 +155,7 @@ export interface StoredReferencesResult<T> {
   document: T | undefined;
   isLoading: boolean;
   error: Error | null;
+  latest: DocumentLatest;
 }
 
 /** The two reads, when both are in hand and nothing is about to replace either. */
@@ -279,13 +295,19 @@ export function useWithStoredReferences<T extends Doc>({
   );
   // A cached merge for exactly these inputs is reused, so the document keeps
   // its identity across renders and the form is not reset by a re-render.
+  const pairReadAt = Math.min(populated.dataUpdatedAt, stored.dataUpdatedAt);
   if (agree && !isMergeOf(last.current, pair, scope)) {
     last.current = {
       scope,
       ...pair,
       document: withStoredReferences(pair.fields, pair.populated, pair.stored),
+      readAt: pairReadAt,
     };
     retries.reset();
+  } else if (agree && last.current !== null) {
+    // Reads that found the document unchanged keep its identity, so the form
+    // is not reset, but still say when it was last read.
+    last.current.readAt = pairReadAt;
   }
 
   const document =
@@ -293,5 +315,23 @@ export function useWithStoredReferences<T extends Doc>({
       ? last.current.document
       : undefined;
   const error = readError(populated, stored, retries.spent);
-  return { document, isLoading: document === undefined && !error, error };
+  const { refetch: refetchPopulated } = populated;
+  const { refetch: refetchStored } = stored;
+  const reload = useCallback(
+    () =>
+      Promise.all([
+        refetchPopulated({ cancelRefetch: true, throwOnError: true }),
+        refetchStored({ cancelRefetch: true, throwOnError: true }),
+      ]),
+    [refetchPopulated, refetchStored]
+  );
+  return {
+    document,
+    isLoading: document === undefined && !error,
+    error,
+    latest: {
+      readAt: document === undefined ? undefined : last.current?.readAt,
+      reload,
+    },
+  };
 }

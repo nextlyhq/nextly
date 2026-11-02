@@ -231,6 +231,7 @@ export default function SingleEditPage({
     error: documentError,
     sourceDoc,
     isNonDefaultLocale,
+    latest,
   } = useSingleEditorDocument({
     slug,
     locale,
@@ -518,6 +519,7 @@ export default function SingleEditPage({
               navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))
             }
             documentView={singleDocumentView(params)}
+            latest={latest}
           />
         </MeasuredPageFrame>
       </QueryErrorBoundary>

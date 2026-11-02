@@ -319,6 +319,7 @@ export default function EditEntryPage({
     document: entry,
     isLoading: isLoadingEntry,
     error: entryError,
+    latest: entryLatest,
   } = useWithStoredReferences({
     // The fields the form renders, so the merge and the form read one list.
     fields: collection
@@ -450,6 +451,7 @@ export default function EditEntryPage({
     scopeKind: "collection",
     slug: slug ?? "",
     entryId: id,
+    latest: entryLatest,
     // 🔴 The same prerequisites the custom branch renders under, not merely a
     // resolved component. A claim taken while the entry is still loading, or
     // after it failed, heartbeats a document the editor is not looking at - and
@@ -699,6 +701,7 @@ export default function EditEntryPage({
             notice={customViewLock.notice}
             onTakeOver={customViewLock.takeOver}
             onRequestAccess={customViewLock.requestAccess}
+            onRetry={customViewLock.retryLoad}
           />
           {/* Boxed for the same reason the injection slots are: under the
               measured frame this is a direct child of a CSS grid, and the rule
@@ -847,6 +850,7 @@ export default function EditEntryPage({
             onDelete={handleDelete}
             onCancel={handleCancel}
             documentView={documentView}
+            latest={entryLatest}
           />
           {afterEditPath && (
             <div

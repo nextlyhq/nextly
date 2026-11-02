@@ -301,6 +301,7 @@ export function DocumentViewBody({
             notice={lock.notice}
             onTakeOver={lock.takeOver}
             onRequestAccess={lock.requestAccess}
+            onRetry={lock.retryLoad}
           />
           <LiveDocumentRecoveryOffer
             recovery={offered.recovery}

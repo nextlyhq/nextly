@@ -114,6 +114,7 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import {
@@ -275,6 +276,13 @@ export interface SingleFormProps {
    * when the route names one.
    */
   documentView?: DocumentViewMount;
+  /**
+   * When the Single on screen was read, and how to read it again, from the
+   * reads that hand it over. Given, a Single this editor gains after a
+   * colleague held it stays read-only until the latest version is on screen;
+   * absent, it unlocks as it stands.
+   */
+  latest?: DocumentLatest;
   /** Additional CSS classes */
   className?: string;
 }
@@ -615,6 +623,7 @@ export function SingleForm({
   documentActions,
   documentBanner,
   documentView,
+  latest,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -799,6 +808,7 @@ export function SingleForm({
     entryId: document.id,
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
+    latest,
   });
   const lock = heldWhileRecovering(lockSurface, recovering);
 

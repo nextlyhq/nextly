@@ -38,6 +38,7 @@ import {
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useCan } from "@admin/hooks/useCan";
@@ -155,6 +156,13 @@ export interface EntryFormProps {
    * collection); an embedded editor reading the live row passes `false`.
    */
   readDraft?: boolean;
+  /**
+   * When the entry on screen was read, and how to read it again, from the
+   * reads that hand it over. Given, an entry this editor gains after a
+   * colleague held it stays read-only until the latest version is on screen;
+   * absent, it unlocks as it stands.
+   */
+  latest?: DocumentLatest;
   /** Called when the user switches the active content language. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /**
@@ -320,6 +328,7 @@ export function EntryForm({
   onCancel,
   locale,
   readDraft,
+  latest,
   onLocaleChange,
   seedFromLocale,
   onSeedHandled,
@@ -659,6 +668,7 @@ export function EntryForm({
     enabled: mode === "edit",
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
+    latest,
   });
   const lock = heldWhileRecovering(lockSurface, recovering);
 
@@ -1006,6 +1016,7 @@ export function EntryForm({
               notice={lock.notice}
               onTakeOver={lock.takeOver}
               onRequestAccess={lock.requestAccess}
+              onRetry={lock.retryLoad}
             />
             {/* No page around a modal to carry the removed-from-code notice in
                 a document banner, so the modal says it itself. */}
