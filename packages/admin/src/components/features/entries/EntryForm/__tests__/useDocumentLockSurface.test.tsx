@@ -165,11 +165,22 @@ describe("loading the latest document before a gain unlocks the form", () => {
    */
   function mount(reload: () => Promise<unknown>, lock: Lock = keptOut) {
     useDocumentLock.mockReturnValue(lock);
-    return renderHook(
-      ({ readAt }: { readAt: number | undefined }) =>
-        useDocumentLockSurface({ ...options, latest: { readAt, reload } }),
+    // Every render, not only the last: one render that unlocks the old copy is
+    // enough for the Page Builder, which reads its document as its editor
+    // mounts, to go on showing that copy.
+    const renders: { readOnly: boolean; readAt: number | undefined }[] = [];
+    const hook = renderHook(
+      ({ readAt }: { readAt: number | undefined }) => {
+        const surface = useDocumentLockSurface({
+          ...options,
+          latest: { readAt, reload },
+        });
+        renders.push({ readOnly: surface.readOnly, readAt });
+        return surface;
+      },
       { initialProps: { readAt: 1 } }
     );
+    return { ...hook, renders };
   }
 
   // How the hook reports each way of gaining it. That each one IS counted as a
@@ -185,9 +196,9 @@ describe("loading the latest document before a gain unlocks the form", () => {
 
   it.each(ways)(
     "refetches the document before unlocking on each move to held-by-me (release, lapse, takeover): %s",
-    (_way, steps) => {
-      const { reload } = deferredReload();
-      const { result, rerender } = mount(reload);
+    async (_way, steps) => {
+      const { reload, settles } = deferredReload();
+      const { result, rerender, renders } = mount(reload);
       expect(result.current.readOnly).toBe(true);
 
       for (const step of steps) {
@@ -202,8 +213,11 @@ describe("loading the latest document before a gain unlocks the form", () => {
       expect(result.current.actionsDisabled).toBe(true);
       expect(result.current.notice?.tone).toBe("loading");
 
-      // The same read again, as when the load answered but its reads have not
-      // reached the document yet: still the copy from before.
+      // The load answered, but its reads have not reached the document yet:
+      // still the copy from before.
+      await act(async () => {
+        settles[0].resolve();
+      });
       rerender({ readAt: 1 });
       expect(result.current.readOnly).toBe(true);
 
@@ -212,6 +226,8 @@ describe("loading the latest document before a gain unlocks the form", () => {
       expect(result.current.readOnly).toBe(false);
       expect(result.current.actionsDisabled).toBe(false);
       expect(result.current.notice).toBeNull();
+      // And no render before it did: the old copy was never editable.
+      expect(renders.filter(r => !r.readOnly && r.readAt === 1)).toEqual([]);
     }
   );
 
@@ -277,6 +293,8 @@ describe("loading the latest document before a gain unlocks the form", () => {
     await act(async () => {
       settles[1].resolve();
     });
+    rerender({ readAt: 1 });
+    expect(result.current.readOnly).toBe(true);
     rerender({ readAt: 2 });
     expect(result.current.readOnly).toBe(false);
     expect(result.current.notice).toBeNull();

@@ -282,3 +282,79 @@ describe("SingleForm under a document lock", () => {
     expect(write.some(control => !control.hasAttribute("disabled"))).toBe(true);
   });
 });
+
+describe("SingleForm when it gains a Single a colleague held", () => {
+  it("stays read-only and offers to try again when the latest document cannot be loaded", async () => {
+    // The Single on screen was read while Bob held it. A save from here would
+    // put that copy back over whatever Bob saved, so it stays read-only, says
+    // why, and asks again only when the person says so.
+    const reload = vi
+      .fn<() => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(undefined);
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob, requestSent: false },
+      gains: 0,
+      takeOver,
+    });
+    const { rerender } = render(
+      <SingleForm
+        schema={schema}
+        document={document}
+        onSubmit={vi.fn()}
+        latest={{ readAt: 1, reload }}
+      />
+    );
+
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 1,
+      takeOver,
+    });
+    rerender(
+      <SingleForm
+        schema={schema}
+        document={document}
+        onSubmit={vi.fn()}
+        latest={{ readAt: 1, reload }}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("document-lock-banner")).toHaveTextContent(
+        "couldn't load the latest version"
+      )
+    );
+    const hero = screen.getByLabelText("Hero Title") as HTMLInputElement;
+    expect(hero.readOnly).toBe(true);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(
+      (screen.getByLabelText("Hero Title") as HTMLInputElement).readOnly
+    ).toBe(true);
+
+    // The reads made since arrive with what Bob saved, and that is what unlocks.
+    rerender(
+      <SingleForm
+        schema={schema}
+        document={{
+          ...document,
+          updatedAt: "2026-01-01T00:05:00.000Z",
+          heroTitle: "Bob's hero",
+        } as unknown as SingleDocumentData}
+        onSubmit={vi.fn()}
+        latest={{ readAt: 2, reload }}
+      />
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Hero Title") as HTMLInputElement).readOnly
+      ).toBe(false)
+    );
+    expect(
+      (screen.getByLabelText("Hero Title") as HTMLInputElement).value
+    ).toBe("Bob's hero");
+  });
+});
