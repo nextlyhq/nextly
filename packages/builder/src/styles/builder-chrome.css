@@ -1280,6 +1280,16 @@
   min-height: 0;
 }
 
+/*
+ * The chosen tab's words in the panel's own text colour, with the accent left
+ * to its underline. The accent as text measured 4.09:1 on the panel surface,
+ * under the 4.5:1 that text this size needs; the underline still marks which
+ * tab is chosen, and the words stay readable in both schemes.
+ */
+.nx-inspector__tabs [role="tab"][data-state="active"] {
+  color: var(--nx-builder-text, var(--nx-foreground));
+}
+
 .nx-style-inspector {
   display: flex;
   flex-direction: column;
