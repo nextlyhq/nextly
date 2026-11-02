@@ -26,7 +26,12 @@ import {
   tokensToDtcg,
   type DtcgNode,
 } from "./dtcg";
-import type { SiteToken, SiteTokenSet, TokenMode } from "./site-tokens";
+import {
+  tokenNamingProblem,
+  type SiteToken,
+  type SiteTokenSet,
+  type TokenMode,
+} from "./site-tokens";
 
 /** The Resolver format version a theme file declares. */
 export const RESOLVER_VERSION = "2025.10";
@@ -246,6 +251,21 @@ export function modeFilesToTokens(files: readonly ModeFile[]): {
       ],
     };
   }
+  // A name saying both words says neither: which file is which cannot be
+  // told, so the choice is reported rather than half read.
+  const both = files.find(
+    file => /light/i.test(file.name) && /dark/i.test(file.name)
+  );
+  if (files.length === 2 && both !== undefined) {
+    return {
+      tokens: [],
+      issues: [
+        issue(
+          `${both.name} has both "light" and "dark" in its name, so which file holds which mode cannot be told and neither was read. Rename it to say one mode.`
+        ),
+      ],
+    };
+  }
   const named = (word: RegExp) => files.find(file => word.test(file.name));
   const lightNamed = named(/light/i);
   const darkNamed = named(/dark/i);
@@ -345,6 +365,16 @@ export function tokensToFigma(
   const document: DtcgNode = {};
   const issues: ValidationIssue[] = [];
   for (const token of set.tokens) {
+    // The same naming verdict the DTCG export applies: a name the engine
+    // refuses is a key no file should carry.
+    if (tokenNamingProblem(token) !== undefined) {
+      issues.push(
+        issue(
+          `"${String(token.name)}" is not a usable variable name, so it was left out of the Figma files.`
+        )
+      );
+      continue;
+    }
     const pair = figmaPair(token);
     if ("refused" in pair) {
       issues.push(
