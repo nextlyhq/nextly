@@ -710,6 +710,14 @@ describe("the panel's frame", () => {
         .getByRole("combobox", { name: "Insert a block" })
         .getAttribute("placeholder")
     ).toBe("Search blocks and components");
+
+    // The Sections tab searches sections, and says so.
+    openTab("Sections");
+    expect(
+      screen
+        .getByRole("combobox", { name: "Insert a block" })
+        .getAttribute("placeholder")
+    ).toBe("Search sections");
   });
 
   it("draws the library's categories by name, a plugin's as written, and a block with none under More blocks", () => {

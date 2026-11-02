@@ -282,6 +282,12 @@ export interface InsertPanelProps {
 /** The panel's two tabs: blocks and the site's components, and patterns. */
 type PanelTab = "blocks" | "sections";
 
+/** What the search says it searches, per tab. */
+const SEARCH_PLACEHOLDERS: Readonly<Record<PanelTab, string>> = {
+  blocks: "Search blocks and components",
+  sections: "Search sections",
+};
+
 /** Which tab an entry is offered in. Patterns are Sections; the rest Blocks. */
 function tabOf(entry: InsertEntry): PanelTab {
   return entry.kind === "pattern" ? "sections" : "blocks";
@@ -1116,7 +1122,7 @@ export function InsertPanel({
       <CommandInput
         value={query}
         onValueChange={setQuery}
-        placeholder="Search blocks and components"
+        placeholder={SEARCH_PLACEHOLDERS[tab]}
       />
       <PlacementLine document={editor.document} candidate={firstPlace} />
       <LibraryNotices library={library} />
