@@ -663,6 +663,82 @@ describe("dragging a Layers row", () => {
   });
 });
 
+describe("a Layers drag whose ground goes from under it", () => {
+  const FRAMES = [
+    "setTimeout",
+    "clearTimeout",
+    "requestAnimationFrame",
+    "cancelAnimationFrame",
+  ] as const;
+
+  /** A drag of `a`, active and aimed past `b`. */
+  function dragging(container: HTMLElement): void {
+    press("a", 10);
+    moveTo(container, X, 20);
+    moveTo(container, X, 2 * ROW - 4);
+    expect(body(container).hasAttribute("data-nx-dragging")).toBe(true);
+  }
+
+  it("ends when the dragged block is deleted mid-drag, and schedules nothing more", () => {
+    vi.useFakeTimers({ toFake: [...FRAMES] });
+    const { container } = render(
+      <Host
+        document={page([node("a", "core/heading"), node("b", "core/heading")])}
+      />
+    );
+    dragging(container);
+    act(() => {
+      editor().apply({ kind: "remove", id: "a" });
+    });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(container.querySelector("[data-nx-dragging]")).toBeNull();
+    expect(line(container)).toBeNull();
+    // No frame loop left running against a gesture that has ended.
+    expect(vi.getTimerCount()).toBe(0);
+    fireEvent.pointerUp(
+      container.querySelector(".nx-layers-panel__body") ?? document.body,
+      {
+        pointerId: 1,
+        clientX: X,
+        clientY: 2 * ROW - 4,
+      }
+    );
+    expect(structure()).toEqual(["b"]);
+  });
+
+  it("ends when the tree it is on leaves the page, with the document unchanged", () => {
+    vi.useFakeTimers({ toFake: [...FRAMES] });
+    const { container } = threeHeadings();
+    dragging(container);
+    // A search typed mid-drag that matches nothing: the panel swaps its tree
+    // for the no-match note, and the element the drag is on is gone.
+    fireEvent.change(screen.getByLabelText("Search layers"), {
+      target: { value: "nothing matches this" },
+    });
+    expect(container.querySelector(".nx-layers-panel__body")).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ends when the browser takes the pointer away", () => {
+    vi.useFakeTimers({ toFake: [...FRAMES] });
+    const { container } = threeHeadings();
+    dragging(container);
+    fireEvent.lostPointerCapture(body(container), { pointerId: 1 });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(body(container).hasAttribute("data-nx-dragging")).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    release(container, X, 2 * ROW - 4);
+    expect(structure()).toEqual(["a", "b", "c"]);
+  });
+});
+
 describe("dragging a Layers row by touch", () => {
   /** A finger on a row: a touch pointer, which picks up only after a hold. */
   function touch(id: string, y: number): void {

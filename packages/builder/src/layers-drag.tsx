@@ -137,6 +137,7 @@ export interface LayersDrag {
     readonly onPointerMove: React.PointerEventHandler<HTMLElement>;
     readonly onPointerUp: React.PointerEventHandler<HTMLElement>;
     readonly onPointerCancel: React.PointerEventHandler<HTMLElement>;
+    readonly onLostPointerCapture: React.PointerEventHandler<HTMLElement>;
   };
   /** The block being dragged, or null when no drag is in flight. */
   readonly draggingId: string | null;
@@ -517,6 +518,13 @@ export function useLayersDrag({
   const pump = React.useCallback(() => {
     const drag = gesture.current;
     if (drag === null || !drag.active) return;
+    // The tree the drag is on was taken off the page — emptied, or the panel
+    // swapped it for its note — so there is nothing left to aim at, and a
+    // loop that kept running would hold a detached tree for ever.
+    if (!drag.host.isConnected) {
+      reset();
+      return;
+    }
     if (drag.stale) {
       drag.stale = false;
       aim(drag);
@@ -532,7 +540,7 @@ export function useLayersDrag({
       }
     }
     drag.frame = requestAnimationFrame(pump);
-  }, [aim]);
+  }, [aim, reset]);
 
   /**
    * Turn a press into a drag: by distance for a mouse or a pen, by the hold
@@ -663,6 +671,34 @@ export function useLayersDrag({
     [reset]
   );
 
+  /*
+   * The browser took the pointer away — another element captured it, or the
+   * window lost it. The drag cannot hear its release any more, so it ends
+   * here rather than waiting for one. Only for an ACTIVE gesture of this
+   * pointer: the release this hook makes itself fires it after the gesture
+   * is already gone.
+   */
+  const onLostPointerCapture = React.useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      const drag = gesture.current;
+      if (drag === null || !drag.active) return;
+      if (drag.owner !== event.pointerId) return;
+      reset();
+    },
+    [reset]
+  );
+
+  /*
+   * The document changed under a drag — a Delete or an Undo pressed while the
+   * pointer is held. Everything the gesture judged was judged against the
+   * document it began on, and the dragged block may not exist any more, so
+   * the drag ends rather than dropping into a page it never saw.
+   */
+  React.useEffect(() => {
+    const drag = gesture.current;
+    if (drag !== null && drag.document !== editor.document) reset();
+  }, [editor.document, reset]);
+
   // A panel closed mid-drag must not leave a frame loop or a timer behind.
   React.useEffect(() => teardown, [teardown]);
 
@@ -686,7 +722,13 @@ export function useLayersDrag({
   }, [draggingId, reset]);
 
   return {
-    handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel },
+    handlers: {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      onPointerCancel,
+      onLostPointerCapture,
+    },
     draggingId,
     drawn,
     picked,

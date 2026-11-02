@@ -240,6 +240,13 @@ function heldIn<K, S, V>(
   return made;
 }
 
+/** The position a row's block occupies now, read from the measured row. */
+function positionOf(row: LayersRow): OpPosition {
+  return row.parentId === undefined || row.slot === undefined
+    ? { index: row.index }
+    : { parentId: row.parentId, slot: row.slot, index: row.index };
+}
+
 /** The position after the block `id`, in the container it sits in. */
 function positionAfter(nodes: BlockNode[], id: string): OpPosition | undefined {
   const at = locateNode(nodes, id);
@@ -260,8 +267,12 @@ interface Gap {
 /**
  * The position a gap and a depth name, before the dragged block is lifted out.
  *
- * Inside the row above when the depth is one more than its own; shallower,
- * after the row above's ancestor at that depth.
+ * Inside the row above when the depth is one more than its own. At the row
+ * below's depth, before that row, in its own slot and at its own index: the
+ * rows of a container's slots are drawn as one run, so the row above can sit
+ * in a different slot from the row below, and "after the row above" would put
+ * the block in the wrong one. Otherwise after the row above's ancestor at that
+ * depth.
  */
 function positionFor(
   document: BlockDocument,
@@ -274,6 +285,7 @@ function positionFor(
   if (depth > above.depth) {
     return positionInside(document.nodes, components, above, below);
   }
+  if (below !== undefined && below.depth === depth) return positionOf(below);
   // The trail from the top of the page down to the row above, so its entry at
   // `depth` is the block the drop goes after. Read from the document rather
   // than from the rows: an ancestor may be scrolled out of the drawn window.

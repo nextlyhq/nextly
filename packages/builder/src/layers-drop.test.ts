@@ -307,6 +307,39 @@ describe("layersDrop: the gap and the depth", () => {
     });
   });
 
+  it("keeps two slots of one container apart where their rows meet", () => {
+    // A container's slots are drawn as one run of rows: `first` holds a, and
+    // `second` holds b then c. Over b's own row, with b lifted out, the rows
+    // either side are a and c — which belong to different slots. The gap is
+    // b's own place, so nothing moves; it must not slip into `first`.
+    registerBlocks(
+      [{ ...base, name: "t/pair", slots: { first: {}, second: {} } }] as never,
+      { source: "layers-drop-test-pair" }
+    );
+    const doc = page([
+      node("pair", "t/pair", {
+        slots: {
+          first: [node("a", "t/heading")],
+          second: [node("b", "t/heading"), node("c", "t/heading")],
+        },
+      }),
+    ]);
+    const rows = rowsOf(doc, ["pair"]);
+    for (const half of ["upper", "lower"] as const) {
+      expect(drop(doc, "b", over(rows, "b", half, 1), ["pair"])).toEqual({
+        kind: "none",
+      });
+    }
+    // Dragged above a, it still lands in the slot of the row it is placed
+    // before: `first`, ahead of a.
+    expect(drop(doc, "c", over(rows, "a", "upper", 1), ["pair"])).toMatchObject(
+      {
+        kind: "drop",
+        to: { parentId: "pair", slot: "first", index: 0 },
+      }
+    );
+  });
+
   it("answers none outside every row", () => {
     const doc = page([node("a", "t/heading"), node("b", "t/heading")]);
     expect(drop(doc, "a", { x: LEFT, y: -5 })).toEqual({ kind: "none" });

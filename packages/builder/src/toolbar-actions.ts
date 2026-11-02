@@ -36,6 +36,8 @@
  */
 
 import {
+  findNode,
+  lockedWithin,
   registryNestingSource,
   saveAsPatternRefusal,
   type BlockDocument,
@@ -600,6 +602,22 @@ function opsOf(
   return plan === null || !("ops" in plan) ? undefined : plan.ops;
 }
 
+/**
+ * A locked block INSIDE the selected one, which the op store will not let a
+ * move carry: it relocates no subtree holding a locked block (`lockedWithin`).
+ * The selected block's own lock is `lockBlockingMove`'s, asked as before.
+ */
+function heldInside(
+  document: BlockDocument,
+  selectedId: string
+): BlockNode | undefined {
+  const node = findNode(document.nodes, selectedId);
+  const lockedId = node === undefined ? undefined : lockedWithin(node);
+  return lockedId === undefined || lockedId === selectedId || node === undefined
+    ? undefined
+    : findNode([node], lockedId);
+}
+
 /** The block menu's moves across depth: into the block above, and out. */
 export type DepthMoveId = "move-in" | "move-out";
 
@@ -644,20 +662,23 @@ export function depthMoveActions(
     return [];
   }
   const ids = selectedIds ?? [selectedId];
+  const held = heldInside(document, selectedId);
   return DEPTH_MOVES.map(move =>
     ids.length > 1
       ? { ...move, enabled: false, reason: oneAtATime(ids.length) }
-      : {
-          ...singleMove(
-            document,
-            selectedId,
-            move.id,
-            move.label,
-            move.direction,
-            lockRefusalFor,
-            position
-          ),
-          direction: move.direction,
-        }
+      : held !== undefined
+        ? { ...move, enabled: false, reason: lockedBy(held, selectedId) }
+        : {
+            ...singleMove(
+              document,
+              selectedId,
+              move.id,
+              move.label,
+              move.direction,
+              lockRefusalFor,
+              position
+            ),
+            direction: move.direction,
+          }
   );
 }
