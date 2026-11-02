@@ -2901,7 +2901,8 @@ function checkVariant(
     // A warning, not a refusal. Removing an exposed field prunes it from every
     // variant in the same save, so a variant whose only value that was is left
     // empty by a legitimate edit; refusing it would refuse the removal itself.
-    // It renders the component's defaults, and the picker can say so.
+    // It renders the component's defaults, and the picker can say so. The
+    // checks after this one still run: a warning ends nothing.
     if (overrideKeys.length === 0) {
       issues.push({
         path: pointer(at, "overrides"),
@@ -2910,7 +2911,6 @@ function checkVariant(
         message: `Variant "${name}" presets nothing, so selecting it shows the component's defaults.`,
         suggestion: "Give it at least one value, or remove the variant.",
       });
-      return;
     }
 
     checkVariantTargets(

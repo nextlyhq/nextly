@@ -21,7 +21,7 @@ import {
   type BlockNode,
 } from "./document";
 import { isDescendable, walkForest } from "./forest-walk";
-import { MAX_ENVELOPE_ENTRIES, MAX_NODES } from "./limits";
+import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import { boundedOwnKeys } from "./safe-record";
 
@@ -69,36 +69,46 @@ export interface StrippedDocument<TDocument extends BlockDocument> {
  * The document passed in is never changed. The walk runs twice when there is
  * something to remove, once to find out and once over a copy, so the common
  * case, a write with nothing retired in it, costs no copy.
+ *
+ * Bounded by the HOST's node cap, the one its document gate accepts, so a site
+ * that raised it has every placement it stores reached: a placement past a
+ * smaller bound would keep a value its designer confirmed removed.
  */
 export function stripRetiredExposures<TDocument extends BlockDocument>(
   document: TDocument,
-  retired: RetiredByComponent
+  retired: RetiredByComponent,
+  limits: DocumentLimits = DEFAULT_LIMITS
 ): StrippedDocument<TDocument> {
   if (retired.size === 0 || !Array.isArray(document.nodes)) {
     return { document, removed: 0 };
   }
-  const found = stripForest(document.nodes, retired, false);
+  const maxNodes = limits.maxNodes;
+  const found = stripForest(document.nodes, retired, maxNodes, false);
   if (found === 0) return { document, removed: 0 };
 
   const copy = structuredClone(document);
-  return { document: copy, removed: stripForest(copy.nodes, retired, true) };
+  return {
+    document: copy,
+    removed: stripForest(copy.nodes, retired, maxNodes, true),
+  };
 }
 
 /**
  * Count, and when `apply` is set also remove, the retired values in a forest.
  *
- * Bounded by the document node cap, as every walk over stored input is.
+ * Bounded by the host's node cap, as every walk over stored input is.
  */
 function stripForest(
   nodes: readonly unknown[],
   retired: RetiredByComponent,
+  maxNodes: number,
   apply: boolean
 ): number {
   let removed = 0;
   let seen = 0;
   walkForest(nodes, ({ node, cycle }) => {
     seen += 1;
-    if (seen > MAX_NODES) return "stop";
+    if (seen > maxNodes) return "stop";
     if (cycle || !isDescendable(node)) return "skip";
     removed += stripPlacement(node, retired, apply);
     return "descend";
@@ -137,14 +147,20 @@ function stripPlacement(
   return removed;
 }
 
-/** Remove the named own keys of a record; returns how many it held. */
+/**
+ * Remove the named own keys of a record; returns how many it held.
+ *
+ * Every key is asked: a component's retired list only grows and lives outside
+ * its bounded envelope, so a cap here would keep the values of every field
+ * retired past it. Each key costs one own-property check.
+ */
 function removeKeys(
   record: Record<string, unknown>,
   keys: readonly string[],
   apply: boolean
 ): number {
   let removed = 0;
-  for (const key of keys.slice(0, MAX_ENVELOPE_ENTRIES)) {
+  for (const key of keys) {
     // Own keys only: a stored record may hold `__proto__` or `toString` as a
     // key, and `in` would find an inherited one on every record.
     if (!Object.prototype.hasOwnProperty.call(record, key)) continue;

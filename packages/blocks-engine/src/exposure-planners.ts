@@ -193,7 +193,7 @@ export function planExposeProperty(
   sources: ExposureSources
 ): ExposureEditResult {
   const draft = editable(definition);
-  if (draft === undefined) return { problem: "not-a-component" };
+  if ("problem" in draft) return draft;
   const label = cleanLabel(request.label);
   if (label === undefined) return { problem: "invalid-label" };
 
@@ -213,7 +213,7 @@ export function planRenameExposure(
   label: string
 ): ExposureEditResult {
   const draft = editable(definition);
-  if (draft === undefined) return { problem: "not-a-component" };
+  if ("problem" in draft) return draft;
   const clean = cleanLabel(label);
   if (clean === undefined) return { problem: "invalid-label" };
   const at = exposureIndex(draft, id);
@@ -241,7 +241,7 @@ export function planRetargetExposure(
   sources: ExposureSources
 ): ExposureEditResult {
   const draft = editable(definition);
-  if (draft === undefined) return { problem: "not-a-component" };
+  if ("problem" in draft) return draft;
   const at = exposureIndex(draft, id);
   if (at === undefined) return { problem: "unknown-exposure" };
   const pointed = pointAt(draft, target, sources.definitions);
@@ -249,7 +249,7 @@ export function planRetargetExposure(
 
   const exposed = [...(draft.exposed ?? [])];
   const current = exposed[at];
-  if (current.type === pointed.type) {
+  if (keepsValues(current, pointed)) {
     exposed[at] = { id, label: current.label, ...pointed };
     draft.exposed = exposed;
     return finished(draft, id, NOTHING_RETIRED, []);
@@ -273,7 +273,7 @@ export function planRemoveExposure(
   id: string
 ): ExposureEditResult {
   const draft = editable(definition);
-  if (draft === undefined) return { problem: "not-a-component" };
+  if ("problem" in draft) return draft;
   const at = exposureIndex(draft, id);
   if (at === undefined) return { problem: "unknown-exposure" };
 
@@ -294,7 +294,7 @@ export function planRemoveExposedSlot(
   slotId: string
 ): ExposureEditResult {
   const draft = editable(definition);
-  if (draft === undefined) return { problem: "not-a-component" };
+  if ("problem" in draft) return draft;
   const slots = draft.slots;
   if (!isPlainRecord(slots) || !Object.hasOwn(slots, slotId)) {
     return { problem: "unknown-exposure" };
@@ -311,23 +311,62 @@ export function planRemoveExposedSlot(
 const NOTHING_RETIRED: RetiredExposures = { properties: [], slots: [] };
 
 /**
- * A copy of the definition to edit, or `undefined` for one that is not a
- * component this module can read.
+ * A copy of the definition to edit, or why it cannot be edited.
  *
  * Copied whole so no edit reaches the caller's document, a stored row or an
  * editor's state. A row that cannot be copied is not plain data, and nothing
  * stored by a save is anything else.
+ *
+ * The envelope's SHAPE is asked before any planner walks it: a stored or
+ * imported component whose `exposed` is not a list, or whose `slots` or
+ * `variants` is not a record, would otherwise throw from the first spread or
+ * iteration, where every planner promises a refusal. The envelope check names
+ * what is wrong.
  */
-function editable(definition: BlockDocument): ComponentDocument | undefined {
+function editable(
+  definition: BlockDocument
+): ComponentDocument | ExposureEditRefusal {
   if (!isPlainRecord(definition) || !isComponentDocument(definition)) {
-    return undefined;
+    return { problem: "not-a-component" };
   }
-  if (!Array.isArray(definition.nodes)) return undefined;
+  if (!Array.isArray(definition.nodes)) return { problem: "not-a-component" };
+  let draft: ComponentDocument;
   try {
-    return structuredClone(definition);
+    draft = structuredClone(definition);
   } catch {
-    return undefined;
+    return { problem: "not-a-component" };
   }
+  // Read as unknown: the declared types describe a well-formed envelope, and
+  // this is the check that establishes one.
+  const {
+    exposed,
+    slots,
+    variants,
+  }: { exposed?: unknown; slots?: unknown; variants?: unknown } = draft;
+  const shaped =
+    (exposed === undefined || Array.isArray(exposed)) &&
+    (slots === undefined || isPlainRecord(slots)) &&
+    (variants === undefined || isPlainRecord(variants));
+  if (shaped) return draft;
+  return {
+    problem: "invalid-exposure",
+    issues: componentEnvelopeIssues(draft).filter(isErrorIssue),
+  };
+}
+
+/**
+ * Whether every value a placement may hold for `current` is one `next` still
+ * takes, so re-pointing can keep the id and the values.
+ *
+ * The same type, and for a select every old choice still offered: a value is
+ * stored as the choice itself, and override validation does not hold it to the
+ * options, so a choice the new prop lacks would reach the block as written.
+ */
+function keepsValues(current: ExposedProperty, next: Pointer): boolean {
+  if (current.type !== next.type) return false;
+  if (current.type !== "select") return true;
+  const offered = new Set((next.options ?? []).map(option => option.value));
+  return (current.options ?? []).every(option => offered.has(option.value));
 }
 
 /** A label trimmed, or `undefined` when nothing is left. */

@@ -576,6 +576,23 @@ describe("a variant that presets nothing", () => {
       ["variant-empty", "warning", "/variants/compact/overrides"],
     ]);
   });
+
+  it("still refuses slot content on it", () => {
+    // The warning must not end the variant's checks: slot content is refused on
+    // every variant, and an empty one is no exception.
+    const issues = issuesFrom(
+      componentDoc({
+        exposed: [goodExposure],
+        variants: {
+          compact: { label: "Compact", overrides: {}, slots: { body: [] } },
+        },
+      })
+    );
+
+    expect(issues.filter(i => i.severity === "error").map(i => i.path)).toEqual(
+      ["/variants/compact/slots"]
+    );
+  });
 });
 
 describe("the unset sentinel is an exact shape", () => {

@@ -52,6 +52,8 @@ beforeEach(() => {
             type: "select",
             options: ["light", { value: "dark", label: "Dark" }],
           },
+          shade: { type: "select", options: ["light", "dark", "dim"] },
+          size: { type: "select", options: ["small", "large"] },
           count: { type: "number" },
         },
       },
@@ -440,6 +442,74 @@ describe("removing an exposed slot", () => {
     expect(planRemoveExposedSlot(component(), "nope")).toEqual({
       problem: "unknown-exposure",
     });
+  });
+});
+
+describe("a select pointed at another select", () => {
+  const withTone = () =>
+    edited(
+      planExposeProperty(
+        component(),
+        { label: "Tone", nodeId: "c1", propPath: "tone" },
+        sources()
+      )
+    );
+
+  it("keeps the id when every old choice is still offered", () => {
+    const base = withTone();
+
+    const edit = edited(
+      planRetargetExposure(
+        base.document,
+        base.id,
+        { nodeId: "c1", propPath: "shade" },
+        sources()
+      )
+    );
+
+    expect(edit.id).toBe(base.id);
+    expect(edit.retired.properties).toEqual([]);
+  });
+
+  it("retires the id when a stored choice would no longer be one", () => {
+    // `dark` stored on a placement would be written into a prop that offers
+    // only sizes: the values belong to the old choices, so the field is new.
+    const base = withTone();
+
+    const edit = edited(
+      planRetargetExposure(
+        base.document,
+        base.id,
+        { nodeId: "c1", propPath: "size" },
+        sources()
+      )
+    );
+
+    expect(edit.id).not.toBe(base.id);
+    expect(edit.retired.properties).toEqual([base.id]);
+  });
+});
+
+describe("a malformed envelope is refused, not thrown on", () => {
+  it.each([
+    ["exposed", { exposed: { title: {} } }],
+    ["variants", { variants: [] }],
+    ["slots", { slots: "extra" }],
+  ])("refuses a component whose %s is the wrong shape", (_, envelope) => {
+    const broken = component(envelope as never);
+
+    for (const result of [
+      planExposeProperty(
+        broken,
+        { label: "Body", nodeId: "c1", propPath: "body" },
+        sources()
+      ),
+      planRenameExposure(broken, "title", "X"),
+      planRemoveExposure(broken, "title"),
+      planRemoveExposedSlot(broken, "extra"),
+    ]) {
+      expect("problem" in result && result.problem).toBe("invalid-exposure");
+    }
   });
 });
 

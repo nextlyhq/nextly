@@ -133,6 +133,40 @@ describe("stripping a host", () => {
   });
 });
 
+describe("a strip reaches as far as the host lets documents grow", () => {
+  it("reaches a placement past the default node cap when the host raised it", () => {
+    // A site that raised `maxNodes` stores larger documents, so a placement
+    // past node 5,000 renders, and its retired value must go with the rest.
+    const filler = Array.from({ length: 5_000 }, (_, i) => box(`f${i}`, []));
+    const host = page([
+      ...filler,
+      placement("late", "hero", { subtitle: "x" }),
+    ]);
+
+    const { document, removed } = stripRetiredExposures(host, retired, {
+      maxDepth: 64,
+      maxNodes: 10_000,
+      maxBytes: 64 * 1024 * 1024,
+    });
+
+    expect(removed).toBe(1);
+    expect(document.nodes.at(-1)?.props).toEqual({ componentId: "hero" });
+  });
+
+  it("removes a retired id however long the component's history", () => {
+    // The retired list only grows, and it lives outside the bounded envelope.
+    const many = Array.from({ length: 1_500 }, (_, i) => `gone${i}`);
+    const host = page([placement("p1", "hero", { gone1499: "late" })]);
+
+    const { removed } = stripRetiredExposures(
+      host,
+      new Map([["hero", { properties: many, slots: [] }]])
+    );
+
+    expect(removed).toBe(1);
+  });
+});
+
 describe("an editor is not told about a retired id", () => {
   it("leaves it out of the orphaned ids, and keeps reporting the others", () => {
     const definition: ComponentDocument = {
