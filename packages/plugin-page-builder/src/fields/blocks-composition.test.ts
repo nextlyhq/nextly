@@ -1368,6 +1368,60 @@ describe("a component save judged inside the documents that use it", () => {
     expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
   });
 
+  it("judges its hosts when an exposed slot's allow-list narrows", async () => {
+    // The host puts a call to action in the exposed slot; the save narrows the
+    // exposure to headlines only. The inner slot takes anything, so only the
+    // exposure's own list refuses it, and the composed tree no longer has it.
+    const tile = (allow?: readonly string[]) =>
+      component(
+        [
+          {
+            id: "inner",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            slots: { children: [] },
+          },
+        ],
+        {
+          slots: {
+            body: {
+              label: "Body",
+              nodeId: "inner",
+              slot: "children",
+              ...(allow ? { allow } : {}),
+            },
+          },
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { tile: { published: tile() } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "tile", {
+              slots: {
+                body: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ tile: [hostPage] });
+
+    const issues = await judge(
+      tile(["acme/text"]),
+      write(readStored, COMPONENTS, "tile"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
+  });
+
   it("does not report a host that was already broken before this save", async () => {
     // The page already places a restricted block at its top level through the
     // component; deepening the component changes nothing about that fault.

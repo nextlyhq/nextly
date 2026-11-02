@@ -935,14 +935,22 @@ async function judgeOneHost(args: {
   }
   if (stored === undefined) return;
 
-  const compose = (seed: ReadonlyMap<string, unknown> | undefined) =>
-    composeWithReads({
+  // The library each composition read is kept with it, so what the host puts
+  // in a placement's slots is judged against the slots the component exposes,
+  // before and after the save, and not only through the composed tree.
+  const compose = async (
+    seed: ReadonlyMap<string, unknown> | undefined
+  ): Promise<ComposedWithLibrary> => {
+    const library = heldLibrary(seed);
+    const composed = await composeWithReads({
       host: stored,
-      library: heldLibrary(seed),
+      library,
       read,
       limits: setup.limits,
       work,
     });
+    return { ...composed, components: lookupOf(library) };
+  };
   const before = await compose(undefined);
   const after = await compose(new Map([[self, document]]));
   if (read.exhausted() || work.left <= 0) {
@@ -962,11 +970,16 @@ async function judgeOneHost(args: {
  * them: the component composed alone shows none, because the host's placement
  * is what re-points the nested reference back at it.
  */
+/** A composition with the component lookup it was read with. */
+type ComposedWithLibrary = ReadComposition & {
+  readonly components: ComponentLookup;
+};
+
 function reportWhatBroke(args: {
   host: HostRef;
   stored: BlockDocument;
-  before: ReadComposition;
-  after: ReadComposition;
+  before: ComposedWithLibrary;
+  after: ComposedWithLibrary;
   setup: CompositionSetup;
   tally: Tally;
 }): void {
@@ -982,8 +995,14 @@ function reportWhatBroke(args: {
   }
   // Counted, not only named: two locked slots of one block type broken the
   // same way read alike, and a save breaking the second is still a new break.
-  const had = faultCounts(faultsIn(stored, before.composition, setup));
-  for (const fault of faultsIn(stored, after.composition, setup)) {
+  const had = faultCounts(
+    faultsIn(stored, before.composition, setup, {
+      components: before.components,
+    })
+  );
+  for (const fault of faultsIn(stored, after.composition, setup, {
+    components: after.components,
+  })) {
     const identity = faultIdentity(fault);
     const left = had.get(identity) ?? 0;
     if (left > 0) {
