@@ -12,7 +12,7 @@ import {
   orderBySortKeys,
   parseSortKeys,
   sortsById,
-} from "../sort-keys";
+} from "../filter-shape";
 
 const posts = pgTable("posts", {
   id: text("id").primaryKey(),

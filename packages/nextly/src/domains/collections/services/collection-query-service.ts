@@ -210,16 +210,14 @@ import {
   type FilterConditionSources,
 } from "../query/filter-condition";
 import {
+  assertReadOffset,
   isPlainObject,
+  orderBySortKeys,
+  parseSortKeys,
   refuseFilterProblems,
   unknownFieldProblem,
 } from "../query/filter-shape";
 import { groupKeyDeclarationProblem } from "../query/group-key-declaration";
-import {
-  assertReadOffset,
-  orderBySortKeys,
-  parseSortKeys,
-} from "../query/sort-keys";
 import {
   timeseriesBoundOperand,
   timeseriesBucketExpression,

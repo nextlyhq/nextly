@@ -36,7 +36,8 @@ refused together with `page`), with `hasNext` and `hasPrev` following it.
 
 Two behaviour changes for sorted reads: entries tied on every sort key now come
 back in id order, so a page never shifts between reads; and an entry with no
-value for a key now sorts last in both directions on every database, which
-moves empty values on PostgreSQL in a descending sort. A read with no sort and
+value for a key now sorts last in both directions on every database. Empty
+values move in a descending sort on PostgreSQL and in an ascending sort on
+MySQL and SQLite, which each put them first there before. A read with no sort and
 no offset is unchanged. Sorting a field held per language with fallback off
 now works on SQLite.
