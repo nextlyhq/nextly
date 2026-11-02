@@ -350,3 +350,69 @@ export function editingBreakpointOf(
     ? chosen
     : BASE_BREAKPOINT;
 }
+
+/** A frame's preview height below 600px wide: a phone held upright. */
+const PHONE_PREVIEW_HEIGHT = 844;
+
+/** A frame's preview height from 600px up to below 1024px: a tablet. */
+const TABLET_PREVIEW_HEIGHT = 1024;
+
+/** A frame's preview height from 1024px up: a laptop screen. */
+const DESKTOP_PREVIEW_HEIGHT = 800;
+
+/**
+ * The height a frame previewing a device at this width is given.
+ *
+ * Decided by the WIDTH alone, in three bands, and never by the space the
+ * editor has. Opening a panel changes how much room is left for the frame;
+ * if the height followed that room, every `vh` length and every height media
+ * query on the page would change with the panels, and the author would be
+ * styling a viewport no visitor has. A height derived from the width is a
+ * fact about the device being previewed, so it changes only when the device
+ * does.
+ *
+ * Bands rather than one height per breakpoint, because a site can add its own
+ * breakpoints at any width and each still needs a height. The same three
+ * bands answer for those: a site-added 700px breakpoint is previewed at a
+ * tablet's height, like any other width in that band.
+ *
+ * @experimental
+ */
+export function previewHeight(width: number): number {
+  if (width < 600) return PHONE_PREVIEW_HEIGHT;
+  if (width < 1024) return TABLET_PREVIEW_HEIGHT;
+  return DESKTOP_PREVIEW_HEIGHT;
+}
+
+/** A width and a height, in CSS pixels. */
+export interface FrameSize {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The scale that fits a whole frame into the region around it.
+ *
+ * BOTH dimensions, because the frame has a height of its own: fitting only the
+ * width leaves a desktop frame taller than a short region, and the bottom of
+ * the previewed viewport is then off screen with nothing to say so. The
+ * smaller of the two ratios is the one at which the frame fits both ways.
+ *
+ * Never above 1, for the reason the width-only fit gives: a frame shown larger
+ * than life makes every measurement an author takes from the screen wrong in
+ * the flattering direction. `1` for a region not yet measured, or one of zero,
+ * because a ratio taken from either is infinite or `NaN` and would paint the
+ * frame nowhere.
+ *
+ * @experimental
+ */
+export function frameFitScale(
+  frame: FrameSize,
+  region: { readonly width?: number; readonly height?: number }
+): number {
+  const { width, height } = region;
+  if (width === undefined || height === undefined) return 1;
+  if (!(width > 0) || !(height > 0)) return 1;
+  if (!(frame.width > 0) || !(frame.height > 0)) return 1;
+  return Math.min(1, width / frame.width, height / frame.height);
+}
