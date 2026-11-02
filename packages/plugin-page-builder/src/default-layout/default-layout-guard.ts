@@ -17,11 +17,18 @@
  *
  * ## Inside a caller's transaction
  *
- * The bulk paths run these hooks inside a transaction they own. The Direct API
- * takes no executor, so a read here would check out a second connection that
- * may wait on the one the transaction holds. The before-check is skipped there
- * rather than refusing every bulk write to Layouts; the after-check still runs
- * once the transaction commits, and the repair restores a usable default.
+ * Core's atomic batch writers run these hooks inside a transaction they own and
+ * hand them its `executor`. The Direct API takes no executor, so a read here
+ * would check out a second connection that may wait on the one the transaction
+ * holds, and on SQLite waits behind the transaction that is waiting for it.
+ *
+ * So inside one, the guard FAILS CLOSED without reading: every delete of a
+ * Layout, and every update that unpublishes a published one, is refused, since
+ * whether it is the default cannot be checked safely there. The admin's and the
+ * REST bulk actions are unaffected: they write item by item with no caller
+ * transaction, and each item is checked as a single write is. The after-hooks
+ * likewise return without reading inside a transaction: with those writes
+ * refused, nothing a transaction can do takes the default away.
  *
  * @module default-layout/default-layout-guard
  */
@@ -39,6 +46,10 @@ import {
 /** What a refused delete or unpublish is told. */
 const DEFAULT_LAYOUT_REFUSAL =
   "This Layout is the site's default. Choose another default first.";
+
+/** What a delete or unpublish inside a caller's transaction is told. */
+const BATCH_REFUSAL =
+  "To keep the site's default protected, delete or unpublish Layouts one at a time, not in a batch.";
 
 /** The plugin context this needs, named structurally. */
 export interface DefaultLayoutGuardContext {
@@ -114,13 +125,27 @@ function statusOf(row: unknown): string | undefined {
   return typeof status === "string" ? status : undefined;
 }
 
+/**
+ * Refuse a delete or unpublish inside a caller's transaction, without reading:
+ * see the module docblock. Checked before anything else the guard does.
+ */
+function refuseInsideATransaction(hook: LayoutHookContext): void {
+  if (hook.executor === undefined) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: BATCH_REFUSAL,
+    logContext: { reason: "default-layout-batch-refused" },
+  });
+}
+
 /** Refuse the write when `id` is the site's default. */
 async function refuseIfDefault(
   hook: LayoutHookContext,
   slugs: DefaultLayoutSlugs,
   id: string | null
 ): Promise<void> {
-  if (id === null || hook.executor !== undefined) return;
+  refuseInsideATransaction(hook);
+  if (id === null) return;
   const nextly = directApiOf(hook);
   if (nextly === null) return;
   const { defaultLayout } = await readLayoutSettings(nextly, slugs);
@@ -141,6 +166,9 @@ async function repairIfUnusable(
   slugs: DefaultLayoutSlugs,
   warn: (message: string, meta?: Record<string, unknown>) => void
 ): Promise<void> {
+  // No read inside a caller's transaction: the before-check refused every
+  // write there that could take the default away (see the module docblock).
+  if (hook.executor !== undefined) return;
   const nextly = directApiOf(hook);
   if (nextly === null) return;
   try {

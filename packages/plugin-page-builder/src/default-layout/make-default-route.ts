@@ -21,22 +21,27 @@
  *
  * An unpublish can race the write: it checks the default before this commits,
  * finds another Layout there, and goes ahead. So the Layout is read once more
- * after the write; if it is no longer published, the previous default is written
- * back and the call is refused, leaving the site as it was.
+ * after the write; if it is no longer published, the call is refused, and the
+ * previous default is written back unless a newer make-default has replaced
+ * this one's write in the meantime (that later request owns the default).
  *
  * Two make-default calls at once each write one reference to one Single, so
  * the later write wins and the default is exactly one of the two.
  *
  * @module default-layout/make-default-route
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
-import { respondMutation } from "nextly";
+import {
+  getCachedNextly,
+  NextlyError,
+  respondMutation,
+} from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
 
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
 import {
+  layoutExists,
   publishedLayoutIds,
   readLayoutSettings,
   writeLayoutSettings,
@@ -80,8 +85,8 @@ interface MakeDefaultResult {
 /**
  * Make one Layout the site's default, as the module docblock describes.
  *
- * `nextly` is a parameter so the route resolves the Direct API at call time,
- * keeping the runtime out of this module's import graph.
+ * `nextly` is a parameter so the route resolves the Direct API per call,
+ * through the SDK, rather than holding one from before boot finished.
  */
 async function makeDefault(
   req: Request,
@@ -154,8 +159,16 @@ async function requireLayoutPublisher(
 
 /**
  * The post-write check described in the module docblock: when the Layout
- * stopped being published while it was being made the default, write the
- * previous default back and refuse.
+ * stopped being published while it was being made the default, refuse, and
+ * write the previous default back if the default is still this request's.
+ *
+ * The settings are read again first, and the previous default is restored only
+ * while they still name `id`. A newer make-default that landed after this
+ * write owns the default, and restoring over it would undo that request. This
+ * narrows the window rather than closing it: the read and the restore are two
+ * statements, not a compare-and-set, so a make-default landing between them
+ * can still be overwritten. The repair sweep then finds whatever is left
+ * unusable.
  */
 async function restoreIfUnpublished(
   nextly: DefaultLayoutDirectApi,
@@ -165,9 +178,15 @@ async function restoreIfUnpublished(
 ): Promise<void> {
   const { id, previous } = change;
   if ((await publishedLayoutIds(nextly, slugs, [id])).has(id)) return;
-  await writeLayoutSettings(nextly, slugs, { defaultLayout: previous });
+  const stillOurs =
+    (await readLayoutSettings(nextly, slugs)).defaultLayout === id;
+  if (stillOurs) {
+    await writeLayoutSettings(nextly, slugs, { defaultLayout: previous });
+  }
   ctx.logger.warn(
-    "[page-builder] a Layout was unpublished while it was being made the default; the previous default was restored",
+    stillOurs
+      ? "[page-builder] a Layout was unpublished while it was being made the default; the previous default was restored"
+      : "[page-builder] a Layout was unpublished while it was being made the default; a newer choice of default was kept",
     { layoutId: id, previous }
   );
   throw NextlyError.conflict({
@@ -186,15 +205,7 @@ async function requirePublishedLayout(
 ): Promise<void> {
   if (id === "") throw NextlyError.notFound();
   if ((await publishedLayoutIds(nextly, slugs, [id])).has(id)) return;
-  const stored = await nextly.find({
-    collection: slugs.layouts,
-    where: { id: { equals: id } },
-    status: "all",
-    limit: 1,
-    depth: 0,
-    overrideAccess: true,
-  });
-  if (stored.items.length === 0) throw NextlyError.notFound();
+  if (!(await layoutExists(nextly, slugs, id))) throw NextlyError.notFound();
   throw NextlyError.conflict({
     reason: "state",
     message: "Only a published Layout can be the default. Publish it first.",
@@ -229,9 +240,9 @@ async function readBody(
 }
 
 /**
- * The route declaration. The Direct API is resolved at call time, as the
- * plugin's other server paths do, so this module adds no runtime import to the
- * plugin entry.
+ * The route declaration. The Direct API is resolved per call through the
+ * SDK's `getCachedNextly`, the booted instance a plugin is promised, rather
+ * than through core's runtime entry.
  */
 export function makeDefaultRoute(): {
   method: "POST";
@@ -243,7 +254,6 @@ export function makeDefaultRoute(): {
     method: "POST",
     path: MAKE_DEFAULT_ROUTE_PATH,
     requiredPermission: MANAGE_SITE_PERMISSION,
-    handler: async (req, ctx) =>
-      makeDefault(req, ctx, (await import("nextly/runtime")).requireNextly()),
+    handler: async (req, ctx) => makeDefault(req, ctx, await getCachedNextly()),
   };
 }

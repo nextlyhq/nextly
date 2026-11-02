@@ -21,6 +21,7 @@ export type DefaultLayoutDirectApi = Pick<
   | "find"
   | "findByID"
   | "create"
+  | "delete"
   | "update"
   | "findSingle"
   | "updateSingle"
@@ -52,16 +53,26 @@ export function relationId(value: unknown): string | null {
   return null;
 }
 
-/** The settings Single's two references, read as the system. */
+/**
+ * The settings Single's two references, read as the system.
+ *
+ * Read WITHOUT creating the document (`createIfMissing: false`). A plain Single
+ * read creates a missing document, which would make every reader here a
+ * writer, a page render among them. A site whose settings were never stored
+ * answers both references as `null`, which every caller already reads as "no
+ * default". The one writer, `writeLayoutSettings`, still creates the document
+ * when it is missing: a Single update does.
+ */
 export async function readLayoutSettings(
   nextly: Pick<DefaultLayoutDirectApi, "findSingle">,
   slugs: DefaultLayoutSlugs
 ): Promise<LayoutSettings> {
-  const doc = (await nextly.findSingle({
+  const doc: Record<string, unknown> | null = await nextly.findSingle({
     slug: slugs.settings,
     depth: 0,
     overrideAccess: true,
-  })) as Record<string, unknown> | null;
+    createIfMissing: false,
+  });
   return {
     defaultLayout: relationId(doc?.defaultLayout),
     seededLayout: relationId(doc?.seededLayout),
@@ -111,6 +122,8 @@ export async function publishedLayoutIds(
     status: "published",
     limit: unique.length,
     depth: 0,
+    // Only the id is read from these rows, so only the id is fetched.
+    select: { id: true },
     overrideAccess: true,
   });
   const published = new Set<string>();
@@ -119,6 +132,28 @@ export async function publishedLayoutIds(
     if (id !== null) published.add(id);
   }
   return published;
+}
+
+/**
+ * Whether a Layout row exists at all, whatever its lifecycle state. The one
+ * answer the repair and the make-default route both ask.
+ */
+export async function layoutExists(
+  nextly: Pick<DefaultLayoutDirectApi, "find">,
+  slugs: DefaultLayoutSlugs,
+  id: string
+): Promise<boolean> {
+  const found = await nextly.find({
+    collection: slugs.layouts,
+    where: { id: { equals: id } },
+    status: "all",
+    limit: 1,
+    depth: 0,
+    // Existence is the whole answer; no column of the row is read.
+    select: { id: true },
+    overrideAccess: true,
+  });
+  return found.items.length > 0;
 }
 
 /** Whether the Single's default names a Layout that is published now. */

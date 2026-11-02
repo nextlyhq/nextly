@@ -59,7 +59,13 @@ export type LayoutResolution =
       readonly fellBackFrom?: string;
     };
 
-/** The Layout `page` is drawn inside, by the rule above. */
+/**
+ * The Layout `page` gets, by the rule above.
+ *
+ * @experimental No renderer draws Layouts yet; the rule is published so the
+ * stored choice and its protections can ship first, and may still change when
+ * the renderer that draws it lands.
+ */
 export function resolvePageLayout(
   page: PageLayoutChoice,
   site: LayoutSite

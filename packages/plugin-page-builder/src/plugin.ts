@@ -35,6 +35,10 @@ import {
   classUsageIndexCollection,
 } from "./collections/class-usage-index";
 import {
+  COMPONENT_RETIRED_SLUG,
+  componentRetiredCollection,
+} from "./collections/component-retired-exposures";
+import {
   COMPONENT_USAGE_INDEX_SLUG,
   componentUsageIndexCollection,
 } from "./collections/component-usage-index";
@@ -77,6 +81,8 @@ import {
 } from "./library-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
+import { registerRetiredExposures } from "./retired-exposure-hooks";
+import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
@@ -781,10 +787,11 @@ export const pageBuilder = (
         "[page-builder] the default Layout repair ran before the plugin was installed"
       );
     }
-    return {
-      ...defaultLayoutSetup,
-      nextly: (await import("nextly/runtime")).requireNextly(),
-    };
+    // The booted instance through the SDK, imported at call time for the
+    // reason the preview reader above gives: this entry reaches a browser
+    // bundle, and the Direct API graph has no place there.
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    return { ...defaultLayoutSetup, nextly: await getCachedNextly() };
   };
 
   /**
@@ -1007,6 +1014,28 @@ export const pageBuilder = (
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
       registerReadinessNotice(ctx, opts);
+      // A component's removed fields: recorded when the definition dropping
+      // them is published, and their values stripped from every later write.
+      // On the store pages are composed against, so a host that redirected it
+      // retires the fields of the definitions its pages actually place.
+      // Not where the host renders components from its own source: no
+      // collection stands for it, and the plugin's store, holding retirements of
+      // its own, would strip fields that source still exposes.
+      if (opts.componentReadiness !== false) {
+        registerRetiredExposures({
+          ctx,
+          componentCollection: composition.store.collection,
+          componentField: composition.store.field,
+          store: retiredStore({
+            nextly: () => requireInstalled().nextly(),
+            // RESOLVED, for the reason every own table is: a host may rename it.
+            collection:
+              ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+              COMPONENT_RETIRED_SLUG,
+          }),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+        });
+      }
       // A blocks field below the top level has no Page Builder to open, and the
       // operator should learn that from the log before an author meets it in
       // the form.
@@ -1074,6 +1103,10 @@ export const pageBuilder = (
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
+        // Each component's retired field and slot ids, recorded when a
+        // definition that drops one is published. Contributed unconditionally,
+        // because every write to a page that places a component reads it.
+        componentRetiredCollection(),
         // The backfill's progress. Contributed beside the indexes it fills,
         // because an index whose write hooks only maintain it going FORWARD is
         // empty for every document that already existed — and an empty index

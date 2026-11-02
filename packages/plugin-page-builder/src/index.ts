@@ -181,6 +181,7 @@ export {
   componentUsageIndex as componentUsageIndexDescriptor,
 } from "./component-usage";
 export { usageCountReader } from "./class-usage-runtime";
+export { COMPONENT_RETIRED_SLUG } from "./collections/component-retired-exposures";
 export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
 export { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
 // The service key and its shape, so a host can reach the reader that is
