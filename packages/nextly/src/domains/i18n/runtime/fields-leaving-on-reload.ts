@@ -15,6 +15,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DesiredSchema } from "../../schema/pipeline/types";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import { companionUniqueIndexName } from "../migration/companion-unique-indexes";
@@ -102,26 +103,31 @@ export async function prepareFieldsLeavingOnReload(
     });
   });
   const entries: FieldsLeavingOnReload[] = [];
+  const renamed: { slug: string; message: string }[] = [];
   for (const [kind, entities, tableNameOf] of localizableConfigEntities(
     config
   )) {
     for (const entity of entities) {
       const target = reloadTarget(kind, entity, tableNameOf, fieldGroupTables);
-      const entry =
-        target &&
-        (await leavingIn(
-          adapter,
-          target,
-          recordedBeforeOf(recorded, kind, target.slug)
-        ));
+      if (!target) continue;
+      const before = recordedBeforeOf(recorded, kind, target.slug);
+      const refusal = await renamedWhileLeaving(adapter, target, before);
+      if (refusal) {
+        renamed.push(refusal);
+        continue;
+      }
+      const entry = await leavingIn(adapter, target, before);
       if (entry) entries.push(entry);
     }
   }
-  const refusals = await leavingRefusalsOnReload(
-    adapter,
-    entries,
-    defaultLocaleOf(config)
-  );
+  const refusals = [
+    ...renamed,
+    ...(await leavingRefusalsOnReload(
+      adapter,
+      entries,
+      defaultLocaleOf(config)
+    )),
+  ];
   for (const r of refusals) report(r.message);
   return { entries, refused: [...new Set(refusals.map(r => r.slug))] };
 }
@@ -150,6 +156,49 @@ function reloadTarget(
   if (slug === undefined || entity.localized !== true) return undefined;
   const stored = kind === "fieldGroup" ? fieldGroupTables.get(slug) : undefined;
   return { kind, slug, tableName: stored ?? tableNameOf(entity), entity };
+}
+
+/**
+ * The refusal of a field translated before this reload that the config renames and makes shared in
+ * the same edit, found by the main table's own rename rule (`detectFieldRename`). The move finds
+ * fields leaving translation by name, so the renamed one is not among them, and its values would
+ * stay in a translations column nothing reads. Undefined for any other edit.
+ */
+async function renamedWhileLeaving(
+  adapter: DrizzleAdapter,
+  e: ReloadTarget,
+  before: RecordedEntity | null | undefined
+): Promise<{ slug: string; message: string } | undefined> {
+  if (before?.localized !== true) return undefined;
+  const fields: readonly LeavingFieldLike[] = e.entity.fields ?? [];
+  const { DynamicCollectionSchemaService } = await import(
+    "../../dynamic-collections/services/dynamic-collection-schema-service"
+  );
+  const detected = new DynamicCollectionSchemaService(
+    undefined,
+    adapter.getCapabilities().dialect
+  ).detectFieldRename(
+    before.fields as unknown as FieldDefinition[],
+    fields as unknown as FieldDefinition[]
+  );
+  if (!detected) return undefined;
+  const translatedBefore = new Set(
+    resolveLocalizedFieldNames([...before.fields], true)
+  );
+  const translatedNow = new Set(resolveLocalizedFieldNames([...fields], true));
+  if (
+    !translatedBefore.has(detected.from.name) ||
+    translatedNow.has(detected.to.name)
+  ) {
+    return undefined;
+  }
+  return {
+    slug: e.slug,
+    message:
+      `[nextly] "${e.slug}": \`${detected.from.name}\` is renamed to \`${detected.to.name}\` and made ` +
+      "shared in one edit, which would leave its values in the translations table. Rename the " +
+      "field first, then mark it shared, in two reloads.",
+  };
 }
 
 /**

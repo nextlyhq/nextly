@@ -81,12 +81,14 @@ type Body = {
   indexedUnique?: true;
   /** A unique index on `body` and `title` together declared in the collection's `indexes`. */
   pairUnique?: true;
+  /** `body` declared under this name instead, as a rename in the config. */
+  renamedTo?: string;
 };
 
 /** A translated collection whose `body` is translated or shared, with its settings. */
 const collectionWith = (
   slug: string,
-  { summary, titleType, indexedUnique, pairUnique, ...body }: Body
+  { summary, titleType, indexedUnique, pairUnique, renamedTo, ...body }: Body
 ) =>
   defineCollection({
     slug,
@@ -97,7 +99,7 @@ const collectionWith = (
       : {}),
     fields: [
       { name: "title", type: titleType ?? "text", localized: false },
-      { name: "body", type: "text", ...body },
+      { name: renamedTo ?? "body", type: "text", ...body },
       ...(summary ? [{ name: "summary", type: "text", localized: false }] : []),
     ] as never,
   });
@@ -499,6 +501,22 @@ describe.each(getConfiguredTestDialects())(
           `UPDATE ${q(TABLE)} SET ${q("title")} = 'e1' WHERE ${q("id")} = 'e2'`
         )
       ).rejects.toThrow();
+    });
+
+    // Renamed and made shared in one edit, the field's values would stay in a translations column
+    // nothing reads: the reload stops and says to make the two changes one at a time.
+    it("refuses a field renamed and made shared in one edit, changing nothing", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" } });
+
+      loaded.config = configWith({ localized: false, renamedTo: "content" });
+      await reloadNextlyConfig();
+
+      expect(told()).toMatch(
+        /"rlleaves".*body.*content.*Rename the field first, then mark it shared, in two reloads/s
+      );
+      expect(await columnsOf(TABLE)).not.toContain("content");
+      expect(await columnsOf(COMPANION)).toContain("body");
+      expect(await archived()).toEqual([]);
     });
 
     it("refuses a Unique field while two entries share an English value, changing nothing", async () => {
