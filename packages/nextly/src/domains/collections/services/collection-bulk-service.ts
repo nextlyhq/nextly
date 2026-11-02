@@ -351,8 +351,15 @@ function newLegacyBatchState(): LegacyBatchState {
  * transaction: every statement a later item ran would fail with
  * `current transaction is aborted` and be reported as an internal error.
  */
-function notMigratedAnswer(error: unknown): boolean {
-  return NextlyError.is(error) && error.code === "ENTITY_NOT_MIGRATED";
+function notMigratedAnswer(error: unknown, collectionName: string): boolean {
+  if (!NextlyError.is(error) || error.code !== "ENTITY_NOT_MIGRATED") {
+    return false;
+  }
+  // Only an answer about this batch's own collection: one about another
+  // entity an item's write reached (through a hook, say) is that item's
+  // failure, and the rest of the batch goes on as `stopOnError` says.
+  const about = error.publicData as { kind?: unknown; slug?: unknown };
+  return about?.kind === "collection" && about.slug === collectionName;
 }
 
 /**
@@ -403,7 +410,7 @@ function batchOptions(options?: BulkOperationOptions): {
 async function runLegacyBatchItem<TItem>(
   index: number,
   item: TItem,
-  options: { stopOnError: boolean },
+  options: { stopOnError: boolean; collectionName: string },
   state: LegacyBatchState,
   worker: (item: TItem) => Promise<LegacyBatchVerdict>,
   abortOnError: (error: unknown) => boolean
@@ -426,7 +433,7 @@ async function runLegacyBatchItem<TItem>(
     state.errors.push({ index, ...failure });
 
     // Aborts whatever the policies say; see notMigratedAnswer.
-    if (notMigratedAnswer(error)) {
+    if (notMigratedAnswer(error, options.collectionName)) {
       state.notMigratedAbort = failure;
       throw error;
     }
@@ -469,7 +476,7 @@ async function runLegacyBatchItem<TItem>(
   // Aborts whatever stopOnError says, with the item's own answer; see
   // notMigratedAnswer. A caller-owned transaction is answered the same
   // ENTITY_NOT_MIGRATED 409 the single-entry write answers.
-  if (notMigratedAnswer(answer)) {
+  if (notMigratedAnswer(answer, options.collectionName)) {
     state.notMigratedAbort = failure;
     throw answer;
   }
@@ -495,7 +502,7 @@ async function runLegacyBatchItem<TItem>(
 async function runLegacyBatch<TItem>(
   tx: TransactionContext,
   items: TItem[],
-  options: { batchSize: number; stopOnError: boolean },
+  options: { batchSize: number; stopOnError: boolean; collectionName: string },
   state: LegacyBatchState,
   worker: (item: TItem) => Promise<LegacyBatchVerdict>,
   abortOnError: (error: unknown) => boolean
@@ -1558,6 +1565,9 @@ export class CollectionBulkService extends BaseService {
    * @param entries - Array of entry data to create
    * @param options - Bulk operation options (batchSize, stopOnError, skipHooks)
    * @returns BulkOperationResult with success/failure counts, errors, and created IDs
+   * @throws The first item's ENTITY_NOT_MIGRATED answer when the database is not
+   *   migrated for this collection, whatever `stopOnError` says: no later item
+   *   can be written either. The caller's transaction decides what it keeps.
    *
    * @example
    * ```typescript
@@ -1898,6 +1908,9 @@ export class CollectionBulkService extends BaseService {
    * @param entries - Array of { id, data } objects to update
    * @param options - Bulk operation options (batchSize, stopOnError, skipHooks)
    * @returns BulkOperationResult with success/failure counts, errors, and updated IDs
+   * @throws The first item's ENTITY_NOT_MIGRATED answer when the database is not
+   *   migrated for this collection, whatever `stopOnError` says: no later item
+   *   can be written either. The caller's transaction decides what it keeps.
    *
    * @example
    * ```typescript
@@ -2201,6 +2214,9 @@ export class CollectionBulkService extends BaseService {
    * @param ids - Array of entry IDs to delete
    * @param options - Bulk operation options (batchSize, stopOnError, skipHooks)
    * @returns BulkOperationResult with success/failure counts, errors, and deleted IDs
+   * @throws The first item's ENTITY_NOT_MIGRATED answer when the database is not
+   *   migrated for this collection, whatever `stopOnError` says: no later item
+   *   can be written either. The caller's transaction decides what it keeps.
    *
    * @example
    * ```typescript
@@ -2388,7 +2404,7 @@ export class CollectionBulkService extends BaseService {
     await runLegacyBatch(
       tx,
       entries,
-      options,
+      { ...options, collectionName: params.collectionName },
       state,
       async entryData => {
         const createResult =
@@ -2471,7 +2487,7 @@ export class CollectionBulkService extends BaseService {
     await runLegacyBatch(
       tx,
       entries,
-      options,
+      { ...options, collectionName: params.collectionName },
       state,
       async entry => {
         const updateResult =
@@ -2531,7 +2547,7 @@ export class CollectionBulkService extends BaseService {
     await runLegacyBatch(
       tx,
       ids,
-      options,
+      { ...options, collectionName: params.collectionName },
       state,
       async entryId => {
         const deleteResult =

@@ -39,6 +39,8 @@ import {
 const POSTS = "lb_posts";
 /** Its table, as the registry names it. */
 const POSTS_TABLE = `dc_${POSTS}`;
+/** The title whose write answers another collection not migrated. */
+const FOREIGN_TITLE = "Reaches authors";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -103,6 +105,23 @@ async function boot(
     collections: [
       defineCollection({
         slug: POSTS,
+        hooks: {
+          // An item whose write reaches another collection the database
+          // lacks, as a hook reading it would, fails with that collection's
+          // answer: a fact about the other collection, not this one.
+          beforeChange: [
+            ({ data }: { data?: Record<string, unknown> }) => {
+              if (data?.title === FOREIGN_TITLE) {
+                throw NextlyError.notMigrated({
+                  kind: "collection",
+                  slug: "lb_authors",
+                  reason: "table",
+                });
+              }
+              return data;
+            },
+          ],
+        },
         access: {
           read: () => true,
           create: () => true,
@@ -227,6 +246,24 @@ describe.each(getConfiguredTestDialects())(
       },
       120_000
     );
+
+    it("fails only the item whose write reaches another collection not migrated", async () => {
+      // The batch's own collection is migrated: an answer about a different
+      // one is that item's failure alone, and the rest of the batch commits.
+      const { services } = await boot(dialect);
+      const result = (await services.collections.createMany(
+        POSTS,
+        [{ title: FOREIGN_TITLE }, { title: "Fifth", subtitle: "Five" }],
+        { as: "system" }
+      )) as BatchResult;
+
+      expect(result.successful).toBe(1);
+      expect(result.failed).toBe(1);
+      expect(result.errors).toEqual([
+        expect.objectContaining({ index: 0, code: "ENTITY_NOT_MIGRATED" }),
+      ]);
+      expect(await rowCount(dialect)).toBe(3);
+    }, 120_000);
 
     it("rolls a mixed batch back whole at its first not-migrated item, without stopOnError", async () => {
       // The first item names no column the database lacks, so on its own it
