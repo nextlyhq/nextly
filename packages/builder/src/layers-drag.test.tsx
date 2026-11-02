@@ -38,7 +38,29 @@ import {
 } from "vitest";
 
 import { useEditorState, type EditorState } from "./editor-state";
-import { LAYERS_OPEN_DELAY_MS } from "./layers-drag";
+
+/*
+ * The engine's `locateNode`, counted and passed through, so a test can see how
+ * often a pointer move walks the document to place a block. Everything else
+ * in the engine is the real thing.
+ */
+const located = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
+  const engine =
+    await importOriginal<typeof import("@nextlyhq/blocks-engine")>();
+  return {
+    ...engine,
+    locateNode: (...args: Parameters<typeof engine.locateNode>) => {
+      located.calls += 1;
+      return engine.locateNode(...args);
+    },
+  };
+});
+import {
+  LAYERS_OPEN_DELAY_MS,
+  LAYERS_TOUCH_HOLD_MS,
+  LAYERS_TOUCH_TOLERANCE_PX,
+} from "./layers-drag";
 import { LayersPanel } from "./layers-panel";
 
 const ROW = 28;
@@ -180,10 +202,21 @@ function page(nodes: BlockNode[]): BlockDocument {
 
 let editorRef: EditorState | null = null;
 
-function Host({ document }: { document: BlockDocument }): React.JSX.Element {
+function Host({
+  document,
+  refuseApply = false,
+}: {
+  document: BlockDocument;
+  /** An editor whose apply refuses every op, as one refusing a stale move. */
+  refuseApply?: boolean;
+}): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
-  return <LayersPanel editor={editor} />;
+  return (
+    <LayersPanel
+      editor={refuseApply ? { ...editor, apply: () => null } : editor}
+    />
+  );
 }
 
 function editor(): EditorState {
@@ -344,6 +377,83 @@ describe("dragging a Layers row", () => {
     release(container, X + 20, ROW + 4);
     expect(structure()).toEqual(["card", "button"]);
     expect(editor().undoDepth).toBe(before);
+  });
+
+  it("clears the spoken reason when the drag ends, and speaks it again on the next", () => {
+    const { container } = render(
+      <Host
+        document={page([
+          node("card", "t/card", { props: { link: "/go" } }),
+          node("button", "t/button"),
+        ])}
+      />
+    );
+    const sentence = "A Button can't go inside this Card.";
+    const refuse = (): void => {
+      press("button", ROW + 14);
+      moveTo(container, X, ROW + 8);
+      moveTo(container, X + 20, ROW + 4);
+    };
+
+    refuse();
+    expect(screen.getByRole("status").textContent).toContain(sentence);
+    // Away to a gap that is not refused, and back: the region goes quiet and
+    // then holds the reason again, a change it reads out a second time.
+    moveTo(container, X, ROW + 4);
+    expect(screen.getByRole("status").textContent).toBe("");
+    moveTo(container, X + 20, ROW + 4);
+    expect(screen.getByRole("status").textContent).toContain(sentence);
+    release(container, X + 20, ROW + 4);
+    // The region describes a drag that has ended no longer.
+    expect(screen.getByRole("status").textContent).toBe("");
+
+    refuse();
+    expect(screen.getByRole("status").textContent).toContain(sentence);
+    release(container, X + 20, ROW + 4);
+  });
+
+  it("refuses every drop for a block holding a locked block, in the lock's words", () => {
+    const { container } = render(
+      <Host
+        document={page([
+          node("box", "core/box", {
+            slots: {
+              children: [node("caption", "core/heading", { locked: true })],
+            },
+          }),
+          node("h", "core/heading"),
+        ])}
+      />
+    );
+    const before = editor().undoDepth;
+    press("box", 14);
+    moveTo(container, X, 20);
+    // After the last row, where nothing else would refuse it.
+    moveTo(container, X, 2 * ROW - 4);
+    expect(line(container)?.hasAttribute("data-refused")).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain(
+      "Heading is locked. Unlock it to move it."
+    );
+    release(container, X, 2 * ROW - 4);
+    expect(structure()).toEqual(["box", "box>caption", "h"]);
+    expect(editor().undoDepth).toBe(before);
+  });
+
+  it("says so when the editor refuses a drop it drew as allowed", () => {
+    const { container } = render(
+      <Host
+        refuseApply
+        document={page([node("a", "core/heading"), node("b", "core/heading")])}
+      />
+    );
+    press("a", 10);
+    moveTo(container, X, 20);
+    moveTo(container, X, 2 * ROW - 4);
+    expect(line(container)?.hasAttribute("data-refused")).toBe(false);
+    release(container, X, 2 * ROW - 4);
+    expect(screen.getByRole("status").textContent).toBe(
+      "Heading could not be moved."
+    );
   });
 
   it("starts no drag while a search filters the rows", () => {
@@ -521,5 +631,116 @@ describe("dragging a Layers row", () => {
     );
     expect(tree.scrollTop).toBeGreaterThan(before);
     release(container, X, 595);
+  });
+
+  it("places the rows without walking the document once per row on each move", () => {
+    // Twenty blocks inside a box, and one after it. The same pointer move is
+    // made with the box closed (two rows drawn) and open (twenty-two): what a
+    // move costs in document walks must not grow with the rows on screen.
+    const inside = Array.from({ length: 20 }, (_, i) =>
+      node(`in${String(i)}`, "core/heading")
+    );
+    const doc = page([
+      node("box", "core/box", { slots: { children: inside } }),
+      node("h", "core/heading"),
+    ]);
+    const walksPerMove = (open: boolean): number => {
+      const { container, unmount } = render(<Host document={doc} />);
+      if (open) act(() => editor().select("in0"));
+      const last = open ? 21 : 1;
+      press("h", last * ROW + 14);
+      moveTo(container, X, last * ROW + 8);
+      located.calls = 0;
+      moveTo(container, X, last * ROW + 4);
+      const calls = located.calls;
+      release(container, X, last * ROW + 4);
+      unmount();
+      return calls;
+    };
+    const closed = walksPerMove(false);
+    const opened = walksPerMove(true);
+    expect(opened - closed).toBeLessThan(5);
+  });
+});
+
+describe("dragging a Layers row by touch", () => {
+  /** A finger on a row: a touch pointer, which picks up only after a hold. */
+  function touch(id: string, y: number): void {
+    fireEvent.pointerDown(label(id), {
+      button: 0,
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: X,
+      clientY: y,
+    });
+  }
+
+  /** A touchmove the browser could still turn into a pan, as it reaches the tree. */
+  function touchMove(container: HTMLElement): Event {
+    const event = new Event("touchmove", { bubbles: true, cancelable: true });
+    label("a").dispatchEvent(event);
+    void container;
+    return event;
+  }
+
+  it("picks a row up after the hold, and not before", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { container } = threeHeadings();
+    touch("a", 10);
+    act(() => {
+      vi.advanceTimersByTime(LAYERS_TOUCH_HOLD_MS - 1);
+    });
+    expect(body(container).hasAttribute("data-nx-dragging")).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(body(container).hasAttribute("data-nx-dragging")).toBe(true);
+    expect(container.querySelector(".nx-layers-picked")).not.toBeNull();
+
+    // Once picked up it drags as a mouse does: down past the last row.
+    moveTo(container, X, 3 * ROW - 4);
+    release(container, X, 3 * ROW - 4);
+    expect(structure()).toEqual(["b", "c", "a"]);
+  });
+
+  it("leaves a finger that moves before the hold to scroll the list", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { container } = threeHeadings();
+    touch("a", 10);
+    moveTo(container, X, 10 + LAYERS_TOUCH_TOLERANCE_PX + 1);
+    act(() => {
+      vi.advanceTimersByTime(LAYERS_TOUCH_HOLD_MS);
+    });
+    expect(captured).toEqual([]);
+    expect(body(container).hasAttribute("data-nx-dragging")).toBe(false);
+    // Nothing holds the page, so the browser may pan it.
+    expect(touchMove(container).defaultPrevented).toBe(false);
+  });
+
+  it("keeps the hold through a tremor within the tolerance", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { container } = threeHeadings();
+    touch("a", 10);
+    moveTo(container, X + 2, 10 + LAYERS_TOUCH_TOLERANCE_PX - 2);
+    act(() => {
+      vi.advanceTimersByTime(LAYERS_TOUCH_HOLD_MS);
+    });
+    expect(body(container).hasAttribute("data-nx-dragging")).toBe(true);
+    release(container, X, 10);
+  });
+
+  it("stops the page panning only while a row is held", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { container } = threeHeadings();
+    touch("a", 10);
+    // During the hold the finger may still be a scroll.
+    expect(touchMove(container).defaultPrevented).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(LAYERS_TOUCH_HOLD_MS);
+    });
+    expect(touchMove(container).defaultPrevented).toBe(true);
+    release(container, X, 10);
+    // And the list scrolls by touch again once the drag ends.
+    expect(touchMove(container).defaultPrevented).toBe(false);
   });
 });

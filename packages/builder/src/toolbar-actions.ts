@@ -47,7 +47,11 @@ import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import { blockDuplication } from "./duplicate-block";
 import type { Rect } from "./geometry";
-import { keyboardMovePosition, type MoveDirection } from "./keyboard-move";
+import {
+  keyboardMovePosition,
+  type KeyboardMove,
+  type MoveDirection,
+} from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
 import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
@@ -134,6 +138,23 @@ function lockedBy(locked: BlockNode, selectedId: string): string {
     : `${layerLabel(locked)} inside this block is locked.`;
 }
 
+/**
+ * Where a block's move in one direction goes: the keyboard move's own answer.
+ *
+ * Passed in by a caller that runs the move, so the availability it shows is
+ * asked with the very function, and the very component definitions, its verb
+ * moves by. The default reads no definitions, as the bar's Move up and Move
+ * down always have — a step within one list needs none.
+ */
+export type MovePosition = (
+  document: BlockDocument,
+  id: string,
+  direction: MoveDirection
+) => KeyboardMove | null;
+
+const POSITION_WITHOUT_DEFINITIONS: MovePosition = (document, id, direction) =>
+  keyboardMovePosition(document.nodes, id, direction);
+
 /** Why a verb that acts on one block is not offered for a set. */
 function oneAtATime(count: number): string {
   return `Only one block at a time. ${count} are selected.`;
@@ -154,7 +175,8 @@ function singleMove<Id extends string>(
   id: Id,
   label: string,
   direction: MoveDirection,
-  ask: LockQuestion | undefined
+  ask: LockQuestion | undefined,
+  position: MovePosition = POSITION_WITHOUT_DEFINITIONS
 ): Omit<ToolbarAction, "id"> & { readonly id: Id } {
   const moveLock = lockBlockingMove(document, selectedId);
   if (moveLock !== undefined) {
@@ -165,7 +187,7 @@ function singleMove<Id extends string>(
       reason: lockedBy(moveLock, selectedId),
     };
   }
-  const to = keyboardMovePosition(document.nodes, selectedId, direction);
+  const to = position(document, selectedId, direction);
   return heldByLock(
     { id, label, enabled: to !== null },
     ask,
@@ -611,7 +633,12 @@ export function depthMoveActions(
   document: BlockDocument,
   selectedId: string | null,
   selectedIds?: readonly string[],
-  lockRefusalFor?: LockQuestion
+  lockRefusalFor?: LockQuestion,
+  /**
+   * The position the verb these run moves by. A caller that runs them passes
+   * its own, so an item is offered exactly when pressing it would move.
+   */
+  position?: MovePosition
 ): DepthMoveAction[] {
   if (selectedId === null || pathTo(document, selectedId).length === 0) {
     return [];
@@ -627,7 +654,8 @@ export function depthMoveActions(
             move.id,
             move.label,
             move.direction,
-            lockRefusalFor
+            lockRefusalFor,
+            position
           ),
           direction: move.direction,
         }

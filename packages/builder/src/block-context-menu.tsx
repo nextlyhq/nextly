@@ -124,9 +124,11 @@ import * as React from "react";
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
 import type { EditorState } from "./editor-state";
-import { useBlockActionsContext } from "./keyboard-actions";
+import {
+  useBlockActionsContext,
+  useDepthMoveActions,
+} from "./keyboard-actions";
 import { useSelectionActions } from "./selection-actions";
-import { depthMoveActions } from "./toolbar-actions";
 
 /**
  * The wrapper's style, hoisted so it is one object rather than one per render.
@@ -169,27 +171,26 @@ export function BlockContextMenu({
    * verb as Alt+ArrowRight and Alt+ArrowLeft, which judges the move by the
    * placement rule and the locks and says why when it refuses.
    */
-  const { document: page, lockRefusalFor } = editor;
-  const entries = React.useMemo(() => {
-    const depth = depthMoveActions(
-      page,
-      selectedId,
-      selectedIds,
-      lockRefusalFor
-    );
-    return actions.flatMap(action => {
-      const own = { ...action, run: run[action.id] };
-      return action.id !== "move-down"
-        ? [own]
-        : [
-            own,
-            ...depth.map(move => ({
-              ...move,
-              run: () => verbs.move(move.direction),
-            })),
-          ];
-    });
-  }, [actions, run, verbs, page, selectedId, selectedIds, lockRefusalFor]);
+  // Judged by the provider with the position function the move verb runs,
+  // component definitions included, so an item is offered exactly when
+  // pressing it would move.
+  const depth = useDepthMoveActions();
+  const entries = React.useMemo(
+    () =>
+      actions.flatMap(action => {
+        const own = { ...action, run: run[action.id] };
+        return action.id !== "move-down"
+          ? [own]
+          : [
+              own,
+              ...depth.map(move => ({
+                ...move,
+                run: () => verbs.move(move.direction),
+              })),
+            ];
+      }),
+    [actions, run, verbs, depth]
+  );
 
   const select = editor.select;
   /*

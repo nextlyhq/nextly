@@ -35,12 +35,11 @@
  * @module layers-drag
  */
 
-import {
-  findNode,
-  locateNode,
-  type BlockDocument,
-  type ComponentLookup,
-  type NestingSource,
+import type {
+  BlockDocument,
+  BlockNode,
+  ComponentLookup,
+  NestingSource,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
@@ -66,10 +65,26 @@ import {
   type LayersVerdictCache,
 } from "./layers-drop";
 import { lockBlockingMove } from "./locking";
-import { refusalAnnouncement } from "./move-refusal";
+import { refusalAnnouncement, unmovedAnnouncement } from "./move-refusal";
 
 /** How long the pointer rests on a collapsed row before it opens. */
 export const LAYERS_OPEN_DELAY_MS = 500;
+
+/**
+ * How long a finger holds a row before it is picked up.
+ *
+ * A touch cannot use the mouse's distance threshold: a finger moving on a list
+ * is a scroll, and the tree keeps the browser's own touch panning so that it
+ * stays one. So a touch drag begins with a HOLD, the sortable-list pattern a
+ * touch user already knows, and only a still finger becomes a drag.
+ */
+export const LAYERS_TOUCH_HOLD_MS = 300;
+
+/**
+ * How far a finger may tremble during the hold and still be holding. Past it
+ * the finger is moving, which is a scroll, and the press is let go.
+ */
+export const LAYERS_TOUCH_TOLERANCE_PX = 5;
 
 /**
  * How far the tree indents each level, so the line starts where a row at that
@@ -109,6 +124,12 @@ export interface LayersDrawn {
   readonly left: number;
 }
 
+/** Where the picked-up row sits, from the top of the element the drag is on. */
+export interface LayersPicked {
+  readonly top: number;
+  readonly height: number;
+}
+
 export interface LayersDrag {
   /** The handlers the element around the tree must carry. */
   readonly handlers: {
@@ -121,6 +142,8 @@ export interface LayersDrag {
   readonly draggingId: string | null;
   /** What to draw, or null when the pointer aims nowhere. */
   readonly drawn: LayersDrawn | null;
+  /** Where the dragged row is drawn, or null when no row is picked up. */
+  readonly picked: LayersPicked | null;
   /** The live region's text: why the drop under the pointer is refused. */
   readonly announcement: string;
 }
@@ -136,6 +159,8 @@ interface Gesture {
   /** Where depth zero begins: the press, less the pressed row's own depth. */
   readonly left: number;
   readonly document: BlockDocument;
+  /** Every block of that document by id, read once (`placesIn`). */
+  readonly places: ReadonlyMap<string, Placed>;
   readonly verdicts: LayersVerdictCache;
   active: boolean;
   clientX: number;
@@ -150,6 +175,14 @@ interface Gesture {
    * rather than leaving the line, and the release, on a list that has gone.
    */
   stale: boolean;
+  /** The reason this gesture last put in the live region, or "". */
+  spoken: string;
+  /** Whether a finger drives it, which picks up by a hold, not a distance. */
+  readonly touch: boolean;
+  /** The hold that picks a touched row up, while it is still being held. */
+  hold: number | null;
+  /** Lets the page pan again; set while a touched row is picked up. */
+  release: (() => void) | null;
 }
 
 /** The block a row stands for, read from the label the panel draws in it. */
@@ -159,6 +192,43 @@ function rowBlockId(row: Element): string | null {
   );
 }
 
+/** Where one block sits in the document the drag began on. */
+interface Placed {
+  readonly node: BlockNode;
+  readonly parentId: string | undefined;
+  readonly slot: string | undefined;
+  readonly index: number;
+}
+
+/**
+ * Every block in the document by id, with where it sits, from ONE walk.
+ *
+ * Built when the gesture begins, because the document cannot change while a
+ * drag lasts: the drag is the only gesture in flight and nothing is applied
+ * until it ends. Each pointer move then places the rows on screen by lookup,
+ * where finding each one in the document would walk it once per row per move.
+ */
+function placesIn(document: BlockDocument): ReadonlyMap<string, Placed> {
+  const places = new Map<string, Placed>();
+  const walk = (
+    nodes: readonly BlockNode[],
+    parentId: string | undefined,
+    slot: string | undefined
+  ): void => {
+    nodes.forEach((node, index) => {
+      // Read defensively, as the engine's own walk is: a stored document may
+      // hold a hole or a slot that is not a list.
+      if (typeof node?.id !== "string") return;
+      places.set(node.id, { node, parentId, slot, index });
+      for (const [name, children] of Object.entries(node.slots ?? {})) {
+        if (Array.isArray(children)) walk(children, node.id, name);
+      }
+    });
+  };
+  walk(document.nodes, undefined, undefined);
+  return places;
+}
+
 /**
  * The rows on screen, in order, with where each block sits, measured in the
  * coordinates of the element the drag is on — the space the line is drawn in,
@@ -166,7 +236,7 @@ function rowBlockId(row: Element): string | null {
  */
 function measureRows(
   host: HTMLElement,
-  document: BlockDocument,
+  places: ReadonlyMap<string, Placed>,
   definitions: ComponentLookup | undefined
 ): LayersRow[] {
   const items = Array.from(
@@ -178,25 +248,45 @@ function measureRows(
   );
   return items.flatMap(item => {
     const id = rowBlockId(item);
-    if (id === null) return [];
-    const node = findNode(document.nodes, id);
-    const at = locateNode(document.nodes, id);
-    if (node === undefined || at === undefined) return [];
+    const at = id === null ? undefined : places.get(id);
+    if (id === null || at === undefined) return [];
     const box = canvasContentRect(item, host);
     return [
       {
         id,
         depth: Number(item.getAttribute("aria-level") ?? "1") - 1,
-        parentId: at.parent?.id,
+        parentId: at.parentId,
         slot: at.slot,
         index: at.index,
         expanded: item.getAttribute("aria-expanded") === "true",
-        canHoldChildren: holdsBlocks(node, definitions),
+        canHoldChildren: holdsBlocks(at.node, definitions),
         top: box.y,
         height: box.height,
       },
     ];
   });
+}
+
+/**
+ * Keep the browser from panning the page while a touched row is held.
+ *
+ * The tree leaves `touch-action` alone so a finger still scrolls it, which
+ * means the browser would take a moving finger for a pan and cancel the
+ * pointer. A `touchmove` cancelled before the pan starts stops that, and is
+ * listened for only while a row is picked up. The long-press menu a held
+ * finger would open is stopped for the same span. Answers the undo.
+ */
+function holdPage(host: HTMLElement): () => void {
+  const stop = (event: Event): void => {
+    event.preventDefault();
+  };
+  // Not passive, or the cancel is ignored.
+  host.addEventListener("touchmove", stop, { passive: false });
+  host.addEventListener("contextmenu", stop);
+  return () => {
+    host.removeEventListener("touchmove", stop);
+    host.removeEventListener("contextmenu", stop);
+  };
 }
 
 /** Whether a point is inside a rectangle, edges included. */
@@ -276,6 +366,8 @@ export function useLayersDrag({
   const [draggingId, setDraggingId] = React.useState<string | null>(null);
   const [drawn, setDrawn] = React.useState<LayersDrawn | null>(null);
   const [announcement, setAnnouncement] = React.useState("");
+  // Where the dragged row is drawn, for the mark that says it was picked up.
+  const [picked, setPicked] = React.useState<LayersPicked | null>(null);
 
   // Read at event time, so a handler bound on one render never acts on a
   // document or an option a later render replaced.
@@ -298,6 +390,8 @@ export function useLayersDrag({
     const drag = gesture.current;
     if (drag === null) return;
     if (drag.frame !== null) cancelAnimationFrame(drag.frame);
+    if (drag.hold !== null) window.clearTimeout(drag.hold);
+    drag.release?.();
     stopResting(drag);
     if (drag.host.hasPointerCapture(drag.owner)) {
       drag.host.releasePointerCapture(drag.owner);
@@ -309,6 +403,10 @@ export function useLayersDrag({
     teardown();
     setDraggingId(null);
     setDrawn(null);
+    setPicked(null);
+    // The region describes the drag, so it goes quiet when the drag ends; the
+    // next drag's reason is then a change it announces, even if identical.
+    setAnnouncement("");
   }, [teardown]);
 
   /**
@@ -350,13 +448,21 @@ export function useLayersDrag({
     (drag: Gesture) => {
       const { definitions: components, editor: current } = latest.current;
       const tree = drag.host.querySelector(`.${LAYERS_TREE_CLASS}`);
-      const rows = measureRows(drag.host, drag.document, components);
+      const rows = measureRows(drag.host, drag.places, components);
       const pointer = canvasContentPoint(drag.clientX, drag.clientY, drag.host);
       // Outside the tree's own box is nowhere, even where a row the tree drew
       // just beyond its scrolled edge would be under the pointer.
       const within =
         tree !== null && inside(canvasContentRect(tree, drag.host), pointer);
       restOn(drag, within ? rowAt(rows, pointer.y) : undefined);
+      const own = rows.find(row => row.id === drag.id);
+      setPicked(previous =>
+        own === undefined
+          ? null
+          : previous?.top === own.top && previous.height === own.height
+            ? previous
+            : { top: own.top, height: own.height }
+      );
       drag.result = within
         ? layersDrop({
             rows,
@@ -393,9 +499,13 @@ export function useLayersDrag({
         result.kind === "refused"
           ? refusalAnnouncement(layersRefusalWording(result.refusal))
           : "";
-      setAnnouncement(previous =>
-        previous === sentence ? previous : sentence
-      );
+      // Spoken when the reason CHANGES, not on every move over the same
+      // refusal. Leaving a refused gap clears the region and so does the
+      // drag's end, so the same reason met again is a change, read again.
+      if (sentence !== drag.spoken) {
+        drag.spoken = sentence;
+        setAnnouncement(sentence);
+      }
     },
     [restOn]
   );
@@ -424,6 +534,26 @@ export function useLayersDrag({
     drag.frame = requestAnimationFrame(pump);
   }, [aim]);
 
+  /**
+   * Turn a press into a drag: by distance for a mouse or a pen, by the hold
+   * for a finger. Either way the block is selected and the pointer captured
+   * only now, for the reason the canvas gives — capturing a press that stays
+   * a click would retarget the click away from the row.
+   */
+  const activate = React.useCallback(
+    (drag: Gesture) => {
+      drag.active = true;
+      drag.hold = null;
+      drag.host.setPointerCapture(drag.owner);
+      if (drag.touch) drag.release = holdPage(drag.host);
+      latest.current.editor.select(drag.id);
+      setDraggingId(drag.id);
+      drag.frame = requestAnimationFrame(pump);
+      aim(drag);
+    },
+    [aim, pump]
+  );
+
   const onPointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
       // The primary button only, and one gesture at a time.
@@ -444,6 +574,7 @@ export function useLayersDrag({
             .x -
           depth * LAYERS_DEPTH_PX,
         document: current.document,
+        places: placesIn(current.document),
         verdicts: layersVerdictCache(),
         active: false,
         clientX: event.clientX,
@@ -452,9 +583,19 @@ export function useLayersDrag({
         frame: null,
         resting: null,
         stale: false,
+        spoken: "",
+        touch: event.pointerType === "touch",
+        hold: null,
+        release: null,
       };
+      const drag = gesture.current;
+      if (drag.touch) {
+        drag.hold = window.setTimeout(() => {
+          if (gesture.current === drag && !drag.active) activate(drag);
+        }, LAYERS_TOUCH_HOLD_MS);
+      }
     },
-    []
+    [activate]
   );
 
   const onPointerMove = React.useCallback(
@@ -463,25 +604,25 @@ export function useLayersDrag({
       if (drag === null || drag.owner !== event.pointerId) return;
       drag.clientX = event.clientX;
       drag.clientY = event.clientY;
-      if (!drag.active) {
-        // The same threshold the canvas uses, so a click on a row stays a
-        // click and never commits a move to where the block already is.
-        const travelled = Math.hypot(
-          event.clientX - drag.originX,
-          event.clientY - drag.originY
-        );
-        if (travelled < DEFAULT_ACTIVATION_PX) return;
-        drag.active = true;
-        // Captured only now, for the reason the canvas gives: capturing a
-        // press that stays a click would retarget the click away from the row.
-        drag.host.setPointerCapture(drag.owner);
-        latest.current.editor.select(drag.id);
-        setDraggingId(drag.id);
-        drag.frame = requestAnimationFrame(pump);
+      if (drag.active) {
+        aim(drag);
+        return;
       }
-      aim(drag);
+      const travelled = Math.hypot(
+        event.clientX - drag.originX,
+        event.clientY - drag.originY
+      );
+      if (drag.touch) {
+        // A finger that moves before the hold is scrolling: let it go, and
+        // the browser pans the list as it would have without this.
+        if (travelled > LAYERS_TOUCH_TOLERANCE_PX) reset();
+        return;
+      }
+      // The same threshold the canvas uses, so a click on a row stays a
+      // click and never commits a move to where the block already is.
+      if (travelled >= DEFAULT_ACTIVATION_PX) activate(drag);
     },
-    [aim, pump]
+    [activate, aim, reset]
   );
 
   const onPointerUp = React.useCallback(
@@ -492,17 +633,24 @@ export function useLayersDrag({
       // ONE op, through the editor's own move: one undo step, refused by its
       // apply as a keyboard move would be if anything changed under the drag.
       // A refused or empty aim moves nothing, so the block stays where it was.
-      if (drag.active && result.kind === "drop") {
-        latest.current.editor.apply({
-          kind: "move",
-          id: drag.id,
-          to: result.to,
-          ...(result.dropSlotIfEmpty === undefined
-            ? {}
-            : { dropSlotIfEmpty: result.dropSlotIfEmpty }),
-        });
-      }
+      const applied =
+        drag.active && result.kind === "drop"
+          ? latest.current.editor.apply({
+              kind: "move",
+              id: drag.id,
+              to: result.to,
+              ...(result.dropSlotIfEmpty === undefined
+                ? {}
+                : { dropSlotIfEmpty: result.dropSlotIfEmpty }),
+            })
+          : undefined;
       reset();
+      // A drop drawn as allowed that the store still refused is said, after
+      // the reset that quiets the region: a move that did not happen must not
+      // read like one that did.
+      if (applied === null) {
+        setAnnouncement(unmovedAnnouncement(drag.document, drag.id));
+      }
     },
     [reset]
   );
@@ -541,6 +689,7 @@ export function useLayersDrag({
     handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel },
     draggingId,
     drawn,
+    picked,
     announcement,
   };
 }
@@ -555,15 +704,28 @@ export function useLayersDrag({
  */
 export function LayersDropOverlay({
   drawn,
+  picked,
 }: {
   drawn: LayersDrawn | null;
+  picked: LayersPicked | null;
 }): React.JSX.Element | null {
-  if (drawn === null) return null;
+  // The row in hand, marked where it sits, so a finger that has just been
+  // held sees that the row is picked up before it moves.
+  const mark =
+    picked === null ? null : (
+      <div
+        className="nx-layers-picked"
+        style={{ top: picked.top, height: picked.height }}
+        aria-hidden="true"
+      />
+    );
+  if (drawn === null) return mark;
   const { result } = drawn;
   const refused = result.kind === "refused";
   const wording = refused ? layersRefusalWording(result.refusal) : null;
   return (
     <>
+      {mark}
       <div
         className="nx-layers-drop-line"
         data-refused={refused ? "" : undefined}

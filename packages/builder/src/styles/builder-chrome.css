@@ -1892,6 +1892,22 @@
 }
 
 /*
+ * The row in hand, marked where it sits once it is picked up: what tells a
+ * finger that has held a row that the hold worked, before it moves. A tint
+ * and a hairline in the primary token, light enough to read the row through.
+ */
+.nx-layers-picked {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+  box-shadow: inset 0 0 0 1px var(--nx-primary);
+  pointer-events: none;
+}
+
+/*
  * The reason a drop is refused, under the line by the row it names. The
  * canvas refusal's look; only its extent is the panel's.
  */

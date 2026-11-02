@@ -397,7 +397,7 @@ export function LayersPanel({
             // the tree rather than only readable by someone who can see it below.
             aria-describedby={hints.length === 0 ? undefined : hintId}
           />
-          <LayersDropOverlay drawn={drag.drawn} />
+          <LayersDropOverlay drawn={drag.drawn} picked={drag.picked} />
         </div>
       )}
 

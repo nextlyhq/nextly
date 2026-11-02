@@ -42,6 +42,7 @@ import { canPlaceIn, findNode } from "@nextlyhq/blocks-engine";
 
 import { placementWording, type RefusalWording } from "./drag-refusal";
 import { placementSources } from "./drop-targets";
+import { layerLabel } from "./layers";
 import type { OpPosition } from "./ops";
 
 /**
@@ -109,4 +110,23 @@ export function refusalAnnouncement(wording: RefusalWording): string {
   return wording.remedy === null
     ? wording.headline
     : `${wording.headline} ${wording.remedy}`;
+}
+
+/**
+ * What is said when the store refused a move nothing judged beforehand would
+ * refuse: a byte cap, a depth limit, an op the forest rejects. It names no
+ * cause, because none was established, and it is still said, because a move
+ * that was attempted and did not happen cannot otherwise be told apart from
+ * one that did.
+ *
+ * @param document - the document the move was asked of
+ * @param id - the block that did not move
+ * @returns the announcement text
+ */
+export function unmovedAnnouncement(
+  document: BlockDocument,
+  id: string
+): string {
+  const block = findNode(document.nodes, id);
+  return `${block === undefined ? "The block" : layerLabel(block)} could not be moved.`;
 }

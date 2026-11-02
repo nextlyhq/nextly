@@ -360,6 +360,27 @@ describe("layersDrop: refusals", () => {
     ).toMatchObject({ kind: "drop", to: { parentId: "card" } });
   });
 
+  it("refuses every place for a block that holds a locked block, as the op layer does", () => {
+    const doc = page([
+      node("box", "t/box", {
+        slots: { children: [node("caption", "t/heading", { locked: true })] },
+      }),
+      node("h1", "t/heading"),
+      node("h2", "t/heading"),
+    ]);
+    const result = drop(doc, "box", over(rowsOf(doc), "h2", "lower", 0));
+    expect(result).toMatchObject({
+      kind: "refused",
+      refusal: { kind: "held", locked: { id: "caption" } },
+      line: { y: 3 * ROW, depth: 0 },
+    });
+    if (result.kind !== "refused") return;
+    expect(layersRefusalWording(result.refusal)).toEqual({
+      headline: "Heading is locked.",
+      remedy: "Unlock it to move it.",
+    });
+  });
+
   it("refuses where the editor's locks refuse, asking with the move it would apply", () => {
     const doc = page([node("box", "t/box"), node("h1", "t/heading")]);
     const lock: LockRefusalFacts = {

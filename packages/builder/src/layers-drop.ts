@@ -39,6 +39,7 @@ import {
   DEFAULT_SLOT,
   findNode,
   locateNode,
+  lockedWithin,
   type BlockDocument,
   type BlockNode,
   type PlacementRefused,
@@ -51,7 +52,11 @@ import { movingSubtree } from "./drop-targets";
 import type { Point } from "./geometry";
 import { indentSlot } from "./keyboard-move";
 import { pathTo } from "./layers";
-import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
+import {
+  lockedBlockWording,
+  lockRefusalWording,
+  type LockRefusalFacts,
+} from "./lock-refusal";
 import type { BuilderOp, OpPosition, SlotAddress } from "./ops";
 
 /** How far right the pointer travels to nest a block one level deeper. */
@@ -146,7 +151,13 @@ export type LayersRefusal =
       readonly movingType: string;
       readonly regionType: string | undefined;
     }
-  | { readonly kind: "lock"; readonly lock: LockRefusalFacts };
+  | { readonly kind: "lock"; readonly lock: LockRefusalFacts }
+  /**
+   * The dragged block holds a block the author locked, itself or deeper. The
+   * op layer relocates no subtree holding a locked block, so this refuses
+   * every place, before release rather than by an apply that does nothing.
+   */
+  | { readonly kind: "held"; readonly locked: BlockNode };
 
 /** What the pointer means right now. */
 export type LayersDropResult =
@@ -182,9 +193,18 @@ export function rowAt(
 
 /** The words a refusal is shown and announced with, from the shared wording. */
 export function layersRefusalWording(refusal: LayersRefusal): RefusalWording {
-  return refusal.kind === "lock"
-    ? lockRefusalWording(refusal.lock)
-    : placementWording(refusal.verdict, refusal.movingType, refusal.regionType);
+  switch (refusal.kind) {
+    case "lock":
+      return lockRefusalWording(refusal.lock);
+    case "held":
+      return lockedBlockWording(refusal.locked);
+    case "placement":
+      return placementWording(
+        refusal.verdict,
+        refusal.movingType,
+        refusal.regionType
+      );
+  }
 }
 
 /** The nearest row outside the dragged block, stepping from `from` by `step`. */
@@ -417,6 +437,14 @@ function judged(
   to: OpPosition,
   line: LayersLine
 ): LayersDropResult {
+  // The op layer's own question first (`lockedWithin`), which every place
+  // answers the same way for this block.
+  const lockedId = lockedWithin(moving);
+  const held =
+    lockedId === undefined ? undefined : findNode([moving], lockedId);
+  if (held !== undefined) {
+    return { kind: "refused", refusal: { kind: "held", locked: held }, line };
+  }
   const refused = placementRefusal(placement, moving, to);
   if (refused !== undefined) return { kind: "refused", refusal: refused, line };
   const dropSlotIfEmpty = vacated(placement.document.nodes, moving.id, to);

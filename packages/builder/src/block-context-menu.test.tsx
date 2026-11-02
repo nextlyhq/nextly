@@ -17,8 +17,10 @@
  */
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   hasBlock,
   registerBlocks,
+  type ComponentLookup,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -103,10 +105,14 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorState {
   } as unknown as EditorState;
 }
 
-function mount(editor: EditorState) {
+function mount(editor: EditorState, definitions?: ComponentLookup) {
   return render(
     <ShortcutProvider>
-      <BlockKeyboardActions onSaveAsPattern={() => undefined} editor={editor}>
+      <BlockKeyboardActions
+        onSaveAsPattern={() => undefined}
+        editor={editor}
+        {...(definitions === undefined ? {} : { definitions })}
+      >
         <BlockContextMenu editor={editor}>
           <Canvas
             document={editor.document}
@@ -431,5 +437,43 @@ describe("the canvas's right-click menu", () => {
         screen.getByRole("menuitem", { name }).getAttribute("data-disabled")
       ).not.toBeNull();
     }
+  });
+
+  it("judges Move in by the component definitions the verb moves by", () => {
+    // An instance above whose component exposes two regions and neither the
+    // default: the keystroke, given the definitions, has no slot to name and
+    // does nothing — so the menu, asked with the same definitions, dims it.
+    register();
+    const definitions: ComponentLookup = new Map([
+      [
+        "comp",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [{ id: "inside", type: "acme/leaf", version: 1, props: {} }],
+          slots: { header: {}, footer: {} },
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const doc = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "comp" },
+        },
+        { id: "a", type: "acme/leaf", version: 1, props: {} },
+      ],
+    } as BlockDocument;
+    const { container } = mount(editorSpy(doc, "a"), definitions);
+    fireEvent.contextMenu(blockElement(container));
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Move in" })
+        .getAttribute("data-disabled")
+    ).not.toBeNull();
   });
 });
