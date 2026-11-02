@@ -91,6 +91,14 @@ export interface EditorRailProps {
   onHelp: (button: HTMLElement) => void;
   /** The rail's own element, for region navigation. */
   railRef: (element: HTMLElement | null) => void;
+  /**
+   * Settings was chosen, from this button, which focus returns to: the host's
+   * Settings dialog. Absent, Settings is a panel like the others, offered
+   * where the host can fill it.
+   */
+  onSettings?: (button: HTMLElement) => void;
+  /** Whether the Settings dialog is open, shown as the item pressed. */
+  settingsOpen?: boolean;
 }
 
 export function EditorRail({
@@ -99,6 +107,8 @@ export function EditorRail({
   onSelect,
   onHelp,
   railRef,
+  onSettings,
+  settingsOpen = false,
 }: EditorRailProps): React.JSX.Element {
   const item = (panel: LeftPanel) => {
     const { label, Icon } = PANEL_CHROME[panel];
@@ -127,6 +137,17 @@ export function EditorRail({
       </ul>
       <ul className="mt-auto flex flex-col gap-1">
         {RAIL_GROUPS.bottom.filter(isAvailable).map(item)}
+        {onSettings === undefined ? null : (
+          <li>
+            <RailItem
+              label={PANEL_CHROME.settings.label}
+              Icon={PANEL_CHROME.settings.Icon}
+              pressed={settingsOpen}
+              onClick={onSettings}
+              data-rail-action="settings"
+            />
+          </li>
+        )}
         <li>
           <RailItem
             label={EDITOR_WORDS.help}

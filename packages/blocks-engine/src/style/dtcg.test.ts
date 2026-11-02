@@ -12,6 +12,7 @@ import {
   NEXTLY_EXTENSION,
   dtcgToTokens,
   readFamilyList,
+  resolveAliases,
   tokensToDtcg,
 } from "./dtcg";
 import type { SiteToken } from "./site-tokens";
@@ -2109,5 +2110,125 @@ describe("what the reader reports it did not keep", () => {
         "does not state values this site can read"
       );
     });
+  });
+});
+
+describe("a variable's plain label across the format", () => {
+  it("round-trips under this system's own extension", () => {
+    const token: SiteToken = {
+      name: "color.brand",
+      label: "Brand blue",
+      kind: "color",
+      values: { light: "#1d2b6b", dark: "#8fa7ff" },
+    };
+    const { document } = tokensToDtcg({ tokens: [token] });
+    const back = dtcgToTokens(document);
+    expect(back.tokens).toEqual([token]);
+  });
+
+  it("drops a label it cannot show, keeping the token and saying so", () => {
+    const back = dtcgToTokens({
+      color: {
+        brand: {
+          $type: "color",
+          $value: "#123456",
+          $extensions: {
+            "com.nextlyhq.nextly": {
+              css: { light: "#123456" },
+              kind: "color",
+              label: "x".repeat(500),
+            },
+          },
+        },
+      },
+    });
+    expect(back.tokens).toHaveLength(1);
+    expect(back.tokens[0]?.label).toBeUndefined();
+    expect(back.issues.map(i => i.message).join(" ")).toMatch(/label/);
+  });
+});
+
+describe("aliases, resolved on import", () => {
+  const base = {
+    color: {
+      $type: "color",
+      blue: {
+        $value: {
+          colorSpace: "srgb",
+          components: [29 / 255, 43 / 255, 107 / 255],
+          hex: "#1d2b6b",
+        },
+      },
+    },
+  };
+
+  it("takes the value a whole-token alias points at", () => {
+    const { tokens, issues } = dtcgToTokens({
+      ...base,
+      brand: { $type: "color", $value: "{color.blue}" },
+    });
+    expect(tokens.find(t => t.name === "brand")?.values.light).toBe("#1d2b6b");
+    expect(issues).toEqual([]);
+  });
+
+  it("follows a chain, and takes the type from the end of it", () => {
+    const { tokens } = dtcgToTokens({
+      ...base,
+      accent: { $value: "{brand}" },
+      brand: { $value: "{color.blue}" },
+    });
+    expect(tokens.find(t => t.name === "accent")).toMatchObject({
+      kind: "color",
+      values: { light: "#1d2b6b" },
+    });
+  });
+
+  it("reads a $ref written as a JSON pointer", () => {
+    const { tokens } = dtcgToTokens({
+      ...base,
+      brand: { $type: "color", $value: { $ref: "#/color/blue/$value" } },
+    });
+    expect(tokens.find(t => t.name === "brand")?.values.light).toBe("#1d2b6b");
+  });
+
+  it("skips a cycle, naming it, and keeps everything else", () => {
+    const { tokens, issues } = dtcgToTokens({
+      ...base,
+      a: { $type: "color", $value: "{b}" },
+      b: { $type: "color", $value: "{a}" },
+    });
+    expect(tokens.map(t => t.name)).toEqual(["color.blue"]);
+    expect(issues.map(i => i.message).join(" ")).toMatch(/"a".*loop/);
+  });
+
+  it("skips an alias whose target is missing", () => {
+    const { tokens, issues } = dtcgToTokens({
+      brand: { $type: "color", $value: "{color.nowhere}" },
+    });
+    expect(tokens).toEqual([]);
+    expect(issues.map(i => i.message).join(" ")).toMatch(
+      /"brand".*"color\.nowhere".*no token/
+    );
+  });
+
+  it("skips an alias whose stated type disagrees with its target", () => {
+    const { tokens, issues } = dtcgToTokens({
+      ...base,
+      gap: { $type: "dimension", $value: "{color.blue}" },
+    });
+    expect(tokens.map(t => t.name)).toEqual(["color.blue"]);
+    expect(issues.map(i => i.message).join(" ")).toMatch(
+      /"gap".*dimension.*color/
+    );
+  });
+
+  it("leaves the document it was given untouched", () => {
+    const document = {
+      ...base,
+      brand: { $type: "color", $value: "{color.blue}" },
+    };
+    const before = JSON.stringify(document);
+    resolveAliases(document);
+    expect(JSON.stringify(document)).toBe(before);
   });
 });

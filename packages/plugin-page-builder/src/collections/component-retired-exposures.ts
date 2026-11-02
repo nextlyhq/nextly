@@ -52,7 +52,9 @@ export interface ComponentRetiredRow {
  */
 export async function retiredKey(
   componentId: string,
-  kind: RetiredKind,
+  // Any kind the table files, so a duplicate's origin row is keyed the same
+  // way as a retired id.
+  kind: string,
   exposureId: string
 ): Promise<string> {
   const bytes = new TextEncoder().encode(

@@ -20,6 +20,7 @@
  */
 import type {
   BlockDocument,
+  BreakpointSet,
   BuilderOp,
   ComponentDocument,
   ComponentExposure,
@@ -405,6 +406,12 @@ export interface PatternCapabilityResponse {
    * route.
    */
   readonly mayCreateComponent?: boolean;
+  /**
+   * Whether this caller may replace a pattern's content from a selection:
+   * `update` and `publish` on the patterns collection, since the new content
+   * is published. Absent from an older server.
+   */
+  readonly mayUpdatePattern?: boolean;
 }
 
 /**
@@ -527,4 +534,62 @@ export interface ComponentFromSelectionResult {
     readonly userId: string;
     readonly apiKeyId?: string;
   };
+}
+
+/**
+ * Where Settings writes the site's breakpoints: the one way they change.
+ *
+ * A route of its own rather than the `site-style` Single's update, because
+ * redefining the site's devices is a site setting with a permission of its
+ * own (`manage-page-builder-site`), not a style. The Single refuses every
+ * other write that changes them, so the two cannot disagree about who may.
+ */
+export const SITE_BREAKPOINTS_ROUTE_PATH = "/site/breakpoints";
+
+/**
+ * What Settings sends to change the site's breakpoints, and what the route
+ * answers it stored: the whole set, or `null` to clear the stored set so the
+ * site's configured breakpoints apply again.
+ */
+export interface SiteBreakpointsRequest {
+  readonly breakpoints: BreakpointSet | null;
+}
+
+/** Where Settings' Site tab reads what it shows and what this caller may change. */
+export const SITE_SETTINGS_ROUTE_PATH = "/site/settings";
+
+/** A Layout the site's default may be, as the Site tab offers it. */
+export interface SiteLayoutOption {
+  readonly id: string;
+  readonly title: string;
+}
+
+/**
+ * What Settings' Site tab shows, and what this caller may change there, each
+ * permission answer derived from the grants its write is judged by.
+ *
+ * Like the pattern answer, NOT A SECURITY BOUNDARY: each write is authorized on
+ * its own. A caller who may not manage the site is told nothing about it.
+ */
+export interface SiteSettingsRead {
+  /** Whether this caller may change the site's settings: the tab is offered. */
+  readonly mayManageSite: boolean;
+  /**
+   * Whether this caller may choose the site's default Layout, which also
+   * needs the rights to update and publish Layouts.
+   */
+  readonly mayChooseDefaultLayout: boolean;
+  /** The site's default Layout, by id, or `null` when it has none. */
+  readonly defaultLayout: string | null;
+  /**
+   * The site's breakpoints, as the canvas resolves them (the stored set over
+   * the configured one). Read here, under the same permission as their one
+   * write, so a role that may manage them can see them without Design's read.
+   */
+  readonly breakpoints: BreakpointSet | null;
+  /**
+   * The published Layouts: every one the caller may choose from, or only the
+   * current default, to name it, for a caller who may not choose.
+   */
+  readonly layouts: readonly SiteLayoutOption[];
 }

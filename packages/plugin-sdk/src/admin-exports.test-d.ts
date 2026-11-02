@@ -290,3 +290,9 @@ expectTypeOf(adminEntry.describeFieldTypes<"rating">)
 expectTypeOf(adminEntry.describeFieldTypes<"rating">).returns.toEqualTypeOf<
   adminEntry.FieldTypeDescription<"rating">[]
 >();
+
+// A plugin's one-shot write to its own route: the caller names the answer's
+// shape, and a refusal arrives as a rejection rather than as `undefined`.
+expectTypeOf(
+  adminEntry.writePluginRoute<{ message: string }>
+).returns.toEqualTypeOf<Promise<{ message: string } | undefined>>();

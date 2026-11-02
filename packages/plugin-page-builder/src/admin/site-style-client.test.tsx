@@ -51,11 +51,26 @@ let writeBehaviour: () => Promise<unknown> = async () => ({ id: "1" });
  */
 let issuesAnswer: readonly ValidationIssue[] = [];
 const writes: Record<string, unknown>[] = [];
+/** What reached Settings' route, and how often the document was read again. */
+const routeWrites: unknown[] = [];
+let refetches = 0;
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  useSingleDocument: () => readAnswer,
+  useSingleDocument: () => ({
+    ...readAnswer,
+    refetch: async () => {
+      refetches += 1;
+      return {};
+    },
+  }),
+  // The site's breakpoints go through Settings' route, answered like the
+  // Single's own update so one switch drives both.
+  writePluginRoute: async (write: unknown) => {
+    routeWrites.push(write);
+    return writeBehaviour();
+  },
   validationIssues: () => issuesAnswer,
   useUpdateSingleDocument: (
     _slug: string,
@@ -92,6 +107,8 @@ beforeEach(() => {
   writeBehaviour = async () => ({ id: "1" });
   issuesAnswer = [];
   writes.length = 0;
+  routeWrites.length = 0;
+  refetches = 0;
   writeOptions = undefined;
 });
 
@@ -167,6 +184,41 @@ describe("writing one section", () => {
 
     expect(writes).toHaveLength(1);
     expect(Object.keys(writes[0] ?? {})).toEqual(["tokens"]);
+  });
+
+  it("writes the breakpoints through Settings' route, and reads the document again", async () => {
+    // The one write the site style lets change them; the Single's own update
+    // would be refused.
+    const { result } = renderHook(() => useSaveSiteStyle());
+    const set = {
+      viewport: [{ id: "tablet", label: "Tablet", maxWidth: 900 }],
+      container: [],
+    };
+
+    let verdict;
+    await act(async () => {
+      verdict = await result.current.save("breakpoints", set);
+    });
+
+    expect(verdict).toEqual({ saved: true, issues: {} });
+    expect(writes).toEqual([]);
+    expect(routeWrites).toEqual([
+      {
+        plugin: "@nextlyhq/plugin-page-builder",
+        path: "/site/breakpoints",
+        body: { breakpoints: set },
+      },
+    ]);
+    expect(refetches).toBe(1);
+  });
+
+  it("sends every other section to the Single, not the route", async () => {
+    const { result } = renderHook(() => useSaveSiteStyle());
+    await act(async () => {
+      await result.current.save("fonts", []);
+    });
+    expect(routeWrites).toEqual([]);
+    expect(writes).toEqual([{ fonts: [] }]);
   });
 
   it("serializes against the other studios through one mutation scope", () => {

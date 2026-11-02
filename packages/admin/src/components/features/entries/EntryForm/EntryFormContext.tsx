@@ -21,6 +21,8 @@ import {
 
 import { useOptionalEntryLocale } from "../EntryLocaleContext";
 
+import type { EntryFieldsPresentation } from "./EntryFieldsPanel";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -102,7 +104,10 @@ export interface EntryFormContextValue {
    * renderer, which passes four shared props to all fifteen input types and is
    * deliberately not where per-plugin wiring goes.
    */
-  renderEntryFields?: (excludePath: string) => ReactNode;
+  renderEntryFields?: (
+    excludePath: string,
+    presentation?: EntryFieldsPresentation
+  ) => ReactNode;
 
   /**
    * Opens the document's full-page preview, where the editor offers one.
@@ -236,7 +241,10 @@ export interface EntryFormContextProviderProps {
    * Renders the entry's other fields for a surface that covers the form,
    * excluding the field at the path it is given.
    */
-  renderEntryFields?: (excludePath: string) => ReactNode;
+  renderEntryFields?: (
+    excludePath: string,
+    presentation?: EntryFieldsPresentation
+  ) => ReactNode;
 
   /**
    * The editor's handler for its full-page preview. Pass it exactly where the
@@ -475,9 +483,21 @@ export function useDocumentIdentity(): DocumentIdentity | null {
  * rendered outside an entry form is a legitimate arrangement and gets null
  * rather than a thrown error.
  */
-export function useEntryFieldsPanel(excludePath: string): ReactNode | null {
+export function useEntryFieldsPanel(
+  excludePath: string,
+  options: {
+    /**
+     * How the fields are framed: the form's own sections (`"panel"`, the
+     * default), or flat for a dialog that frames them itself, where the slug
+     * reads as the page's address with the full address under it.
+     */
+    presentation?: EntryFieldsPresentation;
+  } = {}
+): ReactNode | null {
   const context = useOptionalEntryFormContext();
-  return context?.renderEntryFields?.(excludePath) ?? null;
+  return (
+    context?.renderEntryFields?.(excludePath, options.presentation) ?? null
+  );
 }
 
 /**

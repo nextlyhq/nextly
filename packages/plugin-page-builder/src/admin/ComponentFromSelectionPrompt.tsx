@@ -106,10 +106,24 @@ const COPY: Record<
 
 /** The form, or nothing while no one has asked. */
 export function ComponentFromSelectionPrompt(
-  props: ComponentFromSelectionPromptProps
+  props: Omit<ComponentFromSelectionPromptProps, "request"> & {
+    readonly request: {
+      readonly action: string;
+      readonly document: BlockDocument;
+    } | null;
+  }
 ): React.JSX.Element | null {
-  if (props.request === null) return null;
-  return <ComponentForm {...props} request={props.request} />;
+  const request = props.request;
+  if (request === null) return null;
+  if (request.action !== "save-as" && request.action !== "convert") {
+    return null;
+  }
+  return (
+    <ComponentForm
+      {...props}
+      request={{ action: request.action, document: request.document }}
+    />
+  );
 }
 
 /** The sentences a dry run's warnings become. */
