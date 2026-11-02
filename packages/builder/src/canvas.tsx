@@ -1967,7 +1967,9 @@ export function Canvas({
   // the effect above, so it is installed once per mount.
   useEffect(() => {
     const element = root.current;
-    return element === null ? undefined : guardCanvasNavigation(element);
+    return element === null
+      ? undefined
+      : guardCanvasNavigation(element, `[${CHROME_ATTRIBUTE}]`);
   }, []);
 
   /*

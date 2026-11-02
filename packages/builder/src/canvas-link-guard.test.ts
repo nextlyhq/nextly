@@ -14,18 +14,21 @@ function canvasIn(doc: Document): {
   label: HTMLElement;
   plain: HTMLElement;
   form: HTMLFormElement;
+  help: HTMLElement;
 } {
   const root = doc.createElement("div");
   root.innerHTML = `
     <div data-nx-node="cta"><a href="/signup"><span>Sign up</span></a></div>
     <p data-nx-node="text">Plain text</p>
-    <form data-nx-node="form" action="/subscribe"><button>Go</button></form>`;
+    <form data-nx-node="form" action="/subscribe"><button>Go</button></form>
+    <div data-nx-chrome><a href="/help">Help</a></div>`;
   doc.body.append(root);
   return {
     root,
     label: root.querySelector("span") as HTMLElement,
     plain: root.querySelector("p") as HTMLElement,
     form: root.querySelector("form") as HTMLFormElement,
+    help: root.querySelector('a[href="/help"]') as HTMLElement,
   };
 }
 
@@ -39,6 +42,9 @@ function click(type = "click", button = 0): MouseEvent {
   return new MouseEvent(type, { bubbles: true, cancelable: true, button });
 }
 
+/** The editor's own chrome inside the canvas, as the canvas marks it. */
+const CHROME = "[data-nx-chrome]";
+
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
@@ -47,7 +53,7 @@ afterEach(() => {
 
 function guarded(doc: Document = document) {
   const canvas = canvasIn(doc);
-  cleanups.push(guardCanvasNavigation(canvas.root));
+  cleanups.push(guardCanvasNavigation(canvas.root, CHROME));
   return canvas;
 }
 
@@ -66,6 +72,28 @@ describe("guardCanvasNavigation", () => {
     const { form } = guarded();
     const submit = new Event("submit", { bubbles: true, cancelable: true });
     expect(stopped(form, submit)).toBe(true);
+  });
+
+  it("keeps a submit from reaching the form's own handlers", () => {
+    // A block's script may send the real request from its submit handler,
+    // which cancelling the browser's default alone does not stop.
+    const { root, form } = guarded();
+    let handled = 0;
+    form.addEventListener("submit", () => {
+      handled += 1;
+    });
+    root.addEventListener("submit", () => {
+      handled += 1;
+    });
+    form.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true })
+    );
+    expect(handled).toBe(0);
+  });
+
+  it("leaves a link in the editor's own chrome alone", () => {
+    const { help } = guarded();
+    expect(stopped(help, click())).toBe(false);
   });
 
   it("leaves the click itself to arrive, so selection still runs", () => {
@@ -107,7 +135,7 @@ describe("guardCanvasNavigation", () => {
 
   it("stops guarding once released", () => {
     const { root, label } = canvasIn(document);
-    guardCanvasNavigation(root)();
+    guardCanvasNavigation(root, CHROME)();
     expect(stopped(label, click())).toBe(false);
   });
 });

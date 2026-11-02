@@ -50,6 +50,7 @@ import { markedElementOf } from "./style-subject";
 
 import {
   CANVAS_ROOT_CLASS,
+  CHROME_ATTRIBUTE,
   Canvas,
   DRAG_SOURCE_ATTRIBUTE,
   DROP_PARENT_ATTRIBUTE,
@@ -3202,5 +3203,23 @@ describe("a link drawn on the canvas", () => {
 
     expect(followed).toBe(false);
     expect(onSelect).toHaveBeenCalledWith("cta", "replace");
+  });
+
+  it("leaves a link in the editor's chrome over the canvas working", () => {
+    const { container } = render(
+      <Canvas
+        document={{ formatVersion: 1, kind: "page", nodes: [] } as never}
+        siteStyles={{ css: "", classes: {} } as never}
+        overlay={
+          <div {...{ [CHROME_ATTRIBUTE]: "" }}>
+            <a href="/help">Help</a>
+          </div>
+        }
+      />
+    );
+    const help = container.querySelector('a[href="/help"]');
+    if (help === null) throw new Error("expected the overlay's link");
+
+    expect(fireEvent.click(help)).toBe(true);
   });
 });

@@ -16,7 +16,14 @@
  *   browser activates a link from the keyboard by dispatching a click) and
  *   a modified click that would open a new tab or window;
  * - `auxclick`, the middle button, which opens a new tab without any `click`;
- * - `submit` from a form inside the canvas, however it was triggered.
+ * - `submit` from a form inside the canvas, however it was triggered. A
+ *   submit is also stopped from propagating: a block's own script may send
+ *   the real request from its submit handler, which cancelling the browser's
+ *   default alone does not prevent. Nothing in the editor listens for a
+ *   submit; selection comes from the click that preceded it.
+ *
+ * The editor's own chrome drawn inside the root (the toolbar, an overlay a
+ * host adds) is not the page, so its links keep working.
  *
  * ## Listening on the canvas's own document
  *
@@ -47,9 +54,10 @@ function elementOf(target: EventTarget | null): Element | null {
 }
 
 /** Whether an event's default would take the page somewhere else. */
-function navigates(event: Event, root: Element): boolean {
+function navigates(event: Event, root: Element, chrome: string): boolean {
   const element = elementOf(event.target);
   if (element === null || !root.contains(element)) return false;
+  if (element.closest(chrome) !== null) return false;
   if (event.type === "submit") return true;
   return element.closest(FOLLOWED) !== null;
 }
@@ -59,12 +67,20 @@ function navigates(event: Event, root: Element): boolean {
  * function that stops guarding.
  *
  * Call it once per mounted canvas root; the root is the boundary, so a link
- * in the editor's own chrome outside it still works.
+ * in the editor's own chrome outside it still works. `chrome` is the selector
+ * that marks the editor's chrome drawn INSIDE the root, which is left alone
+ * too. It is passed in rather than imported, because the canvas that owns the
+ * marker is the module that installs this guard.
  */
-export function guardCanvasNavigation(root: HTMLElement): () => void {
+export function guardCanvasNavigation(
+  root: HTMLElement,
+  chrome: string
+): () => void {
   const owner = root.ownerDocument;
   const guard = (event: Event): void => {
-    if (navigates(event, root)) event.preventDefault();
+    if (!navigates(event, root, chrome)) return;
+    event.preventDefault();
+    if (event.type === "submit") event.stopPropagation();
   };
   for (const type of GUARDED) {
     owner.addEventListener(type, guard, true);
