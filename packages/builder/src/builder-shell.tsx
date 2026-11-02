@@ -22,6 +22,7 @@ import {
 import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
+import { isHTMLElement } from "./dom-kind";
 import { EditorRail, panelLabel } from "./editor-rail";
 import { HelpDialog } from "./help-dialog";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
@@ -659,6 +660,10 @@ function shellClaimsRegionCycling(
   root: HTMLElement | null,
   shellCount: number
 ): boolean {
+  // The host document's own reading, deliberately not the focused node inside
+  // a frame: focus inside a same-origin iframe reads here as the iframe, which
+  // the shell contains, while the node inside it belongs to another document
+  // that no element here contains.
   const active = document.activeElement;
   if (root?.contains(active)) return true;
   // `null` as well as `body`: a document that has never been clicked reports
@@ -773,6 +778,7 @@ function focusNextRegion(map: Record<Region, HTMLElement | null> | null): void {
   const present = REGIONS.filter(region => map[region] !== null);
   if (present.length === 0) return;
 
+  // The host's own reading, for the reason `shellClaimsRegionCycling` gives.
   const active = document.activeElement;
   const currentIndex = present.findIndex(region =>
     map[region]?.contains(active)
@@ -1019,6 +1025,7 @@ function keepFocusInShell(
   regions: Record<Region, HTMLElement | null>,
   hiding: readonly Region[]
 ): void {
+  // The host's own reading, for the reason `shellClaimsRegionCycling` gives.
   const focused = document.activeElement;
   if (!hiding.some(region => regions[region]?.contains(focused) === true)) {
     return;
@@ -1148,9 +1155,11 @@ function useSeparatorRegionEscape(
       // Only from a separator. Everywhere else the manager is the right owner,
       // and intercepting here would take the key from a host binding that has
       // every right to it.
+      // By node kind rather than `instanceof HTMLElement`, which answers only
+      // for elements this window built.
       const target = event.target;
       if (
-        !(target instanceof HTMLElement) ||
+        !isHTMLElement(target) ||
         target.getAttribute("role") !== "separator"
       ) {
         return;

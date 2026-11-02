@@ -29,7 +29,7 @@ import {
 } from "@nextlyhq/builder/shell";
 import { useUploadMedia } from "@nextlyhq/plugin-sdk/admin";
 import { WEB_FONT_FORMATS } from "nextly/config";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import {
   classOverrideOf,
@@ -39,6 +39,8 @@ import {
 } from "../../site-style";
 import { useSaveSiteStyle } from "../site-style-client";
 import { useShown } from "../use-shown";
+
+import { StyleRevisionContext } from "./site-style-history";
 
 /**
  * The faces the site loads, or `undefined` while that is not yet known.
@@ -461,7 +463,7 @@ export function useClassSurface(
      * against it would compose a library missing everything stored — and the
      * save would then delete those classes rather than add one.
      */
-    create: useCreateClass(writes, configured),
+    create: useHeldWhileReplaying(useCreateClass(writes, configured)),
     /** Which classes are mid-rename, for the manager's no-op check. */
     pendingSlugs,
     /*
@@ -475,8 +477,37 @@ export function useClassSurface(
      * library missing everything stored would save that partial list, which
      * deletes the classes it could not see rather than renaming one.
      */
-    rename: useRenameClass(writes, configured, beginRename, endRename),
+    rename: useHeldWhileReplaying(
+      useRenameClass(writes, configured, beginRename, endRename)
+    ),
   };
+}
+
+/** What a class change made while a style replay settles is told. */
+const REPLAY_SETTLING = {
+  ok: false as const,
+  reason: "A style change is being undone or redone. Try again in a moment.",
+};
+
+/**
+ * A class write, refused while a style undo or redo settles.
+ *
+ * The inspector and the class manager compose a whole library from the one
+ * they hold, which still has what the replay took away until the read
+ * catches up; a write made then would put it back. So the write waits, said
+ * in words, until the replayed value has been read.
+ */
+function useHeldWhileReplaying<Args extends unknown[], Outcome>(
+  write: (...args: Args) => Promise<Outcome>
+): (...args: Args) => Promise<Outcome | typeof REPLAY_SETTLING> {
+  const { settling } = useContext(StyleRevisionContext);
+  const latest = useRef(settling);
+  latest.current = settling;
+  return useCallback(
+    (...args: Args) =>
+      latest.current ? Promise.resolve(REPLAY_SETTLING) : write(...args),
+    [write]
+  );
 }
 
 /**

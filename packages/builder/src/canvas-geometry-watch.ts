@@ -38,6 +38,7 @@
  */
 
 import { nodeElements } from "./canvas";
+import { isElement } from "./dom-kind";
 import { canvasRootFrom } from "./geometry-dom";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
@@ -141,11 +142,6 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
   };
 }
 
-/** A node this can read an attribute off, asked without naming a realm. */
-function isElement(node: Node): node is Element {
-  return node.nodeType === 1 && "getAttribute" in node;
-}
-
 /**
  * What each attribute held BEFORE this batch, or `undefined` if the batch
  * carries anything that is not an attribute change.
@@ -175,6 +171,7 @@ function beforeBatch(
   for (const record of records) {
     const name = record.attributeName;
     if (record.type !== "attributes" || name === null) return undefined;
+    // A node this can read an attribute off, asked without naming a realm.
     if (!isElement(record.target)) return undefined;
     const namespace = record.attributeNamespace;
     const byName =
