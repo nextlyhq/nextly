@@ -5,3 +5,9 @@
  * component, so loading `nextly.config.ts` doesn't pull admin/React into Node.
  */
 export const STYLE_FIXTURE_PATH = "playground/style-fixture#Showcase";
+
+/**
+ * A document view on posts that does nothing but fill the box the admin gives
+ * it, so a browser test can measure that box against the page's content area.
+ */
+export const FILL_PROBE_PATH = "playground/style-fixture#FillProbe";

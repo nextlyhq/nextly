@@ -1351,6 +1351,9 @@ export function SingleForm({
                  */
                 // Nor beside a document view, which takes the window alone.
                 open={previewOnScreen}
+                // A document view is a full-height screen: the closed split
+                // hands it the content area's height to fill.
+                fill={documentView !== undefined}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
