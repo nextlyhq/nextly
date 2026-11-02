@@ -787,10 +787,11 @@ export const pageBuilder = (
         "[page-builder] the default Layout repair ran before the plugin was installed"
       );
     }
-    return {
-      ...defaultLayoutSetup,
-      nextly: (await import("nextly/runtime")).requireNextly(),
-    };
+    // The booted instance through the SDK, imported at call time for the
+    // reason the preview reader above gives: this entry reaches a browser
+    // bundle, and the Direct API graph has no place there.
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    return { ...defaultLayoutSetup, nextly: await getCachedNextly() };
   };
 
   /**

@@ -154,7 +154,11 @@ async function repointToSeed(
     });
   }
   if (!(await stillDefault(deps, previous))) return "kept";
-  await writeLayoutSettings(deps.nextly, deps.slugs, { defaultLayout: seed });
+  // No person chose this default, so nobody is credited with it.
+  await writeLayoutSettings(deps.nextly, deps.slugs, {
+    defaultLayout: seed,
+    defaultLayoutChangedBy: null,
+  });
   deps.warn(
     "[page-builder] the default Layout was missing or not published, so the default now names the seeded Layout again",
     { previous, seededLayout: seed }
@@ -182,7 +186,9 @@ async function reseed(
     return "kept";
   }
 
-  const created = await createSeed(deps);
+  const created = await createSeed(deps, settings.seededLayout);
+  // Another run's seed landed while this one was creating: it is the seed.
+  if (created === null) return "kept";
   await recordSeed(deps, created, settings.defaultLayout);
   deps.warn(
     settings.seededLayout === null
@@ -241,7 +247,10 @@ async function recordSeed(
     const takeDefault = await stillDefault(deps, observed);
     await writeLayoutSettings(deps.nextly, deps.slugs, {
       seededLayout: created,
-      ...(takeDefault ? { defaultLayout: created } : {}),
+      // A default the repair chooses credits no person.
+      ...(takeDefault
+        ? { defaultLayout: created, defaultLayoutChangedBy: null }
+        : {}),
     });
   } catch (error) {
     await deps.nextly
@@ -274,9 +283,13 @@ async function recordSeed(
  * slugs without case or accents, so `Default-Site` holds `default-site` there.
  * A refusal as a duplicate adds the slug to the taken set and tries the next
  * numbered one, a bounded number of times; past that the run fails, and the
- * sweep tries again later.
+ * sweep tries again later. A refusal that came from another run seeding at the
+ * same moment answers `null` instead: that run's seed is adopted.
  */
-async function createSeed(deps: EnsureDefaultDeps): Promise<string> {
+async function createSeed(
+  deps: EnsureDefaultDeps,
+  observedSeed: string | null
+): Promise<string | null> {
   const { titles, slugs } = await takenNames(deps);
   for (let attempt = 1; ; attempt += 1) {
     const slug = seedSlug(slugs);
@@ -284,6 +297,10 @@ async function createSeed(deps: EnsureDefaultDeps): Promise<string> {
       return await createNamed(deps, seedTitle(titles), slug);
     } catch (error) {
       if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
+      // The refusal may be another run's seed taking this very slug: then the
+      // settings now record it, and creating under the next slug would leave
+      // two seeds. Checked before any retry, and answered with `null`.
+      if (await anotherRunSeeded(deps, observedSeed)) return null;
       if (attempt >= SEED_SLUG_ATTEMPTS) {
         throw NextlyError.conflict({
           reason: "state",
@@ -298,6 +315,15 @@ async function createSeed(deps: EnsureDefaultDeps): Promise<string> {
       slugs.add(slug);
     }
   }
+}
+
+/** Whether the settings now record a seed other than the one this run saw. */
+async function anotherRunSeeded(
+  deps: EnsureDefaultDeps,
+  observedSeed: string | null
+): Promise<boolean> {
+  const { seededLayout } = await readLayoutSettings(deps.nextly, deps.slugs);
+  return seededLayout !== null && seededLayout !== observedSeed;
 }
 
 /** Every stored Layout's title and slug, read as the only columns asked for. */

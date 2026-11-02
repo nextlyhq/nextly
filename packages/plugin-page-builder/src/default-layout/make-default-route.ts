@@ -30,7 +30,11 @@
  *
  * @module default-layout/make-default-route
  */
-import { NextlyError, respondMutation } from "@nextlyhq/plugin-sdk";
+import {
+  getCachedNextly,
+  NextlyError,
+  respondMutation,
+} from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
@@ -81,8 +85,8 @@ interface MakeDefaultResult {
 /**
  * Make one Layout the site's default, as the module docblock describes.
  *
- * `nextly` is a parameter so the route resolves the Direct API at call time,
- * keeping the runtime out of this module's import graph.
+ * `nextly` is a parameter so the route resolves the Direct API per call,
+ * through the SDK, rather than holding one from before boot finished.
  */
 async function makeDefault(
   req: Request,
@@ -236,9 +240,9 @@ async function readBody(
 }
 
 /**
- * The route declaration. The Direct API is resolved at call time, as the
- * plugin's other server paths do, so this module adds no runtime import to the
- * plugin entry.
+ * The route declaration. The Direct API is resolved per call through the
+ * SDK's `getCachedNextly`, the booted instance a plugin is promised, rather
+ * than through core's runtime entry.
  */
 export function makeDefaultRoute(): {
   method: "POST";
@@ -250,7 +254,6 @@ export function makeDefaultRoute(): {
     method: "POST",
     path: MAKE_DEFAULT_ROUTE_PATH,
     requiredPermission: MANAGE_SITE_PERMISSION,
-    handler: async (req, ctx) =>
-      makeDefault(req, ctx, (await import("nextly/runtime")).requireNextly()),
+    handler: async (req, ctx) => makeDefault(req, ctx, await getCachedNextly()),
   };
 }

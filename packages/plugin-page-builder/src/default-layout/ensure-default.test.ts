@@ -42,6 +42,11 @@ interface SiteOptions {
   landing?: { after: number; data: Record<string, unknown> };
   /** Slugs the database refuses as taken, whatever the scan reported. */
   refusedSlugs?: readonly string[];
+  /**
+   * Another process's seed, committed at the moment the first refusal
+   * happens: its row and its settings write. Models two runs racing to seed.
+   */
+  concurrentSeed?: Row;
 }
 
 /** A site in memory. Creates, updates and deletes act on its rows. */
@@ -93,6 +98,15 @@ function site(options: SiteOptions = {}) {
     },
     create: async ({ data }: { data: Record<string, unknown> }) => {
       if (options.refusedSlugs?.includes(String(data.slug)) === true) {
+        const other = options.concurrentSeed;
+        if (other !== undefined && !rows.some(row => row.id === other.id)) {
+          rows.push(other);
+          settings = {
+            ...settings,
+            seededLayout: other.id,
+            defaultLayout: other.id,
+          };
+        }
         throw NextlyError.duplicate();
       }
       created += 1;
@@ -239,6 +253,70 @@ describe("the name scan", () => {
     expect(scans[0]).toMatchObject({
       status: "all",
       select: { title: true, slug: true },
+    });
+  });
+});
+
+describe("two runs seeding at once", () => {
+  it("adopts the other run's seed when the slug is refused because it just took it", async () => {
+    const other: Row = {
+      id: "other-seed",
+      title: "Default (site)",
+      slug: "default-site",
+      status: "published",
+    };
+    const s = site({ refusedSlugs: ["default-site"], concurrentSeed: other });
+
+    await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("kept");
+
+    expect(s.rows.map(row => row.id)).toEqual(["other-seed"]);
+    expect(s.settings()).toMatchObject({
+      seededLayout: "other-seed",
+      defaultLayout: "other-seed",
+    });
+  });
+});
+
+describe("who chose the default", () => {
+  it("is cleared when the repair points the default back at the seed", async () => {
+    const s = site({
+      rows: [
+        {
+          id: "seed",
+          title: "Default (site)",
+          slug: "default-site",
+          status: "published",
+        },
+      ],
+      settings: {
+        defaultLayout: "gone",
+        seededLayout: "seed",
+        defaultLayoutChangedBy: "admin-1",
+      },
+    });
+
+    await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("repointed");
+
+    expect(s.settings()).toMatchObject({
+      defaultLayout: "seed",
+      defaultLayoutChangedBy: null,
+    });
+  });
+
+  it("is cleared when the repair makes a new seed the default", async () => {
+    const s = site({
+      settings: {
+        defaultLayout: null,
+        seededLayout: null,
+        defaultLayoutChangedBy: "admin-1",
+      },
+    });
+
+    await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("seeded");
+
+    expect(s.settings()).toMatchObject({
+      defaultLayout: s.rows[0]?.id,
+      defaultLayoutChangedBy: null,
     });
   });
 });
