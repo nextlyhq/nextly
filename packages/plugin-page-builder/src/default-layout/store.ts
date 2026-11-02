@@ -38,6 +38,11 @@ export interface DefaultLayoutSlugs {
 export interface LayoutSettings {
   readonly defaultLayout: string | null;
   readonly seededLayout: string | null;
+  /**
+   * Who made the current default, by user id; null for a default the plugin
+   * set itself (the seed, or the repair) or one recorded before this existed.
+   */
+  readonly defaultLayoutChangedBy: string | null;
 }
 
 /**
@@ -76,6 +81,11 @@ export async function readLayoutSettings(
   return {
     defaultLayout: relationId(doc?.defaultLayout),
     seededLayout: relationId(doc?.seededLayout),
+    defaultLayoutChangedBy:
+      typeof doc?.defaultLayoutChangedBy === "string" &&
+      doc.defaultLayoutChangedBy !== ""
+        ? doc.defaultLayoutChangedBy
+        : null,
   };
 }
 

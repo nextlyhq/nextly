@@ -623,6 +623,8 @@ describe.each(getConfiguredTestDialects())(
         expect(await settingsOf(t)).toEqual({
           defaultLayout: seed,
           seededLayout: seed,
+          // The repair's own choice names nobody.
+          defaultLayoutChangedBy: null,
         });
 
         await deleteSkippingHooks(t, seed, owner);
@@ -806,12 +808,53 @@ describe.each(getConfiguredTestDialects())(
           "stopped being published"
         );
         expect((await settingsOf(t)).defaultLayout).toBe(previous);
+        // The previous default was the plugin's own, so it names nobody, and
+        // the refused request is not recorded as having chosen it.
+        expect((await settingsOf(t)).defaultLayoutChangedBy).toBeNull();
         expect((await rowOf(t, target)).status).toBe("draft");
         expect(
           warnings.some(message =>
             message.includes("unpublished while it was being made the default")
           )
         ).toBe(true);
+      });
+
+      it("restores whoever chose the previous default along with it", async () => {
+        const t = await boot();
+        const owner = await person(t, "owner");
+        const chosen = await layout(t, "Main", "main");
+        expect(
+          (await makeDefault(await sessionOf(t, owner), chosen)).status
+        ).toBe(200);
+        expect((await settingsOf(t)).defaultLayoutChangedBy).toBe(owner);
+
+        const manager = await person(t, "manager");
+        await grant(t, manager, [
+          "manage-page-builder-site",
+          "read-layouts",
+          "update-layouts",
+          "publish-layouts",
+        ]);
+        const target = await layout(t, "Landing", "landing");
+        let armed = true;
+        t.hooks.register(
+          "afterUpdate",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async context => {
+            const data = (context as { data?: Record<string, unknown> }).data;
+            if (!armed || relationId(data?.defaultLayout) !== target) return;
+            armed = false;
+            await unpublishSkippingHooks(t, target);
+          }
+        );
+
+        const answer = await makeDefault(await sessionOf(t, manager), target);
+
+        expect(answer.status).toBe(409);
+        expect(await settingsOf(t)).toMatchObject({
+          defaultLayout: chosen,
+          defaultLayoutChangedBy: owner,
+        });
       });
 
       it("refuses without restoring when a newer make-default replaced the default before the unpublish landed", async () => {
@@ -886,6 +929,8 @@ describe.each(getConfiguredTestDialects())(
         expect(await settingsOf(t)).toEqual({
           defaultLayout: seed,
           seededLayout: seed,
+          // The repair's own choice names nobody.
+          defaultLayoutChangedBy: null,
         });
         expect((await rowOf(t, seed)).status).toBe("published");
       });
@@ -921,6 +966,8 @@ describe.each(getConfiguredTestDialects())(
         expect(await settingsOf(t)).toEqual({
           defaultLayout: seed,
           seededLayout: seed,
+          // The repair's own choice names nobody.
+          defaultLayoutChangedBy: null,
         });
         expect((await rowOf(t, seed)).status).toBe("published");
       });
