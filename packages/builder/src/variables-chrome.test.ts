@@ -20,6 +20,16 @@ function ruleFor(selector: string): string | undefined {
 }
 
 describe("the Variables editor's styles", () => {
+  it("rounds every corner with the admin's radius tokens, never a raw length", () => {
+    const start = CHROME.indexOf(
+      "/*\n * The Variables view of the Design panel"
+    );
+    const end = CHROME.indexOf(".nx-vars-import__skipped {", start);
+    expect(start).toBeGreaterThan(-1);
+    const block = CHROME.slice(start, end);
+    expect(block.match(/border-radius:\s*\d[^;]*;/g) ?? []).toEqual([]);
+  });
+
   it("sizes its buttons like the panel's other small controls", () => {
     // Two classes, to outrank the button's own text size.
     const body = ruleFor(".nx-vars-editor .nx-vars-editor__button");

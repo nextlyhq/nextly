@@ -38,6 +38,7 @@ import {
   dtcgToTokens,
   modeFilesToTokens,
   resolverToTokens,
+  sameSiteToken,
   tokensToFigma,
   tokensToResolver,
   tokenCustomProperty,
@@ -162,8 +163,9 @@ export type ImportPlan =
       /** Tokens the site does not have. */
       readonly added: readonly SiteToken[];
       /**
-       * Tokens the file fills in without contradicting the site: a dark value,
-       * a label or a description the site's token lacks.
+       * Tokens the file changes without contradicting the site: a dark value,
+       * a label or a description the site's token lacks, or another tool's
+       * data on it.
        */
       readonly changed: readonly SiteToken[];
       readonly unchanged: readonly SiteToken[];
@@ -257,9 +259,13 @@ function planned(
   incoming: readonly SiteToken[],
   into: SiteTokenSet
 ): ReturnType<typeof sortAgainst> & { labelClashes: string[] } {
+  const sorted = sortAgainst(incoming, into);
   return {
-    ...sortAgainst(incoming, into),
-    labelClashes: newLabelClashes(into, mergeById(into, incoming).tokens),
+    ...sorted,
+    labelClashes: newLabelClashes(
+      into,
+      mergeById(into, sorted.incoming).tokens
+    ),
   };
 }
 
@@ -312,9 +318,13 @@ function sortAgainst(
   const changed: SiteToken[] = [];
   const unchanged: SiteToken[] = [];
   const conflicts: ImportConflict[] = [];
-  for (const imported of incoming) {
-    const identity = tokenIdentity(imported);
+  const laid: SiteToken[] = [];
+  for (const stated of incoming) {
+    const identity = tokenIdentity(stated);
     const held = mine.get(identity);
+    // What applying would store: the file's token laid onto the site's.
+    const imported = held === undefined ? stated : laidOnto(held, stated);
+    laid.push(imported);
     if (held === undefined) {
       added.push(imported);
       continue;
@@ -322,10 +332,42 @@ function sortAgainst(
     const fields = conflictFields(held, imported);
     if (fields.length > 0) {
       conflicts.push({ identity, mine: held, imported, fields });
-    } else if (fillsIn(held, imported)) changed.push(imported);
-    else unchanged.push(imported);
+    } else if (sameSiteToken(held, imported)) {
+      // Asked of the token applying would store, with the engine's one
+      // comparison, vendor data included: another tool's metadata arriving
+      // is a change, and a field the file merely leaves out is not.
+      unchanged.push(imported);
+    } else changed.push(imported);
   }
-  return { added, changed, unchanged, conflicts, incoming };
+  return { added, changed, unchanged, conflicts, incoming: laid };
+}
+
+/**
+ * A file's token laid onto the site's: a field the file states replaces the
+ * stored one, and an optional field it leaves out (a dark value, a label, a
+ * description, another tool's data) keeps the stored value rather than being
+ * deleted by an import that never mentioned it.
+ */
+function laidOnto(held: SiteToken, stated: SiteToken): SiteToken {
+  const dark = stated.values.dark ?? held.values.dark;
+  const id = stated.id ?? held.id;
+  const label = stated.label ?? held.label;
+  const description = stated.description ?? held.description;
+  const extensions = stated.extensions ?? held.extensions;
+  const unreadExtension = stated.unreadExtension ?? held.unreadExtension;
+  return {
+    ...(id === undefined ? {} : { id }),
+    name: stated.name,
+    ...(label === undefined ? {} : { label }),
+    kind: stated.kind,
+    values:
+      dark === undefined
+        ? { light: stated.values.light }
+        : { light: stated.values.light, dark },
+    ...(description === undefined ? {} : { description }),
+    ...(extensions === undefined ? {} : { extensions }),
+    ...(unreadExtension === undefined ? {} : { unreadExtension }),
+  };
 }
 
 /**
@@ -386,15 +428,6 @@ function conflictFields(mine: SiteToken, imported: SiteToken): ConflictField[] {
   return fields;
 }
 
-/** Whether the file states something the site's token leaves unset. */
-function fillsIn(mine: SiteToken, imported: SiteToken): boolean {
-  return (
-    (mine.values.dark === undefined && imported.values.dark !== undefined) ||
-    (mine.label === undefined && imported.label !== undefined) ||
-    (mine.description === undefined && imported.description !== undefined)
-  );
-}
-
 /**
  * A planned import applied to the site's tokens as they are NOW.
  *
@@ -408,17 +441,23 @@ export function applyImport(
   into: SiteTokenSet,
   choices: ReadonlyMap<string, ConflictChoice>
 ): ImportResult {
-  const kept = new Set(
-    plan.conflicts
+  // Only what changes the site is applied and counted: a variable the file
+  // holds unchanged, or a conflict kept as the site has it, is no change, and
+  // merging it would spend a save and claim an arrival that did not happen.
+  const standing = new Set([
+    ...plan.unchanged.map(tokenIdentity),
+    ...plan.conflicts
       .filter(conflict => choices.get(conflict.identity) === "keep")
-      .map(conflict => conflict.identity)
+      .map(conflict => conflict.identity),
+  ]);
+  const taken = plan.incoming.filter(
+    token => !standing.has(tokenIdentity(token))
   );
-  const taken = plan.incoming.filter(token => !kept.has(tokenIdentity(token)));
   if (taken.length === 0) {
     return {
       ok: false,
       error:
-        "Every change was set to keep this site's own values, so nothing was changed.",
+        "Nothing in those files would change this site's variables, so nothing was changed.",
       skipped: plan.skipped,
     };
   }

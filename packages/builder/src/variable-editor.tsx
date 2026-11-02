@@ -18,6 +18,7 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { Button, ColorPicker, Input } from "@nextlyhq/ui";
+import { Undo2 } from "lucide-react";
 import * as React from "react";
 
 import { colourHexOf } from "./style-colour";
@@ -229,20 +230,35 @@ function TypePair({
               Dark
             </span>
             {halves.map(half => (
-              <CommitInput
-                key={half.name}
-                label={`${half.name}, dark`}
-                value={half.token.values.dark ?? ""}
-                placeholder={half.token.values.light}
-                readOnly={readOnly}
-                onCommit={value => write(half.at, "dark", value)}
-              />
+              <div key={half.name} className="nx-vars-editor__cell">
+                <CommitInput
+                  label={`${half.name}, dark`}
+                  value={half.token.values.dark ?? ""}
+                  placeholder={half.token.values.light}
+                  readOnly={readOnly}
+                  onCommit={value => write(half.at, "dark", value)}
+                />
+                {/* Each half returns to following light on its own; the
+                    action for both is below. */}
+                {readOnly || half.token.values.dark === undefined ? null : (
+                  <button
+                    type="button"
+                    className="nx-vars__icon-button nx-vars-editor__cell-action"
+                    aria-label={`Use light ${half.name.toLowerCase()}`}
+                    title={`Use light ${half.name.toLowerCase()}`}
+                    onClick={() => onChange(clearDarkValue(tokens, half.at))}
+                  >
+                    <Undo2 aria-hidden="true" size={14} />
+                  </button>
+                )}
+              </div>
             ))}
           </>
         ) : null}
       </div>
       {hasDark ? (
-        readOnly ? null : (
+        readOnly ||
+        halves.some(half => half.token.values.dark === undefined) ? null : (
           <Button
             type="button"
             variant="outline"
