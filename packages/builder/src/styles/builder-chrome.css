@@ -1716,26 +1716,24 @@
 /*
  * The site's OWN dark mode, which is the one thing that darkens the page.
  *
- * A site's dark token values apply under one of two strategies: under
- * `[data-nx-theme="dark"]` on an ancestor the host chooses, or with the
- * viewer's system on a site whose strategy is `media`. The page's ground and
- * text already follow those values through the tokens; what these rules add
- * is the SCHEME. The canvas root states the strategy as
- * `data-nx-site-dark-ground`, and only when the site's dark values include a
- * dark ground — the strategy says when dark values apply, not that the page
- * turns dark, so a site whose dark set keeps a light background keeps light
- * native controls. Each path is keyed on that stated strategy, so a host's
- * attribute does not darken the page of a site that follows the system.
+ * A site's dark token values apply with the viewer's device, unless a
+ * `[data-nx-theme="light"]` marker sits above, and under a
+ * `[data-nx-theme="dark"]` marker whatever the device says, as the site sheet
+ * writes them. The page's ground and text already follow those values through
+ * the tokens; what these rules add is the SCHEME. The canvas root carries
+ * `data-nx-site-dark-ground` only when the site's dark values include a dark
+ * ground, so a site whose dark set keeps a light background keeps light
+ * native controls.
  * The admin's `.dark` class is a different switch and reaches nothing here.
  */
-[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground="attribute"] {
+[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground] {
   color-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
 }
 
 @media (prefers-color-scheme: dark) {
-  .nx-canvas[data-nx-site-dark-ground="media"] {
+  .nx-canvas[data-nx-site-dark-ground]:not([data-nx-theme="light"] .nx-canvas) {
     color-scheme: dark;
     --nx-builder-select: var(--nx-builder-select-on-dark);
     --nx-builder-component: var(--nx-builder-component-on-dark);
