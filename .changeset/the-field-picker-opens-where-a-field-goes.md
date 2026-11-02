@@ -1,6 +1,4 @@
 ---
-"@nextlyhq/plugin-accounts": patch
-"@nextlyhq/plugin-commerce": patch
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-mysql": patch
 "@nextlyhq/adapter-postgres": patch
