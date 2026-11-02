@@ -7,6 +7,32 @@ The editor opens with the page on the canvas, the inspector on the right for the
 selected block, and a rail of named panels on the left. One panel is open at a time.
 Choosing a panel's item again closes it and gives the canvas the room back.
 
+## The top bar
+
+The top bar runs across the editor in three parts.
+
+| Part   | What it holds                                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Left   | The way back to the entry, the page's title, **Undo** and **Redo**, and whether the page is a draft or has unsaved changes.                               |
+| Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                              |
+| Right  | **Preview**, where the admin offers one for this entry, the save and publish actions, and the buttons that hide or show the left panel and the inspector. |
+
+Undo and Redo take the same steps as the keyboard. A text edit still open on the canvas
+is finished first, so its words are the step undone.
+
+A change to the site's shared styles in **Design** (a variable, a class, a font or a
+breakpoint) is a step of the same history. Those are saved as you make them, so undoing
+one saves the style as it was before, and the page's own save state doesn't change.
+
+Hiding a side gives the canvas its room. The left panel you had open comes back when
+you use the rail again. The editor remembers which sides you hid, for you.
+
+The device buttons show Desktop and the site's two widest breakpoints. A site with more
+puts the rest in a menu beside them, under **More devices**. While you style one of those,
+the menu's button shows its name and width. The buttons never change places.
+
+When the bar is narrow, the device buttons drop their label first and keep their icons.
+
 ## The rail
 
 The rail shows only the panels that work in this editor. A panel that is not built yet
@@ -23,7 +49,8 @@ has no item at all, so nothing on the rail opens an empty panel.
 Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
 
 The editor remembers the panel you left open, and on Design the tab you left on, the
-next time you open it in the same browser.
+next time you open it. It remembers them for you, not for the browser, so two people
+who share a browser each find their own.
 
 ## Moving blocks in Layers
 
@@ -52,21 +79,22 @@ Escape closes Help and returns you to the rail.
 
 On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 
-| Keys                                                                          | What they do                                                                 |
-| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                  | Undo the last change                                                         |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Redo the last undone change                                                  |
-| <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                  | Duplicate the selected block                                                 |
-| <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                     | Delete the selected block                                                    |
-| <kbd>Enter</kbd>                                                              | Edit the selected block's text                                               |
-| <kbd>Escape</kbd>                                                             | Clear the block selection                                                    |
-| <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                     | Move the selected block up or down                                           |
-| <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                     | Move the selected block into the container above it, or out of its container |
-| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                  | Open the command palette                                                     |
-| <kbd>F6</kbd>                                                                 | Move to the next area of the editor: rail, panel, canvas, inspector          |
-| <kbd>Ctrl</kbd>+<kbd>0</kbd> | Show the page at actual size |
-| <kbd>Shift</kbd>+<kbd>1</kbd> | Fit the page to the canvas |
-| <kbd>Shift</kbd>+<kbd>F10</kbd> or the menu key | Open the menu of the block that holds focus, from a link or button inside it. Elsewhere, right-click the block or use its toolbar |
+| Keys                                                                          | What they do                                                                                                                      |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                  | Undo the last change                                                                                                              |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Redo the last undone change                                                                                                       |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                  | Duplicate the selected block                                                                                                      |
+| <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                     | Delete the selected block                                                                                                         |
+| <kbd>Enter</kbd>                                                              | Edit the selected block's text                                                                                                    |
+| <kbd>Escape</kbd>                                                             | Clear the block selection                                                                                                         |
+| <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                     | Move the selected block up or down                                                                                                |
+| <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                     | Move the selected block into the container above it, or out of its container                                                      |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                  | Open the command palette                                                                                                          |
+| <kbd>F6</kbd>                                                                 | Move to the next area of the editor: top bar, rail, panel, canvas, inspector                                                      |
+| <kbd>Ctrl</kbd>+<kbd>\\</kbd>                                                 | Hide both side panels, or show them again                                                                                         |
+| <kbd>Ctrl</kbd>+<kbd>0</kbd>                                                  | Show the page at actual size                                                                                                      |
+| <kbd>Shift</kbd>+<kbd>1</kbd>                                                 | Fit the page to the canvas                                                                                                        |
+| <kbd>Shift</kbd>+<kbd>F10</kbd> or the menu key                               | Open the menu of the block that holds focus, from a link or button inside it. Elsewhere, right-click the block or use its toolbar |
 
 Help is the complete list for the editor you have open, including any shortcut the
 page around it adds, such as saving.

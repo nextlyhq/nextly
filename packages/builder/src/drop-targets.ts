@@ -214,6 +214,14 @@ export interface DropRefusal {
    * from one that needs a container to exist first.
    */
   readonly parentId?: string;
+  /**
+   * Why the region refuses. Beside the name rules' reasons (`"wrong-parent"`,
+   * `"restricted-at-root"`, `"not-allowed-in-slot"`) this carries the
+   * placement rule's: `"undeclared-slot"`, `"holds-no-blocks"`,
+   * `"phrasing-only"` and `"content-model"`. A `switch` over it needs a
+   * `default`, or a case for each of those; {@link DropRefusal.verdict}
+   * carries the facts each of them is explained by.
+   */
   readonly reason: PlacementRefusal;
   readonly permitted: readonly string[];
   /**
@@ -238,13 +246,27 @@ export interface DropPlacement {
   readonly placing: () => readonly PlacedNode[];
   readonly sources: PlacementSources;
   /**
-   * The answers already reached, by region id, kept for one gesture. The
-   * document, the blocks being placed and the regions are fixed while a drag
-   * lasts, so a region's answer is too, and every pointer move and autoscroll
-   * frame would otherwise walk the same subtree again.
+   * The answers already reached, kept for one gesture. The document, the
+   * blocks being placed and the regions are fixed while a drag lasts, so a
+   * region's answer is too, and every pointer move and autoscroll frame would
+   * otherwise walk the same subtree again.
    */
-  readonly verdicts?: Map<string, RegionVerdict>;
+  readonly verdicts?: RegionVerdicts;
 }
+
+/**
+ * Region answers keyed by the region's container, then its slot, with the
+ * root region under `undefined` for both.
+ *
+ * Two keys rather than {@link DropRegion.id}: that id joins the two with `::`,
+ * and a node id or a slot name may itself contain `::`, so container `a` with
+ * slot `b::c` and container `a::b` with slot `c` spell the same id while
+ * being different regions with different answers.
+ */
+export type RegionVerdicts = Map<
+  string | undefined,
+  Map<string | undefined, RegionVerdict>
+>;
 
 /**
  * A region's answer: the rule's verdict, and for a refusal the container it is
@@ -666,7 +688,7 @@ export function resolveDrop(query: DropQuery, pointer: Point): DropResolution {
  */
 function judgeRegion(query: DropQuery, region: DropRegion): RegionVerdict {
   const { placement } = query;
-  const held = placement?.verdicts?.get(region.id);
+  const held = placement?.verdicts?.get(region.parentId)?.get(region.slot);
   if (held !== undefined) return held;
   const placing = placement?.placing() ?? [];
   const verdict =
@@ -690,7 +712,12 @@ function judgeRegion(query: DropQuery, region: DropRegion): RegionVerdict {
       ? region.parentId
       : refusingParent(query, region, verdict),
   };
-  placement?.verdicts?.set(region.id, judged);
+  const verdicts = placement?.verdicts;
+  if (verdicts !== undefined) {
+    const bySlot = verdicts.get(region.parentId) ?? new Map();
+    bySlot.set(region.slot, judged);
+    verdicts.set(region.parentId, bySlot);
+  }
   return judged;
 }
 

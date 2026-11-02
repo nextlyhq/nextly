@@ -70,7 +70,7 @@ import {
   type DropResolution,
   type DropTarget,
   type RectSource,
-  type RegionVerdict,
+  type RegionVerdicts,
 } from "./drop-targets";
 import type { EditorState } from "./editor-state";
 import type { Point, Rect } from "./geometry";
@@ -437,7 +437,7 @@ interface Gesture {
    * do not change mid-drag, and every pointer move and autoscroll frame
    * resolves the drop again.
    */
-  readonly placementVerdicts: Map<string, RegionVerdict>;
+  readonly placementVerdicts: RegionVerdicts;
   /** False until the pointer has travelled far enough to mean a drag. */
   active: boolean;
   switchState: TargetSwitchState;

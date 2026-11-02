@@ -829,8 +829,11 @@ export function useBlockKeyboardActions({
         // edit touched.
         when: () => latest.current.canUndo,
         run: () => {
-          latest.current.undo();
-          announce("Undone");
+          // Said once the step has taken effect: a shared style change is
+          // undone by a write, which can be refused.
+          void Promise.resolve(latest.current.undo()).then(done => {
+            if (done) announce("Undone");
+          });
         },
       },
       {
@@ -845,8 +848,9 @@ export function useBlockKeyboardActions({
         whenTyping: false,
         when: () => latest.current.canRedo,
         run: () => {
-          latest.current.redo();
-          announce("Redone");
+          void Promise.resolve(latest.current.redo()).then(done => {
+            if (done) announce("Redone");
+          });
         },
       },
       {
@@ -855,8 +859,9 @@ export function useBlockKeyboardActions({
         whenTyping: false,
         when: () => latest.current.canRedo,
         run: () => {
-          latest.current.redo();
-          announce("Redone");
+          void Promise.resolve(latest.current.redo()).then(done => {
+            if (done) announce("Redone");
+          });
         },
       },
     ],

@@ -11,6 +11,7 @@ import {
   registryBlockSource,
   registryNestingSource,
   type BlockNode,
+  type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -61,11 +62,11 @@ afterEach(() => {
   clearBlocks();
 });
 
-function offeredInside(card: BlockNode): string[] {
-  const sources = {
-    nesting: registryNestingSource(),
-    definitions: registryBlockSource(),
-  };
+function offeredInside(
+  card: BlockNode,
+  nesting: NestingSource = registryNestingSource()
+): string[] {
+  const sources = { nesting, definitions: registryBlockSource() };
   const site = placementSiteIn(
     [card],
     { kind: "slot", parentId: card.id, slot: "children" },
@@ -75,7 +76,7 @@ function offeredInside(card: BlockNode): string[] {
   return allowedEntries(
     catalogFrom(allBlocks()),
     { kind: "slot", parentType: card.type, slot: "children" },
-    registryNestingSource(),
+    nesting,
     undefined,
     {
       site,
@@ -114,6 +115,26 @@ describe("the Add panel under the one placement rule", () => {
       props: { link: "/go" },
     };
     expect(offeredInside(linked)).not.toContain("t/accordion");
+  });
+
+  it("asks the name rules once per entry, inside the one placement rule", () => {
+    // The placement rule already asks a block's parents and the slot's
+    // allow-list, so a second, narrower pass over the same rules beside it
+    // asks each question twice. Counted per type, which a Heading with no
+    // starting children reaches exactly once when the rule is asked once.
+    const registry = registryNestingSource();
+    const asked = new Map<string, number>();
+    const counting: NestingSource = {
+      parentsOf: type => {
+        asked.set(type, (asked.get(type) ?? 0) + 1);
+        return registry.parentsOf(type);
+      },
+      slotAllowOf: (type, slot) => registry.slotAllowOf?.(type, slot),
+    };
+    const plain: BlockNode = { id: "c", type: "t/card", version: 1, props: {} };
+    // The control: the Heading is offered, so it was judged and counted.
+    expect(offeredInside(plain, counting)).toContain("t/heading");
+    expect(asked.get("t/heading")).toBe(1);
   });
 
   it("offers the same Accordion inside the card with its link off", () => {

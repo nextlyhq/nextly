@@ -32,6 +32,7 @@ import { Button } from "@nextlyhq/ui";
 import { useState, type ComponentProps, type JSX } from "react";
 import {
   useFormState,
+  useWatch,
   type Control,
   type FieldValues,
   type Path,
@@ -42,6 +43,7 @@ import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
+import { SiteStyleHistoryContext } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 import { UnsavedChangesPill } from "../UnsavedChangesPill";
 
@@ -51,6 +53,14 @@ import {
   useEditorPanels,
   type EditorPanels,
 } from "./editor-panels";
+import { HistoryButtons } from "./history-buttons";
+import { PreviewButton } from "./preview-button";
+import {
+  ConnectStyleHistoryContext,
+  RemountOnStyleReplay,
+  StyleRevisionContext,
+  useSiteStyleHistory,
+} from "./site-style-history";
 import { offerableTokens, siteStyleStatus } from "./site-style-studios";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -188,7 +198,16 @@ const COMPONENT_READ_NOTES: Readonly<
  * inspector and the canvas region below, so the tree the shell receives is
  * the one it always received.
  */
-function editorTopBar(view: EditorView): React.JSX.Element {
+/**
+ * What the editor puts in the shell's top bar, by column: the document's
+ * history and state at the start, the devices in the centre, and Preview and
+ * the document's actions at the end.
+ */
+function editorTopBar(view: EditorView): {
+  topBar: React.JSX.Element;
+  topBarCenter: React.JSX.Element;
+  topBarEnd: React.JSX.Element;
+} {
   const {
     documentDirty,
     canvasRender,
@@ -197,53 +216,69 @@ function editorTopBar(view: EditorView): React.JSX.Element {
     siteStyleError,
     editedBreakpoint,
     chooseDevice,
+    editor,
+    inline,
   } = view;
-  return (
-    <>
-      <DocumentStatusPill isDirty={documentDirty} />
-      {/* Beside the publish state, not folded into it. The two answer
+  return {
+    topBar: (
+      <>
+        <HistoryButtons editor={editor} inline={inline} />
+        <DocumentStatusPill isDirty={documentDirty} />
+        {/* Beside the publish state, not folded into it. The two answer
                 different questions and one of them has no answer where a
                 collection declares no lifecycle. */}
-      <UnsavedChangesPill isDirty={documentDirty} />
-      {/*
-       * Gated on the SAME read the canvas and the cascade are gated on.
-       * Until the stored style has answered, `canvasSiteStyle` is the
-       * host's config defaults — so the dialog would open on a set the
-       * site never chose, and saving from that draft would overwrite the
-       * site's real breakpoints with defaults the author never saw.
-       *
-       * `!== null`, not `!== undefined`: `useSiteStyle` types `error` as
-       * `Error | null` and normalises success to `null`, so the
-       * `undefined` comparison is true on success too — the same mistake
-       * that once withheld the provenance trace unconditionally.
-       */}
-      <BreakpointManager
-        value={canvasRender.styleContext.breakpoints}
-        onSave={saveBreakpoints}
-        status={siteStyleStatus(siteStylePending, siteStyleError)}
-      />
-      {/*
-       * Beside the manager, and gated on the same read for the same
-       * reason it is: until the stored style has answered, the set in
-       * hand is the host's config defaults, so a device chosen against it
-       * could name a breakpoint the site never had.
-       *
-       * The device chosen is the breakpoint being edited. The choice goes
-       * to the shell, which stores it with the author's preferences and
-       * reports it back, so this shows the device the edits go to.
-       */}
-      <BreakpointSwitcher
-        breakpoints={canvasRender.styleContext.breakpoints}
-        selected={editedBreakpoint}
-        onSelect={chooseDevice}
-        status={siteStyleStatus(siteStylePending, siteStyleError)}
-      />
-      {/* Last, at the bar's far end where the header kept them: the
+        <UnsavedChangesPill isDirty={documentDirty} />
+      </>
+    ),
+    topBarCenter: (
+      <>
+        {/*
+         * Gated on the SAME read the canvas and the cascade are gated on.
+         * Until the stored style has answered, `canvasSiteStyle` is the
+         * host's config defaults — so the dialog would open on a set the
+         * site never chose, and saving from that draft would overwrite the
+         * site's real breakpoints with defaults the author never saw.
+         *
+         * `!== null`, not `!== undefined`: `useSiteStyle` types `error` as
+         * `Error | null` and normalises success to `null`, so the
+         * `undefined` comparison is true on success too — the same mistake
+         * that once withheld the provenance trace unconditionally.
+         */}
+        <RemountOnStyleReplay>
+          <BreakpointManager
+            value={canvasRender.styleContext.breakpoints}
+            onSave={saveBreakpoints}
+            status={siteStyleStatus(siteStylePending, siteStyleError)}
+          />
+        </RemountOnStyleReplay>
+        {/*
+         * Beside the manager, and gated on the same read for the same
+         * reason it is: until the stored style has answered, the set in
+         * hand is the host's config defaults, so a device chosen against it
+         * could name a breakpoint the site never had.
+         *
+         * The device chosen is the breakpoint being edited. The choice goes
+         * to the shell, which stores it with the author's preferences and
+         * reports it back, so this shows the device the edits go to.
+         */}
+        <BreakpointSwitcher
+          breakpoints={canvasRender.styleContext.breakpoints}
+          selected={editedBreakpoint}
+          onSelect={chooseDevice}
+          status={siteStyleStatus(siteStylePending, siteStyleError)}
+        />
+      </>
+    ),
+    topBarEnd: (
+      <>
+        <PreviewButton />
+        {/* Last, at the bar's far end where the header kept them: the
           document's save verbs, which the builder's taking the window would
           otherwise leave reachable only from the keyboard. */}
-      <DocumentActionButtons />
-    </>
-  );
+        <DocumentActionButtons />
+      </>
+    ),
+  };
 }
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
@@ -516,6 +551,20 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
 }
 
 /**
+ * The document's title as the author has it right now, for the top bar: the
+ * form's `title` value while it is text, and nothing otherwise.
+ */
+function usePageTitle<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>
+): string | undefined {
+  const title: unknown = useWatch({
+    control,
+    name: "title" as Path<TFieldValues>,
+  });
+  return typeof title === "string" ? title : undefined;
+}
+
+/**
  * The editor itself, mounted only while open.
  *
  * Separate component so the hooks below — editor state, and the chrome request
@@ -523,15 +572,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
  * ask the admin to hide its navigation for every entry form holding a blocks
  * field, open or not.
  */
-export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
-  initialValue,
-  kinds,
-  onCommit,
-  onClose,
-  name,
-  control,
-  openAt,
-}: {
+interface BlocksEditorProps<TFieldValues extends FieldValues> {
   initialValue: unknown;
   /** The kinds the field accepts, so a seeded document is one it will take. */
   kinds: readonly DocumentKind[] | undefined;
@@ -541,7 +582,37 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   control: Control<TFieldValues>;
   /** The section to open at, as the address names it; none opens at the top. */
   openAt?: string | undefined;
-}): JSX.Element {
+}
+
+export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
+  props: BlocksEditorProps<TFieldValues>
+): JSX.Element {
+  /*
+   * A change to the site's shared styles is a step of the editor's undo
+   * history. Provided from here, above the editor's own hooks, because some
+   * of the style writers run in the editor component itself.
+   */
+  const style = useSiteStyleHistory();
+  return (
+    <SiteStyleHistoryContext.Provider value={style.history}>
+      <StyleRevisionContext.Provider value={style.replay}>
+        <ConnectStyleHistoryContext.Provider value={style.connect}>
+          <EditorBody {...props} />
+        </ConnectStyleHistoryContext.Provider>
+      </StyleRevisionContext.Provider>
+    </SiteStyleHistoryContext.Provider>
+  );
+}
+
+function EditorBody<TFieldValues extends FieldValues>({
+  initialValue,
+  kinds,
+  onCommit,
+  onClose,
+  name,
+  control,
+  openAt,
+}: BlocksEditorProps<TFieldValues>): JSX.Element {
   // The field's value as last loaded or saved: the form resets its defaults to
   // what a save stored, so the editor holds an edit to the locks against the
   // same stored copy the next save is judged against.
@@ -584,6 +655,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     savePoint,
   });
 
+  const pageTitle = usePageTitle(control);
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
@@ -623,6 +695,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       <BuilderShell
         notices={notices}
         onExit={done}
+        // The signed-in author's own preferences, not the browser's.
+        store={mount.preferenceStore}
         availablePanels={availablePanels}
         // Forces the insert panel open from the empty-container appender,
         // which lives on the canvas below rather than beside the rail that
@@ -642,7 +716,10 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
         // editor is open, because the document is committed on the way out.
-        topBar={editorTopBar(view)}
+        {...editorTopBar(view)}
+        // The document's title, read-only, as the author has it in the form
+        // right now. Nothing for a document with no title field.
+        title={pageTitle}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears

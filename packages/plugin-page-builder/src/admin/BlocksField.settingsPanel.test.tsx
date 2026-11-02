@@ -58,6 +58,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       renderPanel,
       availablePanels,
       topBar,
+      topBarCenter,
+      topBarEnd,
     }: {
       renderPanel?: (
         panel: string,
@@ -65,6 +67,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       ) => React.ReactNode;
       availablePanels?: readonly string[];
       topBar?: React.ReactNode;
+      topBarCenter?: React.ReactNode;
+      topBarEnd?: React.ReactNode;
     }): React.JSX.Element => (
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
@@ -74,7 +78,11 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
           ).join(",")}
         </div>
         <div data-testid="panel">{renderPanel?.("settings", view)}</div>
-        <div data-testid="topbar">{topBar}</div>
+        <div data-testid="topbar">
+          {topBar}
+          {topBarCenter}
+          {topBarEnd}
+        </div>
       </div>
     ),
     BlockKeyboardActions: passthrough,
@@ -121,6 +129,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
   useDocumentActions: () => null,
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
   validationIssues: () => [],
   useSingleDocument: () => ({ data: undefined, isPending: false, error: null }),

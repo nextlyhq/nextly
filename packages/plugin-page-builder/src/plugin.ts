@@ -35,6 +35,10 @@ import {
   classUsageIndexCollection,
 } from "./collections/class-usage-index";
 import {
+  COMPONENT_RETIRED_SLUG,
+  componentRetiredCollection,
+} from "./collections/component-retired-exposures";
+import {
   COMPONENT_USAGE_INDEX_SLUG,
   componentUsageIndexCollection,
 } from "./collections/component-usage-index";
@@ -53,6 +57,17 @@ import {
 import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageIndex } from "./component-usage";
+import {
+  defaultLayoutJob,
+  type EnsureDefaultDeps,
+} from "./default-layout/ensure-default";
+import {
+  installDefaultLayout,
+  seedDefaultLayoutAtStart,
+  type DefaultLayoutSetup,
+} from "./default-layout/install";
+import { makeDefaultRoute } from "./default-layout/make-default-route";
+import { pageBuilderSettingsSingle } from "./default-layout/settings-single";
 import type { CompositionSetup } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
@@ -66,6 +81,8 @@ import {
 } from "./library-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
+import { registerRetiredExposures } from "./retired-exposure-hooks";
+import { retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
@@ -752,6 +769,32 @@ export const pageBuilder = (
   let installed: BackfillHost | null = null;
 
   /**
+   * What the default-Layout repair needs from the installed plugin: the
+   * RESOLVED slugs and the log. Published by `init` for the same reason
+   * `installed` is — the repair job is contributed before `init` runs and
+   * handled long after it.
+   */
+  let defaultLayoutSetup: DefaultLayoutSetup | null = null;
+
+  /**
+   * The repair's deps for one run, the Direct API resolved at call time. A run
+   * before `init` refuses with a named reason and the sweep is re-queued,
+   * rather than writing to slugs the plugin has not resolved.
+   */
+  const defaultLayoutDeps = async (): Promise<EnsureDefaultDeps> => {
+    if (defaultLayoutSetup === null) {
+      throw new Error(
+        "[page-builder] the default Layout repair ran before the plugin was installed"
+      );
+    }
+    // The booted instance through the SDK, imported at call time for the
+    // reason the preview reader above gives: this entry reaches a browser
+    // bundle, and the Direct API graph has no place there.
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    return { ...defaultLayoutSetup, nextly: await getCachedNextly() };
+  };
+
+  /**
    * How the blocks field judges composition, once the plugin is installed.
    * Until then only a document's own rules run: nothing is installed to read
    * the library through.
@@ -848,6 +891,10 @@ export const pageBuilder = (
           ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
         layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
       });
+
+      // The site's one default Layout: refuse deleting or unpublishing it, and
+      // queue the repair when a write gets past that.
+      defaultLayoutSetup = installDefaultLayout(ctx);
 
       // How a blocks value is judged as a reader would receive it: where
       // components live, the caps, who places a component, and where to say
@@ -967,10 +1014,40 @@ export const pageBuilder = (
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
       registerReadinessNotice(ctx, opts);
+      // A component's removed fields: recorded when the definition dropping
+      // them is published, and their values stripped from every later write.
+      // On the store pages are composed against, so a host that redirected it
+      // retires the fields of the definitions its pages actually place.
+      // Not where the host renders components from its own source: no
+      // collection stands for it, and the plugin's store, holding retirements of
+      // its own, would strip fields that source still exposes.
+      if (opts.componentReadiness !== false) {
+        registerRetiredExposures({
+          ctx,
+          componentCollection: composition.store.collection,
+          componentField: composition.store.field,
+          store: retiredStore({
+            nextly: () => requireInstalled().nextly(),
+            // RESOLVED, for the reason every own table is: a host may rename it.
+            collection:
+              ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+              COMPONENT_RETIRED_SLUG,
+          }),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+        });
+      }
       // A blocks field below the top level has no Page Builder to open, and the
       // operator should learn that from the log before an author meets it in
       // the form.
       warnNestedBlocksFields(ctx.config, message => ctx.logger.warn(message));
+    },
+    // Seed the default Layout once the system is assembled, so a fresh site
+    // has one before its first page is drawn. Deliberately not awaited:
+    // `seedDefaultLayoutAtStart` says why, and catches every failure itself.
+    onReady: () => {
+      if (defaultLayoutSetup !== null) {
+        void seedDefaultLayoutAtStart(defaultLayoutSetup);
+      }
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no
@@ -1002,6 +1079,10 @@ export const pageBuilder = (
           rebuild: scope =>
             usageBackfillDeps(requireInstalled()).rebuild(scope),
         }),
+        // The default-Layout repair. A sweep, so the runner keeps one queued
+        // and every jobs pass confirms the site still has a published default,
+        // whatever path took it away; the guards also queue it directly.
+        defaultLayoutJob(defaultLayoutDeps),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -1022,6 +1103,10 @@ export const pageBuilder = (
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
+        // Each component's retired field and slot ids, recorded when a
+        // definition that drops one is published. Contributed unconditionally,
+        // because every write to a page that places a component reads it.
+        componentRetiredCollection(),
         // The backfill's progress. Contributed beside the indexes it fills,
         // because an index whose write hooks only maintain it going FORWARD is
         // empty for every document that already existed — and an empty index
@@ -1050,6 +1135,10 @@ export const pageBuilder = (
           // render, and the node referencing it gets no rule at all.
           ...(opts.siteStyle === undefined ? {} : { defaults: configStyle }),
         }),
+        // Where the site's default Layout is recorded. Contributed whether or
+        // not any Layout exists yet, because the repair writes it on a site
+        // that has none, and the make-default route writes it on every other.
+        pageBuilderSettingsSingle(),
       ],
       // One field type, where there were two. The other named the previous
       // editor's document — a shape this package defined itself, stored under a
@@ -1086,6 +1175,23 @@ export const pageBuilder = (
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
         patternCapabilityRoute(),
+        // The one write that chooses the site's default Layout. A route rather
+        // than an edit to the settings Single, because choosing a default has
+        // preconditions (the Layout is published, the caller may publish
+        // Layouts) that a plain Single write cannot state.
+        makeDefaultRoute(),
+      ],
+      // The grant that lets a role choose the site's default Layout, read by
+      // the make-default route. A permission of its own rather than
+      // `update-page-builder-settings`, because that grant would also name a
+      // Single nobody edits directly.
+      permissions: [
+        {
+          action: "manage",
+          resource: "page-builder-site",
+          label: "Manage page builder site settings",
+          description: "Choose the site's default Layout.",
+        },
       ],
 
       // No `publish` permission. One was declared here and nothing ever read

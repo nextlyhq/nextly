@@ -927,21 +927,31 @@ export function allowedEntries<TEntry extends InsertEntry>(
    */
   placement?: EntryPlacement
 ): TEntry[] {
-  return entries.filter(
-    entry =>
-      entryAllowedAt(entry, target, source, definitions).allowed &&
-      (placement === undefined ||
-        canPlace(
+  // Present, the placement rule is the whole answer: it asks the name rules
+  // itself, of the same parent and slot, for a component's roots read through
+  // `placement.sources.components`, which is why that has to be the lookup
+  // the catalog was built with. Asking `entryAllowedAt` beside it would ask
+  // each name rule twice.
+  return entries.filter(entry =>
+    placement === undefined
+      ? entryAllowedAt(entry, target, source, definitions).allowed
+      : canPlace(
           insertedBy(entry, placement.expansion),
           placement.site,
           placement.sources
-        ).allowed)
+        ).allowed
   );
 }
 
 /** What {@link allowedEntries} needs to judge entries by the one placement rule. */
 export interface EntryPlacement {
   readonly site: PlacementSite;
+  /**
+   * Where the rule reads its answers. `components` is the lookup the catalog's
+   * component and pattern entries were read through: the rule judges a
+   * placement by the roots it reads there, and without it a placement's roots
+   * are unknown and restrict nothing.
+   */
   readonly sources: PlacementSources;
   /**
    * The pair a click insert hands {@link nodeForEntry}, so a block is judged

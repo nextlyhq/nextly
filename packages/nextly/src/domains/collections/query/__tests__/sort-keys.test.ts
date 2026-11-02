@@ -7,12 +7,8 @@ import { sql } from "drizzle-orm";
 import { integer, PgDialect, pgTable, text } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
-import {
-  assertReadOffset,
-  orderBySortKeys,
-  parseSortKeys,
-  sortsById,
-} from "../filter-shape";
+import { assertReadOffset, parseSortKeys, sortsById } from "../filter-shape";
+import { orderBySortKeys } from "../sort-order";
 
 const posts = pgTable("posts", {
   id: text("id").primaryKey(),
