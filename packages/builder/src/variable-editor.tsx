@@ -413,6 +413,9 @@ function ColourValue({
   const [picking, setPicking] = React.useState(false);
   const [text, setText] = useDraft(value);
   const draft = React.useRef<string | null>(null);
+  // What the picker shows while a gesture is under way, handed back to it as
+  // its colour so each step builds on the last; written only when it closes.
+  const [shown, setShown] = React.useState<string | null>(null);
   const latest = React.useRef({ value, onCommit });
   React.useEffect(() => {
     latest.current = { value, onCommit };
@@ -426,7 +429,7 @@ function ColourValue({
   }, []);
   // A picker still open when the popover closes writes what it showed.
   React.useEffect(() => flush, [flush]);
-  const hex = colourHexOf(value, undefined);
+  const hex = shown ?? colourHexOf(value, undefined);
   return (
     <div className="nx-vars-editor__field">
       <label className="nx-vars-editor__label" htmlFor={id}>
@@ -447,7 +450,10 @@ function ColourValue({
             aria-expanded={picking}
             style={swatchStyle(hex)}
             onClick={() => {
-              if (picking) flush();
+              if (picking) {
+                flush();
+                setShown(null);
+              }
               setPicking(open => !open);
             }}
           />
@@ -482,6 +488,7 @@ function ColourValue({
           showAlpha
           onColorChange={next => {
             draft.current = next;
+            setShown(next);
           }}
         />
       ) : null}

@@ -661,7 +661,7 @@ function VariableRow({
             data-variable-key={entry.row.key}
             // The visible name first, then the values the swatches show, so
             // a screen reader hears both and speech input still matches.
-            aria-label={`${entry.label}${describe(entry, token, tokens)}`}
+            aria-label={`${entry.label}${describe(entry, token, tokens, mode)}`}
             data-kind={entry.row.kind}
           >
             <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
@@ -846,18 +846,22 @@ function bare(value: string): string {
 function describe(
   entry: VariableEntry,
   token: SiteToken | undefined,
-  tokens: SiteTokenSet
+  tokens: SiteTokenSet,
+  mode: TokenMode
 ): string {
   if (token === undefined) return "";
+  // A colour row shows both its swatches, so both values are said whatever
+  // the preview; every other row shows the preview mode's value, so that is
+  // the one said, read through the same projection the row draws with.
   if (entry.row.kind === "color") {
     const dark = token.values.dark;
     return `, light ${token.values.light}, dark ${dark ?? "same as light"}`;
   }
   if (entry.lineHeight !== undefined) {
-    const line = tokens.tokens[entry.lineHeight.at]?.values.light ?? "";
-    return `, size ${token.values.light}, line height ${line}`;
+    const line = valueFor(tokens.tokens[entry.lineHeight.at], mode);
+    return `, size ${valueFor(token, mode)}, line height ${line}`;
   }
-  return `, ${token.values.light}`;
+  return `, ${valueFor(token, mode)}`;
 }
 
 /** The supplied version of a variable, matched the way the merge does. */

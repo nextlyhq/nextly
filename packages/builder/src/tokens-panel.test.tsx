@@ -746,3 +746,50 @@ describe("a type size whose halves come from different places", () => {
     expect(names).not.toContain("line-height.body");
   });
 });
+
+describe("a row's name in the dark preview", () => {
+  it("says the dark value of a non-colour variable and a type pair", () => {
+    const site: SiteTokenSet = {
+      tokens: SITE.tokens.map(token =>
+        token.name === "space.4"
+          ? { ...token, values: { light: "1rem", dark: "2rem" } }
+          : token.name === "line-height.body"
+            ? { ...token, values: { light: "26px", dark: "30px" } }
+            : token
+      ),
+    };
+    render(<Hosted tokens={site} />);
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Preview" })).getByRole(
+        "button",
+        { name: "Dark" }
+      )
+    );
+    expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 2rem");
+    expect(row(/^Body/).getAttribute("aria-label")).toBe(
+      "Body, size 16px, line height 30px"
+    );
+  });
+});
+
+describe("the colour picker in the editor", () => {
+  it("keeps each step of a gesture rather than snapping back", async () => {
+    render(<Hosted tokens={SITE} />);
+    const editor = await openEditor(/^Text/);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Pick the light colour" })
+    );
+    const surface = () =>
+      within(editor).getByLabelText(/^Saturation and brightness/);
+    const saturation = () =>
+      Number(
+        /(\d+)% saturation/.exec(
+          surface().getAttribute("aria-label") ?? ""
+        )?.[1]
+      );
+    const start = saturation();
+    fireEvent.keyDown(surface(), { key: "ArrowRight" });
+    fireEvent.keyDown(surface(), { key: "ArrowRight" });
+    expect(saturation()).toBeGreaterThan(start + 1);
+  });
+});
