@@ -9,10 +9,10 @@ published like a component: its draft can change without the site seeing it unti
 publish.
 
 <Callout type="warn">
-  Layouts are experimental. Pages store their Layout and their switch, and the
-  site keeps one protected default Layout, but the page route does not draw
-  Layouts yet: a page renders without its header and footer for now. Drawing
-  them lands with a later release of the renderer.
+  Layouts are experimental: the fields, the default's rules and the route option
+  may still change before they are marked stable. A page route draws Layouts
+  once it turns them on; see [Draw pages inside their
+  Layout](#draw-pages-inside-their-layout).
 </Callout>
 
 ## Which Layout a page gets
@@ -29,7 +29,7 @@ names while it is published, then the site's default while it is published, and
 otherwise none. So a page naming a Layout that is not published (or was deleted) gets
 the site's default, and a page whose default is not usable gets no header or footer.
 `effectiveLayoutFor` from `@nextlyhq/plugin-page-builder` answers this for a stored
-page; it is experimental while the renderer does not use it yet.
+page; it is experimental.
 
 ## The default Layout
 
