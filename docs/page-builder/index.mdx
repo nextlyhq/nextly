@@ -63,16 +63,14 @@ boot refuses to start:
 npx nextly plugins install @nextlyhq/plugin-page-builder
 ```
 
-Last, load the editor's styles in your admin page,
-`src/app/admin/[[...params]]/page.tsx`. Without them the builder opens unstyled:
+Last, run `npx nextly generate:types`. It writes the file that registers the builder's
+screen with the admin, and that file also loads the editor's styles, so there is nothing
+to import by hand. In a project created before that file existed, import the generated
+file in your admin page, `src/app/admin/[[...params]]/page.tsx`; see
+[Admin UI](/docs/plugins/admin-ui).
 
-```tsx
-import "@nextlyhq/plugin-page-builder/styles/editor.css";
-```
-
-Run `npx nextly generate:types` after adding the plugin, too. It writes the file that
-registers the builder's screen with the admin. A project created before that file existed
-also imports it in the same admin page; see [Admin UI](/docs/plugins/admin-ui).
+An admin page that still imports `@nextlyhq/plugin-page-builder/styles/editor.css` by hand
+keeps working: it loads the same stylesheet, once. You can remove the import.
 
 ## Render the pages
 
