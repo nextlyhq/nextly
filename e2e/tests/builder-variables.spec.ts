@@ -257,10 +257,12 @@ const SCOPED_LIGHT =
 test("the nearest marker decides which mode a scoped sheet applies", async ({
   page,
 }) => {
+  // Each probe holds text, so it is a visible element the suite's locators
+  // can find.
   await page.setContent(`
-    <div data-nx-theme="light"><div data-nx-theme="dark"><div data-testid="dark-nearer" class="scope"></div></div></div>
-    <div data-nx-theme="dark"><div data-nx-theme="light"><div data-testid="light-nearer" class="scope"></div></div></div>
-    <div data-nx-theme="light"><div data-testid="self-dark" class="scope" data-nx-theme="dark"></div></div>
+    <div data-nx-theme="light"><div data-nx-theme="dark"><div data-testid="dark-nearer" class="scope">dark nearer</div></div></div>
+    <div data-nx-theme="dark"><div data-nx-theme="light"><div data-testid="light-nearer" class="scope">light nearer</div></div></div>
+    <div data-nx-theme="light"><div data-testid="self-dark" class="scope" data-nx-theme="dark">self dark</div></div>
   `);
   const modeOf = (id: string) =>
     page.getByTestId(id).evaluate(
