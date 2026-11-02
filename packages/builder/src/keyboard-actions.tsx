@@ -715,7 +715,9 @@ export function useBlockKeyboardActions({
       // whole section around it.
       const lockedNode = lockBlockingMove(editorNow.document, selectedId);
       if (lockedNode !== undefined) {
-        announce(refusalAnnouncement(lockedBlockWording(lockedNode)));
+        announce(
+          refusalAnnouncement(lockedBlockWording(lockedNode, selectedId))
+        );
         return;
       }
 

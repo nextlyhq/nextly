@@ -455,8 +455,8 @@ describe("layersDrop: refusals", () => {
     });
     if (result.kind !== "refused") return;
     expect(layersRefusalWording(result.refusal)).toEqual({
-      headline: "Heading is locked.",
-      remedy: "Unlock it to move it.",
+      headline: "Heading inside this block is locked.",
+      remedy: "Unlock Heading to move this block.",
     });
   });
 
