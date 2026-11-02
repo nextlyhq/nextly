@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Two sibling fields under one exact name are refused even when one of them is a `title` or `slug` field and the other keeps no column (a text `slug` beside a column-less `slug`). The rule had let such a pair stand as if `define*` had added the system field, though the two share one document key. The `title` and `slug` fields that `defineCollection` and `defineSingle` add still stand aside for a declared sibling of a different case or column.
+A `title` or `slug` field now stands aside for a sibling only on the roads that judge `defineCollection` and `defineSingle` output, the only place those fields are added: the start, a config reload, `nextly db:sync` and the migrate commands. The REST schema routes, the Schema Builder's preview and apply, the services and the manifest write judge the fields as they were sent. There, a text `slug` beside a column-less `slug`, or a text `title` beside a column-less `Title`, is refused like any other pair of sibling fields. A configuration that declares one column-less `title` or `slug` still starts.

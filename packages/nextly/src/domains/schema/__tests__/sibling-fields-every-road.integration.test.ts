@@ -250,6 +250,24 @@ const SYSTEM_NAME_SHAPES: Shape[] = [
   },
 ];
 
+/**
+ * For roads that take any spelling: a sent text `title` beside a sent column-less `Title`. Only
+ * `define*` adds a system field, so a road that writes what it is sent lets none stand aside.
+ */
+const SYSTEM_CASE_SHAPE: Shape = {
+  shape: "a text `title` beside a column-less `Title` at the top level",
+  apply: fields => [
+    ...fields,
+    { name: "title", type: "text" },
+    { name: "Title", type: "text", virtual: true },
+  ],
+  message: kind =>
+    said(
+      kind,
+      "fields 'title' and 'Title' at the top level differ only in letter case."
+    ),
+};
+
 /** For roads that hold names to the manifest's lowercase spelling: exact repeats. */
 const REPEAT_SHAPES: Shape[] = [
   {
@@ -831,6 +849,7 @@ for (const dialect of getConfiguredTestDialects()) {
       const shapes = [
         ...(road.manifestNames ? REPEAT_SHAPES : SPELLING_SHAPES),
         ...(dropsSystemNames ? [] : SYSTEM_NAME_SHAPES),
+        ...(dropsSystemNames || road.manifestNames ? [] : [SYSTEM_CASE_SHAPE]),
       ];
       it(`${road.road} refuses a new pair of sibling fields and writes nothing`, async () => {
         const t = await boot();

@@ -6,10 +6,15 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { defineCollection } from "../../../collections/config/define-collection";
+import { defineSingle } from "../../../singles/config/define-single";
+import { judgeMigrationSiblingFields } from "../migrate-create/sibling-fields";
 import {
+  assertNoNewSiblingClashes,
   configuredSiblingClashes,
   judgeSiblingFields,
   newSiblingClashes,
+  refusedConfiguredSiblingFields,
   type SiblingClash,
   siblingClashes,
   siblingClashesError,
@@ -280,15 +285,22 @@ describe("judgeSiblingFields", () => {
       text("slug"),
     ];
     for (const kind of ["collection", "single"] as const) {
-      expect(judgeSiblingFields(declared, null, kind)).toEqual({
+      expect(
+        judgeSiblingFields(declared, null, { definedInCode: kind })
+      ).toEqual({
         refused: [],
         existing: [],
       });
-      expect(judgeSiblingFields(spelled, null, kind).refused).toEqual([]);
+      expect(
+        judgeSiblingFields(spelled, null, { definedInCode: kind }).refused
+      ).toEqual([]);
     }
-    // A field group has no system fields, and without a kind nothing stands aside.
+    // A field group has no system fields, and without `definedInCode` nothing stands aside.
     expect(
-      names(judgeSiblingFields(declared, null, "fieldGroup").refused)
+      names(
+        judgeSiblingFields(declared, null, { definedInCode: "fieldGroup" })
+          .refused
+      )
     ).toEqual(["the top level: title/Title"]);
     expect(judgeSiblingFields(declared, null).refused).toHaveLength(1);
     // Only at the top level, and only while no stored value is shared.
@@ -297,14 +309,15 @@ describe("judgeSiblingFields", () => {
         judgeSiblingFields(
           [group("seo", [text("title"), component("Title")])],
           null,
-          "collection"
+          { definedInCode: "collection" }
         ).refused
       )
     ).toEqual(["group 'seo': title/Title"]);
     expect(
       names(
-        judgeSiblingFields([text("title"), text("Title")], null, "collection")
-          .refused
+        judgeSiblingFields([text("title"), text("Title")], null, {
+          definedInCode: "collection",
+        }).refused
       )
     ).toEqual(["the top level: title/Title"]);
     // Only the system field `define*` adds stands aside, which has a column:
@@ -312,32 +325,110 @@ describe("judgeSiblingFields", () => {
     for (const kind of ["collection", "single"] as const) {
       expect(
         names(
-          judgeSiblingFields(
-            [component("title"), component("title")],
-            null,
-            kind
-          ).refused
+          judgeSiblingFields([component("title"), component("title")], null, {
+            definedInCode: kind,
+          }).refused
         )
       ).toEqual(["the top level: title/title"]);
       expect(
         names(
-          judgeSiblingFields([component("slug"), component("Slug")], null, kind)
-            .refused
+          judgeSiblingFields([component("slug"), component("Slug")], null, {
+            definedInCode: kind,
+          }).refused
         )
       ).toEqual(["the top level: slug/Slug"]);
     }
-    // Under one exact name the two still share the document key, so even the
-    // added `title` beside an authored column-less `title` is a pair.
+    // `define*` adds its text `title` beside a declared column-less `title`:
+    // it stands aside there, as before the rule.
     for (const kind of ["collection", "single"] as const) {
       expect(
-        names(
-          judgeSiblingFields([text("title"), component("title")], null, kind)
-            .refused
-        )
-      ).toEqual(["the top level: title/title"]);
+        judgeSiblingFields([text("title"), component("title")], null, {
+          definedInCode: kind,
+        })
+      ).toEqual({ refused: [], existing: [] });
     }
     // Written by the author, `define*` still refuses it.
     expect(configuredSiblingClashes("collection", declared)).toHaveLength(1);
+  });
+
+  // Only a road that judges `define*` output adds no field of its own to what
+  // it judges; every other road, and the default, judges a system name like
+  // any other, so a sent text `title` beside a sent column-less `title` or
+  // `Title` is refused there.
+  it("lets no system field stand aside by default", () => {
+    for (const fields of [
+      [text("title"), component("title")],
+      [text("title"), component("Title")],
+      [text("slug"), text("SLUG")],
+    ]) {
+      expect(judgeSiblingFields(fields, null).refused).toHaveLength(1);
+      expect(newSiblingClashes(fields, null)).toHaveLength(1);
+      expect(() =>
+        assertNoNewSiblingClashes(
+          { kind: "collection", slug: "posts" },
+          fields,
+          null
+        )
+      ).toThrow(NextlyError);
+    }
+  });
+
+  // The configuration roads judge `define*` output, which adds a text `title`
+  // and `slug` beside declared fields that take neither column.
+  it("accepts on the configuration roads what define* adds beside a declared column-less system name", async () => {
+    const posts = defineCollection({
+      slug: "posts",
+      fields: [{ name: "slug", type: "text", virtual: true } as never],
+    });
+    const home = defineSingle({
+      slug: "home",
+      fields: [{ name: "title", type: "text", virtual: true } as never],
+    });
+    expect(siblingClashes(posts.fields).map(c => [c.first, c.second])).toEqual([
+      ["slug", "slug"],
+    ]);
+    expect(
+      await refusedConfiguredSiblingFields(
+        { collections: [posts], singles: [home] },
+        { collections: [], singles: [], components: [] },
+        async () => false
+      )
+    ).toEqual([]);
+    expect(
+      judgeMigrationSiblingFields(
+        {
+          collections: [
+            {
+              slug: "posts",
+              tableName: "dc_posts",
+              fields: posts.fields,
+              settings: { source: "code" },
+            },
+          ],
+          singles: [],
+          components: [],
+        },
+        null
+      )
+    ).toEqual({ refused: [], existing: [] });
+    // The same fields from the Builder's manifest are not `define*` output.
+    expect(
+      judgeMigrationSiblingFields(
+        {
+          collections: [
+            {
+              slug: "posts",
+              tableName: "dc_posts",
+              fields: posts.fields,
+              settings: { source: "builder" },
+            },
+          ],
+          singles: [],
+          components: [],
+        },
+        null
+      ).refused
+    ).toHaveLength(1);
   });
 });
 

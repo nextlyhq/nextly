@@ -209,17 +209,26 @@ function sameShared(a: SiblingClash["shared"], b: SiblingClash["shared"]) {
 }
 
 function isSystemFieldStandingAside(
-  kind: SiblingEntityKind | undefined,
+  definedInCode: SiblingEntityKind | undefined,
   clash: SiblingClash
 ): boolean {
   return (
-    (kind === "collection" || kind === "single") &&
+    (definedInCode === "collection" || definedInCode === "single") &&
     clash.path.length === 0 &&
-    // Under one exact name the two share the document key, whatever their columns.
-    clash.kind !== "same-name" &&
     clash.shared === null &&
     SYSTEM_SHAPED_PAIRS.has(clash)
   );
+}
+
+/** How a road judges sibling fields. */
+export interface SiblingJudgeOptions {
+  /**
+   * The kind of entity whose `define*` output the fields are. Only `define*` adds `title` and
+   * `slug` itself, and it refuses two declared fields equal ignoring case before it adds them, so
+   * only on a road that judges its output can such a pair be one the author never wrote. Every
+   * other road leaves it unset, and a system-named pair is judged there like any other.
+   */
+  definedInCode?: SiblingEntityKind;
 }
 
 /**
@@ -238,10 +247,10 @@ function isSystemFieldStandingAside(
 export function judgeSiblingFields(
   next: unknown,
   previous: unknown,
-  kind?: SiblingEntityKind
+  options: SiblingJudgeOptions = {}
 ): { refused: SiblingClash[]; existing: SiblingClash[] } {
   const clashes = siblingClashes(next).filter(
-    clash => !isSystemFieldStandingAside(kind, clash)
+    clash => !isSystemFieldStandingAside(options.definedInCode, clash)
   );
   if (previous === null) return { refused: clashes, existing: [] };
   const held = new Map<string, SiblingClash[]>();
@@ -270,9 +279,9 @@ export function judgeSiblingFields(
 export function newSiblingClashes(
   next: unknown,
   previous: unknown,
-  kind?: SiblingEntityKind
+  options: SiblingJudgeOptions = {}
 ): SiblingClash[] {
-  return judgeSiblingFields(next, previous, kind).refused;
+  return judgeSiblingFields(next, previous, options).refused;
 }
 
 /**
@@ -391,7 +400,8 @@ export function assertNoNewSiblingClashes(
   next: unknown,
   previous: unknown
 ): void {
-  const clashes = newSiblingClashes(next, previous, entity.kind);
+  // A road that writes a definition it was sent: nothing in it was added by `define*`.
+  const clashes = newSiblingClashes(next, previous);
   if (clashes.length > 0) throw siblingClashesError(entity, clashes);
 }
 
@@ -450,7 +460,7 @@ export async function refusedConfiguredSiblingFields(
       const clashes = newSiblingClashes(
         entry.fields ?? [],
         row?.fields ?? null,
-        kind
+        { definedInCode: kind }
       );
       if (clashes.length === 0) continue;
       if (row === undefined) {
