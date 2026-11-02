@@ -1917,6 +1917,40 @@ function DropRefusalNotice({
   );
 }
 
+/**
+ * The document and window the canvas draws in, held where nothing walking an
+ * object's own keys can reach them.
+ *
+ * The value is a prop of the environment provider, and React's development
+ * build describes every changed prop for its performance panel by walking the
+ * object's own enumerable keys a few levels down. A plain `{ document, window }`
+ * leads that walk into the window, whose own keys include each child frame —
+ * and a page with an Embed block has one in an opaque origin, where reading
+ * anything throws a `SecurityError`. It threw while React was running the
+ * commit's effects, so the effects after it never ran: the canvas stopped
+ * measuring its region, and the device and zoom controls stopped moving it.
+ *
+ * Private fields behind getters are not own enumerable keys, so the walk finds
+ * nothing to enter, while `environment.window` reads exactly as before.
+ */
+class CanvasEnvironment implements BlockEnvironment {
+  readonly #document: Document;
+  readonly #window: Window;
+
+  constructor(document: Document, view: Window) {
+    this.#document = document;
+    this.#window = view;
+  }
+
+  get document(): Document {
+    return this.#document;
+  }
+
+  get window(): Window {
+    return this.#window;
+  }
+}
+
 export function Canvas({
   document,
   rootRef,
@@ -2010,7 +2044,8 @@ export function Canvas({
    * root's OWN document rather than the globals, so the answer is the frame's
    * once the canvas renders inside one, with nothing here to change.
    * `undefined` until the root has mounted, which the hook passes on rather
-   * than falling back to the admin page.
+   * than falling back to the admin page. Built as a `CanvasEnvironment` rather
+   * than an object literal; see there for why.
    */
   const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
     undefined
@@ -2018,7 +2053,7 @@ export function Canvas({
   useEffect(() => {
     const view = root.current?.ownerDocument.defaultView;
     if (root.current === null || view == null) return;
-    setEnvironment({ document: root.current.ownerDocument, window: view });
+    setEnvironment(new CanvasEnvironment(root.current.ownerDocument, view));
   }, []);
 
   const page = useMemo(
