@@ -138,6 +138,10 @@ describe("a placement's variant picker", () => {
         node.textContent?.includes("Variant removed, showing defaults")
       );
     expect(notice).toBeDefined();
+    // Said once, by the notice with its Clear, not again under the title.
+    expect(
+      screen.getAllByText(/variant removed, showing defaults/i)
+    ).toHaveLength(1);
 
     fireEvent.click(
       screen.getByRole("button", { name: "Clear the removed variant" })

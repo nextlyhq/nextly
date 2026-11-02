@@ -281,14 +281,12 @@ export function InstanceInspectorPanel({
 
 /**
  * The variant this placement uses, as a phrase after "Component", or nothing.
- * A variant the component no longer offers is said to be gone, since the
- * placement then shows the component's own values.
+ * A variant the component no longer offers is said once, by the variant
+ * picker's notice beside its Clear, rather than here as well.
  */
 function variantPhrase(variant: InstanceInspection["variant"]): string {
-  if (variant === undefined) return "";
-  return variant.label === undefined
-    ? " · variant removed, showing defaults"
-    : ` · ${variant.label} variant`;
+  if (variant?.label === undefined) return "";
+  return ` · ${variant.label} variant`;
 }
 
 /**
