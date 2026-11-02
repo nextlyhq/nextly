@@ -43,6 +43,7 @@ import {
   type DocumentLimits,
   type LockSources,
   type RepairPlan,
+  type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
@@ -124,6 +125,12 @@ export interface EditorState {
    * its component, which the page alone does not hold.
    */
   composed: () => BlockDocument | undefined;
+  /**
+   * The block definitions lock questions are judged by: the host's own
+   * `locks.definitions`, or the live registry. A surface showing what a lock
+   * holds reads these, so it holds what `apply` refuses.
+   */
+  lockDefinitions: SlotDefaultSource;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
@@ -382,6 +389,17 @@ function atApply(
 }
 
 /**
+ * The definitions lock questions are judged by: the host's own, or the live
+ * registry. Held per source, so the store keeps its identity across renders.
+ */
+function useLockDefinitions(
+  locks: UseEditorStateArgs["locks"]
+): SlotDefaultSource {
+  const host = locks?.definitions;
+  return useMemo(() => host ?? registryBlockSource(), [host]);
+}
+
+/**
  * The store's lock questions, asked of the document as it stands and the
  * baseline as last saved, with the composer the room check shares.
  */
@@ -390,12 +408,14 @@ function useLockQuestions(
   composition: { current: AtApply },
   limits: DocumentLimits,
   /** The document as last saved, as this render holds it. */
-  baseline: BlockDocument
+  baseline: BlockDocument,
+  locks: UseEditorStateArgs["locks"]
 ): {
   composerNow: () => Composer | undefined;
   lockRefusalFor: EditorState["lockRefusalFor"];
   planRepair: EditorState["planRepair"];
   composed: EditorState["composed"];
+  lockDefinitions: SlotDefaultSource;
 } {
   const composerNow = useComposer(composition, limits);
   const lockRefusalFor = useCallback(
@@ -424,7 +444,8 @@ function useLockQuestions(
       composerNow()?.(latestDocument.current).document,
     [composerNow, latestDocument]
   );
-  return { composerNow, lockRefusalFor, planRepair, composed };
+  const lockDefinitions = useLockDefinitions(locks);
+  return { composerNow, lockRefusalFor, planRepair, composed, lockDefinitions };
 }
 
 /**
@@ -612,12 +633,13 @@ export function useEditorState({
    * is the more expensive of the two.
    */
   const latestDocument = useRef(document);
-  const { composerNow, lockRefusalFor, planRepair, composed } =
+  const { composerNow, lockRefusalFor, planRepair, composed, lockDefinitions } =
     useLockQuestions(
       latestDocument,
       composition,
       limits,
-      composition.current.stored
+      composition.current.stored,
+      locks
     );
   latestDocument.current = document;
 
@@ -811,6 +833,7 @@ export function useEditorState({
       lockRefusalFor,
       planRepair,
       composed,
+      lockDefinitions,
       undo,
       redo,
       canUndo: depths.undo > 0,
@@ -827,6 +850,7 @@ export function useEditorState({
       lockRefusalFor,
       planRepair,
       composed,
+      lockDefinitions,
       undo,
       redo,
       depths,

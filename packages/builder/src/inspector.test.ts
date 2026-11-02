@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearBlocks,
   registerBlocks,
+  registryBlockSource,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -312,6 +313,33 @@ describe("a block inside an area locked to its content", () => {
     }
   });
 
+  it("reads the locks from the editor's own source, not only the registry", () => {
+    withLockedAreas();
+    // A host judging edits by its own definitions: in them the card's slot
+    // is locked to its content, which the registry's card does not say.
+    const registered = registryBlockSource();
+    const definitions = {
+      get: (type: string) =>
+        type === "acme/card"
+          ? {
+              version: 1,
+              slots: {
+                inner: {
+                  defaultBlock: [{ type: "acme/headline" }],
+                  lock: "contentOnly" as const,
+                },
+              },
+            }
+          : registered.get(type),
+    };
+    const page = documentOf([holder("c", "acme/card", "inner", headline("t"))]);
+
+    // CONTROL: by the registry nothing holds it.
+    expect(designLockOf(page, "t")).toBeUndefined();
+    expect(designLockOf(page, "t", { definitions })).toBeDefined();
+    expect(propIsWritable(page, "t", "align", { definitions })).toBe(false);
+  });
+
   it("holds a block a placement puts under a component's lock, which only the composed page shows", () => {
     withLockedAreas();
     // On the page the headline is placement content, under no lock of the
@@ -324,11 +352,11 @@ describe("a block inside an area locked to its content", () => {
 
     // CONTROL: the page alone holds nothing read-only.
     expect(designLockOf(page, "t")).toBeUndefined();
-    expect(designLockOf(page, "t", composed)).toBeDefined();
-    expect(propIsWritable(page, "t", "align", composed)).toBe(false);
-    expect(propIsWritable(page, "t", "text", composed)).toBe(true);
+    expect(designLockOf(page, "t", { composed })).toBeDefined();
+    expect(propIsWritable(page, "t", "align", { composed })).toBe(false);
+    expect(propIsWritable(page, "t", "text", { composed })).toBe(true);
     expect(
-      inspectSelection(page, "t", composed)?.props.map(prop => [
+      inspectSelection(page, "t", { composed })?.props.map(prop => [
         prop.name,
         prop.readOnly,
       ])

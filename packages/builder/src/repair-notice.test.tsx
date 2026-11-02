@@ -152,6 +152,31 @@ describe("RepairNotice", () => {
     expect(screen.getByRole("region", { name: "Locked areas" })).toBeTruthy();
   });
 
+  it("applies a repair that adds a block the slot starts with", () => {
+    // Each plan mints new ids for a block it adds, so the plan applied must
+    // be the one shown, not one made again at the click.
+    const editor = mount({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: "acme/row",
+          version: 1,
+          props: {},
+          slots: { items: [] },
+        },
+      ],
+    } as unknown as BlockDocument);
+    fireEvent.click(screen.getByRole("button", { name: "Review the repair" }));
+    fireEvent.click(screen.getByRole("button", { name: "Repair" }));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    const row = editor().document.nodes[0]!;
+    expect(row.slots!.items!.map(node => node.type)).toEqual(["acme/headline"]);
+    expect(editor().undoDepth).toBe(1);
+  });
+
   it("changes nothing when the author cancels", () => {
     const editor = mount(rowHolding(headline("extra")));
     fireEvent.click(screen.getByRole("button", { name: "Review the repair" }));

@@ -14,11 +14,7 @@
  *
  * @module repair-notice
  */
-import {
-  findNode,
-  sameStoredValue,
-  type RepairPlan,
-} from "@nextlyhq/blocks-engine";
+import { findNode, type RepairPlan } from "@nextlyhq/blocks-engine";
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -51,17 +47,12 @@ export function RepairNotice({
   if (plan.steps.length === 0 && plan.remaining.length === 0) return null;
 
   const confirm = () => {
-    // Planned again at the moment of confirming, against the store's current
-    // baseline: a save since the review may have changed what the page holds,
-    // and the author confirms the steps they were shown or none.
-    const fresh = editor.planRepair();
-    if (!sameStoredValue(fresh.result.nodes, plan.result.nodes)) {
-      setRefused(
-        "The page has changed since this repair was planned. Review it again."
-      );
-      return;
-    }
-    const translated = repairOps(editor.document, fresh, editor.limits);
+    // The plan shown is this render's, made for the store as it stands: a
+    // save or an edit since the review gives the store, and so this plan, a
+    // new identity, and the list on screen with it. Planning again here would
+    // mint new ids for every block an add step brings, so no plan could ever
+    // match the one reviewed.
+    const translated = repairOps(editor.document, plan, editor.limits);
     if ("refused" in translated) {
       setRefused(refusalSentence(translated.refused, editor));
       return;

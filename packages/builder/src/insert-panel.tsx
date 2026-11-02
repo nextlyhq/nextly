@@ -735,18 +735,24 @@ export function InsertPanel({
     point === null
       ? []
       : allowedEntries(catalog, point.target, source, componentDefinitions);
-  const pointLock =
-    point === null
-      ? undefined
-      : pointLockOf(point.at, offered, editor, { blockSource, nesting });
+  // Per store, point and offer, so typing a query asks the locks nothing
+  // again: the store's object changes with every document it holds, and the
+  // point and the offer are rebuilt each render, so they are keyed by value.
+  const lockCache = React.useRef<LockedEntriesCache | undefined>(undefined);
+  const { kept, pointLock } = cachedLockedEntries(lockCache, {
+    at: point?.at,
+    offered,
+    editor,
+    sources: { blockSource, nesting },
+  });
   const groups =
-    point === null || pointLock !== undefined
+    point === null || kept.length === 0
       ? []
       : // Allowed first, then the query. Both orders yield the same set, but
         // this one keeps the empty state honest: "no blocks match" after a
         // search is a different message from "nothing can go here", and
         // filtering first would collapse them into one.
-        groupByCategory(filterEntries(offered, query), categoryOrder);
+        groupByCategory(filterEntries(kept, query), categoryOrder);
 
   /*
    * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
@@ -1059,35 +1065,97 @@ export function InsertPanel({
   );
 }
 
+/** The last lock verdicts an inserter asked for, and what they were for. */
+interface LockedEntriesCache {
+  readonly editor: unknown;
+  readonly sources: unknown;
+  readonly key: string;
+  readonly result: ReturnType<typeof lockedEntriesAt>;
+}
+
+/** {@link lockedEntriesAt}, asked again only when what it was asked of changed. */
+function cachedLockedEntries(
+  cache: { current: LockedEntriesCache | undefined },
+  args: {
+    at: OpPosition | undefined;
+    offered: readonly InsertEntry[];
+    editor: Pick<EditorState, "lockRefusalFor">;
+    sources: {
+      blockSource: SlotDefaultSource;
+      nesting: NestingSource | undefined;
+    };
+  }
+): ReturnType<typeof lockedEntriesAt> {
+  const key = `${JSON.stringify(args.at ?? null)}\u0001${args.offered
+    .map(entry => entry.id)
+    .join("\u0000")}`;
+  const held = cache.current;
+  if (
+    held !== undefined &&
+    held.editor === args.editor &&
+    held.sources === args.sources.blockSource &&
+    held.key === key
+  ) {
+    return held.result;
+  }
+  const result = lockedEntriesAt(
+    args.at,
+    args.offered,
+    args.editor,
+    args.sources
+  );
+  cache.current = {
+    editor: args.editor,
+    sources: args.sources.blockSource,
+    key,
+    result,
+  };
+  return result;
+}
+
 /**
- * The locks' answer for an insertion point, asked once rather than per tile.
+ * The entries the locks let in at an insertion point, and the reason the
+ * first refused one was refused.
  *
- * Inserting into a slot whose blocks are fixed is refused whatever the block,
- * and a block placed where no lock reaches arrives with the blocks its own
- * slots start with, so it breaks none of its own: the answer is the point's,
- * and the editor's own question asked with the first block offered here is the
- * answer for every tile.
+ * Each block is judged by its own insert, the store's own question: where a
+ * locked slot is already broken, inserting the block it is missing can repair
+ * it while any other block breaks it further, so one block's answer is not
+ * every block's. A pattern or a component arrives as a block of its own type,
+ * which no lock's starting blocks name, so it follows the answer for the
+ * point's first block.
  */
-function pointLockOf(
-  at: OpPosition,
+function lockedEntriesAt(
+  at: OpPosition | undefined,
   offered: readonly InsertEntry[],
   editor: Pick<EditorState, "lockRefusalFor">,
   sources: {
     blockSource: SlotDefaultSource;
     nesting: NestingSource | undefined;
   }
-): LockRefusalFacts | undefined {
-  const probe = offered.find(
-    (entry): entry is BlockInsertEntry => entry.kind === "block"
+): { kept: readonly InsertEntry[]; pointLock: LockRefusalFacts | undefined } {
+  if (at === undefined) return { kept: offered, pointLock: undefined };
+  const refusalOf = (entry: BlockInsertEntry) =>
+    editor.lockRefusalFor([
+      {
+        kind: "insert",
+        node: nodeForEntry(entry, sources.blockSource, sources.nesting),
+        at,
+      },
+    ]);
+  const verdicts = new Map<InsertEntry, LockRefusalFacts | undefined>();
+  for (const entry of offered) {
+    if (entry.kind === "block") verdicts.set(entry, refusalOf(entry));
+  }
+  const firstBlock = offered.find(entry => entry.kind === "block");
+  const pointAnswer =
+    firstBlock === undefined ? undefined : verdicts.get(firstBlock);
+  const kept = offered.filter(entry =>
+    entry.kind === "block"
+      ? verdicts.get(entry) === undefined
+      : pointAnswer === undefined
   );
-  if (probe === undefined) return undefined;
-  return editor.lockRefusalFor([
-    {
-      kind: "insert",
-      node: nodeForEntry(probe, sources.blockSource, sources.nesting),
-      at,
-    },
-  ]);
+  const pointLock = [...verdicts.values()].find(v => v !== undefined);
+  return { kept, pointLock: kept.length === 0 ? pointLock : undefined };
 }
 
 /** What the list says when it offers nothing: the lock's reason, or why not. */

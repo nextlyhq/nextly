@@ -87,7 +87,7 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
-import { designLockOf } from "./inspector";
+import { designLockOf, lockViewOf } from "./inspector";
 import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
@@ -602,7 +602,7 @@ export function SpacingOverlay({
    */
   const designHeld =
     selectedId !== null &&
-    designLockOf(document, selectedId, editor.composed()) !== undefined;
+    designLockOf(document, selectedId, lockViewOf(editor)) !== undefined;
 
   /*
    * Measured before the browser paints, so the bands never appear over the

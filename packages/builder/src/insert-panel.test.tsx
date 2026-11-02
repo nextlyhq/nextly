@@ -149,6 +149,34 @@ describe("InsertPanel", () => {
     expect(onInsert).toHaveBeenCalledWith(op.node);
   });
 
+  it("judges each block by its own insert where a lock answers by block", () => {
+    // A locked slot already missing its heading: inserting the heading repairs
+    // it, inserting anything else breaks it further. One block's answer is
+    // not every block's, whichever comes first in the list.
+    registerBlocks(
+      [
+        { ...base, name: "acme/heading", editor: { label: "Heading" } },
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const editor = {
+      ...editorSpy(documentOf()),
+      lockRefusalFor: (ops: readonly { node?: { type: string } }[]) =>
+        ops[0]?.node?.type === "acme/heading"
+          ? undefined
+          : {
+              code: "locked-slot-altered" as const,
+              holderType: "acme/row",
+              lock: "all" as const,
+            },
+    } as unknown as ReturnType<typeof editorSpy>;
+    render(<InsertPanel editor={editor} />);
+
+    expect(tile("Heading")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Text" })).toBeNull();
+  });
+
   it("offers a row as a drag, carrying the block it names", () => {
     // The panel is where a palette drag STARTS, and the node is built here
     // rather than inside the drag: these definitions are one snapshot taken per
