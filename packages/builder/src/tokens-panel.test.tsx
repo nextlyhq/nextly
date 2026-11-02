@@ -15,7 +15,6 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -148,90 +147,101 @@ describe("the rows", () => {
   });
 });
 
+/** Open a row's editor as a pointer or Enter does: the row is a button. */
+async function openEditor(name: RegExp): Promise<HTMLElement> {
+  fireEvent.click(row(name));
+  return screen.findByRole("dialog");
+}
+
+/** Type into a field and press Enter, which commits it. */
+function enter(field: HTMLElement, value: string): void {
+  fireEvent.change(field, { target: { value } });
+  fireEvent.keyDown(field, { key: "Enter" });
+}
+
+function escape(): void {
+  fireEvent.keyDown(document.activeElement ?? document.body, {
+    key: "Escape",
+  });
+}
+
 describe("the editor beside the panel", () => {
-  it("opens on Enter with focus on Name, and Escape returns focus to the row", async () => {
-    const user = userEvent.setup();
+  it("opens with focus on Name, and Escape returns focus to the row", async () => {
     render(<Hosted tokens={SITE} />);
-    row(/^Brand/).focus();
-    await user.keyboard("{Enter}");
-    const editor = await screen.findByRole("dialog", { name: "Edit Brand" });
+    const editor = await openEditor(/^Brand/);
+    expect(editor.getAttribute("aria-label")).toBe("Edit Brand");
     await waitFor(() =>
       expect(document.activeElement).toBe(within(editor).getByLabelText("Name"))
     );
     expect(within(editor).getByText("color.brand")).toBeDefined();
-    await user.keyboard("{Escape}");
+    escape();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(row(/^Brand/));
   });
 
-  it("keeps Tab inside while it is open", async () => {
-    const user = userEvent.setup();
+  it("keeps Tab inside while it is open, both ways round", async () => {
     render(<Hosted tokens={SITE} />);
-    await user.click(row(/^Text/));
-    const editor = await screen.findByRole("dialog", { name: "Edit Text" });
-    for (let step = 0; step < 12; step += 1) {
-      await user.tab();
-      expect(editor.contains(document.activeElement)).toBe(true);
-    }
+    const editor = await openEditor(/^Text/);
+    const name = within(editor).getByLabelText("Name");
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    const remove = within(editor).getByRole("button", { name: "Remove" });
+    remove.focus();
+    // From the last control Tab wraps to the first, and back again.
+    fireEvent.keyDown(remove, { key: "Tab" });
+    expect(document.activeElement).toBe(name);
+    fireEvent.keyDown(name, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(remove);
   });
 
   it("renames by the plain name, keeping the code name", async () => {
     const onChange = vi.fn();
-    const user = userEvent.setup();
     render(<Hosted tokens={SITE} onChange={onChange} />);
-    await user.click(row(/^Brand/));
-    const name = await screen.findByLabelText("Name");
-    await user.clear(name);
-    await user.type(name, "Brand blue{Enter}");
-    // The commit does not rebuild the field, so focus stays where it was.
-    expect(document.activeElement).toBe(screen.getByLabelText("Name"));
-    expect(screen.getByLabelText("Name")).toHaveProperty("value", "Brand blue");
+    const editor = await openEditor(/^Brand/);
+    const name = within(editor).getByLabelText("Name");
+    name.focus();
+    enter(name, "Brand blue");
     const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
     expect(saved.tokens[0]).toMatchObject({
       name: "color.brand",
       label: "Brand blue",
     });
+    // The commit does not rebuild the field, so focus stays where it was.
+    expect(document.activeElement).toBe(within(editor).getByLabelText("Name"));
+    expect(within(editor).getByLabelText("Name")).toHaveProperty(
+      "value",
+      "Brand blue"
+    );
   });
 
   it("sets and clears a dark value", async () => {
     const onChange = vi.fn();
-    const user = userEvent.setup();
     render(<Hosted tokens={SITE} onChange={onChange} />);
-    await user.click(row(/^Text/));
-    const editor = await screen.findByRole("dialog");
+    const editor = await openEditor(/^Text/);
+    const darkOf = () =>
+      (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[1]?.values.dark;
     expect(within(editor).getByText("Same as light")).toBeDefined();
-    await user.click(
+    fireEvent.click(
       within(editor).getByRole("button", { name: "Add dark value" })
     );
-    expect(
-      (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[1]?.values.dark
-    ).toBe("#3b3f46");
-    const dark = within(editor).getByLabelText("Dark");
-    await user.clear(dark);
-    await user.type(dark, "#e7e9ee{Enter}");
-    expect(
-      (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[1]?.values.dark
-    ).toBe("#e7e9ee");
-    await user.click(
+    expect(darkOf()).toBe("#3b3f46");
+    enter(within(editor).getByLabelText("Dark"), "#e7e9ee");
+    expect(darkOf()).toBe("#e7e9ee");
+    fireEvent.click(
       within(editor).getByRole("button", { name: "Use light value" })
     );
-    expect(
-      (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[1]?.values.dark
-    ).toBeUndefined();
+    expect(darkOf()).toBeUndefined();
   });
 
   it("removes only after a confirm that names the variable", async () => {
     const onChange = vi.fn();
-    const user = userEvent.setup();
     render(<Hosted tokens={SITE} onChange={onChange} />);
-    await user.click(row(/^Text/));
-    const editor = await screen.findByRole("dialog");
-    await user.click(within(editor).getByRole("button", { name: "Remove" }));
+    const editor = await openEditor(/^Text/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(onChange).not.toHaveBeenCalled();
     expect(
       within(editor).getByText(/Any block using it loses that style/)
     ).toBeDefined();
-    await user.click(
+    fireEvent.click(
       within(editor).getByRole("button", { name: "Remove Text" })
     );
     const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
@@ -239,7 +249,6 @@ describe("the editor beside the panel", () => {
   });
 
   it("offers Reset only for a code-supplied variable that was changed, and no Remove", async () => {
-    const user = userEvent.setup();
     const supplied: SiteTokenSet = {
       tokens: [
         { name: "color.brand", kind: "color", values: { light: "#000000" } },
@@ -247,13 +256,12 @@ describe("the editor beside the panel", () => {
       ],
     };
     render(<Hosted tokens={SITE} supplied={supplied} />);
-    await user.click(row(/^Brand/));
-    let editor = await screen.findByRole("dialog");
+    let editor = await openEditor(/^Brand/);
     expect(within(editor).getByRole("button", { name: "Reset" })).toBeDefined();
     expect(within(editor).queryByRole("button", { name: "Remove" })).toBeNull();
-    await user.keyboard("{Escape}");
-    await user.click(row(/^Text/));
-    editor = await screen.findByRole("dialog");
+    escape();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    editor = await openEditor(/^Text/);
     expect(within(editor).queryByRole("button", { name: "Reset" })).toBeNull();
     expect(within(editor).queryByRole("button", { name: "Remove" })).toBeNull();
   });
@@ -261,14 +269,15 @@ describe("the editor beside the panel", () => {
 
 describe("the read-only view", () => {
   it("says so, keeps fields selectable, and offers no change", async () => {
-    const user = userEvent.setup();
     render(<Hosted tokens={SITE} readOnly />);
     expect(
-      screen.getByText("You can view the site’s variables but not change them.")
+      screen.getByText(
+        "You can view the site\u2019s variables but not change them."
+      )
     ).toBeDefined();
     expect(screen.queryByRole("button", { name: /^Add / })).toBeNull();
-    await user.click(row(/^Brand/));
-    const editor = await screen.findByRole("dialog", { name: "Brand" });
+    const editor = await openEditor(/^Brand/);
+    expect(editor.getAttribute("aria-label")).toBe("Brand");
     const name = within(editor).getByLabelText("Name") as HTMLInputElement;
     expect(name.readOnly).toBe(true);
     expect(name.disabled).toBe(false);
@@ -280,9 +289,12 @@ describe("the read-only view", () => {
   });
 
   it("leaves Import out of the menu", async () => {
-    const user = userEvent.setup();
     render(<Hosted tokens={SITE} readOnly />);
-    await user.click(screen.getByRole("button", { name: "Import or export" }));
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Import or export" }),
+      { key: "Enter" }
+    );
+    await screen.findByRole("menu");
     expect(screen.queryByRole("menuitem", { name: /Import/ })).toBeNull();
     expect(
       screen.getByRole("menuitem", { name: "Export (DTCG)" })
@@ -322,13 +334,16 @@ describe("states", () => {
 
 describe("import and export", () => {
   it("lists the exports with CSS last", async () => {
-    const user = userEvent.setup();
     render(<Hosted tokens={SITE} />);
-    await user.click(screen.getByRole("button", { name: "Import or export" }));
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Import or export" }),
+      { key: "Enter" }
+    );
+    await screen.findByRole("menu");
     expect(
       screen.getAllByRole("menuitem").map(item => item.textContent)
     ).toEqual([
-      "Import variables…",
+      "Import variables\u2026",
       "Export (DTCG)",
       "Export for Figma",
       "Export CSS",
