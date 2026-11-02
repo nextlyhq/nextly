@@ -1644,3 +1644,42 @@ describe("the exports' files", () => {
     ]);
   });
 });
+
+describe("an import from Figma, which carries no identity", () => {
+  it("updates a renamed variable by its name, keeping the stored id", () => {
+    const site: SiteTokenSet = {
+      tokens: [
+        {
+          id: "color.primary",
+          name: "brand.main",
+          kind: "color",
+          values: { light: "#3b82f6" },
+        },
+      ],
+    };
+    // Figma's files hold names only: edit the light value as a designer would.
+    const files = exportForFigma(site).map(file => ({
+      name: file.filename,
+      text: file.text
+        .replaceAll("#3B82F6", "#112233")
+        .replace(
+          /"components": \[[^\]]*\]/,
+          '"components": [0.06666666666666667, 0.13333333333333333, 0.2]'
+        ),
+    }));
+    const plan = planImport(files, site);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added).toEqual([]);
+    expect(plan.conflicts.map(c => c.identity)).toEqual(["color.primary"]);
+    const result = applyImport(plan, site, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.tokens.tokens).toEqual([
+      {
+        id: "color.primary",
+        name: "brand.main",
+        kind: "color",
+        values: { light: "#112233" },
+      },
+    ]);
+  });
+});

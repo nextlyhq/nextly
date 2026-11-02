@@ -222,8 +222,7 @@ export function planImport(
   return {
     ok: true,
     skipped,
-    incoming: read.tokens,
-    ...sortAgainst(read.tokens, into),
+    ...sortAgainst(withStoredIds(read.tokens, into), into),
   };
 }
 
@@ -259,7 +258,7 @@ function sortAgainst(
   into: SiteTokenSet
 ): Pick<
   Extract<ImportPlan, { ok: true }>,
-  "added" | "changed" | "unchanged" | "conflicts"
+  "added" | "changed" | "unchanged" | "conflicts" | "incoming"
 > {
   const mine = new Map(into.tokens.map(token => [tokenIdentity(token), token]));
   const added: SiteToken[] = [];
@@ -275,7 +274,30 @@ function sortAgainst(
     else if (fillsIn(held, imported)) changed.push(imported);
     else unchanged.push(imported);
   }
-  return { added, changed, unchanged, conflicts };
+  return { added, changed, unchanged, conflicts, incoming };
+}
+
+/**
+ * The file's tokens, each one that states no id given the id of the site's
+ * variable it names.
+ *
+ * A file from another tool, Figma's above all, carries names only. A variable
+ * renamed here keeps its old name as its id, so matching that file by identity
+ * would read the renamed variable as new and then refuse it for taking the
+ * name. A token the file gives no id is matched by name instead, unless its
+ * name is itself another variable's identity, which a stated identity wins.
+ */
+function withStoredIds(
+  incoming: readonly SiteToken[],
+  into: SiteTokenSet
+): SiteToken[] {
+  const identities = new Set(into.tokens.map(tokenIdentity));
+  const byName = new Map(into.tokens.map(token => [token.name, token]));
+  return incoming.map(token => {
+    if (token.id !== undefined || identities.has(token.name)) return token;
+    const held = byName.get(token.name);
+    return held?.id === undefined ? token : { ...token, id: held.id };
+  });
 }
 
 /** Whether both sides state something and the statements differ. */
