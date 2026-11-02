@@ -90,6 +90,12 @@ const WRITERS: {
     what: "starts its own dev server",
     writes: source => source.includes("playground-dev-server"),
   },
+  {
+    lock: "siteStyle",
+    what: "writes the site style",
+    writes: source =>
+      source.includes("singles/site-style") && /\.(patch|put)\(/.test(source),
+  },
 ];
 
 /**
@@ -205,6 +211,17 @@ test("recognises each kind of write it is there for", () => {
       'from "../support/playground-dev-server"'
     )
   ).toBe(true);
+  expect(
+    WRITERS.find(w => w.lock === "siteStyle")?.writes(
+      'const SITE_STYLE = "/admin/api/singles/site-style";\nawait page.request.patch(SITE_STYLE, { data });'
+    )
+  ).toBe(true);
+  // Reading the site style is not writing it.
+  expect(
+    WRITERS.find(w => w.lock === "siteStyle")?.writes(
+      'await page.request.get("/admin/api/singles/site-style");'
+    )
+  ).toBe(false);
 });
 
 test("reads the locks a spec configures, not the constant anywhere", () => {

@@ -55,6 +55,7 @@ import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import { isHTMLElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasContentRect } from "./geometry-dom";
@@ -133,7 +134,13 @@ export function BlockToolbar({
      * already put the index where the caret is.
      */
     const element = bar.current;
-    if (element !== null && element.contains(window.document.activeElement)) {
+    // Asked of the bar's OWN document, which is the one whose focused element
+    // it can contain: the window's would report an iframe around the bar
+    // whenever the bar is drawn inside a frame.
+    if (
+      element !== null &&
+      element.contains(element.ownerDocument.activeElement)
+    ) {
       return;
     }
     setActiveIndex(0);
@@ -154,7 +161,9 @@ export function BlockToolbar({
       return;
     }
     const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) {
+    // By node kind, not `instanceof HTMLElement`: a root rendered into an
+    // iframe is built by that window, and the bar would never be placed.
+    if (!isHTMLElement(root)) {
       setPlacement(null);
       return;
     }
@@ -210,7 +219,7 @@ export function BlockToolbar({
     if (hidden || selectedId === null) return;
     const element = bar.current;
     const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) return;
+    if (!isHTMLElement(root)) return;
     // Absent in jsdom unless a test supplies one, and absent in older browsers.
     // A missing observer costs a re-measure, not correctness — every render
     // path above still measures.
@@ -237,7 +246,7 @@ export function BlockToolbar({
     setActiveIndex(index);
     const buttons = bar.current?.querySelectorAll("button");
     const target = buttons?.[index];
-    if (target instanceof HTMLElement) target.focus();
+    if (isHTMLElement(target)) target.focus();
   }, []);
 
   const onKeyDown = React.useCallback(

@@ -28,6 +28,7 @@ import {
   scaleCornerRadii,
   usedCornerRadii,
 } from "./border-radii";
+import { isHTMLElement } from "./dom-kind";
 import type { FrameInset, Point, Rect, Scale } from "./geometry";
 
 /**
@@ -295,10 +296,10 @@ export function boxAcross(
  * through that transform already — so any comparison whose two readings sit on
  * opposite sides of it has to compose this back in.
  *
- * Asked against the root's OWN realm, as {@link canvasRootFrom} does. A canvas
- * portalled into a same-origin iframe has a root built by that document's
- * constructor, so the ambient `HTMLElement` is a different function object and
- * a plain `instanceof` is false for an ordinary div — which would substitute an
+ * Asked by node kind, as {@link canvasRootFrom} does. A canvas portalled into
+ * a same-origin iframe has a root built by that document's constructor, so the
+ * ambient `HTMLElement` is a different function object and a plain
+ * `instanceof` is false for an ordinary div — which would substitute an
  * identity scale on a canvas that really is scaled, the very case this exists
  * for.
  *
@@ -308,8 +309,8 @@ export function boxAcross(
  * arithmetic as it was before there was a canvas scale.
  */
 export function canvasPaintedScale(root: Element): Scale {
-  const realm = root.ownerDocument.defaultView;
-  return realm !== null && root instanceof realm.HTMLElement
+  // A root with no window has never been laid out, and has no scale to read.
+  return root.ownerDocument.defaultView !== null && isHTMLElement(root)
     ? paintedScale(root, root.getBoundingClientRect())
     : { x: 1, y: 1 };
 }
@@ -928,15 +929,15 @@ export function hasScrollbarGutter(
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;
   /*
-   * The ELEMENT's realm, not the one asking — see `canvasRootFrom` for why the
-   * ambient `HTMLElement` is the wrong constructor to compare against.
+   * By node kind, not by any realm's constructor — see `canvasRootFrom` for
+   * why the ambient `HTMLElement` is the wrong one to compare against.
    *
    * Getting it wrong here fails SILENTLY and in the unsafe direction. A canvas
    * mounted into a same-origin iframe answers `false` before measuring
    * anything, so the refusal below never fires and every scrolling block in
    * that canvas draws its padding bands across the reserved scrollbar.
    */
-  if (!(element instanceof view.HTMLElement)) return false;
+  if (!isHTMLElement(element)) return false;
 
   /*
    * Only a scroll container can reserve one, and asking anything else is not
@@ -1444,13 +1445,14 @@ function borderSpan(style: CSSStyleDeclaration, axis: "x" | "y"): number {
 }
 
 /**
- * The canvas root an element sits inside, as an `HTMLElement` of its OWN realm.
+ * The canvas root an element sits inside, as an `HTMLElement` of any realm.
  *
  * `instanceof HTMLElement` compares against the constructor of the realm doing
  * the asking. A host that mounts the canvas into a same-origin iframe through a
  * portal gets a root built by that iframe's realm, and the check fails for a
  * perfectly good element — so chrome would return early and draw nothing,
- * silently, on exactly the iframe canvas `geometry.ts` documents.
+ * silently, on exactly the iframe canvas `geometry.ts` documents. The root is
+ * classified by node kind instead, through `dom-kind`.
  *
  * Here rather than at each caller because two of them ask the same question, and
  * the realm-safe spelling is the kind of detail that gets written correctly once
@@ -1462,7 +1464,7 @@ export function canvasRootFrom(
 ): HTMLElement | null {
   const root = element.closest(`.${rootClass}`);
   if (root === null) return null;
-  const realm = root.ownerDocument.defaultView;
-  if (realm === null) return null;
-  return root instanceof realm.HTMLElement ? root : null;
+  // A root with no window is not on screen, so there is nothing to draw over.
+  if (root.ownerDocument.defaultView === null) return null;
+  return isHTMLElement(root) ? root : null;
 }
