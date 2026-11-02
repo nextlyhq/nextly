@@ -399,6 +399,30 @@ describe("dragging a Layers row", () => {
     expect(editor().undoDepth).toBe(before);
   });
 
+  it("draws the reason outside the tree, so every row stays readable", () => {
+    const { container } = render(
+      <Host
+        document={page([
+          node("card", "t/card", { props: { link: "/go" } }),
+          node("button", "t/button"),
+        ])}
+      />
+    );
+    press("button", ROW + 14);
+    moveTo(container, X, ROW + 8);
+    moveTo(container, X + 20, ROW + 4);
+    const notice = container.querySelector<HTMLElement>(
+      ".nx-layers-drop-refusal"
+    );
+    if (notice === null) throw new Error("no refusal drawn");
+    // Placed in the window, past the right edge of the tree's rows (the tree
+    // spans 0 to 300 here), and level with the line it explains.
+    expect(notice.style.position).toBe("fixed");
+    expect(Number.parseFloat(notice.style.left)).toBeGreaterThanOrEqual(300);
+    expect(Number.parseFloat(notice.style.top)).toBeGreaterThanOrEqual(0);
+    release(container, X + 20, ROW + 4);
+  });
+
   it("clears the spoken reason when the drag ends, and speaks it again on the next", () => {
     const { container } = render(
       <Host

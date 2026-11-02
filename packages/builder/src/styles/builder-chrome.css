@@ -1930,7 +1930,7 @@
 }
 
 /*
- * The reason a drop is refused, under the line by the row it names.
+ * The reason a drop is refused, beside the panel and level with the line.
  *
  * On the chrome's raised notice surface with a red leading edge and a warning
  * mark, as the editor's other notices are drawn, rather than a red fill: it
@@ -1939,9 +1939,12 @@
  * its contrast is the panel's.
  */
 .nx-layers-drop-refusal {
-  position: absolute;
-  right: 0.25rem;
-  z-index: 3;
+  /* Fixed in the window by the component, beside the panel: above the
+     canvas it overlaps, and never on the rows it explains. */
+  position: fixed;
+  z-index: 50;
+  width: max-content;
+  max-width: 18rem;
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;

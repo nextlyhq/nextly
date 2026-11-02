@@ -41,6 +41,7 @@ import type {
   ComponentLookup,
   NestingSource,
 } from "@nextlyhq/blocks-engine";
+import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { CircleAlert } from "lucide-react";
 import * as React from "react";
 
@@ -87,6 +88,13 @@ export const LAYERS_TOUCH_HOLD_MS = 300;
  */
 export const LAYERS_TOUCH_TOLERANCE_PX = 5;
 
+/** How far past the panel's edge a refusal's reason sits. */
+const NOTICE_GAP_PX = 8;
+/** How far above the line the reason starts, so its first line meets it. */
+const NOTICE_LIFT_PX = 10;
+/** The least margin a reason keeps from the window's edges. */
+const NOTICE_MARGIN_PX = 8;
+
 /** The class the tree's scrolling element carries, set by the panel. */
 export const LAYERS_TREE_CLASS = "nx-layers-panel__tree";
 
@@ -114,6 +122,12 @@ export interface LayersDrawn {
   readonly top: number;
   /** The line's start, measured from the left of that element. */
   readonly left: number;
+  /**
+   * Where a refusal's reason is placed, in WINDOW coordinates: level with the
+   * line, just past the panel's right edge, so it covers none of the rows the
+   * author is aiming between.
+   */
+  readonly notice: { readonly top: number; readonly left: number };
 }
 
 export interface LayersDrag {
@@ -479,11 +493,16 @@ export function useLayersDrag({
         : { kind: "none" };
 
       const result = drag.result;
+      const edges = containerEdges(drag.host);
       const next: LayersDrawn | null =
         result.kind === "none"
           ? null
           : {
               result,
+              notice: {
+                top: edges.top + result.line.y - NOTICE_LIFT_PX,
+                left: edges.right + NOTICE_GAP_PX,
+              },
               top: result.line.y,
               left: depthStart(drag.host) + result.line.depth * LAYERS_DEPTH_PX,
             };
@@ -755,30 +774,68 @@ export function LayersDropOverlay({
         aria-hidden="true"
       />
       {wording === null ? null : (
-        // The panel's notice surface with a red edge and a warning mark, not
-        // a red fill: the reason is read beside rows of ordinary text.
-        <div
-          className="nx-layers-drop-refusal"
-          style={{ top: drawn.top + 6, left: drawn.left }}
-          aria-hidden="true"
-        >
-          <CircleAlert
-            className="nx-layers-drop-refusal__mark"
-            size={14}
-            aria-hidden="true"
-          />
-          <span className="nx-layers-drop-refusal__text">
-            <span className="nx-layers-drop-refusal__why">
-              {wording.headline}
-            </span>
-            {wording.remedy === null ? null : (
-              <span className="nx-layers-drop-refusal__takes">
-                {wording.remedy}
-              </span>
-            )}
-          </span>
-        </div>
+        <RefusalNotice
+          headline={wording.headline}
+          remedy={wording.remedy}
+          at={drawn.notice}
+        />
       )}
     </>
+  );
+}
+
+/**
+ * A refused drop's reason, beside the panel rather than on it.
+ *
+ * Fixed in the window, level with the line, just past the panel's right edge,
+ * so every row the author is aiming between stays readable. Fixed rather than
+ * absolute so the panel's own clipping cannot cut it off; still drawn inside
+ * the panel, so it keeps the editor's tokens and theme. Kept on screen by
+ * moving it back inside the window by its own measured size.
+ *
+ * The panel's notice surface with a red edge and a warning mark, not a red
+ * fill: the reason is read beside ordinary content.
+ */
+function RefusalNotice({
+  headline,
+  remedy,
+  at,
+}: {
+  headline: string;
+  remedy: string | null;
+  at: LayersDrawn["notice"];
+}): React.JSX.Element {
+  const element = React.useRef<HTMLDivElement | null>(null);
+  const [placed, setPlaced] = React.useState(at);
+  useIsomorphicLayoutEffect(() => {
+    const notice = element.current;
+    if (notice === null) return;
+    const right = window.innerWidth - notice.offsetWidth - NOTICE_MARGIN_PX;
+    const bottom = window.innerHeight - notice.offsetHeight - NOTICE_MARGIN_PX;
+    const left = Math.max(NOTICE_MARGIN_PX, Math.min(at.left, right));
+    const top = Math.max(NOTICE_MARGIN_PX, Math.min(at.top, bottom));
+    setPlaced(previous =>
+      previous.left === left && previous.top === top ? previous : { left, top }
+    );
+  }, [at.left, at.top, headline, remedy]);
+  return (
+    <div
+      ref={element}
+      className="nx-layers-drop-refusal"
+      style={{ position: "fixed", top: placed.top, left: placed.left }}
+      aria-hidden="true"
+    >
+      <CircleAlert
+        className="nx-layers-drop-refusal__mark"
+        size={14}
+        aria-hidden="true"
+      />
+      <span className="nx-layers-drop-refusal__text">
+        <span className="nx-layers-drop-refusal__why">{headline}</span>
+        {remedy === null ? null : (
+          <span className="nx-layers-drop-refusal__takes">{remedy}</span>
+        )}
+      </span>
+    </div>
   );
 }
