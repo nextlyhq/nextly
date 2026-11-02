@@ -65,6 +65,21 @@ export interface InlineTextEditing {
   readonly exposure?: ExposedTextTarget;
 }
 
+/**
+ * The op a finished edit of exposed text writes, asked again of the editor as
+ * it stands: the component library may have changed while the caret was in
+ * the text, and a prop no longer fed by the same text exposure takes nothing.
+ */
+function exposedCommitOp(
+  editor: EditorState,
+  started: ExposedTextTarget,
+  next: string
+) {
+  const now = exposedTarget(editor, started.nodeId, started.prop);
+  if (now === undefined || now.exposureId !== started.exposureId) return null;
+  return exposedTextOp(editor.document, started, next);
+}
+
 /** A composed node's exposed text, when that is what this value is. */
 function exposedTarget(
   editor: EditorState,
@@ -238,7 +253,7 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
             current.prop,
             next
           )
-        : exposedTextOp(editorRef.current.document, current.exposure, next);
+        : exposedCommitOp(editorRef.current, current.exposure, next);
     // `null` for an unchanged value and for one that stopped being editable
     // while the caret was in it — see `inlineTextOp`.
     return op === null ? null : editorRef.current.apply(op);

@@ -2441,8 +2441,9 @@ function planEdits(
  * One exposure per prop: where two point at the same prop, the one the page
  * shows is the last declared that the placement or its variant sets, else the
  * last declared, which is the order the writes apply in. An edit through any
- * other would change a value nobody sees. Visibility drives no prop, so it is
- * not mapped.
+ * other would change a value nobody sees. A visibility exposure is mapped
+ * under `visibility`, with its type, so an editor can find the node it shows
+ * or hides.
  */
 function planExposedProps(
   definition: ComponentDocument,
@@ -2454,16 +2455,17 @@ function planExposedProps(
   const set = effectiveOverrides(definition, instance);
   const chosen = new Map<string, { fed: PropExposure; set: boolean }>();
   for (const property of usableExposures(definition.exposed)) {
-    if (property.type === "visibility") continue;
     const fed: PropExposure | undefined =
       relay === undefined
         ? { id: property.id, type: property.type }
         : relay.get(property.id);
     if (fed === undefined) continue;
-    if (property.nodeId === "" || !isUsablePropPath(property.propPath)) {
-      continue;
-    }
-    const key = `${property.nodeId}\u0000${property.propPath}`;
+    // A visibility exposure drives the node, not a prop, so it is keyed by
+    // the node's own `visibility` whatever its stored path says.
+    const path =
+      property.type === "visibility" ? "visibility" : property.propPath;
+    if (property.nodeId === "" || !isUsablePropPath(path)) continue;
+    const key = `${property.nodeId}\u0000${path}`;
     const isSet = set.has(property.id);
     const held = chosen.get(key);
     if (held !== undefined && held.set && !isSet) continue;

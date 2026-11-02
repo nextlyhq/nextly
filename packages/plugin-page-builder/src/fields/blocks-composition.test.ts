@@ -2064,6 +2064,21 @@ describe("a placement's own values", () => {
     ).toEqual(["PLACEMENT_VALUE_WRONG_TYPE"]);
   });
 
+  it("refuses as unchecked when gated placements need more components than one save reads", async () => {
+    const rows: Record<string, Stored> = {};
+    const gated = Array.from({ length: 101 }, (_, i) => {
+      rows[`c${String(i)}`] = { published: header };
+      return placing(`p${String(i)}`, `c${String(i)}`, {
+        props: { componentId: `c${String(i)}`, overrides: { title: "Hi" } },
+        visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+      });
+    });
+    const { readStored } = storeOf({ [COMPONENTS]: rows });
+    expect(
+      codes(await judge(page(gated), write(readStored, "pages", "home")))
+    ).toContain("COMPOSITION_UNCHECKED");
+  });
+
   it("accepts a cleared field and a value of the field's type", async () => {
     const { readStored } = storeOf({
       [COMPONENTS]: { header: { published: header } },

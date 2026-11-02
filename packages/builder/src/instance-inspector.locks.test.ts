@@ -70,8 +70,28 @@ const SEALED: ComponentDocument = {
         ],
       },
     },
+    {
+      id: "free",
+      type: "acme/quote",
+      version: 1,
+      props: { words: "Outside" },
+    },
   ],
   exposed: [
+    {
+      id: "quoteShown",
+      label: "Quote shown",
+      nodeId: "q",
+      propPath: "visibility",
+      type: "visibility",
+    },
+    {
+      id: "freeShown",
+      label: "Outside shown",
+      nodeId: "free",
+      propPath: "visibility",
+      type: "visibility",
+    },
     {
       id: "words",
       label: "Words",
@@ -130,6 +150,12 @@ describe("rows a contentOnly lock holds", () => {
     const tone = rows.find(row => row.id === "tone");
     expect(words?.heldBy).toBe(undefined);
     expect(tone?.heldBy?.headline).toContain("is locked to its content");
+  });
+
+  it("holds a visibility row by the node it shows, not by any locked node of the placement", () => {
+    const rows = inspect(placed())?.rows ?? [];
+    expect(rows.find(row => row.id === "quoteShown")?.heldBy).toBeDefined();
+    expect(rows.find(row => row.id === "freeShown")?.heldBy).toBe(undefined);
   });
 
   it("holds nothing without the composed page's exposure map", () => {

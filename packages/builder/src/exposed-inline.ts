@@ -21,6 +21,7 @@
  * @module exposed-inline
  */
 import {
+  authoredText,
   contentPropsOf,
   findNode,
   getBlock,
@@ -94,9 +95,11 @@ export function composedTextAt(
   ) {
     return { kind: "part-of", placementId: placement.id };
   }
-  const shown: unknown = (node.props as Record<string, unknown> | undefined)?.[
-    prop
-  ];
+  // The text the page draws for this value, through the projection every
+  // reader shares, so an untouched edit compares equal and writes nothing.
+  const shown = authoredText(
+    (node.props as Record<string, unknown> | undefined)?.[prop]
+  );
   return {
     kind: "exposed",
     target: {
@@ -105,7 +108,7 @@ export function composedTextAt(
       placementId: placement.id,
       exposureId,
       multiline: schema?.type === "textarea",
-      value: typeof shown === "string" ? shown : "",
+      value: shown,
     },
   };
 }

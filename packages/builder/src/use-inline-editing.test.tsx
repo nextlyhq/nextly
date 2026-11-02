@@ -1929,6 +1929,29 @@ describe("the element the gesture measured", () => {
   });
 });
 
+/** A header whose heading exposes `text` and not `kicker`. */
+const HEADER_DEF: ComponentDocument = {
+  formatVersion: 1,
+  kind: "component",
+  nodes: [
+    {
+      id: "h",
+      type: "acme/heading",
+      version: 1,
+      props: { text: "Site name", kicker: "Hello" },
+    },
+  ],
+  exposed: [
+    {
+      id: "title",
+      label: "Title",
+      nodeId: "h",
+      propPath: "text",
+      type: "text",
+    },
+  ],
+};
+
 describe("a double-click on a component's text", () => {
   /** A header placed once, its heading exposing `text` and not `kicker`. */
   function placedHeader() {
@@ -1948,27 +1971,7 @@ describe("a double-click on a component's text", () => {
       ] as never,
       { source: "use-inline-editing-test" }
     );
-    const header: ComponentDocument = {
-      formatVersion: 1,
-      kind: "component",
-      nodes: [
-        {
-          id: "h",
-          type: "acme/heading",
-          version: 1,
-          props: { text: "Site name", kicker: "Hello" },
-        },
-      ],
-      exposed: [
-        {
-          id: "title",
-          label: "Title",
-          nodeId: "h",
-          propPath: "text",
-          type: "text",
-        },
-      ],
-    };
+    const header = HEADER_DEF;
     const page = {
       formatVersion: 1,
       kind: "page",
@@ -2008,6 +2011,28 @@ describe("a double-click on a component's text", () => {
     );
     return { ...hook, editor, onPartOf };
   }
+
+  it("writes nothing when the text stopped being a text field while the caret was in it", () => {
+    const { result, editor } = placedHeader();
+    act(() => result.current.onDoubleClick(doubleClickOn("text")));
+    expect(result.current.editing?.exposure?.exposureId).toBe("title");
+
+    // The library refreshed: the component no longer exposes the headline.
+    const bare = resolveComponentInstances(
+      editor.document,
+      new Map([["header", { ...HEADER_DEF, exposed: [] } as BlockDocument]]),
+      { exposures: true }
+    ).document;
+    (editor as { composed: () => BlockDocument }).composed = () => bare;
+
+    const element = document.querySelector('[data-nx-prop="text"]');
+    if (element === null) throw new Error("no element");
+    element.textContent = "Acme";
+    act(() => {
+      result.current.commit();
+    });
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
 
   it("on text it does not expose, selects the placement and says whose it is", () => {
     const { result, editor, onPartOf } = placedHeader();

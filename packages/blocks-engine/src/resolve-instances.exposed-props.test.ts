@@ -100,10 +100,11 @@ describe("the exposure map on composed nodes", () => {
       text: { id: "headline", type: "text" },
       tone: { id: "tone", type: "select" },
     });
-    // Visibility drives no prop, and the subtitle has nothing else exposed.
-    expect(nodeShowing(document.nodes, "subtitle")?.exposedProps).toBe(
-      undefined
-    );
+    // Visibility drives the node itself, so it is keyed by `visibility`
+    // whatever the stored path says, never by the prop it names.
+    expect(nodeShowing(document.nodes, "subtitle")?.exposedProps).toEqual({
+      visibility: { id: "shown", type: "visibility" },
+    });
   });
 
   it("is absent from a render's output", () => {

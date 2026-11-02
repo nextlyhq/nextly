@@ -558,6 +558,12 @@ async function judgePlacementValues(args: {
     if (answer.kind === "document") library.held.set(id, answer.document);
     else library.missing.add(id);
   }
+  // Past the reader's bound a definition reads as unreadable and its
+  // placement would go unjudged, so the save is refused as unchecked instead.
+  if (args.read.exhausted()) {
+    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
   const components = lookupOf(library);
   if (placementValueIssues(document, components, [], limits).length === 0) {
     return;

@@ -241,6 +241,36 @@ describe("exposed text inside an area locked to its content", () => {
   });
 });
 
+describe("a number stored where text is exposed", () => {
+  it("is edited as the text the page draws, and an untouched edit writes nothing", () => {
+    const numbered: ComponentDocument = {
+      ...HEADER,
+      nodes: [
+        { id: "h", type: "acme/heading", version: 1, props: { text: 2024 } },
+      ],
+    };
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [placed("p1")],
+    };
+    const composed = resolveComponentInstances(
+      document,
+      new Map([["header", numbered as BlockDocument]]),
+      { exposures: true }
+    ).document;
+    const answer = composedTextAt(
+      document,
+      composed,
+      composed.nodes[0]?.id ?? "",
+      "text"
+    );
+    if (answer?.kind !== "exposed") throw new Error("expected exposed text");
+    expect(answer.target.value).toBe("2024");
+    expect(exposedTextOp(document, answer.target, "2024")).toBe(null);
+  });
+});
+
 describe("a text prop another kind of exposure feeds", () => {
   it("is not typed into on the canvas: a choice keeps its options in the panel", () => {
     const toned: ComponentDocument = {

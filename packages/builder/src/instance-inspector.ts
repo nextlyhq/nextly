@@ -290,8 +290,9 @@ function variantOf(
  * `role: "content"` stays editable under the lock, and anything else is held,
  * as D19 judges by the target prop's declared role.
  *
- * A visibility row drives no prop, so the map has no node for it; it is held
- * when the placement itself sits in such an area, which is where its node is.
+ * A visibility row is mapped to the node it shows or hides, and is held when
+ * that node sits in such an area; a node it currently hides is not composed,
+ * so its row is not held.
  */
 function heldRows(
   placementId: string,
@@ -302,10 +303,7 @@ function heldRows(
   const source = lockSourceOf(view);
   const locks = nodeLocks(composed.nodes, source);
   const targets = new Map<string, { node: ResolvedBlockNode; path: string }>();
-  let placementArea: NodeLock | undefined;
   for (const composedNode of composedNodesOf(composed.nodes, placementId)) {
-    const lock = locks.get(composedNode.id);
-    if (lock?.area !== undefined) placementArea ??= lock;
     const fed = composedNode.exposedProps;
     if (fed === undefined) continue;
     for (const path of Object.keys(fed)) {
@@ -315,14 +313,14 @@ function heldRows(
   }
   return row => {
     const target = targets.get(row.id);
-    if (target === undefined) {
-      return row.type === "visibility"
-        ? contentOnlyWording(placementArea, undefined)
-        : undefined;
-    }
+    if (target === undefined) return undefined;
     const lock = locks.get(target.node.id);
+    // Showing or hiding a node is its design, never its content.
     const prop = target.path.split(".")[0] ?? target.path;
-    if (contentPropsOf(propsOf(source, target.node.type)).has(prop)) {
+    if (
+      row.type !== "visibility" &&
+      contentPropsOf(propsOf(source, target.node.type)).has(prop)
+    ) {
       return undefined;
     }
     return contentOnlyWording(lock, target.node.type);
