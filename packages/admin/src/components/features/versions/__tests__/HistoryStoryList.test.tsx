@@ -344,7 +344,7 @@ describe("events between versions", () => {
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
   });
 
-  it("says a takeover was from someone no longer named when the holder is gone", () => {
+  it("says the previous editor is unavailable when the server could not name them", () => {
     renderList(
       [version(1, 1)],
       [
@@ -355,8 +355,9 @@ describe("events between versions", () => {
       ]
     );
     const list = screen.getByRole("list", { name: "History, newest first" });
-    expect(list).toHaveTextContent("Took over from a former user");
+    expect(list).toHaveTextContent("Took over (previous editor unavailable)");
     expect(list).not.toHaveTextContent("null");
+    expect(list).not.toHaveTextContent("u-gone");
   });
 });
 

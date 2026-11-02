@@ -173,7 +173,7 @@ describe.each(getConfiguredTestDialects())(
           actorKind: "person",
           actorId: GRACE.id,
           actorName: GRACE.name,
-          payload: { fromId: ADA.id },
+          payload: { fromId: ADA.id, fromName: ADA.name },
         });
         // Whole seconds on some dialects: allow the second either side.
         const at = new Date(taken[0].occurredAt).getTime();
@@ -184,6 +184,55 @@ describe.each(getConfiguredTestDialects())(
         );
       }, 120_000);
     }
+
+    it("names the previous editor from the users table when read: by name, never by email, and nobody once the account is gone", async () => {
+      const t = await boot(dialect);
+      const { ref, subject } = await post(t);
+      // Ada holds it under a label that is an email address, as the lock
+      // labels a person with no name.
+      await acquireDocumentLock(t.adapter, ref, {
+        ...claimant(ADA),
+        ownerLabel: ADA.email,
+      });
+      await claim(t, ref, GRACE, { takeover: true });
+      const takeover = async () =>
+        (await historyOf(t, subject)).find(e => e.kind === "taken-over");
+
+      // Renamed after the takeover: history names her as she is now, from
+      // the users table, not from anything the event copied.
+      await t.adapter.update(
+        "users",
+        { name: "Ada Lovelace" },
+        { and: [{ column: "id", op: "=", value: ADA.id }] }
+      );
+      expect((await takeover())?.payload).toEqual({
+        fromId: ADA.id,
+        fromName: "Ada Lovelace",
+      });
+
+      // With no name, she is named by nothing, never by her email.
+      await t.adapter.update(
+        "users",
+        { name: null },
+        { and: [{ column: "id", op: "=", value: ADA.id }] }
+      );
+      expect((await takeover())?.payload).toEqual({
+        fromId: ADA.id,
+        fromName: null,
+      });
+      expect(JSON.stringify(await historyOf(t, subject))).not.toContain(
+        ADA.email
+      );
+
+      // Her account gone: still nobody, and the event still stands.
+      await t.adapter.delete("users", {
+        and: [{ column: "id", op: "=", value: ADA.id }],
+      });
+      expect((await takeover())?.payload).toEqual({
+        fromId: ADA.id,
+        fromName: null,
+      });
+    }, 120_000);
 
     it("refuses the takeover and keeps the holder when the event write fails", async () => {
       const t = await boot(dialect);
