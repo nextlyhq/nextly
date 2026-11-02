@@ -169,6 +169,22 @@ export function useSavePatternVerb(
 }
 
 /**
+ * What the editor asks the server about the author and the document as it
+ * mounts: whether the author may save a pattern, and, for a component, what
+ * its live definition holds and how many documents place it, which its own
+ * document cannot say (nothing for a page).
+ */
+function useServerReads(initialDocument: BlockDocument): {
+  readonly mayCreatePattern: boolean;
+  readonly componentFacts: ComponentFieldsHost | undefined;
+} {
+  return {
+    mayCreatePattern: useMayCreatePattern(),
+    componentFacts: useEditedComponentFacts(initialDocument),
+  };
+}
+
+/**
  * Everything the editor is mounted from, read once per opening.
  *
  * Called by the component that is mounted only while the editor is open, so
@@ -316,10 +332,7 @@ export function useEditorMount(
    * list, so the answer has to exist before any of them draws — and asking in
    * three places would be three requests answering one question.
    */
-  const mayCreatePattern = useMayCreatePattern();
-  // What the component being edited holds live and how many documents place
-  // it, which its own document cannot say; nothing for a page.
-  const componentFacts = useEditedComponentFacts(initialDocument);
+  const { mayCreatePattern, componentFacts } = useServerReads(initialDocument);
 
   /*
    * Where the shell keeps this author's panel, device and zoom: under their
