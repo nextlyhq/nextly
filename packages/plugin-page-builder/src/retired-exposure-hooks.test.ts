@@ -115,6 +115,7 @@ function harness(
 ) {
   const handlers = new Map<string, Handler>();
   const errors: { message: string; meta?: Row }[] = [];
+  const warnings: { message: string; meta?: Row }[] = [];
   const registryReads: string[] = [];
   const { store } = options.store ? { store: options.store } : memoryStore();
   registerRetiredExposures({
@@ -155,6 +156,7 @@ function harness(
         },
       },
       logger: {
+        warn: (message, meta) => warnings.push({ message, meta }),
         error: (message, meta) => errors.push({ message, meta }),
       },
     },
@@ -168,7 +170,7 @@ function harness(
       collection: COMPONENTS,
       ...context,
     });
-  return { handlers, run, errors, registryReads };
+  return { handlers, run, errors, warnings, registryReads };
 }
 
 describe("recording retired ids at publish", () => {
@@ -276,6 +278,37 @@ describe("recording retired ids at publish", () => {
 
     expect(retired).toEqual([]);
     expect(errors).toEqual([]);
+  });
+
+  it("retires nothing in a localized store, and warns naming the component", async () => {
+    const { store, retired } = memoryStore();
+    const { run, warnings } = harness({ store, componentStoreLocalized: true });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(definition(["title", "body"]), definition(["body"]))
+    );
+
+    expect(retired).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('"hero"');
+    expect(warnings[0].meta).toMatchObject({
+      retired: { properties: ["title"], slots: [] },
+    });
+  });
+
+  it("says nothing about a localized store's write that drops no field", async () => {
+    const { store } = memoryStore();
+    const { run, warnings } = harness({ store, componentStoreLocalized: true });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(definition(["title"]), definition(["title"]))
+    );
+
+    expect(warnings).toEqual([]);
   });
 
   it("logs a failed record naming the component, and does not throw", async () => {

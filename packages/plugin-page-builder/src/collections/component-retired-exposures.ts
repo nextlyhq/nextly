@@ -36,16 +36,18 @@ export interface ComponentRetiredRow {
 /**
  * The unique key of one retired id.
  *
- * Joined by a NUL, which no id can hold usefully: a component id and an
- * exposure id are stored strings, and a separator they could contain would let
- * two different triples spell one key.
+ * The triple as a JSON array. A component id and an exposure id are stored
+ * strings that may hold any character, so a plain separator they could contain
+ * would let two different triples spell one key; JSON quotes and escapes each
+ * part, so no two triples share a spelling. No NUL either, which PostgreSQL
+ * refuses in a text column.
  */
 export function retiredKey(
   componentId: string,
   kind: RetiredKind,
   exposureId: string
 ): string {
-  return [componentId, kind, exposureId].join("\u0000");
+  return JSON.stringify([componentId, kind, exposureId]);
 }
 
 /** The retired-ids collection. */

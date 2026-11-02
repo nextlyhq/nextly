@@ -22,6 +22,15 @@ import {
 /** How many rows one page of the read returns. */
 const ROWS_PER_PAGE = 200;
 
+/**
+ * How many component ids one read names.
+ *
+ * Each id is a bound parameter of the `IN` list, and SQLite refuses a statement
+ * past 999 of them, while one document may place up to the node cap's worth of
+ * components. A refused read keeps every retired value the write carries.
+ */
+const IDS_PER_READ = 128;
+
 /** What the store reads and writes through. */
 export type RetiredDirectApi = Pick<ClassUsageDirectApi, "find" | "create">;
 
@@ -65,7 +74,8 @@ export function retiredStore(args: {
 }
 
 /**
- * Every retired row of these components, paged to the end.
+ * Every retired row of these components, a bounded number of ids per read,
+ * each paged to the end.
  *
  * Not capped. A list cut short would leave a retired id unknown, and every
  * write would then keep its value; retirements are a designer's deliberate
@@ -77,19 +87,23 @@ async function readRetired(
   componentIds: readonly string[]
 ): Promise<RetiredByComponent> {
   const found = new Map<string, { properties: string[]; slots: string[] }>();
-  for (let page = 1; ; page += 1) {
-    const answer = await nextly.find({
-      collection,
-      where: { componentId: { in: [...componentIds] } },
-      limit: ROWS_PER_PAGE,
-      page,
-      sort: "id",
-      depth: 0,
-      overrideAccess: true,
-    });
-    for (const row of answer.items) addRow(found, row);
-    if (!answer.meta.hasNext) return found;
+  for (let at = 0; at < componentIds.length; at += IDS_PER_READ) {
+    const chunk = componentIds.slice(at, at + IDS_PER_READ);
+    for (let page = 1; ; page += 1) {
+      const answer = await nextly.find({
+        collection,
+        where: { componentId: { in: chunk } },
+        limit: ROWS_PER_PAGE,
+        page,
+        sort: "id",
+        depth: 0,
+        overrideAccess: true,
+      });
+      for (const row of answer.items) addRow(found, row);
+      if (!answer.meta.hasNext) break;
+    }
   }
+  return found;
 }
 
 /** Fold one stored row into the map, skipping a row this cannot read. */

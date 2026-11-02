@@ -65,6 +65,29 @@ describe("reading retired ids", () => {
     expect(calls.every(call => call.overrideAccess === true)).toBe(true);
   });
 
+  it("names a bounded number of ids per read, and answers for all of them", async () => {
+    const ids = Array.from({ length: 1000 }, (_, i) => `c${String(i)}`);
+    const { api, calls } = fakeApi([
+      row("c0", "property", "first"),
+      row("c999", "slot", "last"),
+    ]);
+    const store = retiredStore({ nextly: async () => api, collection: "t" });
+
+    const retired = await store.of(ids);
+
+    expect(retired.get("c0")).toEqual({ properties: ["first"], slots: [] });
+    expect(retired.get("c999")).toEqual({ properties: [], slots: ["last"] });
+    const named = calls.map(
+      call =>
+        (
+          (call as { where?: { componentId: { in: string[] } } }).where
+            ?.componentId.in ?? []
+        ).length
+    );
+    // SQLite refuses a statement past 999 bound parameters.
+    expect(Math.max(...named)).toBeLessThanOrEqual(128);
+  });
+
   it("reads nothing for no components", async () => {
     const { api, calls } = fakeApi([]);
     const store = retiredStore({ nextly: async () => api, collection: "t" });
@@ -127,5 +150,18 @@ describe("recording retired ids", () => {
     await expect(
       store.retire("hero", { properties: ["title"], slots: [] })
     ).rejects.toThrow("database down");
+  });
+});
+
+describe("the unique key of a retired id", () => {
+  it("spells each triple apart, even when an id holds the separator a join would use", () => {
+    // Joined by "|", both of these spell `a|slot|property|b`.
+    expect(retiredKey("a|slot", "property", "b")).not.toBe(
+      retiredKey("a", "slot", "property|b")
+    );
+  });
+
+  it("holds no NUL, which a PostgreSQL text column refuses", () => {
+    expect(retiredKey("hero", "slot", "aside")).not.toContain("\u0000");
   });
 });

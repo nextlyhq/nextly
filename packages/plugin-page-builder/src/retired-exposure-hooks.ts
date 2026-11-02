@@ -82,6 +82,7 @@ export interface RetiredExposurePluginContext {
     };
   };
   logger: {
+    warn(message: string, meta?: Record<string, unknown>): void;
     error(message: string, meta?: Record<string, unknown>): void;
   };
 }
@@ -127,22 +128,15 @@ async function recordRetirements(
 ): Promise<void> {
   const fields = context as unknown as Record<string, unknown>;
   const componentId = idOf(fields.data) ?? idOf(fields.originalData);
-  let retired: RetiredExposures | undefined;
+  const before = asDocument(fieldOf(fields.originalData, args.componentField));
+  const after = asDocument(fieldOf(fields.data, args.componentField));
+  // An unreadable value says nothing about which ids went. Reading it as
+  // "exposes none" would retire every field the component has.
+  if (before === null || after === null) return;
+  const retired = droppedExposures(before, after);
+  if (retired.properties.length === 0 && retired.slots.length === 0) return;
   try {
-    const collection = await args.ctx.services.collections.getCollection(
-      args.componentCollection,
-      requestContextFor(context)
-    );
-    if (!leavesDocumentPublished(context, collection)) return;
-    const before = asDocument(
-      fieldOf(fields.originalData, args.componentField)
-    );
-    const after = asDocument(fieldOf(fields.data, args.componentField));
-    // An unreadable value says nothing about which ids went. Reading it as
-    // "exposes none" would retire every field the component has.
-    if (before === null || after === null) return;
-    retired = droppedExposures(before, after);
-    if (retired.properties.length === 0 && retired.slots.length === 0) return;
+    if (!(await goesLive(args, context, componentId, retired))) return;
     if (componentId === undefined) {
       throw new Error("the published row carries no id");
     }
@@ -155,6 +149,38 @@ async function recordRetirements(
       { componentId, retired, error }
     );
   }
+}
+
+/**
+ * Whether this write puts the removal live, so its ids are retired now.
+ *
+ * A LOCALIZED store is declined, and said so. Publishing there is per
+ * language, so a write leaves one language live while another may still expose
+ * the field, and retiring it would strip values that language still shows;
+ * telling which languages have dropped it is not done yet. The warning names
+ * the component, so its removed ids can be kept from reuse by hand.
+ */
+async function goesLive(
+  args: RetiredExposureHooksArgs,
+  context: HookContext<unknown>,
+  componentId: string | undefined,
+  retired: RetiredExposures
+): Promise<boolean> {
+  const collection = await args.ctx.services.collections.getCollection(
+    args.componentCollection,
+    requestContextFor(context)
+  );
+  if ((collection as { localized?: unknown } | null)?.localized === true) {
+    args.ctx.logger.warn(
+      `[page-builder] component "${componentId ?? "(unknown)"}" stopped ` +
+        "exposing fields in a localized component store, where removed fields " +
+        "are not retired: their values stay on pages, and their ids must not " +
+        "be reused.",
+      { componentId, retired }
+    );
+    return false;
+  }
+  return leavesDocumentPublished(context, collection);
 }
 
 /** The ids `before` exposes that `after` does not, fields and slots apart. */
