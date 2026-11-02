@@ -32,6 +32,7 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import {
+  introspectConstraintNames,
   introspectIndexTables,
   introspectLiveSnapshot,
   introspectTableNames,
@@ -388,7 +389,15 @@ function readAlterTable(cursor: Cursor, dialect: SupportedDialect): Reading {
   for (const tokens of clauses) {
     const clause = new Cursor(tokens);
     const read = readAlterClause(clause, name, dialect, clauses.length);
-    if (read === undefined) return { kind: "unread", touches: name };
+    // SQLite has no ALTER TABLE ADD or DROP CONSTRAINT and records no
+    // constraint names to read, so such a clause there is unread rather than
+    // judged against facts that are never present.
+    const constraintOnSqlite =
+      dialect === "sqlite" &&
+      read?.some(claim => claim.object.kind === "constraint") === true;
+    if (read === undefined || constraintOnSqlite) {
+      return { kind: "unread", touches: name };
+    }
     if (clause.conditional) cursor.conditional = true;
     claims.push(...read);
   }
@@ -728,8 +737,8 @@ const within = (table: string, name: string): string =>
  * (`introspectLiveSnapshot`): columns, indexes, foreign keys and checks, the
  * constraint names as the catalog holds them. On PostgreSQL and SQLite an
  * index is also looked up by name alone (`introspectIndexTables`), for a
- * `DROP INDEX` that names no table. A constraint is a foreign key, a check
- * or a unique index of its name, never a plain index (see the loop below).
+ * `DROP INDEX` that names no table. A constraint is whatever the catalog
+ * records as one on the table (`introspectConstraintNames`).
  */
 export async function readLiveSchema(
   db: unknown,
@@ -756,28 +765,30 @@ export async function readLiveSchema(
   const liveTables = await introspectTableNames(db, dialect, tableNames);
   const snapshot = await introspectLiveSnapshot(db, dialect, liveTables);
   const indexTables = await introspectIndexTables(db, dialect, indexNames);
+  // Every constraint by the catalog's own record of it, primary keys and
+  // exclusion constraints included: inferred from the snapshot's indexes,
+  // foreign keys and checks, a primary key read as absent, and a statement
+  // dropping one that never ran read as done.
+  const constraintNames = await introspectConstraintNames(
+    db,
+    dialect,
+    liveTables
+  );
 
   const tables = new Set(liveTables.map(name => name.toLowerCase()));
   const columns = new Set<string>();
   const indexes = new Set<string>();
   const indexesAnywhere = new Set<string>(indexTables.keys());
   const constraints = new Set<string>();
+  for (const [on, names] of constraintNames) {
+    for (const name of names) constraints.add(within(on, name));
+  }
   for (const spec of snapshot.tables) {
     for (const column of spec.columns)
       columns.add(within(spec.name, column.name));
     for (const index of spec.indexes ?? []) {
       indexes.add(within(spec.name, index.name));
       indexesAnywhere.add(index.name.toLowerCase());
-      // A UNIQUE constraint is held as a unique index of its name. A plain
-      // index is no constraint: MySQL keeps a foreign key's backing index,
-      // under the key's name, after DROP FOREIGN KEY removes the key.
-      if (index.unique) constraints.add(within(spec.name, index.name));
-    }
-    for (const key of spec.foreignKeys ?? []) {
-      constraints.add(within(spec.name, key.name));
-    }
-    for (const check of spec.checks ?? []) {
-      constraints.add(within(spec.name, check.name));
     }
   }
   for (const [index, on] of indexTables) {

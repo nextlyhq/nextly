@@ -209,6 +209,49 @@ describe("refuseUnresolvedAttempts", () => {
     );
   });
 
+  it.each(["postgresql", "sqlite", "mysql"] as const)(
+    "refuses on %s an unresolved attempt whose file this build lacks, on every dialect, naming it",
+    async dialect => {
+      // A build without the file cannot tell whether the attempt ran in a
+      // transaction, so even an unmarked file on PostgreSQL or SQLite is
+      // refused; an attempt since resolved, and a plugin's, are not.
+      const gone = "20261030_000009_gone.sql";
+      const error = await refusal(
+        dialect,
+        [file(false)],
+        [
+          row("file_apply", "applied"),
+          row("file_apply", "in_progress", gone),
+          row("file_apply", "failed", "20261030_000010_resolved.sql"),
+          row("file_apply", "applied", "20261030_000010_resolved.sql"),
+          row("file_apply", "failed", "plugin:shop/0002_gone"),
+        ]
+      );
+      expect(error?.code).toBe("NEXTLY_MIGRATION_PARTIALLY_APPLIED");
+      expect(error?.logContext?.attempts).toEqual([
+        { filename: gone, direction: "up", missing: true, statements: [] },
+      ]);
+      expect(error?.publicMessage).toContain(
+        `this build lacks ${gone}, so it cannot tell how that attempt ran`
+      );
+      expect(error?.publicMessage).toContain(
+        `\`nextly migrate:resolve --failed-cleanup ${gone}\``
+      );
+    }
+  );
+
+  it("names a down section's attempt whose file this build lacks", async () => {
+    const gone = "20261030_000009_gone.sql";
+    const error = await refusal(
+      "postgresql",
+      [],
+      [row("file_apply", "applied", gone), row("file_rollback", "failed", gone)]
+    );
+    expect(error?.logContext?.attempts).toEqual([
+      { filename: gone, direction: "down", missing: true, statements: [] },
+    ]);
+  });
+
   it("still names the file and the recovery when the live schema cannot be read", async () => {
     const error = await refuseUnresolvedAttempts({
       files: [file(false)],

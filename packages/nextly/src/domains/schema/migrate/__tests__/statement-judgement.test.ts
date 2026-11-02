@@ -588,6 +588,13 @@ const CASES: Case[] = [
       done(5, "CREATE INDEX `i` ON `t`"),
     ],
   },
+  {
+    name: "a constraint clause on SQLite, which has none to add or drop, is unread",
+    dialect: "sqlite",
+    statements: ["ALTER TABLE t DROP CONSTRAINT c"],
+    live: { tables: ["t"] },
+    expected: [unknown(1, "ALTER TABLE t DROP CONSTRAINT c", "unread")],
+  },
   // A later statement read as rows or unread that still names its table.
   {
     name: "a table a later CREATE TABLE ... AS makes again is undone, not read as never dropped",

@@ -508,6 +508,27 @@ describe.each(LOCK_DIALECTS)(
         180_000
       );
 
+      it("refuses once the stopped file is gone from the build, until its attempt is cleared", async () => {
+        await kill(await runUntil("up", "after", firstStatement));
+        // A build that lacks the file: removed, renamed, or never shipped.
+        rmSync(join(migrationsDir, FILE));
+        const settled = await databaseState();
+
+        // The lock lapses; both commands refuse, naming the file, with nothing
+        // of it to judge, and change nothing.
+        expect(await refusedWith(migrate())).toEqual([]);
+        expect(await databaseState()).toEqual(settled);
+        expect(await refusedWith(migrateDown())).toEqual([]);
+        expect(await databaseState()).toEqual(settled);
+
+        // The operator reverses what ran and clears the attempt, which needs
+        // no file: the run goes on, with nothing of the file left to apply.
+        await adapter.executeQuery(`DROP TABLE ${one}`);
+        await resolveFile("failed-cleanup");
+        expect((await migrate()).applied).toBe(0);
+        expect(hasUnresolvedAttempt(await fileRows())).toBe(false);
+      }, 180_000);
+
       it.each(["before", "after"] as const)(
         "records a down section's attempt with no outcome when migrate:down is killed %s its first statement",
         async when => {

@@ -77,6 +77,8 @@ interface Refused {
   direction: "up" | "down";
   failed: boolean;
   outsideTransaction: boolean;
+  /** This build's folder lacks the file, so nothing of it can be judged. */
+  missing: boolean;
   statements: JudgedStatement[];
 }
 
@@ -84,6 +86,11 @@ interface Refused {
  * Throws `NEXTLY_MIGRATION_PARTIALLY_APPLIED` naming every app file whose
  * newest unresolved attempt may have stopped part-way, each with its
  * statements judged from the live database. Reads only.
+ *
+ * An unresolved attempt at a file this build's folder lacks (removed,
+ * renamed, or written by a newer build) is refused on every dialect: without
+ * the file, the build cannot tell whether that attempt ran in a transaction,
+ * nor judge its statements.
  */
 export async function refuseUnresolvedAttempts(
   args: RefuseUnresolvedAttemptsArgs
@@ -96,6 +103,7 @@ export async function refuseUnresolvedAttempts(
     else byFilename.set(row.filename, [row]);
   }
   const refused: Refused[] = [];
+  const inFolder = new Set(args.files.map(file => file.filename));
   for (const file of args.files) {
     const attempt = migrationStanding(
       byFilename.get(file.filename) ?? []
@@ -114,11 +122,26 @@ export async function refuseUnresolvedAttempts(
       direction,
       failed: attempt.status === "failed",
       outsideTransaction: !file.transaction,
+      missing: false,
       statements: judgeStatements(
         statements,
         args.dialect,
         await readLiveOrNothing(args, statements)
       ),
+    });
+  }
+  for (const [filename, rows] of byFilename) {
+    if (inFolder.has(filename)) continue;
+    const attempt = migrationStanding(rows).unresolvedAttempt;
+    if (attempt === undefined) continue;
+    refused.push({
+      filename,
+      advice: undefined,
+      direction: attempt.eventType === "file_rollback" ? "down" : "up",
+      failed: attempt.status === "failed",
+      outsideTransaction: false,
+      missing: true,
+      statements: [],
     });
   }
   if (refused.length === 0) return;
@@ -166,6 +189,7 @@ function unresolvedAttemptError(
       attempts: refused.map(r => ({
         filename: r.filename,
         direction: r.direction,
+        ...(r.missing ? { missing: true } : {}),
         statements: r.statements.map(s => ({
           number: s.number,
           verdict: s.verdict,
@@ -185,6 +209,9 @@ function attemptSentence(r: Refused): string {
   const ended = r.failed
     ? "failed"
     : "recorded no outcome (the process running it stopped, or is still running)";
+  if (r.missing) {
+    return `The attempt at ${r.filename}'s ${sectionOf(r)} ${ended}, and this build lacks ${r.filename}, so it cannot tell how that attempt ran or judge its statements: the database may hold part of it.`;
+  }
   const where = r.outsideTransaction
     ? "outside a transaction, as the file is marked to run"
     : "on MySQL, which commits each schema statement as it runs";
@@ -220,6 +247,11 @@ function verdictPhrase(s: JudgedStatement): string {
  */
 function adviceFor(r: Refused): string {
   const f = r.filename;
+  // Recording a file applied or rolled back reads the file; clearing an
+  // attempt does not.
+  if (r.missing) {
+    return `Run the build that has ${f}, or restore it here, to finish or record it; if you reverse what of it ran, record that with \`nextly migrate:resolve --failed-cleanup ${f}\`.`;
+  }
   if (r.direction === "up") return r.advice ?? partiallyAppliedAdvice(f);
   return `If you finish ${f}'s down section by hand, record the rollback with \`nextly migrate:resolve --rolled-back ${f}\`; if you reverse the down section's statements that ran, record that with \`nextly migrate:resolve --failed-cleanup ${f}\`, and the migration stays applied.`;
 }

@@ -932,6 +932,59 @@ export async function introspectTableNames(
 }
 
 /**
+ * The name of every constraint the catalog holds on each of `tableNames`
+ * (their live spellings, as `introspectTableNames` returns them), keyed by the
+ * lower-cased table name, each name lower-cased. Read from the catalog's own
+ * constraint table rather than inferred from indexes, foreign keys and checks,
+ * which leave out a primary key and an exclusion constraint, and keep a MySQL
+ * foreign key's backing index after the key is dropped: PostgreSQL's
+ * `pg_constraint`, every kind, and MySQL's `TABLE_CONSTRAINTS` (a primary key
+ * is named `PRIMARY` there). SQLite names no constraint it can add or drop
+ * later, so nothing is read there.
+ */
+export async function introspectConstraintNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: readonly string[]
+): Promise<Map<string, Set<string>>> {
+  const found = new Map<string, Set<string>>();
+  if (tableNames.length === 0 || dialect === "sqlite") return found;
+  const namesIn = sql.join(
+    tableNames.map(name => sql`${name}`),
+    sql`, `
+  );
+  let rows: unknown[];
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT t.relname AS "table", c.conname AS name
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+            AND t.relname IN (${namesIn})`
+    )) as { rows: unknown[] };
+    rows = result.rows;
+  } else {
+    rows = mysqlResultRows<unknown>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT TABLE_NAME AS \`table\`, CONSTRAINT_NAME AS name
+            FROM information_schema.TABLE_CONSTRAINTS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME IN (${namesIn})`
+      )
+    );
+  }
+  for (const row of rows) {
+    const { table, name } = (row ?? {}) as Record<string, unknown>;
+    if (typeof table !== "string" || typeof name !== "string") continue;
+    const key = table.toLowerCase();
+    const names = found.get(key) ?? new Set<string>();
+    names.add(name.toLowerCase());
+    found.set(key, names);
+  }
+  return found;
+}
+
+/**
  * Every descendant of each named PostgreSQL table, for the drop guard: the
  * tables inheriting from it and its partitions, at any depth, from the
  * catalog's inheritance records (`pg_inherits`), which hold both. Keyed by

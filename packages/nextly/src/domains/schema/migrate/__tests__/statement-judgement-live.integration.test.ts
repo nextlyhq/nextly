@@ -70,11 +70,10 @@ describe.each(LOCK_DIALECTS)(
       expect(live.hasIndex(`${P}_ix`, posts)).toBe(true);
       expect(live.hasIndex(`${P}_ix`, owners)).toBe(false);
       expect(live.hasIndex(`${P}_never`, posts)).toBe(false);
-      expect(live.hasConstraint(posts, `${P}_fk`)).toBe(true);
       if (dialect !== "sqlite") {
-        // SQLite keeps a UNIQUE constraint as an unnamed `sqlite_autoindex_*`,
-        // and has no ALTER TABLE ADD or DROP CONSTRAINT, so no statement there
-        // claims a constraint by that name.
+        // SQLite has no ALTER TABLE ADD or DROP CONSTRAINT, so no statement
+        // there claims a constraint, and none is read.
+        expect(live.hasConstraint(posts, `${P}_fk`)).toBe(true);
         expect(live.hasConstraint(posts, `${P}_uq`)).toBe(true);
       }
       expect(live.hasConstraint(posts, `${P}_absent`)).toBe(false);
@@ -117,6 +116,34 @@ describe.each(LOCK_DIALECTS)(
         expect(
           judgeStatements([dropped], dialect, live).map(s => s.verdict)
         ).toEqual(["done"]);
+      },
+      120_000
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "judges a primary key or an exclusion constraint dropped by name from the catalog, done only once it is gone",
+      async () => {
+        const keyed = `${P}_keyed`;
+        const dropKey = `ALTER TABLE ${keyed} DROP CONSTRAINT ${keyed}_pkey`;
+        const dropExclusion = `ALTER TABLE ${keyed} DROP CONSTRAINT ${P}_ex`;
+        await adapter.executeQuery(
+          `CREATE TABLE ${keyed} (id integer PRIMARY KEY, n integer, CONSTRAINT ${P}_ex EXCLUDE USING btree (n WITH =))`
+        );
+        const verdicts = async () =>
+          judgeStatements(
+            [dropKey, dropExclusion],
+            dialect,
+            await readLiveSchema(adapter.getDrizzle(), dialect, [
+              dropKey,
+              dropExclusion,
+            ])
+          ).map(s => s.verdict);
+        // Neither ran: both constraints are in the catalog.
+        expect(await verdicts()).toEqual(["not_done", "not_done"]);
+        await adapter.executeQuery(dropKey);
+        expect(await verdicts()).toEqual(["done", "not_done"]);
+        await adapter.executeQuery(dropExclusion);
+        expect(await verdicts()).toEqual(["done", "done"]);
       },
       120_000
     );
