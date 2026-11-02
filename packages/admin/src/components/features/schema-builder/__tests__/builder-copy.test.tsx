@@ -526,7 +526,6 @@ const SURFACES: readonly Surface[] = [
             onDeleteField={() => {}}
             onDuplicateField={() => {}}
             onReorder={() => {}}
-            onAddAfter={() => {}}
           />
         </DndContext>
       ),

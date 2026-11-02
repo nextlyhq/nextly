@@ -17,11 +17,10 @@ import type { JSX } from "react";
 import * as Icons from "@admin/components/icons";
 import type { LucideIcon } from "@admin/components/icons";
 import { fieldSubject } from "@admin/lib/builder/builder-announcements";
+import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { WidthField } from "@admin/lib/builder/reflow";
 import { cn } from "@admin/lib/utils";
-
-import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 
 import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 import type { BuilderField } from "../types";
