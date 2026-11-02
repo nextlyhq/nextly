@@ -60,13 +60,12 @@ export function retiredStore(args: {
       return readRetired(await args.nextly(), args.collection, ids);
     },
     retire: async (componentId, retired) => {
-      const wanted = rowsOf(componentId, retired);
+      const wanted = await rowsOf(componentId, retired);
       if (wanted.length === 0) return;
       const nextly = await args.nextly();
       const held = await readRetired(nextly, args.collection, [componentId]);
-      const known = keysOf(componentId, held.get(componentId));
       for (const row of wanted) {
-        if (known.has(row.identity)) continue;
+        if (holds(held, row)) continue;
         await createOnce(nextly, args.collection, row);
       }
     },
@@ -123,30 +122,30 @@ function addRow(
 }
 
 /** The rows a retirement stores. */
-function rowsOf(
+async function rowsOf(
   componentId: string,
   retired: RetiredExposures
-): ComponentRetiredRow[] {
+): Promise<ComponentRetiredRow[]> {
   const rows = (kind: RetiredKind, ids: readonly string[]) =>
-    ids.map(exposureId => ({
-      identity: retiredKey(componentId, kind, exposureId),
+    ids.map(async exposureId => ({
+      identity: await retiredKey(componentId, kind, exposureId),
       componentId,
       kind,
       exposureId,
     }));
-  return [
+  return Promise.all([
     ...rows("property", retired.properties),
     ...rows("slot", retired.slots),
-  ];
+  ]);
 }
 
-/** The keys a component already holds. */
-function keysOf(
-  componentId: string,
-  held: RetiredExposures | undefined
-): ReadonlySet<string> {
-  if (held === undefined) return new Set();
-  return new Set(rowsOf(componentId, held).map(row => row.identity));
+/** Whether the rows read already hold this one. */
+function holds(held: RetiredByComponent, row: ComponentRetiredRow): boolean {
+  const ids = held.get(row.componentId);
+  if (ids === undefined) return false;
+  return (row.kind === "property" ? ids.properties : ids.slots).includes(
+    row.exposureId
+  );
 }
 
 /**
@@ -165,9 +164,7 @@ async function createOnce(
     await nextly.create({ collection, data: { ...row }, overrideAccess: true });
   } catch (error) {
     const held = await readRetired(nextly, collection, [row.componentId]);
-    if (keysOf(row.componentId, held.get(row.componentId)).has(row.identity)) {
-      return;
-    }
+    if (holds(held, row)) return;
     throw error;
   }
 }

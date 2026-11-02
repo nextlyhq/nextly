@@ -16,7 +16,12 @@
  *
  * @module collections/component-retired-exposures
  */
-import { defineCollection, text, type CollectionConfig } from "nextly/config";
+import {
+  defineCollection,
+  text,
+  textarea,
+  type CollectionConfig,
+} from "nextly/config";
 
 /** The slug the retired ids are stored under. */
 export const COMPONENT_RETIRED_SLUG = "nx_pb_component_retired";
@@ -34,20 +39,29 @@ export interface ComponentRetiredRow {
 }
 
 /**
- * The unique key of one retired id.
+ * The unique key of one retired id: a SHA-256 of the triple as a JSON array,
+ * in hex.
  *
- * The triple as a JSON array. A component id and an exposure id are stored
- * strings that may hold any character, so a plain separator they could contain
- * would let two different triples spell one key; JSON quotes and escapes each
- * part, so no two triples share a spelling. No NUL either, which PostgreSQL
- * refuses in a text column.
+ * JSON quotes and escapes each part, so no two triples share a spelling, as a
+ * plain separator an id could contain would let them. Hashed because an
+ * exposure id has no length bound, while a unique column does: a short text
+ * column is `varchar(255)` on MySQL, and a key past it would fail the record
+ * there alone. The digest is always 64 characters, and holds no NUL, which
+ * PostgreSQL refuses in text. Web Crypto, because this module is reachable
+ * from a browser bundle, where `node:crypto` does not resolve.
  */
-export function retiredKey(
+export async function retiredKey(
   componentId: string,
   kind: RetiredKind,
   exposureId: string
-): string {
-  return JSON.stringify([componentId, kind, exposureId]);
+): Promise<string> {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify([componentId, kind, exposureId])
+  );
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), byte =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
 }
 
 /** The retired-ids collection. */
@@ -69,7 +83,9 @@ export function componentRetiredCollection(): CollectionConfig {
       // document places.
       text({ name: "componentId", required: true, index: true }),
       text({ name: "kind", required: true }),
-      text({ name: "exposureId", required: true }),
+      // Long text: an exposure id has no length bound, and a short text column
+      // is `varchar(255)` on MySQL.
+      textarea({ name: "exposureId", required: true }),
     ],
     access: {
       // Written by the plugin through the Direct API, which overrides access.

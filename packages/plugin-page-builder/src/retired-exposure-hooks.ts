@@ -154,7 +154,8 @@ async function recordRetirements(
 /**
  * Whether this write puts the removal live, so its ids are retired now.
  *
- * A LOCALIZED store is declined, and said so. Publishing there is per
+ * A store with no Draft/Published lifecycle puts every write live. A
+ * LOCALIZED store is declined, and said so. Publishing there is per
  * language, so a write leaves one language live while another may still expose
  * the field, and retiring it would strip values that language still shows;
  * telling which languages have dropped it is not done yet. The warning names
@@ -170,7 +171,8 @@ async function goesLive(
     args.componentCollection,
     requestContextFor(context)
   );
-  if ((collection as { localized?: unknown } | null)?.localized === true) {
+  const store = collection as { localized?: unknown; status?: unknown } | null;
+  if (store?.localized === true) {
     args.ctx.logger.warn(
       `[page-builder] component "${componentId ?? "(unknown)"}" stopped ` +
         "exposing fields in a localized component store, where removed fields " +
@@ -180,6 +182,9 @@ async function goesLive(
     );
     return false;
   }
+  // A store without the Draft/Published lifecycle keeps no draft: every write
+  // is the definition pages render from.
+  if (store?.status !== true) return true;
   return leavesDocumentPublished(context, collection);
 }
 

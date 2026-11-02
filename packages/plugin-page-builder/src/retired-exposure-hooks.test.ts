@@ -109,6 +109,8 @@ function harness(
   options: {
     store?: RetiredStore;
     componentStoreLocalized?: boolean;
+    /** Whether the component store owns the Draft/Published lifecycle. */
+    componentStoreStatus?: boolean;
     singles?: Record<string, Row[]>;
     collections?: Record<string, Row[]>;
   } = {}
@@ -131,7 +133,7 @@ function harness(
             registryReads.push(name);
             if (name === COMPONENTS) {
               return {
-                status: true,
+                status: options.componentStoreStatus !== false,
                 localized: options.componentStoreLocalized === true,
                 fields: [{ name: "content", type: "blocks" }],
               };
@@ -278,6 +280,20 @@ describe("recording retired ids at publish", () => {
 
     expect(retired).toEqual([]);
     expect(errors).toEqual([]);
+  });
+
+  it("retires on any update of a store with no publishing lifecycle", async () => {
+    const { store, retired } = memoryStore();
+    const { run } = harness({ store, componentStoreStatus: false });
+
+    await run("afterUpdate", COMPONENTS, {
+      originalData: { id: "hero", content: definition(["title", "body"]) },
+      data: { id: "hero", content: definition(["body"]) },
+    });
+
+    expect(retired).toEqual([
+      { componentId: "hero", retired: { properties: ["title"], slots: [] } },
+    ]);
   });
 
   it("retires nothing in a localized store, and warns naming the component", async () => {

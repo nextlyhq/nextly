@@ -967,19 +967,24 @@ export const pageBuilder = (
       // them is published, and their values stripped from every later write.
       // On the store pages are composed against, so a host that redirected it
       // retires the fields of the definitions its pages actually place.
-      registerRetiredExposures({
-        ctx,
-        componentCollection: composition.store.collection,
-        componentField: composition.store.field,
-        store: retiredStore({
-          nextly: () => requireInstalled().nextly(),
-          // RESOLVED, for the reason every own table is: a host may rename it.
-          collection:
-            ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
-            COMPONENT_RETIRED_SLUG,
-        }),
-        limits: () => opts.limits ?? DEFAULT_LIMITS,
-      });
+      // Not where the host renders components from its own source: no
+      // collection stands for it, and the plugin's store, holding retirements of
+      // its own, would strip fields that source still exposes.
+      if (opts.componentReadiness !== false) {
+        registerRetiredExposures({
+          ctx,
+          componentCollection: composition.store.collection,
+          componentField: composition.store.field,
+          store: retiredStore({
+            nextly: () => requireInstalled().nextly(),
+            // RESOLVED, for the reason every own table is: a host may rename it.
+            collection:
+              ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+              COMPONENT_RETIRED_SLUG,
+          }),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+        });
+      }
       // A blocks field below the top level has no Page Builder to open, and the
       // operator should learn that from the log before an author meets it in
       // the form.

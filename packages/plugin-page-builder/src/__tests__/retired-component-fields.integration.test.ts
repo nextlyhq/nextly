@@ -221,6 +221,41 @@ describe.each(getConfiguredTestDialects())(
       expect(overridesOf(single.content)).toEqual({ body: "Kept" });
     });
 
+    it("records an exposure id longer than a short text column holds", async () => {
+      const t = await boot();
+      const long = `field-${"x".repeat(300)}`;
+      const exposing = (ids: string[]) => ({
+        ...hero([]),
+        exposed: ids.map(id => ({
+          id,
+          label: "Long",
+          nodeId: "h-title",
+          propPath: "text",
+          type: "text",
+        })),
+      });
+      const created = await t.nextly.create({
+        collection: COMPONENTS_SLUG,
+        data: {
+          title: "Long",
+          slug: "long",
+          content: exposing([long]),
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      const id = String(created.item.id);
+
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id,
+        data: { content: exposing([]), status: "published" },
+        overrideAccess: true,
+      });
+
+      expect((await retiredRows(t)).map(row => row.exposureId)).toEqual([long]);
+    });
+
     it("strips a batch write, whose hooks run inside its transaction", async () => {
       const t = await boot();
       const heroId = await publishedHero(t);

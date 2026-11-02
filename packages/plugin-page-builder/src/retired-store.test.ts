@@ -28,6 +28,7 @@ function fakeApi(rows: Row[], pageSize = 200) {
     },
     create: async args => {
       calls.push(args);
+      // The unique identity, as the table enforces it.
       if (rows.some(row => row.identity === args.data.identity)) {
         throw new Error("duplicate key");
       }
@@ -39,11 +40,17 @@ function fakeApi(rows: Row[], pageSize = 200) {
 }
 
 const row = (componentId: string, kind: string, exposureId: string): Row => ({
-  identity: retiredKey(componentId, kind as "property", exposureId),
+  identity: `${componentId}/${kind}/${exposureId}`,
   componentId,
   kind,
   exposureId,
 });
+
+/** The triples a table holds, sorted, whatever their identities spell. */
+const triples = (rows: Row[]) =>
+  rows
+    .map(stored => [stored.componentId, stored.kind, stored.exposureId])
+    .sort();
 
 describe("reading retired ids", () => {
   it("answers each component's ids, as the system, past the first page", async () => {
@@ -108,11 +115,11 @@ describe("recording retired ids", () => {
     });
     await store.retire("hero", { properties: ["body"], slots: [] });
 
-    expect(rows.map(stored => stored.identity).sort()).toEqual(
+    expect(triples(rows)).toEqual(
       [
-        retiredKey("hero", "property", "title"),
-        retiredKey("hero", "property", "body"),
-        retiredKey("hero", "slot", "aside"),
+        ["hero", "property", "title"],
+        ["hero", "property", "body"],
+        ["hero", "slot", "aside"],
       ].sort()
     );
   });
@@ -154,14 +161,23 @@ describe("recording retired ids", () => {
 });
 
 describe("the unique key of a retired id", () => {
-  it("spells each triple apart, even when an id holds the separator a join would use", () => {
+  it("spells each triple apart, even when an id holds the separator a join would use", async () => {
     // Joined by "|", both of these spell `a|slot|property|b`.
-    expect(retiredKey("a|slot", "property", "b")).not.toBe(
-      retiredKey("a", "slot", "property|b")
+    expect(await retiredKey("a|slot", "property", "b")).not.toBe(
+      await retiredKey("a", "slot", "property|b")
     );
   });
 
-  it("holds no NUL, which a PostgreSQL text column refuses", () => {
-    expect(retiredKey("hero", "slot", "aside")).not.toContain("\u0000");
+  it("is the same short width however long the id, as a MySQL unique column needs", async () => {
+    const key = await retiredKey("hero", "property", "x".repeat(1000));
+
+    expect(key).toMatch(/^[0-9a-f]{64}$/);
+    expect(await retiredKey("hero", "property", "title")).toMatch(
+      /^[0-9a-f]{64}$/
+    );
+  });
+
+  it("holds no NUL, which a PostgreSQL text column refuses", async () => {
+    expect(await retiredKey("hero", "slot", "aside")).not.toContain("\u0000");
   });
 });
