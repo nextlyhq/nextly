@@ -682,6 +682,17 @@ export { usePluginClientConfig } from "@nextlyhq/admin";
 export { usePluginRoute } from "@nextlyhq/admin";
 
 /**
+ * @experimental Read a route this plugin contributed once, outside React.
+ *
+ * For a read a hook cannot express: a search an author is typing, each read
+ * cancelling the one it replaces through `signal`. It goes through the same
+ * session handling as `usePluginRoute`, so an expired session is renewed
+ * rather than surfacing as a failure, and a refusal rejects with the admin's
+ * parsed error. Not cached. Answers `undefined` for an empty answer.
+ */
+export { readPluginRoute } from "@nextlyhq/admin";
+
+/**
  * @experimental Write to a route this plugin contributed.
  *
  * The other half of `usePluginRoute`, and it was the missing half: a plugin

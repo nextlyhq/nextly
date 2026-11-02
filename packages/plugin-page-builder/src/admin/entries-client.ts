@@ -11,8 +11,8 @@
  * read is driven by the author's typing: the control asks again on each pause,
  * abandons the previous question when a new one starts, and resolves a stored
  * id once. That is a function called with a query and a signal, which is the
- * shape `@nextlyhq/builder`'s content services lend — and the plugin SDK
- * offers no imperative route read, so this one calls the route itself.
+ * shape `@nextlyhq/builder`'s content services lend, read through the SDK's
+ * imperative `readPluginRoute`.
  *
  * ## What it does NOT do
  *
@@ -22,7 +22,7 @@
  *
  * @module admin/entries-client
  */
-import { pluginRouteFullPath } from "nextly/config";
+import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 // The CONTRACT, not the route: the route reaches the Direct API through
 // `nextly/runtime`, which is server-only and says so at load time.
@@ -34,20 +34,7 @@ import {
 } from "../entries-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
-/**
- * Where the admin's API answers, relative to the origin.
- *
- * The same prefix the admin's own fetcher builds every request on: a
- * scaffolded app mounts the Nextly handler at `/admin/api/[[...params]]`, and
- * the plugin route then answers at `/admin/api/plugins/<name><path>`.
- */
-const ADMIN_API_PREFIX = "/admin/api";
-
-/**
- * Said when the route answered with a failure and no message of its own, or
- * the request never reached it. In the author's terms rather than the
- * network's, because "Failed to fetch" describes the program.
- */
+/** Said when the route answered with something that is not a list of entries. */
 const UNEXPLAINED = "Entries could not be loaded. Try again.";
 
 /** What one read asks for. */
@@ -76,9 +63,12 @@ export interface FindEntriesQuery {
 export async function findEntries(
   query: FindEntriesQuery
 ): Promise<readonly EntryItem[]> {
-  const path = pluginRouteFullPath(
-    PAGE_BUILDER_PLUGIN_NAME,
-    entriesPath({
+  // Through the admin's own route read, so an expired session is renewed and
+  // the read retried rather than failing mid-search, and a refusal carries
+  // the route's own message.
+  const body = await readPluginRoute<EntriesResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: entriesPath({
       collection: query.collection,
       ...(query.search === undefined ? {} : { search: query.search }),
       ...(query.ids === undefined ? {} : { ids: query.ids }),
@@ -87,32 +77,10 @@ export async function findEntries(
       ...(query.limit === undefined
         ? {}
         : { limit: Math.min(query.limit, ENTRIES_LIMIT_MAX) }),
-    })
-  );
-  const response = await fetch(`${ADMIN_API_PREFIX}${path}`, {
-    method: "GET",
-    // The admin session travels as a cookie, as every admin read sends it.
-    credentials: "include",
-    headers: { accept: "application/json" },
+    }),
     ...(query.signal === undefined ? {} : { signal: query.signal }),
   });
-  const body: unknown = await response.json().catch(() => undefined);
-  if (!response.ok) throw new Error(failureMessage(body));
   return itemsOf(body);
-}
-
-/**
- * The message the route's error envelope carries, or the fallback.
- *
- * Errors arrive as `{ error: { code, message, ... } }`; the message is the
- * route's public one, phrased for a person, so it is shown as sent.
- */
-function failureMessage(body: unknown): string {
-  if (typeof body !== "object" || body === null) return UNEXPLAINED;
-  const error = (body as { error?: unknown }).error;
-  if (typeof error !== "object" || error === null) return UNEXPLAINED;
-  const message = (error as { message?: unknown }).message;
-  return typeof message === "string" && message !== "" ? message : UNEXPLAINED;
 }
 
 /**
