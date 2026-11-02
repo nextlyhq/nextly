@@ -1733,11 +1733,19 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .nx-canvas[data-nx-site-dark-ground]:not([data-nx-theme="light"] .nx-canvas) {
+  .nx-canvas[data-nx-site-dark-ground] {
     color-scheme: dark;
     --nx-builder-select: var(--nx-builder-select-on-dark);
     --nx-builder-component: var(--nx-builder-component-on-dark);
   }
+}
+
+/* A light marker above the canvas keeps its scheme light on a dark device,
+   as it keeps the site's values light. After the device rule and heavier. */
+[data-nx-theme="light"] .nx-canvas[data-nx-site-dark-ground] {
+  color-scheme: light;
+  --nx-builder-select: var(--nx-builder-select-on-light);
+  --nx-builder-component: var(--nx-builder-component-on-light);
 }
 
 /*
@@ -2813,7 +2821,7 @@
   line-height: 16px;
   color: var(--nx-muted-foreground);
   border: 1px solid var(--nx-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .nx-vars__empty {

@@ -254,11 +254,11 @@ describe("a site that darkens with the visitor's system", () => {
     /*
      * The site sheet applies dark values with the device for every site, so
      * the scheme follows the device wherever the dark values include a dark
-     * ground, and a light marker above the canvas keeps it light, as it keeps
-     * the values light.
+     * ground; a light marker above the canvas keeps it light, as it keeps the
+     * values light.
      */
     const block =
-      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground\]:not\(\[data-nx-theme="light"\] \.nx-canvas\) \{([^}]*)\}/.exec(
+      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground\] \{([^}]*)\}/.exec(
         CHROME
       );
     expect(block, "the device rule exists").not.toBeNull();
@@ -266,6 +266,23 @@ describe("a site that darkens with the visitor's system", () => {
     expect(declared(body, "color-scheme")).toBe("dark");
     expect(declared(body, "--nx-builder-select")).toBe(
       "var(--nx-builder-select-on-dark)"
+    );
+    const light = ruleFor(
+      '[data-nx-theme="light"] .nx-canvas[data-nx-site-dark-ground]'
+    );
+    expect(declared(light, "color-scheme")).toBe("light");
+    expect(declared(light, "--nx-builder-select")).toBe(
+      "var(--nx-builder-select-on-light)"
+    );
+    // After the device rule, which it outweighs and must not be outweighed by.
+    expect(
+      CHROME.indexOf(
+        '[data-nx-theme="light"] .nx-canvas[data-nx-site-dark-ground]'
+      )
+    ).toBeGreaterThan(
+      CHROME.indexOf(
+        "@media (prefers-color-scheme: dark) {\n  .nx-canvas[data-nx-site-dark-ground]"
+      )
     );
   });
 });
