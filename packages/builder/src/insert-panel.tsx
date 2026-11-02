@@ -50,12 +50,17 @@
 
 import {
   allBlocks,
+  placementSiteIn,
   planInsertPattern,
+  registryBlockSource,
   registryNestingSource,
   type AnyBlockDefinition,
+  type BlockDocument,
   type BlockNode,
   type ComponentLookup,
   type NestingSource,
+  type PlacementSite,
+  type PlacementSources,
 } from "@nextlyhq/blocks-engine";
 import {
   Command,
@@ -92,7 +97,7 @@ import {
   type SavedComponent,
   type SavedPattern,
 } from "./inserter";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp, OpPosition } from "./ops";
 
 /**
  * Where one tier of the host's library read stands, as the panel says it.
@@ -735,7 +740,18 @@ export function InsertPanel({
             // The canvas's lookup travels with the question: a pattern whose
             // root is a component instance is judged by what that component
             // draws, as its own tile is.
-            allowedEntries(catalog, point.target, source, componentDefinitions),
+            allowedEntries(
+              catalog,
+              point.target,
+              source,
+              componentDefinitions,
+              placementAt(
+                editor.document,
+                point.at,
+                source,
+                componentDefinitions
+              )
+            ),
             query
           ),
           categoryOrder
@@ -1054,4 +1070,30 @@ export function InsertPanel({
       </Command>
     </div>
   );
+}
+
+/**
+ * The insertion point as the one placement rule sees it, with what its
+ * ancestors refuse. Undefined when the position's parent is not in the
+ * document, which the name rules then judge alone.
+ */
+function placementAt(
+  document: BlockDocument,
+  at: OpPosition,
+  nesting: NestingSource,
+  components: ComponentLookup | undefined
+): { site: PlacementSite; sources: PlacementSources } | undefined {
+  const sources: PlacementSources = {
+    nesting,
+    definitions: registryBlockSource(),
+    ...(components === undefined ? {} : { components }),
+  };
+  const site = placementSiteIn(
+    document.nodes,
+    at.parentId === undefined
+      ? { kind: "root" }
+      : { kind: "slot", parentId: at.parentId, slot: at.slot ?? "" },
+    sources
+  );
+  return site === undefined ? undefined : { site, sources };
 }

@@ -82,7 +82,7 @@ describe("a drop judged by the one placement rule", () => {
       slot: "children",
       depth: 1,
       rect: box,
-      axis: "vertical",
+      axis: "y",
       childIds: [],
     };
     const button: BlockNode = {

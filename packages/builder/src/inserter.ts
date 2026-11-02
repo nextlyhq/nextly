@@ -34,6 +34,7 @@ import {
   locateNode,
   makeNode,
   placementTypesOf,
+  canPlace,
   placementVerdict,
   composedRootTypes,
   readableDefinition,
@@ -49,6 +50,9 @@ import {
   type DocumentLimits,
   type NestingSource,
   type NestingVerdict,
+  type PlacedNode,
+  type PlacementSite,
+  type PlacementSources,
   type PlacementTarget,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
@@ -901,11 +905,42 @@ export function allowedEntries<TEntry extends InsertEntry>(
   entries: readonly TEntry[],
   target: PlacementTarget,
   source: NestingSource,
-  definitions?: ComponentLookup
+  definitions?: ComponentLookup,
+  /**
+   * The insertion point as the one placement rule sees it: the site, with what
+   * its ancestors refuse. Absent, entries are judged by the name rules alone.
+   */
+  placement?: {
+    readonly site: PlacementSite;
+    readonly sources: PlacementSources;
+  }
 ): TEntry[] {
   return entries.filter(
-    entry => entryAllowedAt(entry, target, source, definitions).allowed
+    entry =>
+      entryAllowedAt(entry, target, source, definitions).allowed &&
+      (placement === undefined ||
+        canPlace(insertedBy(entry), placement.site, placement.sources).allowed)
   );
+}
+
+/**
+ * What an entry would insert, as the placement rule reads it: a block with
+ * the props it starts with, a pattern's blocks, or a component placement.
+ */
+function insertedBy(entry: InsertEntry): readonly PlacedNode[] {
+  switch (entry.kind) {
+    case "block":
+      return [{ type: entry.blockName, props: entry.props }];
+    case "pattern":
+      return entry.document.nodes;
+    case "component":
+      return [
+        {
+          type: COMPONENT_INSTANCE_TYPE,
+          props: { componentId: entry.componentId },
+        },
+      ];
+  }
 }
 
 /**
