@@ -323,6 +323,41 @@ describe("events between versions", () => {
     expect(list).toHaveTextContent("Published English and Spanish");
     expect(list).toHaveTextContent("3 older versions removed by retention");
   });
+
+  it("shows a takeover row naming who took over from whom", () => {
+    renderList(
+      [version(1, 1), version(2, 5)],
+      [
+        event("taken-over", 3, {
+          actorId: "u2",
+          actorName: "Grace",
+          payload: { fromId: "u1", fromName: "Ana" },
+        }),
+      ]
+    );
+    const list = screen.getByRole("list", { name: "History, newest first" });
+    const row = within(list)
+      .getByText("Took over from Ana")
+      .closest("li") as HTMLElement;
+    // Its own row between the versions, led by who took over.
+    expect(row).toHaveTextContent("Grace");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+  });
+
+  it("says a takeover was from someone no longer named when the holder is gone", () => {
+    renderList(
+      [version(1, 1)],
+      [
+        event("taken-over", 3, {
+          actorName: "Grace",
+          payload: { fromId: "u-gone", fromName: null },
+        }),
+      ]
+    );
+    const list = screen.getByRole("list", { name: "History, newest first" });
+    expect(list).toHaveTextContent("Took over from a former user");
+    expect(list).not.toHaveTextContent("null");
+  });
 });
 
 describe("filters", () => {
