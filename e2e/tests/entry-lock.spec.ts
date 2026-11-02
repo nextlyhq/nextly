@@ -15,7 +15,11 @@ import type { Page } from "@playwright/test";
 import { test } from "./support/test";
 import { uniqueTag } from "./support/accounts";
 import { EVERY_DIALECT } from "./support/every-dialect";
-import { twoEditorsOn } from "./support/lock-cases";
+import {
+  secondEditorFindsItHeld,
+  takeoverKeepsUnsavedEdits,
+  type LockedScreen,
+} from "./support/lock-cases";
 import { LOCK } from "./support/locks";
 import { createEntry } from "./support/runtime-collection";
 
@@ -23,9 +27,25 @@ import { createEntry } from "./support/runtime-collection";
 // guards.
 test.describe.configure({ lock: [LOCK.usersRoles] });
 
-/** The post's Excerpt: a plain field of the entry's form. */
-const excerpt = (page: Page) =>
-  page.locator("main").getByRole("textbox", { name: "Excerpt", exact: true });
+/** A post of the test's own, edited through its Excerpt, a plain field. */
+const POST: LockedScreen = {
+  field: (page: Page) =>
+    page.locator("main").getByRole("textbox", { name: "Excerpt", exact: true }),
+  async prepare(api) {
+    const tag = uniqueTag();
+    const stored = `Stored excerpt ${tag}`;
+    const id = await createEntry(api, "posts", {
+      title: `Entry lock ${tag}`,
+      slug: `entry-lock-${tag}`,
+      excerpt: stored,
+    });
+    return {
+      document: { scopeKind: "collection", slug: "posts", entryId: id },
+      address: `/collections/posts/${id}`,
+      stored,
+    };
+  },
+};
 
 // Run on every dialect: the lease the two editors share lives in the database.
 test.describe("two editors on one entry", { tag: EVERY_DIALECT }, () => {
@@ -34,22 +54,19 @@ test.describe("two editors on one entry", { tag: EVERY_DIALECT }, () => {
   // beat, which the cases allow 45 seconds for.
   test.describe.configure({ timeout: 120_000 });
 
-  twoEditorsOn({
-    noun: "entry",
-    field: excerpt,
-    async prepare(api) {
-      const tag = uniqueTag();
-      const stored = `Stored excerpt ${tag}`;
-      const id = await createEntry(api, "posts", {
-        title: `Entry lock ${tag}`,
-        slug: `entry-lock-${tag}`,
-        excerpt: stored,
-      });
-      return {
-        document: { scopeKind: "collection", slug: "posts", entryId: id },
-        address: `/collections/posts/${id}`,
-        stored,
-      };
-    },
+  test("a second editor sees the entry read-only and named, and can ask for access", async ({
+    page,
+    browser,
+    baseURL,
+  }) => {
+    await secondEditorFindsItHeld(POST, { page, browser, baseURL });
+  });
+
+  test("a takeover keeps the displaced editor's unsaved edits", async ({
+    page,
+    browser,
+    baseURL,
+  }) => {
+    await takeoverKeepsUnsavedEdits(POST, { page, browser, baseURL });
   });
 });
