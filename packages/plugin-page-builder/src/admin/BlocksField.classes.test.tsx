@@ -54,14 +54,20 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BuilderShell: ({
       inspector,
       topBar,
+      topBarCenter,
+      topBarEnd,
       children,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
+      topBarCenter?: React.ReactNode;
+      topBarEnd?: React.ReactNode;
       children?: React.ReactNode;
     }): React.JSX.Element => (
       <div>
         {topBar}
+        {topBarCenter}
+        {topBarEnd}
         {inspector}
         {children}
       </div>
@@ -151,6 +157,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
   useDocumentActions: () => null,
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
   useDocumentStatus: () => null,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
