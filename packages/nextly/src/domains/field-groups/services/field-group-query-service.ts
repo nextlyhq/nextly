@@ -178,6 +178,30 @@ export interface PopulateComponentDataManyParams {
    * taking the field's default: see PopulateComponentDataParams.strict.
    */
   strict?: boolean;
+  /**
+   * Optional transaction-bound executor: see PopulateComponentDataParams.executor.
+   * A batch judged inside a write's transaction reads on its connection, both
+   * to see what the transaction wrote and because a pooled read there waits on
+   * the connection the transaction holds.
+   */
+  executor?: unknown;
+}
+
+/**
+ * How a batch populate reads each of its component fields: the expansion
+ * depth, the language, who related rows are read for, whether a failed read
+ * propagates, and the connection it reads on. One object rather than seven
+ * arguments, so the three per-kind readers cannot take them in a different
+ * order.
+ */
+interface BatchPopulateRead {
+  depth: number;
+  currentDepth: number;
+  locale?: string;
+  fallbackLocale?: ComponentFallbackLocale;
+  access: ComponentReadAccess;
+  strict: boolean;
+  executor?: unknown;
 }
 
 // Duplicated here (and in the mutation service) to avoid a cross-domain
@@ -648,6 +672,7 @@ export class FieldGroupQueryService extends BaseService {
       fallbackLocale,
       access = { trusted: TRUSTS_EVERY_COLLECTION },
       strict = false,
+      executor,
     } = params;
     if (entries.length === 0) return entries;
 
@@ -672,6 +697,15 @@ export class FieldGroupQueryService extends BaseService {
     if (componentFields.length === 0) return entries;
 
     const fieldDataMaps = new Map<string, Map<string, unknown>>();
+    const read: BatchPopulateRead = {
+      depth,
+      currentDepth,
+      locale,
+      fallbackLocale,
+      access,
+      strict,
+      executor,
+    };
 
     for (const field of componentFields) {
       try {
@@ -681,11 +715,7 @@ export class FieldGroupQueryService extends BaseService {
             parentTable,
             field.name,
             field,
-            depth,
-            currentDepth,
-            locale,
-            fallbackLocale,
-            access
+            read
           );
           fieldDataMaps.set(field.name, dataMap);
         } else if (field.component) {
@@ -695,11 +725,7 @@ export class FieldGroupQueryService extends BaseService {
               parentTable,
               field.name,
               field.component,
-              depth,
-              currentDepth,
-              locale,
-              fallbackLocale,
-              access
+              read
             );
             fieldDataMaps.set(field.name, dataMap);
           } else {
@@ -708,11 +734,7 @@ export class FieldGroupQueryService extends BaseService {
               parentTable,
               field.name,
               field.component,
-              depth,
-              currentDepth,
-              locale,
-              fallbackLocale,
-              access
+              read
             );
             fieldDataMaps.set(field.name, dataMap);
           }
@@ -947,21 +969,26 @@ export class FieldGroupQueryService extends BaseService {
     componentSlug: string,
     parentIds: string[],
     parentTable: string,
-    fieldName: string
+    fieldName: string,
+    read: Pick<BatchPopulateRead, "strict" | "executor">
   ) {
-    const meta = await this.registryService.getComponent(componentSlug);
+    const meta = await this.registryService.getComponent(
+      componentSlug,
+      read.executor
+    );
     const componentFields = meta.fields;
     const rows = await this.batchGetInstances(
       meta.tableName,
       parentIds,
       parentTable,
-      fieldName
+      fieldName,
+      read
     );
     return {
       meta,
       componentFields,
       rows,
-      reach: await this.passwordReach(componentFields),
+      reach: await this.passwordReach(componentFields, read.executor),
     };
   }
 
@@ -970,17 +997,14 @@ export class FieldGroupQueryService extends BaseService {
     parentTable: string,
     fieldName: string,
     componentSlug: string,
-    depth: number,
-    currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
-    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
+    read: BatchPopulateRead
   ): Promise<Map<string, unknown>> {
     const { meta, componentFields, rows, reach } = await this.batchRead(
       componentSlug,
       parentIds,
       parentTable,
-      fieldName
+      fieldName,
+      read
     );
 
     // Deserialize first (one per parent), i18n-overlay the whole batch in a single
@@ -1004,8 +1028,9 @@ export class FieldGroupQueryService extends BaseService {
     await this.overlayLocalizedComponent(
       meta,
       collected.map(c => c.data),
-      locale,
-      fallbackLocale
+      read.locale,
+      read.fallbackLocale,
+      read.executor
     );
 
     const result = new Map<string, unknown>();
@@ -1016,9 +1041,9 @@ export class FieldGroupQueryService extends BaseService {
           data,
           componentSlug,
           componentFields,
-          depth,
-          currentDepth + 1,
-          access
+          read.depth,
+          read.currentDepth + 1,
+          read.access
         )
       );
     }
@@ -1030,17 +1055,14 @@ export class FieldGroupQueryService extends BaseService {
     parentTable: string,
     fieldName: string,
     componentSlug: string,
-    depth: number,
-    currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
-    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
+    read: BatchPopulateRead
   ): Promise<Map<string, unknown>> {
     const { rows, reach, meta, componentFields } = await this.batchRead(
       componentSlug,
       parentIds,
       parentTable,
-      fieldName
+      fieldName,
+      read
     );
 
     // Deserialize all (rows arrive ordered by (_parent_id, _order)), overlay the whole
@@ -1053,8 +1075,9 @@ export class FieldGroupQueryService extends BaseService {
     await this.overlayLocalizedComponent(
       meta,
       entries.map(e => e.data),
-      locale,
-      fallbackLocale
+      read.locale,
+      read.fallbackLocale,
+      read.executor
     );
 
     const grouped = new Map<string, Record<string, unknown>[]>();
@@ -1067,9 +1090,9 @@ export class FieldGroupQueryService extends BaseService {
             data,
             componentSlug,
             componentFields,
-            depth,
-            currentDepth + 1,
-            access
+            read.depth,
+            read.currentDepth + 1,
+            read.access
           )
         );
     }
@@ -1081,11 +1104,7 @@ export class FieldGroupQueryService extends BaseService {
     parentTable: string,
     fieldName: string,
     field: FieldGroupFieldConfig,
-    depth: number,
-    currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
-    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
+    read: BatchPopulateRead
   ): Promise<Map<string, unknown>> {
     const allowedSlugs = field.components ?? [];
 
@@ -1096,12 +1115,16 @@ export class FieldGroupQueryService extends BaseService {
 
     for (const slug of allowedSlugs) {
       try {
-        const meta = await this.registryService.getComponent(slug);
+        const meta = await this.registryService.getComponent(
+          slug,
+          read.executor
+        );
         const rows = await this.batchGetInstances(
           meta.tableName,
           parentIds,
           parentTable,
-          fieldName
+          fieldName,
+          read
         );
         for (const row of rows) {
           const parentId = row[STORAGE_FORMAT.columns.parentId];
@@ -1136,24 +1159,28 @@ export class FieldGroupQueryService extends BaseService {
           row,
           fields,
           true,
-          await this.passwordReach(fields)
+          await this.passwordReach(fields, read.executor)
         );
         // i18n: overlay the instance's translatable fields from its component companion
         // before relationship expansion (registry-cached meta lookup).
-        const itemMeta = await this.registryService.getComponent(slug);
+        const itemMeta = await this.registryService.getComponent(
+          slug,
+          read.executor
+        );
         await this.overlayLocalizedComponent(
           itemMeta,
           [data],
-          locale,
-          fallbackLocale
+          read.locale,
+          read.fallbackLocale,
+          read.executor
         );
         data = await this.expandComponentRelationships(
           data,
           slug,
           fields,
-          depth,
-          currentDepth + 1,
-          access
+          read.depth,
+          read.currentDepth + 1,
+          read.access
         );
         expandedItems.push(data);
       }
@@ -1210,38 +1237,48 @@ export class FieldGroupQueryService extends BaseService {
     tableName: string,
     parentIds: string[],
     parentTable: string,
-    fieldName: string
+    fieldName: string,
+    // As `getExistingInstances` takes them: only a missing table is read as
+    // empty under `strict`, and `executor` reads on a write's transaction.
+    read: Pick<BatchPopulateRead, "strict" | "executor">
   ): Promise<ComponentRow[]> {
     if (parentIds.length === 0) return [];
 
     try {
-      const rows = await this.adapter.select<ComponentRow>(tableName, {
-        where: {
-          and: [
-            {
-              column: STORAGE_FORMAT.columns.parentId,
-              op: "IN",
-              value: parentIds,
-            },
-            {
-              column: STORAGE_FORMAT.columns.parentTable,
-              op: "=",
-              value: parentTable,
-            },
-            {
-              column: STORAGE_FORMAT.columns.parentField,
-              op: "=",
-              value: fieldName,
-            },
+      const rows = await this.adapter.select<ComponentRow>(
+        tableName,
+        {
+          where: {
+            and: [
+              {
+                column: STORAGE_FORMAT.columns.parentId,
+                op: "IN",
+                value: parentIds,
+              },
+              {
+                column: STORAGE_FORMAT.columns.parentTable,
+                op: "=",
+                value: parentTable,
+              },
+              {
+                column: STORAGE_FORMAT.columns.parentField,
+                op: "=",
+                value: fieldName,
+              },
+            ],
+          },
+          orderBy: [
+            { column: STORAGE_FORMAT.columns.parentId, direction: "asc" },
+            { column: STORAGE_FORMAT.columns.order, direction: "asc" },
           ],
         },
-        orderBy: [
-          { column: STORAGE_FORMAT.columns.parentId, direction: "asc" },
-          { column: STORAGE_FORMAT.columns.order, direction: "asc" },
-        ],
-      });
+        read.executor
+      );
       return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
+      if (read.strict && !isMissingComponentTableError(error)) {
+        throw error;
+      }
       this.logger.debug("Could not batch query component table", {
         tableName,
         error: error instanceof Error ? error.message : String(error),

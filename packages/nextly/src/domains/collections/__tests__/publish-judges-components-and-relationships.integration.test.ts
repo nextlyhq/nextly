@@ -1,0 +1,691 @@
+/**
+ * Publishing judges a collection document with its components and its
+ * junction many-to-many relationships, as they are stored.
+ *
+ * Neither sits on the document's row: a component's values live in tables of
+ * its own, and a many-to-many relationship in a junction. A status-only
+ * publish judges the stored row in update mode, where an absent key is left
+ * unjudged, so a required component or relationship missing from storage went
+ * live unchecked. Each document here is saved while the field is optional and
+ * the field is then made required, which is how a document comes to lack one:
+ * a rule tightened since the save, or rows removed outside the write.
+ */
+
+// Set before the harness boots (env validation reads it once).
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
+import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import type { CollectionsHandler } from "../../../services/collections-handler";
+import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
+import { FieldGroupDataService } from "../../field-groups/services/field-group-data-service";
+import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
+import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
+import { resolveVersionsConfig } from "../../versions/resolve-config";
+import { CollectionRelationshipService } from "../services/collection-relationship-service";
+import type { CollectionRegistryService } from "../services/collection-registry-service";
+
+type Doc = Record<string, unknown>;
+type Result = { success: boolean; statusCode?: number; data?: unknown };
+
+interface Entries {
+  createEntry(
+    params: {
+      collectionName: string;
+      overrideAccess?: boolean;
+      locale?: string;
+    },
+    data: Doc
+  ): Promise<Result>;
+  updateEntry(
+    params: {
+      collectionName: string;
+      entryId: string;
+      overrideAccess?: boolean;
+      locale?: string;
+    },
+    data: Doc
+  ): Promise<Result>;
+  publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    overrideAccess?: boolean;
+  }): Promise<Result>;
+  updateEntries(
+    params: { collectionName: string; overrideAccess?: boolean },
+    entries: { id: string; data: Doc }[]
+  ): Promise<{ successful: number; failed: number }>;
+  bulkUpdateEntries(params: {
+    collectionName: string;
+    ids: string[];
+    data: Doc;
+    overrideAccess?: boolean;
+  }): Promise<{ successes: unknown[]; failures: unknown[] }>;
+}
+
+/**
+ * Whether a nested sub-field's rule refuses: off while documents are saved,
+ * on for the publish, as a rule tightened since a save.
+ */
+let nestedRuleOn = false;
+
+const hero = (heading: string): Doc => ({ heading });
+const card = (label: string): Doc => ({ label });
+const zoneRow = (heading: string): Doc => ({
+  [currentFieldGroupTypeKey]: "hero",
+  heading,
+});
+
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  return createTestNextly({
+    ...(dialect === "sqlite" ? {} : { dialect }),
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "hero",
+        fields: [
+          text({ name: "heading" }),
+          text({
+            name: "code",
+            validate: (value: unknown) =>
+              !nestedRuleOn || value !== "retired" || "code is retired",
+          }),
+        ],
+      }),
+      defineFieldGroup({ slug: "card", fields: [text({ name: "label" })] }),
+    ],
+    collections: [
+      // No drafts: what goes live is the stored row.
+      defineCollection({
+        slug: "pages",
+        status: true,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "hero", component: "hero" }),
+          fieldGroup({ name: "cards", component: "card", repeatable: true }),
+          fieldGroup({
+            name: "zone",
+            components: ["hero", "card"],
+            repeatable: true,
+          }),
+        ],
+      }),
+      defineCollection({
+        slug: "drafted",
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "hero", component: "hero" }),
+        ],
+      }),
+      defineCollection({
+        slug: "guides",
+        status: true,
+        localized: true,
+        fields: [
+          text({ name: "title", localized: true }),
+          fieldGroup({ name: "hero", component: "hero" }),
+        ],
+      }),
+      // A top-level component whose own rule refuses a value only as it goes
+      // live: saved as a draft, judged again as published.
+      defineCollection({
+        slug: "checked",
+        status: true,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({
+            name: "hero",
+            component: "hero",
+            validate: (value: unknown, { data }: { data: Doc }) =>
+              data.status !== "published" ||
+              (value as Doc | null)?.heading !== "draft only" ||
+              "this hero cannot go live",
+          }),
+        ],
+      }),
+    ],
+    localization: { locales: ["en", "de"], defaultLocale: "en" },
+  });
+}
+
+/**
+ * Tags, and stories that point at them through a junction table. Made as the
+ * Schema Builder makes them: a code-first relationship keeps its ids on the
+ * row, so only a Builder collection keeps a many-to-many in a junction.
+ */
+const TAGS_FIELD = {
+  name: "tags",
+  type: "relationship",
+  options: { relationType: "manyToMany", target: "tags" },
+};
+
+async function seedStories(t: TestNextly): Promise<void> {
+  await seedBuilderCollection(t.adapter, {
+    slug: "tags",
+    fields: [{ name: "name", type: "text" }],
+  });
+  await seedBuilderCollection(t.adapter, {
+    slug: "stories",
+    status: true,
+    versions: resolveVersionsConfig({ drafts: false }, true),
+    fields: [{ name: "title", type: "text" }, TAGS_FIELD],
+  });
+}
+
+/**
+ * The relationship's own rule, as a code-first collection would declare it:
+ * more than one tag may be saved, and not published.
+ */
+function registerTagsRule(): void {
+  registerFieldFunctions("collection", "stories", [
+    { name: "title", type: "text" },
+    {
+      ...TAGS_FIELD,
+      validate: (value: unknown, { data }: { data: Doc }) =>
+        data.status !== "published" ||
+        !Array.isArray(value) ||
+        value.length <= 1 ||
+        "at most one tag goes live",
+    },
+  ]);
+}
+
+/** Make these fields of a stored collection required, as a later schema change. */
+async function makeRequired(
+  t: TestNextly,
+  slug: string,
+  names: readonly string[]
+): Promise<void> {
+  const registry = t.getService(
+    "collectionRegistryService"
+  ) as CollectionRegistryService;
+  const stored = await registry.getCollection(slug);
+  await registry.updateCollection(
+    slug,
+    {
+      fields: stored.fields.map(field =>
+        "name" in field &&
+        typeof field.name === "string" &&
+        names.includes(field.name)
+          ? { ...field, required: true }
+          : field
+      ),
+    },
+    { source: "code" }
+  );
+}
+
+function entriesOf(t: TestNextly): Entries {
+  return (
+    t.getService("collectionsHandler") as CollectionsHandler
+  ).getEntryService() as unknown as Entries;
+}
+
+async function created(
+  t: TestNextly,
+  collection: string,
+  data: Doc,
+  locale?: string
+): Promise<string> {
+  const result = await entriesOf(t).createEntry(
+    {
+      collectionName: collection,
+      overrideAccess: true,
+      ...(locale === undefined ? {} : { locale }),
+    },
+    data
+  );
+  expect(result.success, JSON.stringify(result)).toBe(true);
+  const id = (result.data as { id?: unknown } | undefined)?.id;
+  if (typeof id !== "string" && typeof id !== "number") {
+    throw new Error("no id from create");
+  }
+  return String(id);
+}
+
+function publish(
+  t: TestNextly,
+  collection: string,
+  id: string,
+  data: Doc = {},
+  locale?: string
+): Promise<Result> {
+  return entriesOf(t).updateEntry(
+    {
+      collectionName: collection,
+      entryId: id,
+      overrideAccess: true,
+      ...(locale === undefined ? {} : { locale }),
+    },
+    { ...data, status: "published" }
+  );
+}
+
+/** The paths a refusal names, in the order it names them. */
+function refusedPaths(result: unknown): string[] {
+  return [...JSON.stringify(result).matchAll(/"path":"([^"]+)"/g)].map(
+    match => match[1]
+  );
+}
+
+/**
+ * The reads a judgement of components and many-to-many relationships makes,
+ * counted where every reader of them goes.
+ */
+function countRelationReads(): { count(): number; restore(): void } {
+  const spies = [
+    vi.spyOn(FieldGroupDataService.prototype, "populateComponentData"),
+    vi.spyOn(FieldGroupDataService.prototype, "populateComponentDataMany"),
+    vi.spyOn(
+      CollectionRelationshipService.prototype,
+      "fetchManyToManyTargetIds"
+    ),
+    vi.spyOn(
+      CollectionRelationshipService.prototype,
+      "fetchManyToManyTargetIdsOf"
+    ),
+  ];
+  return {
+    count: () => spies.reduce((n, spy) => n + spy.mock.calls.length, 0),
+    restore: () => spies.forEach(spy => spy.mockRestore()),
+  };
+}
+
+describe.each(getConfiguredTestDialects())(
+  "publishing judges a document's components and relationships as stored (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    const ids: Record<string, string> = {};
+
+    beforeAll(async () => {
+      t = await boot(dialect);
+      await seedStories(t);
+      nestedRuleOn = false;
+      const tag = await created(t, "tags", { title: "one", name: "one" });
+      const tag2 = await created(t, "tags", { title: "two", name: "two" });
+      ids.tag = tag;
+
+      // Saved while every component and the relationship are optional.
+      for (const name of [
+        "missing",
+        "batchA",
+        "batchB",
+        "bulkA",
+        "bulkB",
+        "supplied",
+        "releaseMissing",
+      ]) {
+        ids[name] = await created(t, "pages", {
+          title: name,
+          status: "draft",
+          ...(name === "supplied" ? { zone: [zoneRow("kept")] } : {}),
+        });
+      }
+      ids.complete = await created(t, "pages", {
+        title: "complete",
+        status: "draft",
+        hero: hero("Welcome"),
+        cards: [card("one")],
+        zone: [zoneRow("first")],
+      });
+      ids.releaseComplete = await created(t, "pages", {
+        title: "release complete",
+        status: "draft",
+        hero: hero("Welcome"),
+        cards: [card("one")],
+        zone: [zoneRow("first")],
+      });
+      ids.live = await created(t, "pages", {
+        title: "live",
+        status: "published",
+      });
+      for (let i = 0; i < 4; i += 1) {
+        ids[`count${i}`] = await created(t, "pages", {
+          title: `count ${i}`,
+          status: "draft",
+        });
+        ids[`storyCount${i}`] = await created(t, "stories", {
+          title: `count ${i}`,
+          status: "draft",
+        });
+      }
+
+      ids.storyEmpty = await created(t, "stories", {
+        title: "empty",
+        status: "draft",
+      });
+      ids.storyTagged = await created(t, "stories", {
+        title: "tagged",
+        status: "draft",
+        tags: [tag],
+      });
+      ids.storySupplied = await created(t, "stories", {
+        title: "supplied",
+        status: "draft",
+      });
+      ids.storyTwoTags = await created(t, "stories", {
+        title: "two tags",
+        status: "draft",
+        tags: [tag, tag2],
+      });
+
+      // Live, then taken down: its next publish is a republish.
+      ids.republished = await created(t, "drafted", {
+        title: "republished",
+        status: "published",
+      });
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "drafted",
+              entryId: ids.republished,
+              overrideAccess: true,
+            },
+            { status: "draft" }
+          )
+        ).success
+      ).toBe(true);
+      // Live with a hero, and a pending change that clears it.
+      ids.promoted = await created(t, "drafted", {
+        title: "promoted",
+        status: "published",
+        hero: hero("Live"),
+      });
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "drafted",
+              entryId: ids.promoted,
+              overrideAccess: true,
+            },
+            { hero: null }
+          )
+        ).success
+      ).toBe(true);
+
+      ids.everyLanguage = await created(
+        t,
+        "guides",
+        { title: "every", status: "draft" },
+        "en"
+      );
+      ids.german = await created(
+        t,
+        "guides",
+        { title: "german", status: "draft" },
+        "en"
+      );
+      ids.english = await created(
+        t,
+        "guides",
+        { title: "english", status: "draft" },
+        "en"
+      );
+
+      ids.draftOnly = await created(t, "checked", {
+        title: "draft only",
+        status: "draft",
+        hero: hero("draft only"),
+      });
+      ids.nested = await created(t, "checked", {
+        title: "nested",
+        status: "draft",
+        hero: { heading: "fine", code: "retired" },
+      });
+
+      await makeRequired(t, "pages", ["hero", "cards", "zone"]);
+      await makeRequired(t, "drafted", ["hero"]);
+      await makeRequired(t, "guides", ["hero"]);
+      await makeRequired(t, "stories", ["tags"]);
+      registerTagsRule();
+    });
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("refuses a first publish whose required components are missing from storage", async () => {
+      const result = await publish(t, "pages", ids.missing);
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toEqual(
+        expect.arrayContaining(["hero", "cards", "zone"])
+      );
+    });
+
+    it("refuses a publish whose required many-to-many relationship is empty", async () => {
+      const result = await publish(t, "stories", ids.storyEmpty);
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("tags");
+    });
+
+    it("publishes a document whose required components and relationship are stored", async () => {
+      const page = await publish(t, "pages", ids.complete);
+      expect(page.success, JSON.stringify(page)).toBe(true);
+
+      const story = await publish(t, "stories", ids.storyTagged);
+      expect(story.success, JSON.stringify(story)).toBe(true);
+    });
+
+    it("publishes when the publish request itself supplies the missing values", async () => {
+      const page = await publish(t, "pages", ids.supplied, {
+        hero: hero("Sent"),
+        cards: [card("sent")],
+      });
+      expect(page.success, JSON.stringify(page)).toBe(true);
+
+      const story = await publish(t, "stories", ids.storySupplied, {
+        tags: [ids.tag],
+      });
+      expect(story.success, JSON.stringify(story)).toBe(true);
+    });
+
+    it("refuses a republish after an unpublish", async () => {
+      const result = await publish(t, "drafted", ids.republished);
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("hero");
+    });
+
+    it("refuses promoting a pending change that clears a required component", async () => {
+      const result = await publish(t, "drafted", ids.promoted);
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("hero");
+    });
+
+    it("does not judge again a live document sent published again", async () => {
+      const result = await publish(t, "pages", ids.live);
+
+      expect(result.success, JSON.stringify(result)).toBe(true);
+    });
+
+    it("refuses each document of a batch publish that lacks them", async () => {
+      const batch = await entriesOf(t).updateEntries(
+        { collectionName: "pages", overrideAccess: true },
+        [ids.batchA, ids.batchB].map(id => ({
+          id,
+          data: { status: "published" },
+        }))
+      );
+      expect(batch).toMatchObject({ successful: 0, failed: 2 });
+
+      const bulk = await entriesOf(t).bulkUpdateEntries({
+        collectionName: "pages",
+        ids: [ids.bulkA, ids.bulkB],
+        data: { status: "published" },
+        overrideAccess: true,
+      });
+      expect(bulk.successes).toHaveLength(0);
+      expect(bulk.failures).toHaveLength(2);
+    });
+
+    it("refuses publishing every language at once", async () => {
+      const result = await entriesOf(t).publishAllLocales({
+        collectionName: "guides",
+        entryId: ids.everyLanguage,
+        overrideAccess: true,
+      });
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("hero");
+    });
+
+    it("enforces a required component for the default language only", async () => {
+      const german = await publish(t, "guides", ids.german, {}, "de");
+      expect(german.success, JSON.stringify(german)).toBe(true);
+
+      const english = await publish(t, "guides", ids.english, {}, "en");
+      expect(english.success).toBe(false);
+      expect(refusedPaths(english)).toContain("hero");
+    });
+
+    it("runs the top-level component's and the relationship's own rules on what goes live", async () => {
+      const page = await publish(t, "checked", ids.draftOnly);
+      expect(page.success).toBe(false);
+      expect(refusedPaths(page)).toContain("hero");
+
+      const story = await publish(t, "stories", ids.storyTwoTags);
+      expect(story.success).toBe(false);
+      expect(refusedPaths(story)).toContain("tags");
+    });
+
+    it("does not judge again a rule nested inside a component", async () => {
+      nestedRuleOn = true;
+      try {
+        const result = await publish(t, "checked", ids.nested);
+        expect(result.success, JSON.stringify(result)).toBe(true);
+      } finally {
+        nestedRuleOn = false;
+      }
+    });
+
+    it("reads a batch's components and relationships once, whatever its size", async () => {
+      const batchReads = async (
+        collection: string,
+        names: readonly string[]
+      ): Promise<number> => {
+        const reads = countRelationReads();
+        try {
+          await entriesOf(t).updateEntries(
+            { collectionName: collection, overrideAccess: true },
+            names.map(name => ({
+              id: ids[name],
+              data: { status: "published" },
+            }))
+          );
+          return reads.count();
+        } finally {
+          reads.restore();
+        }
+      };
+      const bulkReads = async (
+        collection: string,
+        names: readonly string[]
+      ): Promise<number> => {
+        const reads = countRelationReads();
+        try {
+          await entriesOf(t).bulkUpdateEntries({
+            collectionName: collection,
+            ids: names.map(name => ids[name]),
+            data: { status: "published" },
+            overrideAccess: true,
+          });
+          return reads.count();
+        } finally {
+          reads.restore();
+        }
+      };
+
+      // Every document is refused, so each batch can be asked again.
+      const pagesTwo = await batchReads("pages", ["count0", "count1"]);
+      expect(pagesTwo).toBeGreaterThan(0);
+      expect(
+        await batchReads("pages", ["count0", "count1", "count2", "count3"])
+      ).toBe(pagesTwo);
+      const storiesTwo = await batchReads("stories", [
+        "storyCount0",
+        "storyCount1",
+      ]);
+      expect(storiesTwo).toBeGreaterThan(0);
+      expect(
+        await batchReads("stories", [
+          "storyCount0",
+          "storyCount1",
+          "storyCount2",
+          "storyCount3",
+        ])
+      ).toBe(storiesTwo);
+
+      const bulkTwo = await bulkReads("pages", ["count0", "count1"]);
+      expect(bulkTwo).toBeGreaterThan(0);
+      expect(
+        await bulkReads("pages", ["count0", "count1", "count2", "count3"])
+      ).toBe(bulkTwo);
+    });
+
+    it("stops a release whose document lacks a required component, naming it and the field, and publishes none of it", async () => {
+      const author = await seedPlainAuthor(t);
+      for (const action of ["read", "update", "publish", "unpublish"]) {
+        await grantTo(t, author, action, ["pages"]);
+      }
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      const members: Record<string, string> = {};
+      for (const name of ["releaseMissing", "releaseComplete"]) {
+        const member = await t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: "pages",
+          entryId: ids[name],
+          locale: null,
+          action: "publish",
+          userId: author,
+        });
+        members[name] = member.id;
+      }
+
+      const readiness = await t.nextly.releases.readiness({
+        releaseId: release.id,
+      });
+      expect(readiness.hard).toEqual([
+        expect.objectContaining({
+          memberId: members.releaseMissing,
+          code: "REQUIRED_FIELD_MISSING",
+          detail: {
+            fields: expect.arrayContaining(["hero", "cards", "zone"]),
+          },
+        }),
+      ]);
+
+      await expect(
+        t.nextly.releases.publishNow({ id: release.id })
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      for (const name of ["releaseMissing", "releaseComplete"]) {
+        const row = await t.adapter.selectOne<{ status?: string }>("dc_pages", {
+          where: { and: [{ column: "id", op: "=", value: ids[name] }] },
+        });
+        expect(row?.status).toBe("draft");
+      }
+    });
+  }
+);
