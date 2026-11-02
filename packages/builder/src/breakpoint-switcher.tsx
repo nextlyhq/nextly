@@ -194,9 +194,14 @@ export function BreakpointSwitcher({
           >
             <Glyph className="size-3.5" aria-hidden="true" />
             {/* The chosen device's name and the width it is previewed at; the
-                others are told apart by their glyph, name and tooltip. */}
+                others are told apart by their glyph, name and tooltip. The
+                first thing the top bar gives up when it is narrow: the glyph,
+                the accessible name and the tooltip still say which it is. */}
             {isSelected ? (
-              <span aria-hidden="true" className="tabular-nums">
+              <span
+                aria-hidden="true"
+                className="tabular-nums @max-[1400px]/topbar:hidden"
+              >
                 {option.preview === undefined
                   ? option.label
                   : `${option.label} · ${option.preview}px`}
