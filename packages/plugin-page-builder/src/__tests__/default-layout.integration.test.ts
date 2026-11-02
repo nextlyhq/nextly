@@ -952,6 +952,36 @@ describe.each(getConfiguredTestDialects())(
         ).toEqual({ kind: "none", reason: "switched-off" });
       });
 
+      it("answers no-default on a site whose settings were never stored, and leaves them unstored", async () => {
+        const t = await boot();
+        // The settings Single's table, as core names every Single's.
+        const table = `single_${PAGE_BUILDER_SETTINGS_SLUG.replace(/-/g, "_")}`;
+        const stored = () => t.adapter.select<{ id: string }>(table, {});
+        // The boot's seed stored the settings; remove the row past every hook,
+        // as on a site where that seed never ran.
+        const rows = await stored();
+        expect(rows).toHaveLength(1);
+        await t.adapter.delete(table, {
+          and: [{ column: "id", op: "=", value: rows[0]?.id }],
+        });
+        expect(await stored()).toHaveLength(0);
+
+        const answer = await effectiveLayoutFor(
+          {},
+          { nextly: t.nextly, slugs: SLUGS }
+        );
+
+        expect(answer).toEqual({ kind: "none", reason: "no-default" });
+        // Drawing a page wrote nothing: the settings are still unstored.
+        expect(await stored()).toHaveLength(0);
+        expect(
+          await t.nextly.findSingle({
+            slug: PAGE_BUILDER_SETTINGS_SLUG,
+            createIfMissing: false,
+          })
+        ).toBeNull();
+      });
+
       it("stores a page's Layout and switch", async () => {
         const t = await boot();
         const landing = await layout(t, "Landing", "landing");

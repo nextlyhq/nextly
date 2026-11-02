@@ -53,16 +53,26 @@ export function relationId(value: unknown): string | null {
   return null;
 }
 
-/** The settings Single's two references, read as the system. */
+/**
+ * The settings Single's two references, read as the system.
+ *
+ * Read WITHOUT creating the document (`createIfMissing: false`). A plain Single
+ * read creates a missing document, which would make every reader here a
+ * writer, a page render among them. A site whose settings were never stored
+ * answers both references as `null`, which every caller already reads as "no
+ * default". The one writer, `writeLayoutSettings`, still creates the document
+ * when it is missing: a Single update does.
+ */
 export async function readLayoutSettings(
   nextly: Pick<DefaultLayoutDirectApi, "findSingle">,
   slugs: DefaultLayoutSlugs
 ): Promise<LayoutSettings> {
-  const doc = (await nextly.findSingle({
+  const doc: Record<string, unknown> | null = await nextly.findSingle({
     slug: slugs.settings,
     depth: 0,
     overrideAccess: true,
-  })) as Record<string, unknown> | null;
+    createIfMissing: false,
+  });
   return {
     defaultLayout: relationId(doc?.defaultLayout),
     seededLayout: relationId(doc?.seededLayout),
