@@ -332,7 +332,16 @@ export type PlanProblem =
    * draws, and the two sets of conditions cannot be combined into one without
    * rewriting rules nobody asked to change.
    */
-  | "condition-gated";
+  | "condition-gated"
+  /**
+   * The placement left on the page would nest components, or blocks, deeper
+   * than the page may compose.
+   *
+   * Its own cause because the selection is valid as a component of its own:
+   * what breaks is the page once the run becomes one more level of nesting,
+   * so the author's remedy is a smaller or shallower selection.
+   */
+  | "composed-depth";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -1117,7 +1126,13 @@ export function planConvertToComponent<TFields>(
   componentId: string,
   exposure: ComponentExposure,
   nesting: NestingSource,
-  limits: DocumentLimits = DEFAULT_LIMITS
+  limits: DocumentLimits = DEFAULT_LIMITS,
+  /**
+   * The component definitions the page and the run place, to judge the
+   * composed depth of the page the plan leaves. Absent, that depth is not
+   * judged here and is left to the write's own validation.
+   */
+  components?: ComponentLookup
 ): PlanResult<TFields> {
   // Before anything is built on it, at runtime as well as in the type, for the
   // reason the save-over checks its target id: this is a published entry point
@@ -1199,6 +1214,23 @@ export function planConvertToComponent<TFields>(
 
   const replaced = replaceOps(document, saved, componentId, nesting, bounds);
   if (replaced.problem !== undefined) return replaced;
+
+  // The composed depth, which nothing above measures: the run's own nodes are
+  // within the cap where they stand, and become one more level of component
+  // nesting once they are drawn through a placement. Judged only when the
+  // caller supplies the definitions the page places, since a page composed
+  // without them reads every placement as missing and so as no depth at all.
+  if (components !== undefined) {
+    const deeper = composedDepthRefusal({
+      document,
+      ops: replaced.ops,
+      componentId,
+      definition: definition.document,
+      components,
+      limits: bounds,
+    });
+    if (deeper !== undefined) return deeper;
+  }
 
   return {
     create: {
@@ -1831,6 +1863,51 @@ function storedId(
 ): unknown {
   if (typeof sourceId !== "string") return sourceId;
   return nodeIds.get(sourceId) ?? sourceId;
+}
+
+/** The resolver's refusals that are judgements about depth. */
+const DEPTH_REFUSALS: ReadonlySet<ComponentUnresolvedReason> = new Set([
+  "composed-depth",
+  "node-depth",
+]);
+
+/** How many placements a composition of `document` leaves unresolved for depth. */
+function depthBreaks(
+  document: BlockDocument,
+  components: ComponentLookup,
+  limits: DocumentLimits
+): number {
+  return resolveComponentInstances(document, components, {
+    limits,
+  }).unresolved.filter(entry => DEPTH_REFUSALS.has(entry.reason)).length;
+}
+
+/**
+ * Refuse a convert whose page composes past a depth limit it did not pass
+ * before.
+ *
+ * Counted against the page as it stands rather than asked as "any break at
+ * all", so a page already holding a placement too deep elsewhere can still be
+ * converted somewhere else: the plan answers for what it changes.
+ */
+function composedDepthRefusal(args: {
+  document: BlockDocument;
+  ops: readonly BuilderOp[];
+  componentId: string;
+  definition: BlockDocument;
+  components: ComponentLookup;
+  limits: DocumentLimits;
+}): PlanRefusal | undefined {
+  const { componentId, definition, components, limits } = args;
+  const converted = applyOps(args.document, args.ops, limits).document;
+  const withCreated: ComponentLookup = {
+    has: id => id === componentId || components.has(id),
+    get: id => (id === componentId ? definition : components.get(id)),
+  };
+  const before = depthBreaks(args.document, components, limits);
+  return depthBreaks(converted, withCreated, limits) > before
+    ? { problem: "composed-depth" }
+    : undefined;
 }
 
 /**

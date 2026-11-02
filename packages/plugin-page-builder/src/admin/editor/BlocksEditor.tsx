@@ -39,6 +39,7 @@ import {
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import type { LibraryReadState } from "../pattern-library-client";
@@ -647,6 +648,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     componentLibrary,
     savePattern,
     mayCreatePattern,
+    makeComponent,
+    componentVerbs,
     checklist,
     availablePanels,
     openPanelRequest,
@@ -752,6 +755,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             this plugin's business, not the canvas's.
           */
           mayCreatePattern={mayCreatePattern}
+          components={componentVerbs}
           onShareVerbs={setCardVerbs}
         >
           {/*
@@ -779,6 +783,13 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             selectedIds={editor.selection.ids}
             onClose={savePattern.close}
             returnFocusTo={savePattern.returnFocusTo}
+          />
+          <ComponentFromSelectionPrompt
+            request={makeComponent.request}
+            editor={editor}
+            library={componentLibrary}
+            onClose={makeComponent.close}
+            returnFocusTo={makeComponent.returnFocusTo}
           />
         </BlockKeyboardActions>
       </BuilderShell>

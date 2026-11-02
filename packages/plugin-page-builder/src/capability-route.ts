@@ -34,11 +34,13 @@
  * @module capability-route
  */
 
+import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
   CAPABILITY_ROUTE_PATH,
   type PatternCapabilityResponse,
 } from "./library-contract";
+import type { ComponentStore } from "./library-route";
 import { SAVED_PATTERN_STATUS } from "./save-pattern-route";
 
 /**
@@ -89,6 +91,27 @@ export async function readPatternCapability(
 }
 
 /**
+ * Whether this caller may make a component from a selection: `create` and
+ * `publish` on the store definitions live in (a configured one literally, the
+ * plugin's own under the host's name for it), since the component is created
+ * published. The same two grants the route itself asks for.
+ */
+export async function mayCreateComponent(
+  ctx: CapabilityRouteContext,
+  store: Pick<ComponentStore, "collection"> = {}
+): Promise<boolean> {
+  if (ctx.caller === null) return false;
+  const slug =
+    store.collection ??
+    ctx.self.collections[COMPONENTS_SLUG] ??
+    COMPONENTS_SLUG;
+  return (
+    (await ctx.caller.can("create", slug)) &&
+    (await ctx.caller.can("publish", slug))
+  );
+}
+
+/**
  * The route declaration.
  *
  * No `public: true`, so it is authenticated: the answer is about the caller and
@@ -97,7 +120,9 @@ export async function readPatternCapability(
  * question on the answer would return 403 to exactly the authors this exists to
  * tell "no" gracefully.
  */
-export function patternCapabilityRoute(): {
+export function patternCapabilityRoute(
+  store: Pick<ComponentStore, "collection"> = {}
+): {
   method: "GET";
   path: string;
   handler: (req: Request, ctx: CapabilityRouteContext) => Promise<Response>;
@@ -106,6 +131,9 @@ export function patternCapabilityRoute(): {
     method: "GET",
     path: CAPABILITY_ROUTE_PATH,
     handler: async (_req, ctx) =>
-      Response.json(await readPatternCapability(ctx)),
+      Response.json({
+        ...(await readPatternCapability(ctx)),
+        mayCreateComponent: await mayCreateComponent(ctx, store),
+      } satisfies PatternCapabilityResponse),
   };
 }

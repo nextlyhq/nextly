@@ -66,7 +66,11 @@ import {
 } from "./class-usage-runtime";
 import { reconcileWrittenDocument, usageTarget } from "./class-usage-write";
 import { componentUsageIndex } from "./component-usage";
-import { requestContextFor, writeTargetOf } from "./write-target";
+import {
+  requestContextFor,
+  writeTargetOf,
+  type WriteTarget,
+} from "./write-target";
 
 /**
  * The phases maintenance runs on.
@@ -156,7 +160,7 @@ export function registerClassUsageMaintenance(args: {
   locales: () => readonly string[];
   /** The bounds rows are derived under, read per call. */
   limits: () => DocumentLimits;
-}): void {
+}): CommittedWriteReconciler {
   const handler = (context: UnknownRecord) => maintain(args, context);
   for (const phase of MAINTAINED_PHASES) {
     args.ctx.hooks.on(phase, "*", handler);
@@ -166,7 +170,24 @@ export function registerClassUsageMaintenance(args: {
   for (const phase of FORGOTTEN_PHASES) {
     args.ctx.hooks.on(phase, "*", forgetHandler);
   }
+  return async target => {
+    const work = await maintenanceOf(args, target, {});
+    if (work === null) return;
+    const report = await reconcileWrittenDocument(work);
+    if (report.failures.length > 0) reportFailures(args.ctx.logger, report);
+  };
 }
+
+/**
+ * Bring the usage indexes in line with a document written inside a
+ * transaction the caller owned, once it has committed. The write hooks skip
+ * such a write, since what they would read is not yet visible to the pool.
+ * A failure is logged rather than raised: the write has committed, and a
+ * rebuild repairs the index.
+ */
+export type CommittedWriteReconciler = (
+  target: WriteTarget<ClassUsageDirectApi>
+) => Promise<void>;
 
 /**
  * One write's maintenance, with every failure captured.
@@ -304,10 +325,22 @@ async function planMaintenance(
     excluded: [args.indexCollection, args.componentIndexCollection],
   });
   if (target === null) return null;
+  return maintenanceOf(args, target, requestContextFor(context));
+}
 
+/**
+ * The reconciliation of one written document, or `null` when its collection
+ * holds no blocks field. Shared by the hook and by a write made in a
+ * transaction the caller owns, which the hook skips.
+ */
+async function maintenanceOf(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  target: WriteTarget<ClassUsageDirectApi>,
+  requestContext: unknown
+): Promise<Parameters<typeof reconcileWrittenDocument>[0] | null> {
   const collection = (await args.ctx.services.collections.getCollection(
     target.slug,
-    requestContextFor(context)
+    requestContext
   )) as { fields?: unknown; localized?: unknown };
 
   if (blocksFieldsOf(collection).length === 0) return null;

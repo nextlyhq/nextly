@@ -25,6 +25,7 @@ import {
   useNoticeQueue,
   userPreferenceStore,
   type BuilderShellProps,
+  type ComponentVerbsHost,
   type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
@@ -38,13 +39,18 @@ import {
 import { toast } from "@nextlyhq/ui";
 import { useCallback, useMemo, useState } from "react";
 
+import type { ComponentFromSelectionAction } from "../../library-contract";
 import {
   useComponentLibrary,
   type ComponentLibraryRead,
 } from "../component-library-client";
+import type { ComponentRequest } from "../ComponentFromSelectionPrompt";
 import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
-import { useMayCreatePattern } from "../pattern-capability-client";
+import {
+  useMayCreateComponent,
+  useMayCreatePattern,
+} from "../pattern-capability-client";
 
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
@@ -158,6 +164,59 @@ export function useSavePatternVerb(
   }, [openedFrom]);
 
   return { document, returnFocusTo, open, close };
+}
+
+/** What {@link useMakeComponentVerb} returns, handed on as `makeComponent`. */
+type MakeComponentVerb = {
+  /** What the author asked for, or `null` while the form is not up. */
+  readonly request: ComponentRequest | null;
+  readonly returnFocusTo: () => HTMLElement | null;
+  readonly open: (action: ComponentFromSelectionAction) => void;
+  readonly close: () => void;
+  /** The verbs as the shared verb chain takes them, with the author's grant. */
+  readonly verbs: ComponentVerbsHost;
+};
+
+/**
+ * Raising the make-component form: the same gesture as the pattern form's
+ * (the open passage committed first, the opener remembered), plus which of
+ * the two verbs was asked for.
+ */
+function useMakeComponentVerb(
+  editor: { document: BlockDocument },
+  inline: { commit: () => InlineEditOutcome }
+): MakeComponentVerb {
+  const gesture = useSavePatternVerb(editor, inline);
+  const [action, setAction] = useState<ComponentFromSelectionAction>("save-as");
+  const openGesture = gesture.open;
+  const open = useCallback(
+    (next: ComponentFromSelectionAction) => {
+      setAction(next);
+      openGesture();
+    },
+    [openGesture]
+  );
+  const request = useMemo(
+    () =>
+      gesture.document === null ? null : { action, document: gesture.document },
+    [action, gesture.document]
+  );
+  const mayCreate = useMayCreateComponent();
+  const verbs = useMemo(
+    () => ({
+      mayCreate,
+      onSaveAsComponent: () => open("save-as"),
+      onConvertToComponent: () => open("convert"),
+    }),
+    [mayCreate, open]
+  );
+  return {
+    request,
+    returnFocusTo: gesture.returnFocusTo,
+    open,
+    close: gesture.close,
+    verbs,
+  };
 }
 
 /**
@@ -283,7 +342,8 @@ export function useEditorMount(
    * three places would be three requests answering one question.
    */
   const mayCreatePattern = useMayCreatePattern();
-
+  // The make-component verbs, and whether this author holds their grants.
+  const makeComponent = useMakeComponentVerb(editor, inline);
   /*
    * Where the shell keeps this author's panel, device and zoom: under their
    * own id, so two authors of one browser each get their own. While no one is
@@ -303,6 +363,8 @@ export function useEditorMount(
     inline,
     savePattern,
     mayCreatePattern,
+    makeComponent,
+    componentVerbs: makeComponent.verbs,
     preferenceStore,
   };
 }
@@ -318,6 +380,9 @@ export type EditorMount = {
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
+  makeComponent: MakeComponentVerb;
+  /** The make-component verbs as the shared verb chain takes them. */
+  componentVerbs: ComponentVerbsHost;
   /** Where the shell keeps the signed-in author's preferences. */
   preferenceStore: NonNullable<BuilderShellProps["store"]>;
 };
