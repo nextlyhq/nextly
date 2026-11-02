@@ -376,6 +376,12 @@ async function openAndSelect(
   if (!(await row.isVisible())) {
     await page.getByRole("textbox", { name: "Search layers" }).fill(label);
   }
+  if (!(await row.isVisible())) {
+    // A parent that matches the search too is kept whole but not opened, so
+    // its branch is opened from the keyboard, as an author would.
+    await tree.locator(`[data-nx-layer="${PARENT}"]`).click();
+    await page.keyboard.press("ArrowRight");
+  }
   await row.click();
   await expect(page.locator("[data-block-card]")).toBeVisible();
 }
