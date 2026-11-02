@@ -20,8 +20,12 @@
  *
  * @module runtime/routing/public-reader
  */
+import { z } from "zod";
+
+import { runDetachedFromRequest } from "../../auth/caller-scope";
 import type { Nextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
+import type { ListResult } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
 
 /** The operators a list's filter row may use, each meaning the same on every database. */
@@ -69,10 +73,14 @@ export interface PublicReadQuery {
   populate?: readonly string[];
 }
 
-export interface PublicReadResult {
-  items: Record<string, unknown>[];
-  total: number;
-}
+/** The canonical list envelope: the page of rows and its pagination. */
+export type PublicReadResult = ListResult<Record<string, unknown>>;
+
+/** What a count may narrow by: the list's collection, filters and language. */
+export type PublicCountQuery = Pick<
+  PublicReadQuery,
+  "collection" | "filters" | "locale"
+>;
 
 /** The public reads a page's data provider is given. Nothing else.
  *
@@ -80,9 +88,7 @@ export interface PublicReadResult {
  */
 export interface PublicReader {
   find(query: PublicReadQuery): Promise<PublicReadResult>;
-  count(
-    query: Pick<PublicReadQuery, "collection" | "filters">
-  ): Promise<number>;
+  count(query: PublicCountQuery): Promise<number>;
 }
 
 /** What a route binds the reader to. */
@@ -128,6 +134,57 @@ function refuse(reason: string, message: string, detail: object = {}): never {
     message,
     logContext: { reason: `public-read-${reason}`, ...detail },
   });
+}
+
+const scalar = z.union([z.string(), z.number(), z.boolean()]);
+
+/**
+ * The shape a query must have before any of it is read: each value of the
+ * type it is declared as. A query is outside input (a stored list, a
+ * provider's JavaScript), so `select: "title"` is refused here rather than
+ * spread into five one-letter fields. The bounds and names are judged after,
+ * each refused with its own reason.
+ */
+const QUERY_SHAPE = z.object({
+  collection: z.string(),
+  filters: z
+    .array(
+      z.object({
+        field: z.string(),
+        op: z.string(),
+        value: z.union([scalar, z.array(scalar)]),
+      })
+    )
+    .optional(),
+  sort: z.union([z.string(), z.array(z.string())]).optional(),
+  limit: z.number().optional(),
+  offset: z.number().optional(),
+  page: z.number().optional(),
+  locale: z.string().optional(),
+  select: z.array(z.string()).optional(),
+  populate: z.array(z.string()).optional(),
+});
+
+function assertShape(query: object): void {
+  const parsed = QUERY_SHAPE.safeParse(query);
+  if (parsed.success) return;
+  const issue = parsed.error.issues[0];
+  const where = issue?.path.map(String).join(".") || "the query";
+  refuse(
+    "query-invalid",
+    `A list query's ${where} is not of the type it takes: ${issue?.message ?? "invalid"}.`,
+    { path: where }
+  );
+}
+
+/**
+ * The sort keys, each trimmed, empty ones dropped. A string is split on
+ * commas, as core splits one, so `""`, `" "` and `","` come to no keys and
+ * the read keeps its id order instead of reaching core with no order at all.
+ */
+function sortKeys(sort: string | readonly string[] | undefined): string[] {
+  const parts = typeof sort === "string" ? sort.split(",") : [...(sort ?? [])];
+  return parts.map(key => key.trim()).filter(key => key !== "");
 }
 
 function assertQueryKeys(query: object): void {
@@ -219,6 +276,7 @@ function assertPublicQuery(
     refuse("query-invalid", "A list query must be an object.");
   }
   assertQueryKeys(query);
+  assertShape(query);
   if (typeof query.collection !== "string" || query.collection === "") {
     refuse("collection-missing", "A list query must name a collection.");
   }
@@ -271,9 +329,9 @@ export function toPublicFind(
   return {
     collection: query.collection,
     ...(where === undefined ? {} : { where }),
-    // Always sent, so a list without a sort is in id order, the same on
-    // every read.
-    sort: typeof query.sort === "string" ? query.sort : [...(query.sort ?? [])],
+    // Always sent, and always as keys, so a list without a sort is in id
+    // order, the same on every read.
+    sort: sortKeys(query.sort),
     limit,
     // One start: core never receives both a page and an offset.
     offset: (query.offset ?? 0) + ((query.page ?? 1) - 1) * limit,
@@ -284,40 +342,49 @@ export function toPublicFind(
     // and no key a list cannot know the meaning of.
     status: "published",
     overrideAccess: false,
-    user: undefined,
     unknownSort: "refuse",
+    // Every identity, present and undefined: the Direct API spreads the
+    // instance's defaults underneath a call, so a key left out would let an
+    // instance's own user, key scope, trust or field-rule user judge the read.
+    user: undefined,
+    actor: undefined,
+    fieldAccessUser: undefined,
+    trusted: undefined,
+    req: undefined,
+    request: undefined,
+    context: undefined,
+    showHiddenFields: false,
   } as FindArgs;
 }
 
-/** A reader bound to a route, over a Direct API that answers its two reads.
+/** A reader bound to a route, over a Direct API's `find`.
+ *
+ * `find` alone, so a page route can hand over the content reader it already
+ * holds: a count is a one-row read of ids whose total is the answer, under the
+ * same fixed options.
+ *
+ * Each read runs detached from any request being served. A page rendered
+ * while an API-key request is in flight must not be judged by that key: the
+ * read is made by no one, so no caller's scope may narrow or widen it.
  *
  * @experimental
  */
 export function createPublicReader(
-  nextly: Pick<Nextly, "find" | "count">,
+  nextly: Pick<Nextly, "find">,
   binding: PublicReaderBinding = {}
 ): PublicReader {
+  const read = (args: FindArgs) =>
+    runDetachedFromRequest(() => nextly.find(args));
   return Object.freeze({
     async find(query: PublicReadQuery): Promise<PublicReadResult> {
-      const result = await nextly.find(toPublicFind(query, binding));
-      return {
-        items: result.items,
-        total: result.meta.total,
-      };
+      const result = await read(toPublicFind(query, binding));
+      return { items: result.items, meta: result.meta };
     },
-    async count(
-      query: Pick<PublicReadQuery, "collection" | "filters">
-    ): Promise<number> {
-      const args = toPublicFind({ ...query, limit: 1 }, binding);
-      const counted = await nextly.count({
-        collection: args.collection,
-        ...(args.where === undefined ? {} : { where: args.where }),
-        status: "published",
-        overrideAccess: false,
-        user: undefined,
-        ...(args.locale === undefined ? {} : { locale: args.locale }),
-      });
-      return counted.total;
+    async count(query: PublicCountQuery): Promise<number> {
+      const result = await read(
+        toPublicFind({ ...query, limit: 1, select: ["id"] }, binding)
+      );
+      return result.meta.total;
     },
   });
 }

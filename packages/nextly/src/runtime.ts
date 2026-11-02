@@ -129,6 +129,7 @@ export {
   PUBLIC_FILTER_OPS,
 } from "./runtime/routing/public-reader";
 export type {
+  PublicCountQuery,
   PublicFilter,
   PublicFilterOp,
   PublicReader,

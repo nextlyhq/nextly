@@ -60,11 +60,11 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("reads published entries only, without the fields the public may not read", async () => {
-      const { items, total } = await reader.find({
+      const { items, meta } = await reader.find({
         collection: SLUG,
         limit: 50,
       });
-      expect(total).toBe(8);
+      expect(meta.total).toBe(8);
       expect(items.map(item => item.title)).not.toContain("draft");
       for (const item of items) expect(item).not.toHaveProperty("secret");
     });
@@ -114,13 +114,13 @@ describe.each(getConfiguredTestDialects())(
       expect(second.items.map(item => item.id)).toEqual(
         all.items.slice(2, 4).map(item => item.id)
       );
-      expect(second.total).toBe(all.total);
+      expect(second.meta.total).toBe(all.meta.total);
       await expect(
         reader.count({
           collection: SLUG,
           filters: [{ field: "rank", op: "gte", value: 1 }],
         })
-      ).resolves.toBe(all.total);
+      ).resolves.toBe(all.meta.total);
     });
   }
 );
