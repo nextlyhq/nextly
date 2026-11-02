@@ -258,14 +258,21 @@ import {
 } from "../../versions/entity-teardown";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import {
+  judgeSharedValues,
   type LanguageOutcome,
   languageStatusBefore,
   languagesGoingLiveAsStored,
+  type NamedVerdict,
+  nameVerdict,
   type PendingChange,
   pendingChangesInSaveOrder,
+  promotionBlockers,
+  promotionIssuesOf,
+  type PublishAllBlocker,
   type RefuseSharedFields,
   sharedStateForPublish,
   storedLanguageOutcomes,
+  withVerdictState,
 } from "../../versions/publish-all-plan";
 import { hasLifecycle } from "../../versions/recorded-status";
 import {
@@ -276,7 +283,9 @@ import {
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   asIdSet,
+  type FieldNameReader,
   outOfDateSharedFields,
+  readableFieldNames,
   recordSharedBase,
   releaseSharedBase,
   sharedValuesConflict,
@@ -819,6 +828,17 @@ function keptToLanguage<T extends { writeLocale: string }>(
     ? { ...split, writeLocale: locale }
     : split;
 }
+
+/**
+ * What a change of every language's status settled before its transaction
+ * opened; see `lifecycleAllLocalesPreconditions`.
+ */
+type LifecycleAllLocalesReady = Extract<
+  Awaited<
+    ReturnType<CollectionMutationService["lifecycleAllLocalesPreconditions"]>
+  >,
+  { ready: unknown }
+>["ready"];
 
 /**
  * An entry's document as stored, read on a write's transaction, with the
@@ -7418,6 +7438,241 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * What a change of every language's status does before its transaction
+   * opens, in the order it does it: the refusals that end it first (no entry,
+   * the lifecycle grant, a translations table that is not there, nothing to
+   * change), the lifecycle rule asked in each language it puts live, and what
+   * the transaction then reads only a verdict of. One implementation for the
+   * change and for a preview of a publish, so the preview is refused, and
+   * reads, exactly what the publish would.
+   */
+  private async lifecycleAllLocalesPreconditions(
+    direction: LifecycleDirection,
+    params: AllLocalesLifecycleParams
+  ) {
+    const toUpdate = await this.entryToUpdate({ ...params, gate: null });
+    if (toUpdate.answer) return { answer: toUpdate.answer };
+    const { accessUser, schema, existingEntry } = toUpdate;
+
+    // The draft/published lifecycle flag on the collection config, NOT the
+    // mere presence of a `status` column: a collection that defines an
+    // ordinary user field named `status` has the column but no lifecycle, so
+    // it is not publishable and must not demand the publish permission here.
+    // Resolved through the collection so a custom tableName/dbName override is
+    // honored below, matching every other mutation.
+    const publishCollection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const hasMainStatus =
+      (publishCollection as { status?: boolean }).status === true;
+    // A collection with a lifecycle is asked the lifecycle grant here, before
+    // any work only that change needs; its rule below, once the languages
+    // going live are known.
+    const grantRefused = hasMainStatus
+      ? await this.lifecycleGrantRefusal(
+          direction.accessAction,
+          params,
+          accessUser
+        )
+      : null;
+    if (grantRefused) return { answer: grantRefused };
+    const companion = await this.fileManager.loadCompanionSchema(
+      params.collectionName
+    );
+    const companionReady =
+      !!companion &&
+      (await isCompanionReady(this.adapter, companion.companionTableName));
+    const companionPublishable =
+      !!companion &&
+      companion.hasStatus &&
+      // Only `ready` matters: a companion that is not there has no per-locale publish
+      // lifecycle, and why it is not there changes nothing about that.
+      companionReady;
+    // A localized collection whose translations table isn't there has nowhere
+    // to put any language but the default, so publishing every language is
+    // refused, with the remedy, as a write of one other language is.
+    const otherLanguages =
+      this.localization?.locales.some(
+        locale => locale.code !== this.localization?.defaultLocale
+      ) ?? false;
+    if (
+      direction.nextStatus === "published" &&
+      companion &&
+      !companionReady &&
+      otherLanguages
+    ) {
+      return {
+        answer: errorToServiceResult(
+          NextlyError.conflict({
+            reason: "state",
+            message: companionNotReadyMessage("collection"),
+            logContext: {
+              cause: "localized-write-without-companion",
+              collection: params.collectionName,
+              companionTable: companion.companionTableName,
+            },
+          }),
+          { defaultMessage: "Failed to publish all languages" },
+          this.dialect
+        ),
+      };
+    }
+
+    if (!hasMainStatus && !companionPublishable) {
+      // Nothing to publish — the collection has no status concept. Returned
+      // before the publish permission check so a collection with no lifecycle
+      // does not demand `publish-<slug>` for a call that changes nothing; the
+      // caller's update gate decides whether they are told so, as a Single's
+      // does, so a caller with no grant learns nothing about the entry.
+      const updateDenied = await this.accessService.checkCollectionAccess({
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId: params.entryId,
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: false,
+        authenticatedScope: params.authenticatedScope,
+      });
+      if (updateDenied) return { answer: updateDenied };
+      return {
+        answer: {
+          success: true,
+          statusCode: 200,
+          message: direction.nothingToDoMessage,
+          data: { id: params.entryId },
+        },
+      };
+    }
+
+    // This method exists to publish every locale, so it is unconditionally a
+    // publish and needs the publish permission — checked
+    // directly rather than via a transition, since it publishes companion
+    // locales even when the main row is already published. Runs only once
+    // there is actually something publishable.
+
+    // The lifecycle permission and rule for this direction, asked before any
+    // readiness below is resolved, so a caller who may not publish is refused
+    // before any work only a publish needs. Never route-authorized: a route
+    // attests no lifecycle gate. A scoped API key is judged on its own
+    // `<action>-<slug>` grant. The languages going live read this
+    // collection's own translations, whose readiness is resolved above.
+    // Each filter the lifecycle's rule answered, in the language it was
+    // asked in: a publish's in each language going live, an unpublish's
+    // once, matched in the default language. The entry is matched against
+    // each now, again under the row lock, and once it is written.
+    const lifecycleChecks: FilteredWriteCheck[] = [];
+    const lifecycleDenied = () =>
+      this.refusalOfLifecycleInLanguage(lifecycleChecks, schema, {
+        collectionName: params.collectionName,
+        operation: direction.accessAction,
+        entryId: params.entryId,
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: false,
+        authenticatedScope: params.authenticatedScope,
+      });
+    const fields = ((publishCollection as { fields?: unknown }).fields ??
+      []) as FieldDefinition[];
+    const publishes = direction.nextStatus === "published";
+    // A publish puts every language's pending change live, so a change kept
+    // in any language's slot counts among the languages it is asked about.
+    // An unpublish promotes nothing.
+    const promotes = publishes
+      ? { promotesEveryDraftOf: publishCollection }
+      : {};
+    // Asked here, before the transaction and off its connection: a rule is
+    // the app's own code and may read the database. The lock re-reads what
+    // goes live, and asks nothing.
+    const { denied: deniedBeforePublish, askedLanguages } =
+      await this.askBeforeLifecycle({
+        publishes,
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        row: existingEntry as Record<string, unknown>,
+        fields,
+        ...promotes,
+        ask: lifecycleDenied,
+      });
+    if (deniedBeforePublish) return { answer: deniedBeforePublish };
+
+    // Readiness for this collection AND for every field-group type it can hold, resolved on the
+    // pool before the transaction opens. The snapshot built inside it reads all of them, and
+    // there it can only READ a verdict — resolving issues a query, and a query against a missing
+    // relation aborts the whole transaction on PostgreSQL. A publish is a plausible first act on
+    // a fresh worker, and an unresolved verdict reads as unusable, so every translated value
+    // would be missing from the durable event.
+    await this.warmCompanionReadiness(params.collectionName);
+    await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+      fields: (publishCollection as { fields?: FieldConfig[] }).fields ?? [],
+      // Nothing is being written, so nothing is judged: this call is here purely for the
+      // verdicts it leaves behind.
+      data: {},
+      locale: undefined,
+    });
+
+    // How a publish promotes the pending changes, resolved before the
+    // transaction, as a publish of one language resolves it: the payload
+    // each language's change is folded into, and how a change is restored
+    // onto the live row, which reads the component registry on the pool.
+    // Null where nothing can be promoted: an unpublish, a collection with no
+    // lifecycle or that keeps no working drafts, or one whose schema the
+    // split no longer covers.
+    const promotionContext =
+      publishes && hasMainStatus && this.keepsWorkingDrafts(publishCollection)
+        ? await this.releaseWriteContext(
+            publishCollection,
+            params.collectionName,
+            "published"
+          )
+        : null;
+    const promotion =
+      promotionContext?.promoteRestoreCtx != null
+        ? {
+            context: promotionContext,
+            restoreContext: promotionContext.promoteRestoreCtx,
+            // The caller's grants, resolved HERE, before the transaction
+            // opens, for the reason `updateEntry` gives: the promotion's
+            // gate runs under the row lock, and a resolver first asked from
+            // there queries the pooled connection the transaction holds.
+            // Only where a rule could ask.
+            grants:
+              params.overrideAccess !== true &&
+              this.promotionRulesCanAsk(params.collectionName)
+                ? await this.resolvedGrants(
+                    params.user,
+                    params.authenticatedScope
+                  )
+                : undefined,
+          }
+        : null;
+    const documentLocalized =
+      (publishCollection as { localized?: boolean }).localized === true;
+    const draftRef: VersionRef = {
+      scopeKind: "collection",
+      scopeSlug: params.collectionName,
+      entryId: params.entryId,
+    };
+    return {
+      ready: {
+        schema,
+        existingEntry,
+        publishCollection,
+        hasMainStatus,
+        companion,
+        companionPublishable,
+        lifecycleChecks,
+        fields,
+        publishes,
+        promotes,
+        askedLanguages,
+        promotion,
+        documentLocalized,
+        draftRef,
+      },
+    };
+  }
+
+  /**
    * Move every language of an entry to `direction`'s status at once: the
    * main `status` and — when the collection has per-locale status — every
    * companion row's `_status`, in a single transaction.
@@ -7464,204 +7719,27 @@ export class CollectionMutationService extends BaseService {
       // a publish or an unpublish alone, judged by the lifecycle gate below
       // as a status-only write of one language is, the pending changes it
       // promotes included: no update gate.
-      const toUpdate = await this.entryToUpdate({ ...params, gate: null });
-      if (toUpdate.answer) return toUpdate.answer;
-      const { accessUser, schema, existingEntry } = toUpdate;
-
-      // The draft/published lifecycle flag on the collection config, NOT the
-      // mere presence of a `status` column: a collection that defines an
-      // ordinary user field named `status` has the column but no lifecycle, so
-      // it is not publishable and must not demand the publish permission here.
-      // Resolved through the collection so a custom tableName/dbName override is
-      // honored below, matching every other mutation.
-      const publishCollection = await this.collectionService.getCollection(
-        params.collectionName
+      const preconditions = await this.lifecycleAllLocalesPreconditions(
+        direction,
+        params
       );
-      const hasMainStatus =
-        (publishCollection as { status?: boolean }).status === true;
-      // A collection with a lifecycle is asked the lifecycle grant here, before
-      // any work only that change needs; its rule below, once the languages
-      // going live are known.
-      const grantRefused = hasMainStatus
-        ? await this.lifecycleGrantRefusal(
-            direction.accessAction,
-            params,
-            accessUser
-          )
-        : null;
-      if (grantRefused) return grantRefused;
-      const companion = await this.fileManager.loadCompanionSchema(
-        params.collectionName
-      );
-      const companionReady =
-        !!companion &&
-        (await isCompanionReady(this.adapter, companion.companionTableName));
-      const companionPublishable =
-        !!companion &&
-        companion.hasStatus &&
-        // Only `ready` matters: a companion that is not there has no per-locale publish
-        // lifecycle, and why it is not there changes nothing about that.
-        companionReady;
-      // A localized collection whose translations table isn't there has nowhere
-      // to put any language but the default, so publishing every language is
-      // refused, with the remedy, as a write of one other language is.
-      const otherLanguages =
-        this.localization?.locales.some(
-          locale => locale.code !== this.localization?.defaultLocale
-        ) ?? false;
-      if (
-        direction.nextStatus === "published" &&
-        companion &&
-        !companionReady &&
-        otherLanguages
-      ) {
-        return errorToServiceResult(
-          NextlyError.conflict({
-            reason: "state",
-            message: companionNotReadyMessage("collection"),
-            logContext: {
-              cause: "localized-write-without-companion",
-              collection: params.collectionName,
-              companionTable: companion.companionTableName,
-            },
-          }),
-          { defaultMessage: "Failed to publish all languages" },
-          this.dialect
-        );
-      }
-
-      if (!hasMainStatus && !companionPublishable) {
-        // Nothing to publish — the collection has no status concept. Returned
-        // before the publish permission check so a collection with no lifecycle
-        // does not demand `publish-<slug>` for a call that changes nothing; the
-        // caller's update gate decides whether they are told so, as a Single's
-        // does, so a caller with no grant learns nothing about the entry.
-        const updateDenied = await this.accessService.checkCollectionAccess({
-          collectionName: params.collectionName,
-          operation: "update",
-          entryId: params.entryId,
-          user: accessUser,
-          overrideAccess: params.overrideAccess,
-          routeAuthorized: false,
-          authenticatedScope: params.authenticatedScope,
-        });
-        if (updateDenied) return updateDenied;
-        return {
-          success: true,
-          statusCode: 200,
-          message: direction.nothingToDoMessage,
-          data: { id: params.entryId },
-        };
-      }
-
-      // This method exists to publish every locale, so it is unconditionally a
-      // publish and needs the publish permission — checked
-      // directly rather than via a transition, since it publishes companion
-      // locales even when the main row is already published. Runs only once
-      // there is actually something publishable.
-
-      // The lifecycle permission and rule for this direction, asked before any
-      // readiness below is resolved, so a caller who may not publish is refused
-      // before any work only a publish needs. Never route-authorized: a route
-      // attests no lifecycle gate. A scoped API key is judged on its own
-      // `<action>-<slug>` grant. The languages going live read this
-      // collection's own translations, whose readiness is resolved above.
-      // Each filter the lifecycle's rule answered, in the language it was
-      // asked in: a publish's in each language going live, an unpublish's
-      // once, matched in the default language. The entry is matched against
-      // each now, again under the row lock, and once it is written.
-      const lifecycleChecks: FilteredWriteCheck[] = [];
-      const lifecycleDenied = () =>
-        this.refusalOfLifecycleInLanguage(lifecycleChecks, schema, {
-          collectionName: params.collectionName,
-          operation: direction.accessAction,
-          entryId: params.entryId,
-          user: accessUser,
-          overrideAccess: params.overrideAccess,
-          routeAuthorized: false,
-          authenticatedScope: params.authenticatedScope,
-        });
-      const fields = ((publishCollection as { fields?: unknown }).fields ??
-        []) as FieldDefinition[];
-      const publishes = direction.nextStatus === "published";
-      // A publish puts every language's pending change live, so a change kept
-      // in any language's slot counts among the languages it is asked about.
-      // An unpublish promotes nothing.
-      const promotes = publishes
-        ? { promotesEveryDraftOf: publishCollection }
-        : {};
-      // Asked here, before the transaction and off its connection: a rule is
-      // the app's own code and may read the database. The lock re-reads what
-      // goes live, and asks nothing.
-      const { denied: deniedBeforePublish, askedLanguages } =
-        await this.askBeforeLifecycle({
-          publishes,
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          row: existingEntry as Record<string, unknown>,
-          fields,
-          ...promotes,
-          ask: lifecycleDenied,
-        });
-      if (deniedBeforePublish) return deniedBeforePublish;
-
-      // Readiness for this collection AND for every field-group type it can hold, resolved on the
-      // pool before the transaction opens. The snapshot built inside it reads all of them, and
-      // there it can only READ a verdict — resolving issues a query, and a query against a missing
-      // relation aborts the whole transaction on PostgreSQL. A publish is a plausible first act on
-      // a fresh worker, and an unresolved verdict reads as unusable, so every translated value
-      // would be missing from the durable event.
-      await this.warmCompanionReadiness(params.collectionName);
-      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
-        fields: (publishCollection as { fields?: FieldConfig[] }).fields ?? [],
-        // Nothing is being written, so nothing is judged: this call is here purely for the
-        // verdicts it leaves behind.
-        data: {},
-        locale: undefined,
-      });
-
-      // How a publish promotes the pending changes, resolved before the
-      // transaction, as a publish of one language resolves it: the payload
-      // each language's change is folded into, and how a change is restored
-      // onto the live row, which reads the component registry on the pool.
-      // Null where nothing can be promoted: an unpublish, a collection with no
-      // lifecycle or that keeps no working drafts, or one whose schema the
-      // split no longer covers.
-      const promotionContext =
-        publishes && hasMainStatus && this.keepsWorkingDrafts(publishCollection)
-          ? await this.releaseWriteContext(
-              publishCollection,
-              params.collectionName,
-              "published"
-            )
-          : null;
-      const promotion =
-        promotionContext?.promoteRestoreCtx != null
-          ? {
-              context: promotionContext,
-              restoreContext: promotionContext.promoteRestoreCtx,
-              // The caller's grants, resolved HERE, before the transaction
-              // opens, for the reason `updateEntry` gives: the promotion's
-              // gate runs under the row lock, and a resolver first asked from
-              // there queries the pooled connection the transaction holds.
-              // Only where a rule could ask.
-              grants:
-                params.overrideAccess !== true &&
-                this.promotionRulesCanAsk(params.collectionName)
-                  ? await this.resolvedGrants(
-                      params.user,
-                      params.authenticatedScope
-                    )
-                  : undefined,
-            }
-          : null;
-      const documentLocalized =
-        (publishCollection as { localized?: boolean }).localized === true;
-      const draftRef: VersionRef = {
-        scopeKind: "collection",
-        scopeSlug: params.collectionName,
-        entryId: params.entryId,
-      };
+      if ("answer" in preconditions) return preconditions.answer;
+      const {
+        schema,
+        existingEntry,
+        publishCollection,
+        hasMainStatus,
+        companion,
+        companionPublishable,
+        lifecycleChecks,
+        fields,
+        publishes,
+        promotes,
+        askedLanguages,
+        promotion,
+        documentLocalized,
+        draftRef,
+      } = preconditions.ready;
 
       // `publishCollection` (loaded above for the lifecycle flag) also resolves a
       // custom tableName/dbName override, matching every other mutation;
@@ -7807,36 +7885,14 @@ export class CollectionMutationService extends BaseService {
           // locale that was already live. Read under the lock and inside the
           // retry so it reflects the state this publish actually overwrites;
           // what goes live, each language's outcome and the events all read it.
-          let priorCompanionStatuses: Map<string, string | null>;
-          try {
-            priorCompanionStatuses =
-              companion && companionPublishable
-                ? await readCompanionLocaleStatusAll(
-                    tx.getDrizzle<
-                      Parameters<typeof readCompanionLocaleStatusAll>[0]
-                    >(),
-                    companion.table,
-                    params.entryId,
-                    cachedCompanionReadiness(
-                      this.adapter,
-                      companion.companionTableName
-                    )
-                  )
-                : new Map<string, string | null>();
-          } catch (err) {
-            // The helper already tolerates a missing companion table; any error
-            // here is a real database failure. Normalize it to the canonical
-            // internal error so the raw driver message (which can carry schema
-            // or connection details) does not reach the API caller through the
-            // service's failure result.
-            throw NextlyError.internal({
-              cause: err instanceof Error ? err : undefined,
-              logContext: {
-                reason: "publish-all-companion-status-scan",
-                collection: params.collectionName,
-              },
-            });
-          }
+          const priorCompanionStatuses = await this.priorCompanionStatusesOnTx(
+            tx,
+            {
+              companion: companionPublishable ? companion : null,
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+            }
+          );
 
           // Every language's pending change, in the order their languages
           // last saved, read under the lock: a change saved after the rule was
@@ -7960,14 +8016,14 @@ export class CollectionMutationService extends BaseService {
             // refusal is kept, since the adapter re-wraps whatever leaves the
             // transaction.
             try {
-              if (promotion && pending.length > 0) {
-                // A pending change behind live, or shared edits that can't be
-                // combined or ordered, refuse the publish naming the fields,
-                // through the one verdict a Single's publish reaches. Judged
-                // against the shared values as they are live, read at no
-                // language: a change's own translated values are its own, and
-                // the fields every language shares are the same in each.
-                const changes = documentLocalized
+              // A pending change behind live, or shared edits that can't be
+              // combined or ordered, refuse the publish naming the fields,
+              // through the one verdict a Single's publish reaches. Judged
+              // against the shared values as they are live, read at no
+              // language: a change's own translated values are its own, and
+              // the fields every language shares are the same in each.
+              const changes =
+                promotion && pending.length > 0 && documentLocalized
                   ? await sharedStateForPublish(
                       tx,
                       draftRef,
@@ -7991,83 +8047,28 @@ export class CollectionMutationService extends BaseService {
                       }
                     )
                   : pending;
-                for (const change of changes) {
-                  const finalData = await this.languagePayloadOnTx(tx, {
-                    collectionName: params.collectionName,
-                    locale: change.locale,
-                    payload: promotion.context.finalData,
-                  });
-                  promotions.push(
-                    await this.pendingChangePromotion(tx, {
-                      change,
-                      context: promotion.context,
-                      restoreContext: promotion.restoreContext,
-                      collection: publishCollection,
-                      collectionName: params.collectionName,
-                      entryId: params.entryId,
-                      storedId: String(existingEntry.id),
-                      tableName,
-                      live: storedBefore.get(change.locale) ?? {},
-                      finalData,
-                      companion,
-                      caller: params,
-                      grants: promotion.grants,
-                      updatedAt: publishNow,
-                    })
-                  );
-                }
-              }
-              // Every other language this puts live goes live as it is
-              // stored, each judged when it was saved as a draft and never as
-              // published: validated as each goes live, as a single publish
-              // of it would be, through the same step as the single-entry
-              // publish, so the two cannot judge one document differently.
-              // With a change promoted, every stored translation is judged,
-              // since the change can rewrite the shared values beneath a
-              // language already live; a language whose change was judged
-              // above is not judged again.
-              await this.assertLanguagesGoLiveValid({
-                collectionName: params.collectionName,
-                entryId: params.entryId,
-                row: preImageRow,
-                patch: {},
-                writeLocale: undefined,
-                writeLocaleValues: {},
-                perLocaleStatus: false,
-                everyLanguage: true,
-                // Told only the issues on fields the caller may read.
-                reader: params,
-                // A change kept under no language is the main row's own.
-                writeLocalePromoted: promotions.some(p => p.locale === null),
-                ...(promotions.length > 0
-                  ? {
-                      promotedLocales: new Set(
-                        promotions.flatMap(p =>
-                          p.locale === null ? [] : [p.locale]
-                        )
-                      ),
-                      alsoGoingLive: languagesGoingLiveAsStored(
-                        {
-                          hasMainStatus,
-                          translationsPublishable:
-                            !!companion && companionPublishable,
-                        },
-                        pending,
-                        {
-                          mainStatus: lockedRow.status,
-                          companion: priorCompanionStatuses,
-                        },
-                        configuredLocales
-                      ).flatMap(language => {
-                        const locale = language.locale ?? defaultLocale;
-                        return locale === undefined ? [] : [locale];
-                      }),
-                    }
-                  : {}),
-                fields,
-                user: params.user,
-                tx,
-              });
+              promotions.push(
+                ...(await this.promotionsJudgedOnTx(tx, {
+                  changes,
+                  pending,
+                  promotion,
+                  collection: publishCollection,
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  storedId: String(existingEntry.id),
+                  tableName,
+                  storedBefore,
+                  companion,
+                  companionPublishable,
+                  hasMainStatus,
+                  caller: params,
+                  row: preImageRow,
+                  mainStatus: lockedRow.status,
+                  prior: priorCompanionStatuses,
+                  fields,
+                  updatedAt: publishNow,
+                }))
+              );
             } catch (refusal) {
               publishRefused = refusal;
               throw refusal;
@@ -8910,6 +8911,392 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     }
+  }
+
+  /**
+   * Every stored translation's committed `_status`, read on `tx`, or none
+   * where the entry's translations carry no status of their own.
+   *
+   * The reader already tolerates a translations table that is not there, so
+   * anything thrown is a real database failure, normalized to the canonical
+   * internal error: the driver's message can carry schema or connection
+   * details that must not reach the caller through the service's result.
+   */
+  private async priorCompanionStatusesOnTx(
+    tx: TransactionContext,
+    args: {
+      /** The translations, where they carry a status; null otherwise. */
+      companion: CompanionSchema | null;
+      collectionName: string;
+      entryId: string;
+    }
+  ): Promise<Map<string, string | null>> {
+    if (!args.companion) return new Map();
+    try {
+      return await readCompanionLocaleStatusAll(
+        tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+        args.companion.table,
+        args.entryId,
+        cachedCompanionReadiness(
+          this.adapter,
+          args.companion.companionTableName
+        )
+      );
+    } catch (err) {
+      throw NextlyError.internal({
+        cause: err instanceof Error ? err : undefined,
+        logContext: {
+          reason: "publish-all-companion-status-scan",
+          collection: args.collectionName,
+        },
+      });
+    }
+  }
+
+  /**
+   * The gate a publish of every language passes, judged on `tx` before
+   * anything is written: each pending change's promotion
+   * (`pendingChangePromotion`), then every language the publish puts live as
+   * it is stored, validated as it goes live, as a publish of that language
+   * alone validates it. Refused by throwing; the promotions otherwise. One
+   * implementation for the publish and for its preview, so the preview
+   * reports exactly what the publish would refuse.
+   */
+  private async promotionsJudgedOnTx(
+    tx: TransactionContext,
+    args: {
+      /** Each pending change, carrying the shared state the publish leaves. */
+      changes: readonly PendingChange[];
+      /** Each pending change as stored. */
+      pending: readonly PendingChange[];
+      /** How a change is promoted; null where nothing can be. */
+      promotion: LifecycleAllLocalesReady["promotion"];
+      collection: unknown;
+      collectionName: string;
+      entryId: string;
+      /** The entry's id as stored, which the rules are told. */
+      storedId: string;
+      tableName: string;
+      /** Each pending change's language as stored, read on `tx`. */
+      storedBefore: ReadonlyMap<string | null, Record<string, unknown>>;
+      companion: CompanionSchema | null;
+      companionPublishable: boolean;
+      hasMainStatus: boolean;
+      caller: AllLocalesLifecycleParams;
+      /** The main row, as this transaction reads it. */
+      row: Record<string, unknown>;
+      /** The main row's status before the publish. */
+      mainStatus: unknown;
+      /** Each stored translation's status before the publish. */
+      prior: Map<string, string | null>;
+      fields: FieldDefinition[];
+      updatedAt: Date;
+    }
+  ): Promise<PendingPromotion[]> {
+    const { promotion } = args;
+    const configuredLocales = new Set(
+      this.localization?.locales.map(l => l.code) ?? []
+    );
+    const defaultLocale = this.localization?.defaultLocale;
+    const promotions: PendingPromotion[] = [];
+    if (promotion) {
+      for (const change of args.changes) {
+        const finalData = await this.languagePayloadOnTx(tx, {
+          collectionName: args.collectionName,
+          locale: change.locale,
+          payload: promotion.context.finalData,
+        });
+        promotions.push(
+          await this.pendingChangePromotion(tx, {
+            change,
+            context: promotion.context,
+            restoreContext: promotion.restoreContext,
+            collection: args.collection,
+            collectionName: args.collectionName,
+            entryId: args.entryId,
+            storedId: args.storedId,
+            tableName: args.tableName,
+            live: args.storedBefore.get(change.locale) ?? {},
+            finalData,
+            companion: args.companion,
+            caller: args.caller,
+            grants: promotion.grants,
+            updatedAt: args.updatedAt,
+          })
+        );
+      }
+    }
+    // Every other language this puts live goes live as it is stored, each
+    // judged when it was saved as a draft and never as published: validated
+    // as each goes live, as a single publish of it would be, through the same
+    // step as the single-entry publish, so the two cannot judge one document
+    // differently. With a change promoted, every stored translation is
+    // judged, since the change can rewrite the shared values beneath a
+    // language already live; a language whose change was judged above is not
+    // judged again.
+    await this.assertLanguagesGoLiveValid({
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      row: args.row,
+      patch: {},
+      writeLocale: undefined,
+      writeLocaleValues: {},
+      perLocaleStatus: false,
+      everyLanguage: true,
+      // Told only the issues on fields the caller may read.
+      reader: args.caller,
+      // A change kept under no language is the main row's own.
+      writeLocalePromoted: promotions.some(p => p.locale === null),
+      ...(promotions.length > 0
+        ? {
+            promotedLocales: new Set(
+              promotions.flatMap(p => (p.locale === null ? [] : [p.locale]))
+            ),
+            alsoGoingLive: languagesGoingLiveAsStored(
+              {
+                hasMainStatus: args.hasMainStatus,
+                translationsPublishable:
+                  !!args.companion && args.companionPublishable,
+              },
+              args.pending,
+              { mainStatus: args.mainStatus, companion: args.prior },
+              configuredLocales
+            ).flatMap(language => {
+              const locale = language.locale ?? defaultLocale;
+              return locale === undefined ? [] : [locale];
+            }),
+          }
+        : {}),
+      fields: args.fields,
+      user: args.caller.user,
+      tx,
+    });
+    return promotions;
+  }
+
+  /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it.
+   *
+   * Asked as the publish is asked: the same refusals before any read and the
+   * same publish permission and rule in each language it would put live
+   * (`lifecycleAllLocalesPreconditions`), so a caller who may not publish is
+   * not told what a publish would do. Then the same verdict, read on a
+   * transaction that writes nothing and takes no lock: the shared values
+   * first, and, where they refuse nothing, the promotion's gate
+   * (`promotionsJudgedOnTx`). Every refusal is named as the caller may read
+   * it.
+   */
+  async previewPublishAllLocales(
+    params: AllLocalesLifecycleParams
+  ): Promise<CollectionServiceResult> {
+    try {
+      const preconditions = await this.lifecycleAllLocalesPreconditions(
+        PUBLISH_ALL_LOCALES,
+        params
+      );
+      if ("answer" in preconditions) {
+        const { data, ...rest } = preconditions.answer;
+        // A success here changes nothing: there is nothing to report.
+        return data
+          ? {
+              ...rest,
+              data: { id: params.entryId, languages: [], blockers: [] },
+            }
+          : preconditions.answer;
+      }
+      const ready = preconditions.ready;
+      // Resolved before the transaction, as the publish resolves them: they
+      // query the pooled connection.
+      const grants =
+        ready.promotion?.grants ??
+        (await this.resolvedGrants(params.user, params.authenticatedScope));
+      const preview = await this.adapter.transaction(tx =>
+        this.previewAllLocalesOnTx(tx, ready, params, grants)
+      );
+      return {
+        success: true,
+        statusCode: 200,
+        message: "What publishing every language does.",
+        data: { id: params.entryId, ...preview },
+      };
+    } catch (error) {
+      // Answered as the publish answers it: a translations table found
+      // missing, then a database not migrated for the collection, are named
+      // as such; anything else keeps its own status.
+      const companionGone = await this.companionGoneResult(
+        {
+          collectionName: params.collectionName,
+          locale: undefined,
+          committed: false,
+          defaultMessage: "Failed to preview publishing all languages",
+        },
+        error
+      );
+      if (companionGone) return companionGone;
+      const thrown = await asNotMigrated(
+        error,
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        }),
+        { written: false }
+      );
+      return {
+        success: false,
+        statusCode: 500,
+        message:
+          thrown instanceof Error
+            ? thrown.message
+            : "Failed to preview publishing all languages",
+        data: null,
+        ...errorEnvelopeFields(thrown),
+      };
+    }
+  }
+
+  /**
+   * What publishing every language would do, read on one transaction that
+   * writes nothing and locks nothing, judged in the order the publish judges
+   * it: the planner's verdict on the shared values, then, where that refuses
+   * nothing, the promotion's own gate on what the write would leave.
+   */
+  private async previewAllLocalesOnTx(
+    tx: TransactionContext,
+    ready: LifecycleAllLocalesReady,
+    params: AllLocalesLifecycleParams,
+    grants: () => Promise<CallerGrants>
+  ): Promise<{ languages: LanguageOutcome[]; blockers: PublishAllBlocker[] }> {
+    const {
+      schema,
+      existingEntry,
+      publishCollection,
+      hasMainStatus,
+      companion,
+      companionPublishable,
+      fields,
+      promotion,
+      documentLocalized,
+      draftRef,
+    } = ready;
+    const tableName = collectionTableName(
+      publishCollection,
+      params.collectionName
+    );
+    const manyToManyFields = fields.filter(
+      f => f.type === "relationship" && f.options?.relationType === "manyToMany"
+    );
+    // The main row as committed, in the main-table schema shape, read on the
+    // transaction and with no lock: the preview changes nothing.
+    const [storedRow] = (await tx
+      .getDrizzle<typeof this.db>()
+      .select()
+      .from(schema)
+      .where(eq(schema.id, params.entryId))
+      .limit(1)) as (Record<string, unknown> | undefined)[];
+    const row = storedRow ?? (existingEntry as Record<string, unknown>);
+    const prior = await this.priorCompanionStatusesOnTx(tx, {
+      companion: companionPublishable ? companion : null,
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+    });
+    const pending = promotion
+      ? await pendingChangesInSaveOrder(tx, draftRef)
+      : [];
+    const document =
+      promotion && pending.length > 0 && documentLocalized
+        ? await this.liveSharedDocument(tx, {
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            tableName,
+            fields,
+            main: this.deserializeJsonFieldsForSnapshot(
+              convertTimestampsToCamelCase({ ...row }),
+              fields
+            ),
+            locale: null,
+          })
+        : null;
+    const reader: FieldNameReader = {
+      kind: "collection",
+      slug: params.collectionName,
+      user: params.user,
+      // A routed request runs trusted but still answers to the caller's field
+      // read rules.
+      overrideAccess: params.overrideAccess && !params.routeAuthorized,
+      authenticatedScope: params.authenticatedScope,
+      // Resolved before the transaction opened.
+      grants,
+    };
+    const nameIn =
+      (live: Record<string, unknown>) => (names: readonly string[]) =>
+        readableFieldNames(reader, names, live);
+    const verdict = document
+      ? await judgeSharedValues(tx, draftRef, pending, document)
+      : null;
+    const named: NamedVerdict =
+      verdict && document
+        ? await nameVerdict(verdict, nameIn(document.live))
+        : { outOfDate: new Map(), blockers: [] };
+    const blockers = [...named.blockers];
+    // The gate runs only where the shared values refuse nothing, as in the
+    // publish, which refuses on them first.
+    if (named.outOfDate.size === 0 && blockers.length === 0) {
+      const changes = verdict ? withVerdictState(pending, verdict) : pending;
+      const storedBefore = await this.languageDocumentsOnTx(tx, {
+        row,
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        tableName,
+        fields,
+        manyToManyFields,
+        locales: changes.map(change => change.locale),
+      });
+      try {
+        await this.promotionsJudgedOnTx(tx, {
+          changes,
+          pending,
+          promotion,
+          collection: publishCollection,
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          storedId: String(existingEntry.id),
+          tableName,
+          storedBefore,
+          companion,
+          companionPublishable,
+          hasMainStatus,
+          caller: params,
+          row,
+          mainStatus: row.status,
+          prior,
+          fields,
+          updatedAt: new Date(),
+        });
+      } catch (error) {
+        // A refusal that names no field is not one the preview can report,
+        // so it is thrown as the publish would throw it.
+        const issues = promotionIssuesOf(error);
+        if (!issues) throw error;
+        blockers.push(
+          ...(await promotionBlockers(issues, nameIn(document?.live ?? row)))
+        );
+      }
+    }
+    return {
+      languages:
+        companion && companionPublishable && this.localization
+          ? await storedLanguageOutcomes(tx, {
+              companion,
+              localization: this.localization,
+              entryId: params.entryId,
+              pending,
+              prior,
+              mainStatus: row.status,
+              outOfDate: named.outOfDate,
+            })
+          : [],
+      blockers,
+    };
   }
 
   /**

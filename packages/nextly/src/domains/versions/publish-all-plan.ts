@@ -16,7 +16,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import type { NextlyError, SharedFieldsConflictPublicData } from "../../errors";
+import { NextlyError, type SharedFieldsConflictPublicData } from "../../errors";
 import { isBlank, populateTranslationStatus } from "../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../i18n/config/types";
 import { resolveLocaleChain } from "../i18n/resolve-locale";
@@ -315,6 +315,36 @@ export type PublishAllBlocker = {
 export interface PromotionIssue {
   path: string;
   code: string;
+}
+
+/**
+ * The fields a promotion's gate refusal lists, or undefined for any other
+ * error: the gate refuses as a validation error, one issue per field.
+ */
+export function promotionIssuesOf(
+  error: unknown
+): PromotionIssue[] | undefined {
+  if (!NextlyError.is(error) || error.code !== "VALIDATION_ERROR") {
+    return undefined;
+  }
+  const errors = (error.publicData as { errors?: unknown } | undefined)?.errors;
+  if (!Array.isArray(errors)) return undefined;
+  const issues = errors.flatMap(issue =>
+    issue &&
+    typeof issue === "object" &&
+    typeof (issue as { path?: unknown }).path === "string"
+      ? [
+          {
+            path: (issue as { path: string }).path,
+            code:
+              typeof (issue as { code?: unknown }).code === "string"
+                ? (issue as { code: string }).code
+                : "",
+          },
+        ]
+      : []
+  );
+  return issues.length > 0 ? issues : undefined;
 }
 
 /**

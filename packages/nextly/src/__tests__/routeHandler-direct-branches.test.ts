@@ -432,6 +432,13 @@ describe("needsResolvedRoles", () => {
     expect(
       _needsResolvedRolesForTest("singles", "publishAllSingleLocales", "POST")
     ).toBe(true);
+    expect(
+      _needsResolvedRolesForTest(
+        "collections",
+        "previewPublishAllLocales",
+        "GET"
+      )
+    ).toBe(true);
   });
 
   it("skips the lookup for reads that consume no roles", () => {

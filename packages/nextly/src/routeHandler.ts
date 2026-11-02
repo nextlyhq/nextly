@@ -736,6 +736,9 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   "duplicateEntry",
   "publishAllLocales",
   "unpublishAllLocales",
+  // What publishing every language would do. A read, but admitted on the
+  // publish grant as the publish is (LIFECYCLE_ROUTE_ACTIONS).
+  "previewPublishAllLocales",
   // Version history is guarded by the same per-collection read permission as
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
@@ -843,6 +846,7 @@ const ROLE_AWARE_READ_METHODS = new Set([
   // The preview of a publish of every language runs the publish's own gate,
   // which reads roles as the publish's does.
   "previewPublishAllSingleLocales",
+  "previewPublishAllLocales",
   "listEntries",
   "getEntry",
   "countEntries",
@@ -978,6 +982,7 @@ const LIFECYCLE_ROUTE_ACTIONS: Readonly<
   unpublishAllLocales: "unpublish",
   publishAllSingleLocales: "publish",
   previewPublishAllSingleLocales: "publish",
+  previewPublishAllLocales: "publish",
 };
 
 /**
@@ -2335,6 +2340,7 @@ const SESSION_PRIVATE_METHODS = new Set([
   // What a publish of every language would do is told only to a caller who
   // may publish, naming only the fields they may read.
   "previewPublishAllSingleLocales",
+  "previewPublishAllLocales",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from

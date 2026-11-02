@@ -102,8 +102,8 @@ import {
   type PendingChange,
   pendingChangesInSaveOrder,
   type PublishableShape,
-  type PromotionIssue,
   promotionBlockers,
+  promotionIssuesOf,
   type PublishAllBlocker,
   type RefuseSharedFields,
   sharedStateForPublish,
@@ -2316,34 +2316,6 @@ export class SinglePublishAllService extends BaseService {
     }
     return recorded;
   }
-}
-
-/**
- * The fields a promotion's gate refusal lists, or undefined for any other
- * error: the gate refuses as a validation error, one issue per field.
- */
-function promotionIssuesOf(error: unknown): PromotionIssue[] | undefined {
-  if (!NextlyError.is(error) || error.code !== "VALIDATION_ERROR") {
-    return undefined;
-  }
-  const errors = (error.publicData as { errors?: unknown } | undefined)?.errors;
-  if (!Array.isArray(errors)) return undefined;
-  const issues = errors.flatMap(issue =>
-    issue &&
-    typeof issue === "object" &&
-    typeof (issue as { path?: unknown }).path === "string"
-      ? [
-          {
-            path: (issue as { path: string }).path,
-            code:
-              typeof (issue as { code?: unknown }).code === "string"
-                ? (issue as { code: string }).code
-                : "",
-          },
-        ]
-      : []
-  );
-  return issues.length > 0 ? issues : undefined;
 }
 
 /**

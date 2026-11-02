@@ -1070,6 +1070,18 @@ export class CollectionsHandler {
   }
 
   /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it: asked as the publish is, and writing nothing.
+   */
+  async previewPublishAllLocales(
+    params: Parameters<CollectionsHandler["publishAllLocales"]>[0]
+  ) {
+    return this.entryService.previewPublishAllLocales(
+      this.resolveUserParam(params)
+    );
+  }
+
+  /**
    * Delete an entry.
    * @param params - Collection name, entry ID, and optional user ID
    */
