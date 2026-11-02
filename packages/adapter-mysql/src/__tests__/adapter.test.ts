@@ -15,6 +15,13 @@ import {
   VERSION,
 } from "../index";
 
+/**
+ * A resolver holding every table under a model that declares no columns, so
+ * these cases assert how the raw statement binds its values, and the insert is
+ * not refused as one to a table the resolver does not hold.
+ */
+const holdsEveryTable = { getTable: () => ({}) };
+
 // ============================================================
 // Mock mysql2/promise
 // ============================================================
@@ -1049,6 +1056,7 @@ describe("@nextly/adapter-mysql", () => {
         url: "mysql://localhost:3306/test",
       });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
 
       let result: unknown;
       await adapter.transaction(async tx => {

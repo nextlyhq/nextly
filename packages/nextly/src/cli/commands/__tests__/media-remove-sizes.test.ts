@@ -99,7 +99,7 @@ describe("remove-sizes asks what items use just before removing", () => {
       storage,
       objects: { column: true, tableRows: null, keptTable: null },
       apply: true,
-      referencedNow: referencedNowIn(db.adapter as never, {
+      referencedNow: referencedNowIn(db.adapter as never, storage, {
         withRetiredSizes: false,
       }),
       say: () => {},

@@ -36,6 +36,10 @@ import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { holdsGrant } from "../../../auth/access/gate-adapters";
+import {
+  actorForVisitor,
+  userHoldsPermission,
+} from "../../../auth/access/resolve-actor";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
 import {
   askEachLanguage,
@@ -44,8 +48,15 @@ import {
   withRuleLanguage,
   writeLanguagesFor,
 } from "../../../auth/access/rule-language";
-import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
-import { runWithCallerScope } from "../../../auth/caller-scope";
+import {
+  type AuthenticatedScope,
+  scopeHoldsSuperAdmin,
+} from "../../../auth/authenticated-scope";
+import {
+  effectiveCallerScope,
+  runWithCallerScope,
+} from "../../../auth/caller-scope";
+import { currentPrincipal } from "../../../auth/principal-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -91,14 +102,16 @@ import {
   readStringField,
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
+import { permissionSlug } from "../../../schemas/_zod/rbac";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type {
   CollectionRelationshipService,
   RelationshipDbExecutor,
 } from "../../../services/collections/collection-relationship-service";
-import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
+import type { TrustBound } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -283,7 +296,10 @@ import {
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
-import { VersionCaptureService } from "../../versions/version-capture-service";
+import {
+  underSavepoint,
+  VersionCaptureService,
+} from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import {
   type VersionRef,
@@ -603,9 +619,39 @@ export interface DeleteRowFilter {
   readonly read?: ReadReach;
 }
 
+/** The delete gate's answer, as one ask of it gives it. */
+type DeleteGateAnswer = Awaited<
+  ReturnType<CollectionAccessService["checkCollectionWrite"]>
+>;
+
+/**
+ * A delete batch's gate asked in each language its collection keeps, each
+ * time told that one: each row is judged by the answers of the languages it
+ * holds, as a delete removes each of them.
+ */
+export interface DeleteRowLanguages {
+  /**
+   * For each set of languages the batch's entries hold, keyed by
+   * `languageSetKey`, the answer in each of them, told that one and the set,
+   * as a delete of one such entry is asked.
+   */
+  readonly bySet: ReadonlyMap<string, ReadonlyMap<string, DeleteGateAnswer>>;
+  /** The answer for an entry holding no row in any language, asked once. */
+  readonly once: DeleteGateAnswer;
+}
+
+/** One key for a set of languages, whatever order they were read in. */
+function languageSetKey(languages: readonly string[]): string {
+  return [...languages].sort().join(",");
+}
+
 interface DeleteEntryWriteOptions {
   /** Which shape of the row gate to apply — see the comment at its use. */
-  rowGate: "access-service" | "batch-hoisted" | DeleteRowFilter;
+  rowGate:
+    | "access-service"
+    | "batch-hoisted"
+    | DeleteRowFilter
+    | DeleteRowLanguages;
   /** Run user hooks. Access and recording are NOT hooks and always run. */
   runHooks: boolean;
   /** Name the missing id in a 404, so a failing batch item is identifiable. */
@@ -12107,6 +12153,552 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The languages a delete of each of `entryIds` removes, which its rule is
+   * asked in: each language the entry holds a row in, and every configured
+   * language where the content reaches a localized field group. A field
+   * group keeps its own rows per language, and nothing here reads them per
+   * language yet, so each configured language is asked: that refuses where
+   * any of them is refused, which can only refuse more than the entry's own
+   * languages would. None for an entry holding no row in any language, as
+   * for a collection that keeps none, whose rule is asked once. `undefined`
+   * where the rows cannot be read yet, which refuses the delete rather than
+   * guess. Read on `tx` where one is given.
+   */
+  private async languagesToDeleteEach(args: {
+    collectionName: string;
+    entryIds: readonly string[];
+    fields: readonly { type: string; name?: string }[];
+    tx?: TransactionContext;
+  }): Promise<Map<string, string[]> | undefined> {
+    const held = await this.languagesWithRows(
+      args.collectionName,
+      args.entryIds,
+      args.tx
+    );
+    if (held === undefined) return undefined;
+    const configured =
+      this.localization?.locales.map(locale => locale.code) ?? [];
+    // A delete removes each language's held edit and recovery point too,
+    // whatever the collection keeps today, and a language may hold one with
+    // no row of its own, so those languages are asked.
+    await this.addPendingLanguages(held, {
+      collectionName: args.collectionName,
+      entryIds: args.entryIds,
+      tx: args.tx,
+    });
+    const reachesLocalizedFieldGroup = await this.reachesLocalizedFieldGroup(
+      args.fields,
+      args.tx
+    );
+    return new Map(
+      args.entryIds.map(id => [
+        id,
+        languagesToAsk(held.get(id) ?? [], {
+          configured,
+          reachesLocalizedFieldGroup,
+        }),
+      ])
+    );
+  }
+
+  /**
+   * Add to `held` each language an entry holds a pending row in, a working
+   * draft or an autosave, whether or not the site still configures it or
+   * the collection still keeps drafts, as a delete removes every one: one
+   * query for every entry, in slices the database binds in one statement
+   * beside the query's own conditions. A row naming no language is the
+   * default language's.
+   */
+  private async addPendingLanguages(
+    held: Map<string, string[]>,
+    args: {
+      collectionName: string;
+      entryIds: readonly string[];
+      tx?: TransactionContext;
+    }
+  ): Promise<void> {
+    const db = args.tx ?? this.adapter;
+    const defaultLocale = this.localization?.defaultLocale;
+    // The scope takes binds of its own.
+    const slice = this.idsPerStatement(2);
+    for (let at = 0; at < args.entryIds.length; at += slice) {
+      const drafts = await db.select<{
+        entryId: string;
+        locale: string | null;
+      }>(VERSIONS_TABLE, {
+        columns: ["entryId", "locale"],
+        where: {
+          and: [
+            { column: "scopeKind", op: "=", value: "collection" },
+            { column: "scopeSlug", op: "=", value: args.collectionName },
+            {
+              column: "entryId",
+              op: "IN",
+              value: args.entryIds.slice(at, at + slice),
+            },
+            // Pending rows carry no version number: a durable version always
+            // takes one, and a delete leaves the history it numbers.
+            { column: "versionNo", op: "IS NULL" },
+          ],
+        },
+      });
+      for (const draft of drafts) {
+        const locale = draft.locale ?? defaultLocale;
+        if (locale === undefined) continue;
+        const id = String(draft.entryId);
+        const languages = held.get(id) ?? [];
+        if (!languages.includes(locale)) languages.push(locale);
+        held.set(id, languages);
+      }
+    }
+  }
+
+  /**
+   * How many ids one statement may bind beside `reserved` binds of its own,
+   * within the database's limit on the parameters one statement takes.
+   */
+  private idsPerStatement(reserved: number): number {
+    const limit = this.adapter.getCapabilities().maxParamsPerQuery;
+    // An adapter stating no limit binds every id in one statement.
+    if (!Number.isFinite(limit)) return Number.MAX_SAFE_INTEGER;
+    return Math.max(1, limit - reserved);
+  }
+
+  /** {@link languagesToDeleteEach} for one entry. */
+  private async languagesToDelete(args: {
+    collectionName: string;
+    entryId: string;
+    fields: readonly { type: string; name?: string }[];
+    tx?: TransactionContext;
+  }): Promise<string[] | undefined> {
+    const each = await this.languagesToDeleteEach({
+      ...args,
+      entryIds: [args.entryId],
+    });
+    return each?.get(args.entryId);
+  }
+
+  /**
+   * The refusal of a delete by a caller who does not hold the delete grant,
+   * or `null`: the grant alone, read before anything about the entries'
+   * languages is, and no rule asked. A caller without it is refused whatever
+   * the rule says, so the gate's own refusal answers, and none of the
+   * language reads runs for them. A key is judged by its own scope, a
+   * signed-in user by their roles, a visitor by the Public role's grants. A
+   * plugin-defined person, and a caller the route already judged, are judged
+   * by the gate as before.
+   */
+  private async deleteGrantRefusal(
+    gate: Parameters<CollectionAccessService["checkCollectionWrite"]>[0]
+  ): Promise<CollectionServiceResult | null> {
+    if (gate.overrideAccess || gate.routeAuthorized) return null;
+    const holds = await this.holdsDeleteGrant(gate);
+    if (holds !== false) return null;
+    return (await this.accessService.checkCollectionWrite(gate)).denied;
+  }
+
+  /**
+   * Whether the caller holds the delete grant on the collection: `true`,
+   * `false`, or `undefined` for a plugin-defined person, who holds no grant
+   * of its own and is judged by the gate.
+   */
+  private async holdsDeleteGrant(
+    gate: Parameters<CollectionAccessService["checkCollectionWrite"]>[0]
+  ): Promise<boolean | undefined> {
+    const executor =
+      gate.executor === undefined ? {} : { executor: gate.executor };
+    // The scope the gate itself judges by: the one named, else the one the
+    // calling request authenticated, so a key's own grant answers for it.
+    const scope = effectiveCallerScope(gate.authenticatedScope);
+    if (scope?.actorType === "apiKey") {
+      return (
+        scopeHoldsSuperAdmin(scope) ||
+        scope.permissions.includes(
+          permissionSlug("delete", gate.collectionName)
+        )
+      );
+    }
+    if (gate.user) {
+      return userHoldsPermission(
+        gate.user.id,
+        "delete",
+        gate.collectionName,
+        executor
+      );
+    }
+    if (currentPrincipal() !== null) return undefined;
+    const visitor = await actorForVisitor(executor);
+    return visitor.permissions.some(
+      grant =>
+        grant.action === "delete" && grant.resource === gate.collectionName
+    );
+  }
+
+  /**
+   * A delete of one entry asked before any hook runs: the caller's grant
+   * first, before anything about the entry's languages is read; then each
+   * language the entry holds, with each filter answered matched in its
+   * language and kept for the row lock. The refusal, or the languages asked
+   * and the filters to match again.
+   */
+  private async deleteAskedInEachLanguage(args: {
+    entry: Omit<
+      Parameters<CollectionMutationService["languagesToDelete"]>[0],
+      "tx"
+    >;
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+    params: FilteredWriteCheck["params"];
+    appliesFilter: boolean;
+  }): Promise<
+    | { refusal: CollectionServiceResult }
+    | { languages: string[]; filters: FilteredWriteCheck[] }
+  > {
+    const withoutGrant = await this.deleteGrantRefusal(args.params);
+    if (withoutGrant) return { refusal: withoutGrant };
+    // The companion is read for the entry's languages, so it is ready first.
+    await this.warmLocalizedReadiness(args.entry.collectionName);
+    const languages = await this.languagesToDelete(args.entry);
+    if (languages === undefined) {
+      return {
+        refusal: this.languagesUnknownRefusal(args.entry.collectionName),
+      };
+    }
+    const filters: FilteredWriteCheck[] = [];
+    const denied = await this.deleteRefusalInEachLanguage(filters, {
+      schema: args.schema,
+      params: args.params,
+      appliesFilter: args.appliesFilter,
+      languages,
+    });
+    return denied ? { refusal: denied } : { languages, filters };
+  }
+
+  /**
+   * The refusal of a delete whose entry's languages, read again on `tx` as
+   * its row is locked, are not those its rule was asked in, or `null`. Any
+   * change is a conflict: a language gained was not asked about, and one lost
+   * changes what every language was told, so the answers asked are not the
+   * delete's. Languages that cannot be read refuse it too.
+   */
+  private async deleteLanguagesChangedUnderLock(
+    tx: TransactionContext,
+    entry: Omit<
+      Parameters<CollectionMutationService["languagesToDelete"]>[0],
+      "tx"
+    >,
+    asked: readonly string[]
+  ): Promise<CollectionServiceResult | null> {
+    const locked = await this.languagesToDelete({ ...entry, tx });
+    if (locked === undefined) {
+      return this.languagesUnknownRefusal(entry.collectionName);
+    }
+    const unasked = unaskedLanguages(asked, locked);
+    const lost = unaskedLanguages(locked, asked);
+    if (unasked.length === 0 && lost.length === 0) return null;
+    return errorToServiceResult(
+      languagesChangedConflict([...unasked, ...lost]),
+      { defaultMessage: "Failed to delete entry" },
+      this.dialect
+    );
+  }
+
+  /**
+   * The refusal of a delete whose entry's languages cannot be read yet: the
+   * companion is not resolved, so which languages the delete removes, and so
+   * which rules it owes, is not known.
+   */
+  private languagesUnknownRefusal(
+    collectionName: string
+  ): CollectionServiceResult {
+    return errorToServiceResult(
+      NextlyError.conflict({
+        reason: "state",
+        message: companionNotReadyMessage("collection"),
+        logContext: { cause: "delete-languages-unknown", collectionName },
+      }),
+      { defaultMessage: "Failed to delete entry" },
+      this.dialect
+    );
+  }
+
+  /**
+   * The languages each of `entryIds` holds a translation row in, keyed by
+   * id: none where the collection keeps no companion or its table is not
+   * there, and `undefined`, not known, where inside a transaction the
+   * companion is not yet known to be ready, as no read of it is made before
+   * it is. The locale alone is read, which every companion has,
+   * whether or not it keeps a status per language. One query for all of
+   * them, read on `tx` where one is given.
+   */
+  private async languagesWithRows(
+    collectionName: string,
+    entryIds: readonly string[],
+    tx?: TransactionContext
+  ): Promise<Map<string, string[]> | undefined> {
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      tx?.getDrizzle()
+    );
+    const held = new Map<string, string[]>();
+    if (!companion) return held;
+    if (
+      cachedCompanionReadiness(this.adapter, companion.companionTableName) !==
+      "ready"
+    ) {
+      // Inside a transaction the table cannot be looked for without leaving
+      // it, so the languages are not known. Outside one, a companion table
+      // that is not there holds no row in any language.
+      if (tx) return undefined;
+      if (
+        !(await isCompanionReady(this.adapter, companion.companionTableName))
+      ) {
+        return held;
+      }
+    }
+    if (entryIds.length === 0) return held;
+    const table = companion.table as Record<string, unknown>;
+    const db = (tx?.getDrizzle() ?? this.db) as Parameters<
+      typeof readCompanionLocaleStatusAll
+    >[0];
+    // In slices the database binds in one statement, however many entries a
+    // batch names.
+    const slice = this.idsPerStatement(0);
+    const rows: Record<string, unknown>[] = [];
+    for (let at = 0; at < entryIds.length; at += slice) {
+      rows.push(
+        ...(await db
+          .select({ parent: table._parent, locale: table._locale })
+          .from(companion.table)
+          .where(
+            inArray(table._parent as never, entryIds.slice(at, at + slice))
+          ))
+      );
+    }
+    for (const row of rows) {
+      if (typeof row.locale !== "string") continue;
+      const id = String(row.parent);
+      const languages = held.get(id) ?? [];
+      if (!languages.includes(row.locale)) languages.push(row.locale);
+      held.set(id, languages);
+    }
+    return held;
+  }
+
+  /**
+   * The refusal of a delete asked in each of `languages`, or `null` where
+   * every answer allows it. Each ask is the delete gate's, never on the
+   * route's authority: the route asks the grant alone, as it cannot know the
+   * entry's languages. Each filter answered is matched in its language and
+   * added to `checks`, for the delete to match again under the row lock.
+   * With no language, asked once in the operation's languages.
+   */
+  private async deleteRefusalInEachLanguage(
+    checks: FilteredWriteCheck[],
+    args: {
+      schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+      params: FilteredWriteCheck["params"];
+      appliesFilter: boolean;
+      languages: readonly string[];
+    }
+  ): Promise<CollectionServiceResult | null> {
+    const params = { ...args.params, routeAuthorized: false };
+    const refused = await askEachLanguage(args.languages, async () => {
+      const access = await this.deleteAccess(params, args.appliesFilter);
+      return (
+        access.denied ??
+        (await this.addWriteFilter(checks, {
+          schema: args.schema,
+          access,
+          params,
+          locale: currentRuleLanguage().locale,
+        }))
+      );
+    });
+    return refused?.refusal ?? null;
+  }
+
+  /**
+   * A delete batch's gate, asked before its rows: for each set of languages
+   * its entries hold, in each of them, each time told that one and the set,
+   * as a delete of one such entry is asked; once, in the operation's
+   * languages, for an entry holding none and for a collection that keeps
+   * none. Each entry's languages are read for the whole batch in one query
+   * and read again as its row is locked. Refused where they cannot be read
+   * yet. Read on `tx` where the batch runs in its caller's transaction.
+   */
+  async deleteBatchGate(
+    gate: Parameters<CollectionAccessService["checkCollectionWrite"]>[0],
+    ids: readonly string[],
+    tx?: TransactionContext
+  ): Promise<DeleteGateAnswer | DeleteRowLanguages> {
+    const withoutGrant = await this.deleteGrantRefusal(gate);
+    if (withoutGrant) return { denied: withoutGrant };
+    const collection = await this.collectionService.getCollection(
+      gate.collectionName,
+      tx?.getDrizzle()
+    );
+    const fields = (collection.schemaDefinition?.fields ||
+      collection.fields ||
+      []) as FieldConfig[];
+    const keepsLanguages =
+      (this.localization?.locales.length ?? 0) > 0 &&
+      ((collection as { localized?: boolean }).localized === true ||
+        (await this.reachesLocalizedFieldGroup(fields, tx)));
+    if (!keepsLanguages) return this.accessService.checkCollectionWrite(gate);
+    // Read on the pool only before a transaction is open; inside one the
+    // companion is read as already resolved.
+    if (!tx) await this.warmLocalizedReadiness(gate.collectionName);
+    const each = await this.languagesToDeleteEach({
+      collectionName: gate.collectionName,
+      entryIds: ids,
+      fields,
+      tx,
+    });
+    if (each === undefined) {
+      // The caller's own refusal first: one who may not delete is told so,
+      // not how the collection's translation table stands.
+      const plain = await this.accessService.checkCollectionWrite(gate);
+      if (plain.denied) return plain;
+      return { denied: this.languagesUnknownRefusal(gate.collectionName) };
+    }
+    const bySet = new Map<string, Map<string, DeleteGateAnswer>>();
+    for (const languages of each.values()) {
+      const key = languageSetKey(languages);
+      if (languages.length === 0 || bySet.has(key)) continue;
+      const answers = new Map<string, DeleteGateAnswer>();
+      for (const locale of languages) {
+        answers.set(
+          locale,
+          await withRuleLanguage({ locale, locales: [...languages] }, () =>
+            this.accessService.checkCollectionWrite(gate)
+          )
+        );
+      }
+      bySet.set(key, answers);
+    }
+    return {
+      bySet,
+      once: await this.accessService.checkCollectionWrite(gate),
+    };
+  }
+
+  /**
+   * The refusal of deleting `entryId` inside a transaction, or `null` where
+   * it may go. The row is locked first and its languages read under the
+   * lock, so the languages judged are those the delete removes. It is judged
+   * in each of them, each told that one and all of them, by the batch's
+   * answers for that set or, where nothing was asked before, by the gate
+   * asked now on the transaction. A language refused, or whose filter the
+   * entry is outside, matched in it, refuses the delete. A set the batch was
+   * not asked about refuses it as a conflict, and languages that cannot be
+   * read refuse it.
+   */
+  private async deleteRowRefusalInTransaction(
+    tx: TransactionContext,
+    args: {
+      tableName: string;
+      entryId: string;
+      fields: readonly { type: string; name?: string }[];
+      accessParams: Parameters<
+        CollectionAccessService["checkCollectionWrite"]
+      >[0] & { operation: "delete"; entryId: string };
+      rowGate: "access-service" | DeleteRowFilter | DeleteRowLanguages;
+    }
+  ): Promise<CollectionServiceResult | null> {
+    const { rowGate } = args;
+    if (typeof rowGate === "object" && !("bySet" in rowGate)) {
+      return this.deleteRowRefusalIn(tx, args, rowGate, undefined);
+    }
+    // Asked here, a caller without the delete grant is refused before the
+    // row is locked or its languages read.
+    if (rowGate === "access-service") {
+      const withoutGrant = await this.deleteGrantRefusal(args.accessParams);
+      if (withoutGrant) return withoutGrant;
+    }
+    await tx.lockRow(args.tableName, args.entryId);
+    const held = await this.languagesToDelete({
+      collectionName: args.accessParams.collectionName,
+      entryId: args.entryId,
+      fields: args.fields,
+      tx,
+    });
+    if (held === undefined) {
+      return this.languagesUnknownRefusal(args.accessParams.collectionName);
+    }
+    // An entry holding no row in any language is judged as a delete of one
+    // is: by the gate asked once, in the operation's languages.
+    if (held.length === 0) {
+      // The batch's answer names no entry, so a refusal of it is asked again
+      // for this one, as below: a caller who may not read the entry is told
+      // it is missing.
+      const once = typeof rowGate === "object" ? rowGate.once : undefined;
+      return this.deleteRowRefusalIn(
+        tx,
+        args,
+        once === undefined || once.denied
+          ? await this.accessService.checkCollectionWrite(args.accessParams)
+          : once,
+        undefined
+      );
+    }
+    const asked =
+      typeof rowGate === "object"
+        ? rowGate.bySet.get(languageSetKey(held))
+        : undefined;
+    if (typeof rowGate === "object" && asked === undefined) {
+      return errorToServiceResult(
+        languagesChangedConflict(held),
+        { defaultMessage: "Failed to delete entry" },
+        this.dialect
+      );
+    }
+    for (const locale of held) {
+      const askNow = () =>
+        withRuleLanguage({ locale, locales: [...held] }, () =>
+          this.accessService.checkCollectionWrite(args.accessParams)
+        );
+      const known = asked?.get(locale);
+      // A refusal the batch asked before its rows names no entry, so it is
+      // asked again for this one: a caller who may not read the entry is
+      // told it is missing, as for an id that names nothing.
+      const access =
+        known === undefined || known.denied ? await askNow() : known;
+      const refused = await this.deleteRowRefusalIn(tx, args, access, locale);
+      if (refused) return refused;
+    }
+    return null;
+  }
+
+  /**
+   * The refusal of deleting `args.entryId` by one answer of its gate: the
+   * answer's own refusal, or that of an entry outside the filter it
+   * answered, matched in `locale` on the transaction under the row lock.
+   */
+  private async deleteRowRefusalIn(
+    tx: TransactionContext,
+    args: {
+      tableName: string;
+      entryId: string;
+      accessParams: Parameters<
+        CollectionAccessService["checkCollectionWrite"]
+      >[0] & { operation: "delete"; entryId: string };
+    },
+    access: DeleteGateAnswer | DeleteRowFilter,
+    locale: string | undefined
+  ): Promise<CollectionServiceResult | null> {
+    if (access.denied) return access.denied;
+    if (!access.filter) return null;
+    return this.refusalOutsideFilterInTransaction(
+      tx,
+      args.tableName,
+      args.entryId,
+      access,
+      args.accessParams,
+      locale
+    );
+  }
+
+  /**
    * The answer for a write that `error` failed because the collection's translation table is
    * missing (see {@link companionGoneRefusal}), or `undefined` for any other failure and for a
    * write that committed, whose later failure keeps its own answer.
@@ -12297,13 +12889,17 @@ export class CollectionMutationService extends BaseService {
     access: { filter?: RuleFilter; read?: ReadReach },
     accessParams: Parameters<
       CollectionAccessService["refusalOutsideFilter"]
-    >[0] & { operation: FilteredWrite }
+    >[0] & { operation: FilteredWrite },
+    // The language a filter on a translated field is matched in; the
+    // default where none is named.
+    locale?: string
   ): Promise<CollectionServiceResult<T> | null> {
     const prepared = await this.matchInTransaction(
       tx,
       accessParams.operation,
       access,
-      accessParams.collectionName
+      accessParams.collectionName,
+      locale
     );
     if (!prepared) return null;
     await tx.lockRow(tableName, entryId);
@@ -13018,38 +13614,31 @@ export class CollectionMutationService extends BaseService {
         // super-admin bypass does not apply to a super-admin-owned key here.
         authenticatedScope: params.authenticatedScope,
       };
-      const access = await this.deleteAccess(
-        accessParams,
-        params.appliesFilter !== false
-      );
-      if (access.denied) {
-        return access.denied;
-      }
-      // An entry outside the filter is refused before any hook runs, and asked
-      // again under the row lock below, so the entry removed is the one judged.
-      const filtered = await this.prepareFilteredWrite(
-        params.collectionName,
-        "delete",
-        schema,
-        access
-      );
-      if (filtered) {
-        const outside = (
-          await this.judgedAgainstWriteFilter(
-            this.db,
-            schema,
-            params.entryId,
-            filtered,
-            accessParams
-          )
-        ).refusal;
-        if (outside) return outside;
-      }
-
-      // Get collection metadata for stored hooks
+      // Collection metadata: for the languages the entry holds, and for the
+      // stored hooks below.
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
+      // A delete removes every language the entry holds, so it is asked in
+      // each of them, each time told that one, and a refusal in any refuses
+      // it. Each filter answered is matched in its language now, before any
+      // hook runs, and again under the row lock below, so the entry removed
+      // is the one judged.
+      const deleteLanguages = {
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        fields: (collection.schemaDefinition?.fields ||
+          collection.fields ||
+          []) as FieldConfig[],
+      };
+      const asked = await this.deleteAskedInEachLanguage({
+        entry: deleteLanguages,
+        schema,
+        params: accessParams,
+        appliesFilter: params.appliesFilter !== false,
+      });
+      if ("refusal" in asked) return asked.refusal;
+      const { languages: askedLanguages, filters: deleteFilters } = asked;
       const { storedHooks, tableName, sharedContext, requestFacts } =
         this.operationSetup(collection, params);
 
@@ -13182,19 +13771,19 @@ export class CollectionMutationService extends BaseService {
           .where(eq(schema.id, params.entryId))
           .limit(1);
         if (!currentRow) return; // a concurrent delete won the race.
-        if (filtered) {
-          refusedUnderLock = (
-            await this.judgedAgainstWriteFilter(
-              tx.getDrizzle<typeof this.db>(),
-              schema,
-              params.entryId,
-              filtered,
-              accessParams,
-              { underLock: true }
-            )
-          ).refusal;
-          if (refusedUnderLock) return;
-        }
+        refusedUnderLock = await this.deleteLanguagesChangedUnderLock(
+          tx,
+          deleteLanguages,
+          askedLanguages
+        );
+        if (refusedUnderLock) return;
+        refusedUnderLock = await this.refusalOutsideWriteFilters(
+          tx,
+          schema,
+          params.entryId,
+          deleteFilters
+        );
+        if (refusedUnderLock) return;
 
         // Read the removed document before the cascade delete removes its
         // relations, in the read shape create/update events use. A localized
@@ -13841,50 +14430,60 @@ export class CollectionMutationService extends BaseService {
         tx.getDrizzle()
       );
 
-      // Insert using transaction context
-      const entry = await tx.insert<unknown>(tableName, entryData, {
-        returning: "*",
-      });
-      rowWritten = true;
+      // The row and the rows that complete it — its translations and its
+      // field-group instances — are written under one savepoint where the
+      // transaction has them. A later step refused (a translation or
+      // field-group table this instance has not registered, say) then undoes
+      // the row too, so a caller that catches the failure and commits its own
+      // transaction keeps nothing of this create. Side effects and hooks run
+      // after it, as before.
+      const entry = await underSavepoint(tx, async () => {
+        // Insert using transaction context
+        const entry = await tx.insert<unknown>(tableName, entryData, {
+          returning: "*",
+        });
+        rowWritten = true;
 
-      // The companion row for this write's locale, on the same transaction, so
-      // it rolls back with the main row. A brand-new parent has no row to
-      // conflict with, which is why this inserts where the update path upserts.
-      if (localizedWrite) {
-        // A failure here is a write-integrity failure: the parent row is
-        // already written. Reported as a soft per-item failure, a batch under
-        // `stopOnError: false` would carry on and commit a document whose
-        // translations never landed — the row would exist with no content in
-        // any language. Marked, the batch loop aborts and the transaction
-        // rolls back, exactly as a failed component save does.
-        try {
-          await this.insertCompanionRow(
-            tx,
-            localizedWrite,
-            (entry as { id: string }).id
-          );
-        } catch (error: unknown) {
-          throw markWriteIntegrityFailure(error);
+        // The companion row for this write's locale, on the same transaction, so
+        // it rolls back with the main row. A brand-new parent has no row to
+        // conflict with, which is why this inserts where the update path upserts.
+        if (localizedWrite) {
+          // A failure here is a write-integrity failure: the parent row is
+          // already written. Reported as a soft per-item failure, a batch under
+          // `stopOnError: false` would carry on and commit a document whose
+          // translations never landed — the row would exist with no content in
+          // any language. Marked, the batch loop aborts and the transaction
+          // rolls back, exactly as a failed component save does.
+          try {
+            await this.insertCompanionRow(
+              tx,
+              localizedWrite,
+              (entry as { id: string }).id
+            );
+          } catch (error: unknown) {
+            throw markWriteIntegrityFailure(error);
+          }
+          // Split out of the insert, so the returned row lacks them: merge them
+          // back for the hooks, the event and the response. Under the FIELD's
+          // name rather than the column's — a field whose column differs
+          // (`metaTitle` -> `meta_title`) would otherwise reach hooks and the
+          // durable snapshot under a key no field has.
+          for (const [field, value] of Object.entries(
+            localizedWrite.localizedFieldValues
+          )) {
+            (entry as Record<string, unknown>)[field] = value;
+          }
         }
-        // Split out of the insert, so the returned row lacks them: merge them
-        // back for the hooks, the event and the response. Under the FIELD's
-        // name rather than the column's — a field whose column differs
-        // (`metaTitle` -> `meta_title`) would otherwise reach hooks and the
-        // durable snapshot under a key no field has.
-        for (const [field, value] of Object.entries(
-          localizedWrite.localizedFieldValues
-        )) {
-          (entry as Record<string, unknown>)[field] = value;
-        }
-      }
 
-      await this.saveComponentFieldDataInTx(tx, {
-        parentId: (entry as { id: string }).id,
-        tableName,
-        fields,
-        data: componentFieldData,
-        user: params.user,
-        access: this.fieldGroupAccess(params),
+        await this.saveComponentFieldDataInTx(tx, {
+          parentId: (entry as { id: string }).id,
+          tableName,
+          fields,
+          data: componentFieldData,
+          user: params.user,
+          access: this.fieldGroupAccess(params),
+        });
+        return entry;
       });
 
       // Junction rows, the version snapshot, the outbox event and the
@@ -15462,36 +16061,28 @@ export class CollectionMutationService extends BaseService {
           entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
+          // The key the delete is made with, so its own grant is judged.
+          authenticatedScope: params.authenticatedScope,
           executor: tx.getDrizzle(),
         };
         // A batch asked its gate before its transaction opened and hands each
-        // row the filter it answered; anything else asks here.
-        const access =
-          options.rowGate === "access-service"
-            ? await this.accessService.checkCollectionWrite<{
-                deleted: boolean;
-              }>(accessParams)
-            : options.rowGate;
-        if (access.denied) {
+        // row its answers; anything else asks here. Asked, or read, in each
+        // language the entry holds, before any hook runs.
+        const refused = await this.deleteRowRefusalInTransaction(tx, {
+          tableName,
+          entryId,
+          fields: (collection.schemaDefinition?.fields ||
+            collection.fields ||
+            []) as FieldConfig[],
+          accessParams,
+          rowGate: options.rowGate,
+        });
+        if (refused) {
           return asMissingItem(
-            access.denied,
+            refused as CollectionServiceResult<{ deleted: boolean }>,
             entryId,
             options.identifyMissingEntry
           );
-        }
-        // A delete rule's filter allows only the entries it matches. Matched on
-        // the caller's transaction under the row lock, before any hook runs.
-        if (access.filter) {
-          const refused = await this.refusalOutsideFilterInTransaction<{
-            deleted: boolean;
-          }>(tx, tableName, entryId, access, accessParams);
-          if (refused) {
-            return asMissingItem(
-              refused,
-              entryId,
-              options.identifyMissingEntry
-            );
-          }
         }
       }
 
@@ -15952,7 +16543,10 @@ export class CollectionMutationService extends BaseService {
     params: DeleteEntryWriteParams,
     entryId: string,
     skipHooks: boolean,
-    rowGate: "batch-hoisted" | DeleteRowFilter = "batch-hoisted"
+    rowGate:
+      | "batch-hoisted"
+      | DeleteRowFilter
+      | DeleteRowLanguages = "batch-hoisted"
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.deleteEntryWrite(tx, params, entryId, {

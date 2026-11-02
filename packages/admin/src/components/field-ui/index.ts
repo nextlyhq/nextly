@@ -9,6 +9,22 @@
 export { FieldTypePicker } from "./FieldTypePicker";
 export type { FieldTypePickerProps } from "./FieldTypePicker";
 
+// The one field picker every surface opens to add a field: search first, a
+// most-used group then categories, keyboard alone, and a label-only add step.
+// A surface configures it (its types, plugin surface, name rule, field groups)
+// and owns where the field goes; the picker writes nothing.
+export { FieldPicker } from "./FieldPicker";
+// A field type as the picker describes it (name, description, category, icon
+// and search words), made by the one function core and plugin rows share.
+export { describeFieldTypes } from "nextly/field-catalog";
+export type { FieldTypeDescription } from "nextly/field-catalog";
+export type {
+  FieldGroupOption,
+  FieldPickerChoice,
+  FieldPickerConfig,
+  FieldPickerProps,
+} from "./FieldPicker";
+
 export { FieldDefaultValueInput } from "./FieldDefaultValueInput";
 export type {
   FieldDefaultOption,

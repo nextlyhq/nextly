@@ -1,5 +1,7 @@
+import { tableNotRegisteredError } from "@nextlyhq/adapter-drizzle/types";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
+import { missingSchemaObject } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   clearFieldFunctions,
@@ -490,6 +492,96 @@ describe("FieldGroupDataService", () => {
 
       expect(tx.insert).toHaveBeenCalledTimes(1);
       expect(ctx.adapter.insert).not.toHaveBeenCalled();
+    });
+
+    // A field group's table this running instance has not registered: the
+    // instances already stored cannot be read, so the save cannot tell an
+    // update from a create. Taking it for a create wrote a second instance
+    // beside the one it never saw.
+    describe("when the instance table is not registered", () => {
+      const txSave = (
+        tx: ReturnType<typeof createMockTxContext>,
+        fields: unknown[],
+        data: Record<string, unknown>,
+        validateOnly = false
+      ) => {
+        const params = {
+          parentId: "entry-1",
+          parentTable: "dc_pages",
+          access: TRUSTED,
+          fields,
+          data,
+        } as unknown as Parameters<
+          typeof ctx.service.saveComponentDataInTransaction
+        >[1];
+        const handle = tx as unknown as Parameters<
+          typeof ctx.service.saveComponentDataInTransaction
+        >[0];
+        return (
+          validateOnly
+            ? ctx.service.validateComponentDataInTransaction(handle, params)
+            : ctx.service.saveComponentDataInTransaction(handle, params)
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      };
+
+      it.each([
+        [
+          "a single instance",
+          [seoComponentField()],
+          { seo: { metaTitle: "About" } },
+        ],
+        [
+          "repeatable instances",
+          [repeatableComponentField()],
+          { features: [{ title: "One" }] },
+        ],
+        [
+          "multi-component instances",
+          [multiComponentField()],
+          { layout: [{ _componentType: "hero", heading: "Welcome" }] },
+        ],
+      ])("refuses %s and writes nothing", async (_shape, fields, data) => {
+        const tx = createMockTxContext({
+          select: vi
+            .fn()
+            .mockImplementation((table: string) =>
+              Promise.reject(tableNotRegisteredError(table))
+            ),
+        });
+        const error = await txSave(tx, fields, data);
+        expect(missingSchemaObject(error)?.object).toBe("unregistered");
+        expect(tx.insert).not.toHaveBeenCalled();
+        expect(tx.update).not.toHaveBeenCalled();
+        expect(tx.delete).not.toHaveBeenCalled();
+      });
+
+      it("refuses a validation-only pass for the same reason", async () => {
+        const tx = createMockTxContext({
+          select: vi
+            .fn()
+            .mockRejectedValue(tableNotRegisteredError("comp_seo")),
+        });
+        const error = await txSave(
+          tx,
+          [seoComponentField()],
+          { seo: { metaTitle: "About" } },
+          true
+        );
+        expect(missingSchemaObject(error)?.object).toBe("unregistered");
+      });
+
+      it("still treats any other failed read of the instances as none stored", async () => {
+        const tx = createMockTxContext({
+          select: vi.fn().mockRejectedValue(new Error("connection reset")),
+        });
+        await expect(
+          txSave(tx, [seoComponentField()], { seo: { metaTitle: "About" } })
+        ).resolves.toBeUndefined();
+        expect(tx.insert).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

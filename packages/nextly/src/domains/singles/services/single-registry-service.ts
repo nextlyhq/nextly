@@ -60,6 +60,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import {
   deleteEntityRegistryRow,
   mediaUsageTablePresent,
@@ -527,6 +528,16 @@ export class SingleRegistryService extends BaseRegistryService<
     this.logger.debug("Updating Single", { slug });
 
     const existing = await this.getRecordForWrite(slug);
+    // Every road that rewrites a Single's fields reaches this write, the schema endpoint's among
+    // them, so the sibling rule is asked here too, before the row changes: only a pair of sibling
+    // fields this update creates is refused, and one the Single already holds keeps working.
+    if (data.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "single", slug },
+        data.fields,
+        existing.fields ?? []
+      );
+    }
 
     const targetSlug = data.slug ?? slug;
     await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
