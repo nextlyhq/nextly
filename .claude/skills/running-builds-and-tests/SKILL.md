@@ -71,9 +71,9 @@ held in every session.
   nextly: 0.48 s reading an earlier run's build info, 19.6 s with none.
 
   `check-types` runs TypeScript 7 through `scripts/tsc.mjs`, which passes
-  `--checkers` sized to the machine by `local-limits.mjs`: 4 on a 16 GB machine,
-  2 below that, 1 under `NEXTLY_LOCAL_MAX_WORKERS=1` (`pnpm local-limits` prints
-  it). `scripts/check-types-checkers.test.mjs` holds every package to the
+  `--checkers` sized to the machine by `local-limits.mjs`: 4 from 14 GiB of
+  memory, 2 from 10 GiB, 1 below that or under `NEXTLY_LOCAL_MAX_WORKERS=1`
+  (`pnpm local-limits` prints it). `scripts/check-types-checkers.test.mjs` holds every package to the
   wrapper. The number of parallel checkers can occasionally change which
   diagnostics appear, so a result that looks order-dependent, appearing or
   vanishing between runs or machines, is ruled in or out by rerunning that
@@ -128,7 +128,9 @@ held in every session.
   just the wrong command.
   - Already created but stopped, which is the usual case:
     `docker start nextly-postgres17-test nextly-mysql-test` (add
-    `nextly-postgres15-test` for the 15 leg).
+    `nextly-postgres15-test` for the 15 leg). Their data lives in tmpfs, so a
+    stopped container comes back empty: run `pnpm worktree provision` in each
+    worktree after a start to recreate its test databases.
   - Never created, on a fresh clone:
     `docker compose -f docker-compose.test.yml up -d postgres17-test postgres15-test mysql-test`.
     `postgres15-test` is the only service on 5434, so omitting it leaves the
