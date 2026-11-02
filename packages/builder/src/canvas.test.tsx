@@ -22,6 +22,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import {
   afterAll,
@@ -3272,6 +3273,89 @@ describe("the site's dark-mode strategy on the canvas root", () => {
   });
 });
 
+describe("the nearest theme marker above the canvas", () => {
+  /*
+   * The site's token values resolve to the NEAREST `data-nx-theme` marker,
+   * because the sheet declares them on each marker and custom properties
+   * inherit. The canvas states the same nearest marker, read from the DOM, so
+   * its scheme cannot disagree with its values at any depth of nesting.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function mountUnder(markers: readonly ("light" | "dark")[]): {
+    root: () => Element | null;
+    chain: HTMLElement[];
+  } {
+    const chain: HTMLElement[] = [];
+    let parent: HTMLElement = document.body;
+    for (const mode of markers) {
+      const wrapper = document.createElement("div");
+      wrapper.setAttribute("data-nx-theme", mode);
+      parent.append(wrapper);
+      chain.push(wrapper);
+      parent = wrapper;
+    }
+    const mount = document.createElement("div");
+    parent.append(mount);
+    render(<Canvas document={page} siteStyles={{ breakpoints }} />, {
+      container: mount,
+    });
+    return {
+      root: () => mount.querySelector(`.${CANVAS_ROOT_CLASS}`),
+      chain,
+    };
+  }
+
+  it("states the nearest marker through three alternations", async () => {
+    const { root, chain } = mountUnder(["light", "dark", "light"]);
+    await waitFor(() =>
+      expect(root()?.getAttribute("data-nx-site-theme")).toBe("light")
+    );
+    chain[2]?.setAttribute("data-nx-theme", "dark");
+    await waitFor(() =>
+      expect(root()?.getAttribute("data-nx-site-theme")).toBe("dark")
+    );
+    chain[2]?.removeAttribute("data-nx-theme");
+    // With the nearest gone, the next one out decides.
+    await waitFor(() =>
+      expect(root()?.getAttribute("data-nx-site-theme")).toBe("dark")
+    );
+  });
+
+  it("states the marker in the commit that mounts the canvas, before paint", () => {
+    // A parent's layout effect runs after its children's in the same commit
+    // and before any passive effect, so it sees what the first paint shows.
+    const marker = document.createElement("div");
+    marker.setAttribute("data-nx-theme", "dark");
+    document.body.append(marker);
+    const mount = document.createElement("div");
+    marker.append(mount);
+    let atCommit: string | null | undefined;
+    function Probe(): React.JSX.Element {
+      const holder = React.useRef<HTMLDivElement>(null);
+      React.useLayoutEffect(() => {
+        atCommit = holder.current
+          ?.querySelector(`.${CANVAS_ROOT_CLASS}`)
+          ?.getAttribute("data-nx-site-theme");
+      }, []);
+      return (
+        <div ref={holder}>
+          <Canvas document={page} siteStyles={{ breakpoints }} />
+        </div>
+      );
+    }
+    render(<Probe />, { container: mount });
+    expect(atCommit).toBe("dark");
+  });
+
+  it("states nothing when no marker is above it, so the device decides", async () => {
+    const { root } = mountUnder([]);
+    await waitFor(() => expect(root()).not.toBeNull());
+    expect(root()?.hasAttribute("data-nx-site-theme")).toBe(false);
+  });
+});
+
 describe("the site's body font on the canvas root", () => {
   /*
    * The stylesheet sets the page in `--nx-canvas-site-font`, and the root
@@ -3434,6 +3518,60 @@ describe("the site's ground and text on the canvas root", () => {
     expect(marked("hsl(0 0% 98%)")).toBe(false);
   });
 
+  it("marks no dark ground for a translucent dark value", () => {
+    /*
+     * A colour with alpha below 1 has no lightness of its own: what shows is
+     * the surface behind it, which the canvas cannot see. So it is unknown,
+     * not dark, in every syntax the ground is read in.
+     */
+    const marked = (dark: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-dark-ground");
+    for (const dark of [
+      "#0000",
+      "#00000080",
+      "rgba(0, 0, 0, 0)",
+      "rgb(0 0 0 / 50%)",
+      "oklch(0.145 0 0 / 0.5)",
+      "oklch(14.5% 0 0 / 50%)",
+      "hsl(222 47% 11% / 0.4)",
+      "hsla(222, 47%, 11%, 0.4)",
+      // Signed and exponent alphas, which CSS reads as numbers like any other.
+      "oklch(0.145 0 0 / +0.5)",
+      "oklch(0.145 0 0 / 5e-1)",
+      "hsl(222 47% 11% / -0.5)",
+      "hsla(222, 47%, 11%, 5e-1)",
+    ]) {
+      expect(marked(dark), dark).toBe(false);
+    }
+    // Fully opaque, in the same syntaxes, is still judged by its lightness.
+    for (const dark of [
+      "#000f",
+      "rgba(0, 0, 0, 1)",
+      "oklch(0.145 0 0 / 1)",
+      "hsl(222 47% 11% / 100%)",
+      "hsla(222, 47%, 11%, 1)",
+      // The same grammar for every component, and an alpha above 1 clamps.
+      "oklch(1.45e-1 0 0 / 1e0)",
+      "oklch(0.145 0 0 / +2)",
+      "hsl(222 47% 1.1e1%)",
+      "hsl(222 47 11)",
+    ]) {
+      expect(marked(dark), dark).toBe(true);
+    }
+  });
+
   it("marks no dark ground when it cannot read the dark value", () => {
     // A valid colour this engine does not parse says nothing about luminance,
     // so the canvas keeps the page's light default rather than guessing dark.
@@ -3459,6 +3597,35 @@ describe("the site's ground and text on the canvas root", () => {
         false
       );
     }
+  });
+
+  it("marks the ground opaque only when every value of it is", () => {
+    /*
+     * The page root repeats an opaque ground so a blend inside the isolated
+     * page mixes with it; a translucent one repeated would be composited
+     * twice. So the canvas states which it has, from the same token set.
+     */
+    const opaque = (light: string, dark?: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: dark === undefined ? { light } : { light, dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-ground-opaque");
+    expect(opaque("#ffffff", "#0b0f19")).toBe(true);
+    expect(opaque("white")).toBe(true);
+    expect(opaque("oklch(0.98 0 0)", "hsl(222 47% 11% / 1)")).toBe(true);
+    expect(opaque("rgb(0 0 0 / 50%)")).toBe(false);
+    expect(opaque("#ffffff", "#0b0f1980")).toBe(false);
+    expect(opaque("transparent")).toBe(false);
+    // A value this cannot read is not called opaque.
+    expect(opaque("var(--elsewhere)")).toBe(false);
   });
 
   it("names nothing when the host serves no site sheet", () => {

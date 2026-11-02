@@ -67,6 +67,7 @@ import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import {
   type JSX,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -74,23 +75,37 @@ import {
   useState,
 } from "react";
 
+import { scaleCornerRadii, type CornerRadii } from "./border-radii";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
+import {
+  OVERLAY_OUTPUT_ATTRIBUTE,
+  watchCanvasFor,
+} from "./canvas-geometry-watch";
 import { guardCanvasNavigation } from "./canvas-link-guard";
 import { CanvasRegionFrame, type CanvasRegion } from "./canvas-regions";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isElement, isHTMLElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
+import type { Rect } from "./geometry";
 import {
   canvasContentRect,
+  canvasRootFrom,
   canvasScroller,
+  clippedByAncestor,
+  layoutFragments,
+  renderedScale,
   scrollEventTarget,
+  usedRadiiOf,
+  viewportPositioned,
   visibleBandOf,
 } from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
+import { useNearestThemeMarker } from "./nearest-theme";
+import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
@@ -198,6 +213,8 @@ interface SiteSurface {
   readonly style: Record<`--${string}`, string>;
   /** Whether the site's background token has a DARK value. */
   readonly darkGround: boolean;
+  /** Whether every value of the site's background token is fully opaque. */
+  readonly opaqueGround: boolean;
 }
 
 /**
@@ -232,12 +249,18 @@ function siteSurface(
     style[property] = `var(${tokenCustomProperty(token, prefix)}, ${fallback})`;
   }
   const tokens = resolveSiteTokens(siteStyles.tokens);
-  const ground = tokens.tokens.find(
+  const values = tokens.tokens.find(
     token => tokenIdentity(token) === SITE_GROUND_TOKEN
-  )?.values.dark;
+  )?.values;
+  const ground = values?.dark;
   return {
     style,
     darkGround: ground !== undefined && isDarkGround(ground),
+    opaqueGround:
+      values !== undefined &&
+      [values.light, values.dark].every(
+        value => value === undefined || alphaOf(value.trim()) === 1
+      ),
   };
 }
 
@@ -253,10 +276,114 @@ function isDarkGround(value: string): boolean {
   return luminance !== undefined && luminance < DARK_GROUND_LUMINANCE;
 }
 
-/** `oklch(L …)`, its lightness as a number or a percentage. */
-const OKLCH = /^oklch\(\s*([\d.]+)(%?)/i;
-/** `hsl(H S% L%)` or `hsla(H, S%, L%, A)`, hue optionally in degrees. */
-const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
+/**
+ * One numeric colour component, with its percentage sign if it has one: an
+ * optional sign, a decimal, an optional exponent, an optional `%`.
+ *
+ * The SAME grammar as the engine's `NUMERIC_COMPONENT` in `contrast.ts`, which
+ * reads `rgb()` and does not export it; mirrored here for the two syntaxes the
+ * engine does not read, so a component is a number in all of them alike.
+ * Matched whole rather than parsed with `parseFloat`, which reads a prefix and
+ * stops — `5e-1` would read as 5 and `12abc` as 12.
+ */
+const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%?)$/;
+
+/** A component as a number, and whether it was a percentage. */
+function numericOf(
+  part: string | undefined
+): { value: number; percent: boolean } | undefined {
+  if (part === undefined) return undefined;
+  const match = NUMERIC_COMPONENT.exec(part);
+  if (match === null) return undefined;
+  const value = Number.parseFloat(part);
+  return Number.isFinite(value)
+    ? { value, percent: match[1] === "%" }
+    : undefined;
+}
+
+/** A component as a 0–1 fraction: a percentage of 100, or a number of `scale`. */
+function fractionOf(
+  part: string | undefined,
+  scale: number
+): number | undefined {
+  const parsed = numericOf(part);
+  if (parsed === undefined) return undefined;
+  const fraction = parsed.value / (parsed.percent ? 100 : scale);
+  // Clamped, as CSS Color 4 clamps alpha, lightness and saturation.
+  return Math.min(1, Math.max(0, fraction));
+}
+
+/**
+ * An `oklch()` or `hsl()`/`hsla()` call, split into its colour components and
+ * its alpha: after a `/` in the modern syntax, the fourth comma-separated
+ * component in the legacy one. `undefined` for anything else, or a call whose
+ * shape is neither.
+ */
+function colourFunction(text: string): ColourCall | undefined {
+  const call = /^(oklch|hsla?)\(([^()]*)\)$/i.exec(text);
+  if (call === null) return undefined;
+  const name = (call[1] ?? "").toLowerCase() === "oklch" ? "oklch" : "hsl";
+  const body = call[2] ?? "";
+  return body.includes(",") ? legacyCall(name, body) : modernCall(name, body);
+}
+
+/** A colour function's name, colour components and alpha, as written. */
+interface ColourCall {
+  readonly name: "oklch" | "hsl";
+  readonly components: readonly string[];
+  readonly alpha: string | undefined;
+}
+
+/**
+ * The legacy, comma-separated form: `hsl(h, s%, l%)` or `hsla(h, s%, l%, a)`.
+ * Only `hsl()` has one, and it takes no slash.
+ */
+function legacyCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  if (name === "oklch" || body.includes("/")) return undefined;
+  const parts = body.split(",").map(part => part.trim());
+  if (parts.length !== 3 && parts.length !== 4) return undefined;
+  return { name, components: parts.slice(0, 3), alpha: parts[3] };
+}
+
+/** The modern, space-separated form, with an optional `/ alpha` after it. */
+function modernCall(
+  name: ColourCall["name"],
+  body: string
+): ColourCall | undefined {
+  const [channels, alpha, ...rest] = body.split("/");
+  if (rest.length > 0) return undefined;
+  const parts = (channels ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(part => part !== "");
+  if (parts.length !== 3) return undefined;
+  return { name, components: parts, alpha: alpha?.trim() };
+}
+
+/**
+ * A colour's alpha, 0–1, or `undefined` when it cannot be told.
+ *
+ * Hex and `rgb()` from the engine's parser; `oklch()` and `hsl()` from their
+ * own alpha component, 1 when they state none. A bare colour keyword is opaque
+ * — every named colour is — except `transparent`, and a keyword this cannot
+ * place, such as `currentColor`, is unknown, as is a reference or a function
+ * this does not read.
+ */
+function alphaOf(text: string): number | undefined {
+  const rgb = parseColor(text);
+  if (rgb !== undefined) return rgb.a;
+  const call = colourFunction(text);
+  if (call !== undefined) {
+    return call.alpha === undefined ? 1 : fractionOf(call.alpha, 1);
+  }
+  if (!/^[a-z]+$/i.test(text)) return undefined;
+  const keyword = text.toLowerCase();
+  if (keyword === "transparent") return 0;
+  return keyword === "currentcolor" ? undefined : 1;
+}
 
 /**
  * The relative luminance of a ground colour, or `undefined` when it cannot be
@@ -264,23 +391,38 @@ const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
  * Tailwind themes write, carries perceptual lightness directly: its L cubed is
  * the luminance of a grey, close enough for a dark-or-light call. `hsl()`,
  * which shadcn-style themes write, converts to rgb by the standard formula.
+ *
+ * A TRANSLUCENT colour has no lightness of its own: what a visitor sees is the
+ * surface behind it, which the canvas cannot see either. So any alpha below 1,
+ * in any of these syntaxes, is `undefined` — `#0000` is not a dark ground — and
+ * so is an alpha this cannot read.
  */
 function groundLuminance(text: string): number | undefined {
+  if (alphaOf(text) !== 1) return undefined;
   const rgb = parseColor(text);
   if (rgb !== undefined) return relativeLuminance(rgb);
-  const oklch = OKLCH.exec(text);
-  if (oklch) {
-    const lightness = Number(oklch[1]) / (oklch[2] === "%" ? 100 : 1);
-    return Math.min(1, Math.max(0, lightness)) ** 3;
+  const call = colourFunction(text);
+  if (call === undefined) return undefined;
+  const [first, second, third] = call.components;
+  if (call.name === "oklch") {
+    // L is a number in 0–1, or a percentage.
+    const lightness = fractionOf(first, 1);
+    return lightness === undefined ? undefined : lightness ** 3;
   }
-  const hsl = HSL.exec(text);
-  if (hsl) {
-    const [hue, saturation, lightness] = [hsl[1], hsl[2], hsl[3]].map(Number);
-    return relativeLuminance(
-      hslToRgb(hue ?? 0, (saturation ?? 0) / 100, (lightness ?? 0) / 100)
-    );
+  // Hue as a number, in degrees if it says so; saturation and lightness as
+  // percentages, or the bare numbers CSS Color 4 also accepts for them.
+  const hue = numericOf(first?.replace(/deg$/i, ""));
+  const saturation = fractionOf(second, 100);
+  const lightness = fractionOf(third, 100);
+  if (
+    hue === undefined ||
+    hue.percent ||
+    saturation === undefined ||
+    lightness === undefined
+  ) {
+    return undefined;
   }
-  return undefined;
+  return relativeLuminance(hslToRgb(hue.value, saturation, lightness));
 }
 
 /** An HSL colour as 0–255 channels, by the CSS Color 4 conversion. */
@@ -518,26 +660,6 @@ export function nodeElement(root: HTMLElement, id: string): Element | null {
   // instance is replaced rather than rendered — but the precedence states which
   // answer is the node's rather than leaving it to iteration order.
   return own ?? hosted;
-}
-
-/**
- * Every element the renderer marked as a node, in document order.
- *
- * Beside {@link nodeElement} because both answer from the same marker, and a
- * caller that needs all of them should not walk the tree with its own selector.
- *
- * Chrome drawn INSIDE the canvas root carries no node marker, so it is excluded
- * by construction rather than by a filter that would have to be kept in step
- * with whatever chrome arrives next.
- */
-export function nodeElements(root: HTMLElement): readonly Element[] {
-  const found: Element[] = [];
-  // `forEach` for the reason given in `nodeElement`: a `NodeList` is only
-  // iterable under a lib this package does not compile with.
-  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    found.push(element);
-  });
-  return found;
 }
 
 /**
@@ -2295,6 +2417,7 @@ export function Canvas({
   );
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
+  useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
   const rootStyle: React.CSSProperties = { ...boxStyle, ...surface?.style };
 
@@ -2395,6 +2518,21 @@ export function Canvas({
        */
       data-nx-site-dark-ground={surface?.darkGround === true ? "" : undefined}
       /*
+       * `data-nx-site-theme`, the mode the nearest theme marker above names,
+       * is written onto this element by `useNearestThemeMarker` before paint,
+       * not rendered here: see that hook.
+       */
+      /*
+       * Whether the site's ground is fully opaque, in every mode. Only then
+       * does the rendered page carry the ground as well as the canvas: painted
+       * twice, an opaque ground looks exactly as it does once, while a
+       * translucent one would darken where the layers overlap. See the page
+       * root's rule in `builder-chrome.css` for why the page wants it.
+       */
+      data-nx-site-ground-opaque={
+        surface?.opaqueGround === true ? "" : undefined
+      }
+      /*
        * What the pointer means, for the cursor.
        *
        * On the ROOT rather than per block, because a cursor during a drag is a
@@ -2442,6 +2580,18 @@ export function Canvas({
           />
         </BlockEnvironmentProvider>
       )}
+      {/*
+       * The white halo inside every selected rendering's ring, part of what
+       * selecting a block draws, so every host of this canvas has it.
+       */}
+      <SelectionHalos
+        /*
+         * Suppressed for the duration of a drag, as the toolbar and the spacing
+         * bands are: the selection is mid-move, and a drag reads no geometry
+         * per pointer move beyond the rectangles it cached when it began.
+         */
+        active={marked.length > 0 && drag?.draggingBlockName == null}
+      />
       {overlay}
       {refusalDrawn === null ? null : (
         <DropRefusalNotice
@@ -2463,3 +2613,178 @@ export function Canvas({
     </div>
   );
 }
+
+/** One selected rendering, measured in the canvas's content coordinates. */
+interface Halo extends Rect {
+  /** The primary selection, whose ring is the full width. */
+  readonly primary: boolean;
+  /** A component placement, whose ring is the component colour. */
+  readonly component: boolean;
+  /** The block's own corners, in the canvas's content coordinates. */
+  readonly radii: CornerRadii;
+}
+
+const NO_HALOS: readonly Halo[] = [];
+
+function sameHalos(a: readonly Halo[], b: readonly Halo[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((halo, index) => {
+      const other = b[index];
+      return (
+        other !== undefined &&
+        halo.primary === other.primary &&
+        halo.component === other.component &&
+        halo.x === other.x &&
+        halo.y === other.y &&
+        halo.width === other.width &&
+        halo.height === other.height &&
+        borderRadiusOf(halo.radii) === borderRadiusOf(other.radii)
+      );
+    })
+  );
+}
+
+/** Corner radii as the `border-radius` shorthand writes them, both axes. */
+function borderRadiusOf(radii: CornerRadii): string {
+  const { topLeft, topRight, bottomRight, bottomLeft } = radii;
+  const px = (value: number): string => `${String(value)}px`;
+  return (
+    `${px(topLeft.x)} ${px(topRight.x)} ${px(bottomRight.x)} ${px(bottomLeft.x)} / ` +
+    `${px(topLeft.y)} ${px(topRight.y)} ${px(bottomRight.y)} ${px(bottomLeft.y)}`
+  );
+}
+
+/**
+ * The halo for one selected element, or `undefined` where this layer cannot
+ * draw the element's shape — and the element's own outline ring then stands
+ * alone, which is always correct.
+ *
+ * Declined for the cases every overlay drawn in the canvas's content
+ * coordinates declines, asked of the same `geometry-dom` decisions the spacing
+ * overlay asks: no box or an inline box broken across lines, a box positioned
+ * against the viewport (sticky or fixed, which moves without the content the
+ * halo is drawn in), a rotation, skew, reflection or perspective, and a box an
+ * ancestor cuts off.
+ */
+function haloFor(selected: Element, root: HTMLElement): Halo | undefined {
+  const style = selected.ownerDocument.defaultView?.getComputedStyle(selected);
+  if (style === undefined) return undefined;
+  if (layoutFragments(selected) !== 1) return undefined;
+  if (viewportPositioned(selected)) return undefined;
+  const scale = renderedScale(selected, root);
+  if (!scale.describable) return undefined;
+  // Through `canvasContentRect`, the one place this package reads a rectangle,
+  // so the halo and every other overlay agree at any scroll.
+  const rect = canvasContentRect(selected, root);
+  const radii = usedRadiiOf(style, rect, scale);
+  if (radii === undefined) return undefined;
+  // Into the canvas's coordinates, where the halo is drawn: the element's
+  // corners scale with every transform between it and the root.
+  const drawn = scaleCornerRadii(radii, { x: scale.x, y: scale.y });
+  if (clippedByAncestor(selected, root, drawn)) return undefined;
+  return {
+    ...rect,
+    radii: drawn,
+    primary: selected.getAttribute(SELECTED_ATTRIBUTE) === "primary",
+    component: selected.hasAttribute(INSTANCE_ATTRIBUTE),
+  };
+}
+
+/**
+ * The white halo just inside every selected rendering's ring, drawn by the
+ * editor.
+ *
+ * The ring is an outline on the selected element, which the page never sets
+ * and so cannot lose. The halo is the second tone that keeps the ring readable
+ * on the page's own colours — the select blue vanishes on a blue section, and
+ * the white carries it there — and it is drawn HERE, as positioned elements of
+ * the canvas's own, rather than as anything on the page's elements: a
+ * `box-shadow` replaced the block's own shadow, and an `anchor-name` replaced
+ * the block's own anchor and could mark only one of the elements a selection
+ * renders. Measured, the canvas leaves the page exactly as the page styles it.
+ *
+ * EVERY selected rendering gets one: each member of a multi-selection, and each
+ * copy of a node a block draws more than once — `core/collection-loop` draws
+ * its children once per entry, and the canvas marks every copy. It reads WHICH
+ * elements from those marks rather than deciding again, so the halo and the
+ * ring cannot disagree. The marks are written after this layer renders, so the
+ * geometry watch — which hears attribute changes on the page — draws the first
+ * halo, as well as moving every halo with the layout.
+ */
+const SelectionHalos = memo(function SelectionHalos({
+  active,
+}: {
+  active: boolean;
+}): JSX.Element {
+  const layer = useRef<HTMLDivElement | null>(null);
+  const [halos, setHalos] = useState<readonly Halo[]>(NO_HALOS);
+
+  const measure = useCallback(() => {
+    const element = layer.current;
+    const root =
+      element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
+    const next: Halo[] = [];
+    if (active && root !== null) {
+      root.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`).forEach(selected => {
+        // Another canvas's selection is that canvas's to draw.
+        if (!ownedByCanvas(selected, root)) return;
+        const halo = haloFor(selected, root);
+        if (halo !== undefined) next.push(halo);
+      });
+    }
+    setHalos(current => (sameHalos(current, next) ? current : next));
+  }, [active]);
+
+  /*
+   * Before paint, once per change of whether there is anything to draw — not
+   * on every render of the canvas, which re-renders on every pointer move of a
+   * drag. Everything that moves a selected block after that, the selection
+   * marks included, reaches the geometry watch below.
+   */
+  useIsomorphicLayoutEffect(() => {
+    measure();
+  }, [measure]);
+
+  // Every later move: a selection mark changing, an image loading, a resize, a
+  // scroll. The layer is how the watch finds the root and ignores its own
+  // writes, so drawing a halo does not schedule the next measurement.
+  // Only while something is selected: with nothing to draw there is nothing to
+  // re-measure, and a canvas with no selection observes nothing for it.
+  useEffect(
+    () => (active ? watchCanvasFor(() => layer.current, measure) : undefined),
+    [active, measure]
+  );
+
+  return (
+    <div
+      ref={layer}
+      className="nx-selection-halos"
+      aria-hidden="true"
+      // Drawn over the page and moving nothing in it, so another overlay's
+      // watch does not re-measure for a halo being drawn.
+      {...{ [OVERLAY_OUTPUT_ATTRIBUTE]: "" }}
+    >
+      {halos.map((halo, index) => (
+        <div
+          // By position in document order: the halos carry no identity of their
+          // own, and a re-measure replaces them all.
+          key={index}
+          className="nx-selection-halo"
+          data-primary={halo.primary ? "" : undefined}
+          data-component={halo.component ? "" : undefined}
+          // The element's own rectangle and corners: the ring and band are drawn
+          // inside it by the stylesheet, from the same edge the element's ring
+          // uses, and follow its curve.
+          style={{
+            left: halo.x,
+            top: halo.y,
+            width: halo.width,
+            height: halo.height,
+            borderRadius: borderRadiusOf(halo.radii),
+          }}
+        />
+      ))}
+    </div>
+  );
+});

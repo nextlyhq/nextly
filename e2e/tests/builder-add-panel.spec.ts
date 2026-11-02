@@ -249,9 +249,11 @@ test.describe("the Add panel", () => {
     await page.keyboard.press("ArrowDown");
     const highlighted = await search.getAttribute("aria-activedescendant");
     expect(highlighted).toBeTruthy();
-    const name = await page
-      .locator(`[id="${highlighted}"]`)
-      .getAttribute("aria-label");
+    // The highlighted option by its role and state, and the same element the
+    // search names as active.
+    const option = page.getByRole("option", { selected: true });
+    await expect(option).toHaveAttribute("id", highlighted ?? "");
+    const name = await option.getAttribute("aria-label");
     await expect(popover(page).locator(".nx-insert-popover__name")).toHaveText(
       name ?? ""
     );

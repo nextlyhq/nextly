@@ -26,7 +26,8 @@ import { contrastRatio, gotoAdmin, toRgb, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ lock: [LOCK.homepage] });
+// The canvas reads the site's tokens, which the Site Style single holds.
+test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 const HOMEPAGE_API = "/admin/api/singles/homepage";
@@ -78,6 +79,26 @@ const NODES = [
     },
   },
   {
+    id: "card",
+    type: "core/text",
+    version: 1,
+    props: { text: "A block with a shadow of its own." },
+    // Padding only: its shadow comes from a host rule the test adds, because a
+    // node's own style outranks any editor rule and never showed the defect.
+    styles: {
+      base: {
+        base: {
+          padding: {
+            blockStart: "1rem",
+            blockEnd: "1rem",
+            inlineStart: "1rem",
+            inlineEnd: "1rem",
+          },
+        },
+      },
+    },
+  },
+  {
     id: "logo",
     type: "core/image",
     version: 1,
@@ -93,6 +114,14 @@ async function seed(page: Page): Promise<void> {
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true
   );
+}
+
+/**
+ * The rendered page inside the canvas, which paints the page's ground there:
+ * where the canvas holds a page, its own root is transparent.
+ */
+function canvasPage(page: Page): Locator {
+  return page.locator(".nx-canvas > .nx-pb-page").first();
 }
 
 /** The text block's element on the canvas. */
@@ -161,7 +190,7 @@ for (const theme of ["dark", "light"] as const) {
       const canvas = page.locator(".nx-canvas");
 
       expect(
-        await toRgb(page, await groundBehind(canvas)),
+        await toRgb(page, await groundBehind(canvasPage(page))),
         "the page behind the blocks is the site's ground, as published"
       ).toEqual(site.ground);
 
@@ -238,10 +267,7 @@ for (const theme of ["dark", "light"] as const) {
       expect(ring, "the selection ring is the select blue").toEqual([
         37, 99, 235,
       ]);
-      const ground = await toRgb(
-        page,
-        await groundBehind(page.locator(".nx-canvas"))
-      );
+      const ground = await toRgb(page, await groundBehind(canvasPage(page)));
       expect(
         contrastRatio(ring, ground),
         "the ring stands out from the page it is drawn on"
@@ -328,7 +354,7 @@ test.describe("with the system in dark mode", () => {
     expect(
       await canvas.evaluate(element => getComputedStyle(element).colorScheme)
     ).toBe("dark");
-    const ground = await toRgb(page, await groundBehind(canvas));
+    const ground = await toRgb(page, await groundBehind(canvasPage(page)));
     expect(
       ground,
       "the canvas ground is the site's background token, at its dark value"
@@ -345,3 +371,345 @@ test.describe("with the system in dark mode", () => {
     ).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+test.describe("selecting a block", () => {
+  test("keeps the shadow the page gives it, with the halo drawn beside the ring", async ({
+    page,
+  }) => {
+    /*
+     * The halo used to be an inset `box-shadow` on the selected block, which
+     * replaced any shadow of the block's own, so the selected page drew
+     * differently from the published one. It is a separate layer now.
+     */
+    test.slow();
+    await openBuilder(page, "light");
+    /*
+     * A shadow at the weight a host stylesheet or an element default has —
+     * below the editor's selection rule — which is where selecting a block
+     * used to replace it.
+     */
+    await page.addStyleTag({
+      content: ".nx-pb-page p { box-shadow: 0 4px 12px #00000040; }",
+    });
+    const card = page.locator('.nx-canvas [data-nx-node="card"]').first();
+    const shadowOf = () =>
+      card.evaluate(element => getComputedStyle(element).boxShadow);
+    const before = await shadowOf();
+    expect(before, "the fixture block has a shadow of its own").not.toBe(
+      "none"
+    );
+
+    await card.click();
+    await expect(card).toHaveAttribute("data-nx-selected", "primary");
+    expect(await shadowOf(), "selecting the block keeps its shadow").toBe(
+      before
+    );
+
+    // The halo is measured onto the selected block: its box is the block's,
+    // and the band is drawn just inside that edge, as the ring is.
+    const halo = page.locator(".nx-canvas .nx-selection-halo");
+    await expect(halo).toHaveCount(1);
+    const block = await card.boundingBox();
+    const band = await halo.boundingBox();
+    expect(block && band, "both boxes are measurable").toBeTruthy();
+    if (block && band) {
+      for (const key of ["x", "y", "width", "height"] as const) {
+        expect(
+          Math.abs(band[key] - block[key]),
+          `the halo's ${key} matches the block's`
+        ).toBeLessThan(1);
+      }
+    }
+  });
+  test("leaves an anchor the page gives the block, and what it anchors, in place", async ({
+    page,
+  }) => {
+    /*
+     * The halo is measured and drawn by the editor, so nothing about it is
+     * written onto the page's elements. An `anchor-name` on the selected block
+     * once was, which renamed the PAGE's own anchor in the editor alone and
+     * moved whatever the page positioned against it.
+     */
+    test.slow();
+    await openBuilder(page, "light");
+    // The page's own anchor on the card, at a host stylesheet's weight, and the
+    // title positioned against it.
+    await page.addStyleTag({
+      content: [
+        ".nx-pb-page p { anchor-name: --page-card; }",
+        ".nx-pb-page h1 { position: absolute; position-anchor: --page-card;",
+        "  top: anchor(bottom); left: anchor(left); }",
+      ].join("\n"),
+    });
+    const card = page.locator('.nx-canvas [data-nx-node="card"]').first();
+    const title = page.locator('.nx-canvas [data-nx-node="title"]').first();
+    const anchorOf = () =>
+      card.evaluate(element => getComputedStyle(element).anchorName);
+    expect(await anchorOf(), "the fixture anchors the card").toBe(
+      "--page-card"
+    );
+    const before = await title.boundingBox();
+
+    await card.click();
+    await expect(card).toHaveAttribute("data-nx-selected", "primary");
+    expect(await anchorOf(), "selecting the card keeps its anchor").toBe(
+      "--page-card"
+    );
+    expect(
+      await title.boundingBox(),
+      "what the page anchors to the card stays where it was"
+    ).toEqual(before);
+  });
+});
+
+/**
+ * The colours a screenshot of a page region shows, decoded by the browser —
+ * the suite carries no image decoder of its own, and the engine that painted
+ * the pixels is the one to read them.
+ */
+async function pixelsIn(
+  page: Page,
+  clip: { x: number; y: number; width: number; height: number }
+): Promise<[number, number, number][]> {
+  const png = (await page.screenshot({ clip })).toString("base64");
+  return page.evaluate(async encoded => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${encoded}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("No 2d context");
+    context.drawImage(image, 0, 0);
+    const data = context.getImageData(0, 0, image.width, image.height).data;
+    const out: [number, number, number][] = [];
+    for (let index = 0; index < data.length; index += 4) {
+      out.push([data[index] ?? 0, data[index + 1] ?? 0, data[index + 2] ?? 0]);
+    }
+    return out;
+  }, png);
+}
+
+test.describe("the selection halo", () => {
+  /*
+   * Opens the editor with `css` styling the card the way a page's own
+   * stylesheet would, selects an ordinary block first — whose halo proves the
+   * layer is measuring — then the card.
+   */
+  async function selectCardWith(page: Page, css: string): Promise<Locator> {
+    await openBuilder(page, "light");
+    await page.addStyleTag({ content: css });
+    await canvasText(page).click();
+    await expect(page.locator(".nx-canvas .nx-selection-halo")).toHaveCount(1);
+    const card = page.locator('.nx-canvas [data-nx-node="card"]').first();
+    await card.click();
+    await expect(card).toHaveAttribute("data-nx-selected", "primary");
+    return card;
+  }
+
+  test("follows the block's own rounded corners", async ({ page }) => {
+    test.slow();
+    const card = await selectCardWith(
+      page,
+      ".nx-pb-page p[data-nx-node='card'] { border-radius: 12px; }"
+    );
+    const halo = page.locator(".nx-canvas .nx-selection-halo");
+    await expect(halo).toHaveCount(1);
+    const radius = (locator: Locator) =>
+      locator.evaluate(
+        element => getComputedStyle(element).borderTopLeftRadius
+      );
+    expect(await radius(card)).toBe("12px");
+    await expect
+      .poll(() => radius(halo), { message: "the halo's corner is the block's" })
+      .toBe("12px");
+  });
+
+  for (const [name, css] of [
+    [
+      "rotated, skewed or reflected",
+      ".nx-pb-page p[data-nx-node='card'] { transform: rotate(4deg); }",
+    ],
+    [
+      "cut off by an ancestor",
+      ".nx-pb-page { overflow: hidden; } .nx-pb-page p[data-nx-node='card'] { margin-left: -48px; }",
+    ],
+  ] as const) {
+    test(`declines a block ${name}, leaving its own ring`, async ({ page }) => {
+      /*
+       * A shape the layer's upright rectangle cannot reproduce. Declined as
+       * the spacing overlay declines it, so the block's own outline ring shows
+       * alone rather than a halo drawn where the block is not.
+       */
+      test.slow();
+      const card = await selectCardWith(page, css);
+      await expect(page.locator(".nx-canvas .nx-selection-halo")).toHaveCount(
+        0
+      );
+      expect(
+        await card.evaluate(element => getComputedStyle(element).outlineStyle),
+        "the block's own ring still marks it"
+      ).toBe("solid");
+    });
+  }
+
+  test("stays above page content a site stacks high", async ({ page }) => {
+    /*
+     * A site's `z-index: 5` used to lift its block over the halo layer. The
+     * page is one stacking context now, so the band still shows on top.
+     */
+    test.slow();
+    const card = await selectCardWith(
+      page,
+      ".nx-pb-page p[data-nx-node='card'] { position: relative; z-index: 5; background: #2563eb; }"
+    );
+    await expect(page.locator(".nx-canvas .nx-selection-halo")).toHaveCount(1);
+    const box = await card.boundingBox();
+    expect(box, "the card is measurable").not.toBeNull();
+    if (box === null) return;
+    // A short column across the top edge: ring, then band, then the card.
+    // Near the left end rather than the middle, where the spacing overlay's
+    // value chip sits over the edge.
+    const column = await pixelsIn(page, {
+      x: Math.round(box.x + box.width / 4),
+      y: Math.floor(box.y),
+      width: 1,
+      height: 6,
+    });
+    /*
+     * Near white rather than pure: the spacing overlay's padding band, which
+     * the editor draws over the selected block, tints everything under it. The
+     * card itself is a saturated blue, so a light pixel can only be the band.
+     */
+    expect(
+      column.some(([r, g, b]) => Math.min(r, g, b) > 180),
+      `the white band shows over the card: ${JSON.stringify(column)}`
+    ).toBe(true);
+  });
+});
+
+test.describe("a page's own background", () => {
+  test("wins over the site ground the canvas lays under it", async ({
+    page,
+  }) => {
+    /*
+     * The page's styles compile its background onto the page root. Behind an
+     * opaque site ground the canvas also paints that ground on the page root,
+     * as a weightless fallback, so the page's own background still shows — as
+     * it does when published.
+     */
+    test.slow();
+    const stored = await page.request.patch(HOMEPAGE_API, {
+      data: {
+        layout: {
+          formatVersion: 1,
+          kind: "page",
+          settings: {
+            styles: { base: { base: { backgroundColor: "#fde68a" } } },
+          },
+          nodes: NODES,
+        },
+      },
+    });
+    expect(stored.ok(), `seeding the page: ${stored.status()}`).toBe(true);
+    await gotoAdmin(page, "/singles/homepage", "light");
+    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await expect(canvasText(page)).toBeVisible({ timeout: 30_000 });
+    // The fallback is in play: the default site ground is opaque.
+    await expect(page.locator(".nx-canvas")).toHaveAttribute(
+      "data-nx-site-ground-opaque",
+      ""
+    );
+    await expect
+      .poll(() =>
+        canvasPage(page).evaluate(
+          element => getComputedStyle(element).backgroundColor
+        )
+      )
+      .toBe("rgb(253, 230, 138)");
+  });
+});
+
+test.describe("a translucent site ground", () => {
+  test("is composited once over what sits behind the canvas", async ({
+    page,
+  }) => {
+    /*
+     * The ground is painted on ONE surface. Laid on the canvas root and again
+     * on the page root, a half-transparent ground composited over itself and
+     * the editor's page read darker than the published one.
+     */
+    test.slow();
+    // Stored as the site's own ground, the way an author sets it, and cleared
+    // afterwards: the e2e site stores no tokens of its own.
+    const SITE_STYLE = "/admin/api/singles/site-style";
+    const stored = await page.request.patch(SITE_STYLE, {
+      data: {
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "rgb(0 0 0 / 50%)" },
+            },
+          ],
+        },
+      },
+    });
+    expect(stored.ok(), `storing the ground: ${stored.status()}`).toBe(true);
+    try {
+      await openBuilder(page, "light");
+      await expectGroundOnce(page);
+    } finally {
+      const cleared = await page.request.patch(SITE_STYLE, {
+        data: { tokens: null },
+      });
+      expect(cleared.ok(), `clearing the ground: ${cleared.status()}`).toBe(
+        true
+      );
+    }
+  });
+});
+
+/** One layer of the half-transparent ground over what sits behind the canvas. */
+async function expectGroundOnce(page: Page): Promise<void> {
+  const canvas = page.locator(".nx-canvas");
+  // What the canvas sits on: the first painted surface above it.
+  const backdrop = await toRgb(
+    page,
+    await canvas.evaluate(element => {
+      for (let at = element.parentElement; at !== null; at = at.parentElement) {
+        const fill = getComputedStyle(at).backgroundColor;
+        if (fill !== "rgba(0, 0, 0, 0)" && fill !== "transparent") return fill;
+      }
+      return "rgb(255, 255, 255)";
+    })
+  );
+  /*
+   * A spot of bare page: a gap the test opens above the card, where nothing
+   * but the page's ground is painted.
+   */
+  await page.addStyleTag({
+    content: ".nx-pb-page p[data-nx-node='card'] { margin-top: 48px; }",
+  });
+  const card = page.locator('.nx-canvas [data-nx-node="card"]').first();
+  await expect(card).toBeVisible();
+  const box = await card.boundingBox();
+  expect(box, "the card is measurable").not.toBeNull();
+  if (box === null) return;
+  const [pixel] = await pixelsIn(page, {
+    x: Math.round(box.x + box.width / 4),
+    y: Math.round(box.y - 12),
+    width: 1,
+    height: 1,
+  });
+  // One layer of half-transparent black over the backdrop.
+  const once = backdrop.map(channel => Math.round(channel / 2));
+  for (const [index, channel] of (pixel ?? [0, 0, 0]).entries()) {
+    expect(
+      Math.abs(channel - (once[index] ?? 0)),
+      `channel ${index}: ${JSON.stringify(pixel)} against one layer ${JSON.stringify(once)}`
+    ).toBeLessThanOrEqual(2);
+  }
+}

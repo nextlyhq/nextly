@@ -275,7 +275,7 @@ function ImportPreview({
   );
   const counts = [
     count(plan.added.length, "to add"),
-    count(plan.changed.length, "to fill in"),
+    count(plan.changed.length, "to update"),
     count(plan.unchanged.length, "unchanged"),
     count(plan.conflicts.length, "to settle"),
   ].filter(part => part !== "");
@@ -294,7 +294,7 @@ function ImportPreview({
         <div className="nx-vars-import__body">
           <NameList title="New" names={plan.added.map(tokenDisplayLabel)} />
           <NameList
-            title="Filled in (a dark value, a name or a note this site lacks)"
+            title="Updated (a dark value, a name or a note this site lacks, or another tool's data)"
             names={plan.changed.map(tokenDisplayLabel)}
           />
           {plan.conflicts.length === 0 ? null : (

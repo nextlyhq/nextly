@@ -793,3 +793,52 @@ describe("the colour picker in the editor", () => {
     expect(saturation()).toBeGreaterThan(start + 1);
   });
 });
+
+describe("an explicit preview preference", () => {
+  it("keeps the preview light when the host says so, on a dark device", () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === "(prefers-color-scheme: dark)",
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      render(<Hosted tokens={SITE} prefersDark={false} />);
+      expect(
+        within(screen.getByRole("group", { name: "Preview" })).getByRole(
+          "button",
+          { name: "Light" }
+        )
+      ).toHaveProperty("ariaPressed", "true");
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+});
+
+describe("each half of a type pair's dark value", () => {
+  it("can go back to its light value on its own", async () => {
+    const onChange = vi.fn();
+    const site: SiteTokenSet = {
+      tokens: SITE.tokens.map(token =>
+        token.name === "font-size.body"
+          ? { ...token, values: { light: "16px", dark: "18px" } }
+          : token.name === "line-height.body"
+            ? { ...token, values: { light: "26px", dark: "30px" } }
+            : token
+      ),
+    };
+    render(<Hosted tokens={site} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Use light line height" })
+    );
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    expect(saved.tokens[2]?.values).toEqual({ light: "16px", dark: "18px" });
+    expect(saved.tokens[3]?.values).toEqual({ light: "26px" });
+    expect(
+      within(editor).getByRole("button", { name: "Use light size" })
+    ).toBeDefined();
+  });
+});

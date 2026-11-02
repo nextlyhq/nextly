@@ -718,18 +718,101 @@
  *
  * TWO tones, because the ring is drawn on the site's content and no single
  * colour reads on all of it: the select blue disappears on a blue section, and
- * a white mark on a white one. An inset white band directly inside the blue is
- * the halo — on a white ground the blue carries it, on a blue or a photograph
- * the white does, and on a dark section both do. The band is an inset shadow
- * the 2px outline covers half of, so it changes no geometry either.
- *
- * A block whose own styles set a `box-shadow` keeps it — an author's rule
- * outweighs this one — and then shows the blue ring alone.
+ * a white mark on a white one. A white band directly inside the blue is the
+ * halo — on a white ground the blue carries it, on a blue or a photograph the
+ * white does, and on a dark section both do. It is `.nx-selection-halo` below,
+ * measured and drawn in the canvas's own layer, and NOTHING on the block: the
+ * block's `box-shadow`, `anchor-name` and the rest belong to the page, and a
+ * selection that replaced one drew a page the visitor never sees.
  */
 .nx-canvas [data-nx-selected] {
   outline: 2px solid var(--nx-builder-select);
   outline-offset: -2px;
+}
+
+/*
+ * The halos' layer: a full-bleed sheet over the canvas root's content box, so
+ * the rectangles the canvas measures in its content coordinates land on the
+ * blocks they were measured from. Never a pointer target, so a press travels
+ * through to the block underneath.
+ *
+ * No z-index of its own. It comes after the page in the canvas, and the page
+ * is its own stacking context (below), so it paints above everything the page
+ * draws however high a site stacks its own content — and under the editor's
+ * other overlays, which state theirs.
+ */
+.nx-selection-halos {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/*
+ * The rendered page as ONE stacking context inside the canvas, so a site's
+ * `z-index: 5` orders the page's own content among itself and cannot rise
+ * above the editor's layers drawn over it.
+ *
+ * Isolation changes nothing about the page's own stacking or layout: its
+ * layers keep their order, and the page root stays an ordinary block, so its
+ * children's margins collapse as they do when published. What it does change
+ * is the backdrop a `mix-blend-mode` inside the page blends with — an isolated
+ * group starts from its own background.
+ */
+.nx-canvas > .nx-pb-page {
+  isolation: isolate;
+}
+
+/*
+ * The site's ground on the page root too, so a blended block inside the
+ * isolated page mixes with it as it does with the published page's — but only
+ * where the ground is fully OPAQUE, which the canvas root states from the
+ * site's tokens. Over the canvas's own ground an opaque one looks exactly as
+ * it does painted once; a translucent ground would be composited twice and
+ * read darker, so there the canvas root's ground is the only one, and a blend
+ * inside the page mixes with the page's own content alone.
+ *
+ * Inside `:where()` so it weighs nothing: a background the page's own styles
+ * give its root is compiled onto `.nx-pb-page.nx-pb-page`, and must outweigh
+ * this fallback in the editor exactly as it shows when published.
+ */
+:where(.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page) {
+  background-color: var(--nx-canvas-site-ground, Canvas);
+}
+
+/*
+ * One halo: a white band directly inside the ring, which covers the outer 2px
+ * of the element, so ring and halo keep the inset geometry — never clipped at
+ * the page edge, never merging with a neighbour's.
+ *
+ * On the element's own measured rectangle, and drawn with the RING as well:
+ * the same outline the selected element carries, and the white band as an
+ * inset shadow beneath it — on this editor-owned element, never the page's.
+ * One element drawing both is what keeps them adjacent at every zoom: a band
+ * placed on its own lands a fractional distance in and snaps apart from the
+ * ring, leaving a sliver of the page between them, and a layer drawn over the
+ * page covers the element's own ring wherever the two overlap. The element's
+ * ring is still there beneath, for every place this layer is not drawn.
+ *
+ * Above the block's content rather than beneath it, which a separate layer has
+ * to be; the band is the 2px beside the ring, which the ring's own width
+ * already sits over.
+ */
+.nx-selection-halo {
+  position: absolute;
+  outline: 1px solid var(--nx-builder-select);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
+}
+
+/* The primary's ring is the full 2px, and its halo matches it. */
+.nx-selection-halo[data-primary] {
+  outline-width: 2px;
   box-shadow: inset 0 0 0 4px var(--nx-builder-halo);
+}
+
+/* A component placement's ring is the component colour, as on the element. */
+.nx-selection-halo[data-component] {
+  outline-color: var(--nx-builder-component);
 }
 
 /*
@@ -747,7 +830,6 @@
  */
 .nx-canvas [data-nx-selected=""] {
   outline-width: 1px;
-  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
 }
 
 /*
@@ -1886,36 +1968,32 @@
 /*
  * The site's OWN dark mode, which is the one thing that darkens the page.
  *
- * A site's dark token values apply with the viewer's device, unless a
- * `[data-nx-theme="light"]` marker sits above, and under a
- * `[data-nx-theme="dark"]` marker whatever the device says, as the site sheet
- * writes them. The page's ground and text already follow those values through
+ * A site's dark token values follow the nearest `data-nx-theme` marker
+ * above, or the viewer's device where there is none, as the site sheet writes
+ * them. The page's ground and text already follow those values through
  * the tokens; what these rules add is the SCHEME. The canvas root carries
  * `data-nx-site-dark-ground` only when the site's dark values include a dark
  * ground, so a site whose dark set keeps a light background keeps light
  * native controls.
  * The admin's `.dark` class is a different switch and reaches nothing here.
  */
-[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground] {
+/* The canvas states the nearest theme marker above it as
+   `data-nx-site-theme`, read from the DOM, which is the marker its token
+   values resolve to at any depth of nesting. Keyed on that rather than on
+   ancestor selectors, which cannot tell which marker is nearest. */
+.nx-canvas[data-nx-site-dark-ground][data-nx-site-theme="dark"] {
   color-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
 }
 
+/* With no marker stated, the device decides, as it does for the values. */
 @media (prefers-color-scheme: dark) {
-  .nx-canvas[data-nx-site-dark-ground] {
+  .nx-canvas[data-nx-site-dark-ground]:not([data-nx-site-theme]) {
     color-scheme: dark;
     --nx-builder-select: var(--nx-builder-select-on-dark);
     --nx-builder-component: var(--nx-builder-component-on-dark);
   }
-}
-
-/* A light marker above the canvas keeps its scheme light on a dark device,
-   as it keeps the site's values light. After the device rule and heavier. */
-[data-nx-theme="light"] .nx-canvas[data-nx-site-dark-ground] {
-  color-scheme: light;
-  --nx-builder-select: var(--nx-builder-select-on-light);
-  --nx-builder-component: var(--nx-builder-component-on-light);
 }
 
 /*
@@ -3122,14 +3200,14 @@
   width: 14px;
   height: 14px;
   border: 1px solid var(--nx-border);
-  border-radius: 3px;
+  border-radius: calc(var(--radius-sm) - 1px);
   background: var(--nx-swatch, transparent);
 }
 
 .nx-vars__swatch--main {
   width: 20px;
   height: 20px;
-  border-radius: 5px;
+  border-radius: calc(var(--radius-sm) + 1px);
 }
 
 .nx-vars__pair {
@@ -3157,7 +3235,7 @@
   width: 14px;
   height: 14px;
   border: 1px solid var(--nx-border);
-  border-radius: 3px;
+  border-radius: calc(var(--radius-sm) - 1px);
   background: var(--nx-card);
 }
 
@@ -3296,6 +3374,24 @@
   gap: 0.375rem;
   font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
+}
+
+/* A dark value in the type-size pair, with its own way back to light. */
+.nx-vars-editor__cell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nx-vars-editor__cell > input {
+  min-width: 0;
+}
+
+.nx-vars-editor__cell-action {
+  flex: none;
+  width: 24px;
+  height: 24px;
 }
 
 .nx-vars-editor__inline-action {

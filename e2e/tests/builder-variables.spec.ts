@@ -199,6 +199,41 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
       }, PROPERTY);
     expect(await wrapperValue()).toBe(LIGHT);
     expect(await resolved()).toBe(DARK);
+
+    // The canvas's scheme follows the NEAREST marker, as its token values do,
+    // through three alternations: light > dark > light above the canvas, then
+    // with the nearest flipped to dark.
+    const canvas = page.locator(".nx-canvas");
+    const canvasMode = () =>
+      canvas.evaluate((element, property) => {
+        const style = getComputedStyle(element);
+        return {
+          scheme: style.colorScheme,
+          value: style.getPropertyValue(property).trim(),
+        };
+      }, PROPERTY);
+    const markAbove = (modes: readonly string[]) =>
+      canvas.evaluate((element, chain) => {
+        const holders = [
+          element.ownerDocument.documentElement,
+          element.ownerDocument.body,
+          element.parentElement,
+        ];
+        holders.forEach((holder, at) => {
+          const mode = chain[at];
+          if (holder === null) return;
+          if (mode === undefined) holder.removeAttribute("data-nx-theme");
+          else holder.setAttribute("data-nx-theme", mode);
+        });
+      }, modes);
+    try {
+      await markAbove(["light", "dark", "light"]);
+      await expect.poll(canvasMode).toEqual({ scheme: "light", value: LIGHT });
+      await markAbove(["light", "dark", "dark"]);
+      await expect.poll(canvasMode).toEqual({ scheme: "dark", value: DARK });
+    } finally {
+      await markAbove([]);
+    }
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before },
@@ -222,21 +257,23 @@ const SCOPED_LIGHT =
 test("the nearest marker decides which mode a scoped sheet applies", async ({
   page,
 }) => {
+  // Each probe holds text, so it is a visible element the suite's locators
+  // can find.
   await page.setContent(`
-    <div data-nx-theme="light"><div data-nx-theme="dark"><div id="dark-nearer" class="scope"></div></div></div>
-    <div data-nx-theme="dark"><div data-nx-theme="light"><div id="light-nearer" class="scope"></div></div></div>
-    <div data-nx-theme="light"><div id="self-dark" class="scope" data-nx-theme="dark"></div></div>
+    <div data-nx-theme="light"><div data-nx-theme="dark"><div data-testid="dark-nearer" class="scope">probe</div></div></div>
+    <div data-nx-theme="dark"><div data-nx-theme="light"><div data-testid="light-nearer" class="scope">probe</div></div></div>
+    <div data-nx-theme="light"><div data-testid="self-dark" class="scope" data-nx-theme="dark">probe</div></div>
   `);
+  // Each probe found by its test id, and asked which sheet's selector it
+  // matches. Each holds a word, so it has a box: the suite finds by test id
+  // only what is visible.
   const modeOf = (id: string) =>
-    page.evaluate(
-      ([target, dark, light]) => {
-        const element = document.getElementById(target ?? "");
-        return {
-          dark: element?.matches(dark ?? "") ?? false,
-          light: element?.matches(light ?? "") ?? false,
-        };
-      },
-      [id, SCOPED_DARK, SCOPED_LIGHT]
+    page.getByTestId(id).evaluate(
+      (element, [dark, light]) => ({
+        dark: element.matches(dark ?? ""),
+        light: element.matches(light ?? ""),
+      }),
+      [SCOPED_DARK, SCOPED_LIGHT]
     );
   expect(await modeOf("dark-nearer")).toEqual({ dark: true, light: false });
   expect(await modeOf("light-nearer")).toEqual({ dark: false, light: true });
