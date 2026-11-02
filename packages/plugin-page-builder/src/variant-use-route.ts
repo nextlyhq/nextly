@@ -172,7 +172,7 @@ const VARIANT_USE_BODY = z.object({
 });
 
 /** The parsed body, or the validation error naming what is wrong. */
-export async function variantUseBody(req: Request): Promise<{
+async function variantUseBody(req: Request): Promise<{
   readonly componentId: string;
   readonly variantId: string;
 }> {

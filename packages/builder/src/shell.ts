@@ -136,6 +136,8 @@ export type {
 } from "./inspector-panel";
 // What a host tells the inspector about the component it edits, beside it.
 export type { ComponentFieldsHost } from "./component-fields";
+// And about its variants: how many placements chose one, for the delete dialog.
+export type { ComponentVariantsHost, VariantUse } from "./component-variants";
 
 /**
  * The Style half of the same inspector.

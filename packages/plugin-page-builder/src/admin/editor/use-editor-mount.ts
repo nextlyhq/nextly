@@ -17,6 +17,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   type ComponentFieldsHost,
+  type ComponentVariantsHost,
   type NoticeQueue,
   type EditorState,
   type UseInlineEditingResult,
@@ -45,6 +46,7 @@ import {
 import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
 import { useMayCreatePattern } from "../pattern-capability-client";
+import { useVariantUse } from "../variant-use-client";
 
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
@@ -283,9 +285,12 @@ export function useEditorMount(
   // Asked only of a component with a row: what its live definition holds and
   // how many documents place it, which its own document cannot say.
   const identity = useDocumentIdentity();
-  const componentFacts = useComponentFacts(
-    isComponentDocument(initialDocument) ? identity?.documentId : undefined
-  );
+  const storedComponent = isComponentDocument(initialDocument)
+    ? identity?.documentId
+    : undefined;
+  const componentFacts = useComponentFacts(storedComponent);
+  // The count the variant delete dialog shows, for the same stored component.
+  const componentVariants = useVariantUse(storedComponent);
 
   return {
     initialDocument,
@@ -298,6 +303,7 @@ export function useEditorMount(
     savePattern,
     mayCreatePattern,
     componentFacts,
+    componentVariants,
   };
 }
 
@@ -314,6 +320,8 @@ export type EditorMount = {
   mayCreatePattern: boolean;
   /** What the inspector is told about the component being edited, if any. */
   componentFacts: ComponentFieldsHost | undefined;
+  /** What the variants section is told about the component, if any. */
+  componentVariants: ComponentVariantsHost | undefined;
 };
 
 /**

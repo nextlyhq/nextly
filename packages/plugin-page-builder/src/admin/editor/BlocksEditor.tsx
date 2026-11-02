@@ -297,6 +297,7 @@ function editorInspector(
     siteStylePending,
     siteStyleError,
     componentFacts,
+    componentVariants,
   } = view;
   return (
     <InspectorPanel
@@ -358,6 +359,8 @@ function editorInspector(
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, and how far a removal reaches.
       componentFields={componentFacts}
+      // And how many placements chose a variant, for its delete dialog.
+      componentVariants={componentVariants}
     />
   );
 }

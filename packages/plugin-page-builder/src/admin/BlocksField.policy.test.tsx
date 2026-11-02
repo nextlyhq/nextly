@@ -195,6 +195,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   /*
    * Never awaited by these cases: the loader is reached only when an author
    * double-clicks a passage, and none of them do. Present because the mock

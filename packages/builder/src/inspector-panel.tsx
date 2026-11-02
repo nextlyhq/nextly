@@ -66,6 +66,11 @@ import {
   VisibilityExposeControl,
   type ComponentFieldsBinding,
 } from "./component-fields-panel";
+import type { ComponentVariantsHost } from "./component-variants";
+import {
+  ComponentVariantsContext,
+  ComponentVariantsSection,
+} from "./component-variants-panel";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
@@ -100,6 +105,7 @@ import {
 } from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
+import { placedDefinition } from "./variant-picker";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -277,6 +283,14 @@ export interface InspectorPanelProps {
    * @experimental Settles when the component editor ships.
    */
   componentFields?: ComponentFieldsHost;
+  /**
+   * What the host can tell the component's variants section: how many
+   * placements chose a variant, for the delete dialog. Omitted, the dialog
+   * says the placements fall back without a number.
+   *
+   * @experimental Settles when the component editor ships.
+   */
+  componentVariants?: ComponentVariantsHost;
 }
 
 /** What the inspector needs of the host's component read. */
@@ -403,7 +417,8 @@ function surfaceFor(
   instance: InstanceInspection | null,
   inspection: BlockInspection | null,
   verbs: CardVerbs | undefined,
-  fields: ComponentFieldsBinding | undefined
+  fields: ComponentFieldsBinding | undefined,
+  definitions: ComponentLookup
 ):
   | { readonly tabless: React.JSX.Element }
   | { readonly block: BlockInspection } {
@@ -438,6 +453,7 @@ function surfaceFor(
           inspection={instance}
           editor={editor}
           verbs={verbs}
+          definition={placedDefinition(definitions, instance.componentId)}
         />
       ),
     };
@@ -452,14 +468,24 @@ function surfaceFor(
    * offer an author somewhere to click that can never show anything.
    *
    * In a component's own view, nothing selected means the component itself is
-   * what is being looked at, so its exposed fields are listed.
+   * what is being looked at, so its exposed fields are listed, and the
+   * variants that preset them under those.
    */
   if (
     inspection === null &&
     editor.selectedId === null &&
     fields !== undefined
   ) {
-    return { tabless: <ExposedFieldsList binding={fields} editor={editor} /> };
+    return {
+      tabless: (
+        <ExposedFieldsList binding={fields} editor={editor}>
+          <ComponentVariantsSection
+            editor={editor}
+            component={fields.context.component}
+          />
+        </ExposedFieldsList>
+      ),
+    };
   }
   if (inspection === null) {
     return {
@@ -480,11 +506,14 @@ function surfaceFor(
  */
 export function InspectorPanel({
   componentFields,
+  componentVariants,
   ...panel
 }: InspectorPanelProps): React.JSX.Element {
   return (
     <ComponentFieldsScope editor={panel.editor} host={componentFields}>
-      <SelectionInspector {...panel} />
+      <ComponentVariantsContext.Provider value={componentVariants}>
+        <SelectionInspector {...panel} />
+      </ComponentVariantsContext.Provider>
     </ComponentFieldsScope>
   );
 }
@@ -502,7 +531,10 @@ function SelectionInspector({
   verbs,
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
-}: Omit<InspectorPanelProps, "componentFields">): React.JSX.Element {
+}: Omit<
+  InspectorPanelProps,
+  "componentFields" | "componentVariants"
+>): React.JSX.Element {
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
   // the document and the values shown.
@@ -573,7 +605,14 @@ function SelectionInspector({
   // The component's own view, when the document is a component.
   const fields = React.useContext(ComponentFieldsContext);
 
-  const surface = surfaceFor(editor, instance, inspection, verbs, fields);
+  const surface = surfaceFor(
+    editor,
+    instance,
+    inspection,
+    verbs,
+    fields,
+    (componentLibrary ?? NO_LIBRARY).definitions
+  );
   if ("tabless" in surface) return surface.tabless;
   const block = surface.block;
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));

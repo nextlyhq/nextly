@@ -118,6 +118,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
  * be added here by hand.
  */
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written

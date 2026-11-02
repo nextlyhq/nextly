@@ -69,7 +69,9 @@ export function VariantPicker({
 }): React.JSX.Element | null {
   const node = findNode(editor.document.nodes, nodeId);
   const id = React.useId();
-  if (node === undefined) return null;
+  // A definition that could not be loaded says so below; reading its
+  // absence as "this variant was removed" would say something untrue.
+  if (node === undefined || definition === undefined) return null;
   const choice = variantChoiceOf(definition, node);
   if (choice.options.length === 0 && choice.chosen === undefined) return null;
 

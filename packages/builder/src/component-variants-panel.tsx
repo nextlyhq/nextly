@@ -81,6 +81,14 @@ function useSeenKeys(component: ComponentDocument): readonly string[] {
 }
 
 /**
+ * What the host tells the variants section, handed down from the inspector
+ * so the surface drawing the component's view need not carry it.
+ */
+export const ComponentVariantsContext: React.Context<
+  ComponentVariantsHost | undefined
+> = React.createContext<ComponentVariantsHost | undefined>(undefined);
+
+/**
  * The variants section of a component's own view, under its exposed fields.
  *
  * @experimental Settles when the component editor ships.
@@ -88,12 +96,11 @@ function useSeenKeys(component: ComponentDocument): readonly string[] {
 export function ComponentVariantsSection({
   editor,
   component,
-  host,
 }: {
   editor: EditorState;
   component: ComponentDocument;
-  host?: ComponentVariantsHost | undefined;
 }): React.JSX.Element {
+  const host = React.useContext(ComponentVariantsContext);
   const taken = useSeenKeys(component);
   const context: VariantEditContext = { editor, component, taken };
   const options = variantOptions(component);
@@ -209,7 +216,10 @@ function VariantRow({
   onDelete: () => void;
 }): React.JSX.Element {
   const valuesId = React.useId();
+  const problemId = React.useId();
   const nameRef = React.useRef<HTMLInputElement>(null);
+  // A refused rename's reason, said under the row.
+  const [problem, setProblem] = React.useState<string | undefined>(undefined);
   React.useEffect(() => {
     if (!selectName) return;
     nameRef.current?.focus();
@@ -236,7 +246,14 @@ function VariantRow({
         >
           <ChevronRight size={14} aria-hidden="true" />
         </Button>
-        <VariantName context={context} option={option} inputRef={nameRef} />
+        <VariantName
+          context={context}
+          option={option}
+          inputRef={nameRef}
+          problemId={problemId}
+          problem={problem}
+          onProblem={setProblem}
+        />
         <span
           className="nx-variants__summary"
           data-empty={option.empty ? "" : undefined}
@@ -254,6 +271,11 @@ function VariantRow({
           <Trash2 size={14} aria-hidden="true" />
         </Button>
       </div>
+      {problem === undefined ? null : (
+        <p id={problemId} className="nx-variants__problem" role="alert">
+          {problem}
+        </p>
+      )}
       {open ? (
         <div id={valuesId} className="nx-variants__values">
           {fields.map(field => (
@@ -275,26 +297,31 @@ function VariantName({
   context,
   option,
   inputRef,
+  problemId,
+  problem,
+  onProblem,
 }: {
   context: VariantEditContext;
   option: VariantOption;
   inputRef: React.Ref<HTMLInputElement>;
+  /** The id of the row's refusal sentence, which the input points to. */
+  problemId: string;
+  problem: string | undefined;
+  onProblem: (reason: string | undefined) => void;
 }): React.JSX.Element {
   const [draft, setDraft] = useStoredDraft(option.label);
-  const [problem, setProblem] = React.useState<string | undefined>(undefined);
-  const problemId = React.useId();
   const send = () => {
     if (draft === option.label) return;
     const outcome = renameVariant(context, option.id, draft);
     if (outcome.applied) {
-      setProblem(undefined);
+      onProblem(undefined);
       return;
     }
     // Back to the stored name, with the reason: a blank or taken name is
     // refused, and leaving it on screen would show a name the variant does not
     // have.
     setDraft(option.label);
-    setProblem(outcome.reason);
+    onProblem(outcome.reason);
   };
   return (
     <span className="nx-variants__name">
@@ -310,11 +337,6 @@ function VariantName({
           commitOnEnter(event, send);
         }}
       />
-      {problem === undefined ? null : (
-        <span id={problemId} className="nx-variants__problem" role="alert">
-          {problem}
-        </span>
-      )}
     </span>
   );
 }
@@ -394,53 +416,84 @@ function VariantValueControl({
   value: unknown;
   onCommit: (next: OverrideValue) => void;
 }): React.JSX.Element {
-  if (field.type === "visibility") {
-    return (
-      <span className="nx-variants__switch">
-        <Switch
+  switch (field.type) {
+    case "visibility":
+      return <ShownValue id={id} value={value} onCommit={onCommit} />;
+    case "select":
+      return (
+        <ChoiceValue id={id} field={field} value={value} onCommit={onCommit} />
+      );
+    case "text":
+    case "link":
+      return (
+        <TextValue
           id={id}
-          checked={value !== false}
-          onCheckedChange={checked => onCommit(checked)}
+          value={typeof value === "string" ? value : ""}
+          onCommit={onCommit}
         />
-        <span>{value === false ? "Hidden" : "Shown"}</span>
-      </span>
-    );
+      );
+    default:
+      return (
+        <p id={id} className="nx-inspector__note">
+          Set on each placement. A variant can’t preset{" "}
+          {field.type === "image" ? "an image" : "rich text"} yet.
+        </p>
+      );
   }
-  if (field.type === "select") {
-    return (
-      <Select
-        value={typeof value === "string" ? `=${value}` : undefined}
-        onValueChange={next => onCommit(next.slice(1))}
-      >
-        <SelectTrigger id={id} size="sm">
-          <SelectValue placeholder="Choose" />
-        </SelectTrigger>
-        <SelectContent>
-          {(field.options ?? []).map(choice => (
-            // Prefixed, because the primitive reserves the empty string for
-            // "no selection" and a choice may be "".
-            <SelectItem key={choice.value} value={`=${choice.value}`}>
-              {choice.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    );
-  }
-  if (field.type === "text" || field.type === "link") {
-    return (
-      <TextValue
-        id={id}
-        value={typeof value === "string" ? value : ""}
-        onCommit={onCommit}
-      />
-    );
-  }
+}
+
+/** Whether the variant shows a part, as a switch that says which. */
+function ShownValue({
+  id,
+  value,
+  onCommit,
+}: {
+  id: string;
+  value: unknown;
+  onCommit: (next: OverrideValue) => void;
+}): React.JSX.Element {
   return (
-    <p id={id} className="nx-inspector__note">
-      Set on each placement. A variant can’t preset{" "}
-      {field.type === "image" ? "an image" : "rich text"} yet.
-    </p>
+    <span className="nx-variants__switch">
+      <Switch
+        id={id}
+        checked={value !== false}
+        onCheckedChange={checked => onCommit(checked)}
+      />
+      <span>{value === false ? "Hidden" : "Shown"}</span>
+    </span>
+  );
+}
+
+/** One of a choice field's options. */
+function ChoiceValue({
+  id,
+  field,
+  value,
+  onCommit,
+}: {
+  id: string;
+  field: ExposedProperty;
+  value: unknown;
+  onCommit: (next: OverrideValue) => void;
+}): React.JSX.Element {
+  return (
+    <Select
+      value={typeof value === "string" ? `=${value}` : undefined}
+      onValueChange={next => onCommit(next.slice(1))}
+    >
+      <SelectTrigger id={id} size="sm">
+        <SelectValue placeholder="Choose" />
+      </SelectTrigger>
+      <SelectContent>
+        {(field.options ?? []).map(choice => (
+          // Prefixed, because the primitive reserves the empty string for
+          // "no selection" and a choice may be "".
+          <SelectItem key={choice.value} value={`=${choice.value}`}>
+            {choice.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

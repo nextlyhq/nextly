@@ -392,9 +392,12 @@ function FieldName({
 export function ExposedFieldsList({
   binding,
   editor,
+  children,
 }: {
   binding: ComponentFieldsBinding;
   editor: EditorState;
+  /** What the component's view lists under its fields: its variants. */
+  children?: React.ReactNode;
 }): React.JSX.Element {
   const { component } = binding.context;
   const fields = exposedFields(component);
@@ -436,6 +439,7 @@ export function ExposedFieldsList({
           Select a block to expose more of its properties.
         </p>
       </section>
+      {children}
     </div>
   );
 }

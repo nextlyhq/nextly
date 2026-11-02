@@ -141,6 +141,48 @@ describe("a component's variants in its own view", () => {
     expect(section().textContent).toContain("1 value");
   });
 
+  it("sets a choice and hides a part on the open variant", () => {
+    const base = component();
+    const editor = mount({
+      ...base,
+      exposed: [
+        ...(base.exposed ?? []),
+        {
+          id: "tone",
+          label: "Tone",
+          nodeId: "h1",
+          propPath: "tone",
+          type: "select",
+          options: [
+            { value: "light", label: "Light" },
+            { value: "dark", label: "Dark" },
+          ],
+        },
+        {
+          id: "shown",
+          label: "Shown",
+          nodeId: "h1",
+          propPath: "visibility",
+          type: "visibility",
+        },
+      ],
+      variants: { a: { label: "Night", overrides: {} } },
+    });
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Show the values of Night",
+      })
+    );
+    fireEvent.click(within(section()).getByRole("combobox", { name: "Tone" }));
+    fireEvent.click(screen.getByRole("option", { name: "Dark" }));
+    fireEvent.click(within(section()).getByRole("switch", { name: "Shown" }));
+
+    expect(variantsOf(editor())?.a?.overrides).toEqual({
+      tone: "dark",
+      shown: false,
+    });
+  });
+
   it("says why a taken name is refused, and keeps the old one", () => {
     const editor = mount(
       component({

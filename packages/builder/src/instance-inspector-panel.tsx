@@ -33,6 +33,7 @@ import {
   isRichTextValue,
   isUnsetOverride,
   richTextToPlainText,
+  type ComponentDocument,
   type OverrideValue,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -59,6 +60,7 @@ import {
   type OrphanedOverride,
 } from "./instance-inspector";
 import { useStoredDraft } from "./stored-draft";
+import { VariantPicker } from "./variant-picker";
 
 /**
  * What the row's badge says for each source.
@@ -113,11 +115,14 @@ export function InstanceInspectorPanel({
   inspection,
   editor,
   verbs,
+  definition,
 }: {
   inspection: InstanceInspection;
   editor: EditorState;
   /** The shared block verbs for the card's menu, as a block's card gets. */
   verbs?: CardVerbs | undefined;
+  /** The definition the placement resolves against, for its variant picker. */
+  definition?: ComponentDocument | undefined;
 }): React.JSX.Element {
   // Read the node at commit time rather than closing over one. A field
   // committing on blur can fire after another edit has already replaced the
@@ -174,6 +179,13 @@ export function InstanceInspectorPanel({
         onRename={name => editor.apply(renameOp(inspection.nodeId, name))}
         onLock={locked => editor.apply(lockOp(inspection.nodeId, locked))}
         verbs={verbs}
+      />
+
+      <VariantPicker
+        editor={editor}
+        nodeId={inspection.nodeId}
+        definition={definition}
+        disabled={inspection.identity.locked}
       />
 
       {!inspection.definitionFound ? (

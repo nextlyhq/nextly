@@ -156,10 +156,8 @@ async function save(page: Page, id: string): Promise<void> {
       ["PATCH", "PUT"].includes(response.request().method()) &&
       response.ok()
   );
-  await page
-    .getByRole("button", { name: /^(Save|Save draft|Publish)$/ })
-    .first()
-    .click();
+  // "Save draft" on a document never published, "Save" on one that is.
+  await page.getByRole("button", { name: /^Save( draft)?$/ }).click();
   await saved;
 }
 
@@ -170,7 +168,7 @@ async function storedVariants(
 ): Promise<
   Record<string, { label: string; overrides: Record<string, unknown> }>
 > {
-  const read = await page.request.get(`${COMPONENTS}/${id}?status=all`);
+  const read = await page.request.get(`${COMPONENTS}/${id}?draft=true`);
   expect(read.ok(), `reading the component: ${read.status()}`).toBe(true);
   const body = (await read.json()) as Record<string, unknown>;
   const item = (body.item ?? body) as Record<string, unknown>;
@@ -190,7 +188,7 @@ async function storedPlacements(
   page: Page,
   pageId: string
 ): Promise<Record<string, { props: Record<string, unknown> }>> {
-  const read = await page.request.get(`${PAGES}/${pageId}?status=all`);
+  const read = await page.request.get(`${PAGES}/${pageId}?draft=true`);
   expect(read.ok(), `reading the page: ${read.status()}`).toBe(true);
   const body = (await read.json()) as Record<string, unknown>;
   const item = (body.item ?? body) as Record<string, unknown>;

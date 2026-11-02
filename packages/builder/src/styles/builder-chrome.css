@@ -4034,8 +4034,10 @@ fieldset.nx-inspector__fields {
   gap: 0.5rem;
 }
 
+/* The heading at the size the exposed fields' heading above it takes. */
 .nx-variants__header .nx-inspector__heading {
   margin: 0;
+  font-size: 0.75rem;
 }
 
 .nx-variants__list {
@@ -4083,11 +4085,16 @@ fieldset.nx-inspector__fields {
 }
 
 .nx-variants__name {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  flex: 1 1 auto;
+  flex: 1 1 9rem;
   min-width: 0;
+}
+
+/*
+ * A refused name, said under the whole row rather than beside the input, so
+ * the sentence has the row's width to wrap in.
+ */
+.nx-variants__item > .nx-variants__problem {
+  padding: 0 0.5rem 0.5rem 2.25rem;
 }
 
 .nx-variants__summary {

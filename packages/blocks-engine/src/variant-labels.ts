@@ -37,16 +37,20 @@ function sharedNames(variants: unknown): Map<string, string[]> {
   const byName = new Map<string, string[]>();
   if (!isPlainRecord(variants)) return byName;
   for (const key of boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES) ?? []) {
-    const variant: unknown = ownEntry(variants, key);
-    if (!isPlainRecord(variant) || typeof variant.label !== "string") continue;
-    const name = variantLabelKey(variant.label);
-    if (name === "") continue;
-    byName.set(name, [...(byName.get(name) ?? []), key]);
+    const name = nameOf(ownEntry(variants, key));
+    if (name !== undefined)
+      byName.set(name, [...(byName.get(name) ?? []), key]);
   }
-  for (const [name, keys] of byName) {
-    if (keys.length < 2) byName.delete(name);
+  return new Map([...byName].filter(([, keys]) => keys.length > 1));
+}
+
+/** A stored variant's name as compared, or nothing when it has no usable one. */
+function nameOf(variant: unknown): string | undefined {
+  if (!isPlainRecord(variant) || typeof variant.label !== "string") {
+    return undefined;
   }
-  return byName;
+  const name = variantLabelKey(variant.label);
+  return name === "" ? undefined : name;
 }
 
 /**

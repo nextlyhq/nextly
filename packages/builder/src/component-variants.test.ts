@@ -13,7 +13,7 @@ import {
   type BlockNode,
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   addVariant,
@@ -83,14 +83,25 @@ function recording(
 
 describe("editing a component's variants", () => {
   it("writes an addition as one envelope op, never naming a seen key", () => {
-    const { context, ops } = recording(card(), ["v-gone"]);
+    // The first key minted is one this session saw deleted, so it must be
+    // passed over for the next.
+    const minted = [
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ];
+    const spy = vi
+      .spyOn(crypto, "randomUUID")
+      .mockImplementation(
+        () => minted.shift() as ReturnType<typeof crypto.randomUUID>
+      );
+    const { context, ops } = recording(card(), ["v-aaaaaaaaaaaa"]);
     const outcome = addVariant(context, "Featured");
+    spy.mockRestore();
 
     expect(outcome.applied).toBe(true);
     expect(ops).toHaveLength(1);
-    expect(ops[0]).toMatchObject({ kind: "envelope" });
     const id = outcome.applied ? outcome.id : "";
-    expect(id).not.toBe("v-gone");
+    expect(id).toBe("v-bbbbbbbbbbbb");
     expect(ops[0]).toEqual({
       kind: "envelope",
       patch: { variants: { [id]: { label: "Featured", overrides: {} } } },
