@@ -74,7 +74,7 @@ export function builderChecklist(
       label: "Add your first block",
       // The one gesture nothing else on screen suggests: an empty canvas looks
       // like a page with nothing wrong with it.
-      hint: "Open Insert in the left rail and choose one.",
+      hint: "Open Add in the left rail and choose one.",
       done: blocks > 0,
     },
     {

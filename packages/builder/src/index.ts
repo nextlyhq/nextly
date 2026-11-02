@@ -125,7 +125,7 @@ export {
  *
  * A type costs nothing at runtime, so it can be described from here.
  */
-export type { BuilderShellProps } from "./builder-shell";
+export type { BuilderShellProps, PanelView } from "./builder-shell";
 
 /**
  * @experimental The shell's own decisions: which panels the rail offers, the
@@ -258,6 +258,13 @@ export {
   type LayerSearch,
 } from "./layers";
 export { blockLabel } from "./inserter";
+
+/**
+ * @experimental Bring one block into view by its id, inside the canvas root a
+ * caller names. The one way the editor scrolls to a block it was asked to
+ * show, whichever surface asked.
+ */
+export { revealNode } from "./reveal-node";
 
 /**
  * @experimental Whether the editor may move or delete a block the author has

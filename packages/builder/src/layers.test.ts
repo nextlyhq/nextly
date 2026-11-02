@@ -100,6 +100,20 @@ describe("layerLabel", () => {
       "Heading"
     );
   });
+
+  it("reads the label from the lookup a caller names, not the registry", () => {
+    // A surface that registers nothing resolves blocks through its own
+    // resolver. Asked of the registry there, a block labelled "Hero" would be
+    // humanised from its type and named differently than the editor names it.
+    const hero = { name: "acme/hero-banner", editor: { label: "Hero" } };
+    const lookup = (type: string) =>
+      type === hero.name ? (hero as never) : undefined;
+
+    expect(layerLabel(node("a", "acme/hero-banner"), lookup)).toBe("Hero");
+    expect(
+      layerLabel(node("b", "acme/hero-banner", { name: "Top" }), lookup)
+    ).toBe("Top");
+  });
 });
 
 describe("layersOf", () => {

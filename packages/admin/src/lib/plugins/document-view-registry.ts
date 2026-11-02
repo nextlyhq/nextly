@@ -34,6 +34,21 @@ export type RegisteredDocumentView = NonNullable<
  */
 export type DocumentKind = "collection" | "single";
 
+/**
+ * The query keys a document view's address uses to name a part of the
+ * document: `field`, which of its fields the view edits, and `section`, the
+ * part of that field it opens at. The form does not read them, so moving
+ * between the document's edit address and its views with or without them stays
+ * on the same document, and leaving a view drops them.
+ *
+ * One list for both of those readers. Kept apart, the leave guard came to
+ * accept a key the way back still carried, or the reverse.
+ */
+export const DOCUMENT_VIEW_ADDRESS_PARAMS: readonly string[] = [
+  "field",
+  "section",
+];
+
 const registry = new Map<string, RegisteredDocumentView>();
 
 /**
