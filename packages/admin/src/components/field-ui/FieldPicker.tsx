@@ -289,10 +289,12 @@ function TypeStep({
         onClick={() => onPick(type)}
         className={cn(
           "flex cursor-pointer items-center gap-3 rounded-md border p-2",
-          // The ring is the active row's marker, in both colour schemes; the
-          // background alone is too close to its neighbours to see.
+          // The active row is marked as the kit marks a selected card, a
+          // primary border and tint, plus the focus ring: a tint keeps the
+          // row's own text tokens legible in both colour schemes, where a
+          // solid accent fill hid the muted description in dark.
           index === active
-            ? "border-primary bg-accent ring-2 ring-ring"
+            ? "border-primary bg-primary/10 ring-2 ring-ring"
             : "border-border bg-background"
         )}
       >
@@ -335,7 +337,8 @@ function TypeStep({
         id={listId}
         role="listbox"
         aria-label="Field types"
-        className="max-h-[400px] space-y-3 overflow-y-auto pr-1"
+        // Padded so the active row's ring is not clipped by the scroll edge.
+        className="max-h-[400px] space-y-3 overflow-y-auto p-1"
       >
         {results
           ? results.map(renderOption)
@@ -423,7 +426,7 @@ function FieldGroupStep({
         id={listId}
         role="listbox"
         aria-label="Field groups"
-        className="max-h-[400px] space-y-1.5 overflow-y-auto pr-1"
+        className="max-h-[400px] space-y-1.5 overflow-y-auto p-1"
       >
         {matches.map((option, index) => (
           <div
@@ -437,7 +440,7 @@ function FieldGroupStep({
             className={cn(
               "cursor-pointer rounded-md border p-2 text-sm",
               index === active
-                ? "border-primary bg-accent ring-2 ring-ring"
+                ? "border-primary bg-primary/10 ring-2 ring-ring"
                 : "border-border bg-background"
             )}
           >
