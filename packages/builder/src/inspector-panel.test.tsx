@@ -514,10 +514,12 @@ describe("InspectorPanel block card", () => {
     });
   });
 
-  it("says a block inside a locked one is locked by it, withholds Rename, and holds Lock", () => {
+  it("says a block inside a locked one is locked by it, withholds Rename, and offers Lock", () => {
     // The lock covers everything inside the block: the selected heading is
     // not locked itself, so the card names the block that holds the lock,
-    // where it is lifted, and offers neither a rename nor a lock of its own.
+    // where it is lifted, and withholds a rename. Its own Lock stays offered,
+    // as the multi-selection card offers it: a change to the lock alone is
+    // always allowed, so the action does not depend on how it was selected.
     register();
     const document = {
       formatVersion: 1,
@@ -543,7 +545,8 @@ describe("InspectorPanel block card", () => {
         },
       ],
     } as unknown as BlockDocument;
-    render(<InspectorPanel editor={editorFor(document)} />);
+    const editor = editorFor(document);
+    render(<InspectorPanel editor={editor} />);
 
     expect(
       document_().querySelector('[data-lock="layers-inherited"]')?.textContent
@@ -555,9 +558,14 @@ describe("InspectorPanel block card", () => {
     );
     openCardMenu("Heading");
     expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
-    const lock = screen.getByRole("menuitem", { name: /^Lock/ });
-    expect(lock.getAttribute("data-disabled")).not.toBeNull();
-    expect(lock.textContent).toContain("Locked by Hero. Unlock Hero first.");
+    const lock = screen.getByRole("menuitem", { name: "Lock" });
+    expect(lock.getAttribute("data-disabled")).toBeNull();
+    choose("Lock");
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { locked: true },
+    });
   });
 
   it("keeps every control editable on a block nothing locks", () => {

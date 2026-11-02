@@ -235,3 +235,48 @@ describe("what it reads", () => {
     expect(layersLockChanges(write, pageOf(stored()))).toEqual([]);
   });
 });
+
+describe("the order of a locked block among its siblings", () => {
+  /** A slot holding a lead block, the locked hero, and a tail block. */
+  function row(children: BlockNode[]) {
+    return pageOf([node("row", {}, children)]);
+  }
+  const lead = () => node("lead");
+  const locked = () => node("hero", { locked: true, name: "Hero" });
+  const tail = () => node("tail");
+  const before = () => row([lead(), locked(), tail()]);
+
+  it("refuses swapping the locked block with a sibling that was already there", () => {
+    // Same parent, same slot, same subtree: only its place among the
+    // siblings changed, which is a move all the same.
+    expect(
+      layersLockChanges(row([lead(), tail(), locked()]), before())
+    ).toEqual([expect.objectContaining({ kind: "moved", id: "hero" })]);
+    expect(
+      layersLockChanges(row([locked(), lead(), tail()]), before())
+    ).toEqual([expect.objectContaining({ kind: "moved", id: "hero" })]);
+  });
+
+  it("accepts a new sibling put before it, which only shifts its index", () => {
+    expect(
+      layersLockChanges(
+        row([node("added"), lead(), locked(), tail()]),
+        before()
+      )
+    ).toEqual([]);
+  });
+
+  it("accepts an unlocked sibling before it being deleted", () => {
+    expect(layersLockChanges(row([locked(), tail()]), before())).toEqual([]);
+  });
+
+  it("accepts a new sibling put after it", () => {
+    // Its own place is unchanged: the same existing blocks before it and after.
+    expect(
+      layersLockChanges(
+        row([lead(), locked(), node("added"), tail()]),
+        before()
+      )
+    ).toEqual([]);
+  });
+});

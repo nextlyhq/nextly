@@ -106,9 +106,12 @@ Every save is held to it, the API's and an agent's included. A save is compared 
 the page as stored, its working draft where there is one: a block locked there may
 not change, move or disappear, and the save is refused with the code
 `layers-lock-changed`, naming the block. A save that empties the whole field, by
-setting it to `null`, is refused the same way while the page holds a locked block. A
-block added before a locked one shifts its position without moving it, so that is
-allowed. To change or move a locked block, send it unlocked in the same save.
+setting it to `null`, is refused the same way while the page holds a locked block, on
+the data the save's hooks leave: a hook that empties the field is refused as the
+caller would be. A block added before a locked one, or a block removed from before it,
+shifts its position without moving it, so that is allowed; swapping it with a block
+beside it moves it. To change or move a locked block, send it unlocked in the same
+save.
 
 Deleting is the exception. A locked block can't be deleted in the same save that
 unlocks it, and neither can a block that holds it: unlock it and save first, then
@@ -124,18 +127,20 @@ click still selects a locked block, so you can unlock it from the block's menu.
 Some saves can't be checked, and are kept with a line in the server log saying so:
 
 - a blocks field inside a group or a repeater, whose stored value can't be read;
-- a localized blocks field whose language can't be read yet;
-- a localized blocks field set to `null`, since that check isn't told which
-  language is being saved.
-
-Two more aren't checked, and leave no log line: a Single's blocks field set to `null`,
-and an import that skips hooks and sets the field to `null`.
+- a localized blocks field whose language can't be read yet.
 
 ## Components and locks
 
 A lock inside a component holds on every page that places it. A placement cannot use an
 exposed field or an exposed slot to change what the lock holds, and such a page is
 refused, naming the placement.
+
+A block locked in Layers inside a component holds on every page that places it too. A
+placement's value for an exposed field, or its content for an exposed slot, cannot
+change it, and the save is refused with `layers-lock-changed`, naming the block. A page
+cannot unlock it: remove the value, or unlock the block in the component. A value a page
+already stores is kept, so locking a block after pages gave it values refuses only a new
+one.
 
 A component cannot add an exposed field that drives something a `"contentOnly"` lock
 holds, since no placement could change it. Expose a content field instead, remove the

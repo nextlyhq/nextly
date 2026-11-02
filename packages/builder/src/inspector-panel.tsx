@@ -555,14 +555,14 @@ export function InspectorPanel({
         }
         onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
         // Held inside a `contentOnly` area, which pins the node's own lock
-        // with its design: the save would refuse the change. Held too inside a
-        // block locked in Layers, whose lock is the one to lift.
+        // with its design: the save would refuse the change. The one predicate
+        // the multi-selection card asks too, so a block's Lock is offered alike
+        // however it was selected; inside a block locked in Layers it stays
+        // offered, since a change to the lock alone is always allowed.
         lockHeld={
-          !layersLockChangeable(lock)
-            ? "The area it sits in fixes this."
-            : lock.inheritedFrom !== undefined && !lock.layers
-              ? `Locked by ${lock.inheritedFrom}. Unlock ${lock.inheritedFrom} first.`
-              : undefined
+          layersLockChangeable(lock)
+            ? undefined
+            : "The area it sits in fixes this."
         }
         verbs={verbs}
         reasonId={reasonId}

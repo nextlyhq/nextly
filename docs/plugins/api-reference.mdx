@@ -315,6 +315,7 @@ interface PluginFieldType {
   surfaces?: FieldSurface[];       // where it may be offered; defaults to entries/singles only
   layout?: "takeover";
   validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;  // see below
+  validateEmpty?: boolean;         // experimental: hand `validate` an emptied value too
   validateOptions?: (field) => true | string | PluginFieldIssue[];              // see below
 }
 ```
@@ -379,6 +380,10 @@ so you never have to re-check that you were handed the shape your type stores.
 For `json` that check is representability — a cycle or a `BigInt` is rejected
 before you see it — and nothing more, so the shape of the document is yours to
 define.
+
+_Experimental:_ a type that sets `validateEmpty: true` is also handed a value a write
+empties (`null` or `""`), for content a write must not drop unasked, such as the
+blocks an author locked. Its `required` issue is still reported as before.
 
 #### Judging a value against stored rows: `write.readStored`
 

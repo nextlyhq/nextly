@@ -411,6 +411,8 @@ async function validateFieldValue(
     (field.type === "select" || field.type === "radio");
   const emptyIsOmission =
     !options.emptyIsAValue || value === null || value === undefined;
+  // Read before the empty-value return, which a type may opt out of below.
+  const pluginType = getFieldType(field.type);
   if (
     isEmpty(value) &&
     emptyIsOmission &&
@@ -424,6 +426,24 @@ async function validateFieldValue(
         message: `${label} is required.`,
       });
     }
+    // A type that asked to judge an emptied field is handed the empty value a
+    // write SENT. Absent means untouched on an update, so it is not handed on.
+    if (
+      pluginType?.validateEmpty === true &&
+      pluginType.validate !== undefined &&
+      value !== undefined
+    ) {
+      await validatePluginFieldType(
+        pluginType.validate,
+        field,
+        value,
+        path,
+        label,
+        write,
+        options,
+        issues
+      );
+    }
     return;
   }
 
@@ -433,7 +453,6 @@ async function validateFieldValue(
   // statement of what its column holds, so the built-in rules for that
   // primitive's equivalent type are the ones that apply. Built-ins resolve to
   // themselves — a plugin cannot redefine one, so this never reroutes them.
-  const pluginType = getFieldType(field.type);
   const effectiveType = pluginType
     ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[pluginType.storage]
     : field.type;

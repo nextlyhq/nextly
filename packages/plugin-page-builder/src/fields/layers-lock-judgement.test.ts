@@ -18,11 +18,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
 
-import {
-  LAYERS_LOCK_CHANGED,
-  layersLockIssues,
-  withLockIssues,
-} from "./layers-lock-judgement";
+import { layersLockIssues, withLockIssues } from "./layers-lock-judgement";
+import { LAYERS_LOCK_CHANGED } from "./layers-lock-wording";
 
 const lockedPage = (tone: string) => ({
   formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -103,6 +100,35 @@ describe("layersLockIssues", () => {
       },
     ]);
     expect(issues[0]?.message).toMatch(/^Content\/nodes\/0: /);
+  });
+
+  it("refuses emptying a translated field in the language the write is in", async () => {
+    // Core hands the validator an emptied value (`validateEmpty`), with the
+    // write's language, so a `null` is judged like any other replacement.
+    const asked: PluginStoredValueTarget[] = [];
+    const issues = await layersLockIssues(
+      null,
+      argsFor(
+        writeTo(
+          async target => {
+            asked.push(target);
+            return { kind: "value", value: lockedPage("dark") };
+          },
+          { locale: "de" }
+        ),
+        {},
+        true
+      ),
+      "Content"
+    );
+
+    expect(asked.map(target => target.locale)).toEqual(["de"]);
+    expect(issues).toEqual([
+      expect.objectContaining({
+        code: LAYERS_LOCK_CHANGED,
+        message: expect.stringContaining("would remove it"),
+      }),
+    ]);
   });
 
   it("keeps a translated field's write whose language store is not ready, and says so", async () => {

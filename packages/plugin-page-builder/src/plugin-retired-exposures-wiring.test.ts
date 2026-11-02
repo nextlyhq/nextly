@@ -40,22 +40,13 @@ async function registrations(options?: PageBuilderOptions): Promise<string[]> {
   return on.mock.calls.map(([phase, collection]) => `${phase} ${collection}`);
 }
 
-/**
- * How many times one registration was made. `beforeUpdate *` is shared: the
- * guard on an emptied blocks field registers there on every install, so the
- * retirement's own registration is the one beyond it.
- */
-function countOf(wired: readonly string[], registration: string): number {
-  return wired.filter(entry => entry === registration).length;
-}
-
 describe("the retirement of removed component fields, as installed", () => {
   it("records on the component store and strips on every write", async () => {
     const wired = await registrations();
 
     expect(wired).toContain(`afterUpdate ${COMPONENTS_SLUG}`);
     expect(wired).toContain("beforeCreate *");
-    expect(countOf(wired, "beforeUpdate *")).toBe(2);
+    expect(wired).toContain("beforeUpdate *");
   });
 
   it("follows a host that keeps components in another collection", async () => {
@@ -71,6 +62,6 @@ describe("the retirement of removed component fields, as installed", () => {
 
     expect(wired).not.toContain(`afterUpdate ${COMPONENTS_SLUG}`);
     expect(wired).not.toContain("beforeCreate *");
-    expect(countOf(wired, "beforeUpdate *")).toBe(1);
+    expect(wired).not.toContain("beforeUpdate *");
   });
 });

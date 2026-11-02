@@ -15,7 +15,10 @@
  *
  * @module __tests__/layers-lock.integration.test
  */
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+} from "@nextlyhq/blocks-engine";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -24,7 +27,9 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { LAYERS_LOCK_CHANGED } from "../fields/layers-lock-judgement";
+import { COMPONENTS_SLUG } from "../collections/components";
+import { blocks } from "../fields/blocksHelper";
+import { LAYERS_LOCK_CHANGED } from "../fields/layers-lock-wording";
 import { pageBuilder } from "../plugin";
 
 type Node = Record<string, unknown> & { id: string };
@@ -231,6 +236,65 @@ describe.each(getConfiguredTestDialects())(
       expect(await read()).toBeNull();
     });
 
+    it("refuses a field a LATER hook empties on a page holding a locked block", async () => {
+      // A collection's own `beforeUpdate` hook runs after any registered for
+      // every collection, so the field is judged on the data the hooks leave,
+      // where every other rule is judged.
+      const { update, read } = await storedPage();
+      current!.hooks.register("beforeUpdate", "pages", async context => {
+        const data = (context as { data?: Record<string, unknown> }).data;
+        return data === undefined ? undefined : { ...data, content: null };
+      });
+      await expectRefusedNamingHero(update(pageOf(storedNodes())));
+      expect((await read()).nodes).toEqual(pageOf(storedNodes()).nodes);
+    });
+
+    it("refuses emptying a Single's field that holds a locked block", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder()],
+        singles: [
+          { slug: "home", fields: [blocks({ name: "content" })] } as never,
+        ],
+      });
+      const t = current;
+      const save = (content: unknown) =>
+        t.nextly.updateSingle({
+          slug: "home",
+          data: { content },
+          overrideAccess: true,
+        } as never);
+      await save(pageOf(storedNodes()));
+      await expectRefusedNamingHero(save(null));
+    });
+
+    it("refuses an import that skips hooks and empties the field", async () => {
+      await storedPage();
+      const t = current!;
+      const [page] = (
+        await t.nextly.find({ collection: "pages", overrideAccess: true })
+      ).items as Array<{ id: string | number }>;
+      const entries = (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): {
+            updateEntries(
+              params: { collectionName: string; overrideAccess?: boolean },
+              entries: { id: string; data: Record<string, unknown> }[],
+              options?: { skipHooks?: boolean }
+            ): Promise<{ successful: number; failed: number }>;
+          };
+        }
+      ).getEntryService();
+
+      const result = await entries.updateEntries(
+        { collectionName: "pages", overrideAccess: true },
+        [{ id: String(page!.id), data: { content: null } }],
+        { skipHooks: true }
+      );
+
+      expect(result.failed, JSON.stringify(result)).toBe(1);
+    });
+
     it("accepts a change that leaves the locked block where and as it is", async () => {
       const { update, read } = await storedPage();
       // A block added before it shifts its index, not its place; the section
@@ -287,6 +351,129 @@ describe.each(getConfiguredTestDialects())(
       const again = structuredClone(stored.nodes);
       childrenOf(again[1]!)[0]!.props = { text: "Again", level: 1 };
       await expect(update(pageOf(again))).resolves.toBeDefined();
+    });
+
+    describe("a block locked inside a component a page places", () => {
+      /**
+       * A published component holding a locked "Hero" heading and a free one,
+       * each exposed to its placements through a text field.
+       */
+      async function promo(t: TestNextly): Promise<string> {
+        const created = await t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Promo",
+            slug: "promo",
+            content: {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: [
+                heading("hero", { locked: true, name: "Hero" }),
+                heading("sub"),
+              ],
+              exposed: [
+                {
+                  id: "title",
+                  label: "Title",
+                  nodeId: "hero",
+                  propPath: "text",
+                  type: "text",
+                },
+                {
+                  id: "subtitle",
+                  label: "Subtitle",
+                  nodeId: "sub",
+                  propPath: "text",
+                  type: "text",
+                },
+              ],
+            },
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        return String(created.item.id);
+      }
+
+      const placing = (componentId: string, overrides?: object): Node => ({
+        id: "i1",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: {
+          componentId,
+          ...(overrides === undefined ? {} : { overrides }),
+        },
+      });
+
+      it("refuses a placement's value that changes the locked block, naming it", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const id = await promo(t);
+        const save = (nodes: Node[]) =>
+          t.nextly.create({
+            collection: "pages",
+            data: {
+              title: "Home",
+              slug: `home-${String(Math.random()).slice(2, 8)}`,
+              content: pageOf(nodes),
+            },
+            overrideAccess: true,
+          });
+
+        // CONTROL: placed as it is, and given a value for the free block, the
+        // page saves; only the value reaching the locked block is refused.
+        await expect(save([placing(id)])).resolves.toBeDefined();
+        await expect(
+          save([placing(id, { subtitle: "Spring sale" })])
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(
+          save([placing(id, { title: "Changed" })])
+        );
+      });
+
+      it("refuses it on an update too", async () => {
+        const { update } = await storedPage([heading("loose")]);
+        const id = await promo(current!);
+        await expect(update(pageOf([placing(id)]))).resolves.toBeDefined();
+        await expectRefusedNamingHero(
+          update(pageOf([placing(id, { title: "Changed" })]))
+        );
+      });
+
+      it("keeps a value the stored page gave the block before it was locked", async () => {
+        const { update } = await storedPage([heading("loose")]);
+        const t = current!;
+        const id = await promo(t);
+        const unlocked = (await t.nextly.findByID({
+          collection: COMPONENTS_SLUG,
+          id,
+          overrideAccess: true,
+        })) as unknown as { content: { nodes: Node[] } };
+        const content = structuredClone(unlocked.content);
+        delete content.nodes[0]!.locked;
+        await t.nextly.update({
+          collection: COMPONENTS_SLUG,
+          id,
+          data: { content },
+          overrideAccess: true,
+        });
+        const given = pageOf([placing(id, { title: "Changed" })]);
+        await expect(update(given)).resolves.toBeDefined();
+
+        // The designer locks the block afterwards: the page keeps what it
+        // stores, and only a new value for the block is refused.
+        content.nodes[0]!.locked = true;
+        await t.nextly.update({
+          collection: COMPONENTS_SLUG,
+          id,
+          data: { content },
+          overrideAccess: true,
+        });
+        await expect(update(given)).resolves.toBeDefined();
+        await expectRefusedNamingHero(
+          update(pageOf([placing(id, { title: "Changed again" })]))
+        );
+      });
     });
   }
 );

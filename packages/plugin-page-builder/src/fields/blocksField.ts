@@ -190,6 +190,11 @@ export function blocksFieldType(
     category: "Structured",
     icon: "LayoutGrid",
 
+    // An emptied field is judged too: setting it to `null` or "" drops every
+    // block it holds, a locked one included, so the Layers lock is asked of
+    // that write as of any other, on the data every `before*` hook has left.
+    validateEmpty: true,
+
     /**
      * The document's own rules, run on every write.
      *
@@ -200,7 +205,12 @@ export function blocksFieldType(
      * document travels in the message.
      */
     validate: (value, args) => {
-      const verdict = judgedByRules(value, args, breakpoints, composition);
+      // An empty value has no document to judge by the rules, only the locks
+      // of the one it would replace.
+      const emptied = value === null || value === undefined || value === "";
+      const verdict = emptied
+        ? true
+        : judgedByRules(value, args, breakpoints, composition);
       // A value judged on its own, or a create, has no stored document to
       // hold a lock, and keeps the answer it always got, synchronously where
       // the rules gave one.
@@ -212,7 +222,7 @@ export function blocksFieldType(
         typeof args.field.label === "string" ? args.field.label : args.path;
       return Promise.resolve(verdict).then(answered =>
         layersLockIssues(
-          value,
+          emptied ? null : value,
           args,
           label,
           composition?.()?.onLayersLockUnjudged

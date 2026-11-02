@@ -27,10 +27,8 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 
 import { documentOf, type LayersLockUnjudged } from "./blocks-composition";
+import { LAYERS_LOCK_CHANGED, pageLockMessage } from "./layers-lock-wording";
 import { readStoredForms } from "./lock-baselines";
-
-/** The issue code a write breaking a Layers lock is refused with. */
-export const LAYERS_LOCK_CHANGED = "layers-lock-changed";
 
 /**
  * Whether a field path names a top-level field. A stored value can be read
@@ -51,42 +49,23 @@ export function judgesLayersLocks(args: PluginFieldValidateArgs): boolean {
   return args.mode === "update" && args.write !== undefined;
 }
 
-/** What one broken lock is refused with, naming the block and the way on. */
-function issueFor(
-  change: LayersLockChange,
-  path: string,
-  label: string
-): PluginFieldIssue {
-  const block = `"${change.label}"`;
-  const message =
-    change.kind === "removed"
-      ? `${block} is locked in Layers, and this write would remove it. A locked block, or a block holding one, can't be removed in the save that unlocks it: unlock it and save first, then remove it.`
-      : `${block} is locked in Layers, and this write would ${
-          change.kind === "moved" ? "move it" : "change it or a block inside it"
-        }. Send it unlocked in the same write to change it.`;
-  return {
-    path,
-    code: LAYERS_LOCK_CHANGED,
-    message: `${label}${change.path}: ${message}`,
-  };
-}
-
-/**
- * The issues each broken lock is refused with. One wording for every path
- * that judges a write, the field's validation and the guard on an emptied
- * field alike.
- */
-export function layersLockIssuesFor(
+/** The issues each broken lock is refused with. */
+function layersLockIssuesFor(
   changes: readonly LayersLockChange[],
   path: string,
   label: string
 ): PluginFieldIssue[] {
-  return changes.map(change => issueFor(change, path, label));
+  return changes.map(change => ({
+    path,
+    code: LAYERS_LOCK_CHANGED,
+    message: `${label}${change.path}: ${pageLockMessage(change)}`,
+  }));
 }
 
 /**
  * The issues a write breaking a Layers lock is refused with; empty when it
- * keeps every lock or is a create.
+ * keeps every lock or is a create. An emptied field (`null`) is judged too:
+ * every locked block it held would be removed.
  *
  * Two values cannot be read, so their locks cannot be judged: a blocks field
  * inside a group or a repeater, and a translated field whose language store is

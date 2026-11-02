@@ -75,7 +75,6 @@ import type {
 } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
-import { registerLayersLockGuard } from "./layers-lock-guard";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import {
@@ -909,8 +908,8 @@ export const pageBuilder = (
       const componentIndex =
         ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
         COMPONENT_USAGE_INDEX_SLUG;
-      // One wording for every place a Layers lock goes unjudged: the field's
-      // validation and the guard on an emptied field.
+      // What the server log says when the field's validation could not judge
+      // a write's Layers locks.
       const warnLayersLockUnjudged = (found: LayersLockUnjudged) =>
         ctx.logger.warn(
           `[page-builder] a save was not checked against the blocks locked in Layers, because the stored value could not be read (${found.reason}); a locked block it changed was not protected`,
@@ -922,9 +921,6 @@ export const pageBuilder = (
             reason: found.reason,
           }
         );
-      // Refuse an update that empties a blocks field holding a locked block,
-      // which the field's own validation is never handed.
-      registerLayersLockGuard({ ctx, onUnjudged: warnLayersLockUnjudged });
       composition = {
         store: {
           // The collection components actually live in, resolved the way the

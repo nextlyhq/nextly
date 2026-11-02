@@ -251,9 +251,10 @@ export interface PluginFieldType {
    * Runs after the built-in rules for the storage primitive and BEFORE the
    * field's own `validate`, so a schema author's rule composes on top of this
    * one rather than replacing it. An absent or empty value never reaches here
-   * — that is what `required` is for — and neither does one the storage
-   * primitive already refused, so a validator never has to re-check that it
-   * was handed the shape its type stores.
+   * — that is what `required` is for — unless the type sets `validateEmpty`;
+   * and neither does one the storage primitive already refused, so a
+   * validator never has to re-check that it was handed the shape its type
+   * stores.
    *
    * Return `true` to accept. Return a string for a single problem, or an array
    * when one value can be wrong in several places at once (a structured
@@ -271,6 +272,18 @@ export interface PluginFieldType {
     value: unknown,
     args: PluginFieldValidateArgs
   ) => PluginFieldValidationResult | Promise<PluginFieldValidationResult>;
+  /**
+   * @experimental Run `validate` for an EMPTY value too: a write that sets the
+   * field to `null` or an empty string, which otherwise never reaches it.
+   *
+   * For a type whose stored content a write must not be able to drop without
+   * being asked, such as a page whose blocks an author locked. Judged where
+   * every other rule is, on the data the write's `before*` hooks have left, so
+   * a hook emptying the field is judged as the caller emptying it would be.
+   * The validator then receives the empty value and decides what it means;
+   * required-ness is still reported as before.
+   */
+  validateEmpty?: boolean;
   /**
    * Checks on the field's own DECLARATION, run when a schema is registered
    * rather than when a value is written.

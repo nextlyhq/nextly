@@ -86,11 +86,13 @@ import {
 } from "../composition-reading";
 
 import { isForest } from "./blocks-document";
+import { LAYERS_LOCK_CHANGED, placedLockMessage } from "./layers-lock-wording";
 import {
   composedFormsRead,
   lockBaselines,
   readStoredForms,
 } from "./lock-baselines";
+import { placedLayersLocks } from "./placement-layers-locks";
 
 /** The issue shape core's validation envelope carries. */
 interface Issue {
@@ -216,10 +218,9 @@ export interface LayersLockUnjudged extends WrittenTo {
   readonly field: string;
   /**
    * Why its stored value could not be read: a translated field whose language
-   * store is not ready, a translated field emptied by a write whose language
-   * the check is not told, or a field inside a group or a repeater.
+   * store is not ready, or a field inside a group or a repeater.
    */
-  readonly reason: "language-not-ready" | "language-unknown" | "nested-field";
+  readonly reason: "language-not-ready" | "nested-field";
 }
 
 /**
@@ -528,6 +529,15 @@ async function judgeOwnComposition(args: {
   for (const fault of faults) {
     report.add(fault.code, fault.message);
   }
+  await judgePlacedLocks({
+    document,
+    composed: composed.composition.document,
+    reading: { library, read, limits: setup.limits, work },
+    stored: args.stored,
+    report,
+    setup,
+    unjudged: { field: args.field ?? "", ...args.writtenTo },
+  });
   await judgePlacementValues({
     document,
     library,
@@ -536,6 +546,36 @@ async function judgeOwnComposition(args: {
     stored: args.stored,
     report,
   });
+}
+
+/**
+ * Refuse a placement's value or slot content that changes a block its
+ * component locks in Layers (`placedLayersLocks`), naming the block. Where the
+ * stored page cannot be read (a localized field whose language is not ready),
+ * the write is kept and the server log says so, as for the page's own locks.
+ */
+async function judgePlacedLocks(
+  args: Parameters<typeof placedLayersLocks>[0] & {
+    report: Report;
+    setup: CompositionSetup;
+    unjudged: Omit<LayersLockUnjudged, "reason">;
+  }
+): Promise<void> {
+  const answer = await placedLayersLocks(args);
+  if (answer.kind === "unchecked") {
+    args.report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
+  if (answer.kind === "unjudged") {
+    args.setup.onLayersLockUnjudged?.({
+      ...args.unjudged,
+      reason: "language-not-ready",
+    });
+    return;
+  }
+  for (const change of answer.changes) {
+    args.report.add(LAYERS_LOCK_CHANGED, placedLockMessage(change));
+  }
 }
 
 /** The issue code for each way a placement's value is refused. */

@@ -215,7 +215,7 @@ export async function composedFormsRead(args: {
  * The document with each placement's own values and slot content removed, so
  * composing it draws every component as the component holds it.
  */
-function placementsAsComponentsHoldThem(
+export function placementsAsComponentsHoldThem(
   document: BlockDocument,
   limits: DocumentLimits
 ): BlockDocument {

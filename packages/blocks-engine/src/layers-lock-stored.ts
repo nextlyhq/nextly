@@ -58,6 +58,40 @@ interface Placed {
   readonly chain: readonly string[];
   /** The ancestors' ids alone, for asking whether one was already reported. */
   readonly ancestors: readonly string[];
+  /** The ids of the blocks in the same list, this one included, in order. */
+  readonly siblings: readonly string[];
+}
+
+/** The usable ids of a list's entries, in order. */
+function idsOf(entries: readonly unknown[]): string[] {
+  const ids: string[] = [];
+  for (const entry of entries) {
+    const id = idOf(entry);
+    if (id !== undefined) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Whether a node keeps its place among the siblings that were there before:
+ * the same of them before it, in stored and in written form.
+ *
+ * Only siblings both forms hold are counted, so a block added beside it or one
+ * removed shifts its index without moving it, while swapping it with a block
+ * that was already there is a move.
+ */
+function samePlaceAmongSiblings(stored: Placed, written: Placed): boolean {
+  const kept = new Set(written.siblings);
+  const was = new Set(stored.siblings);
+  const before = (list: readonly string[], present: Set<string>, id: string) =>
+    list.slice(0, list.indexOf(id)).filter(sibling => present.has(sibling));
+  const storedBefore = before(stored.siblings, kept, stored.id);
+  const writtenBefore = before(written.siblings, was, written.id);
+  const writtenSet = new Set(writtenBefore);
+  return (
+    storedBefore.length === writtenBefore.length &&
+    storedBefore.every(id => writtenSet.has(id))
+  );
 }
 
 /** A node's id, when the entry is a record carrying a usable one. */
@@ -84,6 +118,7 @@ function slotsOf(
 function rootsOf(forest: unknown): Placed[] {
   if (!isPlainRecord(forest) || !Array.isArray(forest.nodes)) return [];
   const roots: Placed[] = [];
+  const siblings = idsOf(forest.nodes as readonly unknown[]);
   (forest.nodes as readonly unknown[]).forEach((entry, index) => {
     const id = idOf(entry);
     if (id === undefined || !isPlainRecord(entry)) return;
@@ -93,6 +128,7 @@ function rootsOf(forest: unknown): Placed[] {
       path: pointer("/nodes", index),
       chain: [],
       ancestors: [],
+      siblings,
     });
   });
   return roots;
@@ -102,6 +138,7 @@ function rootsOf(forest: unknown): Placed[] {
 function childrenOf(parent: Placed): Placed[] {
   const placed: Placed[] = [];
   for (const [slot, children] of slotsOf(parent.node)) {
+    const siblings = idsOf(children);
     children.forEach((child, index) => {
       const id = idOf(child);
       if (id === undefined || !isPlainRecord(child)) return;
@@ -111,6 +148,7 @@ function childrenOf(parent: Placed): Placed[] {
         path: pointer(pointer(pointer(parent.path, "slots"), slot), index),
         chain: [...parent.chain, parent.id, slot],
         ancestors: [...parent.ancestors, parent.id],
+        siblings,
       });
     });
   }
@@ -256,6 +294,7 @@ function changeOf(
   // Unlocked in this same write: the one way past the lock.
   if (written.node.locked !== true) return undefined;
   if (!sameChain(stored.chain, written.chain)) return "moved";
+  if (!samePlaceAmongSiblings(stored, written)) return "moved";
   if (!sameApartFromLocks(stored.node, written.node)) return "changed";
   return undefined;
 }
