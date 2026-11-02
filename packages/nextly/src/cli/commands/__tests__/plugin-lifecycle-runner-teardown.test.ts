@@ -72,6 +72,12 @@ vi.mock("../../utils/registry-resolver", () => ({
 }));
 vi.mock("../../../domains/schema/ownership/uninstall-dependents", () => ({
   findUninstallDependents: () => Promise.resolve([]),
+  pluginEntities: () => ({
+    collectionSlugs: [],
+    collectionSlugForTable: () => null,
+    single: [],
+    fieldGroup: [],
+  }),
 }));
 
 vi.mock("../../utils/adapter", () => ({
@@ -109,7 +115,7 @@ vi.mock("../../../domains/schema/events/schema-events-repository", () => ({
     insertEvent() {
       return Promise.resolve("event");
     }
-    deleteModuleRows() {
+    deletePluginModuleRows() {
       return Promise.resolve();
     }
   },
@@ -123,7 +129,7 @@ vi.mock(
       read() {
         return Promise.resolve([]);
       }
-      deleteByOwner() {
+      deletePluginOwner() {
         return Promise.resolve();
       }
     },

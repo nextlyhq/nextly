@@ -188,10 +188,7 @@ export interface PluginLifecycleDeps {
    * `plugin_lifecycle` record stays: the boot reads it. Each delete matches
    * nothing the second time, so a resumed uninstall can run it again.
    */
-  forgetPlugin: (
-    plugin: LifecyclePlugin,
-    ledgerFilenames: readonly string[]
-  ) => Promise<void>;
+  forgetPlugin: (plugin: LifecyclePlugin) => Promise<void>;
   /**
    * Each named table that exists now, with a token the database keeps for
    * that table through a rename and gives no table that replaces it
@@ -767,7 +764,7 @@ async function executeUninstall(
   // A full uninstall leaves nothing of the plugin behind but the record that
   // it was uninstalled; keeping the data keeps its rows, marked orphaned.
   if (plan.finalState === "uninstalled") {
-    await deps.forgetPlugin(plugin, plan.ledgerFilenames);
+    await deps.forgetPlugin(plugin);
   } else {
     await registry.setState(plugin.name, plan.finalState);
   }

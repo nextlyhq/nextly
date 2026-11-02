@@ -71,12 +71,6 @@ export interface UninstallPlan {
   downModules: string[];
   /** Tables the operator is about to lose. Empty when keeping data. */
   tablesDropped: string[];
-  /**
-   * The plugin's migration-ledger rows, which a full uninstall removes so a
-   * later install applies every module from the start. Empty when keeping
-   * data, which keeps them.
-   */
-  ledgerFilenames: string[];
 }
 
 /**
@@ -95,7 +89,6 @@ export function planUninstall(input: UninstallInput): UninstallPlan {
       finalState: "orphaned",
       downModules: [],
       tablesDropped: [],
-      ledgerFilenames: [],
     };
   }
 
@@ -116,7 +109,6 @@ export function planUninstall(input: UninstallInput): UninstallPlan {
     finalState: "uninstalled",
     downModules: reversed,
     tablesDropped: [...new Set(tableRows.map(row => row.tableName))],
-    ledgerFilenames: reversed.map(name => `plugin:${input.pluginName}/${name}`),
   };
 }
 

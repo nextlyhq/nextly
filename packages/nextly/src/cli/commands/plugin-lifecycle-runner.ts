@@ -773,21 +773,13 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       owned: readonly OwnerRecord[]
     ) => {
       const definition = definitions.find(d => d.name === plugin.name);
-      // The plugin's collections, as the registry stores them, so fields
-      // elsewhere pointing at one are found by the slug they name.
-      const collectionConfigs = [
-        ...(definition?.contributes?.collections ?? []),
-        ...(definition?.collections ?? []),
-      ];
       const [
         { databaseDependentsSources },
-        { findUninstallDependents },
-        { resolveCollectionTableName },
+        { findUninstallDependents, pluginEntities },
         { installRegistryResolver },
       ] = await Promise.all([
         import("../../domains/collections/services/collection-dependents"),
         import("../../domains/schema/ownership/uninstall-dependents"),
-        import("../../domains/schema/utils/resolve-table-name"),
         import("../utils/registry-resolver"),
       ]);
       // The field registries are read by name through the adapter, which a
@@ -799,12 +791,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // refuse a table it does not list.
       const reader = Object.create(drizzleAdapter) as typeof drizzleAdapter;
       installRegistryResolver(reader);
-      const slugByTable = new Map(
-        collectionConfigs.map(collection => [
-          resolveCollectionTableName(collection.slug, collection.dbName),
-          collection.slug,
-        ])
-      );
+      // What it owns, by the names a host's renames gave it.
+      const own = pluginEntities(definition);
       const { compileExtensionSchema } = await import(
         "../../domains/schema/extension/publish"
       );
@@ -817,8 +805,10 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       return findUninstallDependents({
         pluginName: plugin.name,
         owned,
-        collectionSlugs: collectionConfigs.map(collection => collection.slug),
-        collectionSlugForTable: table => slugByTable.get(table) ?? null,
+        collectionSlugs: own.collectionSlugs,
+        collectionSlugForTable: own.collectionSlugForTable,
+        // Its own Singles and field groups go with it, and so do their fields.
+        ownEntities: { single: own.single, fieldGroup: own.fieldGroup },
         sources: databaseDependentsSources(reader, () =>
           Promise.resolve(extensionSchema ?? null)
         ),
@@ -831,17 +821,12 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     // A fully uninstalled plugin leaves its lifecycle record and nothing
     // else: its settings, ledger module rows and owner rows go, so a later
     // install starts from nothing. Each delete is a no-op when run again.
-    forgetPlugin: async (
-      plugin: LifecyclePlugin,
-      ledgerFilenames: readonly string[]
-    ) => {
+    forgetPlugin: async (plugin: LifecyclePlugin) => {
       // Loaded here: the settings tables module carries every dialect's.
-      const [{ pluginSettingsTables }, { eq }, { createOwnerRegistry }] =
-        await Promise.all([
-          import("../../schemas/plugin-settings"),
-          import("drizzle-orm"),
-          import("../../domains/schema/ownership/owner-registry"),
-        ]);
+      const [{ pluginSettingsTables }, { eq }] = await Promise.all([
+        import("../../schemas/plugin-settings"),
+        import("drizzle-orm"),
+      ]);
       const { nextlyPluginSettings } = pluginSettingsTables(dialect);
       await drizzleAdapter
         .getDrizzle<SettingsDeleteDb>()
@@ -850,10 +835,12 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       await new SchemaEventsRepository(
         drizzleAdapter.getDrizzle(),
         dialect
-      ).deleteModuleRows(ledgerFilenames);
-      await createOwnerRegistry(
-        new SchemaOwnersRepository(drizzleAdapter.getDrizzle(), dialect)
-      ).remove(plugin.name);
+      ).deletePluginModuleRows(plugin.name);
+      // Its rows only: another owner may share its name.
+      await new SchemaOwnersRepository(
+        drizzleAdapter.getDrizzle(),
+        dialect
+      ).deletePluginOwner(plugin.name);
     },
     // Read through the schema pipeline's own introspection, so a column is
     // judged present exactly as a push would see it.

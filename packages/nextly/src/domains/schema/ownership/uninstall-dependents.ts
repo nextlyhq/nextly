@@ -28,10 +28,14 @@
  *
  * @module domains/schema/ownership/uninstall-dependents
  */
+
+import type { PluginDefinition } from "../../../plugins/plugin-context";
+import { resolvePluginSelf } from "../../../plugins/self";
 import {
   findCollectionDependents,
   type DependentsSources,
 } from "../../collections/services/collection-dependents";
+import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
 import {
   describeOwner,
@@ -57,6 +61,8 @@ export interface UninstallDependentsInput {
   owned: readonly OwnerRecord[];
   /** The slugs of the plugin's own collections, whose fields go with it. */
   collectionSlugs: readonly string[];
+  /** Its own Singles and field groups, whose fields go with it too. */
+  ownEntities?: { single?: readonly string[]; fieldGroup?: readonly string[] };
   /** The collection a table holds, so fields pointing at it are found; `null` for a plain table. */
   collectionSlugForTable: (table: string) => string | null;
   /** Fields, the compiled extension schema, and recorded element rows. */
@@ -165,7 +171,14 @@ async function onItsTables(
     { fieldsGoWith: input.collectionSlugs }
   );
   for (const dependents of onTables.values()) {
-    for (const field of dependents.fields) {
+    const ownSingles = new Set(input.ownEntities?.single ?? []);
+    const ownGroups = new Set(input.ownEntities?.fieldGroup ?? []);
+    const othersFields = dependents.fields.filter(
+      field =>
+        !(field.entityType === "single" && ownSingles.has(field.entitySlug)) &&
+        !(field.entityType === "fieldGroup" && ownGroups.has(field.entitySlug))
+    );
+    for (const field of othersFields) {
       found.add({
         kind: "relationship field",
         name: field.fieldPath,
@@ -293,4 +306,53 @@ export async function findUninstallDependents(
   await onItsTables(input, ownTables, found);
   await onItsContributedColumns(input, new Set(ownTables), found);
   return found.list;
+}
+
+/** What a plugin owns, by the names its rows and fields use. */
+export interface PluginEntities {
+  /** Its collections' slugs, after a host's renames. */
+  collectionSlugs: string[];
+  /** The collection a table holds, or `null` for a table of its own schema. */
+  collectionSlugForTable: (table: string) => string | null;
+  single: string[];
+  fieldGroup: string[];
+}
+
+/**
+ * The collections, Singles and field groups a plugin owns, under the names
+ * it is stored by: a host's `renameMap` is applied, so a field elsewhere
+ * that names a renamed collection is matched to it.
+ */
+export function pluginEntities(
+  definition: PluginDefinition | undefined
+): PluginEntities {
+  if (definition === undefined) {
+    return {
+      collectionSlugs: [],
+      collectionSlugForTable: () => null,
+      single: [],
+      fieldGroup: [],
+    };
+  }
+  const self = resolvePluginSelf(definition);
+  const resolved = (declared: string): string =>
+    self.collections[declared] ?? declared;
+  const configs = [
+    ...(definition.contributes?.collections ?? []),
+    ...(definition.collections ?? []),
+  ];
+  const slugByTable = new Map(
+    configs.map(collection => [
+      resolveCollectionTableName(resolved(collection.slug), collection.dbName),
+      resolved(collection.slug),
+    ])
+  );
+  return {
+    collectionSlugs: configs.map(collection => resolved(collection.slug)),
+    collectionSlugForTable: table => slugByTable.get(table) ?? null,
+    single: Object.values(self.singles),
+    fieldGroup: (definition.contributes?.fieldGroups ?? []).map(
+      group => group.slug
+    ),
+  };
 }

@@ -8,7 +8,11 @@ import { describe, expect, it } from "vitest";
 import type { DependentsSources } from "../../../collections/services/collection-dependents";
 import type { ExtensionSchemaRecord } from "../dependent-elements";
 import type { OwnerRecord } from "../owner-registry";
-import { findUninstallDependents } from "../uninstall-dependents";
+import {
+  findUninstallDependents,
+  pluginEntities,
+} from "../uninstall-dependents";
+import type { PluginDefinition } from "../../../../plugins/plugin-context";
 
 const row = (over: Partial<OwnerRecord>): OwnerRecord => ({
   tableName: "fx__notes",
@@ -227,6 +231,48 @@ describe("findUninstallDependents", () => {
         }),
       ]
     );
+    expect(found).toEqual([]);
+  });
+});
+
+describe("what the plugin owns", () => {
+  it("names a collection by the slug a host renamed it to", () => {
+    const own = pluginEntities({
+      name: "fx",
+      version: "1.0.0",
+      contributes: { collections: [{ slug: "notes", fields: [] }] },
+      renameMap: { notes: "site_notes" },
+    } as unknown as PluginDefinition);
+    expect(own.collectionSlugs).toEqual(["site_notes"]);
+    expect(own.collectionSlugForTable("dc_site_notes")).toBe("site_notes");
+    expect(own.collectionSlugForTable("dc_notes")).toBeNull();
+  });
+
+  it("does not count a field of its own Single that points at its own collection", async () => {
+    const found = await findUninstallDependents({
+      pluginName: "fx",
+      owned: [row({})],
+      collectionSlugs: ["fx-notes"],
+      collectionSlugForTable: table =>
+        table === "fx__notes" ? "fx-notes" : null,
+      ownEntities: { single: ["fx-settings"], fieldGroup: [] },
+      sources: sources({
+        fields: [
+          {
+            entityType: "single",
+            entitySlug: "fx-settings",
+            fields: [
+              {
+                name: "featured",
+                type: "relationship",
+                relationTo: "fx-notes",
+              },
+            ],
+          },
+        ],
+      }),
+      recordedRowsOn: () => Promise.resolve([]),
+    });
     expect(found).toEqual([]);
   });
 });

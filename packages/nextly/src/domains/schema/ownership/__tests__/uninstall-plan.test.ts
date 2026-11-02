@@ -109,7 +109,6 @@ describe("--keep-data", () => {
       finalState: "orphaned",
       downModules: [],
       tablesDropped: [],
-      ledgerFilenames: [],
     });
   });
 
@@ -139,13 +138,6 @@ describe("a full uninstall", () => {
 
   it("names the tables the operator is about to lose", () => {
     expect(planUninstall(input()).tablesDropped).toEqual(["auth__identities"]);
-  });
-
-  it("names the plugin's qualified ledger rows, which a full uninstall removes", () => {
-    expect(planUninstall(input()).ledgerFilenames).toEqual([
-      "plugin:auth/002_add_column",
-      "plugin:auth/001_init",
-    ]);
   });
 
   it("refuses when any module cannot be undone", () => {

@@ -11,7 +11,7 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { schemaEventsTables } from "../../../schemas/schema-events";
@@ -23,6 +23,7 @@ import type {
   SchemaEventType,
 } from "../../../schemas/schema-events/types";
 
+import { pluginOfLedgerRow } from "./ledger-scope";
 import { standingOf } from "./migration-state";
 import { asRepositoryDb, type RepositoryDb } from "./repository-db";
 
@@ -418,21 +419,27 @@ export class SchemaEventsRepository {
   }
 
   /**
-   * Delete every ledger row recorded under these module filenames
-   * (`plugin:<name>/<module>`), whatever the event: applies, reverts and
-   * failures alike. A full plugin uninstall forgets the plugin's migrations
-   * so a later install applies them again from the first. `plugin_lifecycle`
-   * rows are never matched, so the record the boot reads stays. No
-   * `RETURNING`, which MySQL lacks.
+   * Delete every migration row a plugin's modules recorded, whatever the
+   * event (applies, rollbacks, failures) and whichever modules are still
+   * applied: a resumed uninstall no longer lists the modules it already
+   * undid, and their rows must go too, so a later install applies every
+   * module from the first. Matched by the ledger's own scope rule
+   * (`pluginOfLedgerRow`), never by a prefix a longer plugin name could
+   * share. `plugin_lifecycle` rows are never matched, so the record the boot
+   * reads stays.
    */
-  async deleteModuleRows(filenames: readonly string[]): Promise<void> {
-    if (filenames.length === 0) return;
-    await this.db.delete(this.table).where(
-      sql`filename IN (${sql.join(
-        filenames.map(name => sql`${name}`),
-        sql`, `
-      )}) AND event_type <> 'plugin_lifecycle'`
-    );
+  async deletePluginModuleRows(pluginName: string): Promise<void> {
+    const rows = (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`event_type <> 'plugin_lifecycle' AND filename LIKE 'plugin:%'`
+      )) as unknown as SchemaEventRow[];
+    const ids = rows
+      .filter(row => pluginOfLedgerRow(row.filename) === pluginName)
+      .map(row => row.id);
+    if (ids.length === 0) return;
+    await this.db.delete(this.table).where(inArray(this.table.id, ids));
   }
 
   /**

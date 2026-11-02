@@ -486,8 +486,10 @@ describe("plugins uninstall against a real database", () => {
 
     await uninstall();
 
-    // A full uninstall forgets its owner records with its tables.
+    // A full uninstall forgets its owner records with its tables, and the
+    // migration rows of the modules migrate:down already undid.
     expect(await ownerStates()).toEqual([]);
+    expect(await ledger()).toEqual([]);
   });
 
   it("names only the elements on its own tables as dropped with them", async () => {
@@ -572,6 +574,32 @@ describe("plugins uninstall refuses to drop what another owner built", () => {
 });
 
 describe("a full uninstall forgets the plugin", () => {
+  it("leaves another owner's rows that share its name", async () => {
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        tableName: "app_notes",
+        elementKind: "index" as const,
+        elementName: "app_idx_named_like_the_plugin",
+        ownerKind: "app",
+        ownerId: PLUGIN,
+        migratedBy: "app",
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active" as const,
+      },
+    ]);
+    state.migrations = [init, more];
+
+    await uninstall();
+
+    const left = await new SchemaOwnersRepository(state.db, "sqlite").read([
+      "app_notes",
+    ]);
+    expect(left.map(row => row.elementName)).toContain(
+      "app_idx_named_like_the_plugin"
+    );
+  });
+
   it("deletes its settings, secrets included, and leaves another owner's", async () => {
     const insert = state.sqlite.prepare(
       `INSERT INTO "nextly_plugin_settings" ("owner", "key", "value", "is_secret", "updated_at") VALUES (?, ?, ?, ?, ?)`
