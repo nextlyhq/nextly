@@ -1027,7 +1027,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
 
           expect(result.successful).toBe(1);
           expect(result.failed).toBe(1);
-          expect(result.errors).toEqual([{ index: 1, error: "nope" }]);
+          // The code-less 500 envelope reports the code the single-entry
+          // write answers it with.
+          expect(result.errors).toEqual([
+            { index: 1, error: "nope", code: "INTERNAL_ERROR" },
+          ]);
           // The committed-then-failed item still owes its delivery and its
           // tags, even though it is counted a failure.
           expect(result.eventRecorded).toBe(true);
@@ -1039,7 +1043,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           const result = await op.inTx(makeTx());
 
           expect(result.successful).toBe(1);
-          expect(result.errors).toEqual([{ index: 1, error: "nope" }]);
+          // The code-less 500 envelope reports the code the single-entry
+          // write answers it with.
+          expect(result.errors).toEqual([
+            { index: 1, error: "nope", code: "INTERNAL_ERROR" },
+          ]);
           expect(result.revalidationIntents).toHaveLength(2);
         });
 
@@ -1106,10 +1114,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             () => undefined,
             (error: unknown) => error
           );
-          // The abort is a typed internal failure: the public message stays
-          // generic — a returned worker failure may be a hook, access, or
-          // server problem, not caller input — and the per-index detail
-          // rides the cause, which the wire never serializes.
+          // The abort is the item's own answer, rebuilt from its envelope: a
+          // code-less 500 is a typed internal failure with the generic public
+          // message, and the per-index detail rides the log context, which
+          // the wire never serializes.
           if (!(rejection instanceof NextlyError)) {
             throw new Error(
               "expected the stopOnError abort to be a NextlyError"
@@ -1117,7 +1125,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           }
           expect(rejection.code).toBe("INTERNAL_ERROR");
           expect(rejection.message).toBe("An unexpected error occurred.");
-          expect(rejection.cause?.message).toContain("Entry at index 1 failed");
+          expect(rejection.logContext).toMatchObject({
+            batchIndex: 1,
+            itemMessage: "nope",
+          });
         });
 
         it("leaves the outbox signal absent on the twin when no item records an event", async () => {
