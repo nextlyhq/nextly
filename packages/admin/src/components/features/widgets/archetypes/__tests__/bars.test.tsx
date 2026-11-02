@@ -16,17 +16,17 @@ import type {
   WidgetResult,
 } from "@admin/types/dashboard/widgets";
 
-import { barsAccepts, barsBody } from "../bars";
+import { barsBody } from "../bars";
 import { CardEmpty } from "../../frame/states";
 import { gridBounds } from "../../__tests__/grid-bounds";
 
+// A declared card, answered on the server by its card id.
 const widget = (): DashboardWidget =>
   ({
     id: "acme/by-status",
     title: "Entries by status",
     archetype: "bars",
     size: gridBounds(4),
-    query: { source: "collection:posts", op: "groupBy", groupBy: "status" },
   }) as DashboardWidget;
 
 const grouped = (
@@ -53,15 +53,6 @@ describe("the bars archetype", () => {
     const outcome = barsBody({ op: "count", total: 12 }, widget());
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.message).toContain("count");
-  });
-
-  it("needs a query, and says so by name", () => {
-    expect(barsAccepts({ archetype: "bars", title: "By status" })).toContain(
-      "By status"
-    );
-    expect(
-      barsAccepts({ archetype: "bars", query: { op: "groupBy" } })
-    ).toBeUndefined();
   });
 
   it("names the bucket for rows whose value is null", () => {

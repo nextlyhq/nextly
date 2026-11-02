@@ -8,8 +8,11 @@
  * sheet holds them now, and whether the sheet is saving. A change is the
  * form's like any field's, so Done saves it with the rest, once it passes the
  * setting's own rules (`settingValueProblem`, the rule the layout write and
- * the card's read hold a stored value to); a value that does not is named
- * under the editor and Done keeps nothing.
+ * the card's read hold a stored value to) and, for a Field setting, names a
+ * field the chosen collection offers the reader (`unavailableFieldProblem`,
+ * the layout write's field-fit rule); a value that does not is named under
+ * the editor and Done keeps nothing. An editor clears a setting with
+ * `onChange(undefined)`, which the form holds as unset.
  *
  * Loaded by its path through the admin's component registry, as a card's own
  * component is, and isolated the same way: an editor that throws, or one the
@@ -19,12 +22,18 @@
  * @module components/features/widgets/edit/SettingEditorControl
  */
 
-import { settingValueProblem, type AnyWidgetSetting } from "nextly/config";
+import {
+  settingValueProblem,
+  type AnyWidgetSetting,
+  type PublishedContentSource,
+} from "nextly/config";
 import type { SettingEditorProps } from "nextly/widget-result";
 import type { JSX } from "react";
 import { useController, useWatch } from "react-hook-form";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+
+import { unavailableFieldProblem } from "./content-settings";
 
 /** What the sheet says where an editor cannot be drawn. */
 function EditorUnavailable({ label }: { label: string }): JSX.Element {
@@ -53,18 +62,25 @@ export function SettingEditorControl({
   setting,
   component,
   disabled,
+  sources,
 }: {
   setting: AnyWidgetSetting;
   component: string;
   disabled: boolean;
+  /** The collections and fields this reader may be offered; absent until they arrive. */
+  sources: readonly PublishedContentSource[] | undefined;
 }): JSX.Element {
   const { field, fieldState } = useController({
     name: setting.name,
     // Judged on Done, as the form judges every field: a value the setting
-    // does not take is named here rather than saved and set aside later.
+    // does not take is named here rather than saved and set aside later, and
+    // so is a field the collection the form holds now does not offer, which
+    // the layout write would refuse.
     rules: {
-      validate: (value: unknown) =>
-        settingValueProblem(setting, fromForm(value)) ?? true,
+      validate: (value: unknown, values: Record<string, unknown>) =>
+        settingValueProblem(setting, fromForm(value)) ??
+        unavailableFieldProblem(setting, values, sources) ??
+        true,
     },
   });
   // Every value in the sheet, so an editor whose choices follow another

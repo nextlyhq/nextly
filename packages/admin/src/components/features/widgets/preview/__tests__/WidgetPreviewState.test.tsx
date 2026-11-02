@@ -30,7 +30,6 @@ const openOrders = {
   title: "Open orders",
   archetype: "metric",
   size: { min: { w: 3, h: 2 }, default: { w: 4, h: 2 }, max: { w: 12, h: 2 } },
-  serverData: true,
   settings: [
     {
       name: "tone",

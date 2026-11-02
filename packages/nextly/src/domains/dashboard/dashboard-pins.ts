@@ -13,10 +13,13 @@
  * @experimental Until the dashboard's pins are built on it.
  */
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
 import { NextlyError } from "../../errors/nextly-error";
 import { DASHBOARD_PINS_TABLE } from "../../schemas/dashboard-pins/table-name";
 import { uuidV7 } from "../../utils/uuid-v7";
 import type { VersionsWhere, VersionsWhereCondition } from "../versions/db-api";
+import { lockPerson } from "../versions/history-locks";
 
 import {
   type DashboardLogger,
@@ -81,11 +84,7 @@ export interface DashboardPin {
 
 /** The database surface the repository reads and writes through. */
 export interface DashboardPinsDb extends TableProbe {
-  upsert<T = unknown>(
-    table: string,
-    data: Record<string, unknown>,
-    options: { conflictColumns: string[]; updateColumns?: string[] }
-  ): Promise<T>;
+  transaction<T>(callback: (tx: TransactionContext) => Promise<T>): Promise<T>;
   select<T = unknown>(
     table: string,
     options?: {
@@ -141,9 +140,18 @@ export class DashboardPins {
    * pin, and its time. A new pin past {@link MAX_PINS_PER_READER} is refused,
    * naming the limit, before anything is written.
    *
-   * Two pins written at the same moment at the limit's edge can both pass the
-   * count; the list a reader is shown is still read whole, and the next pin
-   * is refused, so the overshoot is never more than those racing writes.
+   * 🔴 The count and the insert are one step: both run in one transaction
+   * that first locks the reader's account row (`lockPerson`), so two pins of
+   * one reader written at once take turns, and the second counts the first.
+   * On PostgreSQL and MySQL that is a `FOR UPDATE` on the row; SQLite's write
+   * transaction already serialises every writer. The pins are read with a
+   * locking read too, so MySQL counts the latest committed rows rather than
+   * its snapshot. Without the lock, two pins at 19 would both pass the count
+   * and leave the reader with 21.
+   *
+   * Every pin counted is one the caller has not found orphaned: the service
+   * removes the reader's pins of targets that no longer exist before it pins
+   * (`DashboardPinsService.pin`), so a deleted target never costs a pin.
    */
   async pin(userId: string, target: PinTarget): Promise<void> {
     if (!(await this.present())) {
@@ -153,42 +161,39 @@ export class DashboardPins {
         logContext: { table: DASHBOARD_PINS_TABLE },
       });
     }
-    const pinned = await this.db.select<{ id: string } & PinColumns>(
-      DASHBOARD_PINS_TABLE,
-      {
-        where: { and: [{ column: "userId", op: "=", value: userId }] },
-        limit: MAX_PINS_PER_READER + 1,
-      }
-    );
     const columns = targetColumns(target);
-    const already = pinned.some(
-      row =>
-        row.targetType === columns.targetType &&
-        row.targetSlug === columns.targetSlug &&
-        row.entryId === columns.entryId
-    );
-    if (!already && pinned.length >= MAX_PINS_PER_READER) {
-      throw NextlyError.conflict({
-        reason: "state",
-        message: `You can pin at most ${MAX_PINS_PER_READER} entries and Singles. Unpin one to pin another.`,
-        logContext: { userId, limit: MAX_PINS_PER_READER },
+    await this.db.transaction(async tx => {
+      if (!(await lockPerson(tx, userId))) {
+        throw NextlyError.notFound({
+          logContext: { userId, reason: "pinning reader has no account" },
+        });
+      }
+      const pinned = await tx.select<PinColumns>(DASHBOARD_PINS_TABLE, {
+        columns: ["targetType", "targetSlug", "entryId"],
+        where: { and: [{ column: "userId", op: "=", value: userId }] },
+        forUpdate: true,
       });
-    }
-    // Insert, or keep the pin already there: an upsert that names nothing to
-    // update keeps the existing row on every dialect without raising.
-    await this.db.upsert(
-      DASHBOARD_PINS_TABLE,
-      {
+      const already = pinned.some(
+        row =>
+          row.targetType === columns.targetType &&
+          row.targetSlug === columns.targetSlug &&
+          row.entryId === columns.entryId
+      );
+      if (already) return;
+      if (pinned.length >= MAX_PINS_PER_READER) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message: `You can pin at most ${MAX_PINS_PER_READER} entries and Singles. Unpin one to pin another.`,
+          logContext: { userId, limit: MAX_PINS_PER_READER },
+        });
+      }
+      await tx.insert(DASHBOARD_PINS_TABLE, {
         id: uuidV7(),
         userId,
-        ...targetColumns(target),
+        ...columns,
         pinnedAt: new Date(),
-      },
-      {
-        conflictColumns: ["userId", "targetType", "targetSlug", "entryId"],
-        updateColumns: [],
-      }
-    );
+      });
+    });
   }
 
   /** Remove `userId`'s pin of `target`; true when there was one. */

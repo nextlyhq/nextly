@@ -65,6 +65,8 @@ import {
   widthChoices,
 } from "../sizes";
 
+import { settingsIntent } from "./settings-sheet-code";
+
 export interface CardActionsMenuProps {
   /** What the reader calls this card, which the button's name says. */
   title: string;
@@ -122,7 +124,7 @@ export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
 }
 
 /** One direction of the card's size: what it is called, its choices and how each reads. */
-interface SizeAxis {
+export interface SizeAxis {
   kind: "width" | "height";
   label: string;
   icon: ComponentType<{ "aria-hidden"?: boolean; className?: string }>;
@@ -135,7 +137,13 @@ interface SizeAxis {
 }
 
 /** One direction's choices under its label, the drawn one checked. */
-function AxisChoices({ axis }: { axis: SizeAxis }) {
+function AxisChoices({
+  axis,
+  disabled,
+}: {
+  axis: SizeAxis;
+  disabled: boolean;
+}) {
   return (
     <>
       <DropdownMenuLabel className="text-xs text-muted-foreground">
@@ -158,6 +166,7 @@ function AxisChoices({ axis }: { axis: SizeAxis }) {
               value={String(option)}
               data-testid={`card-${axis.kind}-${option}`}
               aria-label={name.spoken}
+              disabled={disabled}
             >
               {name.detail === undefined ? (
                 name.label
@@ -186,12 +195,24 @@ function AxisChoices({ axis }: { axis: SizeAxis }) {
  * a submenu beside it has room on neither side, so it was drawn partly off the screen. In place,
  * the choices share the menu's own box, which already fits.
  */
-function AxisSection({ axis, inPlace }: { axis: SizeAxis; inPlace: boolean }) {
-  if (inPlace) return <AxisChoices axis={axis} />;
+export function AxisSection({
+  axis,
+  inPlace,
+  disabled = false,
+}: {
+  axis: SizeAxis;
+  inPlace: boolean;
+  /** A write is in flight, so no size can be chosen now. */
+  disabled?: boolean;
+}): JSX.Element {
+  if (inPlace) return <AxisChoices axis={axis} disabled={disabled} />;
   const Icon = axis.icon;
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger data-testid={`card-${axis.kind}-menu`}>
+      <DropdownMenuSubTrigger
+        disabled={disabled}
+        data-testid={`card-${axis.kind}-menu`}
+      >
         <Icon aria-hidden />
         {axis.label}
         <span aria-hidden className="ml-auto text-xs text-muted-foreground">
@@ -199,7 +220,7 @@ function AxisSection({ axis, inPlace }: { axis: SizeAxis; inPlace: boolean }) {
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
-        <AxisChoices axis={axis} />
+        <AxisChoices axis={axis} disabled={disabled} />
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );
@@ -207,9 +228,10 @@ function AxisSection({ axis, inPlace }: { axis: SizeAxis; inPlace: boolean }) {
 
 /**
  * The directions a card may be resized in: each whose bounds offer more than the one size it
- * has, so a widget of one fixed height offers no Height at all.
+ * has, so a widget of one fixed height offers no Height at all. The one reading of a card's size
+ * choices for both card menus and the quick popover.
  */
-function sizeAxes(
+export function sizeAxes(
   size: GridSize,
   bounds: WidgetSizeBounds,
   setSize: (size: GridSize) => void
@@ -237,6 +259,15 @@ function sizeAxes(
   ];
   return axes.filter(axis => axis.choices.length > 1);
 }
+
+/**
+ * How Remove is drawn in a card's menu, at rest and while customising: in the destructive colour,
+ * highlighted or not, as the one item that takes something away. The deeper shade in light mode,
+ * where the reference red is under 4.5:1 on the menu's surface; the reference red in dark mode,
+ * where the deeper shade is the one that falls short.
+ */
+export const REMOVE_ITEM_CLASS =
+  "text-destructive-700 data-[highlighted]:text-destructive-700 dark:text-destructive dark:data-[highlighted]:text-destructive";
 
 export function CardActionsMenu({
   title,
@@ -266,6 +297,9 @@ export function CardActionsMenu({
       <DropdownMenuTrigger asChild>
         <Button
           ref={triggerRef}
+          // With Settings in this menu, the sheet's code starts loading as
+          // the reader heads for the menu.
+          {...(on.openSettings ? settingsIntent : {})}
           type="button"
           variant="ghost"
           size="icon"
@@ -288,6 +322,21 @@ export function CardActionsMenu({
           event.preventDefault();
         }}
       >
+        {/* Settings, Size, the moves, then Remove: the order of the card menu at rest, with
+            the moves customising adds in the middle. */}
+        {on.openSettings ? (
+          <DropdownMenuItem
+            onSelect={handled(on.openSettings)}
+            data-testid="card-settings"
+          >
+            <Settings aria-hidden className="size-4" />
+            Settings
+          </DropdownMenuItem>
+        ) : null}
+        {sizeAxes(size, bounds, on.setSize).map(axis => (
+          <AxisSection key={axis.kind} axis={axis} inPlace={sizesInPlace} />
+        ))}
+        <DropdownMenuSeparator />
         {MOVES.map(({ direction, label, icon: Icon }) => (
           <DropdownMenuItem
             key={direction}
@@ -302,24 +351,9 @@ export function CardActionsMenu({
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
-        {sizeAxes(size, bounds, on.setSize).map(axis => (
-          <AxisSection key={axis.kind} axis={axis} inPlace={sizesInPlace} />
-        ))}
-        {on.openSettings ? (
-          <DropdownMenuItem
-            onSelect={handled(on.openSettings)}
-            data-testid="card-settings"
-          >
-            <Settings aria-hidden className="size-4" />
-            Settings
-          </DropdownMenuItem>
-        ) : null}
-        <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={handled(on.remove)}
-          // The destructive token, highlighted or not: the one item here that
-          // takes something away.
-          className="text-destructive data-[highlighted]:text-destructive"
+          className={REMOVE_ITEM_CLASS}
           data-testid="card-remove"
         >
           <Trash2 aria-hidden className="size-4" />

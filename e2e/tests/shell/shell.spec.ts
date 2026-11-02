@@ -483,6 +483,89 @@ test.describe("the readiness diagnostic itself", () => {
     expect(String(error)).toMatch(/Timeout|exceeded/i);
     expect(String(error)).not.toContain("not in the DOM");
   });
+
+  /**
+   * A visible rail beside a painted shell root that has no box yet, and gets
+   * one `sizedAfter` milliseconds in, or never.
+   */
+  const railBesideUnsizedChrome = (sizedAfter?: number) =>
+    `<html><body><nav aria-label="Editor panels">Rail</nav>
+     <div class="nx-builder-chrome"
+       style="background-color:rgb(255, 255, 255);width:0;height:0"></div>
+     ${
+       sizedAfter === undefined
+         ? ""
+         : `<script>setTimeout(() => {
+              const chrome = document.querySelector(".nx-builder-chrome");
+              chrome.style.width = "800px";
+              chrome.style.height = "600px";
+            }, ${sizedAfter});</script>`
+     }</body></html>`;
+
+  test("waits for a shell root that gets its box after its rail shows", async ({
+    page,
+  }) => {
+    // The rail is visible before the root has laid out, as it is on a loaded
+    // machine. Measured once, at that instant, the root read as unstyled and
+    // failed whichever test landed there.
+    await page.setContent(railBesideUnsizedChrome(300));
+
+    await expect(assertShellReady(page, { timeout: 5_000 })).resolves.toBe(
+      undefined
+    );
+  });
+
+  test("waits as long as the box takes, not a set time", async ({ page }) => {
+    // A wait of a fixed length would pass the case above and fail here, as a
+    // busier machine would make it fail again.
+    await page.setContent(railBesideUnsizedChrome(900));
+
+    await expect(assertShellReady(page, { timeout: 5_000 })).resolves.toBe(
+      undefined
+    );
+  });
+
+  test("is ready soon after the box arrives, not at the end of the allowance", async ({
+    page,
+  }) => {
+    // Bounded on both sides: never before the box exists, and well before the
+    // allowance runs out, so the wait follows the shell rather than a clock.
+    const started = Date.now();
+    await page.setContent(railBesideUnsizedChrome(1_500));
+    await assertShellReady(page, { timeout: 8_000 });
+    const took = Date.now() - started;
+
+    expect(took).toBeGreaterThanOrEqual(1_400);
+    expect(took).toBeLessThan(3_000);
+  });
+
+  test("still names a shell root that never gets its box", async ({ page }) => {
+    // The wait is bounded, and running out of it is a failure with the same
+    // diagnosis, never a pass.
+    await page.setContent(railBesideUnsizedChrome());
+
+    await expect(assertShellReady(page, NEVER_READY)).rejects.toThrow(
+      /no layout box/
+    );
+  });
+
+  test("reports a missing shell root at once, not after the allowance", async ({
+    page,
+  }) => {
+    // A box can arrive late; a root missing beside a rendered rail is a markup
+    // change, and waiting for it would add the whole allowance to every goto.
+    await page.setContent(
+      `<html><body><nav aria-label="Editor panels">Rail</nav></body></html>`
+    );
+    const started = Date.now();
+    const error = await assertShellReady(page, { timeout: 10_000 }).then(
+      () => null,
+      (thrown: unknown) => thrown
+    );
+
+    expect(String(error)).toMatch(/ROOT is missing/);
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
 });
 
 test.describe("the unpainted predicate", () => {

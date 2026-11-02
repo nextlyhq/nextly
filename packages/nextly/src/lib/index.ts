@@ -22,11 +22,7 @@ export * from "./env";
 export * from "./get-base-url";
 export * from "./logger";
 export {
-  getMediaVariant,
-  getSmallestMediaVariant,
   normalizeMediaUrls,
   toAbsoluteMediaUrl,
   toPublicMediaUrl,
-  type MediaLike,
-  type GetMediaVariantOptions,
 } from "./media-variant";

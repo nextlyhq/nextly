@@ -204,7 +204,7 @@ describe("useTableColumns", () => {
 
   /**
    * Same guard, one level deeper: a caller that rebuilds its pinned set per
-   * render (the shape the image-sizes surface carried before migrating here)
+   * render (a shape a list surface once carried before migrating here)
    * must not lose the stable array — identity follows meaning, the way the
    * hook underneath treats its own array arguments.
    */

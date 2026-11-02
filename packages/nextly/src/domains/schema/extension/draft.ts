@@ -22,6 +22,10 @@ import {
   type SupportedDialect,
 } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  DROP_SIZES_COMMAND,
+  isReservedCoreColumn,
+} from "../../media/retired-image-sizes-constants";
 import { kindAndSizes, toSnakeCase } from "../services/field-column-descriptor";
 
 import type { TableRelationInput, ColumnBuilder, TableDefinition } from "./dsl";
@@ -492,6 +496,20 @@ function assertColumnFitsTable(
     refuse(
       `${scope.ownerPath}.extendTable.${table.name}`,
       `Column "${column.name}" is already declared on "${table.name}".`
+    );
+  }
+  // A name the core table once declared, kept so that a column of that name
+  // on it is only ever the core one. `media.sizes` recorded each older item's
+  // image size files, and an existing database may still have it until
+  // `nextly media remove-sizes --apply --drop` removes it; a contributed
+  // `sizes` would be read as that record, and its values as files to delete.
+  if (
+    table.owner.kind === "core" &&
+    isReservedCoreColumn(table.name, column.name)
+  ) {
+    refuse(
+      `${scope.ownerPath}.extendTable.${table.name}`,
+      `Column "${column.name}" is reserved on "${table.name}": it is where image sizes were stored, and an existing database may still have that column until \`${DROP_SIZES_COMMAND}\` drops it. Give the column another name.`
     );
   }
   const existingKey = table.columns.find(

@@ -76,13 +76,19 @@ import {
   formatTimestamp,
   slugify,
 } from "../../domains/schema/migrate-create/format-file";
-import { generateMigration } from "../../domains/schema/migrate-create/generate";
+import {
+  generateMigration,
+  removedCollectionTables,
+} from "../../domains/schema/migrate-create/generate";
 import {
   generateBlankPluginMigration,
   generatePluginMigration,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
-import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
+import {
+  EMPTY_SNAPSHOT,
+  loadLatestSnapshot,
+} from "../../domains/schema/migrate-create/snapshot-io";
 import type {
   ContributedElements,
   TableSpec,
@@ -427,13 +433,57 @@ export async function runMigrateCreate(
   // but extension schema. Taking that early return first meant an
   // extension-only configuration wrote no migration at all and production
   // never received the table.
+  const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
+
+  // Before the app stream compiles: a plugin hook still extending a removed
+  // collection's table would stop that compile with a bare "does not exist",
+  // where this names what the hook adds. A drop of a collection something
+  // still depends on is refused with the message a delete gets. The check and
+  // its readers are loaded only when the migration would drop a collection,
+  // which most runs do not.
+  const removedTables = removedCollectionTables({
+    previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
+    collections,
+    singles,
+    components,
+    dialect,
+  });
+  if (removedTables.length > 0) {
+    try {
+      const [
+        { assertRemovedCollectionsUnused },
+        { compileExtensionSchemaWith },
+      ] = await Promise.all([
+        import("../../domains/schema/migrate-create/removed-collections"),
+        import(
+          "../../domains/collections/services/collection-dependents-schema"
+        ),
+      ]);
+      await assertRemovedCollectionsUnused({
+        removedTables,
+        collections,
+        singles,
+        components,
+        dialect,
+        extensionSchema: removed =>
+          compileExtensionSchemaWith({
+            config: configResult.config,
+            dialect,
+            removedCollections: removed,
+            logger: { warn: m => logger.warn(m) },
+          }),
+      });
+    } catch (error) {
+      exitWithError(logger, error);
+    }
+  }
+
   const appStream = await compileAppStreamTables({
     config: configResult.config,
     dialect,
     logger: { warn: m => logger.warn(m) },
   });
 
-  const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
   // A new address is judged by the one address rule before anything is written.
   assertMigrationAddresses(merged, latest, logger);
   // The rows as the previous snapshot recorded each Builder entity, for a

@@ -5,6 +5,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { Widget } from "../../kit";
 import { WidgetCard } from "../../WidgetCard";
 import {
   cardBodyHeightPx,
@@ -50,11 +51,10 @@ describe("the frame's measures", () => {
     // The must-differ half of the body height: the numbers above are only true while the frame
     // draws these classes. Each is read off the drawn card, not off the constants.
     render(
-      <WidgetCard
-        title="Published posts"
-        link={{ label: "View all", href: "/admin/collections/posts" }}
-      >
+      <WidgetCard title="Published posts">
         <p>body</p>
+        {/* A footer link, so the card draws its footer and its gap is read. */}
+        <Widget.FooterLink href="/admin/collections/posts" label="View all" />
       </WidgetCard>
     );
     const card = screen.getByRole("region", { name: "Published posts" });

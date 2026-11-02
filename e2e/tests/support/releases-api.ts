@@ -83,3 +83,25 @@ export async function cancel(page: Requester, id: string): Promise<void> {
     await page.request.post(`${API}/releases/${id}/cancel`, { data: {} })
   );
 }
+
+/**
+ * How many releases each day from `from` to `to` holds, read in `timezone`,
+ * from the calendar read the admin draws its grid from. A window of at most
+ * six weeks, as that read takes.
+ */
+export async function releasesPerDay(
+  page: Requester,
+  from: string,
+  to: string,
+  timezone: string
+): Promise<Map<string, number>> {
+  const search = new URLSearchParams({ from, to, timezone });
+  const response = await page.request.get(
+    `${API}/releases/calendar?${search.toString()}`
+  );
+  expect(response.ok(), await response.text()).toBe(true);
+  const read = (await response.json()) as {
+    days: { date: string; total: number }[];
+  };
+  return new Map(read.days.map(day => [day.date, day.total]));
+}

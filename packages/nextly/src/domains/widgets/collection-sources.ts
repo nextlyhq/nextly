@@ -75,6 +75,12 @@ interface RegisteredCollection {
    */
   timestamps?: unknown;
   /**
+   * Who defines the collection: the app's code, a plugin, or the Schema
+   * Builder. Read with `admin` by the kept-off rule (`keptOffDashboard`), which
+   * leaves out a collection removed from code.
+   */
+  source?: unknown;
+  /**
    * The Draft/Published `status` column. Read defensively for the same reason
    * `timestamps` is, and carried for the same reason: the flag decides whether
    * `status` exists as a COLUMN, and a source that omits a column the table has
@@ -431,7 +437,7 @@ export async function refreshCollectionSources(): Promise<boolean> {
     (collection): collection is RegisteredCollection & { slug: string } =>
       typeof collection.slug === "string" &&
       collection.slug !== "" &&
-      !keptOffDashboard(collection)
+      !keptOffDashboard("collection", collection)
   );
 
   registerBuiltInSources(
