@@ -35,7 +35,14 @@ import {
   useUpdateSingleDocument,
   validationIssues,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useMemo } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  type Context,
+} from "react";
 
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import {
@@ -167,6 +174,80 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
   return issues;
 }
 
+/**
+ * A stored style change as one step of the editor's undo history. Each half
+ * writes the section and answers whether the write was stored.
+ */
+export interface SiteStyleStep {
+  readonly undo: () => Promise<SiteStyleReplay>;
+  readonly redo: () => Promise<SiteStyleReplay>;
+}
+
+/** What one half of a step came to: whether it was stored, and what. */
+export interface SiteStyleReplay {
+  readonly stored: boolean;
+  readonly section: SiteStyleSection;
+  /** The section's value once the write answered. */
+  readonly value: unknown;
+}
+
+/**
+ * Where saves made inside the editor become steps of its history.
+ *
+ * A style is stored the moment it changes, so undoing one is another write:
+ * the section as it was before. `settled` holds, per section, what it will
+ * hold once every write already made in this editor has answered: a stored
+ * write's value, or for a refused one what stood before it. Shared by every
+ * studio, and every write joins it in turn, so a step's "before" is what was
+ * really there, whichever saves were in flight or refused, which the read
+ * cannot say until it catches up.
+ */
+export interface SiteStyleHistory {
+  /** Records a step; answers a function that withdraws it. */
+  readonly record: (step: SiteStyleStep) => () => void;
+  readonly settled: Map<SiteStyleSection, SectionChain>;
+}
+
+/**
+ * One section's writes in this editor, in turn.
+ *
+ * `tail` settles to what the section holds once every write made so far has
+ * answered. Once none is in flight (`pending` 0), `held` is that value and
+ * `heldAt` the stored document read at that moment: a newer read means the
+ * section moved elsewhere (another tab, or the echo of these writes), and the
+ * read is believed over the chain from then on.
+ */
+export interface SectionChain {
+  tail: Promise<unknown>;
+  pending: number;
+  held: unknown;
+  heldAt: unknown;
+}
+
+/** Whether two section values are the same, as stored JSON. */
+/** What a queued write answers with when it should write nothing after all. */
+const SKIP: unique symbol = Symbol("skip");
+
+export function sameSection(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/** Null outside the editor, where a save joins no history. */
+export const SiteStyleHistoryContext: Context<SiteStyleHistory | null> =
+  createContext<SiteStyleHistory | null>(null);
+
+/**
+ * A section as the stored document holds it, or `null` when it holds none.
+ * Raw rather than narrowed, so writing it back stores exactly what was there.
+ */
+export function storedSection(
+  document: unknown,
+  section: SiteStyleSection
+): unknown {
+  if (typeof document !== "object" || document === null) return null;
+  return (document as Record<string, unknown>)[section] ?? null;
+}
+
 /** Saving one section, and what the last attempt said. */
 export interface SiteStyleWrite {
   /** Save ONE section. Every other section is left exactly as it was. */
@@ -193,8 +274,13 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   const mutation = useUpdateSingleDocument(SITE_STYLE_SLUG, undefined, {
     scopeId: SITE_STYLE_SLUG,
   });
+  // The stored document, read at the moment of a save rather than closed over.
+  const { data } = useSingleDocument(SITE_STYLE_SLUG);
+  const stored = useRef(data);
+  stored.current = data;
+  const history = useContext(SiteStyleHistoryContext);
 
-  const save = useCallback(
+  const write = useCallback(
     async (
       section: SiteStyleSection,
       value: unknown
@@ -223,6 +309,117 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       }
     },
     [mutation]
+  );
+
+  /**
+   * Write a section after every write already made to it in this editor, and
+   * hand on what it then holds. `value` is read only once those have
+   * answered, so an undo can write back a "before" that is still settling.
+   */
+  const inTurn = useCallback(
+    (
+      chain: SectionChain,
+      section: SiteStyleSection,
+      value: (before: unknown) => unknown
+    ) => {
+      const before = chain.tail;
+      chain.pending += 1;
+      const done = before.then(async held => {
+        const next = await value(held);
+        // A write whose step was withdrawn while it waited stores nothing.
+        if (next === SKIP) {
+          return { result: { saved: false, issues: {} }, holds: held };
+        }
+        const result = await write(section, next);
+        return { result, holds: result.saved ? next : held };
+      });
+      chain.tail = done.then(({ holds }) => {
+        chain.pending -= 1;
+        if (chain.pending === 0) {
+          chain.held = holds;
+          chain.heldAt = stored.current;
+        }
+        return holds;
+      });
+      return { before, done };
+    },
+    [write]
+  );
+
+  /**
+   * The section's chain, begun again from the stored read when nothing of
+   * this editor's is in flight and the read has moved on since it settled.
+   */
+  const chainOf = useCallback(
+    (
+      settled: Map<SiteStyleSection, SectionChain>,
+      section: SiteStyleSection
+    ): SectionChain => {
+      const known = settled.get(section);
+      if (
+        known !== undefined &&
+        (known.pending > 0 || known.heldAt === stored.current)
+      ) {
+        return known;
+      }
+      const held = storedSection(stored.current, section);
+      const fresh: SectionChain = {
+        tail: Promise.resolve(held),
+        pending: 0,
+        held,
+        heldAt: stored.current,
+      };
+      settled.set(section, fresh);
+      return fresh;
+    },
+    []
+  );
+
+  /*
+   * A save inside the editor is also a step of its history, recorded when the
+   * author makes the change rather than when it is stored: the studios save
+   * without waiting, and a page edit made meanwhile comes after it. A refused
+   * save changed nothing, so its step is withdrawn.
+   */
+  const save = useCallback(
+    async (
+      section: SiteStyleSection,
+      value: unknown
+    ): Promise<SiteStyleSaveResult> => {
+      if (history === null) return write(section, value);
+      const { settled } = history;
+      const chain = chainOf(settled, section);
+      // A save that leaves the section as it stands is no step to take back,
+      // and must not end the redo branch.
+      if (chain.pending === 0 && sameSection(chain.held, value)) {
+        return write(section, value);
+      }
+      const { before, done } = inTurn(chain, section, () => value);
+      // Set once the save is refused: an undo or redo of it queued in the
+      // meantime then writes nothing, or a change would be stored with no
+      // step left to take it back.
+      let withdrawn = false;
+      const replay =
+        (target: () => unknown) => async (): Promise<SiteStyleReplay> => {
+          const { result, holds } = await inTurn(
+            chainOf(settled, section),
+            section,
+            () => (withdrawn ? SKIP : target())
+          ).done;
+          return { stored: result.saved, section, value: holds };
+        };
+      const withdraw = history.record({
+        undo: replay(() => before),
+        redo: replay(() => value),
+      });
+      const { result } = await done;
+      if (!result.saved) {
+        withdrawn = true;
+        withdraw();
+      }
+      return result;
+    },
+    [write, history, inTurn, chainOf]
   );
 
   return { save, saving: mutation.isPending };

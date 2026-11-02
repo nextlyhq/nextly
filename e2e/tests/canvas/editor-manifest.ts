@@ -103,11 +103,10 @@ export const EDITOR_PROPERTIES: readonly AcceptanceProperty[] = [
   },
   {
     n: 14,
-    property: "A Layers drag reorders a block",
+    property:
+      "Dragging in Layers reorders a block, and dragging right nests it, each one undo step",
     greenIn: "layers drag",
-    status: "deferred",
-    reason:
-      "the Layers panel has no drag yet: layers-panel.tsx renders the shared TreeView, which offers click and keyboard selection only, so there is nothing to drag. Covered here the day rows become draggable.",
+    status: "covered",
   },
 ];
 

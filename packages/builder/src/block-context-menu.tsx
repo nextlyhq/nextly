@@ -124,7 +124,10 @@ import * as React from "react";
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
 import type { EditorState } from "./editor-state";
-import { useBlockActionsContext } from "./keyboard-actions";
+import {
+  useBlockActionsContext,
+  useDepthMoveActions,
+} from "./keyboard-actions";
 import { useSelectionActions } from "./selection-actions";
 
 /**
@@ -176,6 +179,33 @@ export function BlockContextMenu({
   // how one of them came to ask something narrower.
   const actions = useSelectionActions(editor);
   const run = React.useMemo(() => blockActionRunners(verbs), [verbs]);
+
+  /*
+   * Move in and Move out, after Move down: the menu's way to every move a
+   * Layers drag makes, for an author who does not drag. Run through the same
+   * verb as Alt+ArrowRight and Alt+ArrowLeft, which judges the move by the
+   * placement rule and the locks and says why when it refuses.
+   */
+  // Judged by the provider with the position function the move verb runs,
+  // component definitions included, so an item is offered exactly when
+  // pressing it would move.
+  const depth = useDepthMoveActions();
+  const entries = React.useMemo(
+    () =>
+      actions.flatMap(action => {
+        const own = { ...action, run: run[action.id] };
+        return action.id !== "move-down"
+          ? [own]
+          : [
+              own,
+              ...depth.map(move => ({
+                ...move,
+                run: () => verbs.move(move.direction),
+              })),
+            ];
+      }),
+    [actions, run, verbs, depth]
+  );
 
   const select = editor.select;
   /*
@@ -237,9 +267,9 @@ export function BlockContextMenu({
       */}
       {selectedId === null ? null : (
         <ContextMenuContent aria-label="Block actions">
-          {actions.map((action, index) => (
+          {entries.map((action, index) => (
             <React.Fragment key={action.id}>
-              {DESTRUCTIVE.has(action.id) || startsMenuGroup(actions, index) ? (
+              {DESTRUCTIVE.has(action.id) || startsMenuGroup(entries, index) ? (
                 <ContextMenuSeparator />
               ) : null}
               <ContextMenuItem
@@ -252,7 +282,7 @@ export function BlockContextMenu({
                     : "flex-col items-start gap-0.5"
                 }
                 onSelect={() => {
-                  run[action.id]();
+                  action.run();
                 }}
               >
                 <span>{action.label}</span>
