@@ -148,9 +148,7 @@ describe("pageSections", () => {
         block("a", "core/heading", { text: "First" }),
         block("gated", "core/heading", { text: "Members only" }, {
           visibility: {
-            conditions: [
-              [{ field: "role", operator: "equals", value: "member" }],
-            ],
+            conditions: [[{ field: "role", op: "equals", value: "member" }]],
           },
         } as Partial<BlockNode>),
         block("b", "core/heading", { text: "Second" }),

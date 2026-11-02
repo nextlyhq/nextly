@@ -153,7 +153,7 @@ describe("prepareDocumentAsDrawn", () => {
           version: 1,
           props: { text: "Members" },
           visibility: {
-            conditions: [[{ field: "role", operator: "equals", value: "x" }]],
+            conditions: [[{ field: "role", op: "equals", value: "x" }]],
           },
         } as BlockDocument["nodes"][number],
       ],
@@ -181,7 +181,11 @@ describe("prepareDocumentAsDrawn", () => {
   });
 
   it("answers null for an unreadable envelope, as the stages do", () => {
-    const unreadable = { ...untouchedDocument(), formatVersion: -1 };
+    // An envelope this build does not speak, which the type rightly refuses.
+    const unreadable = {
+      ...untouchedDocument(),
+      formatVersion: -1,
+    } as unknown as BlockDocument;
 
     expect(prepareDocumentAsDrawn(unreadable, { resolver })).toBeNull();
   });
