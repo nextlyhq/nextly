@@ -418,12 +418,31 @@ export function unreadableStoredFonts(doc: unknown): readonly string[] {
 
 /** One face's shape, or nothing. Value rules stay `validateFontFace`'s. */
 function readFontFace(entry: unknown): FontFaceDef | undefined {
-  if (!isPlainRecord(entry)) return undefined;
-  if (typeof entry.family !== "string" || !Array.isArray(entry.src)) {
+  if (!isPlainRecord(entry) || typeof entry.family !== "string") {
     return undefined;
   }
+  const src = readFontSources(entry.src);
+  const source = readFontOrigin(entry.source);
+  if (src === undefined || source === null || !descriptorsAreWords(entry)) {
+    return undefined;
+  }
+  return {
+    family: entry.family,
+    src,
+    ...optionalField("weight", entry.weight),
+    ...optionalField("style", entry.style),
+    ...optionalField("display", entry.display),
+    ...optionalField("unicodeRange", entry.unicodeRange),
+    // Kept, so a writer appending to what it read stores it back unchanged.
+    ...(source === undefined ? {} : { source }),
+  };
+}
+
+/** A face's files as `{ url, format? }` records, or nothing when one is not. */
+function readFontSources(raw: unknown): FontFaceDef["src"] | undefined {
+  if (!Array.isArray(raw)) return undefined;
   const src: FontFaceDef["src"][number][] = [];
-  for (const source of entry.src) {
+  for (const source of raw) {
     const record: unknown = source;
     if (
       !isPlainRecord(record) ||
@@ -432,28 +451,51 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
     ) {
       return undefined;
     }
-    src.push({
-      url: record.url,
-      ...(record.format === undefined ? {} : { format: record.format }),
-    });
+    src.push({ url: record.url, ...optionalField("format", record.format) });
   }
+  return src;
+}
+
+/** Whether a face's descriptors are each absent or a string. */
+function descriptorsAreWords(entry: Record<string, unknown>): boolean {
+  return [entry.weight, entry.style, entry.display, entry.unicodeRange].every(
+    optionalString
+  );
+}
+
+/** `{ [key]: value }` when the value is there, and nothing when it is not. */
+function optionalField<K extends string>(
+  key: K,
+  value: unknown
+): Partial<Record<K, string>> {
+  const field: Partial<Record<K, string>> = {};
+  if (typeof value === "string") field[key] = value;
+  return field;
+}
+
+/**
+ * Where a face came from, read for its shape: `undefined` when it says
+ * nothing, `null` when it is not one of the two kinds with words beside it.
+ * How long those words may be stays `validateFontFace`'s.
+ */
+function readFontOrigin(
+  raw: unknown
+): NonNullable<FontFaceDef["source"]> | undefined | null {
+  if (raw === undefined) return undefined;
   if (
-    !optionalString(entry.weight) ||
-    !optionalString(entry.style) ||
-    !optionalString(entry.display) ||
-    !optionalString(entry.unicodeRange)
+    !isPlainRecord(raw) ||
+    (raw.kind !== "google" && raw.kind !== "upload") ||
+    !optionalString(raw.id) ||
+    !optionalString(raw.licence) ||
+    !optionalString(raw.category)
   ) {
-    return undefined;
+    return null;
   }
   return {
-    family: entry.family,
-    src,
-    ...(entry.weight === undefined ? {} : { weight: entry.weight }),
-    ...(entry.style === undefined ? {} : { style: entry.style }),
-    ...(entry.display === undefined ? {} : { display: entry.display }),
-    ...(entry.unicodeRange === undefined
-      ? {}
-      : { unicodeRange: entry.unicodeRange }),
+    kind: raw.kind,
+    ...(raw.id === undefined ? {} : { id: raw.id }),
+    ...(raw.licence === undefined ? {} : { licence: raw.licence }),
+    ...(raw.category === undefined ? {} : { category: raw.category }),
   };
 }
 

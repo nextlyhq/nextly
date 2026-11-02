@@ -814,6 +814,61 @@ describe("font faces", () => {
   it("refuses a face with no file at all", () => {
     expect(validateFontFace({ family: "B", src: [] }, "f")).toHaveLength(1);
   });
+
+  describe("where a face came from", () => {
+    const google = {
+      kind: "google" as const,
+      id: "inter",
+      licence: "OFL-1.1",
+      category: "sans-serif",
+    };
+
+    it("accepts a face saying it came from Google Fonts or an upload", () => {
+      expect(
+        validateFontFace({ family: "Inter", src: [local], source: google }, "f")
+      ).toEqual([]);
+      expect(
+        validateFontFace(
+          { family: "Brand", src: [local], source: { kind: "upload" } },
+          "f"
+        )
+      ).toEqual([]);
+    });
+
+    it("emits the same rule with or without it, since a page has no use for it", () => {
+      const bare = emitFontFaces([{ family: "Inter", src: [local] }]).css;
+      const sourced = emitFontFaces([
+        { family: "Inter", src: [local], source: google },
+      ]).css;
+      expect(sourced).toBe(bare);
+      expect(sourced).not.toContain("inter");
+    });
+
+    it("refuses a source of a kind it does not know", () => {
+      const issues = validateFontFace(
+        {
+          family: "Inter",
+          src: [local],
+          source: { kind: "elsewhere" as "google" },
+        },
+        "fonts[0]"
+      );
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.message).toContain("where it came from");
+    });
+
+    it("refuses a source whose words are longer than any real one", () => {
+      const issues = validateFontFace(
+        {
+          family: "Inter",
+          src: [local],
+          source: { kind: "google", licence: "x".repeat(200) },
+        },
+        "fonts[0]"
+      );
+      expect(issues).toHaveLength(1);
+    });
+  });
 });
 
 describe("stored data reaching the stylesheet", () => {
