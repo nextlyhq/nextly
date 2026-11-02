@@ -53,6 +53,7 @@ import {
 import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageIndex } from "./component-usage";
+import { entriesRoute } from "./entries-route";
 import type { CompositionSetup } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
@@ -1076,6 +1077,10 @@ export const pageBuilder = (
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
         patternCapabilityRoute(),
+        // The relation control's read: a collection's entries as `{ id, title }`,
+        // for the collections a registered block prop names as relation targets,
+        // read as the author asking.
+        entriesRoute(),
       ],
 
       // No `publish` permission. One was declared here and nothing ever read
