@@ -148,6 +148,62 @@ async function created(
   return String((result.item as { id: unknown }).id);
 }
 
+/**
+ * The probe type beside site content in two languages: a localized collection
+ * whose blocks-like field is translated, an unlocalized collection whose field
+ * carries the flag anyway (and so is stored on the main row), and a Single.
+ */
+async function bootLanguages(dialect: TestDialect): Promise<TestNextly> {
+  const plugin = definePlugin({
+    name: "@test/stored-read-languages",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: { fieldTypes: [probe, other] },
+  });
+  current = await createTestNextly({
+    dialect,
+    plugins: [plugin],
+    collections: [
+      {
+        slug: "worded",
+        localized: true,
+        fields: [
+          { name: "title", type: "text" },
+          { name: "body", type: "probe", localized: true },
+        ],
+      } as unknown as CollectionConfig,
+      {
+        slug: "flagged",
+        fields: [{ name: "body", type: "probe", localized: true }],
+      } as unknown as CollectionConfig,
+    ],
+    singles: [
+      {
+        slug: "site",
+        fields: [{ name: "body", type: "probe" }],
+      } as never,
+    ],
+    localization: { locales: ["en", "de", "fr"], defaultLocale: "en" },
+  });
+  return current;
+}
+
+/** Reads as validation on the pool does, for a site whose default is English. */
+function languagesReader(t: TestNextly, type: string) {
+  const connection: StoredFieldConnection = {
+    db: t.adapter as unknown as VersionsDbApi,
+    executor: undefined,
+    defaultLocale: "en",
+  };
+  const write = entryWriteContext({
+    kind: "collection",
+    slug: "worded",
+    connection,
+  });
+  return (target: Parameters<typeof write.readStored>[1]) =>
+    write.readStored(type, target);
+}
+
 describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
   describe("reading stored values of a validator's own field type", () => {
     it("reads the value as stored, and answers absent for an entry that is not there", async () => {
@@ -298,6 +354,88 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       // Where ids are minted by the write, a supplied one is not the identity
       // the row is stored under, so nothing is handed.
       expect(judgedIds).toEqual([chosen, undefined]);
+    });
+  });
+
+  describe("reading a value stored per language, and a Single's", () => {
+    it("reads a localized field in the language asked for, and the default language when none is named", async () => {
+      const t = await bootLanguages(dialect);
+      const id = await created(t, "worded", {
+        title: "a",
+        body: { said: "en" },
+      });
+      await t.nextly.update({
+        collection: "worded",
+        id,
+        locale: "de",
+        data: { body: { said: "de" } },
+        overrideAccess: true,
+      } as never);
+      const read = languagesReader(t, "probe");
+      const at = (locale?: string) =>
+        read({
+          collection: "worded",
+          id,
+          field: "body",
+          form: "published",
+          ...(locale === undefined ? {} : { locale }),
+        } as never);
+
+      expect(await at("de")).toEqual({ kind: "value", value: { said: "de" } });
+      expect(await at("en")).toEqual({ kind: "value", value: { said: "en" } });
+      expect(await at()).toEqual({ kind: "value", value: { said: "en" } });
+    });
+
+    it("answers absent for a language that stores nothing, rather than another language's value", async () => {
+      const t = await bootLanguages(dialect);
+      const id = await created(t, "worded", {
+        title: "a",
+        body: { said: "en" },
+      });
+      const read = languagesReader(t, "probe");
+
+      expect(
+        await read({
+          collection: "worded",
+          id,
+          field: "body",
+          form: "published",
+          locale: "fr",
+        } as never)
+      ).toEqual({ kind: "absent" });
+    });
+
+    it("reads a flagged field of an unlocalized collection from the row, where it is stored", async () => {
+      const t = await bootLanguages(dialect);
+      const id = await created(t, "flagged", { body: { said: "row" } });
+      const read = languagesReader(t, "probe");
+
+      expect(
+        await read({
+          collection: "flagged",
+          id,
+          field: "body",
+          form: "published",
+        })
+      ).toEqual({ kind: "value", value: { said: "row" } });
+    });
+
+    it("reads a Single's stored value", async () => {
+      const t = await bootLanguages(dialect);
+      await t.nextly.updateSingle({
+        slug: "site",
+        data: { body: { said: "single" } },
+        overrideAccess: true,
+      } as never);
+      const read = languagesReader(t, "probe");
+
+      expect(
+        await read({
+          single: "site",
+          field: "body",
+          form: "published",
+        } as never)
+      ).toEqual({ kind: "value", value: { said: "single" } });
     });
   });
 

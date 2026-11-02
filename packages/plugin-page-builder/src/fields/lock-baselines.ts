@@ -31,27 +31,26 @@ import { isForest } from "./blocks-document";
 
 /**
  * The field's stored forms, the live one and the draft an editor's preview
- * reads, as the write reads them.
+ * reads, as the write reads them, in the language the write is judged in.
  *
- * Empty for a create, for a single, which has no entry id to read by, and
- * where a form cannot be read: each then measures the document against its
- * starting blocks alone, which refuses more and never less.
+ * Empty for a create, for a language that stores no value yet, and where a
+ * form cannot be read: each then measures the document against its starting
+ * blocks alone, which refuses more and never less.
  */
 export async function storedFormsOf(
   write: PluginFieldWrite | undefined,
   field: string
 ): Promise<BlockDocument[]> {
-  if (write === undefined || write.kind !== "collection") return [];
-  const id = write.id;
-  if (id === undefined) return [];
+  const document = storedDocumentOf(write);
+  if (write === undefined || document === undefined) return [];
   const forms: BlockDocument[] = [];
   for (const form of ["published", "draft"] as const) {
     try {
       const read = await write.readStored({
-        collection: write.slug,
-        id,
+        ...document,
         field,
         form,
+        ...(write.locale === undefined ? {} : { locale: write.locale }),
       });
       if (read.kind === "value" && isForest(read.value)) {
         forms.push(read.value as BlockDocument);
@@ -61,6 +60,21 @@ export async function storedFormsOf(
     }
   }
   return forms;
+}
+
+/**
+ * Which stored document the write is to: a single by its slug, or a
+ * collection's entry by its id; `undefined` for a create, which stores nothing
+ * yet to read.
+ */
+function storedDocumentOf(
+  write: PluginFieldWrite | undefined
+): { single: string } | { collection: string; id: string } | undefined {
+  if (write === undefined) return undefined;
+  if (write.kind === "single") return { single: write.slug };
+  return write.id === undefined
+    ? undefined
+    : { collection: write.slug, id: write.id };
 }
 
 /**

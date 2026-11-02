@@ -155,6 +155,8 @@ export interface EntryWriteContext {
   readonly kind: PluginFieldWrite["kind"];
   readonly slug: string;
   readonly id?: string;
+  /** The language the write is judged in; see `PluginFieldWrite.locale`. */
+  readonly locale?: string;
   readonly inTransaction: boolean;
   readStored(
     allowedType: string,
@@ -171,6 +173,7 @@ function fieldWriteFor(
     kind: write.kind,
     slug: write.slug,
     ...(write.id === undefined ? {} : { id: write.id }),
+    ...(write.locale === undefined ? {} : { locale: write.locale }),
     inTransaction: write.inTransaction,
     readStored: target => write.readStored(type, target),
   };
