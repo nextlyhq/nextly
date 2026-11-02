@@ -208,3 +208,37 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
     );
   }
 });
+
+/**
+ * The marker blocks a scoped sheet writes, as `emitTokenBlocks` writes them for
+ * the scope `.scope` (pinned there by a unit test). Spelled out because the
+ * marker is published contract.
+ */
+const SCOPED_DARK =
+  ':is(.scope)[data-nx-theme="dark"],[data-nx-theme="dark"] :is(.scope):not([data-nx-theme="light"],[data-nx-theme="dark"] [data-nx-theme="light"] *)';
+const SCOPED_LIGHT =
+  ':is(.scope)[data-nx-theme="light"],[data-nx-theme="light"] :is(.scope):not([data-nx-theme="dark"],[data-nx-theme="light"] [data-nx-theme="dark"] *)';
+
+test("the nearest marker decides which mode a scoped sheet applies", async ({
+  page,
+}) => {
+  await page.setContent(`
+    <div data-nx-theme="light"><div data-nx-theme="dark"><div id="dark-nearer" class="scope"></div></div></div>
+    <div data-nx-theme="dark"><div data-nx-theme="light"><div id="light-nearer" class="scope"></div></div></div>
+    <div data-nx-theme="light"><div id="self-dark" class="scope" data-nx-theme="dark"></div></div>
+  `);
+  const modeOf = (id: string) =>
+    page.evaluate(
+      ([target, dark, light]) => {
+        const element = document.getElementById(target ?? "");
+        return {
+          dark: element?.matches(dark ?? "") ?? false,
+          light: element?.matches(light ?? "") ?? false,
+        };
+      },
+      [id, SCOPED_DARK, SCOPED_LIGHT]
+    );
+  expect(await modeOf("dark-nearer")).toEqual({ dark: true, light: false });
+  expect(await modeOf("light-nearer")).toEqual({ dark: false, light: true });
+  expect(await modeOf("self-dark")).toEqual({ dark: true, light: false });
+});

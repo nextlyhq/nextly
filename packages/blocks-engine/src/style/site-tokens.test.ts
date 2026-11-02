@@ -620,6 +620,29 @@ describe("emitTokenBlocks", () => {
     );
   });
 
+  it("guards each scoped marker block against a nearer marker of the other mode", () => {
+    // Pinned exactly: the browser spec checks what these select under nested
+    // markers, and spells the same selectors out.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ".scope"
+    );
+    expect(css).toContain(
+      ':is(.scope)[data-nx-theme="dark"],[data-nx-theme="dark"] :is(.scope):not([data-nx-theme="light"],[data-nx-theme="dark"] [data-nx-theme="light"] *){--site-color-text:#eee}'
+    );
+    expect(css).toContain(
+      ':is(.scope)[data-nx-theme="light"],[data-nx-theme="light"] :is(.scope):not([data-nx-theme="dark"],[data-nx-theme="light"] [data-nx-theme="dark"] *){--site-color-text:#111}'
+    );
+  });
+
   it("writes a scoped light block for a light marker at or above the scope", () => {
     const { css } = emitTokenBlocks(
       {
@@ -635,7 +658,7 @@ describe("emitTokenBlocks", () => {
     );
     expect(
       css.endsWith(
-        `[${DARK_MODE_ATTRIBUTE}="light"] :is(${SCOPE}),:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`
+        `:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] :is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="dark"],[${DARK_MODE_ATTRIBUTE}="light"] [${DARK_MODE_ATTRIBUTE}="dark"] *){--site-color-text:#111}`
       )
     ).toBe(true);
   });

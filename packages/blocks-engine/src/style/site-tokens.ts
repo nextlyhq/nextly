@@ -385,7 +385,13 @@ function markerBlockFor(
   // takes the specificity of its most specific argument, so a list of single
   // classes weighs exactly what one of them did.
   const scoped = `:is(${selector})`;
-  return `${marker} ${scoped},${scoped}${marker}${body}`;
+  // The NEAREST marker decides. A light and a dark block would otherwise
+  // match with equal weight under nested markers, and whichever was written
+  // last would win however the markers nest. So a block that applies through
+  // an ancestor's marker stands down where the other mode's marker is on the
+  // scope itself, or sits between that ancestor and the scope.
+  const other = `[${DARK_MODE_ATTRIBUTE}="${mode === "dark" ? "light" : "dark"}"]`;
+  return `${scoped}${marker},${marker} ${scoped}:not(${other},${marker} ${other} *)${body}`;
 }
 
 /**
