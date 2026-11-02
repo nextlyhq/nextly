@@ -31,6 +31,7 @@ import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
+  storageReadingOf,
   type StoredFileRemover,
 } from "../remove-stored-files";
 import { StoredFileSearchReader } from "../stored-file-search";
@@ -276,7 +277,8 @@ async function removeRecordedFiles(
   const kept = await filesKeptByOthers(
     new StoredFileSearchReader(db, logger).search,
     record.files.map(file => file.path),
-    [mediaId]
+    [mediaId],
+    storageReadingOf(storage)
   );
   if (!kept) return false;
   let removed = true;

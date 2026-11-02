@@ -7,7 +7,7 @@ import { Command } from "commander";
 import { config as loadEnvFile } from "dotenv";
 
 import {
-  canonicalStoredPath,
+  storedKeysOn,
   collectionsSharingMediaPlace,
   findOrphanThumbnails,
   mediaPlaceIsExclusive,
@@ -136,11 +136,17 @@ export async function referencedStoredPaths(
  * removed, when the table cannot be read, or when an item has come to have
  * a thumbnail whose stored location its record does not show: by a URL
  * under any name, it may refer to any listed file.
+ *
+ * Paths are compared as `storage` tells its files apart (`storedKeysOn`):
+ * exactly where it keeps keys as written, where an item naming
+ * `media/x.webp` does not use `media//x.webp`.
  */
 export function referencedNowIn(
   adapter: Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">,
+  storage: Pick<IStorageAdapter, "getType">,
   options: ReferenceOptions = {}
 ): ReferencedNow {
+  const keys = storedKeysOn(storage.getType());
   // One reader for every recheck, so the column's provenance is asked once
   // across them all rather than once per batch.
   const shared: ReferenceOptions = {
@@ -159,10 +165,8 @@ export function referencedNowIn(
       return null;
     }
     if (now.unlocated.length > 0) return null;
-    const referenced = new Set([...now.paths].map(canonicalStoredPath));
-    return new Set(
-      paths.filter(path => referenced.has(canonicalStoredPath(path)))
-    );
+    const referenced = new Set([...now.paths].map(keys.path));
+    return new Set(paths.filter(path => referenced.has(keys.path(path))));
   };
 }
 
@@ -538,7 +542,7 @@ export function createMediaCommand(): Command {
             sharedWith: collectionsSharingMediaPlace(prefix, others),
             referenced: () =>
               referencedStoredPaths(drizzle, { retiredSizes: readSizes }),
-            referencedNow: referencedNowIn(drizzle, {
+            referencedNow: referencedNowIn(drizzle, storage, {
               retiredSizes: readSizes,
             }),
             apply,
@@ -569,22 +573,24 @@ export function createMediaCommand(): Command {
         await runMediaCommand(
           cmd,
           apply ? MEDIA_APPLY : null,
-          ({ drizzle, dialect, mediaStorage }) =>
-            runRemoveSizes({
+          ({ drizzle, dialect, mediaStorage }) => {
+            const storage = mediaStorage.getAdapterForCollection("media");
+            return runRemoveSizes({
               db: drizzle.getDrizzle(),
               dialect,
-              storage: mediaStorage.getAdapterForCollection("media"),
+              storage,
               apply,
               drop: cmdOptions.drop === true,
               // The question `media orphans` asks just before its removals,
               // without the retired sizes: those are the files being removed.
-              referencedNow: referencedNowIn(drizzle, {
+              referencedNow: referencedNowIn(drizzle, storage, {
                 withRetiredSizes: false,
               }),
               executeSql: statement => drizzle.executeQuery(statement),
               dropUnderLock: dropSizesUnderSchemaLock(drizzle),
               say: line => console.log(line),
-            })
+            });
+          }
         );
       }
     );

@@ -128,9 +128,9 @@ describe("deleting a folder with a large subtree", () => {
     const deleted = await folders.deleteFolder("root", true);
 
     expect(deleted).toMatchObject({ success: true, deletedMedia: 2 });
-    // The Undo check, the items whose retired sizes are read before the
-    // transaction, then the items read in the transaction that locks and
-    // removes them: two statements each.
-    expect(statements()).toBe(6);
+    // The Undo check, then the items read in the transaction that locks and
+    // removes them, whose retired sizes are read there too: two statements
+    // each.
+    expect(statements()).toBe(4);
   });
 });

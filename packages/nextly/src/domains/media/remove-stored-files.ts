@@ -5,8 +5,13 @@ import { redactCredentialsInText } from "../../observability/mask-emails";
 import { consoleLogger } from "../../shared/types";
 import { isTransientError, withRetry } from "../../storage/retry";
 
-import { canonicalStoredPath } from "./orphan-thumbnails";
+import {
+  canonicalStoredPath,
+  storedKeysOn,
+  type StoredKeys,
+} from "./orphan-thumbnails";
 import { RETIRED_SIZES_COLUMN } from "./retired-image-sizes-constants";
+import type { SizeLocator } from "./size-location";
 import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
 
 /**
@@ -14,9 +19,55 @@ import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
  * every delete does it, of one item or of a folder's.
  */
 
-/** The storage surface removal uses: a delete by stored path, per collection. */
+/**
+ * The storage surface removal uses: a delete by stored path, per collection,
+ * and where the storage serves a path and what kind it is, which locate an
+ * image size recorded by its URL alone (`sizeLocatorOf`). The media storage
+ * has all three; a storage without the last two removes no such size.
+ */
 export interface StoredFileRemover {
   delete(filePath: string, collection?: string): Promise<void>;
+  getPublicUrl?(filePath: string, collection?: string): string;
+  getStorageType?(collection?: string): string;
+}
+
+/**
+ * The media collection's place in `storage`, as locating a size asks it, or
+ * undefined when the storage cannot say where it serves a file.
+ */
+function sizeLocatorOf(
+  storage: Pick<StoredFileRemover, "getPublicUrl" | "getStorageType">
+): SizeLocator | undefined {
+  const publicUrl = storage.getPublicUrl?.bind(storage);
+  const storageType = storage.getStorageType?.bind(storage);
+  if (!publicUrl || !storageType) return undefined;
+  return {
+    getPublicUrl: filePath => publicUrl(filePath, "media"),
+    getType: () => storageType("media"),
+  };
+}
+
+/**
+ * How media records are read against one storage, for the question both
+ * sides of a removal ask, "does this record name this file": where an image
+ * size recorded by URL alone is on it (`sizeLocatorOf`), and how its stored
+ * keys compare (`storedKeysOn`). The files a delete removes and the files
+ * another item keeps are read with the same one, so the two answer alike.
+ */
+export interface StorageReading {
+  locator: SizeLocator | undefined;
+  keys: StoredKeys;
+}
+
+/**
+ * The reading of `storage`. One that cannot say its kind compares keys
+ * canonically, as a storage whose spellings may be one file.
+ */
+export function storageReadingOf(
+  storage: Pick<StoredFileRemover, "getPublicUrl" | "getStorageType">
+): StorageReading {
+  const locator = sizeLocatorOf(storage);
+  return { locator, keys: storedKeysOn(locator?.getType() ?? "") };
 }
 
 /**
@@ -83,6 +134,18 @@ export function warnNotRemoved(
 export function warnUnlocated(url: string, mediaId: string): void {
   consoleLogger.warn(
     `[MediaService] Left the thumbnail of media ${mediaId} at ${storedPathForLog(url)}: its stored location could not be worked out from the record.`
+  );
+}
+
+/**
+ * An image size whose record names it by URL alone, and which is not shown to
+ * be a file of the storage configured now: named, by that URL, the one record
+ * of it left once the item is gone, for it to be removed where it is stored.
+ * Nothing was removed in its place.
+ */
+export function warnSizeNotHere(url: string, mediaId: string): void {
+  consoleLogger.warn(
+    `[MediaService] Left an image size of media ${mediaId} at ${storedPathForLog(url)}: its record names it by URL alone, and that URL is not where the media storage configured now serves a file it holds. Remove it from the storage that serves it.`
   );
 }
 
@@ -166,31 +229,37 @@ function mayReferTo(
 }
 
 /**
- * Of `paths`, the ones `rows` refer to, compared as stored paths are
- * (`canonicalStoredPath`): the one answer to "does an item refer to this
- * file" that the search for left-behind thumbnails also gives.
+ * Of `paths`, the ones `rows` refer to, each row's files read as a delete of
+ * it would remove them and keys compared as `reading`'s storage tells its
+ * files apart (`StorageReading`).
  *
  * A row's thumbnail whose stored location its record does not show (an
  * original spelled otherwise than its URL, say) cannot be compared by path;
  * a file whose name it ends in is taken as referred to, since nothing shows
- * it is not.
+ * it is not. So is one a size recorded by URL alone ends in, where the
+ * storage cannot say where it serves a file; where it can, such a size it
+ * does not serve is another storage's file, and names none of this one's.
  */
 export function pathsReferencedAmong(
   paths: readonly string[],
-  rows: readonly MediaFilesRecord[]
+  rows: readonly MediaFilesRecord[],
+  reading: StorageReading
 ): Set<string> {
+  const { keys, locator } = reading;
   const referenced = new Set<string>();
   const unlocatedNames = new Set<string>();
   for (const row of rows) {
-    const files = storedFilesOf(row);
-    for (const path of files.paths) referenced.add(canonicalStoredPath(path));
-    for (const url of files.unlocated) unlocatedNames.add(lastSegment(url));
+    const files = storedFilesOf(row, locator);
+    for (const path of files.paths) referenced.add(keys.path(path));
+    const unknown = locator === undefined ? files.notHere : [];
+    for (const url of [...files.unlocated, ...unknown]) {
+      unlocatedNames.add(lastSegment(url));
+    }
   }
   return new Set(
     paths.filter(
       path =>
-        referenced.has(canonicalStoredPath(path)) ||
-        unlocatedNames.has(lastSegment(path))
+        referenced.has(keys.path(path)) || unlocatedNames.has(lastSegment(path))
     )
   );
 }
@@ -215,7 +284,9 @@ export function pathsReferencedAmong(
 export async function filesKeptByOthers(
   search: StoredFileSearch,
   paths: readonly string[],
-  mediaIds: readonly string[]
+  mediaIds: readonly string[],
+  /** The storage the files are removed from, read as the removal reads it. */
+  reading: StorageReading
 ): Promise<Set<string> | null> {
   const names = [...new Set(paths.map(lastSegment).filter(Boolean))];
   const readAll = async (sizes: SQL | undefined) => {
@@ -252,7 +323,7 @@ export async function filesKeptByOthers(
       }
       rows = await readAll(undefined);
     }
-    return pathsReferencedAmong(paths, rows);
+    return pathsReferencedAmong(paths, rows, reading);
   } catch (error) {
     consoleLogger.warn(
       mediaIds.length > 0
@@ -283,8 +354,12 @@ export async function removeStoredFiles(
   mediaId: string,
   kept: ReadonlySet<string> = new Set()
 ): Promise<boolean> {
-  const { paths, unlocated } = storedFilesOf(record);
+  const { paths, unlocated, notHere } = storedFilesOf(
+    record,
+    storageReadingOf(storage).locator
+  );
   for (const url of unlocated) warnUnlocated(url, mediaId);
+  for (const url of notHere) warnSizeNotHere(url, mediaId);
   const removed = await Promise.all(
     paths
       .filter(filePath => !kept.has(filePath))

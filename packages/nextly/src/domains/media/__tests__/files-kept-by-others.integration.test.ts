@@ -21,9 +21,20 @@ import {
   setRetiredSizes,
 } from "../../../__tests__/helpers/retired-image-sizes";
 import { consoleLogger } from "../../../shared/types";
-import { filesKeptByOthers, removeStoredFiles } from "../remove-stored-files";
+import {
+  filesKeptByOthers,
+  removeStoredFiles,
+  storageReadingOf,
+} from "../remove-stored-files";
+
 import { StoredFileSearchReader } from "../stored-file-search";
 import { storedFilesOf } from "../stored-files";
+
+/**
+ * A storage that says neither where it serves a file nor its kind: these
+ * cases are about the search, and read every record as such a storage would.
+ */
+const unread = storageReadingOf({});
 
 const SHARED = "2026/10/3b1c-photo-small.webp";
 // A key may hold what JSON escapes and `like` reads as its own escape.
@@ -76,7 +87,8 @@ describeEachDialect("files another item refers to", dialect => {
     const kept = await filesKeptByOthers(
       probe.search,
       [ESCAPED],
-      ["deleted-1"]
+      ["deleted-1"],
+      unread
     );
 
     expect([...(kept ?? [])]).toEqual([ESCAPED]);
@@ -88,7 +100,8 @@ describeEachDialect("files another item refers to", dialect => {
     const kept = await filesKeptByOthers(
       probe.search,
       [SHARED, ALONE],
-      ["deleted-1"]
+      ["deleted-1"],
+      unread
     );
 
     // Not null: the statement ran on this dialect.
@@ -128,7 +141,8 @@ describeEachDialect("files another item refers to", dialect => {
     const kept = await filesKeptByOthers(
       racing,
       [...files, otherOriginal],
-      ["deleted-2"]
+      ["deleted-2"],
+      unread
     );
     // As every delete does: the files go only once the search has answered.
     if (kept) {
