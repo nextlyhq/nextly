@@ -23,6 +23,8 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  group,
+  password,
   text,
 } from "../../../config";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
@@ -124,6 +126,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: "quote",
         localized: true,
         fields: [text({ name: "body" })],
+      }),
+      // Translated, its translated group holding a password: both are kept on
+      // the translations row.
+      defineFieldGroup({
+        slug: "vault",
+        localized: true,
+        fields: [
+          text({ name: "heading" }),
+          group({
+            name: "box",
+            localized: true,
+            fields: [text({ name: "b" }), password({ name: "pin" })],
+          }),
+        ],
       }),
       // Used by one collection only, whose table a test removes.
       defineFieldGroup({ slug: "banner", fields: [text({ name: "body" })] }),
@@ -274,6 +290,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         status: true,
         versions: { drafts: true },
         fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: "vaulted",
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "items", component: "vault", repeatable: true }),
+        ],
       }),
       defineCollection({
         slug: "bannered",
@@ -448,11 +471,98 @@ function countRelationReads(): { count(): number; restore(): void } {
   };
 }
 
+/**
+ * Each read of a component's translations, as the number of values it binds,
+ * seen on the Drizzle handle every pooled read takes, under a lowered limit
+ * on a statement's parameters. `failRead` makes the read with that number,
+ * counted from 1, fail, as a database fault would.
+ */
+function recordTranslationReads(
+  t: TestNextly,
+  budget: number,
+  failRead?: number
+): { binds: number[]; restore(): void } {
+  const capabilities = t.adapter.getCapabilities();
+  const limit = vi
+    .spyOn(t.adapter, "getCapabilities")
+    .mockReturnValue({ ...capabilities, maxParamsPerQuery: budget });
+  const binds: number[] = [];
+  const drizzle = t.adapter.getDrizzle();
+  const recordingBuilder = (builder: object): object =>
+    new Proxy(builder, {
+      get(target, property) {
+        const value = Reflect.get(target, property) as unknown;
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => {
+          const result = (value as (...a: unknown[]) => unknown).apply(
+            target,
+            args
+          ) as { toSQL?: () => { sql: string; params: unknown[] } };
+          if (property === "from") return recordingBuilder(result);
+          if (property === "where" && result.toSQL) {
+            const query = result.toSQL();
+            if (query.sql.includes("_locales")) {
+              binds.push(query.params.length);
+              if (binds.length === failRead) {
+                return Promise.reject(new Error("translations read failed"));
+              }
+            }
+          }
+          return result;
+        };
+      },
+    });
+  const handle = vi.spyOn(t.adapter, "getDrizzle").mockReturnValue(
+    new Proxy(drizzle as object, {
+      get(target, property) {
+        const value = Reflect.get(target, property) as unknown;
+        if (typeof value !== "function") return value;
+        return property === "select"
+          ? (...args: unknown[]) =>
+              recordingBuilder(
+                (value as (...a: unknown[]) => object).apply(target, args)
+              )
+          : (value as (...a: unknown[]) => unknown).bind(target);
+      },
+    }) as ReturnType<typeof t.adapter.getDrizzle>
+  );
+  return {
+    binds,
+    restore: () => {
+      handle.mockRestore();
+      limit.mockRestore();
+    },
+  };
+}
+
 describe.each(getConfiguredTestDialects())(
   "publishing judges a document's components and relationships as stored (%s)",
   (dialect: TestDialect) => {
     let t: TestNextly;
     const ids: Record<string, string> = {};
+
+    /** Both zoned entries' zones, read in `locale`, exactly as stored. */
+    const readZones = (
+      t: TestNextly,
+      locale: string
+    ): Promise<Record<string, unknown>[]> =>
+      (
+        t.getService("fieldGroupDataService") as FieldGroupDataService
+      ).populateComponentDataMany({
+        entries: [{ id: ids.zonedA }, { id: ids.zonedB }],
+        parentTable: "dc_zoned",
+        fields: [
+          fieldGroup({
+            name: "blocks",
+            components: ["note", "quote"],
+            repeatable: true,
+          }),
+        ] as never,
+        depth: 0,
+        strict: true,
+        locale,
+        fallbackLocale: false,
+      });
 
     beforeAll(async () => {
       t = await boot(dialect);
@@ -759,6 +869,13 @@ describe.each(getConfiguredTestDialects())(
           ).success
         ).toBe(true);
       }
+      ids.vaulted = await created(t, "vaulted", {
+        title: "vaulted",
+        items: [1, 2, 3, 4, 5].map(at => ({
+          heading: `item ${at}`,
+          box: { b: `b ${at}`, pin: `pin-${at}` },
+        })),
+      });
       ids.bannered = await created(t, "bannered", {
         title: "bannered",
         status: "draft",
@@ -1252,68 +1369,9 @@ describe.each(getConfiguredTestDialects())(
       // A limit of four: one language and three instances to a statement,
       // where each kind here has four or six.
       const budget = 4;
-      const capabilities = t.adapter.getCapabilities();
-      const limit = vi
-        .spyOn(t.adapter, "getCapabilities")
-        .mockReturnValue({ ...capabilities, maxParamsPerQuery: budget });
-      // The values each translations read binds, seen on the Drizzle handle
-      // every pooled read takes.
-      const binds: number[] = [];
-      const drizzle = t.adapter.getDrizzle();
-      const recordingBuilder = (builder: object): object =>
-        new Proxy(builder, {
-          get(target, property) {
-            const value = Reflect.get(target, property) as unknown;
-            if (typeof value !== "function") return value;
-            return (...args: unknown[]) => {
-              const result = (value as (...a: unknown[]) => unknown).apply(
-                target,
-                args
-              ) as { toSQL?: () => { sql: string; params: unknown[] } };
-              if (property === "from") return recordingBuilder(result);
-              if (property === "where" && result.toSQL) {
-                const query = result.toSQL();
-                if (query.sql.includes("_locales")) {
-                  binds.push(query.params.length);
-                }
-              }
-              return result;
-            };
-          },
-        });
-      const handle = vi.spyOn(t.adapter, "getDrizzle").mockReturnValue(
-        new Proxy(drizzle as object, {
-          get(target, property) {
-            const value = Reflect.get(target, property) as unknown;
-            if (typeof value !== "function") return value;
-            return property === "select"
-              ? (...args: unknown[]) =>
-                  recordingBuilder(
-                    (value as (...a: unknown[]) => object).apply(target, args)
-                  )
-              : (value as (...a: unknown[]) => unknown).bind(target);
-          },
-        }) as ReturnType<typeof t.adapter.getDrizzle>
-      );
+      const reads = recordTranslationReads(t, budget);
       try {
-        const fieldGroups = t.getService(
-          "fieldGroupDataService"
-        ) as FieldGroupDataService;
-        const read = await fieldGroups.populateComponentDataMany({
-          entries: [{ id: ids.zonedA }, { id: ids.zonedB }],
-          parentTable: "dc_zoned",
-          fields: [
-            fieldGroup({
-              name: "blocks",
-              components: ["note", "quote"],
-              repeatable: true,
-            }),
-          ] as never,
-          depth: 0,
-          strict: true,
-          locale: "en",
-          fallbackLocale: false,
-        });
+        const read = await readZones(t, "en");
 
         expect(
           read.map(entry => (entry.blocks as Doc[]).map(block => block.body))
@@ -1323,11 +1381,73 @@ describe.each(getConfiguredTestDialects())(
           )
         );
         // Each kind in runs: six notes and four quotes, three to a run.
-        expect(binds).toHaveLength(4);
-        expect(binds.every(bound => bound <= budget)).toBe(true);
+        expect(reads.binds).toHaveLength(4);
+        expect(reads.binds.every(bound => bound <= budget)).toBe(true);
       } finally {
-        handle.mockRestore();
-        limit.mockRestore();
+        reads.restore();
+      }
+    });
+
+    it("splits the languages of a read of every translation where they alone reach the limit", async () => {
+      // A limit of two, which the two languages of a read of every
+      // translation reach with no instance at all.
+      const budget = 2;
+      const reads = recordTranslationReads(t, budget);
+      try {
+        const read = await readZones(t, "all");
+
+        expect(
+          read.map(entry => (entry.blocks as Doc[]).map(block => block.body))
+        ).toEqual(
+          ["zonedA", "zonedB"].map(name =>
+            [1, 2, 3, 4, 5].map(at => ({ en: `${name} ${at}`, de: null }))
+          )
+        );
+        expect(reads.binds.length).toBeGreaterThan(0);
+        expect(reads.binds.every(bound => bound <= budget)).toBe(true);
+      } finally {
+        reads.restore();
+      }
+    });
+
+    it("returns no translation, raw value or password from a read whose later translations statement fails", async () => {
+      // A limit of four: three instances to a statement for one language, two
+      // for both, so five instances take more than one statement either way.
+      const items = async (locale: string, failRead: number) => {
+        const reads = recordTranslationReads(t, 4, failRead);
+        try {
+          const fieldGroups = t.getService(
+            "fieldGroupDataService"
+          ) as FieldGroupDataService;
+          const [entry] = await fieldGroups.populateComponentDataMany({
+            entries: [{ id: ids.vaulted }],
+            parentTable: "dc_vaulted",
+            fields: [
+              fieldGroup({
+                name: "items",
+                component: "vault",
+                repeatable: true,
+              }),
+            ] as never,
+            depth: 0,
+            locale,
+          });
+          expect(reads.binds.length).toBeGreaterThanOrEqual(failRead);
+          return entry.items as Doc[];
+        } finally {
+          reads.restore();
+        }
+      };
+      for (const locale of ["en", "all"]) {
+        // Where the first statement fails, nothing is translated: what a
+        // failed read returned when it was one statement.
+        const unread = await items(locale, 1);
+        expect(unread).toHaveLength(5);
+        expect(JSON.stringify(unread)).not.toMatch(/item \d|pin/);
+
+        // A later statement failing returns the same, with no item carrying
+        // what the statements before it read.
+        expect(await items(locale, 2)).toEqual(unread);
       }
     });
 
