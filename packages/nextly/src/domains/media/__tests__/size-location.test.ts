@@ -69,6 +69,25 @@ describe("a size's URL on an object storage", () => {
     );
   });
 
+  // An address that does not parse serves no file, so nothing is located
+  // through it; reading it must not throw, since a delete reads its files
+  // after its rows are gone.
+  it("is not served here when the recorded URL does not parse", () => {
+    expect(servedHere("https://", KEY, here)).toBe(false);
+    expect(servedHere("//", KEY, storage("/uploads", "local"))).toBe(false);
+  });
+
+  it("is not served here when the storage's own URL does not parse", () => {
+    const broken: SizeLocator = {
+      getPublicUrl: () => "https://",
+      getType: () => "s3",
+    };
+
+    expect(servedHere(`https://new-bucket.example/${KEY}`, KEY, broken)).toBe(
+      false
+    );
+  });
+
   it("keeps the case of the path: another path is another file", () => {
     expect(
       servedHere(`https://new-bucket.example/${KEY.toUpperCase()}`, KEY, here)
@@ -125,5 +144,23 @@ describe("a delete's reading of a size recorded by its URL alone", () => {
 
     expect(files.paths).not.toContain(KEY);
     expect(files.notHere).toEqual([`HTTPS://old-bucket.example/${KEY}`]);
+  });
+
+  it("names a size whose URL does not parse (a port past 65535) and still lists the item's own file", () => {
+    const files = storedFilesOf(
+      {
+        filename: "2026/11/photo.png",
+        // An older record saved under a base URL that does not parse.
+        url: "https://new-bucket.example:99999/2026/11/photo.png",
+        thumbnailUrl: null,
+        sizes: JSON.stringify({
+          small: { url: `https://new-bucket.example:99999/${KEY}` },
+        }),
+      },
+      storage("https://new-bucket.example")
+    );
+
+    expect(files.paths).toContain("2026/11/photo.png");
+    expect(files.notHere).toEqual([`https://new-bucket.example:99999/${KEY}`]);
   });
 });

@@ -46,20 +46,32 @@ export function pathOfSize(
  * slashes written once. An absolute URL is parsed before anything is tidied:
  * its scheme and host are case-insensitive, which parsing settles (it writes
  * both in lower case), and its path is not, so only the path is tidied.
+ *
+ * Undefined for a URL that does not parse, such as a bare `https://` an older
+ * record or a custom storage holds: it serves no file, so nothing is located
+ * through it. A delete reads its files after its rows are gone, and a throw
+ * there would fail the request and leave every other file it named in place.
  */
-function servedAt(url: string): { origin: string | null; path: string } {
+function servedAt(
+  url: string
+): { origin: string | null; path: string } | undefined {
   const address = url.replace(/[?#].*$/, "");
   if (/^https?:\/\//i.test(address)) {
-    const parsed = new URL(address);
-    return {
-      origin: parsed.origin,
-      path: parsed.pathname.replace(/\/{2,}/g, "/"),
-    };
+    const parsed = parsedUrl(address);
+    return parsed
+      ? { origin: parsed.origin, path: parsed.pathname.replace(/\/{2,}/g, "/") }
+      : undefined;
   }
-  return {
-    origin: null,
-    path: new URL(canonicalStoredPath(address), "http://site.invalid").pathname,
-  };
+  const relative = parsedUrl(
+    canonicalStoredPath(address),
+    "http://site.invalid"
+  );
+  return relative ? { origin: null, path: relative.pathname } : undefined;
+}
+
+/** The URL `input` names, or undefined where it does not parse. */
+function parsedUrl(input: string, base?: string): URL | undefined {
+  return URL.canParse(input, base) ? new URL(input, base) : undefined;
 }
 
 /**
@@ -68,7 +80,8 @@ function servedAt(url: string): { origin: string | null; path: string } {
  * One relative and one absolute match only on local disk, which is served
  * from the site under either spelling. On any other storage a URL relative to
  * the site is a file local disk wrote, and the same path under the storage's
- * own host is another file, so it is not this storage's.
+ * own host is another file, so it is not this storage's. A URL on either side
+ * that does not parse is not where this storage serves anything.
  */
 export function servedHere(
   url: string,
@@ -77,6 +90,7 @@ export function servedHere(
 ): boolean {
   const recorded = servedAt(url);
   const here = servedAt(storage.getPublicUrl(path));
+  if (!recorded || !here) return false;
   if (recorded.path !== here.path) return false;
   if (recorded.origin === here.origin) return true;
   const oneRelative = recorded.origin === null || here.origin === null;
