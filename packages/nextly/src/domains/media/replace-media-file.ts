@@ -39,7 +39,9 @@ import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
+  storageReadingOf,
   warnNotRemoved,
+  type StoredFileRemover,
 } from "./remove-stored-files";
 import { revalidateMedia } from "./revalidate-media";
 import { StoredFileSearchReader } from "./stored-file-search";
@@ -67,7 +69,8 @@ export interface ReplacementFile {
 /** What replacing needs: the database, the storage and the image tools. */
 export interface ReplaceMediaFileDeps {
   adapter: DrizzleAdapter;
-  storage: {
+  /** The media storage, which also says where it serves a file and its kind. */
+  storage: Pick<StoredFileRemover, "getPublicUrl" | "getStorageType"> & {
     upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult>;
     delete(filePath: string, collection?: string): Promise<void>;
   };
@@ -292,7 +295,8 @@ async function settleOldFiles(
     const kept = await filesKeptByOthers(
       new StoredFileSearchReader(deps.adapter, deps.logger).search,
       files.map(file => file.path),
-      [mediaId]
+      [mediaId],
+      storageReadingOf(deps.storage)
     );
     if (!kept) return;
     const forgotten = await forgetKeptFiles(deps.adapter, mediaId, files, tx =>

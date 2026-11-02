@@ -11,8 +11,15 @@ import { describe, expect, it } from "vitest";
 import {
   errorForLog,
   filesKeptByOthers,
+  storageReadingOf,
   storedPathForLog,
 } from "../remove-stored-files";
+
+/**
+ * A storage that says neither where it serves a file nor its kind: these
+ * cases are about the search, and read every record as such a storage would.
+ */
+const unread = storageReadingOf({});
 
 describe("errorForLog", () => {
   it.each([
@@ -121,7 +128,8 @@ describe("filesKeptByOthers, when the sizes column is gone by the time it is rea
     const kept = await filesKeptByOthers(
       racing(error, reads),
       ["2026/10/1d1d-gone.png", otherOriginal],
-      ["deleted"]
+      ["deleted"],
+      unread
     );
 
     expect(reads).toEqual(["with", "without"]);
@@ -145,7 +153,8 @@ describe("filesKeptByOthers, when the sizes column is gone by the time it is rea
       const kept = await filesKeptByOthers(
         racing(error, reads),
         ["2026/10/1d1d-gone.png"],
-        ["deleted"]
+        ["deleted"],
+        unread
       );
 
       expect(reads).toEqual(["with"]);
