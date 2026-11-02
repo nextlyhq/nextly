@@ -26,17 +26,18 @@ import type { Command } from "commander";
 
 import {
   chooseRestoreEntity,
+  KIND_NAMES,
   kindOption,
   resolveEntityTables,
 } from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { createContext, type CommandContext } from "../context";
 import { exitWithError } from "../errors";
 import {
   restoreCollectionRequired,
   restoreEntityRefusal,
 } from "../errors/areas/sync";
-import { createContext, type CommandContext } from "../program";
 import { withAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
@@ -137,7 +138,7 @@ export async function runI18nRestore(
         logger.warn(
           `${result.rowsUnattributed} archived value(s) for "${slug}" were written before the archive ` +
             "recorded which kind of entity they belong to, and could not be matched to one. " +
-            `They are kept. If they are this ${entity.kind === "fieldGroup" ? "field group" : entity.kind}'s, ` +
+            `They are kept. If they are this ${KIND_NAMES[entity.kind]}'s, ` +
             `restore them with --kind ${kindOption(entity.kind)}.`
         );
       };

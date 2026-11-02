@@ -30,6 +30,11 @@ export function registerMigrateCreateCommand(program: Command): void {
       "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"
     )
     .option(
+      "--record-snapshot",
+      "Write a migration that changes nothing, whose snapshot records which fields are translated, for a project whose latest snapshot predates that record. Run it with the config as last migrated",
+      false
+    )
+    .option(
       "--no-transaction",
       "Write a unit that runs outside a transaction: with --blank, a file whose first line is the marker; with --plugin, a module with transaction: false that you can edit"
     )
