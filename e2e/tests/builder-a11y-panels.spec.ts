@@ -150,9 +150,9 @@ const SURFACES: ReadonlyArray<{
       // From the editor's own page: focus inside the canvas's frame would
       // send the keystroke to the frame instead.
       await railButton(page, "Layers").focus();
-      // Control, not the platform's modifier: on a Mac runner the editor
-      // answers Control+K and not Command+K today, which is being looked into
-      // separately. This scan is about the palette's markup, however it opens.
+      // Control, not the platform's modifier: the suite's browser reports a
+      // Windows user agent whatever machine runs it, so the editor reads its
+      // "mod" key as Control. On a Mac's own browser it is Command.
       await page.keyboard.press("Control+k");
       await expect(page.getByRole("dialog")).toBeVisible();
     },
