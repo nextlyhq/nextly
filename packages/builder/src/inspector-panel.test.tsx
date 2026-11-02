@@ -104,6 +104,7 @@ function editorFor(
     canRedo: false,
     undoDepth: 0,
     lockRefusalFor: () => undefined,
+    composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 

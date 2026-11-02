@@ -91,6 +91,7 @@ function editorOf(selectedId: string | null, ids?: string[]): EditorState {
       ids: ids ?? (selectedId === null ? [] : [selectedId]),
       primary: selectedId,
     },
+    composed: () => undefined,
   } as unknown as EditorState;
 }
 
@@ -499,6 +500,7 @@ describe("who may write from the canvas", () => {
       document,
       selectedId: "a",
       selection: { ids: ["a"], primary: "a" },
+      composed: () => undefined,
     } as unknown as EditorState;
   }
 
