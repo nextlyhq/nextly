@@ -2157,6 +2157,21 @@ describe("hiding the side panels", () => {
     expect(screen.queryByText("inspector body")).toBeNull();
   });
 
+  it("draws no left panel button when the host offers no left panel", () => {
+    // With nothing to show there, the button could only do nothing.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        availablePanels={[]}
+        inspector={<p>inspector body</p>}
+      />
+    );
+    expect(screen.queryByRole("button", { name: /^Left panel$/ })).toBeNull();
+    expect(toggle(/^Inspector$/)).toBeTruthy();
+  });
+
   it("opens the first panel the host offers when it offers no Add", () => {
     // Shown with none chosen, the left side has to open something the rail
     // offers, or the button would stay unpressed and nothing would open.

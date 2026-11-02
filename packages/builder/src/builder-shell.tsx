@@ -854,7 +854,8 @@ function ShellTopBar({
   onZoomPick: ((next: CanvasZoom) => void) | undefined;
   leftShown: boolean;
   inspectorShown: boolean;
-  onLeft: () => void;
+  /** Absent when the host offers no left panel, so there is nothing to show. */
+  onLeft: (() => void) | undefined;
   onInspector: () => void;
 }): React.JSX.Element {
   return (
@@ -950,7 +951,8 @@ function ShellTopBar({
 /**
  * The top bar's buttons that show or hide each side of the editor, so the
  * canvas can take the room. Pressed means shown; each keeps its panel's name,
- * and the pressed state says which way it is.
+ * and the pressed state says which way it is. The left one is drawn only when
+ * the host offers a left panel, since with none it could show nothing.
  */
 function SidePanelToggles({
   leftShown,
@@ -960,7 +962,7 @@ function SidePanelToggles({
 }: {
   leftShown: boolean;
   inspectorShown: boolean;
-  onLeft: () => void;
+  onLeft: (() => void) | undefined;
   onInspector: () => void;
 }): React.JSX.Element {
   const toggle = (
@@ -987,7 +989,9 @@ function SidePanelToggles({
   );
   return (
     <div className="flex shrink-0 items-center gap-0.5">
-      {toggle("Left panel", leftShown, onLeft, PanelLeft)}
+      {onLeft === undefined
+        ? null
+        : toggle("Left panel", leftShown, onLeft, PanelLeft)}
       {toggle("Inspector", inspectorShown, onInspector, PanelRight)}
     </div>
   );
@@ -1042,7 +1046,8 @@ function useSidePanels(
   inspectorShown: boolean;
   leftShown: boolean;
   selectPanel: (panel: LeftPanel) => void;
-  toggleLeft: () => void;
+  /** Absent when the host offers no left panel: there is nothing to show. */
+  toggleLeft: (() => void) | undefined;
   toggleInspector: () => void;
 } {
   const restored = preferences.leftPanel;
@@ -1111,7 +1116,7 @@ function useSidePanels(
     inspectorShown,
     leftShown,
     selectPanel,
-    toggleLeft,
+    toggleLeft: LEFT_PANELS.some(isAvailable) ? toggleLeft : undefined,
     toggleInspector,
   };
 }
