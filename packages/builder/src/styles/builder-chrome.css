@@ -1254,7 +1254,8 @@
  * state a screen reader reads, so styling from that attribute keeps what is
  * seen and what is announced reading off one value.
  */
-.nx-style-inspector__toggle > button[aria-pressed="true"] {
+.nx-style-inspector__toggle > button[aria-pressed="true"],
+.nx-style-inspector__toggle > button[aria-checked="true"] {
   background: var(--nx-accent);
   color: var(--nx-accent-foreground);
 }

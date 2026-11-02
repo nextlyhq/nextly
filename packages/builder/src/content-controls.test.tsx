@@ -11,7 +11,7 @@
  * - Every `<label for>` and `aria-labelledby` in the inspector resolves to an
  *   element in the page.
  */
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
@@ -215,5 +215,79 @@ describe("what an author reads", () => {
     );
     expect(getByRole("switch", { name: "Open by default" })).toBeDefined();
     expect(queryByRole("checkbox")).toBeNull();
+  });
+});
+
+describe("a few short options in a row", () => {
+  function registerChoices(): void {
+    registerBlocks(
+      [
+        {
+          name: "acme/every",
+          version: 1,
+          description: "Choices.",
+          example: { props: {} },
+          editor: { label: "Every" },
+          props: {
+            kind: {
+              type: "select",
+              label: "Kind",
+              options: ["unordered", "ordered"],
+              optionLabels: { unordered: "Bulleted", ordered: "Numbered" },
+            },
+            loading: {
+              type: "select",
+              options: ["lazy", "eager"],
+              optionLabels: {
+                lazy: "Load when near the screen",
+                eager: "Load immediately",
+              },
+            },
+          },
+          render: () => null,
+        },
+      ] as never,
+      { source: "content-controls-test" }
+    );
+  }
+
+  function mountWith(props: Record<string, unknown>) {
+    registerChoices();
+    const document = documentOf();
+    (document.nodes[0] as BlockNode).props = props;
+    const editor = editorFor(document);
+    const view = render(<InspectorPanel editor={editor} />);
+    return { editor, view };
+  }
+
+  it("draws them as radio buttons the arrow keys move between", () => {
+    const { editor, view } = mountWith({ kind: "unordered" });
+    const kind = view.getByRole("radiogroup", { name: "Kind" });
+    const bulleted = view.getByRole("radio", { name: "Bulleted" });
+    expect(bulleted.getAttribute("aria-checked")).toBe("true");
+    // Only the chosen one is in the tab order.
+    expect(bulleted.tabIndex).toBe(0);
+    expect(view.getByRole("radio", { name: "Numbered" }).tabIndex).toBe(-1);
+
+    fireEvent.keyDown(bulleted, { key: "ArrowRight" });
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { props: { kind: "ordered" } },
+    });
+    expect(kind).toBeDefined();
+  });
+
+  it("keeps a menu for options too long to sit side by side", () => {
+    const { view } = mountWith({ loading: "lazy" });
+    expect(view.queryByRole("radiogroup", { name: "Loading" })).toBeNull();
+    expect(view.getByRole("combobox", { name: "Loading" })).toBeDefined();
+  });
+
+  it("keeps a menu while the stored value is none of the options", () => {
+    // A row would show nothing chosen and replace the value on a click.
+    const { view } = mountWith({ kind: "dashed" });
+    expect(view.queryByRole("radiogroup", { name: "Kind" })).toBeNull();
+    expect(view.getByRole("combobox", { name: "Kind" })).toBeDefined();
   });
 });

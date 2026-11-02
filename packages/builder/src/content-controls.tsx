@@ -45,7 +45,9 @@ import {
 } from "./content-control-types";
 import { optionLabel, propLabel, type EditableProp } from "./inspector";
 import { RelationControl } from "./relation-control";
+import { radioGroupStep } from "./roving-radios";
 import { useStoredDraft } from "./stored-draft";
+import { fitsSideBySide, type SideBySideRoom } from "./style-numeric";
 import type { InlineRichTextEditorLoader } from "./use-inline-rich-text";
 
 export { CONTENT_CONTROL_TYPES };
@@ -236,7 +238,18 @@ function CheckboxControl({
   );
 }
 
-/** One of a declared set of options, committed the moment it is chosen. */
+/**
+ * How much room the Content tab's control column has for a row of options:
+ * the Level of a heading (H1 to H6) and "This tab · A new tab" fit; a set of
+ * long names does not, and stays a menu.
+ */
+const CONTENT_ROW: SideBySideRoom = { maxCount: 6, maxEach: 9, maxTotal: 18 };
+
+/**
+ * One of a declared set of options, committed the moment it is chosen. A set
+ * whose words fit side by side is drawn as a row of buttons, so every choice
+ * is on screen; a longer one is a menu.
+ */
 function SelectControl({
   id,
   prop,
@@ -244,25 +257,111 @@ function SelectControl({
   onCommit,
   label,
 }: ContentControlProps): React.JSX.Element {
+  const name = label ?? propLabel(prop.name, prop.schema);
+  const labels = prop.options.map(option => optionLabel(prop.schema, option));
+  const stored = typeof prop.value === "string" ? prop.value : undefined;
+  // A stored value outside the options is shown by the menu, which can say
+  // what it is; a row of buttons would show none chosen and replace it.
+  const segmented =
+    fitsSideBySide(labels, CONTENT_ROW) &&
+    (stored === undefined || prop.options.includes(stored));
+  if (segmented) {
+    return (
+      <div className="nx-inspector__field" data-content-control="select">
+        <p className="nx-inspector__field-name" id={`${id}-label`}>
+          {name}
+        </p>
+        <SegmentedChoice
+          id={id}
+          labelledBy={`${id}-label`}
+          options={prop.options}
+          labels={labels}
+          value={stored}
+          disabled={disabled}
+          onChoose={next => onCommit(prop.name, next)}
+        />
+      </div>
+    );
+  }
   return (
     <div className="nx-inspector__field" data-content-control="select">
-      <Label htmlFor={id}>{label ?? propLabel(prop.name, prop.schema)}</Label>
+      <Label htmlFor={id}>{name}</Label>
       <Select
         disabled={disabled}
-        value={typeof prop.value === "string" ? prop.value : undefined}
+        value={stored}
         onValueChange={next => onCommit(prop.name, next)}
       >
         <SelectTrigger id={id}>
           <SelectValue placeholder="Choose" />
         </SelectTrigger>
         <SelectContent>
-          {prop.options.map(option => (
+          {prop.options.map((option, index) => (
             <SelectItem key={option} value={option}>
-              {optionLabel(prop.schema, option)}
+              {labels[index]}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
+    </div>
+  );
+}
+
+/**
+ * A choice of one among a few options, as a row of radio buttons: the arrow
+ * keys move the choice, as in any radio group, and only the chosen one (or the
+ * first, with none chosen) is in the tab order.
+ */
+function SegmentedChoice({
+  id,
+  labelledBy,
+  options,
+  labels,
+  value,
+  disabled,
+  onChoose,
+}: {
+  id: string;
+  labelledBy: string;
+  options: readonly string[];
+  labels: readonly string[];
+  value: string | undefined;
+  disabled: boolean;
+  onChoose: (option: string) => void;
+}): React.JSX.Element {
+  const buttons = React.useRef<Array<HTMLButtonElement | null>>([]);
+  const chosen = value === undefined ? -1 : options.indexOf(value);
+  const stop = chosen === -1 ? 0 : chosen;
+  return (
+    <div
+      id={id}
+      className="nx-style-inspector__toggle"
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+    >
+      {options.map((option, index) => (
+        <button
+          key={option}
+          ref={element => {
+            buttons.current[index] = element;
+          }}
+          type="button"
+          role="radio"
+          aria-checked={index === chosen}
+          tabIndex={index === stop ? 0 : -1}
+          disabled={disabled}
+          onClick={() => onChoose(option)}
+          onKeyDown={event => {
+            const step = radioGroupStep(event.key);
+            if (step === null) return;
+            event.preventDefault();
+            const next = (index + step + options.length) % options.length;
+            buttons.current[next]?.focus();
+            onChoose(options[next] ?? option);
+          }}
+        >
+          {labels[index]}
+        </button>
+      ))}
     </div>
   );
 }

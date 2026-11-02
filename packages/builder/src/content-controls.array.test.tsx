@@ -171,7 +171,8 @@ describe("a list of records", () => {
     ]);
     // The other controls drew too.
     expect(second.getByRole("switch", { name: "Required" })).toBeDefined();
-    expect(second.getByRole("combobox", { name: "Type" })).toBeDefined();
+    // Two short options: a row of radio buttons rather than a menu.
+    expect(second.getByRole("radiogroup", { name: "Type" })).toBeDefined();
   });
 
   it("says a list without an item schema can't be edited here", () => {
