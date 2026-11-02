@@ -19,7 +19,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { BreakpointDialog } from "./breakpoint-dialog";
+import { BreakpointEditor } from "./breakpoint-editor";
 import type { BreakpointSet } from "./breakpoints";
 
 function stored(): BreakpointSet {
@@ -29,13 +29,16 @@ function stored(): BreakpointSet {
   };
 }
 
+/**
+ * The editor, as a host shows it while editing. `onOpenChange` stands for the
+ * host's "editing" state: leaving the editor calls it with `false`.
+ */
 function open(value: BreakpointSet, onSave = vi.fn(), onOpenChange = vi.fn()) {
   render(
-    <BreakpointDialog
-      open
-      onOpenChange={onOpenChange}
+    <BreakpointEditor
       value={value}
       onSave={onSave}
+      onClose={() => onOpenChange(false)}
     />
   );
   return onSave;
@@ -145,15 +148,11 @@ describe("saving", () => {
 
   it("refuses dismissal while a save is in flight", async () => {
     /*
-     * Freezing the fields left three ways out untouched — Cancel, the content's
-     * X, and Escape — all of which arrive through `onOpenChange`. Taken during a
-     * pending write, the dialog unmounts with the draft: a refusal landing
-     * afterwards has nowhere to be shown, and reopening seeds from a read that
-     * has not caught up.
-     *
-     * Escape is exercised as well as the button, because they are different
-     * paths to the same callback and guarding only the one with a `disabled`
-     * attribute would leave the keyboard route open.
+     * Freezing the fields left Cancel untouched. Taken during a pending write,
+     * the editor unmounts with the draft: a refusal landing afterwards has
+     * nowhere to be shown, and editing again seeds from a read that has not
+     * caught up. Escape is pressed too, and leaves nothing either: the editor
+     * sits in its host's page, which owns Escape.
      */
     let settle: (value: undefined) => void = () => {};
     const onSave = vi.fn(
