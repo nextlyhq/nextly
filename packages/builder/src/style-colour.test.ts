@@ -499,23 +499,14 @@ describe("a translucent background withholds the verdict", () => {
 
 describe("which mode a token resolves in", () => {
   const media: SiteTokenSet = { ...TOKENS, darkMode: "media" };
-  const attribute: SiteTokenSet = { ...TOKENS, darkMode: "attribute" };
 
-  it("follows the system only where the site said to", () => {
-    // `emitTokenBlocks` wraps the dark block in
-    // `@media (prefers-color-scheme:dark)` for the media strategy, so the
-    // canvas switches with the system and nothing tells the panel.
-    expect(activeTokenMode(media, true)).toBe("dark");
-    expect(activeTokenMode(media, false)).toBe("light");
-  });
-
-  it("stays light on the attribute strategy, which the panel cannot observe", () => {
-    // The dark block is written under `[data-nx-theme="dark"]`, set by the HOST
-    // on an ancestor of its choosing. A stated limit, not a claim.
-    expect(activeTokenMode(attribute, true)).toBe("light");
-    // And the default, when a site names no strategy at all.
-    expect(activeTokenMode(TOKENS, true)).toBe("light");
-    expect(activeTokenMode(undefined, true)).toBe("light");
+  it("follows the device, which is what the compiled sheet follows", () => {
+    // The site sheet writes every dark value under
+    // `@media (prefers-color-scheme:dark)`, whatever the set's deprecated
+    // `darkMode` says, so the canvas switches with the device and the panel
+    // has to resolve the same way.
+    expect(activeTokenMode(true)).toBe("dark");
+    expect(activeTokenMode(false)).toBe("light");
   });
 
   it("resolves a reference to the value the canvas is actually showing", () => {

@@ -3305,3 +3305,25 @@ describe("which elements count as media for the fit controls", () => {
     expect(fitShown("div")).toBe(false);
   });
 });
+
+describe("a colour that does not follow light and dark", () => {
+  it("is marked on the control holding it", () => {
+    mount(
+      { color: true },
+      { base: { [BASE_BREAKPOINT]: { color: "#1d2b6b" } } }
+    );
+    expect(
+      fieldsOf("color").getByText(/Not adapted to dark mode/)
+    ).toBeDefined();
+  });
+
+  it("is not marked once a variable holds the colour", () => {
+    mount(
+      { color: true },
+      { base: { [BASE_BREAKPOINT]: { color: { $token: "color.text" } } } }
+    );
+    expect(
+      fieldsOf("color").queryByText(/Not adapted to dark mode/)
+    ).toBeNull();
+  });
+});

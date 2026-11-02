@@ -129,8 +129,11 @@ export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
   defineBlock({
     name: ACCORDION_ITEM_BLOCK,
     version: 1,
-    description:
-      "One section of an accordion: a title that is always visible and children the browser reveals when it is open.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: One section of an
+    // accordion: a title that is always visible and children the browser
+    // reveals when it is open.
+    description: "One part of an accordion, with a title that opens it.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
