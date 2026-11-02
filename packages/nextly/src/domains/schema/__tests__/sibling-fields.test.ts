@@ -326,14 +326,16 @@ describe("judgeSiblingFields", () => {
         )
       ).toEqual(["the top level: slug/Slug"]);
     }
-    // The added `title` (a text field) beside an authored column-less `title`.
-    expect(
-      judgeSiblingFields(
-        [text("title"), component("title")],
-        null,
-        "collection"
-      )
-    ).toEqual({ refused: [], existing: [] });
+    // Under one exact name the two still share the document key, so even the
+    // added `title` beside an authored column-less `title` is a pair.
+    for (const kind of ["collection", "single"] as const) {
+      expect(
+        names(
+          judgeSiblingFields([text("title"), component("title")], null, kind)
+            .refused
+        )
+      ).toEqual(["the top level: title/title"]);
+    }
     // Written by the author, `define*` still refuses it.
     expect(configuredSiblingClashes("collection", declared)).toHaveLength(1);
   });

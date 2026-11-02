@@ -127,9 +127,10 @@ function sharedValue(
 /**
  * The system fields `define*` adds at a collection's and a Single's top level
  * (`title`, `slug`). Each is added only when no declared field takes its
- * column, so one beside a declared sibling that shares no stored value with it
- * (a column-less `Title`, a `TITLE` whose column is `t_i_t_l_e`) is a pair the
- * author never wrote, and the definition stands as `define*` accepted it.
+ * column, so one beside a declared sibling that shares no stored value or key
+ * with it (a column-less `Title`, a `TITLE` whose column is `t_i_t_l_e`) is a
+ * pair the author never wrote, and the definition stands as `define*` accepted
+ * it. A sibling of the exact same name shares the document key, so it is judged.
  */
 const SYSTEM_FIELD_NAMES: ReadonlySet<string> = new Set(["title", "slug"]);
 
@@ -214,6 +215,8 @@ function isSystemFieldStandingAside(
   return (
     (kind === "collection" || kind === "single") &&
     clash.path.length === 0 &&
+    // Under one exact name the two share the document key, whatever their columns.
+    clash.kind !== "same-name" &&
     clash.shared === null &&
     SYSTEM_SHAPED_PAIRS.has(clash)
   );
