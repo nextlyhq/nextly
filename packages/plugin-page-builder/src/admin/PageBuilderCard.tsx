@@ -437,7 +437,11 @@ function PreviewBar({
       <span className="min-w-0 flex-1 basis-40 text-sm text-muted-foreground">
         Live preview · {count} {count === 1 ? "section" : "sections"}
       </span>
-      {preview === null ? null : (
+      {/* Only on the editable page. A page drawn read-only inside the editor
+          — a version in history, the source language beside a translation —
+          inherits the live editor's preview, which opens the CURRENT page in
+          the language being edited, not the one this card shows. */}
+      {preview === null || !canEdit ? null : (
         <Button
           type="button"
           variant="outline"
@@ -518,6 +522,13 @@ export function PageBuilderCard({
 
   const said = note ?? (canEdit && href === undefined ? SAVE_FIRST : undefined);
   const anotherLanguage = showsAnotherLanguage(useDocumentLocale());
+  // Held across renders that change none of its inputs: the preview keys its
+  // whole page render on the sections it is handed, so a fresh array from
+  // every render of the form around this card would redo that render each time.
+  const { hrefFor, inPicture } = useMemo(
+    () => sectionLinks(sections, canEdit, href, anotherLanguage),
+    [sections, canEdit, href, anotherLanguage]
+  );
 
   // Empty means nothing stored, not nothing drawn: a page whose only sections
   // are gated by a condition still holds a page, and inviting the author to
@@ -532,13 +543,6 @@ export function PageBuilderCard({
       />
     );
   }
-
-  const { hrefFor, inPicture } = sectionLinks(
-    sections,
-    canEdit,
-    href,
-    anotherLanguage
-  );
 
   return (
     // `min-w-0` because the form lays fields out as grid items, whose default

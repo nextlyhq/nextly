@@ -10,7 +10,7 @@
  *
  * @module reveal-node.test
  */
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { revealNode } from "./reveal-node";
@@ -102,6 +102,30 @@ describe("revealNode", () => {
 
     expect(revealNode(root, id)).toBe(true);
     expect(scrolls.get(id)).toHaveBeenCalled();
+  });
+
+  it("finds a placed component by its instance, which draws no element of its own", () => {
+    // The definition's nodes carry ids minted for the drawing; the instance the
+    // editor holds is named on them by the instance attribute, outermost first.
+    motionPreference(false);
+    const root = document.createElement("div");
+    const outer = document.createElement("header");
+    outer.setAttribute(NODE_ID_ATTRIBUTE, "minted-1");
+    outer.setAttribute(INSTANCE_ATTRIBUTE, "host");
+    const inner = document.createElement("p");
+    inner.setAttribute(NODE_ID_ATTRIBUTE, "minted-2");
+    inner.setAttribute(INSTANCE_ATTRIBUTE, "host");
+    outer.append(inner);
+    root.append(outer);
+    document.body.append(root);
+    const outerScroll = vi.fn();
+    const innerScroll = vi.fn();
+    outer.scrollIntoView = outerScroll;
+    inner.scrollIntoView = innerScroll;
+
+    expect(revealNode(root, "host")).toBe(true);
+    expect(outerScroll).toHaveBeenCalledTimes(1);
+    expect(innerScroll).not.toHaveBeenCalled();
   });
 
   it("searches a whole document when that is the root, as a frame's would be", () => {

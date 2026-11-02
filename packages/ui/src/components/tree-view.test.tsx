@@ -677,6 +677,25 @@ describe("a selection made outside the tree", () => {
     ).toBe("true");
   });
 
+  it("brings the row into view again when it is selected again after a clear", () => {
+    // Selected, cleared, the tree scrolled back to the top, then the same row
+    // selected again: a new selection, which is revealed like any other.
+    const { rerender, container } = render(
+      <TreeView nodes={many} aria-label="Layers" selectedId="n400" />
+    );
+    rerender(<TreeView nodes={many} aria-label="Layers" selectedId={null} />);
+    const scroller = container.firstElementChild;
+    if (!(scroller instanceof HTMLElement)) throw new Error("no scroller");
+    act(() => {
+      scroller.scrollTo({ top: 0 });
+    });
+    expect(screen.queryByRole("treeitem", { name: "Node 400" })).toBeNull();
+
+    rerender(<TreeView nodes={many} aria-label="Layers" selectedId="n400" />);
+
+    expect(screen.getByRole("treeitem", { name: "Node 400" })).toBeDefined();
+  });
+
   it("waits for an ancestor to open, then brings the row into view", () => {
     // The row of a nested block exists only once its ancestors are expanded,
     // which the caller does after selecting it.

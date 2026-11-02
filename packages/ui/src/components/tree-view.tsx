@@ -369,7 +369,13 @@ const TreeView: React.ForwardRefExoticComponent<
      */
     const revealed = React.useRef<string | null>(null);
     React.useEffect(() => {
-      if (selected === null || revealed.current === selected) return;
+      // A clear ends the selection, so selecting the same row again later is a
+      // new change, revealed like any other.
+      if (selected === null) {
+        revealed.current = null;
+        return;
+      }
+      if (revealed.current === selected) return;
       const index = rows.findIndex(row => row.node.id === selected);
       if (index < 0) return;
       revealed.current = selected;

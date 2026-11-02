@@ -504,6 +504,19 @@ describe("PageBuilderCard's full-page preview", () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
+  it("is not offered on a page drawn read-only, which may not be the live one", () => {
+    // A version in history and the source language beside a translation are
+    // drawn read-only inside the live editor, whose preview opens the CURRENT
+    // page in the language being edited: offering it there opens a page other
+    // than the one the card shows.
+    preview.current = { open: vi.fn() };
+    render(<PageBuilderCard {...base} document={FIVE} canEdit={false} />);
+
+    expect(
+      screen.queryByRole("button", { name: PREVIEW_PAGE_LABEL })
+    ).toBeNull();
+  });
+
   it("is not offered where the editor offers no preview", () => {
     render(<PageBuilderCard {...base} document={FIVE} />);
 

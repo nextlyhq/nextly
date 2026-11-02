@@ -14,21 +14,23 @@
  * canvas drawn inside a frame keeps its nodes in the frame's own document,
  * where a global search finds nothing. The caller says where the canvas is.
  *
- * ## The node is found by the renderer's own attribute
+ * ## The node is found the way the canvas finds it
  *
- * `NODE_ID_ATTRIBUTE` is what the renderer emits on each block's root element
- * when an editor asks for it, and what hit-testing already reads. A second
- * marker for scrolling would be a second address for one node.
+ * Through `nodeElement`, the canvas's own map from a node id to the element it
+ * was drawn as. That answers for a placed component too: the instance the
+ * editor holds draws no element of its own, and its definition's elements
+ * carry minted ids with the instance named beside them. A second lookup here
+ * would be a second answer to what a node id means in the DOM.
  *
  * @module reveal-node
  */
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { nodeElement } from "./canvas";
 
 /**
  * Whether the reader asked the system for less motion, asked of the window the
  * root belongs to — a frame's window answers for the frame.
  */
-function prefersReducedMotion(root: Document | Element): boolean {
+function prefersReducedMotion(root: Document | HTMLElement): boolean {
   const owner = "defaultView" in root ? root : root.ownerDocument;
   const view = owner.defaultView;
   if (view === null || typeof view.matchMedia !== "function") return false;
@@ -48,14 +50,12 @@ function prefersReducedMotion(root: Document | Element): boolean {
  * @returns whether the block was found; `false` scrolls nothing, which is what
  *   an address naming a block the page no longer has should do
  */
-export function revealNode(root: Document | Element, id: string): boolean {
-  // Matched by comparing the attribute rather than by a selector built from
-  // the id: ids are stored data, and one holding a quote or a bracket would
-  // otherwise break the selector or match something else.
-  const element = Array.from(
-    root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`)
-  ).find(candidate => candidate.getAttribute(NODE_ID_ATTRIBUTE) === id);
-  if (element === undefined) return false;
+export function revealNode(root: Document | HTMLElement, id: string): boolean {
+  // A frame's document is searched from its root element, which holds all of
+  // it; `nodeElement` compares ids rather than building a selector from them.
+  const scope = "documentElement" in root ? root.documentElement : root;
+  const element = nodeElement(scope, id);
+  if (element === null) return false;
   element.scrollIntoView({
     block: "nearest",
     inline: "nearest",
