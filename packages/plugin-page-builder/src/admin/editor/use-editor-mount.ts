@@ -29,6 +29,7 @@ import {
   useNoticeQueue,
   userPreferenceStore,
   type BuilderShellProps,
+  type ComponentVerbsHost,
   type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
@@ -43,13 +44,18 @@ import {
 import { toast } from "@nextlyhq/ui";
 import { useCallback, useMemo, useState } from "react";
 
+import type { ComponentFromSelectionAction } from "../../library-contract";
 import {
   useComponentLibrary,
   type ComponentLibraryRead,
 } from "../component-library-client";
+import type { ComponentRequest } from "../ComponentFromSelectionPrompt";
 import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
-import { useMayCreatePattern } from "../pattern-capability-client";
+import {
+  useMayCreateComponent,
+  useMayCreatePattern,
+} from "../pattern-capability-client";
 
 import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
@@ -166,6 +172,107 @@ export function useSavePatternVerb(
   return { document, returnFocusTo, open, close };
 }
 
+/** What {@link useMakeComponentVerb} returns, handed on as `makeComponent`. */
+type MakeComponentVerb = {
+  /** What the author asked for, or `null` while the form is not up. */
+  readonly request: ComponentRequest | null;
+  readonly returnFocusTo: () => HTMLElement | null;
+  readonly open: (action: ComponentFromSelectionAction) => void;
+  readonly close: () => void;
+  /** The verbs as the shared verb chain takes them, with the author's grant. */
+  readonly verbs: ComponentVerbsHost;
+};
+
+/**
+ * Raising the make-component form: the same gesture as the pattern form's
+ * (the open passage committed first, the opener remembered), plus which of
+ * the two verbs was asked for.
+ */
+function useMakeComponentVerb(
+  editor: { document: BlockDocument },
+  inline: { commit: () => InlineEditOutcome }
+): MakeComponentVerb {
+  const gesture = useSavePatternVerb(editor, inline);
+  const [action, setAction] = useState<ComponentFromSelectionAction>("save-as");
+  const openGesture = gesture.open;
+  const open = useCallback(
+    (next: ComponentFromSelectionAction) => {
+      setAction(next);
+      openGesture();
+    },
+    [openGesture]
+  );
+  const request = useMemo(
+    () =>
+      gesture.document === null ? null : { action, document: gesture.document },
+    [action, gesture.document]
+  );
+  const mayCreate = useMayCreateComponent();
+  const verbs = useMemo(
+    () => ({
+      mayCreate,
+      onSaveAsComponent: () => open("save-as"),
+      onConvertToComponent: () => open("convert"),
+    }),
+    [mayCreate, open]
+  );
+  return {
+    request,
+    returnFocusTo: gesture.returnFocusTo,
+    open,
+    close: gesture.close,
+    verbs,
+  };
+}
+
+/**
+ * What the canvas's inline editing tells the author: an edit that did not
+ * save, and the component a clicked part of a placement belongs to.
+ */
+function useInlineNotices(
+  editor: EditorState,
+  componentLibrary: ComponentLibraryRead
+): {
+  announce: (outcome: InlineEditOutcome) => void;
+  partOf: (placementId: string) => void;
+} {
+  /*
+   * ONE place the author is told about an inline edit that did not save.
+   *
+   * Passed to the hook rather than read from what `commit` returns here,
+   * because most edits do not end by this component calling `commit`. Leaving
+   * the passage ends one; so does opening another, and so does this canvas
+   * unmounting. The outcome that most needs saying — a passage whose block was
+   * deleted or locked while the author typed into it — is reached almost
+   * entirely by the first of those, so reporting from the return value alone
+   * said nothing on the common path.
+   */
+  const announce = useCallback((outcome: InlineEditOutcome) => {
+    const problem = inlineEditProblem(outcome);
+    if (problem !== null) toast.error(problem);
+  }, []);
+  /*
+   * A double-click on text a component does not expose selects the placement
+   * (the hook does that) and says whose the text is, with the variant, so the
+   * gesture is never met with nothing. Read against the same library the
+   * canvas draws with. A toast rather than the builder's notice queue, which
+   * holds failures: this is information, and it fades.
+   */
+  const partOf = useCallback(
+    (placementId: string) => {
+      const inspection = inspectInstance(
+        editor.document,
+        placementId,
+        componentLibrary.definitions,
+        componentLibrary.components
+      );
+      if (inspection !== null) toast.info(partOfComponentSentence(inspection));
+    },
+    [editor.document, componentLibrary]
+  );
+  return { announce, partOf };
+}
+
 /**
  * Everything the editor is mounted from, read once per opening.
  *
@@ -261,40 +368,7 @@ export function useEditorMount(
    * keeps its node classes recognisable, and this package is already on the
    * admin side of that line.
    */
-  /*
-   * ONE place the author is told about an inline edit that did not save.
-   *
-   * Passed to the hook rather than read from what `commit` returns here,
-   * because most edits do not end by this component calling `commit`. Leaving
-   * the passage ends one; so does opening another, and so does this canvas
-   * unmounting. The outcome that most needs saying — a passage whose block was
-   * deleted or locked while the author typed into it — is reached almost
-   * entirely by the first of those, so reporting from the return value alone
-   * said nothing on the common path.
-   */
-  const announce = useCallback((outcome: InlineEditOutcome) => {
-    const problem = inlineEditProblem(outcome);
-    if (problem !== null) toast.error(problem);
-  }, []);
-  /*
-   * A double-click on text a component does not expose selects the placement
-   * (the hook does that) and says whose the text is, with the variant, so the
-   * gesture is never met with nothing. Read against the same library the
-   * canvas draws with. A toast rather than the builder's notice queue, which
-   * holds failures: this is information, and it fades.
-   */
-  const partOf = useCallback(
-    (placementId: string) => {
-      const inspection = inspectInstance(
-        editor.document,
-        placementId,
-        componentLibrary.definitions,
-        componentLibrary.components
-      );
-      if (inspection !== null) toast.info(partOfComponentSentence(inspection));
-    },
-    [editor.document, componentLibrary]
-  );
+  const { announce, partOf } = useInlineNotices(editor, componentLibrary);
   const { inline, passages, locale } = useInlineAndInspector(
     editor,
     announce,
@@ -315,7 +389,8 @@ export function useEditorMount(
    * three places would be three requests answering one question.
    */
   const mayCreatePattern = useMayCreatePattern();
-
+  // The make-component verbs, and whether this author holds their grants.
+  const makeComponent = useMakeComponentVerb(editor, inline);
   /*
    * Where the shell keeps this author's panel, device and zoom: under their
    * own id, so two authors of one browser each get their own. While no one is
@@ -337,6 +412,8 @@ export function useEditorMount(
     locale,
     savePattern,
     mayCreatePattern,
+    makeComponent,
+    componentVerbs: makeComponent.verbs,
     preferenceStore,
   };
 }
@@ -356,6 +433,9 @@ export type EditorMount = {
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
+  makeComponent: MakeComponentVerb;
+  /** The make-component verbs as the shared verb chain takes them. */
+  componentVerbs: ComponentVerbsHost;
   /** Where the shell keeps the signed-in author's preferences. */
   preferenceStore: NonNullable<BuilderShellProps["store"]>;
 };

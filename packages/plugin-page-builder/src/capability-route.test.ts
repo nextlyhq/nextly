@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { readPatternCapability } from "./capability-route";
+import { mayCreateComponent, readPatternCapability } from "./capability-route";
 import { PATTERNS_SLUG } from "./collections/patterns";
 
 /** What was asked, so a test can assert the question and not only the answer. */
@@ -123,5 +123,52 @@ describe("the pattern capability route", () => {
     await expect(
       readPatternCapability({ self: { collections: {} }, caller: null })
     ).resolves.toEqual({ mayCreate: false });
+  });
+});
+
+describe("whether the caller may make a component", () => {
+  function grants(held: Record<string, boolean>) {
+    return {
+      self: { collections: { components: "site_components" } },
+      caller: {
+        can: (action: string, resource: string) =>
+          Promise.resolve(held[`${action}-${resource}`] === true),
+      },
+    };
+  }
+
+  it("asks for create AND publish, on the store the host resolved", async () => {
+    const both = grants({
+      "create-site_components": true,
+      "publish-site_components": true,
+    });
+    expect(await mayCreateComponent(both)).toBe(true);
+  });
+
+  it("says no to an author who may create components but not publish them", async () => {
+    const createOnly = grants({ "create-site_components": true });
+    expect(await mayCreateComponent(createOnly)).toBe(false);
+  });
+
+  it("says yes where the store named is the plugin's own components", async () => {
+    const both = grants({
+      "create-site_components": true,
+      "publish-site_components": true,
+    });
+    expect(
+      await mayCreateComponent(both, { collection: "site_components" })
+    ).toBe(true);
+  });
+
+  it("says no where the host keeps components in a store of its own", async () => {
+    const configured = grants({
+      "create-blocks_lib": true,
+      "publish-blocks_lib": true,
+      "create-site_components": true,
+      "publish-site_components": true,
+    });
+    expect(
+      await mayCreateComponent(configured, { collection: "blocks_lib" })
+    ).toBe(false);
   });
 });

@@ -608,6 +608,8 @@ export class CollectionsHandler {
     page?: number;
     /** Rows to skip before the first returned, instead of a page. */
     offset?: number;
+    /** Refuse a sort key that names no sortable field instead of dropping it. */
+    unknownSort?: "drop" | "refuse";
     /** Number of documents per page (default: 10, max: 500) */
     limit?: number;
     /** Search query to filter entries by searchable fields */
