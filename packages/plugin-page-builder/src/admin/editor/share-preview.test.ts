@@ -33,7 +33,7 @@ const hero = {
   props: {
     heading: "Who we are",
     body: "We build tools people keep.",
-    image: "https://cdn.example.com/team.jpg",
+    image: "/uploads/team.jpg",
   },
 };
 
@@ -49,7 +49,27 @@ describe("the share preview", () => {
     ).toEqual({
       title: "Who we are",
       description: "We build tools people keep.",
-      image: { kind: "url", url: "https://cdn.example.com/team.jpg" },
+      image: { kind: "url", url: "/uploads/team.jpg" },
+    });
+  });
+
+  it("never fetches an image from another site's address", () => {
+    // The published page keeps such an image only when the site allows its
+    // host, a list only the server holds, so the preview shows a stand-in.
+    const elsewhere = {
+      ...hero,
+      props: { ...hero.props, image: "https://cdn.example.com/team.jpg" },
+    };
+    const image = (document: BlockDocument, ogImage?: unknown) =>
+      sharePreview({
+        seo: ogImage === undefined ? undefined : { ogImage },
+        document,
+        pageTitle: "About us",
+        definitions,
+      }).image;
+    expect(image(page(elsewhere))).toEqual({ kind: "remote" });
+    expect(image(page(), "//cdn.example.com/og.png")).toEqual({
+      kind: "remote",
     });
   });
 
@@ -119,10 +139,7 @@ describe("the share preview", () => {
         definitions,
       }).image;
     expect(of("6f1c2a9e-media-id")).toEqual({ kind: "media" });
-    expect(of("https://cdn.example.com/og.png")).toEqual({
-      kind: "url",
-      url: "https://cdn.example.com/og.png",
-    });
+    expect(of("https://cdn.example.com/og.png")).toEqual({ kind: "remote" });
     expect(of("/uploads/og.png")).toEqual({
       kind: "url",
       url: "/uploads/og.png",

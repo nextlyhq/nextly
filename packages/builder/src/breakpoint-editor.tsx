@@ -37,8 +37,8 @@ function uniqueId(base: string, taken: ReadonlySet<string>): string {
 }
 
 /**
- * Where a breakpoint applies, in the device buttons' words: from one more
- * than the next narrower breakpoint up to its own width.
+ * Where a breakpoint applies, in the device buttons' words: from just above
+ * the next narrower breakpoint up to its own width.
  */
 function rangeOf(rows: readonly DraftRow[], row: DraftRow): string {
   const width = Number(row.width);
@@ -49,7 +49,13 @@ function rangeOf(rows: readonly DraftRow[], row: DraftRow): string {
     .map(other => Number(other.width))
     .filter(other => Number.isFinite(other) && other > 0 && other < width);
   if (narrower.length === 0) return `up to ${width}px`;
-  return `${Math.max(...narrower) + 1}–${width}px`;
+  const below = Math.max(...narrower);
+  // A whole pixel more is where the range starts only between whole widths:
+  // a fractional width hands over just above itself, so "481.5" after 480.5
+  // would leave out a real stretch the wider breakpoint already covers.
+  return Number.isInteger(below) && Number.isInteger(width)
+    ? `${below + 1}–${width}px`
+    : `above ${below}px, up to ${width}px`;
 }
 
 /**

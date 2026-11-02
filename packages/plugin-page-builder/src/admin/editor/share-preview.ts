@@ -28,7 +28,14 @@ export interface ShareSeoFields {
 export type ShareImage =
   | { kind: "url"; url: string }
   /** An image from the media library, shown as a stand-in until it is read. */
-  | { kind: "media" };
+  | { kind: "media" }
+  /**
+   * An image written as another site's address. Shown as a stand-in, never
+   * fetched: the published page only uses one whose host the site allows, and
+   * that list is the server's, so Settings would otherwise contact a host the
+   * site refuses and preview an image the live link leaves out.
+   */
+  | { kind: "remote" };
 
 /** What the preview card shows. */
 export interface SharePreview {
@@ -49,11 +56,18 @@ function isAddress(value: string): boolean {
 }
 
 /** A media value's address, whatever shape the field stored it in. */
+/** An image written as an address: this site's own path, or a stand-in. */
+function addressImage(address: string): ShareImage {
+  return address.startsWith("/") && !address.startsWith("//")
+    ? { kind: "url", url: address }
+    : { kind: "remote" };
+}
+
 function seoImage(value: unknown): ShareImage | undefined {
   const stored = text(value);
   if (stored !== undefined) {
     // An upload field stores the media's id, which is not an image address.
-    return isAddress(stored) ? { kind: "url", url: stored } : { kind: "media" };
+    return isAddress(stored) ? addressImage(stored) : { kind: "media" };
   }
   if (value !== null && typeof value === "object") {
     const nested = text((value as Record<string, unknown>).url);
@@ -102,7 +116,7 @@ export function sharePreview(args: {
     (first === undefined
       ? undefined
       : first.kind === "url"
-        ? ({ kind: "url", url: first.value } as const)
+        ? addressImage(first.value)
         : ({ kind: "media" } as const));
   return {
     title,

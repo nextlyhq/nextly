@@ -483,6 +483,17 @@ describe("where each breakpoint applies", () => {
     // The base is the fixed first row, not an editable one.
     expect(screen.getByText("the base, always applies")).toBeTruthy();
   });
+
+  it("starts just above a fractional width, not a whole pixel past it", () => {
+    open({
+      viewport: [
+        { id: "tablet", label: "Tablet", maxWidth: 768.5 },
+        { id: "mobile", label: "Mobile", maxWidth: 480.5 },
+      ],
+      container: [],
+    });
+    expect(screen.getByText("above 480.5px, up to 768.5px")).toBeTruthy();
+  });
 });
 
 describe("telling the host about a save", () => {

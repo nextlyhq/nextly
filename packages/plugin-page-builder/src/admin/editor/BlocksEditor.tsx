@@ -685,7 +685,6 @@ function editorSettings(
           // dialog on every pass, open or not.
           dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
         }
-        host={window.location.host}
         breakpoints={{
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,

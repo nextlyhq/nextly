@@ -78,10 +78,12 @@ type DialogState = Parameters<
 export interface SettingsDialogProps extends DialogState {
   /** The entry's own fields, drawn by the admin, or null where there are none. */
   pageFields: ReactNode | null;
-  /** How a shared link to this page would look. */
+  /**
+   * How a shared link to this page would look. It names no host: the public
+   * site may be served from another origin than the admin, and only the
+   * server knows which.
+   */
   share: SharePreview;
-  /** Where the site is served, as a shared link names it. */
-  host: string;
   /** The site's breakpoints: what is saved, how to save, whether it is read. */
   breakpoints: Pick<
     ComponentProps<typeof BreakpointManager>,
@@ -107,7 +109,6 @@ export function SettingsDialog({
   returnFocus,
   pageFields,
   share,
-  host,
   breakpoints,
 }: SettingsDialogProps): JSX.Element {
   const site = usePluginRoute<SiteSettingsRead>({
@@ -162,7 +163,7 @@ export function SettingsDialog({
               value="page"
               className="min-h-0 flex-1 overflow-y-auto px-6 pb-6"
             >
-              <ThisPage pageFields={pageFields} share={share} host={host} />
+              <ThisPage pageFields={pageFields} share={share} />
             </TabsContent>
             {siteTab ? (
               <TabsContent
@@ -326,8 +327,7 @@ function SiteTab({
 function ThisPage({
   pageFields,
   share,
-  host,
-}: Pick<SettingsDialogProps, "pageFields" | "share" | "host">): JSX.Element {
+}: Pick<SettingsDialogProps, "pageFields" | "share">): JSX.Element {
   return (
     <div className="space-y-6 pt-4">
       {pageFields === null ? null : <section>{pageFields}</section>}
@@ -335,7 +335,7 @@ function ThisPage({
         <h3 id="settings-share-title" className="text-sm font-semibold">
           Search and sharing
         </h3>
-        <SharePreviewCard share={share} host={host} />
+        <SharePreviewCard share={share} />
         <p className="text-xs text-muted-foreground">
           {"Approximate: your site's metadata may differ."}
         </p>
@@ -344,14 +344,8 @@ function ThisPage({
   );
 }
 
-/** How a shared link would look: image, address, title and description. */
-function SharePreviewCard({
-  share,
-  host,
-}: {
-  share: SharePreview;
-  host: string;
-}): JSX.Element {
+/** How a shared link would look: image, title and description. */
+function SharePreviewCard({ share }: { share: SharePreview }): JSX.Element {
   return (
     <figure
       aria-label="Share preview"
@@ -365,11 +359,12 @@ function SharePreviewCard({
         />
       ) : (
         <div className="flex h-40 items-center justify-center border-b border-border bg-muted text-xs text-muted-foreground">
-          Image from the media library
+          {share.image.kind === "media"
+            ? "Image from the media library"
+            : "Image from another site"}
         </div>
       )}
       <figcaption className="grid gap-0.5 px-3 py-2.5">
-        <span className="text-xs text-muted-foreground">{host}</span>
         <span className="text-sm font-semibold">{share.title}</span>
         {share.description === undefined ? null : (
           <span className="line-clamp-2 text-sm text-muted-foreground">

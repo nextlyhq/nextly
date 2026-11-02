@@ -104,7 +104,6 @@ function show(onOpenChange = vi.fn()) {
         returnFocus={() => null}
         pageFields={<input aria-label="Title" defaultValue="About us" />}
         share={{ title: "Who we are", description: "We build tools." }}
-        host="acme.com"
         breakpoints={{
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
@@ -134,7 +133,6 @@ describe("the Settings dialog", () => {
     expect(screen.getByRole("tab", { name: "This page" })).toBeTruthy();
     expect(screen.getByLabelText("Title")).toBeTruthy();
     const preview = screen.getByRole("figure", { name: "Share preview" });
-    expect(preview.textContent).toContain("acme.com");
     expect(preview.textContent).toContain("Who we are");
     expect(
       screen.getByText("Approximate: your site's metadata may differ.")
@@ -367,7 +365,6 @@ describe("the Settings dialog", () => {
         returnFocus={() => null}
         pageFields={<input aria-label="Title" />}
         share={{ title: "Who we are" }}
-        host="acme.com"
         breakpoints={{
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
