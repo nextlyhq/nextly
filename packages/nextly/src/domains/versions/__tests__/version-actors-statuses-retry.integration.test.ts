@@ -40,6 +40,10 @@ import {
   VersionCaptureService,
   type CaptureInput,
 } from "../version-capture-service";
+import {
+  STORAGE_MODES,
+  type StorageMode,
+} from "../../../plugins/__tests__/helpers/dialect-matrix";
 
 let current: TestNextly | undefined;
 let services: PluginContext["services"] | undefined;
@@ -59,7 +63,10 @@ interface VersionItem {
   author: { kind?: string; id: string | null; name: string | null } | null;
 }
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  storage: StorageMode
+): Promise<TestNextly> {
   const probe = definePlugin({
     name: "@test/version-actors",
     version: "1.0.0",
@@ -70,6 +77,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   });
   current = await createTestNextly({
     dialect,
+    perLanguageStorage: storage.perLanguageStorage,
     collections: [
       defineCollection({
         slug: "notes",
@@ -237,11 +245,20 @@ async function versionNumbersOf(t: TestNextly, id: string): Promise<number[]> {
     .sort((x, y) => x - y);
 }
 
-describe.each(getConfiguredTestDialects())(
+// Both storage layouts: where translatable values live must not change what this answers.
+describe.each(
+  STORAGE_MODES.flatMap(storage =>
+    getConfiguredTestDialects().map(dialect => ({
+      dialect,
+      storage,
+      mode: storage.name,
+    }))
+  )
+)(
   "version actors, statuses and number clashes (integration, %s)",
-  dialect => {
+  ({ dialect, storage }) => {
     it("names each version's actor: a person, an API key by its own name, and the system for a seed and a plugin", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const person = await seedLiveAuthor(t);
       const reader = await keyNamed(t, "History reader", ["read-notes"]);
       const writer = await keyNamed(t, "Import robot", [
@@ -305,7 +322,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("records a status the lifecycle does not know as it is, never as published", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const reader = await keyNamed(t, "Reader", ["read-tickets"]);
       const id = idOf(
         await t.nextly.create({
@@ -319,7 +336,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("marks a status too long for the column as shortened, keeps it whole in the snapshot, and reports it once", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const collection = `memos-${dialect}`;
       const reader = await keyNamed(t, "Reader", [`read-${collection}`]);
       const error = vi.spyOn(
@@ -365,7 +382,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("retries a version insert under the next number when a concurrent write took it", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const id = idOf(
         await t.nextly.create({ collection: "notes", data: { title: "x" } })
       );
@@ -382,7 +399,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("counts the version that won the race when the retried write trims history to its cap", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const id = idOf(
         await t.nextly.create({ collection: "notes", data: { title: "x" } })
       );
