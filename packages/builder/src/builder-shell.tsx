@@ -950,7 +950,11 @@ function ShellTopBar({
           onLeft={onLeft}
           onInspector={onInspector}
         />
-        {topBarEnd === undefined ? null : (
+        {/* `null` and `false` are what a conditional slot gives when it is
+          empty, so they draw no rule either. */}
+        {topBarEnd === undefined ||
+        topBarEnd === null ||
+        topBarEnd === false ? null : (
           <>
             <span
               aria-hidden="true"

@@ -485,7 +485,10 @@ export function CompactDocumentActionBar({
   actions,
   bindings,
   pending = false,
-}: Omit<DocumentActionBarProps, "className" | "narrowItems">): JSX.Element {
+}: Omit<
+  DocumentActionBarProps,
+  "className" | "narrowItems"
+>): JSX.Element | null {
   const { available, primary } = wiredActions(actions, bindings);
   const options = [
     ...bound(actionsAt(available, "toolbar"), bindings),
@@ -498,12 +501,15 @@ export function CompactDocumentActionBar({
     bindings
   );
   if (primary === undefined) {
+    // Nothing to lead and nothing this bar keeps: no control at all, rather
+    // than a menu that opens empty. The entry's page still has its own.
+    if (options.length + danger.length === 0) return null;
     return (
       <DocumentMenu
         narrowItems={[]}
         documentItems={options}
         dangerItems={danger}
-        wideMenu={options.length + danger.length > 0}
+        wideMenu
       />
     );
   }

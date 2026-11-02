@@ -2349,13 +2349,18 @@ describe("the top bar's three columns", () => {
     );
   });
 
-  it("draws no rule when the host puts nothing at the end", () => {
+  it.each([
+    ["no end content", undefined],
+    ["an empty conditional slot", null],
+    ["a false condition", false],
+  ])("draws no rule for %s", (_name, topBarEnd) => {
     stubContainerFits(true);
     render(
       <BuilderShell
         onExit={vi.fn()}
         store={memoryStore()}
         title="About us"
+        topBarEnd={topBarEnd}
         onZoomChange={vi.fn()}
       />
     );

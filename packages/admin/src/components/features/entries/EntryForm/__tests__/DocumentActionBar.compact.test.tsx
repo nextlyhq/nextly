@@ -201,6 +201,24 @@ describe("the compact document control", () => {
     ]);
   });
 
+  it("draws nothing when nothing leads and it keeps no row", () => {
+    // Writes refused: only reading actions are left, and this bar keeps none
+    // of them, so an empty menu would be a control that does nothing.
+    const VIEW_API: EditorDocumentAction = {
+      id: "view-api",
+      label: "View API response",
+      placement: "menu",
+      group: "document",
+    };
+    const { container } = render(
+      <CompactDocumentActionBar
+        actions={[VIEW_API]}
+        bindings={bindings({ "view-api": { onSelect: vi.fn() } })}
+      />
+    );
+    expect(container.querySelector("button")).toBeNull();
+  });
+
   it("keeps the rows in a menu of their own when nothing leads", async () => {
     // A reader who may unpublish but not edit: no leading action, and the
     // row they may use still has somewhere to be.
