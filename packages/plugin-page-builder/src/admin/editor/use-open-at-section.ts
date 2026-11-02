@@ -29,8 +29,8 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-open-at-section
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { revealNode } from "@nextlyhq/builder";
-import type { EditorState, LeftPanel } from "@nextlyhq/builder/shell";
+import { revealNode, type LeftPanel } from "@nextlyhq/builder";
+import type { EditorState } from "@nextlyhq/builder/shell";
 import { useEffect, useRef } from "react";
 
 export interface OpenAtSectionArgs {

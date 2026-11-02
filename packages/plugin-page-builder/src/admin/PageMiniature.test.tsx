@@ -7,8 +7,8 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PageMiniature } from "./PageMiniature";
 import { pageRenderInputs } from "./page-render-inputs";
@@ -237,5 +237,280 @@ describe("PageMiniature", () => {
     );
 
     expect(scaled?.style.transform).toBe("scale(1)");
+  });
+});
+
+/*
+ * jsdom lays nothing out, so the sizes the preview reads are stubbed on the
+ * elements it reads them from, by their slot. A stub keyed by slot rather than
+ * set on every element keeps a measurement of the WRONG element at zero, which
+ * is what lets these cases tell the right reading from a plausible wrong one.
+ */
+function stubLayout(sizes: {
+  frameWidth: number;
+  pageHeight: number;
+  boxes?: Record<string, { top: number; height: number }>;
+  /** Where the page's own box starts on screen. */
+  pageTop?: number;
+}): () => void {
+  const width = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth"
+  );
+  const height = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "offsetHeight"
+  );
+  const rect = Element.prototype.getBoundingClientRect;
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.dataset.slot === "page-miniature" ? sizes.frameWidth : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.dataset.slot === "page-miniature-scaled"
+        ? sizes.pageHeight
+        : 0;
+    },
+  });
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    const box = sizes.boxes?.[this.getAttribute("data-nx-node") ?? ""];
+    const isPage =
+      this instanceof HTMLElement &&
+      this.dataset.slot === "page-miniature-page";
+    const top = box?.top ?? (isPage ? (sizes.pageTop ?? 0) : 0);
+    const h = box?.height ?? 0;
+    return {
+      top,
+      bottom: top + h,
+      left: 0,
+      right: 100,
+      width: 100,
+      height: h,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    };
+  };
+  return () => {
+    if (width)
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", width);
+    if (height)
+      Object.defineProperty(HTMLElement.prototype, "offsetHeight", height);
+    Element.prototype.getBoundingClientRect = rect;
+  };
+}
+
+function frameOf(container: HTMLElement): HTMLElement {
+  const frame = container.querySelector<HTMLElement>(
+    '[data-slot="page-miniature"]'
+  );
+  if (!frame) throw new Error("no preview frame");
+  return frame;
+}
+
+describe("PageMiniature's height", () => {
+  let restore = () => {};
+  afterEach(() => restore());
+
+  it("shows at most 640 px of a long page and scrolls inside for the rest", () => {
+    // 640 px of column for a 1280 px composition is a scale of one half, so a
+    // 2000 px page is 1000 px tall on screen: more than the cap.
+    restore = stubLayout({ frameWidth: 640, pageHeight: 2000 });
+    const { container } = render(
+      <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
+    );
+
+    const frame = frameOf(container);
+    expect(frame.style.height).toBe("640px");
+    expect(frame.className).toContain("overflow-y-auto");
+    // The scrolled content is the page's whole scaled height, so the rest of
+    // it is reachable by scrolling rather than cut off.
+    expect(
+      container.querySelector<HTMLElement>('[data-slot="page-miniature-page"]')
+        ?.style.height
+    ).toBe("1000px");
+  });
+
+  it("is as tall as a short page, not the cap", () => {
+    restore = stubLayout({ frameWidth: 640, pageHeight: 800 });
+    const { container } = render(
+      <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
+    );
+
+    expect(frameOf(container).style.height).toBe("400px");
+  });
+});
+
+describe("PageMiniature drawing only once it is seen", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** An observer the test reports through, as a scroll would. */
+  function observeBy(): { show: () => void } {
+    let report: IntersectionObserverCallback = () => {};
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          report = callback;
+        }
+        observe(): void {}
+        disconnect(): void {}
+      }
+    );
+    return {
+      show: () =>
+        act(() =>
+          report(
+            [{ isIntersecting: true } as IntersectionObserverEntry],
+            {} as IntersectionObserver
+          )
+        ),
+    };
+  }
+
+  it("does not draw the page while the field is off screen", () => {
+    observeBy();
+    const { container } = render(
+      <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
+    );
+
+    expect(container.textContent).not.toContain("Hello from the page");
+    // The frame still holds its place, so the form does not jump when the page
+    // arrives.
+    expect(frameOf(container)).toBeDefined();
+  });
+
+  it("draws it once the field scrolls into view", () => {
+    const observer = observeBy();
+    const { container } = render(
+      <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
+    );
+
+    observer.show();
+
+    expect(container.textContent).toContain("Hello from the page");
+  });
+});
+
+describe("PageMiniature's sections", () => {
+  let restore = () => {};
+  afterEach(() => restore());
+
+  const twoSections = {
+    ...doc,
+    nodes: [
+      ...doc.nodes,
+      {
+        id: "b",
+        type: TEXT.name,
+        version: TEXT.version,
+        props: { text: "Second" },
+      },
+    ],
+  } as unknown as BlockDocument;
+
+  const sections = [
+    { id: "a", name: "Section 1, Text: Hello from the page", href: "/x?s=a" },
+    { id: "b", name: "Section 2, Text: Second", href: "/x?s=b" },
+  ];
+
+  it("offers each section as a link named for it", () => {
+    render(
+      <PageMiniature
+        document={twoSections}
+        siteStyles={undefined}
+        render={RENDER}
+        sections={sections}
+        onNavigate={() => {}}
+      />
+    );
+
+    const second = screen.getByRole("link", {
+      name: "Section 2, Text: Second",
+    });
+    expect(second.getAttribute("href")).toBe("/x?s=b");
+  });
+
+  it("places each over the section it names", () => {
+    // Half scale; the second section starts 600 px down the composed page and
+    // is 400 px tall, so on screen it starts at 300 and is 200 tall. Measured
+    // against the page's own box, which starts 50 px down the screen, so a
+    // reading taken against the window instead would be 50 px out.
+    restore = stubLayout({
+      frameWidth: 640,
+      pageHeight: 1000,
+      pageTop: 50,
+      boxes: { a: { top: 50, height: 300 }, b: { top: 350, height: 200 } },
+    });
+    render(
+      <PageMiniature
+        document={twoSections}
+        siteStyles={undefined}
+        render={RENDER}
+        sections={sections}
+        onNavigate={() => {}}
+      />
+    );
+
+    const second = screen.getByRole("link", { name: /Section 2/ });
+    expect(second.style.top).toBe("300px");
+    expect(second.style.height).toBe("200px");
+  });
+
+  it("opens a section within the admin on a plain click, and on Space", () => {
+    const onNavigate = vi.fn();
+    render(
+      <PageMiniature
+        document={twoSections}
+        siteStyles={undefined}
+        render={RENDER}
+        sections={sections}
+        onNavigate={onNavigate}
+      />
+    );
+    const first = screen.getByRole("link", { name: /Section 1/ });
+
+    fireEvent.click(first, { button: 0 });
+    fireEvent.keyDown(first, { key: " " });
+
+    expect(onNavigate.mock.calls).toEqual([["/x?s=a"], ["/x?s=a"]]);
+  });
+
+  it("leaves a modified click to the browser, which opens a new tab", () => {
+    const onNavigate = vi.fn();
+    render(
+      <PageMiniature
+        document={twoSections}
+        siteStyles={undefined}
+        render={RENDER}
+        sections={sections}
+        onNavigate={onNavigate}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: /Section 1/ }), {
+      button: 0,
+      metaKey: true,
+    });
+
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("offers nothing to open when it is given no sections", () => {
+    render(
+      <PageMiniature
+        document={twoSections}
+        siteStyles={undefined}
+        render={RENDER}
+      />
+    );
+
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
   });
 });
