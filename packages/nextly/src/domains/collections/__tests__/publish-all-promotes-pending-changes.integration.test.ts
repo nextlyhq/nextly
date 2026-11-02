@@ -14,6 +14,7 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  password,
   text,
 } from "../../../config";
 import {
@@ -24,6 +25,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { VersionsRepository } from "../../versions/versions-repository";
 import type { WebhookEvent } from "../../webhooks/types";
 
 let current: TestNextly | undefined;
@@ -96,10 +98,11 @@ async function fieldIn(
 /** An entry's stored translation rows for `locale`, as the table holds them. */
 async function translationRows(
   id: string,
-  locale: string
+  locale: string,
+  collectionName = POSTS
 ): Promise<Record<string, unknown>[]> {
   return current!.adapter.select<Record<string, unknown>>(
-    `dc_${POSTS}_locales`,
+    `dc_${collectionName}_locales`,
     {
       where: {
         and: [
@@ -339,7 +342,14 @@ describe.each(getConfiguredTestDialects())(
 
 const GUARDED = "guardedpending";
 const HEROES = "heropending";
+const REMOVED = "removedpending";
+const SEALED = "sealedpending";
 const PUBLISHER = "publisher";
+
+/** A version snapshot as stored, read back as the document it records. */
+function snapshotOf(stored: unknown): unknown {
+  return typeof stored === "string" ? JSON.parse(stored) : stored;
+}
 
 describe.each(getConfiguredTestDialects())(
   "what publishing every language owes each pending change it promotes (integration, %s)",
@@ -534,6 +544,129 @@ describe.each(getConfiguredTestDialects())(
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ title: "Hola", _status: "published" });
       expect(await titleIn(entries, translated, "es")).toBe("Hola");
+    });
+
+    it("judges a pending change kept for a language the app no longer configures as told every language", async () => {
+      const entries = await bootWith(
+        dialect,
+        defineCollection({
+          slug: REMOVED,
+          localized: true,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title", localized: true }),
+            // Writable only by a write told the default language alone.
+            text({
+              name: "note",
+              localized: true,
+              access: { update: ({ locale }) => locale === "en" },
+            }),
+          ],
+        })
+      );
+      await userWhoMay(current!, PUBLISHER, "publish", [REMOVED]);
+      const created = await entries.createEntry(
+        { collectionName: REMOVED, overrideAccess: true, locale: "en" },
+        { title: "Hello", note: "Live", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      const held = await entries.updateEntry(at(id, "es", REMOVED), {
+        note: "Held",
+      });
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      // A language the site has since removed keeps its pending change: the
+      // change held for Spanish, kept under French instead, which this site
+      // does not configure.
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: REMOVED,
+        entryId: id,
+      };
+      const drafts = new VersionsRepository(current!.adapter);
+      const spanish = await drafts.findWorkingDraft(ref, "es");
+      expect(JSON.stringify(spanish?.snapshot)).toContain("Held");
+      await drafts.upsertWorkingDraft({
+        ref,
+        locale: "fr",
+        snapshot: snapshotOf(spanish?.snapshot),
+      });
+      await drafts.deleteWorkingDraft(ref, "es");
+      // POPULATION CONTROL: the only pending change is the removed language's.
+      expect(await pendingLocales(id)).toEqual(["fr"]);
+
+      const every = await entries.publishAllLocales({
+        collectionName: REMOVED,
+        entryId: id,
+        overrideAccess: false,
+        user: { id: PUBLISHER },
+      });
+
+      // Told every language, as a write naming a language the site does not
+      // configure is, the rule refuses the edit; told the default alone, it
+      // would allow it.
+      expect(every.success).toBe(false);
+      expect((every as { publicData?: unknown }).publicData).toMatchObject({
+        errors: [{ path: "note", code: "FORBIDDEN" }],
+      });
+      // Nothing went live, and the change is kept.
+      expect(await translationRows(id, "fr", REMOVED)).toEqual([]);
+      expect(
+        await fieldIn(
+          entries,
+          { collectionName: REMOVED, id, locale: "en" },
+          "note"
+        )
+      ).toBe("Live");
+      expect(await pendingLocales(id)).toEqual(["fr"]);
+    });
+
+    it("consumes pending changes the schema no longer lets it promote, putting none of them live", async () => {
+      const entries = await bootWith(
+        dialect,
+        defineCollection({
+          slug: SEALED,
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            text({ name: "title" }),
+            // A password field rules the draft split out: this collection
+            // can neither hold nor promote a pending change.
+            password({ name: "secret" }),
+          ],
+        })
+      );
+      const created = await entries.createEntry(
+        { collectionName: SEALED, overrideAccess: true },
+        { title: "Live", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      // A pending change held before the schema made the split ineligible,
+      // stored as the write path stores one.
+      await new VersionsRepository(current!.adapter).upsertWorkingDraft({
+        ref: { scopeKind: "collection", scopeSlug: SEALED, entryId: id },
+        locale: null,
+        snapshot: { title: "Stale" },
+      });
+      // POPULATION CONTROL: the change is there to be consumed.
+      expect(await pendingLocales(id)).toEqual(["(none)"]);
+
+      const published = await entries.publishAllLocales({
+        collectionName: SEALED,
+        entryId: id,
+        overrideAccess: true,
+      });
+      expect(published.success, JSON.stringify(published)).toBe(true);
+
+      // As a publish of one language consumes it: none of it live, and no
+      // pending change left to resurface if the split is turned back on.
+      expect(await pendingLocales(id)).toEqual([]);
+      const read = await entries.getEntry({
+        collectionName: SEALED,
+        entryId: id,
+        overrideAccess: true,
+      });
+      expect((read.data as { title?: unknown } | null)?.title).toBe("Live");
     });
   }
 );

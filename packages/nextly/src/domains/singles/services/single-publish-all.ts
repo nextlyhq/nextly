@@ -53,7 +53,10 @@ import type { PublicationFacts } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
-import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import {
+  readComponentSubtrees,
+  readComponentSubtreesByLocale,
+} from "../../field-groups/read-component-subtrees";
 import {
   fieldGroupWriteAccessOf,
   type FieldGroupWriteAccess,
@@ -1485,20 +1488,21 @@ export class SinglePublishAllService extends BaseService {
       ...priorCompanionStatuses.keys(),
       ...promoted,
     ]);
+    // Every language's subtrees in one read of each component table: this
+    // runs while the publish holds the row's lock, so its reads must not
+    // multiply with the languages.
+    const read = await readComponentSubtreesByLocale({
+      fieldGroupDataService: this.fieldGroupDataService,
+      tx,
+      entryId: plan.existingDoc.id,
+      parentTable: plan.singleMeta.tableName,
+      fieldConfigs: plan.fieldConfigs,
+      locales: [...locales],
+      reason: "webhook-single-component-read",
+      logContext: { table: plan.singleMeta.tableName },
+    });
     for (const locale of locales) {
-      components.set(
-        locale ?? "",
-        await readComponentSubtrees({
-          fieldGroupDataService: this.fieldGroupDataService,
-          tx,
-          entryId: plan.existingDoc.id,
-          parentTable: plan.singleMeta.tableName,
-          fieldConfigs: plan.fieldConfigs,
-          locale,
-          reason: "webhook-single-component-read",
-          logContext: { table: plan.singleMeta.tableName },
-        })
-      );
+      components.set(locale ?? "", read.get(locale) ?? {});
     }
     return { components, values };
   }

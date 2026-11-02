@@ -13,12 +13,14 @@ import {
   type DeleteComponentDataParams,
 } from "./field-group-mutation-service";
 import {
+  type ComponentReadLanguage,
   FieldGroupQueryService,
   type PopulateComponentDataParams,
   type PopulateComponentDataManyParams,
 } from "./field-group-query-service";
 
 export type {
+  ComponentReadLanguage,
   SaveComponentDataParams,
   DeleteComponentDataParams,
   PopulateComponentDataParams,
@@ -193,5 +195,18 @@ export class FieldGroupDataService {
     params: PopulateComponentDataManyParams
   ): Promise<Record<string, unknown>[]> {
     return this.queryService.populateComponentDataMany(params);
+  }
+
+  /**
+   * One entry's component data in several languages at once, each component
+   * table read once for them all; see
+   * `FieldGroupQueryService.populateComponentDataByLanguage`.
+   */
+  populateComponentDataByLanguage(
+    params: Parameters<
+      FieldGroupQueryService["populateComponentDataByLanguage"]
+    >[0]
+  ): Promise<Record<string, unknown>[]> {
+    return this.queryService.populateComponentDataByLanguage(params);
   }
 }

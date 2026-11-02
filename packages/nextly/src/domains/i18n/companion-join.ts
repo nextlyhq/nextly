@@ -127,21 +127,45 @@ export interface PopulateCompanionArgs {
 export async function populateCompanionFields(
   args: PopulateCompanionArgs
 ): Promise<void> {
-  const { db, companionTable, localizedFields, rows, localeChain } = args;
+  const { rows, localeChain, ...shared } = args;
+  await populateCompanionFieldsByLanguage({
+    ...shared,
+    byLanguage: [{ rows, localeChain }],
+  });
+}
+
+/**
+ * {@link populateCompanionFields} for several languages at once, each with its
+ * own rows and fallback chain: ONE query fetches the companion rows of every
+ * chain (`_parent ∈ ids`, `_locale ∈` their union), and each language's rows
+ * are then resolved from them by its own chain, as a read of that language
+ * alone resolves them. One language is the read above. Mutates each
+ * language's rows in place.
+ */
+export async function populateCompanionFieldsByLanguage(
+  args: Omit<PopulateCompanionArgs, "rows" | "localeChain"> & {
+    byLanguage: readonly {
+      rows: Record<string, unknown>[];
+      localeChain: string[];
+    }[];
+  }
+): Promise<void> {
+  const { db, companionTable, localizedFields } = args;
   const idKey = args.idKey ?? "id";
   // Not ready means there is nothing to join to, so the main table's values stand.
   if (args.readiness !== "ready") return;
-  if (
-    rows.length === 0 ||
-    localizedFields.length === 0 ||
-    localeChain.length === 0
-  ) {
-    return;
-  }
+  const languages = args.byLanguage.filter(
+    language => language.rows.length > 0 && language.localeChain.length > 0
+  );
+  if (localizedFields.length === 0 || languages.length === 0) return;
 
-  const ids = rows
-    .map(r => r[idKey])
-    .filter((id): id is string | number => id !== null && id !== undefined);
+  const ids = [
+    ...new Set(
+      languages
+        .flatMap(language => language.rows.map(r => r[idKey]))
+        .filter((id): id is string | number => id !== null && id !== undefined)
+    ),
+  ];
   if (ids.length === 0) return;
 
   const table = companionTable as CompanionTable;
@@ -152,11 +176,22 @@ export async function populateCompanionFields(
     .where(
       and(
         inArray(table._parent as never, ids),
-        inLocaleChain(table, localeChain)
+        inLocaleChain(table, [
+          ...new Set(languages.flatMap(language => language.localeChain)),
+        ])
       )
     );
 
-  fillCompanionFields({ ...args, companionRows });
+  for (const language of languages) {
+    fillCompanionFields({
+      localizedFields,
+      statusValues: args.statusValues,
+      idKey: args.idKey,
+      rows: language.rows,
+      localeChain: language.localeChain,
+      companionRows,
+    });
+  }
 }
 
 /**

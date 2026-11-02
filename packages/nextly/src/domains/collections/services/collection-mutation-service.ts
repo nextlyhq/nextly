@@ -41,6 +41,7 @@ import {
   askEachLanguage,
   currentRuleLanguage,
   withRuleLanguage,
+  writeAsNamedLanguagesFor,
   writeLanguagesFor,
 } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
@@ -7104,7 +7105,11 @@ export class CollectionMutationService extends BaseService {
    * validated as it goes live, then folded into the caller's payload for
    * that language by `foldWorkingDraft`, under the caller's field rules told
    * that language, as a read showing the change asks them
-   * (`workingDraftPromotionRefused`). Refused by throwing.
+   * (`workingDraftPromotionRefused`). A change kept for a language the app no
+   * longer configures is told every language rather than the default it
+   * would resolve to, so a rule that answers by language cannot judge it as
+   * a write of the default language (`writeAsNamedLanguagesFor`). Refused by
+   * throwing.
    */
   private pendingChangePromotion(
     tx: TransactionContext,
@@ -7133,7 +7138,7 @@ export class CollectionMutationService extends BaseService {
     const { change, context, companion } = args;
     const locale = change.locale ?? undefined;
     return withRuleLanguage(
-      writeLanguagesFor(this.localization, locale),
+      writeAsNamedLanguagesFor(this.localization, locale),
       async () => {
         // The caller's payload for this language, a copy for each pass that
         // reads it, so no pass sees another's.
@@ -7973,12 +7978,13 @@ export class CollectionMutationService extends BaseService {
           // publish of that language alone writes it, then consumed. Without
           // this the statuses would all say published while the content each
           // author was holding stayed unapplied. Its field groups are saved
-          // under the caller's field rules told that language, as it was
-          // judged.
+          // under the caller's field rules told the languages it was judged
+          // in: that language, or every one for a language the app no longer
+          // configures.
           const translated = new Set<string>();
           for (const promoted of promotions) {
             await withRuleLanguage(
-              writeLanguagesFor(
+              writeAsNamedLanguagesFor(
                 this.localization,
                 promoted.locale ?? undefined
               ),
@@ -8007,6 +8013,20 @@ export class CollectionMutationService extends BaseService {
               translated.add(promoted.translation.writeLocale);
             }
             await this.consumeWorkingDraft(tx, draftRef, promoted.locale);
+          }
+          // A pending change the collection can no longer promote — drafts
+          // turned off, or a schema the split no longer covers, such as a
+          // password field added after the change was held — is consumed
+          // with none of its content written, as a publish of one language
+          // consumes it. Left in place it would go on shadowing the document
+          // just published, and resurface over it if the split were turned
+          // back on.
+          if (publishes && !promotion) {
+            for (const locale of await new VersionsRepository(
+              tx
+            ).listWorkingDraftLocales(draftRef)) {
+              await this.consumeWorkingDraft(tx, draftRef, locale);
+            }
           }
 
           if (hasMainStatus) {
