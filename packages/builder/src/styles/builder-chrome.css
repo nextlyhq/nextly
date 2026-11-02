@@ -2437,16 +2437,19 @@
   border-inline-end: 1px solid
     color-mix(in srgb, var(--nx-builder-ink-text) 25%, transparent);
   color: var(--nx-builder-ink-text);
-  font-size: 0.75rem;
+  /* The type scale is declared inline, so its custom property can be absent
+     at runtime; the fallback is the same step. */
+  font-size: var(--text-xs, 0.75rem);
   white-space: nowrap;
 }
 
 /*
  * A selected block locked in Layers, by its own lock or one around it: the
  * selection ring is dashed, so the canvas says it is held before anything is
- * tried on it.
+ * tried on it. Only a canvas node carries the lock mark, so the node marker is
+ * not repeated here; this still outranks the selection ring's own rule.
  */
-.nx-canvas [data-nx-node][data-nx-locked][data-nx-selected] {
+.nx-canvas [data-nx-locked][data-nx-selected] {
   outline-style: dashed;
 }
 
