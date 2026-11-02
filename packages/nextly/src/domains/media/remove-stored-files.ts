@@ -35,7 +35,7 @@ export interface StoredFileRemover {
  * The media collection's place in `storage`, as locating a size asks it, or
  * undefined when the storage cannot say where it serves a file.
  */
-export function sizeLocatorOf(
+function sizeLocatorOf(
   storage: Pick<StoredFileRemover, "getPublicUrl" | "getStorageType">
 ): SizeLocator | undefined {
   const publicUrl = storage.getPublicUrl?.bind(storage);

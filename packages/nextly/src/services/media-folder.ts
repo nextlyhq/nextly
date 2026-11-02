@@ -50,11 +50,11 @@ import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
-  sizeLocatorOf,
   storageReadingOf,
   storedPathForLog,
   warnSizeNotHere,
   warnUnlocated,
+  type StorageReading,
   type StoredFileRemover,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
@@ -172,23 +172,35 @@ type RemoveStoredFiles = (
 ) => Promise<void>;
 
 /**
+ * How a cascading folder delete removes its items' files, and the one
+ * reading of the storage they are removed from (`StorageReading`), which the
+ * search for files another item keeps uses too: both ask "which files does
+ * this record name" of the same storage.
+ */
+interface FolderRemoval {
+  remove: RemoveStoredFiles;
+  reading: StorageReading;
+}
+
+/**
  * Every file of each item, as a delete of that item removes them, one item
  * at a time: a chunk of a hundred items asked for all at once would send the
  * storage every file of every item together, and a refused or throttled
  * request leaves its file stored.
  */
-const removeEveryStoredFile: RemoveStoredFiles = async (records, kept) => {
-  const storage = getMediaStorage();
-  for (const record of records) {
-    await removeStoredFiles(storage, record, record.id, kept);
-  }
-};
+function removeEveryStoredFile(storage: StoredFileRemover): RemoveStoredFiles {
+  return async (records, kept) => {
+    for (const record of records) {
+      await removeStoredFiles(storage, record, record.id, kept);
+    }
+  };
+}
 
 /**
  * Storage a caller hands a cascading folder delete, as the cleanup argument
  * has taken it before: given every stored file of the items removed. Where it
  * says where it serves a file, as the media storage does, an image size
- * recorded by URL alone that it serves is among them (`sizeLocatorOf`).
+ * recorded by URL alone that it serves is among them (`storageReadingOf`).
  */
 interface FolderStorageCleanup
   extends Pick<StoredFileRemover, "getPublicUrl" | "getStorageType"> {
@@ -224,31 +236,61 @@ function pendingDeletesRefusal(): DeleteFolderOutcome {
   };
 }
 
-/** The removal a cascading folder delete runs, from what its caller gave. */
+/**
+ * The removal a cascading folder delete runs, from what its caller gave, with
+ * the reading of the storage it removes from: the given storage's, or the
+ * media storage's where none is given or a function removes the files.
+ */
 function removalFrom(
   cleanup: RemoveStoredFiles | FolderStorageCleanup | undefined
-): RemoveStoredFiles {
-  if (cleanup === undefined) return removeEveryStoredFile;
-  if (typeof cleanup === "function") {
-    // The rows are already gone: a failure is named, never thrown, so it
-    // cannot stop the rest of the cascade.
-    return async (records, kept) => {
-      try {
-        await cleanup(records, kept);
-      } catch (error) {
-        consoleLogger.warn(
-          "[MediaFolderService] Could not remove the files of the deleted items",
-          { error: errorForLog(error) }
-        );
-      }
+): FolderRemoval {
+  if (cleanup === undefined) {
+    const storage = getMediaStorage();
+    return {
+      remove: removeEveryStoredFile(storage),
+      reading: storageReadingOf(storage),
     };
   }
+  if (typeof cleanup === "function") {
+    return {
+      remove: removalBy(cleanup),
+      reading: storageReadingOf(getMediaStorage()),
+    };
+  }
+  const reading = storageReadingOf(cleanup);
+  return { remove: removalThrough(cleanup, reading), reading };
+}
+
+/** A removal by the caller's own function, which names a failure. */
+function removalBy(cleanup: RemoveStoredFiles): RemoveStoredFiles {
+  // The rows are already gone: a failure is named, never thrown, so it
+  // cannot stop the rest of the cascade.
+  return async (records, kept) => {
+    try {
+      await cleanup(records, kept);
+    } catch (error) {
+      consoleLogger.warn(
+        "[MediaFolderService] Could not remove the files of the deleted items",
+        { error: errorForLog(error) }
+      );
+    }
+  };
+}
+
+/**
+ * A removal through storage the caller gave, handed every file of the
+ * items, each read as `reading` reads it.
+ */
+function removalThrough(
+  cleanup: FolderStorageCleanup,
+  reading: StorageReading
+): RemoveStoredFiles {
   return async (records, kept) => {
     const filePaths: string[] = [];
     for (const record of records) {
       const { paths, unlocated, notHere } = storedFilesOf(
         record,
-        sizeLocatorOf(cleanup)
+        reading.locator
       );
       filePaths.push(...paths.filter(filePath => !kept.has(filePath)));
       for (const url of unlocated) warnUnlocated(url, record.id);
@@ -971,7 +1013,7 @@ export class MediaFolderService extends BaseService {
      */
     cleanup?: RemoveStoredFiles | FolderStorageCleanup
   ): Promise<DeleteFolderOutcome> {
-    const removeFiles = removalFrom(cleanup);
+    const files = removalFrom(cleanup);
     try {
       const refusal = await this.refuseUndeletableFolder(
         folderId,
@@ -1058,7 +1100,7 @@ export class MediaFolderService extends BaseService {
       // files are removed in.
       if (removal.removed.length > 0) {
         await withMediaRevalidationBatch(() =>
-          this.removeFilesOfRemoved(removal.removed, removeFiles)
+          this.removeFilesOfRemoved(removal.removed, files)
         );
       }
       // After the statement, so this only names rows the delete really changed,
@@ -1098,7 +1140,7 @@ export class MediaFolderService extends BaseService {
    */
   private async removeFilesOfRemoved(
     removed: readonly StoredMediaRecord[],
-    removeFiles: RemoveStoredFiles
+    files: FolderRemoval
   ): Promise<void> {
     const runSize = 100;
     for (let start = 0; start < removed.length; start += runSize) {
@@ -1106,17 +1148,17 @@ export class MediaFolderService extends BaseService {
       const ids = run.map(record => record.id);
       await this.afterCommit(() => revalidateMedia(ids));
       await this.afterCommit(async () => {
-        // Every file a removal can take, a size recorded by URL alone among
-        // them where the media storage serves it, so each is asked about,
-        // with every other item's record read against the same storage.
-        const reading = storageReadingOf(getMediaStorage());
+        // Every file the removal can take, a size recorded by URL alone
+        // among them where its storage serves it, so each is asked about,
+        // with every other item's record read against that same storage.
+        const { reading } = files;
         const kept = await filesKeptByOthers(
           this.storedFileSearch,
           run.flatMap(record => storedFilesOf(record, reading.locator).paths),
           ids,
           reading
         );
-        if (kept) await removeFiles(run, kept);
+        if (kept) await files.remove(run, kept);
         await this.removeKeptFilesOf(ids);
       });
     }

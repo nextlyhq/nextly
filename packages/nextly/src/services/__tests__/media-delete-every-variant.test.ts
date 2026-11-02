@@ -411,6 +411,52 @@ describe("a size recorded by its URL alone that two items name", () => {
   });
 });
 
+// A folder cascade a caller hands its own storage reads every record
+// against that storage, the items it keeps files for as well as its own.
+describe("a size recorded by its URL alone on a storage a folder delete is given", () => {
+  it("stays while an item outside the folder names it", async () => {
+    onLocalDisk();
+    const folders = new MediaFolderService(db.adapter, testLogger);
+    const created = await folders.createFolder({
+      name: `folder-${randomUUID()}`,
+      createdBy: "user-1",
+    });
+    const folder = created.data!.id;
+    // Records of files on the given storage, not on the media storage.
+    const cdn = "https://cdn.example";
+    const shared = `${cdn}/2026/11/shared-small.webp`;
+    const onGivenStorage = async (id: string, name: string) => {
+      await db.db
+        .update(db.schema.media)
+        .set({
+          filename: `2026/11/${name}`,
+          url: `${cdn}/2026/11/${name}`,
+          thumbnailUrl: null,
+        })
+        .where(eq(db.schema.media.id, id));
+      setStoredSizes(id, JSON.stringify({ small: { url: shared } }));
+    };
+    await onGivenStorage(await uploadImage(folder), "inside.png");
+    await onGivenStorage(await uploadImage(), "outside.png");
+    const given: string[] = [];
+    const storage = {
+      bulkDelete: async (filePaths: string[]) => {
+        given.push(...filePaths);
+        return { successful: filePaths, failed: [] };
+      },
+      getPublicUrl: (filePath: string) => `${cdn}/${filePath}`,
+      getStorageType: () => "s3",
+    };
+
+    const result = await folders.deleteFolder(folder, true, storage);
+
+    expect(result.success).toBe(true);
+    // The control: the deleted item's own file went to the given storage.
+    expect(given).toContain("2026/11/inside.png");
+    expect(given).not.toContain("2026/11/shared-small.webp");
+  });
+});
+
 // Whether another item names a file is asked by its key, compared as the
 // storage tells its files apart: S3 keeps `2026//10/x` and `2026/10/x` as
 // two objects, while a custom adapter promises nothing of the kind.
