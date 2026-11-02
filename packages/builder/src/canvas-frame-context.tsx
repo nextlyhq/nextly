@@ -30,8 +30,11 @@
 import { useShortcutManager, type ShortcutManager } from "@nextlyhq/ui";
 import * as React from "react";
 
-/** The iframe the canvas renders in, or `null` for the editor's own document. */
-const CanvasFrameContext = React.createContext<HTMLIFrameElement | null>(null);
+/**
+ * The frame the canvas renders in and the document it holds now, or `null`
+ * for the editor's own document.
+ */
+const CanvasFrameContext = React.createContext<CanvasFrame | null>(null);
 
 /**
  * Where the canvas is rendered, as the code around it needs to know.
@@ -52,11 +55,27 @@ export interface CanvasFrame {
   readonly window: (Window & typeof globalThis) | null;
 }
 
+/** A frame and the document it was last seen holding. */
+interface SeenDocument {
+  readonly frame: HTMLIFrameElement | null;
+  readonly document: Document | null;
+}
+
 /**
  * Names the iframe the canvas renders in, for everything beneath it.
  *
  * `null`, like no provider at all, means the canvas is in the editor's own
  * document.
+ *
+ * The frame's document is HELD in state and re-read on the frame's `load`,
+ * rather than read off `contentDocument` while rendering. A frame replaces its
+ * document when it loads — its first `about:blank` gives way to its content,
+ * and a reload builds another — and nothing in that renders. Read during
+ * render, every listener and media query beneath would stay on the document
+ * that was thrown away until some unrelated render happened to read again.
+ * Held here, the replacement is itself the update: consumers depending on the
+ * document or window re-run, detaching from the old one and attaching to the
+ * new.
  *
  * @experimental
  */
@@ -67,8 +86,41 @@ export function CanvasFrameProvider({
   frame: HTMLIFrameElement | null;
   children?: React.ReactNode;
 }): React.JSX.Element {
+  const [seen, setSeen] = React.useState<SeenDocument>(() => ({
+    frame,
+    document: frame?.contentDocument ?? null,
+  }));
+  React.useEffect(() => {
+    if (frame === null) return;
+    const read = (): void => {
+      const current = frame.contentDocument;
+      // The same pair returns the same object, so a load that changed nothing
+      // renders nothing.
+      setSeen(previous =>
+        previous.frame === frame && previous.document === current
+          ? previous
+          : { frame, document: current }
+      );
+    };
+    // Once now as well: the frame may have loaded between the render that
+    // handed it here and this effect, and that load has already fired.
+    read();
+    frame.addEventListener("load", read);
+    return () => frame.removeEventListener("load", read);
+  }, [frame]);
+  // A frame handed in since the state was last set is read directly until the
+  // effect above catches up, so no render answers with another frame's document.
+  const doc =
+    seen.frame === frame ? seen.document : (frame?.contentDocument ?? null);
+  const value = React.useMemo<CanvasFrame | null>(
+    () =>
+      frame === null
+        ? null
+        : { frame, document: doc, window: doc?.defaultView ?? null },
+    [frame, doc]
+  );
   return (
-    <CanvasFrameContext.Provider value={frame}>
+    <CanvasFrameContext.Provider value={value}>
       {children}
     </CanvasFrameContext.Provider>
   );
@@ -77,27 +129,20 @@ export function CanvasFrameProvider({
 /**
  * The document and window the canvas is rendered in.
  *
- * Read during render, as hooks are, and the document and window are compared
- * by identity in the returned object's memo: a frame whose document is
- * replaced by a reload answers with the new one on the next render, and a
- * dependency on `.document` or `.window` re-runs the effect that listened on
- * the old one.
+ * In a frame, the document its provider last saw it load, which changes when
+ * the frame loads another: a dependency on `.document` or `.window` then
+ * re-runs the effect that listened on the old one. With no frame, the
+ * editor's own document and window, which do not change.
  *
  * @experimental
  */
 export function useCanvasFrame(): CanvasFrame {
-  const frame = React.useContext(CanvasFrameContext);
-  const doc =
-    frame === null
-      ? typeof document === "undefined"
-        ? null
-        : document
-      : frame.contentDocument;
-  const view = doc?.defaultView ?? null;
-  return React.useMemo(
-    () => ({ frame, document: doc, window: view }),
-    [frame, doc, view]
-  );
+  const framed = React.useContext(CanvasFrameContext);
+  const own = React.useMemo<CanvasFrame>(() => {
+    const doc = typeof document === "undefined" ? null : document;
+    return { frame: null, document: doc, window: doc?.defaultView ?? null };
+  }, []);
+  return framed ?? own;
 }
 
 /**

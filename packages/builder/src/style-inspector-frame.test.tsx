@@ -10,7 +10,7 @@
  *
  * @module style-inspector-frame.test
  */
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BreakpointSet } from "./breakpoints";
@@ -86,6 +86,46 @@ describe("which window the inspector asks", () => {
     expect(frameAsked.join(" ")).toContain("max-width: 991px");
     expect(frameAsked).toContain("(prefers-color-scheme: dark)");
     expect(editorAsked).toEqual([]);
+  });
+
+  it("asks the new window once the frame loads another document", async () => {
+    // A frame replaces its document, and its window, when it loads: its first
+    // `about:blank` gives way to its content. Taking it out of the page and
+    // putting it back is what makes jsdom do the same.
+    const frame = frameWithMedia();
+    const reloadAsked: string[] = [];
+    // Registered before the panel renders, so it runs before the provider's
+    // own `load` listener and the new window can answer by then.
+    const loaded = new Promise<void>(resolve => {
+      frame.addEventListener(
+        "load",
+        () => {
+          const view = frame.contentWindow;
+          if (view !== null) {
+            Object.defineProperty(view, "matchMedia", {
+              value: recorder(reloadAsked),
+            });
+          }
+          resolve();
+        },
+        { once: true }
+      );
+    });
+    render(
+      <CanvasFrameProvider frame={frame}>
+        <StyleInspectorPanel editor={editor} breakpoints={BREAKPOINTS} />
+      </CanvasFrameProvider>
+    );
+    expect(frameAsked.join(" ")).toContain("max-width: 991px");
+
+    await act(async () => {
+      frame.remove();
+      document.body.append(frame);
+      await loaded;
+    });
+
+    expect(reloadAsked.join(" ")).toContain("max-width: 991px");
+    expect(reloadAsked).toContain("(prefers-color-scheme: dark)");
   });
 
   it("asks the editor's window while the canvas shares its document", () => {

@@ -12,7 +12,13 @@
  * @module canvas-frame-context.test
  */
 import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
-import { cleanup, fireEvent, render, renderHook } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -249,6 +255,83 @@ describe("the editor's shortcuts inside the frame", () => {
       </ShortcutProvider>
     );
     pressSave(document);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a frame whose document is replaced", () => {
+  /**
+   * Replace the frame's document and wait for the frame's `load`.
+   *
+   * Taking the frame out of the page and putting it back is what makes jsdom
+   * give it a NEW document, as a browser does for a reload or for the content
+   * that follows a frame's first `about:blank`; setting `srcdoc` or writing
+   * into the document keeps the same object there. Nothing here renders: the
+   * provider has to learn of the replacement from the frame itself.
+   */
+  async function replaceDocument(frame: HTMLIFrameElement): Promise<void> {
+    const loaded = new Promise<void>(resolve => {
+      frame.addEventListener("load", () => resolve(), { once: true });
+    });
+    frame.remove();
+    document.body.append(frame);
+    await loaded;
+  }
+
+  it("answers with the new document and window once the frame has loaded it", async () => {
+    const frame = frameOf();
+    const before = frame.contentDocument;
+    let seen: Document | null = null;
+    function Probe(): null {
+      seen = useCanvasFrame().document;
+      return null;
+    }
+    render(
+      <CanvasFrameProvider frame={frame}>
+        <Probe />
+      </CanvasFrameProvider>
+    );
+    expect(seen).toBe(before);
+
+    await act(async () => {
+      await replaceDocument(frame);
+    });
+
+    // As booleans: a failing `toBe` tries to print both documents, and the
+    // printer cannot describe a frame's document, so the report would be a
+    // crash in the printer rather than the comparison that failed.
+    // The control: the frame really holds a different document now.
+    expect(frame.contentDocument === before).toBe(false);
+    expect(seen === frame.contentDocument).toBe(true);
+  });
+
+  it("moves the editor's keys to the new document, and off the old one", async () => {
+    const frame = frameOf();
+    const before = frame.contentDocument;
+    if (before === null) throw new Error("no frame document");
+    const onSave = vi.fn();
+    render(
+      <ShortcutProvider isApple={false}>
+        <CanvasFrameProvider frame={frame}>
+          <CanvasFrameShortcuts />
+          <SaveBinding onSave={onSave} />
+        </CanvasFrameProvider>
+      </ShortcutProvider>
+    );
+
+    await act(async () => {
+      await replaceDocument(frame);
+    });
+    const after = frame.contentDocument;
+    if (after === null || after === before) {
+      throw new Error("the frame's document was not replaced");
+    }
+
+    pressSave(after);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // jsdom keeps the old document dispatchable, which is what makes a
+    // listener left behind on it observable here.
+    pressSave(before);
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 });
