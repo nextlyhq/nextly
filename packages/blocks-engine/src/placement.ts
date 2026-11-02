@@ -326,25 +326,11 @@ function composeInstance(
   sources: PlacementSources,
   memo: Memo
 ): InstanceFacts | undefined {
-  const props = isPlainRecord(node.props) ? node.props : undefined;
-  const componentId = props?.componentId;
   const components = sources.components;
-  if (typeof componentId !== "string" || components === undefined) {
-    return undefined;
-  }
-  const definition = readableDefinition(components.get(componentId));
-  if (definition === undefined) return undefined;
-  const exposed = isPlainRecord(definition.slots) ? definition.slots : {};
-  // Read through the envelope bound, as the resolver reads it: a definition
-  // exposing more slots than that is malformed, and its slots are unknown.
-  const slotIds = boundedOwnKeys(exposed, MAX_ENVELOPE_ENTRIES);
-  if (slotIds === null) return undefined;
-  const probes: Record<string, BlockNode[]> = {};
-  for (const slot of slotIds) {
-    probes[slot] = [
-      { id: probeId(slot), type: PROBE_TYPE, version: 1, props: {} },
-    ];
-  }
+  const exposed = exposedSlotsOf(node, components);
+  if (components === undefined || exposed === undefined) return undefined;
+  const probes = probesFor(exposed);
+  if (probes === undefined) return undefined;
   const composed = resolveComponentInstances(
     {
       formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -357,6 +343,43 @@ function composeInstance(
     return undefined;
   }
   return readComposed(composed, exposed, sources, memo);
+}
+
+/**
+ * The slots a placement's component exposes, or undefined when its component
+ * cannot be read.
+ */
+function exposedSlotsOf(
+  node: PlacedNode,
+  components: ComponentLookup | undefined
+): Readonly<Record<string, unknown>> | undefined {
+  const props = isPlainRecord(node.props) ? node.props : undefined;
+  const componentId = props?.componentId;
+  if (typeof componentId !== "string" || components === undefined) {
+    return undefined;
+  }
+  const definition = readableDefinition(components.get(componentId));
+  if (definition === undefined) return undefined;
+  return isPlainRecord(definition.slots) ? definition.slots : {};
+}
+
+/**
+ * One stand-in per exposed slot, read through the envelope bound as the
+ * resolver reads it: a definition exposing more slots than that is malformed,
+ * and its slots are unknown.
+ */
+function probesFor(
+  exposed: Readonly<Record<string, unknown>>
+): Record<string, BlockNode[]> | undefined {
+  const slotIds = boundedOwnKeys(exposed, MAX_ENVELOPE_ENTRIES);
+  if (slotIds === null) return undefined;
+  const probes: Record<string, BlockNode[]> = {};
+  for (const slot of slotIds) {
+    probes[slot] = [
+      { id: probeId(slot), type: PROBE_TYPE, version: 1, props: {} },
+    ];
+  }
+  return probes;
 }
 
 /** Walk a composed placement: its kinds, and each exposed slot's rule. */
@@ -378,17 +401,7 @@ function readComposed(
     composed.slice(0, MAX_NODES).map(root => ({ node: root, carry: top })),
     (at, { refused, parent, slot }) => {
       if (at.type === PROBE_TYPE) {
-        const exposureId = probeExposure(at, exposed);
-        if (
-          exposureId !== undefined &&
-          parent !== undefined &&
-          slot !== undefined
-        ) {
-          slots.set(
-            exposureId,
-            slotRuleFor(exposed[exposureId], parent, slot, sources)
-          );
-        }
+        recordProbe(at, { parent, slot }, exposed, sources, slots);
         return undefined;
       }
       const model = modelOf(at, sources, memo);
@@ -412,6 +425,28 @@ function readComposed(
   );
   if (rootsArePhrasing) kinds.add("phrasing");
   return { slots, kinds: CONTENT_KINDS.filter(kind => kinds.has(kind)) };
+}
+
+/** Record the rule of the exposed slot a stand-in landed in, by its holder. */
+function recordProbe(
+  probe: PlacedNode,
+  at: { parent: Holder | undefined; slot: string | undefined },
+  exposed: Readonly<Record<string, unknown>>,
+  sources: PlacementSources,
+  slots: Map<string, SlotRule>
+): void {
+  const exposureId = probeExposure(probe, exposed);
+  if (
+    exposureId === undefined ||
+    at.parent === undefined ||
+    at.slot === undefined
+  ) {
+    return;
+  }
+  slots.set(
+    exposureId,
+    slotRuleFor(exposed[exposureId], at.parent, at.slot, sources)
+  );
 }
 
 /** Which exposed slot a stand-in stood in for, or undefined. */

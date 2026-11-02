@@ -548,17 +548,12 @@ async function measuredAgainstStored(
   const composedStored = placementBroken
     ? await composedFormsRead({ ...reading, hosts: stored.forms })
     : undefined;
+  const baselines = lockBroken
+    ? await lockBaselines({ ...reading, document, stored: stored.forms })
+    : undefined;
   const again = faultsIn(document, args.composition, setup, {
     components: lookupOf(reading.library),
-    ...(lockBroken
-      ? {
-          baselines: await lockBaselines({
-            ...reading,
-            document,
-            stored: stored.forms,
-          }),
-        }
-      : {}),
+    ...(baselines === undefined ? {} : { baselines }),
     ...(composedStored === undefined
       ? {}
       : {
@@ -569,12 +564,24 @@ async function measuredAgainstStored(
   // Old breaks are known only from a stored page this could read and compose
   // whole; a baseline cut short could miss one and call it new.
   if (stored.readable && composedStored?.complete !== false) return again;
-  const kept = again.filter(fault => !PLACEMENT_FAULTS.has(fault.code));
-  if (kept.length < again.length) {
+  return keptUnjudged(again, setup, args);
+}
+
+/**
+ * The faults with every placement break kept unjudged, and the server log
+ * told how many, naming the document.
+ */
+function keptUnjudged(
+  faults: readonly CompositionFault[],
+  setup: CompositionSetup,
+  at: { field: string | undefined; writtenTo: WrittenTo | undefined }
+): readonly CompositionFault[] {
+  const kept = faults.filter(fault => !PLACEMENT_FAULTS.has(fault.code));
+  if (kept.length < faults.length) {
     setup.onPlacementUnjudged?.({
-      field: args.field ?? "",
-      ...args.writtenTo,
-      breaks: again.length - kept.length,
+      field: at.field ?? "",
+      ...at.writtenTo,
+      breaks: faults.length - kept.length,
     });
   }
   return kept;
