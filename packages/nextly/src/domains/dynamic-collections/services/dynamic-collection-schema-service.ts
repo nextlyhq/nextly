@@ -1017,9 +1017,11 @@ export class DynamicCollectionSchemaService {
       if (this.dialect === "sqlite" && typeof value === "boolean") {
         return Number(value);
       }
-      // SQLite keeps a date as its epoch seconds, so a stated date is bound as
-      // those, as `formatDefaultValue` writes it into the migration file.
-      if (this.dialect === "sqlite" && field.type === "date") {
+      // A stated date is bound as the moment it names, in whatever form it was
+      // typed ("2026-01-02", an offset time): a Date, which every driver binds
+      // as one, or on SQLite, which keeps a date as its epoch seconds, those, as
+      // `formatDefaultValue` writes it into the migration file.
+      if (field.type === "date") {
         const at =
           value instanceof Date
             ? value
@@ -1027,7 +1029,9 @@ export class DynamicCollectionSchemaService {
               ? new Date(value)
               : null;
         if (at !== null && !Number.isNaN(at.getTime())) {
-          return Math.floor(at.getTime() / 1000);
+          return this.dialect === "sqlite"
+            ? Math.floor(at.getTime() / 1000)
+            : at;
         }
       }
       // No driver binds an object or an array as JSON: SQLite refuses one, and PostgreSQL's
