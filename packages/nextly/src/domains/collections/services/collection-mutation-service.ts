@@ -43,8 +43,16 @@ import {
   withRuleLanguage,
   writeLanguagesFor,
 } from "../../../auth/access/rule-language";
-import { userHoldsPermission } from "../../../auth/access/resolve-actor";
-import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import {
+  actorForVisitor,
+  userHoldsPermission,
+} from "../../../auth/access/resolve-actor";
+import {
+  type AuthenticatedScope,
+  scopeHoldsSuperAdmin,
+} from "../../../auth/authenticated-scope";
+import { currentPrincipal } from "../../../auth/principal-scope";
+import { permissionSlug } from "../../../schemas/_zod/rbac";
 import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
@@ -12176,27 +12184,57 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * The refusal of a delete by a signed-in user who does not hold the delete
-   * grant, or `null`: the grant alone, read before anything about the
-   * entries' languages is, and no rule asked. A user without it is refused
-   * whatever the rule says, so the gate's own refusal answers, and none of
-   * the language reads runs for them. A key and a visitor, whose grants are
-   * read with their rule, and a caller the route already judged, are judged
+   * The refusal of a delete by a caller who does not hold the delete grant,
+   * or `null`: the grant alone, read before anything about the entries'
+   * languages is, and no rule asked. A caller without it is refused whatever
+   * the rule says, so the gate's own refusal answers, and none of the
+   * language reads runs for them. A key is judged by its own scope, a
+   * signed-in user by their roles, a visitor by the Public role's grants. A
+   * plugin-defined person, and a caller the route already judged, are judged
    * by the gate as before.
    */
   private async deleteGrantRefusal(
     gate: Parameters<CollectionAccessService["checkCollectionWrite"]>[0]
   ): Promise<CollectionServiceResult | null> {
-    if (gate.overrideAccess || gate.routeAuthorized || !gate.user) return null;
-    if (gate.authenticatedScope?.actorType === "apiKey") return null;
-    const holds = await userHoldsPermission(
-      gate.user.id,
-      "delete",
-      gate.collectionName,
-      gate.executor === undefined ? {} : { executor: gate.executor }
-    );
-    if (holds) return null;
+    if (gate.overrideAccess || gate.routeAuthorized) return null;
+    const holds = await this.holdsDeleteGrant(gate);
+    if (holds !== false) return null;
     return (await this.accessService.checkCollectionWrite(gate)).denied;
+  }
+
+  /**
+   * Whether the caller holds the delete grant on the collection: `true`,
+   * `false`, or `undefined` for a plugin-defined person, who holds no grant
+   * of its own and is judged by the gate.
+   */
+  private async holdsDeleteGrant(
+    gate: Parameters<CollectionAccessService["checkCollectionWrite"]>[0]
+  ): Promise<boolean | undefined> {
+    const executor =
+      gate.executor === undefined ? {} : { executor: gate.executor };
+    const scope = gate.authenticatedScope;
+    if (scope?.actorType === "apiKey") {
+      return (
+        scopeHoldsSuperAdmin(scope) ||
+        scope.permissions.includes(
+          permissionSlug("delete", gate.collectionName)
+        )
+      );
+    }
+    if (gate.user) {
+      return userHoldsPermission(
+        gate.user.id,
+        "delete",
+        gate.collectionName,
+        executor
+      );
+    }
+    if (currentPrincipal() !== null) return undefined;
+    const visitor = await actorForVisitor(executor);
+    return visitor.permissions.some(
+      grant =>
+        grant.action === "delete" && grant.resource === gate.collectionName
+    );
   }
 
   /**

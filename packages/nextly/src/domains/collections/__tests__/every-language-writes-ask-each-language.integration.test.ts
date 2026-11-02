@@ -359,6 +359,85 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("a caller who may not delete", () => {
+      /** Makes the pending rows unreadable, so a read of them before the gate fails the delete. */
+      function versionsUnreadable(t: TestNextly): void {
+        const select = t.adapter.select.bind(t.adapter);
+        vi.spyOn(t.adapter, "select").mockImplementation(((
+          table: string,
+          ...rest: unknown[]
+        ) =>
+          table === "nextly_versions"
+            ? Promise.reject(new Error("versions unreadable"))
+            : (select as (...args: unknown[]) => unknown)(
+                table,
+                ...rest
+              )) as never);
+      }
+
+      /** The status a refused Direct API call answers, the error's own. */
+      async function statusOf(call: () => Promise<unknown>): Promise<number> {
+        try {
+          await call();
+          return 200;
+        } catch (error) {
+          if (NextlyError.is(error)) return error.statusCode;
+          throw error;
+        }
+      }
+
+      it("is refused by a key's own scope before the entry's languages are read", async () => {
+        const t = await boot(dialect);
+        const { withGerman } = await seed(t, ANY_LANGUAGE);
+        versionsUnreadable(t);
+
+        // The author holds delete; the key they made holds read alone.
+        const status = await statusOf(() =>
+          entriesOf(t)
+            .deleteEntry({
+              collectionName: ANY_LANGUAGE,
+              entryId: withGerman,
+              user: { id: AUTHOR },
+              overrideAccess: false,
+              authenticatedScope: {
+                actorType: "apiKey",
+                permissions: [`read-${ANY_LANGUAGE}`],
+              },
+            } as never)
+            .then(result => {
+              const { statusCode } = result as { statusCode?: number };
+              if (statusCode && statusCode >= 400) {
+                throw new NextlyError({
+                  code: "FORBIDDEN",
+                  statusCode,
+                  publicMessage: "refused",
+                } as never);
+              }
+            })
+        );
+
+        expect(status).toBe(403);
+        vi.restoreAllMocks();
+        expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(true);
+      });
+
+      it("is refused by the Public role's grants before the entry's languages are read", async () => {
+        const t = await boot(dialect);
+        const { withGerman } = await seed(t, ANY_LANGUAGE);
+        versionsUnreadable(t);
+
+        const status = await statusOf(() =>
+          t.nextly.delete({
+            collection: ANY_LANGUAGE,
+            id: withGerman,
+            overrideAccess: false,
+          })
+        );
+
+        expect([401, 403]).toContain(status);
+        vi.restoreAllMocks();
+        expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(true);
+      });
+
       it("is refused before anything about the entry's languages is read", async () => {
         const t = await boot(dialect);
         const { withGerman } = await seed(t, ANY_LANGUAGE);
