@@ -37,6 +37,7 @@ import {
 } from "../../../domains/schema/events/schema-events-repository";
 import { ensureSchemaEventsTable } from "../../../domains/schema/events/schema-events-ddl";
 import { resolveMigration } from "../../../domains/schema/migrate/resolve";
+import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import { marksNoTransaction } from "../../../domains/schema/migrate/split-sql";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
 import {
@@ -48,11 +49,7 @@ import {
 } from "../../../domains/schema/pipeline/__tests__/helpers/schema-lock-world";
 import { NextlyError } from "../../../errors/nextly-error";
 import { createLogger } from "../../utils/logger";
-import {
-  migrateCore,
-  parseSqlSections,
-  refuseUnresolvedAppAttempts,
-} from "../migrate";
+import { migrateCore, refuseUnresolvedAppAttempts } from "../migrate";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
 
 const CHILD = join(__dirname, "helpers", "migration-run-child.ts");

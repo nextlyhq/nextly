@@ -28,6 +28,7 @@ import { useState } from "react";
 import * as Icons from "@admin/components/icons";
 
 import { DashboardEditBar } from "./DashboardEditBar";
+import { useSettingsPanelHoldsChanges } from "./settings-panel-registry";
 import type { DashboardFocus } from "./useDashboardFocus";
 import type { LayoutEditor } from "./useLayoutEditor";
 import type { SaveRequest } from "./useSaveRequest";
@@ -53,7 +54,7 @@ export interface DashboardEditChromeProps {
    * The arrangement's own, rather than the editor's, because they also say
    * what happened and move focus.
    */
-  on: { begin: () => void; cancel: () => void; addWidget: () => void };
+  on: { cancel: () => void; addWidget: () => void };
   /** Saving, which over an unreadable stored layout asks first. */
   saveRequest: SaveRequest;
   /** Where the bar and the Customize button register for focus. */
@@ -218,25 +219,28 @@ export function DashboardEditChrome({
 }: DashboardEditChromeProps): JSX.Element {
   const [askingReset, setAskingReset] = useState(false);
   const requestSave = () => void saveRequest.request();
+  // A card's open settings panel holding a change is an unsaved change of the dashboard's too:
+  // Save keeps it with the draft (`useSaveRequest`), so Save is offered for it.
+  const panelHoldsChanges = useSettingsPanelHoldsChanges();
 
   return (
     <>
       {hasArrangement ? (
         <DashboardEditBar
           isEditing={editor.isEditing}
-          hasUnsavedChanges={editor.hasUnsavedChanges}
+          hasUnsavedChanges={
+            editor.hasUnsavedChanges || (editor.isEditing && panelHoldsChanges)
+          }
           isResetStaged={editor.isResetStaged}
           isSaving={editor.isSaving}
           isWriting={editor.isWriting}
           canReset={canReset}
-          onBegin={on.begin}
           onSave={requestSave}
           onCancel={on.cancel}
           onReset={() => setAskingReset(true)}
           onAddWidget={on.addWidget}
           addWidgetRef={focus.addWidgetRef}
           barRef={focus.barRef}
-          customizeRef={focus.customizeRef}
         >
           <SaveProblem
             editor={editor}

@@ -22,7 +22,9 @@ import { recordAdvisoryNotice } from "../../hooks/side-effect-warnings";
 import {
   expiryHandoff,
   holdForNextFlush,
+  holdForNextRequest,
   isPendingExpiryHandoff,
+  takeHeldForNextRequest,
   takePendingExpiries,
   type ExpiryHandoff,
 } from "../../revalidation/expiry-handoff";
@@ -33,6 +35,9 @@ import type {
 } from "../../revalidation/types";
 import { consoleLogger } from "../../shared/types";
 import { loadNextModule, requireNextApi } from "../next-api";
+
+import { MAX_TAGS_PER_READ } from "./nextly-tags";
+import { holdFailedRecord } from "./record-retry";
 
 /** A Next `cacheLife`-style profile: `{ expire: 0 }` means expire immediately. */
 type CacheLifeProfile = string | { expire?: number };
@@ -114,8 +119,9 @@ function resolveNextCache(
  * Next.js keeps at most 128 tags on one cached read (`cacheTag`) and drops the
  * rest, so a read that names more than that may carry only its first 128. The
  * limit is per read, not per expiry: a write may expire any number of tags.
+ * Its value is the read side's, so the two can never disagree.
  */
-export const MAX_TAGS_PER_WRITE = 128;
+export const MAX_TAGS_PER_WRITE = MAX_TAGS_PER_READ;
 
 /**
  * What Next.js says when `updateTag` is called anywhere but a Server Action: in
@@ -295,18 +301,25 @@ export class NextCacheRevalidator implements CacheRevalidator {
     const own = tagsToExpire(intents);
     // Expiries an earlier write handed to the in-process default go out with
     // this one, so a later request in the same process drains them.
-    const tags = [...new Set([...takePendingExpiries(), ...own])];
+    const pending = [...new Set([...takePendingExpiries(), ...own])];
+    // Tags an installed hand-off already took, which Next.js's own cache has
+    // still to expire. Outside a request they are only kept again: handing
+    // them off once more would record them again with every such write.
+    const handedOff = takeHeldForNextRequest();
+    const tags = [...new Set([...pending, ...handedOff])];
     if ("unresolved" in resolved) {
       // Next.js is here but its cache could not be loaded: every tag waits
       // for the out-of-request path rather than being skipped.
+      holdForNextRequest(handedOff);
       return this.defer(
-        new Map(tags.map(tag => [tag, resolved.unresolved])),
+        new Map(pending.map(tag => [tag, resolved.unresolved])),
         own
       );
     }
     const failed = expireTags(resolved, tags);
     if ("noRequest" in failed) {
-      return this.waitForRequest(tags, own, failed.noRequest);
+      holdForNextRequest(handedOff);
+      return this.waitForRequest(pending, own, failed.noRequest);
     }
     revalidatePaths(resolved, intents);
     if (failed.size === 0) return;
@@ -319,7 +332,8 @@ export class NextCacheRevalidator implements CacheRevalidator {
    * pending, each once, for the next write that runs inside a request to
    * expire; retaking and retrying every pending tag on each such write made a
    * run of N of them O(N²) attempts and log. An installed hand-off expires
-   * from outside a request, so there they are handed to it as any failure is.
+   * from outside a request, so there they are handed to it as any failure is,
+   * and kept, once each, for Next.js's own cache at the next request.
    */
   private async waitForRequest(
     tags: string[],
@@ -377,36 +391,55 @@ export class NextCacheRevalidator implements CacheRevalidator {
   }
 
   /**
-   * Hands tags off, awaited but bounded by {@link HANDOFF_TIMEOUT_MS}, without
-   * letting the hand-off itself fail the write: a queue that does not answer
-   * must not hold the response.
+   * Hands tags off through {@link handOffWithin}, to the installed hand-off,
+   * and keeps them for Next.js's own cache at the next request: the in-process
+   * default already keeps them for that, and an installed one records them
+   * only where nextly's cache handlers read.
    */
   private async handOff(tags: string[], reason: string): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const timedOut = new Promise<"timed-out">(resolve => {
-        timer = setTimeout(() => resolve("timed-out"), HANDOFF_TIMEOUT_MS);
-        timer.unref?.();
-      });
-      const answer = await Promise.race([
-        Promise.resolve(this.handoff().handOff(tags, reason)),
-        timedOut,
-      ]);
-      if (answer === "timed-out") {
-        consoleLogger.error(
-          `[nextly] the cache expiry hand-off did not answer within ${HANDOFF_TIMEOUT_MS} ms: ${tags.join(", ")}`
-        );
-        // It may still take them, but it may not: keep them for the next flush too.
-        holdForNextFlush(tags);
-      }
-    } catch (error) {
+    const handoff = this.handoff();
+    await handOffWithin(handoff, tags, reason);
+    if (!isPendingExpiryHandoff(handoff)) holdForNextRequest(tags);
+  }
+}
+
+/**
+ * Hands tags to `handoff`, awaited but bounded by {@link HANDOFF_TIMEOUT_MS},
+ * without letting the hand-off itself fail the write: one that does not answer
+ * must not hold the response, or a committed write made outside a request.
+ * Tags it refused, or did not take in time, are kept for this process's next
+ * flush. Shared by every revalidator that hands off.
+ */
+export async function handOffWithin(
+  handoff: ExpiryHandoff,
+  tags: string[],
+  reason: string
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timedOut = new Promise<"timed-out">(resolve => {
+      timer = setTimeout(() => resolve("timed-out"), HANDOFF_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    const answer = await Promise.race([
+      Promise.resolve(handoff.handOff(tags, reason)),
+      timedOut,
+    ]);
+    if (answer === "timed-out") {
       consoleLogger.error(
-        `[nextly] the cache expiry hand-off failed: ${error instanceof Error ? error.message : String(error)}`
+        `[nextly] the cache expiry hand-off did not answer within ${HANDOFF_TIMEOUT_MS} ms: ${tags.join(", ")}`
       );
-      // Not lost with the hand-off: the next flush in this process drains them.
-      holdForNextFlush(tags);
-    } finally {
-      clearTimeout(timer);
+      // It may still take them, but it may not: keep them for the next flush
+      // too, and retry them, since a quiet process may make no next flush.
+      holdFailedRecord(tags);
     }
+  } catch (error) {
+    consoleLogger.error(
+      `[nextly] the cache expiry hand-off failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    // Not lost with the hand-off: the next flush in this process drains them.
+    holdForNextFlush(tags);
+  } finally {
+    clearTimeout(timer);
   }
 }

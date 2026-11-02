@@ -154,57 +154,30 @@ async function idsReturnedBy(
 }
 
 /**
- * The status of each of `entryIds` this caller may read, as the ordinary read
- * path returns it: `"published"`, `"draft"`, or whatever else the collection
- * stores. A document the caller may not read, or one that is gone, is absent,
- * and so is the status of a collection with no lifecycle.
- *
- * Derived from the same read as {@link readableDocumentIds}, so a document
- * this says something about is exactly one that read would call readable.
- */
-export async function readableDocumentStatuses(
-  collection: string,
-  entryIds: readonly string[],
-  caller: ReadCaller,
-  locale?: string | null
-): Promise<Map<string, string>> {
-  const documents = await documentsReturnedBy(
-    collection,
-    entryIds,
-    locale,
-    { overrideAccess: false, caller },
-    ["status"]
-  );
-  const statuses = new Map<string, string>();
-  for (const [id, document] of documents) {
-    if (typeof document.status === "string") statuses.set(id, document.status);
-  }
-  return statuses;
-}
-
-/**
- * A Single's status as this caller reads it in `locale`, or `undefined` when
- * it records none. A refused read throws, as the Singles read path does.
+ * A Single's document as this caller reads it in `locale`, with the columns
+ * `columns` names (the system timestamps come with every read), or `null`
+ * when the read returns none. A refused read throws, as the Singles read path
+ * does.
  *
  * Asked only for a Single already known to exist: the Singles read path
  * creates a missing Single, so asking it about one that might not exist would
  * make reading a label perform a write. The same identity as every read here.
  */
-export async function readableSingleStatus(
+export async function readableSingleColumns(
   slug: string,
   caller: ReadCaller,
+  columns: readonly string[],
   locale?: string | null
-): Promise<string | undefined> {
-  const document = (await requireNextly().findSingle({
+): Promise<Record<string, unknown> | null> {
+  return requireNextly().findSingle({
     slug,
-    select: { status: true },
-    // Every state, as the collections' status read asks: the default reads the
+    select: Object.fromEntries(columns.map(column => [column, true])),
+    // Every state, as the collections' reads ask: the default reads the
     // published document alone, so a draft Single would read as missing and
     // its row lose its label. Access is still the caller's.
     status: "all",
     ...identityOptions(locale, { overrideAccess: false, caller }),
-  })) as { status?: unknown } | null;
-  return typeof document?.status === "string" ? document.status : undefined;
+  });
 }
 
 /**
@@ -228,20 +201,23 @@ export async function readableDocumentIds(
 
 /**
  * The documents among `entryIds` this caller may READ, each with the columns
- * `columns` names beside its id: a title to show beside a document the caller
- * chose to keep. Derived from the same read as {@link readableDocumentIds}, so
- * a document shown here is exactly one that read would call readable.
+ * `columns` names beside its id, in `locale` (the default language when it
+ * names none): a title to show beside a document the caller chose to keep or
+ * saved in that language. Derived from the same read as
+ * {@link readableDocumentIds}, so a document shown here is exactly one that
+ * read would call readable, in that language.
  */
 export async function readableDocumentColumns(
   collection: string,
   entryIds: readonly string[],
   caller: ReadCaller,
-  columns: readonly string[]
+  columns: readonly string[],
+  locale?: string | null
 ): Promise<Map<string, Record<string, unknown>>> {
   return documentsReturnedBy(
     collection,
     entryIds,
-    undefined,
+    locale,
     { overrideAccess: false, caller },
     columns
   );

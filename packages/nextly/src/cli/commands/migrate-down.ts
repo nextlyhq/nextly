@@ -68,6 +68,7 @@ import {
   marksNoTransaction,
   splitSqlStatements,
 } from "../../domains/schema/migrate/split-sql";
+import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import {
   assertNoForeignDrops,
   columnsAfter,
@@ -101,7 +102,7 @@ import {
 } from "../utils/data-loss-consent";
 import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
-import { parseSqlSections, refuseUnresolvedAppAttempts } from "./migrate";
+import { refuseUnresolvedAppAttempts } from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,

@@ -19,7 +19,6 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { listBody } from "../archetypes/list";
 import { metricBody } from "../archetypes/metric";
-import { statsBody } from "../archetypes/stats";
 import * as geometry from "../frame/geometry";
 import { WidgetCard } from "../WidgetCard";
 
@@ -91,20 +90,23 @@ function lineBoxes(root: Element): string[] {
 
 const SELECT = ["title", "updatedAt", "status"];
 
-function listCard(limit: number): DashboardWidget {
+/** A declared list card, answered on the server: its rows are drawn by the fields they carry. */
+function listCard(): DashboardWidget {
   return {
     id: "acme/recent",
     title: "Recent",
     archetype: "list",
     size: gridBounds(4),
-    query: { source: "collection:posts", op: "list", select: SELECT, limit },
   } as unknown as DashboardWidget;
 }
 
-/** The body as it loads, at `tier`. */
+/**
+ * The body as it loads, at `tier`, its skeleton holding the place of `limit` items: `null` for
+ * the default number, as the renderer holds a declared list card's.
+ */
 function skeletonAt(
   tier: Tier,
-  limit: number,
+  limit: number | null,
   density: ListDensity = "default"
 ): string[] {
   const { unmount } = render(
@@ -125,13 +127,13 @@ function skeletonAt(
   return boxes;
 }
 
-/** The body once a full answer lands, at `tier`: more rows than it draws, so its footer shows. */
+/** The body once an answer of `count` rows lands, at `tier`: more rows than it draws. */
 function loadedAt(
   tier: Tier,
-  limit: number,
+  count: number,
   density: ListDensity = "default"
 ): string[] {
-  const items = Array.from({ length: limit + 1 }, (_, i) => ({
+  const items = Array.from({ length: count }, (_, i) => ({
     title: `Post ${i}`,
     updatedAt: "2026-10-19T00:00:00.000Z",
     status: "draft",
@@ -142,7 +144,7 @@ function loadedAt(
       items,
       fields: SELECT.map(name => ({ name, kind: "text" })),
     } as never,
-    listCard(limit)
+    listCard()
   );
   if (!drawn.ok || !("node" in drawn)) throw new Error("expected a list body");
   const { unmount } = render(
@@ -162,18 +164,19 @@ describe("a list card holds its rows' place in their own line boxes", () => {
       // 🔴 The skeleton the card used to draw was three plain bars at every tier: a medium
       // card then gained a detail line per row, a large one a table head, and every card the
       // footer line, all at once, as the answer landed.
-      const loaded = loadedAt(tier, 5);
+      const loaded = loadedAt(tier, 11);
       expect(loaded.length).toBeGreaterThan(0);
-      expect(skeletonAt(tier, 5)).toEqual(loaded);
+      expect(skeletonAt(tier, null)).toEqual(loaded);
     }
   );
 
-  it("draws the same line boxes loading as loaded at compact density, where more rows fit", () => {
-    const loaded = loadedAt("medium", 10, "compact");
+  it("draws the same line boxes loading as loaded at compact density", () => {
+    // The default five rows, each in a compact row's box, on both sides.
+    const loaded = loadedAt("medium", 11, "compact");
     expect(
       loaded.filter(box => box === "LIST_ROW_HEIGHT_CLASS.compact")
-    ).toHaveLength(7);
-    expect(skeletonAt("medium", 10, "compact")).toEqual(loaded);
+    ).toHaveLength(5);
+    expect(skeletonAt("medium", null, "compact")).toEqual(loaded);
   });
 
   it("lays a large card out as a table of its columns, and counts each tier's rows", () => {
@@ -207,10 +210,7 @@ describe("a figure card holds its number's line", () => {
 
     const drawn = metricBody(
       { op: "count", total: 7 } as never,
-      {
-        title: "Unpublished",
-        query: { source: "versions", op: "count" },
-      } as never
+      { title: "Unpublished" } as never
     );
     if (!drawn.ok || !("node" in drawn)) throw new Error("expected a body");
     render(<WidgetCard title="Unpublished loaded">{drawn.node}</WidgetCard>);
@@ -224,49 +224,6 @@ describe("a figure card holds its number's line", () => {
     // as the number arrived.
     expect(loading).toEqual(["FIGURE_VALUE_CLASS"]);
     expect(loaded).toEqual(loading);
-  });
-});
-
-describe("a stats card holds each of its cells", () => {
-  it("draws the same line boxes and labels loading as loaded", () => {
-    // 🔴 It shared the figure's skeleton, one number's line, while the loaded card draws a
-    // value AND a label for every cell, so it grew by a line and more rows of cells.
-    const cells = [
-      { key: "total", label: "Total" },
-      { key: "published", label: "Published" },
-      { key: "draft", label: "Draft" },
-    ];
-    render(
-      <WidgetCard
-        title="Health"
-        state={{ kind: "loading" }}
-        skeleton="stats"
-        skeletonCells={cells.map(cell => cell.label)}
-      >
-        body
-      </WidgetCard>
-    );
-    const skeleton = screen.getByTestId("card-skeleton");
-    const loading = lineBoxes(skeleton);
-    const loadingLabels = [...skeleton.querySelectorAll("dt")].map(
-      dt => dt.textContent
-    );
-
-    const drawn = statsBody(
-      { title: "Health loaded", cells } as never,
-      () => ({ ok: true, result: { op: "count", total: 7 } }) as never
-    );
-    if (!drawn.ok || !("node" in drawn)) throw new Error("expected a body");
-    render(<WidgetCard title="Health loaded">{drawn.node}</WidgetCard>);
-    const body = within(
-      screen.getByRole("region", { name: "Health loaded" })
-    ).getByTestId("widget-card-body");
-
-    expect(loading).toContain("STATS_CELL_CLASS");
-    expect(lineBoxes(body)).toEqual(loading);
-    expect([...body.querySelectorAll("dt")].map(dt => dt.textContent)).toEqual(
-      loadingLabels
-    );
   });
 });
 

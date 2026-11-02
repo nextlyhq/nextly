@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 /**
  * A settings page is seen on `read-settings` and used on the permission each
- * change asks. A role holding only `read-settings` sees General, Image Sizes
- * and User Fields read-only: no Save, no add, no edit, no delete and no
- * reorder, since the server refuses every one of them. It may open a user
- * field or an image size to see it, as the server lets it read one, and the
- * edit page shows it with nothing to save. A role holding the change's
- * permission is offered it.
+ * change asks. A role holding only `read-settings` sees General and User
+ * Fields read-only: no Save, no add, no edit, no delete and no reorder, since
+ * the server refuses every one of them. It may open a user field to see it,
+ * as the server lets it read one, and the edit page shows it with nothing to
+ * save. A role holding the change's permission is offered it. (The Image
+ * Sizes screen these once covered was removed with image sizes.)
  *
  * The permission hook is replaced by one that checks as the product checks
  * (`holdsPermission`).
@@ -46,26 +46,6 @@ vi.mock("@admin/hooks/useRouter", () => ({
   useRouter: () => ({ route: { params: { id: EDITED_ID } } }),
 }));
 
-const thumbnail = vi.hoisted(() => ({
-  id: "size_1",
-  name: "Thumbnail",
-  width: 320,
-  height: 240,
-  fit: "cover",
-  quality: 80,
-  format: "webp",
-  isDefault: false,
-  sortOrder: 1,
-}));
-vi.mock("@admin/services/imageSizesApi", () => ({
-  fetchImageSizes: () => Promise.resolve([thumbnail]),
-  fetchImageSize: () => Promise.resolve(thumbnail),
-  updateImageSize: vi.fn(),
-  createImageSize: vi.fn(),
-  fetchImageProcessingAvailability: () => Promise.resolve({ available: true }),
-  deleteImageSize: vi.fn(),
-}));
-
 // One object for every render, for the same reason: the page copies the
 // fields into its own state whenever the data changes.
 const company = vi.hoisted(() => ({
@@ -101,9 +81,6 @@ vi.mock("@admin/hooks/queries/useUserFields", () => ({
 }));
 
 import SettingsGeneralPage from "../dashboard/settings/index";
-import ImageSizesSettingsPage from "../dashboard/settings/image-sizes/index";
-import CreateImageSizePage from "../dashboard/settings/image-sizes/create";
-import EditImageSizePage from "../dashboard/settings/image-sizes/edit/[id]";
 import CreateUserFieldPage from "../dashboard/users/fields/create";
 import EditUserFieldPage from "../dashboard/users/fields/edit/[id]";
 import UserFieldsPage from "../dashboard/users/fields/index";
@@ -144,46 +121,6 @@ describe("General settings", () => {
   });
 });
 
-describe("Image Sizes", () => {
-  it("offers nothing to change to a role that may only read settings", async () => {
-    holding("read-settings");
-    render(<ImageSizesSettingsPage />);
-    expect((await screen.findAllByText("Thumbnail")).length).toBeGreaterThan(0);
-    expect(screen.queryByText("Add Size")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Row actions" })
-    ).not.toBeInTheDocument();
-    // The size opens to be seen: its row links to the edit page, which shows
-    // it read-only to this role (below).
-    expect(
-      screen
-        .getAllByRole("link", { name: "Thumbnail" })
-        .map(link => link.getAttribute("href"))
-    ).toContain("/admin/settings/image-sizes/edit/size_1");
-  });
-
-  it("offers adding a size to a role that may create settings, and no row action", async () => {
-    holding("read-settings", "create-settings");
-    render(<ImageSizesSettingsPage />);
-    expect((await screen.findAllByText("Thumbnail")).length).toBeGreaterThan(0);
-    expect(screen.getByText("Add Size")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Row actions" })
-    ).not.toBeInTheDocument();
-  });
-
-  it("offers a size's row actions to a role that may update settings", async () => {
-    // The control for the row-action cases above: the selector finds them.
-    holding("read-settings", "update-settings");
-    render(<ImageSizesSettingsPage />);
-    expect((await screen.findAllByText("Thumbnail")).length).toBeGreaterThan(0);
-    expect(
-      screen.getAllByRole("button", { name: "Row actions" }).length
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText("Add Size")).not.toBeInTheDocument();
-  });
-});
-
 describe("User Fields", () => {
   it("offers nothing to change to a role that may only read settings", async () => {
     holding("read-settings");
@@ -219,25 +156,6 @@ describe("User Fields", () => {
 });
 
 describe("the edit pages", () => {
-  it("shows an image size with nothing to save to a role that may only read settings", async () => {
-    holding("read-settings");
-    render(<EditImageSizePage />);
-    expect(await screen.findByDisplayValue("Thumbnail")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Update Image Size" })
-    ).not.toBeInTheDocument();
-  });
-
-  it("offers an image size's save to a role that may update settings", async () => {
-    // The control: the same page with the permission the save asks.
-    holding("read-settings", "update-settings");
-    render(<EditImageSizePage />);
-    expect(await screen.findByDisplayValue("Thumbnail")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Update Image Size" })
-    ).toBeInTheDocument();
-  });
-
   it("shows a user field with nothing to save to a role that may only read settings", () => {
     holding("read-settings");
     render(<EditUserFieldPage />);
@@ -261,7 +179,6 @@ describe("the create pages", () => {
   // The route asks create; each page also asks read, which the list it is
   // reached from and returns to after a create asks.
   const PAGES = [
-    ["an image size", CreateImageSizePage, "Create Image Size"],
     ["a user field", CreateUserFieldPage, "Create Field"],
   ] as const;
 

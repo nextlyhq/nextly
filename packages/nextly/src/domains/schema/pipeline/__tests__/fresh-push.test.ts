@@ -399,10 +399,13 @@ describe("freshPushSchema", () => {
       const result = await freshPushSchema("mysql", db, {});
 
       expect(result.statementsExecuted).toBeDefined();
+      // Scoped to the desired tables (none in this empty schema), so live
+      // content tables never reach the kit's rename resolver.
       expect(pushSchemaSpy).toHaveBeenCalledWith(
         expect.anything(),
         db,
-        "nextly_test"
+        "nextly_test",
+        { tables: [] }
       );
       expect(result.statementsExecuted).toHaveLength(1);
     });

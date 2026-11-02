@@ -25,6 +25,7 @@ import type {
   ReleaseMemberAction,
   ReleaseReadiness,
   ReleaseReadinessEntry,
+  ScheduleDocumentPayload,
   ScheduleReleasePayload,
   UpdateReleasePayload,
 } from "../types/releases";
@@ -243,6 +244,28 @@ export const scheduleRelease = (
 ): Promise<{ message: string }> =>
   fetcher<{ message: string }>(
     `/releases/${id}/schedule`,
+    { method: "POST", body: JSON.stringify(payload) },
+    true
+  );
+
+/** What scheduling a document answers: the release it went into. */
+export interface ScheduleDocumentResponse {
+  message?: string;
+  item: {
+    release: Pick<Release, "id" | "title" | "scheduledAt" | "timezone">;
+  };
+}
+
+/**
+ * Schedule one document to go live on its own, in one request. The release,
+ * its one document and its time land together or not at all, so a refusal
+ * leaves no empty release behind.
+ */
+export const scheduleDocument = (
+  payload: ScheduleDocumentPayload
+): Promise<ScheduleDocumentResponse> =>
+  fetcher<ScheduleDocumentResponse>(
+    "/releases/schedule-document",
     { method: "POST", body: JSON.stringify(payload) },
     true
   );

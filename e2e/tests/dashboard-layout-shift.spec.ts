@@ -42,10 +42,14 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { leaveReleasesAsTheRunnerWould } from "./support/release-states";
+import { cancel, post, release, schedule } from "./support/releases-api";
 import { mainColumnBox, waitForShellAnswers } from "./support/shell-geometry";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ lock: [LOCK.dashboard, LOCK.heavy] });
+test.describe.configure({
+  lock: [LOCK.dashboard, LOCK.heavy, LOCK.releases],
+});
 
 /** The cold-load ceiling. */
 const MAX_COLD_SHIFT = 0.1;
@@ -212,7 +216,11 @@ function report(
  * `data-shell-answers="pending"` until the answers they draw from are in.
  */
 async function waitForSettled(page: Page): Promise<void> {
-  const cells = page.locator('[data-testid^="widget-cell-"]');
+  // Drawn cards only: a card the dashboard is drawn without while empty keeps a cell it never
+  // shows.
+  const cells = page
+    .locator('[data-testid^="widget-cell-"]')
+    .filter({ visible: true });
   await expect(cells.first()).toBeVisible({ timeout: 60_000 });
   // Nothing still loading: no card marked busy, AND no skeleton drawn anywhere (every skeleton
   // the UI kit draws is marked `data-slot="skeleton"`). A card that draws its own body (a
@@ -240,53 +248,101 @@ async function followLink(page: Page, href: string): Promise<void> {
   }, href);
 }
 
-for (const size of WIDTHS) {
-  test(`moves less than ${MAX_COLD_SHIFT} on a cold load (${size.name})`, async ({
-    page,
-  }, info) => {
-    test.setTimeout(240_000);
-    await page.setViewportSize({ width: size.width, height: size.height });
-    await recordShifts(page);
-    // Warm the route (on the dev server, its compile), then measure a fresh load of it.
-    await gotoAdmin(page, "/");
-    await waitForSettled(page);
-    await page.reload();
-    await waitForSettled(page);
-    const shift = await shiftSoFar(page);
-    report(info, `cold ${size.name} ${size.width}px`, shift);
-    expect(shift.dashboard + shift.mixed).toBeLessThan(MAX_COLD_SHIFT);
-    if (PRODUCTION_SERVER) {
-      // No shell element moved: the shell's regions are drawn at the size they settle at, so the
-      // only way for this to go red is for something already painted to move. Counted by element
-      // rather than read from the shell's share, which leaves out a shift that moved the
-      // dashboard in the same frame.
-      expect(
-        shift.shellMoves,
-        `the shell moved: ${shift.shellSources.join(" | ")}`
-      ).toBe(0);
+/**
+ * Each case on two sites: one where nothing waits for the reader, so Needs your attention hides
+ * while empty, and one where an overdue release waits, so it is placed. The card is decided
+ * before the first paint either way: neither its leaving nor its arriving may move the page.
+ */
+const SITES = [
+  { name: "nothing waiting", overdue: false },
+  { name: "an overdue release waiting", overdue: true },
+];
+
+const DAY = 24 * 60 * 60 * 1000;
+
+for (const site of SITES) {
+  test.describe(site.name, () => {
+    const seeded: Array<{ id: string; outcome: "overdue" }> = [];
+
+    test.beforeEach(async ({ page }) => {
+      if (!site.overdue) return;
+      const stamp = Date.now().toString(36);
+      const postId = await post(page, stamp);
+      const id = await release(page, `Layout shift overdue ${stamp}`, postId);
+      await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+      seeded.push({ id, outcome: "overdue" });
+      await leaveReleasesAsTheRunnerWould(page, seeded);
+    });
+
+    test.afterEach(async ({ page }) => {
+      // Left as they were found: an overdue release of this spec's would place the card on
+      // every later spec's dashboard.
+      for (const { id } of seeded.splice(0)) await cancel(page, id);
+    });
+
+    /** On the site with an item waiting, the card is on the page measured. */
+    async function cardAsTheSiteHasIt(page: Page): Promise<void> {
+      if (!site.overdue) return;
+      await expect(
+        page
+          .getByTestId("widget-cell-core/needs-attention")
+          .filter({ visible: true })
+      ).toBeVisible();
+    }
+
+    for (const size of WIDTHS) {
+      test(`moves less than ${MAX_COLD_SHIFT} on a cold load (${size.name})`, async ({
+        page,
+      }, info) => {
+        test.setTimeout(240_000);
+        await page.setViewportSize({ width: size.width, height: size.height });
+        await recordShifts(page);
+        // Warm the route (on the dev server, its compile), then measure a fresh load of it.
+        await gotoAdmin(page, "/");
+        await waitForSettled(page);
+        await page.reload();
+        await waitForSettled(page);
+        await cardAsTheSiteHasIt(page);
+        const shift = await shiftSoFar(page);
+        report(info, `cold ${site.name} ${size.name} ${size.width}px`, shift);
+        expect(shift.dashboard + shift.mixed).toBeLessThan(MAX_COLD_SHIFT);
+        if (PRODUCTION_SERVER) {
+          // No shell element moved: the shell's regions are drawn at the size they settle at, so
+          // the only way for this to go red is for something already painted to move. Counted by
+          // element rather than read from the shell's share, which leaves out a shift that moved
+          // the dashboard in the same frame.
+          expect(
+            shift.shellMoves,
+            `the shell moved: ${shift.shellSources.join(" | ")}`
+          ).toBe(0);
+        }
+      });
+
+      test(`does not move at all on a warm return (${size.name})`, async ({
+        page,
+      }, info) => {
+        test.setTimeout(240_000);
+        await page.setViewportSize({ width: size.width, height: size.height });
+        await recordShifts(page);
+        await gotoAdmin(page, "/");
+        await waitForSettled(page);
+        // Away and back within the session: the arrangement and the answers are cached.
+        await followLink(page, "/admin/collections/posts");
+        await page.waitForURL(/\/admin\/collections\/posts/);
+        await forgetShifts(page);
+        await followLink(page, "/admin");
+        await page.waitForURL(/\/admin\/?$/);
+        await waitForSettled(page);
+        await cardAsTheSiteHasIt(page);
+        const shift = await shiftSoFar(page);
+        report(info, `warm ${site.name} ${size.name} ${size.width}px`, shift);
+        expect(shift.dashboard + shift.mixed).toBe(0);
+      });
     }
   });
+}
 
-  test(`does not move at all on a warm return (${size.name})`, async ({
-    page,
-  }, info) => {
-    test.setTimeout(240_000);
-    await page.setViewportSize({ width: size.width, height: size.height });
-    await recordShifts(page);
-    await gotoAdmin(page, "/");
-    await waitForSettled(page);
-    // Away and back within the session: the arrangement and the answers are cached.
-    await followLink(page, "/admin/collections/posts");
-    await page.waitForURL(/\/admin\/collections\/posts/);
-    await forgetShifts(page);
-    await followLink(page, "/admin");
-    await page.waitForURL(/\/admin\/?$/);
-    await waitForSettled(page);
-    const shift = await shiftSoFar(page);
-    report(info, `warm ${size.name} ${size.width}px`, shift);
-    expect(shift.dashboard + shift.mixed).toBe(0);
-  });
-
+for (const size of WIDTHS) {
   test(`holds the main column through a round trip to a collection (${size.name})`, async ({
     page,
   }, info) => {

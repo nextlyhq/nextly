@@ -24,6 +24,7 @@ import { useDocumentLockHolder } from "@admin/hooks/queries/useDocumentLockHolde
 import {
   documentLockAffordances,
   readerAffordances,
+  READ_ONLY_REMOVED_FROM_CODE,
   type DocumentLockAffordances,
 } from "./document-lock-affordances";
 
@@ -49,10 +50,17 @@ export interface DocumentLockSurfaceOptions extends UseDocumentLockOptions {
    * may publish makes wait while a colleague is editing.
    */
   readOnlyForReader?: boolean;
+  /**
+   * Why the surface is read-only for a reader: the user's access (the
+   * default), or the entity's removal from code, whose notice the editor's
+   * document banner carries instead of the reader's sentence.
+   */
+  readOnlyBecause?: "access" | "removed-from-code";
 }
 
 export function useDocumentLockSurface({
   readOnlyForReader = false,
+  readOnlyBecause = "access",
   ...options
 }: DocumentLockSurfaceOptions): DocumentLockSurface {
   const enabled = options.enabled ?? true;
@@ -89,7 +97,9 @@ export function useDocumentLockSurface({
 
   return {
     ...(readOnlyForReader
-      ? readerAffordances(holder)
+      ? readOnlyBecause === "removed-from-code"
+        ? READ_ONLY_REMOVED_FROM_CODE
+        : readerAffordances(holder)
       : documentLockAffordances(state, lastKnownHolder.current)),
     takeOver,
     requestAccess,

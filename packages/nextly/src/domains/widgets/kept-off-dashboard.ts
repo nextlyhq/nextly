@@ -35,8 +35,18 @@
  * `globalThis` like every other widget store, so it survives the module re-evaluation Next.js
  * and Turbopack perform.
  *
+ * ## And what the app's code no longer declares
+ *
+ * An entity removed from code (its registry row says the app's code defines it, and the running
+ * configuration no longer declares it) is left out by the same rule. Its table is retired by a
+ * migration while its registry row can stay behind, so the dashboard would otherwise list it,
+ * publish a source for it and count it, and every one of those reads would query a table that
+ * may already be gone.
+ *
  * @module domains/widgets/kept-off-dashboard
  */
+
+import { rowRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 
 /** The two kinds of content the dashboard lists. */
 export type DashboardContentKind = "collection" | "single";
@@ -50,6 +60,14 @@ function store(): Map<DashboardContentKind, Set<string>> {
   return globalForKeptOff.__nextly_widgetKeptOffDashboard;
 }
 
+/** The parts of a registry record the rule reads, each stored JSON or a column, so `unknown`. */
+interface KeptOffRecord {
+  slug?: unknown;
+  /** Who defines the entity: the app's code, a plugin, or the Schema Builder. */
+  source?: unknown;
+  admin?: unknown;
+}
+
 /**
  * Record, from one registry read, which entities of one kind are kept off the dashboard.
  *
@@ -58,11 +76,11 @@ function store(): Map<DashboardContentKind, Set<string>> {
  */
 export function recordKeptOffDashboard(
   kind: DashboardContentKind,
-  records: ReadonlyArray<{ slug?: unknown; admin?: unknown }>
+  records: readonly KeptOffRecord[]
 ): void {
   const slugs = new Set<string>();
   for (const record of records) {
-    if (typeof record.slug === "string" && keptOffDashboard(record)) {
+    if (typeof record.slug === "string" && keptOffDashboard(kind, record)) {
       slugs.add(record.slug);
     }
   }
@@ -78,13 +96,41 @@ export function isKeptOffDashboard(
 }
 
 /**
- * Whether a registry record of a collection or Single is kept off the dashboard.
+ * Whether a registry record of a collection or Single is kept off the dashboard: hidden from
+ * the admin's navigation, or removed from code.
  *
  * Takes the record's stored `admin` as `unknown` and checks it at the point of use, because the
  * registry row is stored JSON and its shape is not something to assume.
  */
-export function keptOffDashboard(record: { admin?: unknown }): boolean {
+export function keptOffDashboard(
+  kind: DashboardContentKind,
+  record: KeptOffRecord
+): boolean {
+  return hiddenFromNavigation(record) || removedFromCode(kind, record);
+}
+
+/** Whether the record's stored `admin` hides the entity from the admin's navigation. */
+function hiddenFromNavigation(record: KeptOffRecord): boolean {
   const admin = record.admin;
   if (typeof admin !== "object" || admin === null) return false;
   return (admin as { hidden?: unknown }).hidden === true;
+}
+
+/**
+ * Whether the record is of an entity removed from code (`rowRemovedFromCode`): defined by the
+ * app's code, and no longer declared by the configuration the process runs. Its table may be
+ * gone already, since only a migration retires it and the registry row can outlive the drop; a
+ * dashboard read of it would then fail, and before that it describes content the app no longer
+ * has. Asked of the record already in hand, against the configuration the boot or the last
+ * landed reload published, so it reads nothing more. Unknown while no configuration is
+ * published, and then nothing is left out by it.
+ */
+function removedFromCode(
+  kind: DashboardContentKind,
+  record: KeptOffRecord
+): boolean {
+  return rowRemovedFromCode(kind, {
+    slug: typeof record.slug === "string" ? record.slug : null,
+    source: typeof record.source === "string" ? record.source : null,
+  });
 }
