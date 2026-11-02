@@ -400,25 +400,35 @@ async function saveDraft(page: Page): Promise<void> {
 /**
  * Every visible label in the inspector names an element that is there and
  * visible, by `for` or by `aria-labelledby`. Answers what does not resolve.
+ *
+ * Resolved as the browser resolves them, through `label.control` and the
+ * field's `ariaLabelledByElements`, rather than by looking ids up: the
+ * reference a screen reader follows is what is under test, and an id lookup
+ * can answer with a hidden copy of the element instead.
  */
 async function unresolvedLabels(page: Page): Promise<string[]> {
   return page.locator(".nx-inspector").evaluate(root => {
-    const visible = (element: Element | null): boolean =>
+    const visible = (element: Element | null | undefined): boolean =>
       element instanceof HTMLElement && element.checkVisibility();
     const problems: string[] = [];
     for (const label of root.querySelectorAll("label[for]")) {
-      if (!visible(label)) continue;
-      const target = document.getElementById(label.getAttribute("for") ?? "");
-      if (!visible(target)) problems.push(`label "${label.textContent}"`);
+      if (!visible(label) || !(label instanceof HTMLLabelElement)) continue;
+      if (!visible(label.control)) {
+        problems.push(`label "${label.textContent}"`);
+      }
     }
     for (const field of root.querySelectorAll("[aria-labelledby]")) {
       if (!visible(field)) continue;
-      for (const ref of (field.getAttribute("aria-labelledby") ?? "").split(
-        " "
-      )) {
-        if (document.getElementById(ref) === null) {
-          problems.push(`aria-labelledby "${ref}"`);
-        }
+      const named = (field.getAttribute("aria-labelledby") ?? "")
+        .split(" ")
+        .filter(ref => ref !== "");
+      // ARIA reflection: the elements the attribute's ids resolve to, in
+      // order, with an id that resolves to nothing left out.
+      const found =
+        (field as Element & { ariaLabelledByElements?: Element[] | null })
+          .ariaLabelledByElements ?? [];
+      if (found.length !== named.length) {
+        problems.push(`aria-labelledby "${named.join(" ")}"`);
       }
     }
     return problems;
