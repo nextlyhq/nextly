@@ -12,6 +12,7 @@ import {
   factsQuery,
   liveIdsOf,
   readComponentFacts,
+  storeIsLocalized,
 } from "./component-facts-route";
 
 const NO_RETIRED = { properties: [], slots: [] };
@@ -177,5 +178,35 @@ describe("the retired ids", () => {
         },
       })
     ).rejects.toThrow("the table is unavailable");
+  });
+});
+
+describe("a store that records no retirements", () => {
+  it("answers null for them, so the editor adds no field", async () => {
+    const facts = await readComponentFacts("hero", {
+      readLive: async () => row,
+      countPlacements: async () => ({ documents: 1, complete: true }),
+      field: "content",
+      readRetired: async () => null,
+    });
+    expect(facts.retired).toBeNull();
+    expect(facts.live.properties).toEqual(["title", "cta"]);
+  });
+});
+
+describe("whether the store is localized", () => {
+  it("is read from the store's own configuration, as the request's user", async () => {
+    const asked: Array<[string, unknown]> = [];
+    const collections = {
+      getCollection: async (name: string, context: unknown) => {
+        asked.push([name, context]);
+        return { slug: name, localized: name === "translated" };
+      },
+    };
+    expect(
+      await storeIsLocalized(collections, "translated", { id: "u1" })
+    ).toBe(true);
+    expect(await storeIsLocalized(collections, "components", null)).toBe(false);
+    expect(asked[0]).toEqual(["translated", { user: { id: "u1" } }]);
   });
 });

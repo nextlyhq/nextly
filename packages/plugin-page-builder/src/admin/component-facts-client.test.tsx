@@ -24,6 +24,7 @@ import type { ComponentFactsResponse } from "../library-contract";
 import {
   FACTS_FAILED,
   FACTS_PENDING,
+  FACTS_UNRECORDED,
   useComponentFacts,
 } from "./component-facts-client";
 
@@ -81,6 +82,18 @@ describe("the component's facts", () => {
     renderHook(() => useComponentFacts("hero"));
     const paths = read.mock.calls.map(call => call[0].path);
     expect(new Set(paths).size).toBe(2);
+  });
+
+  it("make adding wait for good where the store records no retirements", () => {
+    answering({
+      live: { properties: ["title"], slots: [] },
+      retired: null,
+      reach: null,
+    });
+    const { result } = renderHook(() => useComponentFacts("hero"));
+    expect(result.current).toEqual({
+      reserved: { unavailable: FACTS_UNRECORDED },
+    });
   });
 
   it("reserve the live and retired ids and carry the count once answered", () => {

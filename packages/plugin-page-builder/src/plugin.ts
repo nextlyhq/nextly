@@ -55,7 +55,7 @@ import {
   USAGE_BACKFILL_STATE_SLUG,
   usageBackfillStateCollection,
 } from "./collections/usage-backfill-state";
-import { componentFactsRoute } from "./component-facts-route";
+import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
 import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
@@ -1144,6 +1144,19 @@ export const pageBuilder = (
           readRetired: ctx => async id => {
             if (opts.componentReadiness === false) {
               return { properties: [], slots: [] };
+            }
+            // A localized store records no retirements (see the write hooks),
+            // so none can be reported: `null`, and the editor adds no field.
+            if (
+              await storeIsLocalized(
+                ctx.services.collections,
+                componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                ctx.user
+              )
+            ) {
+              return null;
             }
             const store = retiredStore({
               nextly: () => requireInstalled().nextly(),

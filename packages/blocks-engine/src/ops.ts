@@ -1092,6 +1092,12 @@ export type BuilderOp =
        *
        * Only the SHAPE is judged here: what the fields hold is the envelope
        * check's question, which every save of the definition asks.
+       *
+       * A fifth member of a published union: code that builds ops or applies
+       * them is unaffected, and an exhaustive `switch` over `kind` handles it
+       * with a case of its own or a default.
+       *
+       * @experimental Settles when the component editor ships.
        */
       readonly kind: "envelope";
       readonly patch: EnvelopePatch;
@@ -3607,7 +3613,9 @@ function assertEnvelopeOp(
     );
   }
   const unset: unknown = op.unset ?? [];
-  if (!Array.isArray(unset) || !unset.every(isString)) {
+  // The JSON domain FIRST, as `update`'s list is judged: reading an index of a
+  // list holding an accessor would run it before anything refused the list.
+  if (!Array.isArray(unset) || !isJsonValue(unset) || !unset.every(isString)) {
     throw new OpError(
       `envelope: \`unset\` of ${describe(unset)} is not a list of field names.`
     );

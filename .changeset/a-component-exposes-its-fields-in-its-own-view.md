@@ -40,6 +40,9 @@ value. A property placements could not set, or one inside an area locked to its
 content, is refused with the reason.
 
 The engine gains an `envelope` op, so an exposure edit is one undo step like any
-other edit. A new field's id stays clear of every id the component's live
+other edit. `BuilderOp` (published by `@nextlyhq/blocks-engine` and re-exported by
+`@nextlyhq/builder`) gains this fifth member: code that builds or applies ops is
+unaffected, and an exhaustive `switch` over `op.kind` needs a case for
+`"envelope"` or a default. A new field's id stays clear of every id the component's live
 definition still uses or has retired, read from a new `/component-facts`
 route, which also counts the documents that place the component directly.

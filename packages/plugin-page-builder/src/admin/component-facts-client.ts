@@ -25,6 +25,10 @@ import {
 export const FACTS_PENDING =
   "Checking which fields this component’s published version uses…";
 
+/** Said where the store records no retired ids, so none can be avoided. */
+export const FACTS_UNRECORDED =
+  "This component is stored per language, where removed fields aren’t recorded yet, so a new field can’t be added here. Rename or remove the fields it has.";
+
 /** Said when they could not be read. */
 export const FACTS_FAILED =
   "This component’s published fields could not be read, so a new field can’t be added yet. Reload to try again.";
@@ -61,6 +65,9 @@ export function useComponentFacts(
     // A failed read, even one holding an earlier answer, is not trusted.
     if (failed) return { reserved: { unavailable: FACTS_FAILED } };
     if (data === undefined) return { reserved: { unavailable: FACTS_PENDING } };
+    if (data.retired === null) {
+      return { reserved: { unavailable: FACTS_UNRECORDED } };
+    }
     // Both lists, for the reason each is reserved: placements may hold values
     // under a live id the draft dropped, and under a retired one until their
     // next write strips it.
