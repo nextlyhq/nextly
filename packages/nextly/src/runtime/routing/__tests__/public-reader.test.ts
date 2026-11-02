@@ -215,6 +215,37 @@ describe("toPublicFind", () => {
     expect(toPublicFind({ collection: "posts" }).depth).toBe(0);
   });
 
+  it.each(["-", "title,-", ["title", " - "]])(
+    "refuses a sort key that is only a sign: %j",
+    sort => {
+      expect(
+        refusal(() =>
+          toPublicFind({ collection: "posts", sort } as PublicReadQuery)
+        )
+      ).toContain("public-read-sort-invalid");
+    }
+  );
+
+  it.each(["gt", "gte", "lt", "lte", "contains"] as const)(
+    "refuses true or false for %s, and keeps it for equals",
+    op => {
+      expect(
+        refusal(() =>
+          toPublicFind({
+            collection: "posts",
+            filters: [{ field: "rank", op, value: true }],
+          })
+        )
+      ).toContain("public-read-value-invalid");
+      expect(
+        toPublicFind({
+          collection: "posts",
+          filters: [{ field: "featured", op: "equals", value: true }],
+        }).where
+      ).toEqual({ and: [{ featured: { equals: true } }] });
+    }
+  );
+
   it("refuses __proto__ as a field name", () => {
     expect(
       refusal(() =>

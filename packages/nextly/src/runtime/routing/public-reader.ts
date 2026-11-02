@@ -184,7 +184,18 @@ function assertShape(query: object): void {
  */
 function sortKeys(sort: string | readonly string[] | undefined): string[] {
   const parts = typeof sort === "string" ? sort.split(",") : [...(sort ?? [])];
-  return parts.map(key => key.trim()).filter(key => key !== "");
+  const keys = parts.map(key => key.trim()).filter(key => key !== "");
+  // A sign with no field after it is a malformed key, not an absent one:
+  // core's parser would drop it, and the refusal of unknown keys never see it.
+  const signOnly = keys.filter(key => key.replace(/^-/, "").trim() === "");
+  if (signOnly.length > 0) {
+    refuse(
+      "sort-invalid",
+      'A sort key needs a field name after its sign, such as "-date".',
+      { keys: signOnly }
+    );
+  }
+  return keys;
 }
 
 const COUNT_KEYS: ReadonlySet<string> = new Set([
@@ -274,13 +285,31 @@ function valueFits(op: PublicFilterOp, value: unknown): boolean {
       (op === "not_in" || value.length > 0)
     );
   }
-  return op === "exists" ? typeof value === "boolean" : isScalar(value);
+  if (op === "exists") return typeof value === "boolean";
+  // Ordering and text matching compare a value; true or false has no order
+  // and is no text, so only the equality operators take one.
+  if (ORDERED_OR_TEXT.has(op)) {
+    return (
+      typeof value === "string" ||
+      (typeof value === "number" && Number.isFinite(value))
+    );
+  }
+  return isScalar(value);
 }
+
+const ORDERED_OR_TEXT: ReadonlySet<PublicFilterOp> = new Set([
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "contains",
+]);
 
 /** What {@link valueFits} wants, in words, for the refusal. */
 function expectedValue(op: PublicFilterOp): string {
   if (op === "in") return "a list of at least one value";
   if (op === "not_in") return "a list of values";
+  if (ORDERED_OR_TEXT.has(op)) return "a number or text";
   return op === "exists" ? "true or false" : "one value";
 }
 
