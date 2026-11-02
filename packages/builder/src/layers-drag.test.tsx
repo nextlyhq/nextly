@@ -1,0 +1,525 @@
+// @vitest-environment jsdom
+
+/**
+ * Dragging a Layers row, through the panel and a real editor.
+ *
+ * jsdom lays nothing out, so every row is given the rectangle the tree would
+ * draw it at: 28px each, stacked from the top, in a tree 300px wide that
+ * reaches well past them. Where the rows go and whether they may is `layers-drop`'s, asserted
+ * there; what is only true HERE is the gesture — when a press becomes a drag,
+ * when one may start at all, what a release commits, how Escape ends one, and
+ * the wait before a collapsed row opens.
+ *
+ * @module layers-drag.test
+ */
+import {
+  clearBlocks,
+  registerBlocks,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import * as React from "react";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+import { useEditorState, type EditorState } from "./editor-state";
+import { LAYERS_OPEN_DELAY_MS } from "./layers-drag";
+import { LayersPanel } from "./layers-panel";
+
+const ROW = 28;
+/** Where a top-level row is pressed, across. */
+const X = 40;
+
+/** Pointer ids the panel has taken capture of, newest last. */
+let captured: number[] = [];
+let realRect: () => DOMRect;
+
+beforeAll(() => {
+  const element = window.Element.prototype as unknown as Record<
+    string,
+    unknown
+  >;
+  element.scrollIntoView = function scrollIntoView(): void {};
+  element.setPointerCapture = function setPointerCapture(id: number): void {
+    captured.push(id);
+  };
+  element.releasePointerCapture = function releasePointerCapture(): void {};
+  element.hasPointerCapture = function hasPointerCapture(): boolean {
+    return false;
+  };
+  (window as unknown as Record<string, unknown>).ResizeObserver =
+    class ResizeObserver {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    };
+  // A virtualizer told its viewport is zero pixels tall draws no rows.
+  Object.defineProperty(window.HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    value: 800,
+  });
+  Object.defineProperty(window.HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    value: 800,
+  });
+  // Each row where the tree would draw it, by its index; the tree and the
+  // element around it span the panel.
+  realRect = window.Element.prototype.getBoundingClientRect;
+  window.Element.prototype.getBoundingClientRect =
+    function getBoundingClientRect(this: Element): DOMRect {
+      const box = (top: number, height: number) =>
+        ({
+          x: 0,
+          y: top,
+          top,
+          left: 0,
+          width: 300,
+          right: 300,
+          height,
+          bottom: top + height,
+        }) as DOMRect;
+      const index = this.getAttribute("data-tree-index");
+      if (this.getAttribute("role") === "treeitem" && index !== null) {
+        return box(Number(index) * ROW, ROW);
+      }
+      if (
+        this.classList.contains("nx-layers-panel__tree") ||
+        this.classList.contains("nx-layers-panel__body")
+      ) {
+        // Reaching well past the rows at both ends, so no row sits in the
+        // bands near an edge where a held drag scrolls the tree. As tall as
+        // the laid-out height the panel reports, so nothing reads as scaled.
+        return box(-200, 800);
+      }
+      return box(0, 0);
+    };
+});
+
+afterAll(() => {
+  window.Element.prototype.getBoundingClientRect = realRect;
+});
+
+const base = {
+  version: 1,
+  description: "A block.",
+  example: { props: {} },
+  render: () => null,
+};
+
+beforeEach(() => {
+  registerBlocks(
+    [
+      { ...base, name: "core/heading", editor: { label: "Heading" } },
+      {
+        ...base,
+        name: "core/box",
+        editor: { label: "Box" },
+        slots: { children: {} },
+      },
+      {
+        ...base,
+        name: "t/card",
+        editor: { label: "Card" },
+        slots: { children: {} },
+        contentModel: (props: { link?: string }) =>
+          props.link
+            ? {
+                is: ["flow", "interactive"],
+                accepts: { without: ["interactive"] },
+              }
+            : { is: ["flow"] },
+      },
+      {
+        ...base,
+        name: "t/button",
+        editor: { label: "Button" },
+        contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
+      },
+      {
+        ...base,
+        name: "t/fixed-row",
+        editor: { label: "Fixed row" },
+        slots: {
+          items: { defaultBlock: [{ type: "core/heading" }], lock: "all" },
+        },
+      },
+    ] as never,
+    { source: "layers-drag-test" }
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  clearBlocks();
+  captured = [];
+  vi.useRealTimers();
+});
+
+function node(id: string, type: string, extra: Partial<BlockNode> = {}) {
+  return { id, type, version: 1, props: {}, ...extra } as BlockNode;
+}
+
+function page(nodes: BlockNode[]): BlockDocument {
+  return { formatVersion: 1, kind: "page", nodes } as BlockDocument;
+}
+
+let editorRef: EditorState | null = null;
+
+function Host({ document }: { document: BlockDocument }): React.JSX.Element {
+  const editor = useEditorState({ initialDocument: document });
+  editorRef = editor;
+  return <LayersPanel editor={editor} />;
+}
+
+function editor(): EditorState {
+  if (editorRef === null) throw new Error("no editor rendered");
+  return editorRef;
+}
+
+/** The page as ids: `parent>id` inside a container. */
+function structure(): string[] {
+  const out: string[] = [];
+  const walk = (nodes: readonly BlockNode[], parent?: string): void => {
+    for (const each of nodes) {
+      out.push(parent === undefined ? each.id : `${parent}>${each.id}`);
+      walk(Object.values(each.slots ?? {}).flat(), each.id);
+    }
+  };
+  walk(editor().document.nodes);
+  return out;
+}
+
+function body(container: HTMLElement): HTMLElement {
+  const found = container.querySelector<HTMLElement>(".nx-layers-panel__body");
+  if (found === null) throw new Error("no drag body rendered");
+  return found;
+}
+
+function label(id: string): Element {
+  const found = document.querySelector(`[data-nx-layer="${id}"]`);
+  if (found === null) throw new Error(`no row for ${id}`);
+  return found;
+}
+
+/** Press a row at a height inside it, at the top level's x. */
+function press(id: string, y: number, x = X): void {
+  fireEvent.pointerDown(label(id), {
+    button: 0,
+    pointerId: 1,
+    clientX: x,
+    clientY: y,
+  });
+}
+
+function moveTo(container: HTMLElement, x: number, y: number): void {
+  fireEvent.pointerMove(body(container), {
+    pointerId: 1,
+    clientX: x,
+    clientY: y,
+  });
+}
+
+function release(container: HTMLElement, x: number, y: number): void {
+  fireEvent.pointerUp(body(container), {
+    pointerId: 1,
+    clientX: x,
+    clientY: y,
+  });
+}
+
+function line(container: HTMLElement): HTMLElement | null {
+  return container.querySelector<HTMLElement>(".nx-layers-drop-line");
+}
+
+function threeHeadings() {
+  return render(
+    <Host
+      document={page([
+        node("a", "core/heading"),
+        node("b", "core/heading"),
+        node("c", "core/heading"),
+      ])}
+    />
+  );
+}
+
+describe("dragging a Layers row", () => {
+  it("leaves a press that travels less than the activation distance a click", () => {
+    const { container } = threeHeadings();
+    press("a", 10);
+    moveTo(container, X + 2, 12);
+    expect(captured).toEqual([]);
+    expect(body(container).hasAttribute("data-nx-dragging")).toBe(false);
+    release(container, X + 2, 12);
+    expect(structure()).toEqual(["a", "b", "c"]);
+  });
+
+  it("moves a row dragged down past another, as ONE undo step", () => {
+    const { container } = threeHeadings();
+    const before = editor().undoDepth;
+    press("a", 10);
+    moveTo(container, X, 20);
+    expect(captured).toEqual([1]);
+    // The lower half of the last row: after it.
+    moveTo(container, X, 3 * ROW - 4);
+    expect(line(container)).not.toBeNull();
+    release(container, X, 3 * ROW - 4);
+
+    expect(structure()).toEqual(["b", "c", "a"]);
+    expect(editor().undoDepth).toBe(before + 1);
+    act(() => editor().undo());
+    expect(structure()).toEqual(["a", "b", "c"]);
+  });
+
+  it("keeps the depth on a drag straight down past a container", () => {
+    const { container } = render(
+      <Host
+        document={page([
+          node("a", "core/heading"),
+          node("box", "core/box"),
+          node("c", "core/heading"),
+        ])}
+      />
+    );
+    press("a", 10);
+    moveTo(container, X, 20);
+    // The lower half of the box, at the x the press began: after the box at
+    // the top level, not inside it.
+    moveTo(container, X, 2 * ROW - 4);
+    release(container, X, 2 * ROW - 4);
+    expect(structure()).toEqual(["box", "a", "c"]);
+  });
+
+  it("nests a row dragged to the right inside the row above it", () => {
+    const { container } = render(
+      <Host
+        document={page([node("box", "core/box"), node("h", "core/heading")])}
+      />
+    );
+    press("h", ROW + 14);
+    moveTo(container, X, ROW + 8);
+    // One level right, over the top of its own row: the gap under the box.
+    moveTo(container, X + 20, ROW + 4);
+    release(container, X + 20, ROW + 4);
+    expect(structure()).toEqual(["box", "box>h"]);
+  });
+
+  it("refuses a drop the placement rule forbids, says why, and leaves the block", () => {
+    const { container } = render(
+      <Host
+        document={page([
+          node("card", "t/card", { props: { link: "/go" } }),
+          node("button", "t/button"),
+        ])}
+      />
+    );
+    const before = editor().undoDepth;
+    press("button", ROW + 14);
+    moveTo(container, X, ROW + 8);
+    moveTo(container, X + 20, ROW + 4);
+
+    const drawn = line(container);
+    expect(drawn?.hasAttribute("data-refused")).toBe(true);
+    const sentence = "A Button can't go inside this Card.";
+    expect(
+      container.querySelector(".nx-layers-drop-refusal")?.textContent
+    ).toContain(sentence);
+    expect(screen.getByRole("status").textContent).toContain(sentence);
+
+    release(container, X + 20, ROW + 4);
+    expect(structure()).toEqual(["card", "button"]);
+    expect(editor().undoDepth).toBe(before);
+  });
+
+  it("starts no drag while a search filters the rows", () => {
+    const { container } = threeHeadings();
+    fireEvent.change(screen.getByLabelText("Search layers"), {
+      target: { value: "heading" },
+    });
+    press("a", 10);
+    moveTo(container, X, 20);
+    moveTo(container, X, 3 * ROW - 4);
+    release(container, X, 3 * ROW - 4);
+    expect(captured).toEqual([]);
+    expect(structure()).toEqual(["a", "b", "c"]);
+  });
+
+  it("starts no drag on a locked block", () => {
+    const { container } = render(
+      <Host
+        document={page([
+          node("a", "core/heading", { locked: true }),
+          node("b", "core/heading"),
+        ])}
+      />
+    );
+    press("a", 10);
+    moveTo(container, X, 20);
+    moveTo(container, X, 2 * ROW - 4);
+    release(container, X, 2 * ROW - 4);
+    expect(captured).toEqual([]);
+    expect(structure()).toEqual(["a", "b"]);
+  });
+
+  it("starts no drag on a block its locked area holds in place", () => {
+    const { container } = render(
+      <Host
+        document={page([
+          node("row", "t/fixed-row", {
+            slots: { items: [node("fixed", "core/heading")] },
+          }),
+          node("loose", "core/heading"),
+        ])}
+      />
+    );
+    // Selecting it opens the row, so its own row is on screen to press.
+    act(() => editor().select("fixed"));
+    press("fixed", ROW + 14);
+    moveTo(container, X, ROW + 20);
+    moveTo(container, X, 3 * ROW - 4);
+    release(container, X, 3 * ROW - 4);
+    expect(captured).toEqual([]);
+    expect(structure()).toEqual(["row", "row>fixed", "loose"]);
+  });
+
+  it("refuses a drop into a locked area, in the lock's own words", () => {
+    const { container } = render(
+      <Host
+        document={page([
+          node("row", "t/fixed-row", {
+            slots: { items: [node("fixed", "core/heading")] },
+          }),
+          node("loose", "core/heading"),
+        ])}
+      />
+    );
+    act(() => editor().select("fixed"));
+    // The last row, dragged to the gap under the locked area's block, one
+    // level in: inside the area.
+    press("loose", 2 * ROW + 14);
+    moveTo(container, X, 2 * ROW + 8);
+    moveTo(container, X + 20, 2 * ROW + 4);
+    expect(line(container)?.hasAttribute("data-refused")).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain(
+      "This area of Fixed row is locked."
+    );
+    release(container, X + 20, 2 * ROW + 4);
+    expect(structure()).toEqual(["row", "row>fixed", "loose"]);
+  });
+
+  it("aims nowhere once the pointer leaves the tree, so a release there moves nothing", () => {
+    const { container } = threeHeadings();
+    press("a", 10);
+    moveTo(container, X, 20);
+    moveTo(container, X, 3 * ROW - 4);
+    expect(line(container)).not.toBeNull();
+    // Past the tree's right edge, at a height that is still a row's.
+    moveTo(container, 400, 3 * ROW - 4);
+    expect(line(container)).toBeNull();
+    release(container, 400, 3 * ROW - 4);
+    expect(structure()).toEqual(["a", "b", "c"]);
+  });
+
+  it("abandons the drag on Escape, so the release moves nothing", () => {
+    const { container } = threeHeadings();
+    press("a", 10);
+    moveTo(container, X, 20);
+    moveTo(container, X, 3 * ROW - 4);
+    expect(line(container)).not.toBeNull();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(line(container)).toBeNull();
+    release(container, X, 3 * ROW - 4);
+    expect(structure()).toEqual(["a", "b", "c"]);
+  });
+
+  it("opens a collapsed row the pointer rests on, after the delay and not before", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { container } = render(
+      <Host
+        document={page([
+          node("box", "core/box", {
+            slots: { children: [node("inner", "core/heading")] },
+          }),
+          node("h", "core/heading"),
+        ])}
+      />
+    );
+    const boxRow = () => label("box").closest('[role="treeitem"]');
+    expect(boxRow()?.getAttribute("aria-expanded")).toBe("false");
+
+    press("h", ROW + 14);
+    moveTo(container, X, ROW + 8);
+    moveTo(container, X, 10);
+    act(() => {
+      vi.advanceTimersByTime(LAYERS_OPEN_DELAY_MS - 1);
+    });
+    expect(boxRow()?.getAttribute("aria-expanded")).toBe("false");
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(boxRow()?.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("reads the aim again once a rested row opens, so the release lands at the line", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { container } = render(
+      <Host
+        document={page([
+          node("box", "core/box", {
+            slots: { children: [node("inner", "core/heading")] },
+          }),
+          node("h", "core/heading"),
+        ])}
+      />
+    );
+    press("h", ROW + 14);
+    moveTo(container, X, ROW + 8);
+    // The lower half of the closed box, one level in: inside it, at the end.
+    moveTo(container, X + 20, ROW - 4);
+    act(() => {
+      vi.advanceTimersByTime(LAYERS_OPEN_DELAY_MS);
+    });
+    // Open now, with its first block drawn under the same pointer: the gap is
+    // before that block. A frame passes with no pointer move at all.
+    await act(
+      () => new Promise<void>(done => requestAnimationFrame(() => done()))
+    );
+    release(container, X + 20, ROW - 4);
+    expect(structure()).toEqual(["box", "box>h", "box>inner"]);
+  });
+
+  it("scrolls the tree while the pointer rests near its bottom edge", async () => {
+    const { container } = threeHeadings();
+    const tree = container.querySelector<HTMLElement>(".nx-layers-panel__tree");
+    if (tree === null) throw new Error("no tree rendered");
+    press("a", 10);
+    moveTo(container, X, 20);
+    // Inside the band at the tree's bottom edge, and then held still.
+    moveTo(container, X, 595);
+    const before = tree.scrollTop;
+    await act(
+      () => new Promise<void>(done => requestAnimationFrame(() => done()))
+    );
+    await act(
+      () => new Promise<void>(done => requestAnimationFrame(() => done()))
+    );
+    expect(tree.scrollTop).toBeGreaterThan(before);
+    release(container, X, 595);
+  });
+});

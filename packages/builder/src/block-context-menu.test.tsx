@@ -37,7 +37,7 @@ import { BlockContextMenu } from "./block-context-menu";
 import { Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
-import { toolbarActions } from "./toolbar-actions";
+import { depthMoveActions, toolbarActions } from "./toolbar-actions";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 afterEach(() => {
@@ -56,6 +56,15 @@ function register() {
         example: { props: {} },
         editor: { label: "Leaf" },
         render: () => React.createElement("p", null, "leaf"),
+      },
+      {
+        name: "acme/box",
+        version: 1,
+        description: "A box.",
+        example: { props: {} },
+        editor: { label: "Box" },
+        slots: { children: {} },
+        render: () => React.createElement("div", null, "box"),
       },
     ] as never,
     { source: "block-context-menu-test" }
@@ -140,10 +149,16 @@ describe("the canvas's right-click menu", () => {
     const { container } = mount(editorSpy(pair(), "a"));
     fireEvent.contextMenu(blockElement(container));
 
-    // Taken from the same call the menu takes them from, rather than written
+    // Taken from the same calls the menu takes them from, rather than written
     // down here: a literal list keeps passing while a verb appears on the bar
     // and not in this menu, which is the exact divergence this test names.
-    const expected = toolbarActions(pair(), "a").map(action => action.label);
+    // The menu adds the two depth moves after Move down, which the bar leaves
+    // off.
+    const depth = depthMoveActions(pair(), "a").map(action => action.label);
+    const expected = toolbarActions(pair(), "a").flatMap(action =>
+      action.id === "move-down" ? [action.label, ...depth] : [action.label]
+    );
+    expect(depth).toEqual(["Move in", "Move out"]);
 
     // The control: an empty model would make the comparison vacuous.
     expect(expected.length).toBeGreaterThan(1);
@@ -375,5 +390,46 @@ describe("the canvas's right-click menu", () => {
     // either input — the reason has to be in the item's own content.
     expect(remove.textContent).toContain("This block is locked.");
     expect(remove.getAttribute("title")).toBeNull();
+  });
+
+  it("moves a block into the one above with Move in, as Alt+ArrowRight does", () => {
+    register();
+    const doc = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "box", type: "acme/box", version: 1, props: {} },
+        { id: "a", type: "acme/leaf", version: 1, props: {} },
+      ],
+    } as BlockDocument;
+    const editor = editorSpy(doc, "a");
+    const { container } = mount(editor);
+    fireEvent.contextMenu(blockElement(container));
+
+    const moveIn = screen.getByRole("menuitem", { name: "Move in" });
+    expect(moveIn.getAttribute("data-disabled")).toBeNull();
+    fireEvent.pointerUp(moveIn, { pointerType: "mouse", button: 0 });
+
+    // Through the editor's own `apply`, with the keyboard move's position.
+    expect(editor.apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "move",
+        id: "a",
+        to: { parentId: "box", slot: "children", index: 0 },
+      })
+    );
+  });
+
+  it("dims Move in and Move out where the block has nowhere to go", () => {
+    // The first block at the top level: nothing above to move into, and no
+    // container to move out of.
+    register();
+    const { container } = mount(editorSpy(pair(), "a"));
+    fireEvent.contextMenu(blockElement(container));
+    for (const name of ["Move in", "Move out"]) {
+      expect(
+        screen.getByRole("menuitem", { name }).getAttribute("data-disabled")
+      ).not.toBeNull();
+    }
   });
 });

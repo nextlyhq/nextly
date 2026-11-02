@@ -38,13 +38,10 @@ import type {
   ComponentLookup,
   NestingSource,
 } from "@nextlyhq/blocks-engine";
-import {
-  canPlaceIn,
-  findNode,
-  registryBlockSource,
-} from "@nextlyhq/blocks-engine";
+import { canPlaceIn, findNode } from "@nextlyhq/blocks-engine";
 
 import { placementWording, type RefusalWording } from "./drag-refusal";
+import { placementSources } from "./drop-targets";
 import type { OpPosition } from "./ops";
 
 /**
@@ -84,11 +81,10 @@ export function nestingRefusalForMove(
     parent === undefined
       ? { kind: "root" }
       : { kind: "slot", parentId: parent.id, slot: to.slot ?? "" },
-    {
+    placementSources({
       nesting,
-      definitions: registryBlockSource(),
-      ...(definitions === undefined ? {} : { components: definitions }),
-    }
+      ...(definitions === undefined ? {} : { definitions }),
+    })
   );
   // ALLOWED is null: the rule permits this placement. Whether it survives the
   // store's own limits is a later question with a different answer.

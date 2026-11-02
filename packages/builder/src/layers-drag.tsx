@@ -1,0 +1,587 @@
+"use client";
+
+/**
+ * Dragging a Layers row: the pointer, the line, and the reason a drop is
+ * refused.
+ *
+ * Decides nothing about WHERE a row lands — {@link layersDrop} does that, from
+ * measured rows, and judges it by the one placement rule and the editor's
+ * locks. This is the seam between that and a browser: it reads the rows the
+ * tree drew, follows one gesture, and commits the drop through the editor's
+ * own `move`, the op a keyboard move applies, as one undo step.
+ *
+ * ## Driven from the panel, not the tree
+ *
+ * The rows are the shared `TreeView`'s, and nothing here changes it. The
+ * gesture is read by delegation on an element around the tree: a press finds
+ * its row through `role="treeitem"` and the block through `data-nx-layer`, and
+ * the depth through `aria-level` — the attributes the tree already draws for
+ * assistive technology, so the drag reads the same structure a screen reader
+ * does.
+ *
+ * ## Drag is an enhancement, never the only way
+ *
+ * WCAG 2.2 SC 2.5.7 asks for a way to do what a drag does without dragging.
+ * The editor's move keys and the block menu's Move up, down, in and out do
+ * every move this does, judged by the same rule.
+ *
+ * ## The rows are measured on every move
+ *
+ * Unlike the canvas, which measures once, a Layers drag changes the list under
+ * the pointer: a collapsed row opens after a hover, and the tree draws only
+ * the rows near the visible window, so a scroll swaps rows in and out. The rows
+ * are therefore read again for each aim — a few dozen rectangles at most.
+ *
+ * @module layers-drag
+ */
+
+import {
+  findNode,
+  locateNode,
+  type BlockDocument,
+  type ComponentLookup,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
+import * as React from "react";
+
+import { autoscrollStep } from "./autoscroll";
+import { DEFAULT_ACTIVATION_PX } from "./canvas-drag";
+import { placementSources } from "./drop-targets";
+import type { EditorState } from "./editor-state";
+import type { Point, Rect } from "./geometry";
+import {
+  canvasContentPoint,
+  canvasContentRect,
+  containerEdges,
+} from "./geometry-dom";
+import { holdsBlocks } from "./keyboard-move";
+import {
+  LAYERS_DEPTH_PX,
+  layersDrop,
+  layersRefusalWording,
+  layersVerdictCache,
+  rowAt,
+  type LayersDropResult,
+  type LayersRow,
+  type LayersVerdictCache,
+} from "./layers-drop";
+import { lockBlockingMove } from "./locking";
+import { refusalAnnouncement } from "./move-refusal";
+
+/** How long the pointer rests on a collapsed row before it opens. */
+export const LAYERS_OPEN_DELAY_MS = 500;
+
+/**
+ * How far the tree indents each level, so the line starts where a row at that
+ * depth draws its name. The tree's own figure; drawn wrong it misplaces the
+ * line, never the drop, which {@link layersDrop} decides.
+ */
+const TREE_INDENT_PX = 12;
+/** Where a top-level row's name starts: the row's padding and its twisty. */
+const TREE_NAME_START_PX = 24;
+
+/** The class the tree's scrolling element carries, set by the panel. */
+export const LAYERS_TREE_CLASS = "nx-layers-panel__tree";
+
+export interface UseLayersDragOptions {
+  /** The editor whose document a drop moves a block in. */
+  editor: EditorState;
+  /** The nesting rules the placement is judged by. */
+  nesting: NestingSource;
+  /** The component definitions an instance is judged by, when there are any. */
+  definitions?: ComponentLookup;
+  /**
+   * Whether a press may start a drag. Off while a search filters the rows:
+   * a filtered list hides the neighbours a gap is between, so a line drawn
+   * there would name a place the author cannot see.
+   */
+  enabled: boolean;
+  /** Opens a collapsed row the pointer has rested on. */
+  onOpen: (id: string) => void;
+}
+
+/** What the panel draws while a drag is aimed somewhere. */
+export interface LayersDrawn {
+  readonly result: Exclude<LayersDropResult, { kind: "none" }>;
+  /** The line's height, measured from the top of the element the drag is on. */
+  readonly top: number;
+  /** The line's start, measured from the left of that element. */
+  readonly left: number;
+}
+
+export interface LayersDrag {
+  /** The handlers the element around the tree must carry. */
+  readonly handlers: {
+    readonly onPointerDown: React.PointerEventHandler<HTMLElement>;
+    readonly onPointerMove: React.PointerEventHandler<HTMLElement>;
+    readonly onPointerUp: React.PointerEventHandler<HTMLElement>;
+    readonly onPointerCancel: React.PointerEventHandler<HTMLElement>;
+  };
+  /** The block being dragged, or null when no drag is in flight. */
+  readonly draggingId: string | null;
+  /** What to draw, or null when the pointer aims nowhere. */
+  readonly drawn: LayersDrawn | null;
+  /** The live region's text: why the drop under the pointer is refused. */
+  readonly announcement: string;
+}
+
+/** What one gesture remembers, none of which renders. */
+interface Gesture {
+  readonly owner: number;
+  readonly id: string;
+  /** The element the handlers are on, which the rows are read inside. */
+  readonly host: HTMLElement;
+  readonly originX: number;
+  readonly originY: number;
+  /** Where depth zero begins: the press, less the pressed row's own depth. */
+  readonly left: number;
+  readonly document: BlockDocument;
+  readonly verdicts: LayersVerdictCache;
+  active: boolean;
+  clientX: number;
+  clientY: number;
+  result: LayersDropResult;
+  frame: number | null;
+  /** The collapsed row being rested on, and the timer that opens it. */
+  resting: { readonly id: string; readonly timer: number } | null;
+  /**
+   * Set when a row has opened under a pointer that may not move again: the
+   * rows below it have shifted, so the aim is read again on the next frame
+   * rather than leaving the line, and the release, on a list that has gone.
+   */
+  stale: boolean;
+}
+
+/** The block a row stands for, read from the label the panel draws in it. */
+function rowBlockId(row: Element): string | null {
+  return (
+    row.querySelector("[data-nx-layer]")?.getAttribute("data-nx-layer") ?? null
+  );
+}
+
+/**
+ * The rows on screen, in order, with where each block sits, measured in the
+ * coordinates of the element the drag is on — the space the line is drawn in,
+ * so a measured gap can be handed to `top` and lands on what was measured.
+ */
+function measureRows(
+  host: HTMLElement,
+  document: BlockDocument,
+  definitions: ComponentLookup | undefined
+): LayersRow[] {
+  const items = Array.from(
+    host.querySelectorAll<HTMLElement>('[role="treeitem"]')
+  ).sort(
+    (a, b) =>
+      Number(a.getAttribute("data-tree-index")) -
+      Number(b.getAttribute("data-tree-index"))
+  );
+  return items.flatMap(item => {
+    const id = rowBlockId(item);
+    if (id === null) return [];
+    const node = findNode(document.nodes, id);
+    const at = locateNode(document.nodes, id);
+    if (node === undefined || at === undefined) return [];
+    const box = canvasContentRect(item, host);
+    return [
+      {
+        id,
+        depth: Number(item.getAttribute("aria-level") ?? "1") - 1,
+        parentId: at.parent?.id,
+        slot: at.slot,
+        index: at.index,
+        expanded: item.getAttribute("aria-expanded") === "true",
+        canHoldChildren: holdsBlocks(node, definitions),
+        top: box.y,
+        height: box.height,
+      },
+    ];
+  });
+}
+
+/** Whether a point is inside a rectangle, edges included. */
+function inside(box: Rect, point: Point): boolean {
+  return (
+    point.x >= box.x &&
+    point.x <= box.x + box.width &&
+    point.y >= box.y &&
+    point.y <= box.y + box.height
+  );
+}
+
+/**
+ * Whether the editor's locks hold a block where it is, so no drag can move it.
+ *
+ * A block in an area locked "all" or to its content may not move at all, not
+ * even within the area; one locked to its order may still be reordered there.
+ * Asked of the editor's own lock question with a move out to the end of the
+ * page, which leaves only the area the block is in to answer.
+ */
+function heldInPlace(editor: EditorState, id: string): boolean {
+  const found = editor.lockRefusalFor([
+    { kind: "move", id, to: { index: editor.document.nodes.length } },
+  ]);
+  return found !== undefined && found.lock !== "insert";
+}
+
+/** The row a press landed in, inside `host`: its block and its depth. */
+function pressedRow(
+  target: EventTarget,
+  host: HTMLElement
+): { id: string; depth: number } | null {
+  if (!(target instanceof Element)) return null;
+  const row = target.closest('[role="treeitem"]');
+  if (row === null || !host.contains(row)) return null;
+  const id = rowBlockId(row);
+  if (id === null) return null;
+  return { id, depth: Number(row.getAttribute("aria-level") ?? "1") - 1 };
+}
+
+/**
+ * Whether a drag may pick the block up. A locked block, or one its area holds
+ * in place, is left alone: the press still selects it, as a click on a locked
+ * block does on the canvas.
+ */
+function movable(editor: EditorState, id: string): boolean {
+  return (
+    lockBlockingMove(editor.document, id) === undefined &&
+    !heldInPlace(editor, id)
+  );
+}
+
+/** A comparable spelling of what is drawn, so an unchanged aim draws nothing. */
+function drawnKey(drawn: LayersDrawn | null): string {
+  if (drawn === null) return "";
+  const { result } = drawn;
+  const why =
+    result.kind === "refused"
+      ? refusalAnnouncement(layersRefusalWording(result.refusal))
+      : "";
+  return [result.kind, drawn.top, drawn.left, why].join("\u0000");
+}
+
+/**
+ * Wire pointer events on the element around the Layers tree to the drop rule.
+ *
+ * Returns handlers to spread onto that element and what to draw over it.
+ */
+export function useLayersDrag({
+  editor,
+  nesting,
+  definitions,
+  enabled,
+  onOpen,
+}: UseLayersDragOptions): LayersDrag {
+  const gesture = React.useRef<Gesture | null>(null);
+  const [draggingId, setDraggingId] = React.useState<string | null>(null);
+  const [drawn, setDrawn] = React.useState<LayersDrawn | null>(null);
+  const [announcement, setAnnouncement] = React.useState("");
+
+  // Read at event time, so a handler bound on one render never acts on a
+  // document or an option a later render replaced.
+  const latest = React.useRef({
+    editor,
+    nesting,
+    definitions,
+    enabled,
+    onOpen,
+  });
+  latest.current = { editor, nesting, definitions, enabled, onOpen };
+
+  const stopResting = React.useCallback((drag: Gesture) => {
+    if (drag.resting !== null) window.clearTimeout(drag.resting.timer);
+    drag.resting = null;
+  }, []);
+
+  /** End the gesture and release what it holds, drawing nothing. */
+  const teardown = React.useCallback(() => {
+    const drag = gesture.current;
+    if (drag === null) return;
+    if (drag.frame !== null) cancelAnimationFrame(drag.frame);
+    stopResting(drag);
+    if (drag.host.hasPointerCapture(drag.owner)) {
+      drag.host.releasePointerCapture(drag.owner);
+    }
+    gesture.current = null;
+  }, [stopResting]);
+
+  const reset = React.useCallback(() => {
+    teardown();
+    setDraggingId(null);
+    setDrawn(null);
+  }, [teardown]);
+
+  /**
+   * Open a collapsed row the pointer rests on, after a short wait.
+   *
+   * Started once per row: a pointer moving within the same row keeps the
+   * timer it has rather than restarting it, or a hand that never holds
+   * perfectly still would never open anything.
+   */
+  const restOn = React.useCallback(
+    (drag: Gesture, row: LayersRow | undefined) => {
+      const opens =
+        row !== undefined &&
+        row.id !== drag.id &&
+        !row.expanded &&
+        row.canHoldChildren;
+      if (!opens) {
+        stopResting(drag);
+        return;
+      }
+      if (drag.resting?.id === row.id) return;
+      stopResting(drag);
+      const id = row.id;
+      drag.resting = {
+        id,
+        timer: window.setTimeout(() => {
+          if (gesture.current !== drag) return;
+          drag.resting = null;
+          drag.stale = true;
+          latest.current.onOpen(id);
+        }, LAYERS_OPEN_DELAY_MS),
+      };
+    },
+    [stopResting]
+  );
+
+  /** Re-aim the drag at where the pointer is now, and draw the answer. */
+  const aim = React.useCallback(
+    (drag: Gesture) => {
+      const { definitions: components, editor: current } = latest.current;
+      const tree = drag.host.querySelector(`.${LAYERS_TREE_CLASS}`);
+      const rows = measureRows(drag.host, drag.document, components);
+      const pointer = canvasContentPoint(drag.clientX, drag.clientY, drag.host);
+      // Outside the tree's own box is nowhere, even where a row the tree drew
+      // just beyond its scrolled edge would be under the pointer.
+      const within =
+        tree !== null && inside(canvasContentRect(tree, drag.host), pointer);
+      restOn(drag, within ? rowAt(rows, pointer.y) : undefined);
+      drag.result = within
+        ? layersDrop({
+            rows,
+            draggedId: drag.id,
+            pointer,
+            left: drag.left,
+            placement: {
+              document: drag.document,
+              sources: placementSources({
+                nesting: latest.current.nesting,
+                ...(components === undefined
+                  ? {}
+                  : { definitions: components }),
+              }),
+              lockRefusalFor: current.lockRefusalFor,
+              verdicts: drag.verdicts,
+            },
+          })
+        : { kind: "none" };
+
+      const result = drag.result;
+      const next: LayersDrawn | null =
+        result.kind === "none"
+          ? null
+          : {
+              result,
+              top: result.line.y,
+              left: TREE_NAME_START_PX + result.line.depth * TREE_INDENT_PX,
+            };
+      setDrawn(previous =>
+        drawnKey(previous) === drawnKey(next) ? previous : next
+      );
+      const sentence =
+        result.kind === "refused"
+          ? refusalAnnouncement(layersRefusalWording(result.refusal))
+          : "";
+      setAnnouncement(previous =>
+        previous === sentence ? previous : sentence
+      );
+    },
+    [restOn]
+  );
+
+  /**
+   * Scroll the tree while the pointer rests near its top or bottom edge, and
+   * keep aiming: the rows move under a pointer that does not.
+   */
+  const pump = React.useCallback(() => {
+    const drag = gesture.current;
+    if (drag === null || !drag.active) return;
+    if (drag.stale) {
+      drag.stale = false;
+      aim(drag);
+    }
+    const tree = drag.host.querySelector<HTMLElement>(`.${LAYERS_TREE_CLASS}`);
+    if (tree !== null) {
+      const edges = containerEdges(tree);
+      const step = autoscrollStep(drag.clientY, edges.top, edges.bottom);
+      if (step !== 0) {
+        const before = tree.scrollTop;
+        tree.scrollTop = before + step;
+        if (tree.scrollTop !== before) aim(drag);
+      }
+    }
+    drag.frame = requestAnimationFrame(pump);
+  }, [aim]);
+
+  const onPointerDown = React.useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      // The primary button only, and one gesture at a time.
+      if (event.button !== 0 || gesture.current?.active === true) return;
+      const { editor: current, enabled: allowed } = latest.current;
+      if (!allowed) return;
+      const pressed = pressedRow(event.target, event.currentTarget);
+      if (pressed === null || !movable(current, pressed.id)) return;
+      const { id, depth } = pressed;
+      gesture.current = {
+        owner: event.pointerId,
+        id,
+        host: event.currentTarget,
+        originX: event.clientX,
+        originY: event.clientY,
+        left:
+          canvasContentPoint(event.clientX, event.clientY, event.currentTarget)
+            .x -
+          depth * LAYERS_DEPTH_PX,
+        document: current.document,
+        verdicts: layersVerdictCache(),
+        active: false,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        result: { kind: "none" },
+        frame: null,
+        resting: null,
+        stale: false,
+      };
+    },
+    []
+  );
+
+  const onPointerMove = React.useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      const drag = gesture.current;
+      if (drag === null || drag.owner !== event.pointerId) return;
+      drag.clientX = event.clientX;
+      drag.clientY = event.clientY;
+      if (!drag.active) {
+        // The same threshold the canvas uses, so a click on a row stays a
+        // click and never commits a move to where the block already is.
+        const travelled = Math.hypot(
+          event.clientX - drag.originX,
+          event.clientY - drag.originY
+        );
+        if (travelled < DEFAULT_ACTIVATION_PX) return;
+        drag.active = true;
+        // Captured only now, for the reason the canvas gives: capturing a
+        // press that stays a click would retarget the click away from the row.
+        drag.host.setPointerCapture(drag.owner);
+        latest.current.editor.select(drag.id);
+        setDraggingId(drag.id);
+        drag.frame = requestAnimationFrame(pump);
+      }
+      aim(drag);
+    },
+    [aim, pump]
+  );
+
+  const onPointerUp = React.useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      const drag = gesture.current;
+      if (drag === null || drag.owner !== event.pointerId) return;
+      const result = drag.result;
+      // ONE op, through the editor's own move: one undo step, refused by its
+      // apply as a keyboard move would be if anything changed under the drag.
+      // A refused or empty aim moves nothing, so the block stays where it was.
+      if (drag.active && result.kind === "drop") {
+        latest.current.editor.apply({
+          kind: "move",
+          id: drag.id,
+          to: result.to,
+          ...(result.dropSlotIfEmpty === undefined
+            ? {}
+            : { dropSlotIfEmpty: result.dropSlotIfEmpty }),
+        });
+      }
+      reset();
+    },
+    [reset]
+  );
+
+  const onPointerCancel = React.useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (gesture.current?.owner !== event.pointerId) return;
+      reset();
+    },
+    [reset]
+  );
+
+  // A panel closed mid-drag must not leave a frame loop or a timer behind.
+  React.useEffect(() => teardown, [teardown]);
+
+  /*
+   * Escape abandons the drag. On the DOCUMENT and in the capture phase, as the
+   * canvas listens: the keyboard is wherever focus was when the drag began,
+   * and the editor's own Escape (clearing the selection) must not also run.
+   */
+  React.useEffect(() => {
+    if (draggingId === null) return;
+    const abandon = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      reset();
+    };
+    document.addEventListener("keydown", abandon, true);
+    return () => {
+      document.removeEventListener("keydown", abandon, true);
+    };
+  }, [draggingId, reset]);
+
+  return {
+    handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel },
+    draggingId,
+    drawn,
+    announcement,
+  };
+}
+
+/**
+ * The line where a dragged row would land, and why it cannot when it cannot.
+ *
+ * Drawn over the tree by the panel, in the coordinates of the element the
+ * drag is on. Hidden from assistive technology: the reason is spoken through
+ * the panel's live region, and a pointer gesture describes itself to anyone
+ * who can see the line.
+ */
+export function LayersDropOverlay({
+  drawn,
+}: {
+  drawn: LayersDrawn | null;
+}): React.JSX.Element | null {
+  if (drawn === null) return null;
+  const { result } = drawn;
+  const refused = result.kind === "refused";
+  const wording = refused ? layersRefusalWording(result.refusal) : null;
+  return (
+    <>
+      <div
+        className="nx-layers-drop-line"
+        data-refused={refused ? "" : undefined}
+        style={{ top: drawn.top, left: drawn.left }}
+        aria-hidden="true"
+      />
+      {wording === null ? null : (
+        <div
+          className="nx-drop-refusal nx-layers-drop-refusal"
+          style={{ top: drawn.top + 6, left: drawn.left }}
+          aria-hidden="true"
+        >
+          <span className="nx-drop-refusal__why">{wording.headline}</span>
+          {wording.remedy === null ? null : (
+            <span className="nx-drop-refusal__takes">{wording.remedy}</span>
+          )}
+        </div>
+      )}
+    </>
+  );
+}

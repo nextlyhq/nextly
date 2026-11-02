@@ -1832,6 +1832,74 @@
   min-height: 0;
 }
 
+/*
+ * The element a row drag is read on: the tree, and the line drawn over it.
+ *
+ * Positioned so the line and the refusal are placed in its own coordinates,
+ * and a column with `min-height: 0` for the reason the panel is one — without
+ * it the tree inside grows the panel rather than scrolling.
+ */
+.nx-layers-panel__body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/*
+ * The cursor says a row is held, over the gaps and over the rows alike: each
+ * row declares its own pointer cursor, so the drag has to reach them.
+ */
+.nx-layers-panel__body[data-nx-dragging],
+.nx-layers-panel__body[data-nx-dragging] [role="treeitem"] {
+  cursor: grabbing;
+}
+
+/*
+ * Where a dragged row would land: a line at the gap, starting where a row at
+ * that depth draws its name, so its indent says how deep the block will sit.
+ *
+ * Centred on the gap rather than hanging below it, and never a target itself,
+ * as the canvas line is not. Red, in the danger token the canvas refusal uses,
+ * when the placement rule or a lock refuses the drop there.
+ */
+.nx-layers-drop-line {
+  position: absolute;
+  right: 0.25rem;
+  z-index: 2;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--nx-primary);
+  transform: translateY(-1px);
+  pointer-events: none;
+}
+
+/* The canvas line's terminal, so the two read as one kind of mark. */
+.nx-layers-drop-line::before {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: inherit;
+}
+
+.nx-layers-drop-line[data-refused] {
+  background: var(--nx-destructive);
+}
+
+/*
+ * The reason a drop is refused, under the line by the row it names. The
+ * canvas refusal's look; only its extent is the panel's.
+ */
+.nx-layers-drop-refusal {
+  right: 0.25rem;
+  max-width: none;
+}
+
 .nx-layers-panel__note {
   margin: 0;
   padding: 0.5rem 0.25rem;

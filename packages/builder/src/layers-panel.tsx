@@ -50,10 +50,22 @@
  * sighted author reads it because it sits under the tree; a screen-reader user
  * hears it on entering the tree, which is the moment the question arises.
  *
+ * ## Rows can be dragged, through the same rule as everything else
+ *
+ * A row dragged by the pointer moves its block, and dragged to the right nests
+ * it; `layers-drag` follows the gesture and `layers-drop` decides where it
+ * lands and whether the placement rule and the locks allow it. Off while a
+ * search filters the list, whose hidden neighbours a drop would land between.
+ *
  * @module layers-panel
  */
 
-import { allBlocks } from "@nextlyhq/blocks-engine";
+import {
+  allBlocks,
+  registryNestingSource,
+  type ComponentLookup,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
 import {
   Input,
   TreeView,
@@ -69,6 +81,11 @@ import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
 import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
+import {
+  LAYERS_TREE_CLASS,
+  LayersDropOverlay,
+  useLayersDrag,
+} from "./layers-drag";
 
 export interface LayersPanelProps {
   /** The editor whose document this shows and whose selection it drives. */
@@ -88,6 +105,16 @@ export interface LayersPanelProps {
    * direction for a claim that cannot be checked from here.
    */
   moveHints?: boolean;
+  /**
+   * The nesting rules a dragged row is judged by. Defaults to the registry's,
+   * which is what the keyboard moves and the canvas default to.
+   */
+  nesting?: NestingSource;
+  /**
+   * The component definitions the canvas draws instances from, so a dragged
+   * instance is judged by what it draws, as its canvas drop is.
+   */
+  definitions?: ComponentLookup;
 }
 
 /** One badge: an icon nobody has to see, and a word every reader gets. */
@@ -197,9 +224,30 @@ const DIRECTION_LABEL: Readonly<Record<MoveDirection, string>> = {
 export function LayersPanel({
   editor,
   moveHints = false,
+  nesting,
+  definitions,
 }: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
+
+  // Memoised on what was supplied, so the drag is not handed a new rule
+  // source on every render.
+  const rules = React.useMemo(
+    () => nesting ?? registryNestingSource(),
+    [nesting]
+  );
+  const drag = useLayersDrag({
+    editor,
+    nesting: rules,
+    ...(definitions === undefined ? {} : { definitions }),
+    enabled: query.trim() === "",
+    // A collapsed row rested on during a drag opens into the author's own set,
+    // as a twisty click would, so it stays open after the drag ends.
+    onOpen: id =>
+      setOpened(previous =>
+        previous.includes(id) ? previous : [...previous, id]
+      ),
+  });
 
   // Recomputed each render rather than memoised. The tree is only valid against
   // the document it was read from, and every edit replaces that document — a
@@ -318,33 +366,50 @@ export function LayersPanel({
       ) : nodes.length === 0 ? (
         <p className="nx-layers-panel__note">No blocks match “{query}”.</p>
       ) : (
-        <TreeView
-          className="nx-layers-panel__tree"
-          aria-label="Layers"
-          nodes={nodes}
-          selectedId={editor.selectedId}
-          // The panel shows what the canvas shows. Passing only the primary
-          // would leave two surfaces disagreeing about what is selected, on a
-          // screen where a delete acts on all of it.
-          selectedIds={editor.selection.ids}
-          // The tree's three gestures ARE the editor's three gestures: it
-          // reports which one a row's modifiers meant and the store's own rules
-          // decide what that does. A panel translating them itself would be a
-          // second grammar to keep in step.
-          onSelectedChange={editor.select}
-          expandedIds={expandedIds}
-          // The tree reports the whole next set, which during a search includes
-          // branches only the search opened. Those are dropped before storing,
-          // so clearing the query collapses them again instead of baking a
-          // temporary reveal into what the author has open.
-          onExpandedChange={next =>
-            setOpened(next.filter(id => !search.expand.includes(id)))
-          }
-          // The hint is the tree's DESCRIPTION, so it is announced on entering
-          // the tree rather than only readable by someone who can see it below.
-          aria-describedby={hints.length === 0 ? undefined : hintId}
-        />
+        <div
+          className="nx-layers-panel__body"
+          data-nx-dragging={drag.draggingId === null ? undefined : ""}
+          {...drag.handlers}
+        >
+          <TreeView
+            className={LAYERS_TREE_CLASS}
+            aria-label="Layers"
+            nodes={nodes}
+            selectedId={editor.selectedId}
+            // The panel shows what the canvas shows. Passing only the primary
+            // would leave two surfaces disagreeing about what is selected, on a
+            // screen where a delete acts on all of it.
+            selectedIds={editor.selection.ids}
+            // The tree's three gestures ARE the editor's three gestures: it
+            // reports which one a row's modifiers meant and the store's own rules
+            // decide what that does. A panel translating them itself would be a
+            // second grammar to keep in step.
+            onSelectedChange={editor.select}
+            expandedIds={expandedIds}
+            // The tree reports the whole next set, which during a search includes
+            // branches only the search opened. Those are dropped before storing,
+            // so clearing the query collapses them again instead of baking a
+            // temporary reveal into what the author has open.
+            onExpandedChange={next =>
+              setOpened(next.filter(id => !search.expand.includes(id)))
+            }
+            // The hint is the tree's DESCRIPTION, so it is announced on entering
+            // the tree rather than only readable by someone who can see it below.
+            aria-describedby={hints.length === 0 ? undefined : hintId}
+          />
+          <LayersDropOverlay drawn={drag.drawn} />
+        </div>
       )}
+
+      {/*
+        Why a drop under the pointer is refused, spoken. Present from the first
+        render, since a region that appears with its first message is often not
+        announced at all. A `div` rather than the editor's `p` region, which is
+        the keyboard moves' own and sits elsewhere in the editor.
+      */}
+      <div role="status" aria-live="polite" className="nx-sr-only">
+        {drag.announcement}
+      </div>
 
       {/*
         Outside the empty and no-match branches deliberately: the bindings are
