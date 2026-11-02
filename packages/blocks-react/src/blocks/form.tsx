@@ -365,8 +365,11 @@ export function renderForm({
 export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
   name: "core/form",
   version: 1,
-  description:
-    "A plain HTML form that posts to a URL you choose. Stores nothing and ships no JavaScript; the form-builder plugin is the one that collects submissions.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A plain HTML form that posts
+  // to a URL you choose. Stores nothing and ships no JavaScript; the form-
+  // builder plugin is the one that collects submissions.
+  description: "A form that sends what visitors type to an address you choose.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.

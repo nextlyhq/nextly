@@ -211,7 +211,7 @@ test.describe("the inspector", () => {
 
     const card = page.locator("[data-block-card]");
     await expect(card.getByRole("heading", { level: 2 })).toHaveText("Heading");
-    await expect(card).toContainText("A section title.");
+    await expect(card).toContainText("A title for a page or section.");
     await expect(card.locator(".nx-block-icon")).toBeVisible();
     await expect(
       card.getByRole("button", { name: "Actions for Heading" })

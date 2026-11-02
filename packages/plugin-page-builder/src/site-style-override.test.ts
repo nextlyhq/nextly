@@ -92,6 +92,18 @@ describe("only what differs from the site's own defaults is stored", () => {
     expect(override.tokens[0]?.unreadExtension).toEqual({ future: "keep-me" });
   });
 
+  it("stores a default the author only gave a plain label", () => {
+    // A label is the one field an author changes on a code-supplied variable
+    // without touching its value. Compared away, the relabel is filtered out
+    // of the payload and the save reports success while storing nothing.
+    const relabelled = { ...ink, label: "Ink" };
+    const override = tokenOverrideOf(DEFAULTS, {
+      ...DEFAULTS,
+      tokens: [relabelled, brand],
+    });
+    expect(override.tokens).toEqual([relabelled]);
+  });
+
   it("stores a token the config never supplied", () => {
     const edited = [
       ...merged().tokens,

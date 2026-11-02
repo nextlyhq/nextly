@@ -36,12 +36,18 @@ import {
   isPlainRecord,
   compileSiteSheet,
   dtcgToTokens,
+  modeFilesToTokens,
+  resolverToTokens,
+  tokensToFigma,
+  tokensToResolver,
   tokenCustomProperty,
   tokenIdentity,
   tokensToDtcg,
   type SiteToken,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
+
+import { labelClashes } from "./tokens-studio";
 
 /** What an import did, or why it could not begin. */
 export type ImportResult =
@@ -124,6 +130,318 @@ export function importDtcg(text: string, into: SiteTokenSet): ImportResult {
     // counting the file's entries would claim an arrival that did not happen.
     imported: merged.landed,
     skipped: [...skipped, ...merged.refused],
+  };
+}
+
+/** One chosen file, as text. */
+export interface ImportFile {
+  readonly name: string;
+  readonly text: string;
+}
+
+/** A token the file and the site both hold, with values that clash. */
+export interface ImportConflict {
+  readonly identity: string;
+  readonly mine: SiteToken;
+  readonly imported: SiteToken;
+  /** Each field the two state differently, in words, for the preview. */
+  readonly fields: readonly ConflictField[];
+}
+
+/** One field a conflict differs in: the site's value and the file's. */
+export interface ConflictField {
+  readonly field: string;
+  readonly mine: string;
+  readonly imported: string;
+}
+
+/** What an import WOULD do, shown to the author before anything changes. */
+export type ImportPlan =
+  | {
+      readonly ok: true;
+      /** Tokens the site does not have. */
+      readonly added: readonly SiteToken[];
+      /**
+       * Tokens the file fills in without contradicting the site: a dark value,
+       * a label or a description the site's token lacks.
+       */
+      readonly changed: readonly SiteToken[];
+      readonly unchanged: readonly SiteToken[];
+      /** Tokens whose values clash, each settled by the author: keep or use. */
+      readonly conflicts: readonly ImportConflict[];
+      /**
+       * Names the import would give to more than one variable. Applying such
+       * an import is refused, so the preview says which before it is tried.
+       */
+      readonly labelClashes: readonly string[];
+      /** What the files held that this site cannot, in the engine's words. */
+      readonly skipped: readonly string[];
+      /** Every token read, in file order, for {@link applyImport}. */
+      readonly incoming: readonly SiteToken[];
+    }
+  | {
+      readonly ok: false;
+      readonly error: string;
+      readonly skipped: readonly string[];
+    };
+
+/** The author's answer to one conflict. */
+export type ConflictChoice = "keep" | "use";
+
+/**
+ * The files an author chose, read and compared with the site, changing nothing.
+ *
+ * Three shapes are read: a theme (resolver) file with the token files it
+ * names, one file per mode as Figma exports them, or a single token file.
+ * Aliases are resolved by the engine as each file is read.
+ */
+export function planImport(
+  files: readonly ImportFile[],
+  into: SiteTokenSet
+): ImportPlan {
+  const parsed: { name: string; document: unknown }[] = [];
+  for (const file of files) {
+    try {
+      parsed.push({
+        name: file.name,
+        document: JSON.parse(file.text) as unknown,
+      });
+    } catch {
+      return {
+        ok: false,
+        error: `${file.name} is not valid JSON, so nothing was imported. It may be truncated or may not be a token file at all.`,
+        skipped: [],
+      };
+    }
+  }
+  let read: ReturnType<typeof dtcgToTokens>;
+  try {
+    read = readChosen(parsed);
+  } catch {
+    // The reader walks the file recursively; see `importDtcg`.
+    return {
+      ok: false,
+      error:
+        "That file is nested too deeply to read. A design-token file groups its tokens a few levels deep; this one goes thousands.",
+      skipped: [],
+    };
+  }
+  const skipped = read.issues.map(entry => entry.message);
+  if (read.tokens.length === 0) {
+    return {
+      ok: false,
+      error:
+        "No variables in those files could be used by this site. Nothing was changed.",
+      skipped,
+    };
+  }
+  // One entry per identity, chosen once, so the preview shows exactly what
+  // applying will merge: the last of two entries sharing an identity, with
+  // the first reported.
+  const dropped: string[] = [];
+  const unique = [
+    ...oneEach(withStoredIds(read.tokens, into), dropped).values(),
+  ];
+  return {
+    ok: true,
+    skipped: [...skipped, ...dropped],
+    ...planned(unique, into),
+  };
+}
+
+/**
+ * The file's tokens sorted against the site, with the names the import would
+ * give to more than one variable if every conflict took the file's side.
+ */
+function planned(
+  incoming: readonly SiteToken[],
+  into: SiteTokenSet
+): ReturnType<typeof sortAgainst> & { labelClashes: string[] } {
+  return {
+    ...sortAgainst(incoming, into),
+    labelClashes: newLabelClashes(into, mergeById(into, incoming).tokens),
+  };
+}
+
+/**
+ * Names shown for more than one variable once an import is merged, other than
+ * those the site already shared before it: a name a site already uses twice
+ * is not the import's doing.
+ */
+function newLabelClashes(before: SiteTokenSet, after: SiteTokenSet): string[] {
+  const had = new Set(labelClashes(before).map(name => name.toLowerCase()));
+  return labelClashes(after).filter(name => !had.has(name.toLowerCase()));
+}
+
+/** Which reader the chosen files call for. */
+function readChosen(
+  parsed: readonly { name: string; document: unknown }[]
+): ReturnType<typeof dtcgToTokens> {
+  const theme = parsed.find(file => isThemeFile(file.document));
+  if (theme !== undefined) {
+    const others = new Map(
+      parsed
+        .filter(file => file !== theme)
+        .map(file => [file.name, file.document])
+    );
+    return resolverToTokens(theme.document, others);
+  }
+  if (parsed.length > 1) return modeFilesToTokens(parsed);
+  return dtcgToTokens(parsed[0]?.document);
+}
+
+/** A DTCG Resolver document: it resolves sets and modifiers in an order. */
+function isThemeFile(document: unknown): boolean {
+  return (
+    isPlainRecord(document) &&
+    typeof document.version === "string" &&
+    Array.isArray(document.resolutionOrder)
+  );
+}
+
+/** The file's tokens sorted by how they meet the site's, matched on identity. */
+function sortAgainst(
+  incoming: readonly SiteToken[],
+  into: SiteTokenSet
+): Pick<
+  Extract<ImportPlan, { ok: true }>,
+  "added" | "changed" | "unchanged" | "conflicts" | "incoming"
+> {
+  const mine = new Map(into.tokens.map(token => [tokenIdentity(token), token]));
+  const added: SiteToken[] = [];
+  const changed: SiteToken[] = [];
+  const unchanged: SiteToken[] = [];
+  const conflicts: ImportConflict[] = [];
+  for (const imported of incoming) {
+    const identity = tokenIdentity(imported);
+    const held = mine.get(identity);
+    if (held === undefined) {
+      added.push(imported);
+      continue;
+    }
+    const fields = conflictFields(held, imported);
+    if (fields.length > 0) {
+      conflicts.push({ identity, mine: held, imported, fields });
+    } else if (fillsIn(held, imported)) changed.push(imported);
+    else unchanged.push(imported);
+  }
+  return { added, changed, unchanged, conflicts, incoming };
+}
+
+/**
+ * The file's tokens, each one that states no id given the id of the site's
+ * variable it names.
+ *
+ * A file from another tool, Figma's above all, carries names only. A variable
+ * renamed here keeps its old name as its id, so matching that file by identity
+ * would read the renamed variable as new and then refuse it for taking the
+ * name. A token the file gives no id is matched by name instead, unless its
+ * name is itself another variable's identity, which a stated identity wins.
+ */
+function withStoredIds(
+  incoming: readonly SiteToken[],
+  into: SiteTokenSet
+): SiteToken[] {
+  const identities = new Set(into.tokens.map(tokenIdentity));
+  const byName = new Map(into.tokens.map(token => [token.name, token]));
+  return incoming.map(token => {
+    if (token.id !== undefined || identities.has(token.name)) return token;
+    const held = byName.get(token.name);
+    return held?.id === undefined ? token : { ...token, id: held.id };
+  });
+}
+
+/** Whether both sides state something and the statements differ. */
+function differs(
+  mine: string | undefined,
+  theirs: string | undefined
+): boolean {
+  return mine !== undefined && theirs !== undefined && mine !== theirs;
+}
+
+/**
+ * Each field the site's variable and the file's state differently. Kind, code
+ * name and light value always count; dark value, name and description count
+ * only where both state one, since one side leaving a field unset is the file
+ * filling it in rather than contradicting it.
+ */
+function conflictFields(mine: SiteToken, imported: SiteToken): ConflictField[] {
+  const fields: ConflictField[] = [];
+  const note = (field: string, a: string | undefined, b: string | undefined) =>
+    fields.push({ field, mine: a ?? "none", imported: b ?? "none" });
+  if (mine.kind !== imported.kind) note("Kind", mine.kind, imported.kind);
+  if (mine.name !== imported.name) note("Code name", mine.name, imported.name);
+  if (mine.values.light !== imported.values.light) {
+    note("Light", mine.values.light, imported.values.light);
+  }
+  if (differs(mine.values.dark, imported.values.dark)) {
+    note("Dark", mine.values.dark, imported.values.dark);
+  }
+  if (differs(mine.label, imported.label)) {
+    note("Name", mine.label, imported.label);
+  }
+  if (differs(mine.description, imported.description)) {
+    note("Description", mine.description, imported.description);
+  }
+  return fields;
+}
+
+/** Whether the file states something the site's token leaves unset. */
+function fillsIn(mine: SiteToken, imported: SiteToken): boolean {
+  return (
+    (mine.values.dark === undefined && imported.values.dark !== undefined) ||
+    (mine.label === undefined && imported.label !== undefined) ||
+    (mine.description === undefined && imported.description !== undefined)
+  );
+}
+
+/**
+ * A planned import applied to the site's tokens as they are NOW.
+ *
+ * A conflict the author chose to keep is left as the site has it; every other
+ * token from the files is merged in, an unanswered conflict taking the file's
+ * side. `into` is asked for at apply time rather than taken from the plan,
+ * because the author may have edited a variable while the preview was open.
+ */
+export function applyImport(
+  plan: Extract<ImportPlan, { ok: true }>,
+  into: SiteTokenSet,
+  choices: ReadonlyMap<string, ConflictChoice>
+): ImportResult {
+  const kept = new Set(
+    plan.conflicts
+      .filter(conflict => choices.get(conflict.identity) === "keep")
+      .map(conflict => conflict.identity)
+  );
+  const taken = plan.incoming.filter(token => !kept.has(tokenIdentity(token)));
+  if (taken.length === 0) {
+    return {
+      ok: false,
+      error:
+        "Every change was set to keep this site's own values, so nothing was changed.",
+      skipped: plan.skipped,
+    };
+  }
+  const merged = mergeById(into, taken);
+  // Refused rather than saved: two variables under one name cannot be told
+  // apart in the panel, and the site's own edits are held to the same rule.
+  const clashing = newLabelClashes(into, merged.tokens);
+  if (clashing.length > 0) {
+    return {
+      ok: false,
+      error: `This import would give two variables the same name: ${clashing
+        .map(name => `"${name}"`)
+        .join(
+          ", "
+        )}. Keep this site's version of one of them, or rename one first.`,
+      skipped: plan.skipped,
+    };
+  }
+  return {
+    ok: true,
+    tokens: merged.tokens,
+    imported: merged.landed,
+    skipped: [...plan.skipped, ...merged.refused],
   };
 }
 
@@ -541,6 +859,52 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
     mime: "application/json",
     skipped,
   };
+}
+
+/** The file name a DTCG export is saved under, and its theme file's. */
+const DTCG_FILE = "variables.tokens.json";
+const THEME_FILE = "variables.resolver.json";
+
+/**
+ * The DTCG export: the token file, and beside it a theme file when any
+ * variable has a dark value, so a tool reading the standard finds the modes.
+ */
+export function exportDtcgWithTheme(tokens: SiteTokenSet): ExportResult[] {
+  const main = { ...exportDtcg(tokens), filename: DTCG_FILE };
+  if (
+    main.text === "" ||
+    !tokens.tokens.some(token => token.values.dark !== undefined)
+  ) {
+    return [main];
+  }
+  const theme = tokensToResolver(tokens, DTCG_FILE);
+  return [
+    main,
+    {
+      text: `${JSON.stringify(theme.resolver, null, 2)}\n`,
+      filename: THEME_FILE,
+      mime: "application/json",
+      skipped: theme.issues.map(entry => entry.message),
+    },
+  ];
+}
+
+/**
+ * The For Figma export: one file per mode, each holding every variable, as
+ * Figma's variables import asks. What Figma cannot hold is named once, on the
+ * light file.
+ */
+export function exportForFigma(tokens: SiteTokenSet): ExportResult[] {
+  return (["light", "dark"] as const).map(mode => {
+    const made = tokensToFigma(tokens, mode);
+    const empty = Object.keys(made.document).length === 0;
+    return {
+      text: empty ? "" : `${JSON.stringify(made.document, null, 2)}\n`,
+      filename: `${mode}.tokens.json`,
+      mime: "application/json",
+      skipped: mode === "light" ? made.issues.map(entry => entry.message) : [],
+    };
+  });
 }
 
 /**

@@ -3249,17 +3249,22 @@ describe("the site's dark-mode strategy on the canvas root", () => {
     );
   }
 
-  it("states `media` for a site that darkens with the system", () => {
-    expect(
-      strategyOf({ breakpoints, tokens: { tokens: [], darkMode: "media" } })
-    ).toBe("media");
-  });
-
-  it("states `attribute` for a site that names no strategy", () => {
-    expect(strategyOf({ breakpoints, tokens: { tokens: [] } })).toBe(
-      "attribute"
-    );
-    expect(strategyOf({ breakpoints })).toBe("attribute");
+  it("marks a dark ground whatever the deprecated darkMode says", () => {
+    // The site sheet applies dark values with the device whatever a stored
+    // `darkMode` names, so the canvas marks the dark ground the same way.
+    for (const darkMode of ["media", "attribute", undefined] as const) {
+      expect(
+        strategyOf({
+          breakpoints,
+          tokens: {
+            tokens: [],
+            ...(darkMode === undefined ? {} : { darkMode }),
+          },
+        }),
+        String(darkMode)
+      ).toBe("");
+    }
+    expect(strategyOf({ breakpoints })).toBe("");
   });
 
   it("states nothing when the host serves no site sheet", () => {

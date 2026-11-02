@@ -110,8 +110,11 @@ export const CARD_BASE_STYLES = {
 export const card: BlockDefinition<ContainerProps, PageContext> = defineBlock({
   name: CARD_BLOCK,
   version: 1,
-  description:
-    "A rounded container that clips its contents, so an image sitting at its top edge follows the corner instead of overhanging it.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A rounded container that
+  // clips its contents, so an image sitting at its top edge follows the corner
+  // instead of overhanging it.
+  description: "A rounded panel for an image and some text.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.

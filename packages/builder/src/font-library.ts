@@ -259,7 +259,7 @@ function needsAttention(reading: StackReading): boolean {
 /** What to say about one reading, or nothing when it is working as written. */
 function noteFor(reading: StackReading, value: string): string | undefined {
   if (reading.kind === "invalid") {
-    return `"${value}" is not a font-family value a browser will read, so this token applies nothing.`;
+    return `"${value}" is not a font-family value a browser will read, so this variable applies nothing.`;
   }
   if (reading.kind === "keyword") return undefined;
   const first = reading.firstChoice;
@@ -270,7 +270,7 @@ function noteFor(reading: StackReading, value: string): string | undefined {
   const consequence = reading.hasFallback
     ? "Readers without it installed see the next family in the list instead."
     : "Readers without it installed see the browser's default typeface instead.";
-  return `${first.family} is the typeface this token asks for first, and this site provides no font file for it. ${consequence}`;
+  return `${first.family} is the typeface this variable asks for first, and this site provides no font file for it. ${consequence}`;
 }
 
 /**
@@ -330,10 +330,10 @@ export function tokenSummary(
   attention: readonly FontTokenRow[]
 ): string {
   if (rows.length === 0) {
-    return "This site has no typeface tokens yet. Design’s Variables tab creates them.";
+    return "This site has no typeface variables yet. Design’s Variables tab creates them.";
   }
   if (attention.length === 0) {
-    const noun = rows.length === 1 ? "token" : "tokens";
+    const noun = rows.length === 1 ? "variable" : "variables";
     // Deliberately not "each asking first for a family this site provides".
     // A `var()` stack has an unknown first choice and a lone `inherit` has no
     // family at all, so that sentence would claim something checked about rows
@@ -371,5 +371,5 @@ export function tokenSummary(
       `${unreadable} hold a value no browser will read, so they apply nothing`
     );
   }
-  return `Of ${rows.length} typeface tokens, ${parts.join("; ")}.`;
+  return `Of ${rows.length} typeface variables, ${parts.join("; ")}.`;
 }

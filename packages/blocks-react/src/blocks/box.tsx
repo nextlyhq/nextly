@@ -30,8 +30,11 @@ import type { ContainerProps } from "./container";
 export const box: BlockDefinition<ContainerProps, PageContext> = defineBlock({
   name: "core/box",
   version: 1,
-  description:
-    "A generic container. Full width with no padding of its own; use display to make it a flex row, a stack, or a grid.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A generic container. Full
+  // width with no padding of its own; use display to make it a flex row, a
+  // stack, or a grid.
+  description: "A plain container for grouping blocks.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.
