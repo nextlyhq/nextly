@@ -45,11 +45,26 @@ import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
 import { useBulkMutation } from "../useBulkMutation";
 
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
+
 /**
  * Default table parameters for Single queries
  */
 const defaultParams: TableParams = {
   pagination: { page: 0, pageSize: 10 },
+  sorting: [],
+  filters: {},
+};
+
+/**
+ * The Singles list the sidebar asks for, and the browser tab's title with it.
+ *
+ * One declaration, so one cache entry: the sidebar loads the list as it draws
+ * its navigation, and the title reads each Single's label from that same entry
+ * rather than requesting the Single again. Mirrors `NAV_COLLECTIONS_PARAMS`.
+ */
+export const NAV_SINGLES_PARAMS: TableParams = {
+  pagination: { page: 0, pageSize: 100 },
   sorting: [],
   filters: {},
 };
@@ -726,6 +741,12 @@ export function useUpdateSingleDocument(
       void queryClient.invalidateQueries({
         queryKey: singleDocumentKeys.all(),
       });
+    },
+    // The editor reports the failure itself. A refusal because the Single was
+    // removed from code also reads its schema again, so an editor opened
+    // before the removal turns read-only.
+    onError: error => {
+      refreshRemovedFromCodeSchema(queryClient, error);
     },
   });
 }

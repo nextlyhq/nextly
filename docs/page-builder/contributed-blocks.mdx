@@ -1,0 +1,169 @@
+---
+title: Blocks from plugins
+description: Contribute blocks to the page builder from a plugin, give a block its own inspector, and write block code that works inside the editor's canvas.
+---
+
+A plugin can add blocks to the page builder. Its blocks then appear in the editor's Add
+panel and its search, get an inspector like the core blocks, render on the published site,
+and validate on save. This is experimental: the contract may change before the page
+builder is stable.
+
+## Declare the blocks
+
+Declare the blocks for the page builder in `contributes.declarations`, and name an
+`editorEntry`: a module that exports the same definitions for the editor.
+
+```ts
+// my-blocks/blocks.ts
+import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+import { createElement } from "react";
+
+export const callout = defineBlock<{ text?: string }>({
+  name: "acme/callout",
+  version: 1,
+  description: "A short highlighted note.",
+  editor: { label: "Callout", category: "Content", keywords: ["note"] },
+  props: { text: { type: "text", role: "content" } },
+  example: { props: { text: "Remember this." } },
+  render: ({ props, className }) =>
+    createElement("aside", { className }, props.text ?? ""),
+});
+
+export const acmeBlocks = { blocks: [callout], supports: [] };
+```
+
+```tsx
+// my-blocks/editor.tsx
+"use client";
+
+export { acmeBlocks } from "./blocks";
+```
+
+```ts
+// my-blocks/plugin.ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+import { acmeBlocks } from "./blocks";
+
+export const acmeBlocksPlugin = definePlugin({
+  name: "@acme/blocks",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    declarations: {
+      "@nextlyhq/plugin-page-builder": {
+        ...acmeBlocks,
+        editorEntry: "@acme/blocks/editor#acmeBlocks",
+      },
+    },
+  },
+});
+```
+
+Both halves are needed. The server registers the declared blocks when your app boots,
+which is what validates and renders them. The editor runs in the admin's browser bundle,
+and it receives your blocks from the `editorEntry`: `npx nextly generate:types` writes the
+admin's component map, which imports that module and hands its blocks to the editor. Run
+it after adding or changing a declaration; `next dev` rewrites the map for you when it
+falls behind.
+
+Export the same objects from both, as above. The editor registers your supports before
+your blocks, so a block may use a support another plugin declares. A block named like a
+core block (`core/...`) is refused in the editor, with a warning naming both.
+
+`PageBuilderDeclaration` and `PageBuilderEditorEntry` from
+`@nextlyhq/plugin-page-builder/blocks` type the two objects.
+
+### Blocks registered in code reach the server only
+
+`blockRegistry(ctx).register()` from a plugin's `init` still works, but the editor never
+sees a block registered that way: nothing can name its module before the plugin runs, so
+the component map cannot import it. In development, the first registration of each such
+block logs a warning naming it. Declare it instead.
+
+## Give a block its own inspector
+
+By default a block's inspector is generated from its `props`. To draw your own, name a
+component in `editor.component`. It replaces the generated content controls only: the
+block's name and lock, its CSS id and attributes, and its Style tab stay as they are for
+every block.
+
+```tsx
+// my-blocks/editor.tsx
+"use client";
+
+import type { BlockInspectorProps } from "@nextlyhq/plugin-sdk/blocks";
+
+export function CalloutInspector({
+  props,
+  commit,
+  readOnly,
+}: BlockInspectorProps<{ text?: string }>) {
+  return (
+    <input
+      aria-label="Callout text"
+      defaultValue={props.text ?? ""}
+      disabled={readOnly}
+      onBlur={event => commit("text", event.target.value)}
+    />
+  );
+}
+```
+
+```ts
+editor: { label: "Callout", component: "@acme/blocks/editor#CalloutInspector" },
+```
+
+The component receives:
+
+| Prop       | What it is                                                                               |
+| ---------- | ---------------------------------------------------------------------------------------- |
+| `node`     | The selected block as the document stores it.                                            |
+| `props`    | Its props.                                                                               |
+| `commit`   | `commit(name, value)` sets one prop, through the same path the generated controls write. |
+| `readOnly` | `true` while the block is locked in Layers.                                              |
+
+While `readOnly` is true the editor refuses every `commit`, whatever your component does,
+so draw your controls disabled. Inside an area locked `"contentOnly"`, the editor accepts a
+`commit` only for a prop declared `role: "content"`, as it does for the generated
+controls. If your component is not in the component map, or throws
+while it draws, the block gets its generated controls instead.
+
+## Block code inside the editor's canvas
+
+The editor draws blocks in its canvas, which is meant to become a frame of its own. A
+block whose code measures itself, listens to the window, or reads the viewport must use
+the document and window it is drawn in, not the globals: either its own element's
+`ownerDocument` and `defaultView`, or `useBlockEnvironment()`.
+
+```tsx
+"use client";
+
+import { useBlockEnvironment } from "@nextlyhq/blocks-react/environment";
+import { useEffect, useState } from "react";
+
+export function ViewportWidth() {
+  const environment = useBlockEnvironment();
+  const [width, setWidth] = useState<number>();
+  useEffect(() => {
+    const view = environment?.window;
+    if (view === undefined) return;
+    const measure = () => setWidth(view.innerWidth);
+    measure();
+    view.addEventListener("resize", measure);
+    return () => view.removeEventListener("resize", measure);
+  }, [environment]);
+  return <span>{width ?? ""}</span>;
+}
+```
+
+In the editor the hook returns the canvas's document and window. On the published site it
+returns the page's own once the block has mounted, and `undefined` while it renders on the
+server, so read it in an effect. A block that reads the globals still renders in both
+places; only its measurements and listeners would target the admin page instead of the
+canvas.
+
+## Related
+
+- [Locked areas](/docs/page-builder/locked-areas) — what `contentOnly` lets an author change
+- [Plugin stability](/docs/plugins/stability) — what experimental means for these APIs

@@ -177,6 +177,8 @@ describe("before a storing action", () => {
       ok: false,
       reason: "failed",
       message: "The heading is still being written.",
+      // Stopped before any write, so nothing else says why.
+      beforeWrite: true,
     });
     expect(onSaveDraft).not.toHaveBeenCalled();
   });
@@ -278,6 +280,7 @@ describe("before a storing action", () => {
       reason: "busy",
       message:
         "Changes on this page are still being saved. Try again in a moment.",
+      beforeWrite: true,
     });
   });
 
@@ -301,6 +304,7 @@ describe("before a storing action", () => {
       reason: "refused",
       message:
         "Site colours wasn't saved, so this page wasn't either: The server is unreachable.",
+      beforeWrite: true,
     });
   });
 

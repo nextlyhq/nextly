@@ -36,7 +36,11 @@ export type FieldTypeCategory =
 export interface FieldTypeCatalogEntry<T extends string = FieldType> {
   /** The type key field instances reference. */
   type: T;
-  /** Human label shown in pickers. */
+  /**
+   * The type's one plain name, in sentence case, shown wherever the type is
+   * named (pickers, outlines, settings, review). Never the internal type id:
+   * that is what stored data uses, not what a person reads.
+   */
   label: string;
   /** Picker grouping. */
   category: FieldTypeCategory;
@@ -65,7 +69,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   },
   {
     type: "richText",
-    label: "Editor",
+    label: "Rich text",
     category: "Basic",
     hint: "Lexical rich-text editor",
     icon: "Edit",
@@ -144,15 +148,15 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   // Media
   {
     type: "upload",
-    label: "Media",
+    label: "Image or file",
     category: "Media",
-    hint: "File or image upload",
+    hint: "An uploaded file or image",
     icon: "Upload",
   },
   // Relational
   {
     type: "relationship",
-    label: "Relationship",
+    label: "Link to entries",
     category: "Relational",
     hint: "Link to records in another collection",
     icon: "Link2",
@@ -160,7 +164,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   // Structured
   {
     type: "repeater",
-    label: "Repeater",
+    label: "Repeating rows",
     category: "Structured",
     hint: "Repeating group of fields",
     icon: "Layers",
@@ -177,7 +181,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     // picker shows. Renaming the type would make every existing `fields` JSON row unreadable, so
     // the two are pinned apart by a test rather than left to be kept in step by hand.
     type: STORAGE_FORMAT.fieldType,
-    label: "Field Group",
+    label: "Field group",
     category: "Structured",
     hint: "Embed a reusable field group",
     icon: "Puzzle",
@@ -788,4 +792,112 @@ export function narrowFieldTypeCatalog<T extends FieldType>(
     (entry): entry is FieldTypeCatalogEntry & { type: T } =>
       allowed.has(entry.type)
   );
+}
+
+/**
+ * The order the picker's categories appear in, as the category type's comment
+ * describes it. A category a plugin declares outside this list still shows,
+ * after these, so a mistyped category never hides a type.
+ */
+export const FIELD_TYPE_CATEGORY_ORDER: readonly FieldTypeCategory[] = [
+  "Basic",
+  "Advanced",
+  "Media",
+  "Relational",
+  "Structured",
+];
+
+/**
+ * The types the picker shows first, before the categories, in this order. A
+ * surface that offers none of them shows no most-used group.
+ */
+export const MOST_USED_FIELD_TYPES: readonly FieldType[] = [
+  "text",
+  "richText",
+  "upload",
+  "relationship",
+  "select",
+  "date",
+];
+
+/**
+ * A field type as the picker describes and searches it: the catalog row plus
+ * the other words a person may type for it.
+ *
+ * Kept a separate type rather than a new member of `FieldTypeCatalogEntry`,
+ * because that row is published in the shape plugins already consume and a
+ * new member would change it for every one of them.
+ */
+export interface FieldTypeDescription<T extends string = FieldType>
+  extends FieldTypeCatalogEntry<T> {
+  /**
+   * Words that find this type besides its name, description and category:
+   * the type id first (the name developers use), then the names earlier
+   * versions of Nextly showed, then everyday words for what it holds.
+   */
+  synonyms: readonly string[];
+}
+
+/**
+ * The extra search words for each type, besides its id. Keyed by every type a
+ * surface can offer, so a type added to the union does not compile until it
+ * says what else a person might call it.
+ */
+const FIELD_TYPE_SYNONYMS: Readonly<
+  Record<
+    FieldType | UserSurfaceFieldType | FormSurfaceFieldType,
+    readonly string[]
+  >
+> = {
+  text: ["string", "title", "name", "heading", "short text"],
+  textarea: ["paragraph", "multi-line", "excerpt", "summary", "plain text"],
+  // "Editor" is what the picker called this before it was named rich text.
+  richText: ["editor", "wysiwyg", "body", "content", "markdown", "html"],
+  email: ["mail", "e-mail", "contact"],
+  password: ["secret", "credential"],
+  number: ["integer", "decimal", "float", "price", "amount", "count"],
+  code: ["snippet", "script", "embed", "source"],
+  date: ["time", "datetime", "calendar", "day", "timestamp"],
+  select: ["dropdown", "choice", "option", "enum"],
+  radio: ["radio buttons", "choice", "option", "one of"],
+  checkbox: ["boolean", "toggle", "switch", "yes or no", "true or false"],
+  json: ["raw", "object", "data"],
+  chips: ["tags", "keywords", "labels"],
+  // "Media" is this type's earlier name; image, photo and file are what
+  // people look for.
+  upload: ["media", "image", "photo", "picture", "file", "attachment", "pdf"],
+  // "Relationship" is this type's earlier name and its id.
+  relationship: ["relation", "reference", "link", "foreign key", "author"],
+  // "Repeater" is this type's earlier name and its id.
+  repeater: ["array", "list", "rows", "repeat"],
+  group: ["object", "section", "nested", "fieldset"],
+  // A field group is stored under two spellings; both, and the word the
+  // admin used before "field group", find it.
+  component: ["fieldGroup", "field group", "reusable"],
+  fieldGroup: ["component", "field group", "reusable"],
+  url: ["link", "website", "web address", "href"],
+  phone: ["telephone", "mobile", "cell"],
+  time: ["clock", "hour", "minute"],
+  file: ["upload", "attachment", "document"],
+  hidden: ["invisible", "tracking", "utm"],
+};
+
+/**
+ * Describe catalog rows for the picker: each row as it is, plus its search
+ * words. The one place a description is made, for built-in, surface-only and
+ * plugin rows alike; a type with no entry above (a plugin's) is found by its
+ * id as well as its name, description and category.
+ */
+export function describeFieldTypes<T extends string>(
+  entries: readonly FieldTypeCatalogEntry<T>[]
+): FieldTypeDescription<T>[] {
+  return entries.map(entry => {
+    const extra = Object.prototype.hasOwnProperty.call(
+      FIELD_TYPE_SYNONYMS,
+      entry.type
+    )
+      ? FIELD_TYPE_SYNONYMS[entry.type as keyof typeof FIELD_TYPE_SYNONYMS]
+      : [];
+    return { ...entry, synonyms: [entry.type, ...extra] };
+  });
 }

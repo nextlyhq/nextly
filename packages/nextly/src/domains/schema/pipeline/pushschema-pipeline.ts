@@ -51,6 +51,7 @@ import {
 import { activePostgresSchema } from "../services/postgres-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
+import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
 import {
   countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
@@ -784,10 +785,10 @@ export class PushSchemaPipeline {
       // The entities' tables with what hooks contributed to them, then the
       // extension's own tables: built by the one function the schema preview
       // also builds from, so the preview shows what this apply will do.
-      const { snapshot: desiredSnapshot, fieldGroupTypeColumns } =
+      const { snapshot: snapshotBeforeRenames, fieldGroupTypeColumns } =
         buildDesiredSnapshot({ desired, dialect, liveSnapshot, extensions });
 
-      const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+      const allOperations = diffSnapshots(liveSnapshot, snapshotBeforeRenames);
 
       // A UI save owns only the entity being edited. An operation targeting a code-first or
       // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
@@ -902,7 +903,20 @@ export class PushSchemaPipeline {
 
       // Already excluded above, before the operation set was read. Resolutions are keyed to the
       // candidates and events that set produced, so none of them can reintroduce a locked table.
-      const resolvedOps = allResolvedOps;
+      // A Schema Builder relationship this save renames keeps what its old column had: the keys
+      // were planned before the renames were answered, so one its old column never had is taken
+      // back from both the operations and the snapshot the rest of the apply builds from.
+      const { operations: resolvedOps, desired: desiredSnapshot } =
+        withoutKeysOnKeylessRenames(
+          allResolvedOps,
+          snapshotBeforeRenames,
+          liveSnapshot,
+          new Set(
+            Object.values(desired.collections)
+              .filter(c => c.builderOwned === true)
+              .map(c => c.tableName.toLowerCase())
+          )
+        );
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       //

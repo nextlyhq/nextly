@@ -32,6 +32,7 @@ import { useRoles } from "@admin/hooks/queries/useRoles";
 import { useUserFields } from "@admin/hooks/queries/useUserFields";
 import { useUser, useUpdateUser } from "@admin/hooks/queries/useUsers";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useLogout } from "@admin/hooks/useLogout";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
@@ -101,6 +102,9 @@ export default function EditUserPage(): ReactElement {
     error: userError,
     refetch: refetchUser,
   } = useUser(userId || undefined);
+  // The tab names the user being edited: their name, or their email when they
+  // have none, as the page shows them.
+  useDocumentTitle(user?.name || user?.email);
 
   // TanStack Query: Fetch roles list
   const {

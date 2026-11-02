@@ -18,12 +18,13 @@ into it.
 
 > **Alpha.** The public surface is not yet stable.
 
-## Two entries, and why
+## Three entries, and why
 
-| Entry                         | Contains                              | Exported today                                                                                    |
-| ----------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `@nextlyhq/blocks-react`      | the renderer and the context contract | `PageRenderer`, `BlockBoundary`, the core block library, context types, `createStandaloneContext` |
-| `@nextlyhq/blocks-react/next` | everything that needs `next/*`        | `createBlocksPage`                                                                                |
+| Entry                                | Contains                                              | Exported today                                                                                    |
+| ------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `@nextlyhq/blocks-react`             | the renderer and the context contract                 | `PageRenderer`, `BlockBoundary`, the core block library, context types, `createStandaloneContext` |
+| `@nextlyhq/blocks-react/next`        | everything that needs `next/*`                        | `createBlocksPage`                                                                                |
+| `@nextlyhq/blocks-react/environment` | the document and window a block runs in (client only) | `useBlockEnvironment`, `BlockEnvironmentProvider`                                                 |
 
 Render a document anywhere:
 
@@ -68,6 +69,12 @@ The root entry imports **no `next/*`, no admin code and no CMS runtime**. You
 can render a document from a plain React app, a test, or a script with nothing
 else installed — the CMS is one way to produce documents, not a requirement for
 rendering them.
+
+A block whose own code measures itself or listens to the window asks
+`useBlockEnvironment()` from `/environment` for the document and window it is
+drawn in, rather than reading the globals: in the editor that is the canvas's,
+and on the published site the page's own once the block has mounted. It is a
+client entry because the root is server-only.
 
 Everything Next-coupled lives at `/next`, so importing the renderer never pulls
 Next into your module graph. `src/layering.test.ts` enforces both rules as a

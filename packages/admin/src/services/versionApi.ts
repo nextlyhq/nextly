@@ -114,8 +114,11 @@ export type VersionDetail = VersionMeta & {
   snapshot: unknown;
   /**
    * What the read rules held back from this reader: top-level field names, and
-   * dotted paths below them (`banner.secret`). A field named here was withheld,
-   * not absent from the version.
+   * dotted paths below them (`banner.secret`), a list row named by its index in
+   * this version (`items.1.secret`). A field named here was withheld, not absent
+   * from the version.
+   *
+   * @experimental
    */
   withheld: string[];
 };

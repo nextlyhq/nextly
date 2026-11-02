@@ -11,7 +11,7 @@
  * @since 1.0.0
  */
 
-import { Button } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import { useState, useCallback, useMemo, useRef } from "react";
 import type { JSX } from "react";
 
@@ -27,10 +27,12 @@ import {
   useBulkUpdateEntries,
 } from "@admin/hooks/queries";
 import { useCollection } from "@admin/hooks/queries/useCollections";
+import { useCan } from "@admin/hooks/useCan";
+import { useDefaultLanguageAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
-import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
 import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
@@ -39,7 +41,16 @@ import type { Entry } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
+import {
+  isRemovedFromCode,
+  removedEntityHasNoTable,
+} from "../removed-from-code-notice";
+import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 
+import {
+  getCollectionLabels,
+  toCollectionForColumns,
+} from "./collection-for-columns";
 import { EntryEmptyState } from "./EntryEmptyState";
 import {
   buildEntryWhereFilter,
@@ -57,9 +68,9 @@ import {
   linkedSortFor,
   linkedStatusFor,
   type ChosenForCollection,
-  type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import { useEntryBulkActions } from "./useEntryBulkActions";
 
 // ============================================================================
 // Types
@@ -101,105 +112,6 @@ function toTablePaginationState(
     limit: response.meta.limit,
     total: response.meta.total,
     totalPages: response.meta.totalPages,
-  };
-}
-
-/**
- * Creates a CollectionForColumns object from collection data.
- * Uses slug as fallback for labels.
- */
-function toCollectionForColumns(
-  collection:
-    | {
-        name: string;
-        label?: string;
-        schemaDefinition?: { fields: Array<{ name?: string; type?: string }> };
-        fields?: Array<{ name?: string; type?: string }>;
-        admin?: { defaultColumns?: string[]; useAsTitle?: string };
-        /**
-         * Built-in Draft / Published lifecycle flag (collection-level).
-         * Read from the dynamic-collections row or the code-first config.
-         * Forwarded to `CollectionForColumns.status` so the table's
-         * bulk-action bar can decide whether to render Publish /
-         * Unpublish buttons.
-         */
-        status?: boolean;
-        /** i18n: collection has multilingual content — drives the translation-status column. */
-        localized?: boolean;
-      }
-    | undefined,
-  slug: string
-): CollectionForColumns {
-  // Default collection structure when data is loading
-  if (!collection) {
-    return {
-      slug,
-      fields: [],
-      admin: {},
-    };
-  }
-
-  // Get fields from either new or old API format
-  // schemaDefinition.fields is the legacy format from the API
-  const rawFields =
-    collection.schemaDefinition?.fields || collection.fields || [];
-  const fields = rawFields as CollectionForColumns["fields"];
-
-  // Determine default columns: use admin config or auto-generate from first few fields
-  // Filter to only data fields (those with name property, excluding layout fields)
-  const layoutTypes = ["group", "relationship", "repeater", "component"];
-  const dataFields = rawFields.filter(
-    (f): f is { name: string; type: string } =>
-      typeof f.name === "string" &&
-      f.name.length > 0 &&
-      typeof f.type === "string" &&
-      !layoutTypes.includes(f.type)
-  );
-
-  const defaultColumns =
-    collection.admin?.defaultColumns || dataFields.slice(0, 4).map(f => f.name);
-
-  const labels = getCollectionLabels(collection, slug);
-
-  return {
-    slug,
-    label: labels.plural,
-    fields,
-    // Forward the Draft / Published flag so the bulk-action bar can
-    // surface Publish / Unpublish only for collections that opted in.
-    status: collection.status === true,
-    // Forward the localization flag so the table can render a
-    // per-row translation-completeness column.
-    localized: collection.localized === true,
-    admin: {
-      useAsTitle: collection.admin?.useAsTitle,
-      defaultColumns: [
-        "title",
-        ...defaultColumns.filter(
-          c => c !== "title" && c !== "slug" && c !== "updatedAt"
-        ),
-        "slug",
-        "updatedAt",
-      ],
-    },
-  };
-}
-
-/**
- * Gets display labels for the collection.
- */
-function getCollectionLabels(
-  collection: { label?: string; name?: string } | undefined,
-  slug: string
-): { singular: string; plural: string } {
-  const displayName = collection?.label || collection?.name || slug;
-
-  // Simple pluralization: add 's' if doesn't already end with 's'
-  const plural = displayName.endsWith("s") ? displayName : `${displayName}s`;
-
-  return {
-    singular: displayName,
-    plural,
   };
 }
 
@@ -295,9 +207,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
 
   // Request the per-locale translation-status overview only for localized collections
   // on a localization-enabled app — drives the list's translation-completeness column.
-  const { enabled: localizationEnabled } = useLocalization();
+  // Asked only of a user the server lets read every language's state: the
+  // overview reads them all, so without that the whole list would be refused
+  // rather than shown without its translation column. The list's read carries
+  // no language, so the server judges it in the default language.
+  const asksTranslationStatus =
+    useDefaultLanguageAsksTranslationStatus(collectionSlug);
   const wantsTranslationStatus =
-    localizationEnabled &&
+    asksTranslationStatus &&
     (collection as { localized?: boolean } | undefined)?.localized === true;
 
   // A sort the link that opened this list carried (`?sort=-updatedAt`, from a dashboard card's
@@ -310,10 +227,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       linkedSortFor(
         sortParam,
         collection
-          ? toCollectionForColumns(collection, collectionSlug)
+          ? toCollectionForColumns(
+              collection,
+              collectionSlug,
+              asksTranslationStatus
+            )
           : undefined
       ),
-    [sortParam, collection, collectionSlug]
+    [sortParam, collection, collectionSlug, asksTranslationStatus]
   );
   const sort = choiceInForce(
     chosenSort,
@@ -331,10 +252,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       linkedStatusFor(
         statusParam,
         collection
-          ? toCollectionForColumns(collection, collectionSlug)
+          ? toCollectionForColumns(
+              collection,
+              collectionSlug,
+              asksTranslationStatus
+            )
           : undefined
       ),
-    [statusParam, collection, collectionSlug]
+    [statusParam, collection, collectionSlug, asksTranslationStatus]
   );
   const status = choiceInForce(
     chosenStatus,
@@ -352,6 +277,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       updatedFrom,
       updatedTo,
       translated: translationFilter,
+      readsTranslationState: asksTranslationStatus,
     });
   }, [
     whereParam,
@@ -361,11 +287,22 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     updatedFrom,
     updatedTo,
     translationFilter,
+    asksTranslationStatus,
   ]);
 
+  // A collection removed from code whose main table an applied migration
+  // dropped has no entries to read: the read would only fail, after its
+  // retries, with the table's skeleton standing under the notice until then.
+  const tableGone = removedEntityHasNoTable(collection);
+
   // Fetch entries with pagination and filters
-  const { data: entriesResponse, isLoading: entriesLoading } = useEntries({
+  const {
+    data: entriesResponse,
+    isLoading: entriesLoading,
+    error: entriesError,
+  } = useEntries({
     collectionSlug,
+    enabled: !tableGone,
     params: {
       page,
       limit,
@@ -410,8 +347,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // ---------------------------------------------------------------------------
 
   const collectionForColumns = useMemo(
-    () => toCollectionForColumns(collection, collectionSlug),
-    [collection, collectionSlug]
+    () =>
+      toCollectionForColumns(collection, collectionSlug, asksTranslationStatus),
+    [collection, collectionSlug, asksTranslationStatus]
   );
 
   // ---------------------------------------------------------------------------
@@ -568,14 +506,22 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     setPage(1);
   }, []);
 
-  // disableCreate gates every creation affordance from one place — the
-  // header button, the empty-state CTA, and the keyboard shortcut all call
-  // this, so a machine-created collection cannot reach the create screen
-  // through any of them. While the collection metadata is still loading the
-  // answer is unknown, and unknown counts as disabled: the shortcut must
-  // not slip through the loading window.
-  const createDisabled = Boolean(collection?.admin?.disableCreate);
-  const createAllowed = Boolean(collection) && !createDisabled;
+  // One gate for every creation affordance — the header button, the
+  // empty-state CTA, and the keyboard shortcut — so neither a
+  // machine-created collection (disableCreate) nor a caller who may not
+  // create here reaches the create screen through any of them. While the
+  // collection metadata or the caller's access is still loading the answer
+  // is unknown, and unknown counts as disabled: the shortcut must not slip
+  // through the loading window.
+  const canCreate = useCan(`create-${collectionSlug}`);
+  // A collection removed from code refuses every write, a create included.
+  const removedFromCode = isRemovedFromCode(collection);
+  const createDisabled =
+    Boolean(collection?.admin?.disableCreate) || removedFromCode;
+  const createAllowed = Boolean(collection) && !createDisabled && canCreate;
+  // The bulk actions offered here, which the table's checkboxes and bar
+  // follow too, so the Delete shortcut opens nothing they would not.
+  const offeredBulk = useEntryBulkActions(collectionForColumns);
   const handleCreateClick = useCallback(() => {
     if (!createAllowed) return;
     navigateTo(
@@ -602,12 +548,13 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   }, []);
 
   const handleDeleteSelected = useCallback(() => {
+    if (!offeredBulk.delete) return;
     const selectedIds = tableRef.current?.getSelectedIds() ?? [];
     if (selectedIds.length > 0) {
       setSelectedForDelete(selectedIds);
       setDeleteDialogOpen(true);
     }
-  }, []);
+  }, [offeredBulk.delete]);
 
   const handleSelectionChange = useCallback((selectedIds: string[]) => {
     setHasSelection(selectedIds.length > 0);
@@ -702,8 +649,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
             API
           </Button>
           {/* Machine-created collections (disableCreate) never offer "New" —
-              a hand-typed entry there would be fiction, not data. */}
-          {!createDisabled && (
+              a hand-typed entry there would be fiction, not data — and nor
+              does a collection the caller may not create in. */}
+          {createAllowed && (
             <Button
               onClick={handleCreateClick}
               className="flex-1 sm:flex-initial hover-unified"
@@ -715,6 +663,19 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
         </div>
       </div>
 
+      {/* Above the list: why nothing here can be changed, and the next step. */}
+      {removedFromCode && (
+        <RemovedFromCodeNotice
+          entity={{
+            kind: "collection",
+            label: labels.plural,
+            slug: collectionSlug,
+          }}
+          state={collection?.removedFromCodeState}
+          className="mb-6"
+        />
+      )}
+
       {/* BeforeListTable injection point */}
       {beforeListTablePath && (
         <PluginSlot path={beforeListTablePath} props={injectionProps} />
@@ -723,11 +684,20 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       {/* Content — a plugin List override replaces the default table (D23) */}
       {listViewPath ? (
         <PluginSlot path={listViewPath} props={injectionProps} />
+      ) : tableGone ? null : entriesError ? (
+        // A list the server refused says so in its own words where the rows
+        // would be. Without this a failed read has no rows and is not
+        // loading, which draws the empty state and calls the collection empty.
+        <Alert variant="destructive">
+          <AlertDescription>
+            {apiErrorMessage(entriesError, "The entries couldn't be loaded.")}
+          </AlertDescription>
+        </Alert>
       ) : entries.length === 0 && !entriesLoading && !search ? (
         <EntryEmptyState
           collectionName={labels.plural}
           singularName={labels.singular}
-          onCreateClick={handleCreateClick}
+          onCreateClick={createAllowed ? handleCreateClick : undefined}
         />
       ) : (
         <EntryTable

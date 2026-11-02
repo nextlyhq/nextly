@@ -84,6 +84,9 @@ const PANEL_WIDE_WINDOW = 1200;
  */
 const PANEL_MIN_WINDOW = 1024;
 
+/** One array for "nothing was held back", so its identity never changes. */
+const NOTHING_WITHHELD: readonly string[] = [];
+
 /**
  * Folds the content sidebar for as long as it is mounted, which is while
  * history is open beside the document on a window too narrow to hold both
@@ -105,6 +108,11 @@ export interface VersionHistorySheetProps {
    */
   canRestore?: boolean;
   /**
+   * The document's writes are refused: its collection or Single was removed
+   * from code. Its versions are still shown, but none is marked seen.
+   */
+  writesRefused?: boolean;
+  /**
    * Status of the LIVE document, which is what a restore is about to change.
    * The selected version's own status describes the past and says nothing
    * about whether this change is publicly visible.
@@ -125,7 +133,7 @@ export interface VersionHistorySheetProps {
   liveDirty?: boolean;
   /**
    * A transient reason the confirm action must refuse: the document
-   * becoming read-only while the confirmation is open. The Restore… trigger
+   * becoming read-only while the confirmation is open. The restore trigger
    * removes itself on the same signal, but an already-open dialog outlives
    * it, so the refusal has to be carried into the confirmation as well.
    */
@@ -163,6 +171,7 @@ export function VersionHistorySheet({
   onOpenChange,
   scope,
   canRestore = false,
+  writesRefused = false,
   liveStatus = null,
   entityLocalized,
   liveDirty = false,
@@ -237,6 +246,9 @@ export function VersionHistorySheet({
   const viewedLocale = detail.data?.locale ?? null;
   const viewedLoading = detail.isLoading;
   const viewedError = detail.error ?? null;
+  // What the read held back. A shared constant while nothing has arrived, so a
+  // render that has no version yet does not republish the selection.
+  const viewedWithheld = detail.data?.withheld ?? NOTHING_WITHHELD;
 
   // Shown once it has arrived and is on screen: chosen and still loading, or
   // failed, is not a version the person has seen.
@@ -249,7 +261,8 @@ export function VersionHistorySheet({
       !viewedLoading &&
       viewedError === null
       ? selected
-      : null
+      : null,
+    { writesRefused }
   );
 
   // Returning to the live document from Back to current clears the selection here
@@ -283,13 +296,15 @@ export function VersionHistorySheet({
     onSuccess: result => {
       setConfirmingRestore(false);
       onOpenChange(false);
-      // A restore can succeed while leaving parts behind, when the schema no
-      // longer has a field the version held. Saying so beats a clean success
-      // message that overstates what came back.
+      // A restore can succeed while leaving parts behind: a field the schema no
+      // longer has, one the restorer may not read, or one they may not write.
+      // Saying so beats a clean success message that overstates what came
+      // back. The message names no cause and no outcome, since the list mixes
+      // them: a field the schema dropped has no current value to keep.
       if (result.droppedFields.length > 0) {
         toast.success(
           `Restored version ${result.restoredFrom}. ` +
-            `${result.droppedFields.length} field(s) no longer in this schema were skipped: ` +
+            `${result.droppedFields.length} field(s) were not restored: ` +
             result.droppedFields.join(", ")
         );
         return;
@@ -379,6 +394,7 @@ export function VersionHistorySheet({
       versionNo: selected,
       snapshot: viewedSnapshot,
       locale: viewedLocale,
+      withheld: viewedWithheld,
       isLoading: viewedLoading,
       error: viewedError,
       scope: scopeRef.current,
@@ -393,6 +409,7 @@ export function VersionHistorySheet({
     selected,
     viewedSnapshot,
     viewedLocale,
+    viewedWithheld,
     viewedLoading,
     viewedError,
     viewedAbout,
@@ -491,8 +508,8 @@ export function VersionHistorySheet({
               : {}),
           }),
     });
-    // Withdrawn on unmount as well as on close: a Restore… left holding a
-    // trigger into an unmounted panel would open a dialog nothing renders.
+    // Withdrawn on unmount as well as on close: a restore button left holding
+    // a trigger into an unmounted panel would open a dialog nothing renders.
     return () => setRestore(null);
   }, [
     open,
@@ -856,9 +873,10 @@ export function VersionHistorySheet({
             versionNo={selected}
             isPublished={liveStatus === "published"}
             unsavedChanges={liveDirty}
+            hasWithheldFields={viewedWithheld.length > 0}
             confirmDisabled={restoreRefused}
             isRestoring={restore.isPending}
-            // Re-checked at confirm time: the Restore… trigger can vanish while
+            // Re-checked at confirm time: the restore trigger can vanish while
             // the dialog is open (a claim arriving mid-dialog), and an open
             // dialog must not restore past a refusal that arrived after it.
             onConfirm={() => {

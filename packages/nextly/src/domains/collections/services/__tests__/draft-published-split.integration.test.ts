@@ -344,6 +344,9 @@ describe("draft/published split — updateEntry (integration)", () => {
     // A collection whose reads are access-enforced: only an authenticated caller
     // reads it, and everyone who reads it may also update it.
     handle = await createTestNextly({
+      // The boot's seeding: the anonymous read below is judged by the Public
+      // role, which boot grants the read because its rule answers `true`.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: COLLECTION,
@@ -832,7 +835,8 @@ describe("draft/published split — promote on publish (integration)", () => {
       { status: "published" }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // Live content unchanged, the working draft still present.
     const [live] = await handle.adapter.select<LiveRow>(TABLE);

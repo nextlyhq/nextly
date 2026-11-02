@@ -19,12 +19,13 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
 
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 // PR 4 of unified-error-system migration: ServiceError → NextlyError.
 import { NextlyError } from "../../../errors";
-import { userFieldDefinitionsMysql } from "../../../schemas/user-field-definitions/mysql";
-import { userFieldDefinitionsPg } from "../../../schemas/user-field-definitions/postgres";
-import { userFieldDefinitionsSqlite } from "../../../schemas/user-field-definitions/sqlite";
+import type { userFieldDefinitionsMysql } from "../../../schemas/user-field-definitions/mysql";
+import type { userFieldDefinitionsPg } from "../../../schemas/user-field-definitions/postgres";
+import type { userFieldDefinitionsSqlite } from "../../../schemas/user-field-definitions/sqlite";
 import type {
   UserFieldDefinitionInsert,
   UserFieldDefinitionRecord,
@@ -114,13 +115,13 @@ export class UserFieldDefinitionService extends BaseService {
 
     switch (this.dialect) {
       case "postgresql":
-        this.userFieldDefinitions = userFieldDefinitionsPg;
-        break;
       case "mysql":
-        this.userFieldDefinitions = userFieldDefinitionsMysql;
-        break;
       case "sqlite":
-        this.userFieldDefinitions = userFieldDefinitionsSqlite;
+        // The loaded dialect's own table, so only that dialect's file is
+        // imported; `createAdapter` loads it.
+        this.userFieldDefinitions = loadedDialect(
+          this.dialect
+        ).tables.userFieldDefinitions;
         break;
       default:
         // Wrap `this.dialect` (typed as `never` in default branch) with

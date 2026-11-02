@@ -74,10 +74,12 @@ describe("takeLiveSharedValuesForDocument: the gate chain", () => {
     expect(singleTake).not.toHaveBeenCalled();
   });
 
-  it("asks the Single's service for a Single", async () => {
+  it("asks the Single's service for a Single, naming the document the gate judged", async () => {
     await takeLiveSharedValuesForDocument(argsFor("single"));
+    // The service takes into this document or none: a Single's row can be
+    // replaced between the gate above and the take.
     expect(singleTake).toHaveBeenCalledWith(
-      expect.objectContaining({ slug: "posts", locale: "es" })
+      expect.objectContaining({ slug: "posts", entryId: "e1", locale: "es" })
     );
     expect(collectionTake).not.toHaveBeenCalled();
   });

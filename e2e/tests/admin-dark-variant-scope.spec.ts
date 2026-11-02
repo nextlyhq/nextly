@@ -17,8 +17,8 @@
  * - R-2: the admin's own dark theme paints its dark utilities and tokens
  *   together, and renders unmixed with the host class present.
  * - R-4: a `group-hover` variant driven by its marker inside the admin (a
- *   media card, whose image scales while the pointer is on the card) keeps
- *   applying, in both of the admin's own themes.
+ *   media card, whose tile's border turns primary while the pointer is on
+ *   the card) keeps applying, in both of the admin's own themes.
  *
  * The screens are the Releases list with one published release of our own:
  * its state badge and status icon are resting elements whose classes carry
@@ -207,36 +207,34 @@ test.describe("the admin's variant confinement", () => {
     }) => {
       await gotoAdmin(page, "/media", theme);
 
-      // A media card is the `.group`; its image scales up under
-      // `group-hover:scale-105`. The image's own transform is asserted
-      // because a transform cannot arrive from anywhere else — the card's
-      // ordinary `hover:` styling is a border, and the shared row-hover
-      // rules force only colour — so the change the poll waits for can come
-      // only from the confined `:is(:where(.nextly-admin .group):hover *)`
-      // variant. (The header's icon links would not isolate it: their
-      // `hover-subtle-row` forces descendants' colour on plain hover, so the
-      // icon brightens with or without the group variant.)
+      // A media card is the `.group`; its tile's border turns primary under
+      // `group-hover:border-primary`. The tile's border colour is asserted
+      // because on this card only the group variant moves it: the card and
+      // its tile carry no plain `hover:` styling, selection and the open
+      // tile's ring are not hover states, and the list view's row-hover
+      // rules never reach the grid — so the change the poll waits for can
+      // come only from the confined
+      // `:is(:where(.nextly-admin .group):hover *)` variant.
       const name = `variant-scope-${Date.now()}.png`;
       await dropFiles(page, [{ name, buffer: pngBuffer(128) }]);
-      // The media list opens in its table view, which draws no cards; the
+      // The media library opens in its list view, which draws no cards; the
       // card grid is where the variant lives.
-      await page.locator('button[title="Grid View"]').click();
+      await page.locator('button[title="Grid view"]').click();
 
-      // The card grid's image is picked out by the variant's own class, so
-      // the table's and the side panel's copies of the same picture cannot
-      // be mistaken for it.
-      const image = page.locator(`img[alt="${name}"][class*="group-hover"]`);
-      const card = page.locator(".group.aspect-square").filter({ has: image });
-      await expect(image).toBeVisible({ timeout: 30_000 });
+      // The card is picked out by its upload's own name, so the side
+      // panel's copy of the same picture cannot be mistaken for it.
+      const card = page.locator(`div.group[aria-label^="${name} -"]`);
+      const tile = card.locator("div.aspect-square");
+      await expect(tile).toBeVisible({ timeout: 30_000 });
 
-      // Tailwind v4's scale utilities set the native `scale` property, not
-      // `transform`, which stays "none" however far the image scales.
-      const resting = await image.evaluate(el => getComputedStyle(el).scale);
+      // The border eases in through `transition-colors`; poll for it.
+      const resting = await tile.evaluate(
+        el => getComputedStyle(el).borderTopColor
+      );
 
       await card.hover();
-      // `transition-all` eases the scale in over half a second; poll for it.
       await expect
-        .poll(() => image.evaluate(el => getComputedStyle(el).scale))
+        .poll(() => tile.evaluate(el => getComputedStyle(el).borderTopColor))
         .not.toBe(resting);
     });
   }

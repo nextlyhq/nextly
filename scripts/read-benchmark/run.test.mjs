@@ -4,6 +4,7 @@ import { keyFor } from "./saved.mjs";
 import {
   checkLimits,
   checkNumbers,
+  modePair,
   needsAnotherRun,
   optionsOf,
   orderFor,
@@ -16,6 +17,9 @@ import {
   withinLoad,
 } from "./run.mjs";
 
+/** The pair the runs below hold, base first. */
+const PAIR = ["main", "per-language"];
+
 /** A run whose every read took `main` and `perLanguage` at p95 (and half that at p50). */
 const run = (main, perLanguage) => ({
   main: { results: { "direct list": { p50: main / 2, p95: main } } },
@@ -24,9 +28,20 @@ const run = (main, perLanguage) => ({
 
 describe("how the benchmark runs", () => {
   it("alternates the order of the modes from run to run", () => {
-    expect(orderFor(0)).toEqual(["main", "per-language"]);
-    expect(orderFor(1)).toEqual(["per-language", "main"]);
-    expect(orderFor(2)).toEqual(["main", "per-language"]);
+    expect(orderFor(0, PAIR)).toEqual(["main", "per-language"]);
+    expect(orderFor(1, PAIR)).toEqual(["per-language", "main"]);
+    expect(orderFor(2, PAIR)).toEqual(["main", "per-language"]);
+    expect(orderFor(1, ["main", "e4"])).toEqual(["e4", "main"]);
+  });
+
+  it("compares two different modes the fixture knows, base first", () => {
+    expect(modePair("main,per-language")).toEqual(["main", "per-language"]);
+    expect(modePair("main,e4")).toEqual(["main", "e4"]);
+    expect(modePair("e4,per-language")).toEqual(["e4", "per-language"]);
+    // One mode alone, a mode against itself, a third mode, or one the fixture does not know.
+    for (const bad of ["main", "main,main", "main,e4,per-language", "main,json-map", ""]) {
+      expect(() => modePair(bad), bad).toThrow(/^--modes .* is not two different modes of main, per-language, e4$/);
+    }
   });
 
   it("sees runs agree only when every mode's p95s spread within the limit", () => {
@@ -75,14 +90,17 @@ describe("what a run accepts", () => {
       [keyFor("sqlite", 0, "per-language"), { p: 2 }],
       [keyFor("sqlite", 1, "per-language"), { p: 3 }],
     ]);
-    expect(savedRun(saved, "sqlite", 0)).toEqual({ main: { p: 1 }, "per-language": { p: 2 } });
+    expect(savedRun(saved, "sqlite", 0, PAIR)).toEqual({ main: { p: 1 }, "per-language": { p: 2 } });
     // Half a run, its other half lost with the process: both are taken again together.
-    expect(savedRun(saved, "sqlite", 1)).toBeNull();
-    expect(savedRun(saved, "mysql", 0)).toBeNull();
+    expect(savedRun(saved, "sqlite", 1, PAIR)).toBeNull();
+    expect(savedRun(saved, "mysql", 0, PAIR)).toBeNull();
+    // Only the modes compared make a run.
+    expect(savedRun(saved, "sqlite", 0, ["main", "e4"])).toBeNull();
   });
 
   it("takes the documented defaults and refuses numbers that would disable a control", () => {
     expect(() => checkNumbers(optionsOf([]))).not.toThrow();
+    expect(optionsOf([]).modes).toBe("main,per-language");
     // Each refused by this check's own message: `--warmup=-1`, since a bare
     // `-1` is read as a flag and refused before it reaches the check.
     for (const bad of [["--warmup=-1"], ["--max-load", "Infinity"], ["--bound", "Infinity"], ["--docs", "10"], ["--iterations", "1.5"], ["--spread-limit", "0"], ["--seed", "x"]]) {
@@ -98,8 +116,8 @@ describe("what a run accepts", () => {
 
 describe("how the benchmark reports", () => {
   it("records every setting a measurement was taken with, the warm-up among them", () => {
-    const options = { seed: "1", docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", "max-load": "8", revision: "abc" };
-    expect(reportSettings(options)).toEqual({ revision: "abc", seed: 1, docs: 1000, iterations: 3000, warmup: 300, restIterations: 600, maxLoad: 8 });
+    const options = { modes: "main,e4", seed: "1", docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", "max-load": "8", revision: "abc" };
+    expect(reportSettings(options)).toEqual({ revision: "abc", modes: ["main", "e4"], seed: 1, docs: 1000, iterations: 3000, warmup: 300, restIterations: 600, maxLoad: 8 });
   });
 
   const verdict = rows => ({ verdict: { reads: rows } });
@@ -113,7 +131,15 @@ describe("how the benchmark reports", () => {
 
   it("puts each read's medians, ratio, spread and verdict in one row", () => {
     const runs = [run(10, 11), run(10, 11), run(10, 11)];
-    const lines = tableLines({ sqlite: { runs, verdict: { reads: [{ read: "direct list", gates: true, verdict: "pass", ratio: 1.1, spread: { main: 0, "per-language": 0.02 } }] } } });
+    const lines = tableLines({ sqlite: { runs, verdict: { reads: [{ read: "direct list", gates: true, verdict: "pass", ratio: 1.1, spread: { main: 0, "per-language": 0.02 } }] } } }, PAIR);
+    expect(lines[0]).toBe("| Database | Read | main p50 / p95 (median of runs) | per-language p50 / p95 | p95 ratio | p95 spread (main, per-language) | Verdict |");
     expect(lines[2]).toBe("| sqlite | direct list | 5.00 / 10.00 ms | 5.50 / 11.00 ms | 1.100 | 0.0%, 2.0% | pass |");
+  });
+
+  it("names the modes it compares in the table, and reads each from its own runs", () => {
+    const runs = [{ main: { results: { "direct list": { p50: 5, p95: 10 } } }, e4: { results: { "direct list": { p50: 6, p95: 12 } } } }];
+    const lines = tableLines({ mysql: { runs, verdict: { reads: [{ read: "direct list", gates: true, verdict: "over", ratio: 1.2, spread: { main: 0.01, e4: 0.03 } }] } } }, ["main", "e4"]);
+    expect(lines[0]).toBe("| Database | Read | main p50 / p95 (median of runs) | e4 p50 / p95 | p95 ratio | p95 spread (main, e4) | Verdict |");
+    expect(lines[2]).toBe("| mysql | direct list | 5.00 / 10.00 ms | 6.00 / 12.00 ms | 1.200 | 1.0%, 3.0% | over |");
   });
 });

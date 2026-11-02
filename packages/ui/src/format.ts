@@ -31,3 +31,10 @@ export type {
  * and a sign, never in colour alone.
  */
 export { formatChange, formatCount } from "./lib/format/number";
+
+/**
+ * @experimental The five shared chart colours: the token each slot is drawn in, so a chart's
+ * marks follow the theme, on the server as in the admin. Beside the formatters because a card's
+ * figures and its chart marks are drawn from one entry, wherever the card is written.
+ */
+export { chartColour, type ChartSlot } from "./lib/color/chart";

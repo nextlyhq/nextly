@@ -1,11 +1,11 @@
 /**
  * The words an author reads when a region will not take the block they hold.
  *
- * Separated from the engine deliberately, and by the engine's own instruction:
  * {@link drop-targets} produces a refusal CODE plus the list of what the region
- * accepts, because "wording is a presentation decision — it belongs where the
- * words are drawn and where they can be translated — and a code is what a
- * caller can branch on". This module is that caller.
+ * accepts. The sentences themselves are the engine's
+ * (`placementRefusalWording`), because the server words the same refusals on a
+ * save and an author must read the same words from both; this module binds
+ * them to the editor's block labels.
  *
  * ## Three reasons, three remedies
  *
@@ -32,9 +32,10 @@
  *
  * @module drag-refusal
  */
+import { placementRefusalWording } from "@nextlyhq/blocks-engine";
+
 import type { DropRefusal } from "./drop-targets";
 import { blockLabel } from "./inserter";
-import { asPermittedList, permittedLabel } from "./permitted-prose";
 
 /**
  * The two facts a refusal's wording is built from.
@@ -70,22 +71,6 @@ export interface RefusalWording {
 }
 
 /**
- * "a" or "an", decided by the LABEL rather than by the type it came from.
- *
- * The label is what appears in the sentence, so it is what the article has to
- * agree with. Deciding from the type would ask about "core/image", which begins
- * with a consonant, and produce "a Image".
- *
- * Spelling rather than pronunciation, which is the honest bound: this is right
- * for the vowel-initial labels a block palette actually produces and would be
- * wrong for an initialism read letter by letter. A pronunciation dictionary is
- * not worth carrying for a set of names the project chooses itself.
- */
-function article(label: string): string {
-  return /^[aeiou]/i.test(label) ? "an" : "a";
-}
-
-/**
  * Why this drop will not happen, and what would.
  *
  * `regionType` is optional because one reason has no region to name —
@@ -99,44 +84,16 @@ export function refusalWording(
   movingType: string,
   regionType: string | undefined
 ): RefusalWording {
-  const moving = blockLabel(movingType);
-  const region = regionType === undefined ? undefined : blockLabel(regionType);
-  const moved = `${article(moving)} ${moving}`;
-
-  const headline = ((): string => {
-    switch (refusal.reason) {
-      case "restricted-at-root":
-        // Not "choose another container": there is none on screen that would
-        // take it, so the only remedy is to create the nesting.
-        return `${moving} has to sit inside a container.`;
-      case "not-allowed-in-slot":
-        // The slot refuses, not the block's parent — naming the parent here
-        // would send the author to change the wrong thing.
-        return `This slot does not take ${moved}.`;
-      case "wrong-parent":
-        return region === undefined
-          ? `That container does not take ${moved}.`
-          : `${region} does not take ${moved}.`;
+  return placementRefusalWording(
+    {
+      allowed: false,
+      reason: refusal.reason,
+      blockType: movingType,
+      permitted: refusal.permitted,
+    },
+    {
+      labelOf: blockLabel,
+      ...(regionType === undefined ? {} : { regionType }),
     }
-  })();
-
-  /*
-   * The second line follows the REASON, because `permitted` is two different
-   * facts wearing one field name.
-   *
-   * `not-allowed-in-slot` carries the slot's allow-list — types the region
-   * admits — so "Takes" is a true statement about the region. The other two
-   * carry `parentsOf(movingType)`: the containers the block being dragged may
-   * sit inside, which says nothing about what the refusing region accepts.
-   *
-   * "or" rather than "and" for the parent list, because they are alternatives
-   * an author picks between; the slot's list is an enumeration of what it holds.
-   */
-  const permitted = refusal.permitted.map(permittedLabel);
-  if (permitted.length === 0) return { headline, remedy: null };
-  const remedy =
-    refusal.reason === "not-allowed-in-slot"
-      ? `Takes ${asPermittedList(permitted, "and")}`
-      : `${moving} goes inside ${asPermittedList(permitted, "or")}`;
-  return { headline, remedy };
+  );
 }

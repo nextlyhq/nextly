@@ -65,9 +65,12 @@ import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { ExtensionColumn } from "../../schema/extension/types";
+import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
+  componentRelationIsSingleReference,
+  componentRelationshipHoldsReferenceList,
   componentRelationshipStoresJson,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
@@ -286,32 +289,59 @@ export class FieldGroupSchemaService {
       );
     }
 
-    // A plain index on every column that references another table, then on
-    // every other column a field asks to index — one per column either way.
-    // Localized fields live in the companion, not the main comp_ table, so
-    // they get no main index.
+    // A plain index on every column that references one entry, then on every
+    // other column a field asks to index — one per column either way, by the
+    // per-field rule the desired schema applies (`collectionIndexSpecs`), so
+    // the two agree on every user column's index. Localized fields live in the
+    // companion, not the main comp_ table, so they get no main index.
+    //
+    // A unique column the dialect can key carries its uniqueness as `uq_`
+    // below and gets no plain index besides. A relation holding a list of
+    // references gets none even when it asks
+    // (`componentRelationshipHoldsReferenceList` says why); a single
+    // polymorphic reference is one object and keeps one it asks for.
+    // Otherwise a plain index goes only where the dialect can index the
+    // column: MySQL cannot index a JSON column, and the index statement would
+    // fail after the table was already created.
+    const indexed = (field: DataFieldConfig, wanted: boolean): boolean => {
+      if (!wanted || componentRelationshipHoldsReferenceList(field)) {
+        return false;
+      }
+      const columnType = this.columnTypeFor(field) ?? "";
+      if (
+        "unique" in field &&
+        field.unique &&
+        uniquenessCanBeAnIndex(columnType, this.dialect)
+      ) {
+        return false;
+      }
+      return columnTypeIsIndexable(columnType, this.dialect);
+    };
     const mainColumns = this.columnFields(fields).filter(
       field => !localizedNames.has(field.name)
     );
     const referencing = mainColumns.filter(field =>
-      this.fieldHasForeignKey(field)
+      indexed(field, componentRelationIsSingleReference(field))
     );
-    // An index a field asks for only where the dialect can index its column: MySQL cannot index a
-    // JSON column, so a declared index on one would fail after the table was already created. The
-    // desired schema asks the same rule, so neither side declares an index the other lacks.
-    const declaredIndexed = mainColumns.filter(
-      field =>
-        !this.fieldHasForeignKey(field) &&
-        "index" in field &&
-        field.index &&
-        columnTypeIsIndexable(this.columnTypeFor(field) ?? "", this.dialect)
+    const declaredIndexed = mainColumns.filter(field =>
+      indexed(
+        field,
+        !componentRelationIsSingleReference(field) &&
+          "index" in field &&
+          field.index === true
+      )
     );
     for (const field of [...referencing, ...declaredIndexed]) {
       const columnName = this.toSnakeCase(field.name);
       const indexName = `idx_${tableName}_${columnName}`;
 
       indexStatements.push(
-        this.createIndexSql(indexName, tableName, columnName)
+        this.createIndexSql(
+          indexName,
+          tableName,
+          columnName,
+          this.columnTypeFor(field) ?? ""
+        )
       );
     }
 
@@ -1134,15 +1164,6 @@ export class FieldGroupSchemaService {
     return [...found];
   }
 
-  private fieldHasForeignKey(field: DataFieldConfig): boolean {
-    if (!isRelationshipField(field) && !isUploadField(field)) return false;
-    return (
-      !Array.isArray(field.relationTo) &&
-      !field.hasMany &&
-      typeof field.relationTo === "string"
-    );
-  }
-
   private isFieldModified(
     oldField: DataFieldConfig,
     newField: DataFieldConfig
@@ -1211,15 +1232,26 @@ export class FieldGroupSchemaService {
     );
   }
 
-  /** A plain index on one column, in this dialect's spelling. */
+  /**
+   * A plain index on one column, in this dialect's spelling. Rendered by the schema pipeline's own
+   * rule, so a MySQL TEXT/BLOB column, which MySQL refuses to index whole, is keyed by the same
+   * prefix a collection's column is.
+   */
   private createIndexSql(
     indexName: string,
     tableName: string,
-    columnName: string
+    columnName: string,
+    columnType: string
   ): string {
-    // MySQL has no IF NOT EXISTS for CREATE INDEX.
-    const ifNotExists = this.dialect === "mysql" ? "" : "IF NOT EXISTS ";
-    return `CREATE INDEX ${ifNotExists}${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`;
+    const sql = columnIndexSql(
+      tableName,
+      indexName,
+      columnName,
+      columnType,
+      this.dialect,
+      name => `${this.q}${name}${this.q}`
+    );
+    return `${sql};`;
   }
 
   private buildFieldMap(fields: FieldConfig[]): Map<string, DataFieldConfig> {

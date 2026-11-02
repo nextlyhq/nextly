@@ -116,7 +116,10 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       children?: React.ReactNode;
-      renderPanel?: (panel: string) => React.ReactNode;
+      renderPanel?: (
+        panel: string,
+        view: { current: string | null; choose: (view: string) => void }
+      ) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
         {/*
@@ -126,7 +129,9 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          */}
         {topBar}
         {inspector}
-        {shownPanel === null ? null : renderPanel?.(shownPanel)}
+        {shownPanel === null
+          ? null
+          : renderPanel?.("design", { current: shownPanel, choose: () => {} })}
         {children}
       </div>
     ),
@@ -146,6 +151,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: nothing,
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,

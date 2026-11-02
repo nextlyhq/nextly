@@ -19,6 +19,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import type { FieldConfig } from "../../collections/fields/types";
 import { getService, type ServiceMap } from "../../di";
 import { NextlyError } from "../../errors";
+import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
 import type { ServiceErrorEnvelope } from "../../errors/from-service-envelope";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { originalErrorOf } from "../../errors/original-error";
@@ -28,7 +29,9 @@ import {
   applyFieldWriteAccess,
   callerAccessGrants,
 } from "../../shared/lib/field-level-registry";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
+import { appLocalization } from "../i18n/configured-locales";
 import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
@@ -282,9 +285,11 @@ export async function resolveComponentSchemas(
  */
 function usableLocale(versionLocale: string | null): string | null {
   if (versionLocale === null) return null;
-  const localization = getService("config")?.localization;
-  // Without localization configured there is no locale to validate against, and
-  // nothing reads one either.
+  // The site's languages as they are now, so a site whose languages are stored
+  // rather than declared in its configuration validates against that list too.
+  const localization = appLocalization();
+  // Without languages there is no locale to validate against, and nothing
+  // reads one either.
   if (!localization) return null;
   return isValidLocale(localization, versionLocale) ? versionLocale : null;
 }
@@ -419,6 +424,12 @@ function deepEquals(a: unknown, b: unknown): boolean {
 export async function restoreVersion(
   args: RestoreVersionArgs
 ): Promise<RestoreVersionResult> {
+  // Refused first when the collection or Single is removed from code, before
+  // the version is read or replayed.
+  await refuseHistoryWriteIfRemovedFromCode({
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+  });
   if (!Number.isInteger(args.versionNo) || args.versionNo < 1) {
     throw NextlyError.validation({
       errors: [
@@ -605,9 +616,9 @@ export async function restoreVersion(
     const result = await singles.update(args.slug, payload, {
       user: args.user,
       overrideAccess: false,
-      // The route authorized the caller for this document; the update still
-      // runs its own document-level rules.
-      routeAuthorized: true,
+      // Not route-authorized: the route judged the restore in every language,
+      // and it writes the version's, so the update asks the rules again in
+      // that language.
       // Forward the actor so an API-key restore is attributed to the key, not
       // its owner — mirrors the collection branch below.
       ...(args.actor ? { actor: args.actor } : {}),
@@ -628,8 +639,10 @@ export async function restoreVersion(
         collectionName: args.slug,
         entryId: args.entryId,
         user: args.user,
+        // Not route-authorized: the route judged the restore in every
+        // language, and it writes the version's, so the update asks the rule
+        // again in that language, its filter included.
         overrideAccess: false,
-        routeAuthorized: true,
         request: args.request,
         // A snapshot that restores `status: "published"` must satisfy the key's
         // own publish grant, not the owner's RBAC.
@@ -679,7 +692,25 @@ function assertWriteSucceeded(
   // snapshot, a server fault -- reached the caller naming nothing.
   const original = originalErrorOf(result);
 
-  if (status === 403 || status === 404) {
+  // A refusal is the update's own answer, as an update refused there is
+  // answered: in words where the caller may read the entry, and as a missing
+  // entry where it may not. One that names no code is answered as missing.
+  if (
+    (status === NEXTLY_ERROR_STATUS.FORBIDDEN ||
+      status === NEXTLY_ERROR_STATUS.NOT_FOUND) &&
+    result.code
+  ) {
+    throw errorFromServiceEnvelope(result as ServiceErrorEnvelope, {
+      reason: "restore-write-denied",
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    });
+  }
+  if (
+    status === NEXTLY_ERROR_STATUS.FORBIDDEN ||
+    status === NEXTLY_ERROR_STATUS.NOT_FOUND
+  ) {
     throw NextlyError.notFound({
       cause: original,
       logContext: {

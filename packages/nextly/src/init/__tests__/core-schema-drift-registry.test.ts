@@ -8,11 +8,18 @@
  * core schema as behind — a warning about a database that is correct, which an
  * operator cannot act on and will learn to ignore.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeAll } from "vitest";
 
 import { MIGRATION_TARGET } from "../../domains/field-groups/migration/manifest";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { warnIfCoreSchemaIsBehind } from "../first-run";
+import { loadDialectTables } from "../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 const introspectLiveSnapshot = vi.fn();
 

@@ -30,6 +30,7 @@ import {
   type RestLimitGate,
   type RestLimitTarget,
 } from "../../middleware/rest-limit-gate";
+import { getNextlyLogger } from "../../observability/logger";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 import {
@@ -41,6 +42,7 @@ import type { PluginSelf } from "../self";
 
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
+import { noteRetiredManageAsked } from "./retired-manage-asked";
 import { buildPluginRouteCaller } from "./route-caller";
 import {
   checkRouteCsrf,
@@ -137,6 +139,11 @@ async function resolvePluginRouteAuth(
 
   const required = requiredPermissionOrRefusal(route, self);
   if ("error" in required) return required;
+  // A route asking a retired permission is answered by the plain four, and
+  // its plugin is told once what to ask instead.
+  if (required.permission) {
+    noteRetiredManageAsked(self.name, ...permissionArgs(required.permission));
+  }
 
   // requirePermission already enforces authentication, so the permission-gated
   // path needs a single call (avoids verifying the session twice).
@@ -147,7 +154,7 @@ async function resolvePluginRouteAuth(
   if (isErrorResponse(authResult)) {
     return { error: toNextlyAuthError(authResult) };
   }
-  return authenticatedCaller(authResult);
+  return authenticatedCaller(authResult, self);
 }
 
 /**
@@ -244,7 +251,8 @@ function authenticatedCaller(
   authResult: Exclude<
     Awaited<ReturnType<typeof requireAuthentication>>,
     { statusCode: number }
-  >
+  >,
+  self: PluginSelf
 ): RouteAuth & { user: AuthUser; caller: PluginRouteCaller } {
   const user: AuthUser = {
     id: authResult.userId as AuthUser["id"],
@@ -260,7 +268,7 @@ function authenticatedCaller(
     // Built from the same `authResult` the scope above is derived from, so
     // the raw grant and the question asked of it cannot disagree about who
     // is asking.
-    caller: buildPluginRouteCaller(authResult),
+    caller: buildPluginRouteCaller(authResult, self.name),
     principal: null,
     credential: authResult.authMethod === "session" ? "cookie" : "bearer",
   };
@@ -286,11 +294,28 @@ function requiredPermissionOrRefusal(
       permission: resolveRoutePermission(route.requiredPermission, self),
     };
   } catch (cause) {
+    // A permission the route cannot work out is the plugin's fault, not the
+    // caller's: answered 500, as any server fault is, and never let through.
+    // A 403 told the caller their grant fell short when no grant could have
+    // been enough. The resolver's own error, or the empty slug's, goes to the
+    // log.
+    // A resolver's own NextlyError, such as an empty slug's, already says what
+    // went wrong; its message and reason are kept, since the log would
+    // otherwise reduce it to the generic public message it carries.
+    const explained = NextlyError.is(cause) ? cause : undefined;
     return {
-      error: NextlyError.forbidden({
+      error: new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "An unexpected error occurred.",
+        logMessage:
+          explained?.logMessage ??
+          "a plugin route's requiredPermission could not be resolved",
         ...(cause instanceof Error ? { cause } : {}),
         logContext: {
           reason: "plugin-route-permission-unresolved",
+          ...(explained?.logContext?.reason !== undefined
+            ? { causeReason: explained.logContext.reason }
+            : {}),
           plugin: self.name,
           path: route.path,
         },
@@ -852,9 +877,26 @@ export async function runPluginRoute(
   }
   const auth = settled.resolved;
   if ("error" in auth) {
+    const requestId = readOrGenerateRequestId(req);
+    // A server fault here, such as a permission the route cannot work out, is
+    // the plugin's to fix, so it is logged with what caused it. A refusal of
+    // the caller is not: it is the gate working.
+    if (auth.error.statusCode >= 500) {
+      try {
+        getNextlyLogger().error({
+          kind: "plugin-route-error",
+          ...auth.error.toLogJSON(requestId),
+          plugin: matched.pluginName,
+          path: matched.route.path,
+        });
+      } catch {
+        // A logger that fails must not cost the caller the answer below, as
+        // the dispatcher and `withErrorHandler` hold for theirs.
+      }
+    }
     return markPluginResponse(
       buildErrorResponse(auth.error, {
-        requestId: readOrGenerateRequestId(req),
+        requestId,
         flattened: currentFlattenedErrors(),
       }),
       matched.route

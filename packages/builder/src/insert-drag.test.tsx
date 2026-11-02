@@ -273,7 +273,9 @@ describe("dragging a block from the palette onto the canvas", () => {
     expect(dragState.draggingBlockName).toBe("test/heading");
     expect(ids()).toEqual(["a", "b"]);
     expect(editorRef?.undoDepth).toBe(0);
-    expect(built).toBe(0);
+    // Built once while aiming, so the locks are asked about the node itself;
+    // building is not inserting, and the document is untouched above.
+    expect(built).toBe(1);
 
     release(200, 90);
 
@@ -281,6 +283,7 @@ describe("dragging a block from the palette onto the canvas", () => {
     // Exactly one, and it is the whole point: two would mean the node was
     // materialised early and moved into place.
     expect(editorRef?.undoDepth).toBe(1);
+    // And the node judged is the node that landed: not built a second time.
     expect(built).toBe(1);
   });
 

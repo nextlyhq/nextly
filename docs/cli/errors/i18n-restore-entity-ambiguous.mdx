@@ -1,0 +1,23 @@
+---
+title: I18N_RESTORE_ENTITY_AMBIGUOUS
+description: "`i18n:restore --collection` names more than one kind of entity, and `--kind` does not say which."
+---
+
+## Cause
+
+`i18n:restore --collection` names more than one kind of entity, and `--kind` does not say which.
+
+A field group's slugs are its own, so one slug can name a field group and a collection or single at once. Restoring one entity's archived values into another's table is the mistake the restore refuses to guess at.
+
+## Fix
+
+- Run the command again with the `--kind` the Next line names, for example `nextly i18n:restore --collection hero --kind field-group`.
+
+## Example
+
+```text
+✗ "hero" names a collection and a field group.
+  Why:  Looked in your config and ui-schema.json. A field group's slugs are its own, so one slug can name a field group and a collection or single at once.
+  Next: Say which with --kind collection or --kind field-group.
+  Docs: https://nextlyhq.com/docs/cli/errors/i18n-restore-entity-ambiguous  (I18N_RESTORE_ENTITY_AMBIGUOUS)
+```

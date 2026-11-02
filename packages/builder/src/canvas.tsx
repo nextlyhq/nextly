@@ -49,6 +49,10 @@ import {
   sharedStyleInputs,
 } from "@nextlyhq/blocks-react";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
+import {
+  BlockEnvironmentProvider,
+  type BlockEnvironment,
+} from "@nextlyhq/blocks-react/environment";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import {
@@ -65,6 +69,7 @@ import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { refusalWording } from "./drag-refusal";
 import { canvasContentRect, scrollableAncestor } from "./geometry-dom";
+import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
@@ -1768,7 +1773,12 @@ function DropRefusalNotice({
   const notice = useRef<HTMLDivElement | null>(null);
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
   const { parentId } = refusal;
-  const { headline, remedy } = refusalWording(refusal, movingType, regionType);
+  // One wording per rule: a lock's from the function every lock refusal uses,
+  // a nesting refusal's from the drag's own.
+  const { headline, remedy } =
+    "lock" in refusal
+      ? lockRefusalWording(refusal.lock)
+      : refusalWording(refusal, movingType, regionType);
 
   /*
    * Measured BEFORE the browser paints, not after.
@@ -1980,22 +1990,41 @@ export function Canvas({
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
 
+  /*
+   * The document and window the blocks are drawn in, for block code that
+   * measures itself or listens (`useBlockEnvironment`). Read from the canvas
+   * root's OWN document rather than the globals, so the answer is the frame's
+   * once the canvas renders inside one, with nothing here to change.
+   * `undefined` until the root has mounted, which the hook passes on rather
+   * than falling back to the admin page.
+   */
+  const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
+    undefined
+  );
+  useEffect(() => {
+    const view = root.current?.ownerDocument.defaultView;
+    if (root.current === null || view == null) return;
+    setEnvironment({ document: root.current.ownerDocument, window: view });
+  }, []);
+
   const page = useMemo(
     () => (
-      <PageRenderer
-        {...rendered}
-        document={document}
-        siteStyles={sheet}
-        // What makes the hit-testing above possible at all. The renderer emits
-        // the node attribute only when asked, because a PUBLISHED page should
-        // not carry an editor's addressing — so the canvas asks and a route
-        // does not. Spread first and set here deliberately: a caller passing
-        // `nodeAttribute: false` through `render` would silently disable
-        // selection for the whole canvas.
-        nodeAttribute
-      />
+      <BlockEnvironmentProvider value={environment}>
+        <PageRenderer
+          {...rendered}
+          document={document}
+          siteStyles={sheet}
+          // What makes the hit-testing above possible at all. The renderer emits
+          // the node attribute only when asked, because a PUBLISHED page should
+          // not carry an editor's addressing — so the canvas asks and a route
+          // does not. Spread first and set here deliberately: a caller passing
+          // `nodeAttribute: false` through `render` would silently disable
+          // selection for the whole canvas.
+          nodeAttribute
+        />
+      </BlockEnvironmentProvider>
     ),
-    [rendered, document, sheet]
+    [rendered, document, sheet, environment]
   );
 
   /*

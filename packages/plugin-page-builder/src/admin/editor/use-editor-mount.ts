@@ -6,13 +6,14 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-editor-mount
  */
 import {
-  hasBlock,
-  registerBlocks,
+  blockLabelFrom,
+  getBlock,
+  placementRefusalMessage,
   type BlockDocument,
   type DocumentKind,
   type DocumentLimits,
+  type LocatedPlacementBreak,
 } from "@nextlyhq/blocks-engine";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
   type NoticeQueue,
   type EditorState,
@@ -37,35 +38,12 @@ import {
   useComponentLibrary,
   type ComponentLibraryRead,
 } from "../component-library-client";
+import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
 import { useMayCreatePattern } from "../pattern-capability-client";
 
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
-
-/**
- * Put the core blocks in the BROWSER's registry.
- *
- * The plugin registers them during its own setup, which runs in the server
- * process. The engine's registry is module state, so the copy loaded into the
- * admin's client bundle is a different one and starts empty — and everything
- * the editor asks flows through it: `allBlocks` fills the inserter,
- * `registryNestingSource` decides what a position accepts, and the renderer
- * resolves a node's type to something it can draw.
- *
- * Registering once, here, rather than handing each of those its own list is
- * what keeps them agreeing. Given separate lists, the palette could offer a
- * block the renderer cannot draw and the nesting rule has never heard of — and
- * an empty registry fails SILENTLY in the permissive direction, because a block
- * nobody has heard of declares no parent and is therefore allowed everywhere.
- *
- * Filtered by `hasBlock` because registration refuses a redefinition, and this
- * runs again on every hot reload and every remount of the editor.
- */
-function ensureCoreBlocksRegistered(): void {
-  const missing = coreBlocks.filter(block => !hasBlock(block.name));
-  if (missing.length > 0) registerBlocks(missing, { source: PLUGIN_SOURCE });
-}
 
 /**
  * What to tell the author when an inline edit did not save, or `null` when
@@ -184,17 +162,28 @@ function useSavePatternVerb(
 export function useEditorMount(
   initialValue: unknown,
   /** The kinds the field accepts, so a seeded document is one it will take. */
-  kinds: readonly DocumentKind[] | undefined
+  kinds: readonly DocumentKind[] | undefined,
+  /**
+   * The field's value as last loaded or saved, which locks keep against;
+   * undefined for an entry never saved.
+   */
+  savedValue?: unknown
 ): EditorMount {
-  // Before anything reads the registry. Inside the component that mounts the
-  // editor rather than at module scope: this file is imported by the field
-  // control, which every entry form holding a blocks field renders whether or
-  // not the editor is ever opened.
-  ensureCoreBlocksRegistered();
+  // The core blocks and every block a plugin contributed, before anything
+  // reads the registry. Inside the component that mounts the editor rather
+  // than at module scope: this file is imported by the field control, which
+  // every entry form holding a blocks field renders whether or not the editor
+  // is ever opened.
+  ensureEditorBlocksRegistered();
 
   const initialDocument = useMemo(
     () => documentFrom(initialValue, kinds),
     [initialValue, kinds]
+  );
+  const stored = useMemo(
+    () =>
+      savedValue === undefined ? undefined : documentFrom(savedValue, kinds),
+    [savedValue, kinds]
   );
   const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
   /*
@@ -235,6 +224,15 @@ export function useEditorMount(
     // through this apply, and this is the one place the reason is known.
     definitions: componentLibrary.definitions,
     onRefused: refusal => notices.raise(refusal.sentence),
+    // A lock refusal, said the same way: the author reads why, in words.
+    onLockRefused: refusal => notices.raise(refusal.sentence),
+    // What the next save judges locks against, so the editor refuses exactly
+    // what that save would.
+    stored,
+    // An edit that would put a block where it may not go is refused by the op
+    // store whichever surface asked for it, so the author is told why here
+    // rather than seeing the edit silently not happen.
+    onPlacementRefused: refusal => notices.raise(placementSentence(refusal)),
   });
 
   /*
@@ -304,3 +302,13 @@ export type EditorMount = {
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
 };
+
+/**
+ * A placement refusal as the author reads it: the engine's wording, which the
+ * server uses for the same refusal on a save, with the editor's block labels.
+ */
+function placementSentence(refusal: LocatedPlacementBreak): string {
+  return placementRefusalMessage(refusal.verdict, {
+    labelOf: type => blockLabelFrom(type, getBlock(type)),
+  });
+}

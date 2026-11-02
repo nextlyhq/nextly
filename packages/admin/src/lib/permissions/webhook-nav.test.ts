@@ -26,8 +26,9 @@ const webhookItem: NavigationItem = {
   requiredPermission: ["read-webhooks", "update-webhooks"],
 };
 
+// The webhook flag decides alone; no other permission is asked here.
 const isVisible = (caps: AdminCapabilities) =>
-  filterNavigationItems([webhookItem], caps).length === 1;
+  filterNavigationItems([webhookItem], caps, () => false).length === 1;
 
 describe("webhook navigation visibility", () => {
   it("shows the item to a user with webhook access", () => {

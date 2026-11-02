@@ -147,6 +147,10 @@ interface Install {
 async function boot(dialect: TestDialect): Promise<Install> {
   current = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
+    // A visitor is judged by the Public role a real boot makes, which reads
+    // the authors by their rule and holds no read of the page or the Single,
+    // whose rule refuses visitors.
+    seedPublic: true,
     collections: [authors(), pages()],
     singles: [settings()],
   });
@@ -279,7 +283,7 @@ async function singleLink(minter: string): Promise<string> {
 
 /** The request's cookies: a preview link, a signed-in session, both or none. */
 function cookies(jar: { link?: string; session?: string }) {
-  return () => ({
+  return async () => ({
     get: (name: string) => {
       if (name === PREVIEW_SCOPE_COOKIE && jar.link !== undefined) {
         return { value: encodeURIComponent(jar.link) };

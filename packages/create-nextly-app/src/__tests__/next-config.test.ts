@@ -282,7 +282,7 @@ describe("a config it cannot change safely", () => {
       'export default {\n  experimental: { optimizePackageImports: ["drizzle-orm"] },\n};\n',
     ],
     [
-      "uses the old experimental option for the list",
+      "uses the deprecated experimental option for the list",
       'export default {\n  experimental: { serverComponentsExternalPackages: ["my-native-lib"] },\n};\n',
     ],
   ] as const) {
@@ -391,126 +391,62 @@ describe("configs it can still change safely", () => {
   });
 });
 
-describe("an app on Next.js 14", () => {
-  const next14 = () =>
-    write(
-      "node_modules/next/package.json",
-      JSON.stringify({ name: "next", version: "14.2.3" })
-    );
-
-  it("leaves the config untouched and prints the option Next.js 14 reads", async () => {
-    await mkdir(path.join(dir, "node_modules/next"), { recursive: true });
-    await next14();
-    const text = "export default {\n  reactStrictMode: true,\n};\n";
+describe("a config with the deprecated experimental list", () => {
+  // Next.js still reads `experimental.serverComponentsExternalPackages`, by
+  // copying it over the top-level list, so writing a top-level list beside it
+  // would report success and lose Nextly's packages.
+  it("says to move its entries to the top-level list and delete the key", async () => {
+    const text =
+      'export default {\n  experimental: { serverComponentsExternalPackages: ["my-native-lib"] },\n};\n';
     await write("next.config.mjs", text);
 
     const result = await patchNextConfig(dir, postgres);
 
-    expect(result).toMatchObject({
-      kind: "manual",
-      file: "next.config.mjs",
-      spelling: "legacy",
-    });
+    expect(result.kind).toBe("manual");
     expect(await read("next.config.mjs")).toBe(text);
-    expect(said(result)).toContain(
-      `experimental: { instrumentationHook: true, serverComponentsExternalPackages: [${quoted(REQUIRED).join(", ")}] },`
+    const [advice] = nextConfigFiles(result).skipped;
+    expect(advice?.why).toBe(
+      "Nextly's packages were not added: it lists packages under experimental.serverComponentsExternalPackages, which Next.js copies over serverExternalPackages, replacing the packages added there. Move the packages under experimental.serverComponentsExternalPackages into a top-level serverExternalPackages list, add Nextly's to it, and delete experimental.serverComponentsExternalPackages, keeping the config's other experimental keys"
     );
-  });
-
-  it("writes no config of its own either, and gives the whole file to create", async () => {
-    await mkdir(path.join(dir, "node_modules/next"), { recursive: true });
-    await next14();
-
-    const result = await patchNextConfig(dir, postgres);
-
-    expect(result).toMatchObject({
-      kind: "manual",
-      spelling: "legacy",
-      file: "next.config.mjs",
-      create: true,
-    });
-    await expect(read("next.config.ts")).rejects.toThrow();
-    await expect(read("next.config.mjs")).rejects.toThrow();
-    const message = said(result);
-    expect(message).toContain("Create next.config.mjs with:");
-    expect(message).toContain("export default {");
-  });
-
-  it("gives Next.js 14 one experimental object, so pasting it as given keeps both keys", async () => {
-    await mkdir(path.join(dir, "node_modules/next"), { recursive: true });
-    await next14();
-    await write("next.config.mjs", "export default {};\n");
-
-    const message = said(await patchNextConfig(dir, postgres));
-
-    expect(message.match(/experimental:/g)).toHaveLength(1);
-    expect(message).toContain("instrumentationHook: true");
-    expect(message).toContain("serverComponentsExternalPackages");
+    // The advice every other refusal gets would keep the legacy key, which is
+    // exactly what loses Nextly's packages.
+    expect(advice?.why).not.toContain(
+      "keeping any packages and experimental keys already there"
+    );
   });
 });
 
-describe("an app whose Next.js is not installed", () => {
+describe("an app whose Next.js version cannot be read", () => {
+  // The list is written without asking which Next.js the app runs: every
+  // supported release reads it as the top-level option.
   const config = "export default {\n  reactStrictMode: true,\n};\n";
-  const uninstall = () =>
-    rm(path.join(dir, "node_modules"), { recursive: true, force: true });
-  const declare = (range: string) =>
-    write("package.json", JSON.stringify({ dependencies: { next: range } }));
-
-  it("goes by the range in package.json when it admits one major", async () => {
-    await uninstall();
-    await declare("^15.1.0");
-    await write("next.config.mjs", config);
-
-    const result = await patchNextConfig(dir, postgres);
-
-    expect(result).toMatchObject({ kind: "written", file: "next.config.mjs" });
-  });
-
-  it("gives the Next.js 14 option when that range is 14's", async () => {
-    await uninstall();
-    await declare("~14.2.3");
-    await write("next.config.mjs", config);
-
-    const result = await patchNextConfig(dir, postgres);
-
-    expect(result).toMatchObject({ kind: "manual", spelling: "legacy" });
-    expect(await read("next.config.mjs")).toBe(config);
-  });
 
   for (const [why, range] of [
-    ["admits several majors", ">=14"],
-    ["admits either of two majors", "14 || 15"],
     ["names no version", "latest"],
     ["is missing", null],
   ] as const) {
-    it(`leaves the config untouched and prints both spellings when the range ${why}`, async () => {
-      await uninstall();
-      if (range) await declare(range);
+    it(`still writes the list when the app's range ${why} and nothing is installed`, async () => {
+      await rm(path.join(dir, "node_modules"), {
+        recursive: true,
+        force: true,
+      });
+      if (range) {
+        await write(
+          "package.json",
+          JSON.stringify({ dependencies: { next: range } })
+        );
+      }
       await write("next.config.mjs", config);
 
       const result = await patchNextConfig(dir, postgres);
 
-      expect(result).toMatchObject({ kind: "manual", spelling: "either" });
-      expect(await read("next.config.mjs")).toBe(config);
-      const message = said(result);
-      expect(message).toContain(
-        `serverExternalPackages: [${quoted(REQUIRED).join(", ")}],`
-      );
-      expect(message).toContain(
-        `experimental: { instrumentationHook: true, serverComponentsExternalPackages: [${quoted(REQUIRED).join(", ")}] },`
-      );
+      expect(result).toMatchObject({
+        kind: "written",
+        file: "next.config.mjs",
+        added: REQUIRED,
+      });
     });
   }
-
-  it("goes by the installed version over the range", async () => {
-    await installNext("14.2.3");
-    await declare("^15.1.0");
-    await write("next.config.mjs", config);
-
-    const result = await patchNextConfig(dir, postgres);
-
-    expect(result).toMatchObject({ kind: "manual", spelling: "legacy" });
-  });
 });
 
 describe("an app with no Next config", () => {

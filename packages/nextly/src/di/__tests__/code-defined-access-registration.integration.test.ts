@@ -2,8 +2,8 @@
  * Code-defined `access` blocks reach the RBAC registry whatever else the config
  * contains.
  *
- * `checkAccess` resolves them from an in-memory registry, and a slug missing
- * from it falls through to the caller's stored permissions. That is the
+ * An access check resolves them from an in-memory registry, and a slug
+ * missing from it falls through to the caller's stored permissions. That is the
  * dangerous direction: an unregistered rule does not fail closed, it stops
  * applying — so a `read: () => false` written to restrict a Single silently
  * stops restricting.
@@ -77,14 +77,12 @@ describe("code-defined access registration (integration)", () => {
       "preferences",
       "public-notes",
     ]);
-    const rbac = current.getService(
-      "rbacAccessControlService"
-    ) as RBACAccessControlService;
+    const access = current.nextly.access;
 
     // The positive control: the permissive rule is reached and answers true for
     // the same user, so a blanket denial cannot explain the refusal below.
     await expect(
-      rbac.checkAccess({
+      access.check({
         userId: "user-1",
         operation: "read",
         resource: "public-notes",
@@ -92,7 +90,7 @@ describe("code-defined access registration (integration)", () => {
     ).resolves.toBe(true);
 
     await expect(
-      rbac.checkAccess({
+      access.check({
         userId: "user-1",
         operation: "read",
         resource: "preferences",

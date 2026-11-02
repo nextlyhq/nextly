@@ -400,7 +400,8 @@ describe.each(getConfiguredTestDialects())(
       // Refused at the collection, as its version history is: the route's own
       // gate, before the document is looked at, so it says nothing of whether
       // this document exists. The read by subject answers not found.
-      expect((await restGet(outsider, path)).status).toBe(403);
+      // Refused read as well, so answered as a missing entry is.
+      expect((await restGet(outsider, path)).status).toBe(404);
       expect(
         (
           await restGet(outsider, ["content-events"], {

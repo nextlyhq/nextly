@@ -14,6 +14,7 @@
 
 import type { FieldConfig } from "nextly/config";
 
+import { useCanRequest } from "@admin/hooks/useCanRequest";
 import type { SingleDocument } from "@admin/services/singleApi";
 
 import { singleDocumentKeys, useSingleDocument } from "./useSingles";
@@ -69,10 +70,13 @@ export function useSingleEditorDocument({
   // shows empty rather than the default language's text, which would bleed the
   // source into the field and risk saving it as this language's translation.
   const fallbackLocale = localizationEnabled ? "none" : undefined;
+  // The overview reads every language's state, so it is asked only of a user
+  // the server lets read them all; otherwise the Single would be refused.
+  const mayReadTranslations = useCanRequest(slug ?? "", "readTranslations");
   const populated = useSingleDocument(slug, {
     locale,
     fallbackLocale,
-    translationStatus: localizationEnabled,
+    translationStatus: localizationEnabled && mayReadTranslations,
     draft: draftsEnabled,
   });
   // The same document as stored. The populated read leaves out a related item

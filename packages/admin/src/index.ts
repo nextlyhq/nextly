@@ -162,6 +162,15 @@ export {
   type DocumentStatus,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
+ * The surrounding document's full-page preview, for a field that shows the
+ * page and offers to open it as the editor's own Preview action does. Null
+ * wherever that action is absent.
+ */
+export {
+  useDocumentPreview,
+  type DocumentPreview,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
  * The fields an active takeover hid, for the surface that took the body over.
  *
  * A takeover collapses the form body to the takeover field alone, so the rest
@@ -353,6 +362,8 @@ export {
   // Reads a plugin's own PUBLIC config from admin metadata; see
   // `usePluginClientConfig`.
   usePluginClientConfig,
+  FieldPicker,
+  describeFieldTypes,
   ConditionRow,
   operatorsForType,
   operatorTakesValue,
@@ -362,6 +373,11 @@ export {
   EDITABLE_VALIDATION_RULES,
 } from "./components/field-ui";
 export type {
+  FieldPickerProps,
+  FieldPickerConfig,
+  FieldPickerChoice,
+  FieldGroupOption,
+  FieldTypeDescription,
   FieldTypePickerProps,
   FieldDefaultValueInputProps,
   FieldDefaultOption,
@@ -691,17 +707,10 @@ export {
 
 // Dashboard Components
 export { StatsCard } from "./components/features/dashboard/StatsCard";
-export {
-  RecentActivity,
-  type RecentActivityProps,
-} from "./components/features/dashboard/RecentActivity";
 export { WelcomeHeader } from "./components/features/dashboard/WelcomeHeader";
 export { ContentStatsGrid } from "./components/features/dashboard/ContentStatsGrid";
-export { RecentEntriesWidget } from "./components/features/dashboard/RecentEntriesWidget";
 export { ContentStatusWidget } from "./components/features/dashboard/ContentStatusWidget";
-export { CollectionQuickLinks } from "./components/features/dashboard/CollectionQuickLinks";
 export { ProjectStatsGrid } from "./components/features/dashboard/ProjectStatsGrid";
-export { OnboardingChecklist } from "./components/features/dashboard/OnboardingChecklist";
 export {
   StatsGridSkeleton,
   ActivitySkeleton,
@@ -709,7 +718,6 @@ export {
   ContentStatusSkeleton,
   CollectionQuickLinksSkeleton,
   ProjectStatsSkeleton,
-  OnboardingChecklistSkeleton,
   DashboardPageSkeleton,
 } from "./components/features/dashboard/DashboardSkeleton";
 
@@ -733,6 +741,49 @@ export type {
   RecentEntriesResponse,
 } from "./types/dashboard/recent-entries";
 export type { ProjectStatItem } from "./types/dashboard/project-stats";
+
+// The widget kit: the parts core's own dashboard cards are drawn from, for a
+// widget's own component. Plugins reach them only through
+// `@nextlyhq/plugin-sdk/admin`, so the admin stays the host's single copy and
+// a card part reads the tier of the card it is drawn in.
+// @experimental while the dashboard widget SDK settles.
+export {
+  type CardEmptyContent,
+  type SkeletonShape,
+} from "./components/features/widgets/frame/states";
+export {
+  FrameState,
+  type CardState,
+  type SkeletonHint,
+} from "./components/features/widgets/frame/card-state";
+// The parts of a card's body, under the names a plugin uses: `Widget.*`. The formatters and the
+// colour accessor are the SDK root's, from `@nextlyhq/ui`'s server-safe entries.
+export {
+  Widget,
+  type WidgetBarChartGroup,
+  type WidgetBarChartProps,
+  type WidgetChartUnit,
+  type WidgetFigureProps,
+  type WidgetKit,
+  type WidgetListProps,
+  type WidgetListTotal,
+  type WidgetRowAction,
+  type WidgetSeries,
+  type WidgetSeriesChartProps,
+  type WidgetSeriesInterval,
+  type WidgetSeriesPoint,
+  type WidgetTableColumn,
+  type WidgetTableProps,
+} from "./components/features/widgets/kit";
+export type { WidgetRenderSize } from "nextly/widget-result";
+// A row's time as core's list cards word it ("5m ago", then the date in the
+// admin's timezone and date format), and the clock those cards re-render on,
+// so a widget's own list words and moves its times as theirs do.
+export { formatRelativeTime as formatWidgetTime } from "./lib/dashboard";
+export { useNowTick as useWidgetClock } from "./hooks/useNowTick";
+// Asks the dashboard's cards and header summary again, for a widget whose own
+// write changes what they answer.
+export { useRefreshDashboard } from "./hooks/queries/useRefreshDashboard";
 
 // Constants
 export {

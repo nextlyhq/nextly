@@ -10,6 +10,8 @@ interface PluginComponentBoundaryProps {
   children: ReactNode;
   /** Optional custom fallback; defaults to a compact, identifiable message. */
   fallback?: ReactNode;
+  /** Told when the component throws, for a host that draws the failure itself. */
+  onError?: () => void;
 }
 
 /**
@@ -23,9 +25,11 @@ export function PluginComponentBoundary({
   componentPath,
   children,
   fallback,
+  onError,
 }: PluginComponentBoundaryProps): ReactNode {
   return (
     <ErrorBoundary
+      {...(onError === undefined ? {} : { onError: () => onError() })}
       fallback={
         fallback ?? (
           <div

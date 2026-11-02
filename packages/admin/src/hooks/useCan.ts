@@ -1,19 +1,27 @@
 import { useCurrentUserPermissions } from "./useCurrentUserPermissions";
 
 /**
- * @experimental Returns `true` if the current user holds `permission` (D36).
- * Super-admin always passes (delegated to `hasPermission`). Returns `false`
- * while permissions are still loading — the gate stays closed until access is
- * known, a safe default for UX gating. Client-side UX only; the server still
- * enforces via `requirePermission`.
+ * @experimental Returns `true` if the current user may do what `permission`
+ * names (D36). Returns `false` while that is still loading — the gate stays
+ * closed until access is known, a safe default for UX gating. Client-side UX
+ * only; the server still enforces every request.
  *
  * `permission` is a permission slug (`${action}-${resource}`, e.g.
  * `"manage-seo"`) — assignable from `PermissionSlug` (`@nextlyhq/plugin-sdk`).
+ * A read, create, update, delete, publish or unpublish of a collection or
+ * Single (`"update-posts"`) is answered as the server decides it for that
+ * entity, its code access rules included, so it can be `false` for a role
+ * that holds the permission. Once the server has answered, such a slug for a
+ * resource it does not name is `false` except to a super-admin, so a plugin
+ * permission that is not about a collection or Single takes another action
+ * (`"export-reports"`). Any other slug is answered from the permissions the
+ * user's roles hold, a super-admin holding all of them.
+ *
  * Typed as `string` (not nextly's `PermissionSlug`) because admin's bundled
  * d.ts cannot reference nextly's barrel types; `PermissionSlug` is `string`
  * until codegen narrows it (D47/P6).
  */
 export function useCan(permission: string): boolean {
-  const { hasPermission } = useCurrentUserPermissions();
-  return hasPermission(permission);
+  const { can } = useCurrentUserPermissions();
+  return can(permission);
 }

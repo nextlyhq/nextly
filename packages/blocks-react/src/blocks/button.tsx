@@ -212,5 +212,7 @@ export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // An `<a>` or a `<button>` either way: interactive phrasing content.
+  contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
   render: renderButton,
 });

@@ -276,6 +276,8 @@ The seeded `Super Admin` role bypasses every check. Other roles you create are g
 
 Ask whether the user may do something, rather than which roles they hold: a user whose custom role holds the permission is then allowed too. `nextly.access.check` asks the same access decision every route uses, collection and Single rules included.
 
+For a read, `true` means the user may read some entries. Where the collection's `read` rule answers a filter, the user may read only the entries the filter matches, and a read through Nextly in the user's context applies it. So read with that context (`overrideAccess: false` and the user) rather than as a trusted call, which returns every entry. A write whose rule answers a filter is answered `false`.
+
 The example below authenticates a signed-in session, so a request carrying only an API key is answered `401` before any check. `nextly.access.check` judges the user named by `userId`: it doesn't know about an API key's own scope, which can be narrower than the user who made the key.
 
 ```typescript
@@ -313,7 +315,9 @@ export async function GET(req: Request) {
 
 ## Permissions
 
-Permissions follow the slug format `<action>-<resource>` -- e.g. `read-users`, `create-roles`, `update-api-keys`, `manage-settings`. The four standard actions are `create`, `read`, `update`, `delete`; some resources also use `manage` as a coarse-grained shortcut.
+Permissions follow the slug format `<action>-<resource>` -- e.g. `read-users`, `create-roles`, `update-api-keys`, `update-settings`. The four standard actions are `create`, `read`, `update`, `delete`; a few resources have a `manage` permission of their own, such as `manage-background-jobs`.
+
+> **Upgrading:** `manage-media`, `manage-settings`, `manage-email-providers` and `manage-email-templates` are retired. Run `nextly upgrade` after updating: it gives each role holding one the plain `read-`, `create-`, `update-` and `delete-` permissions on that resource. Until it has run, a role holding only the retired permission is refused there.
 
 Permissions for the core resources (`users`, `roles`, `permissions`) are seeded the first time the database is set up. Permissions for collections and singles you define in `nextly.config.ts` are wired up by the collection / single registration path -- you don't need to add them to a seeder.
 

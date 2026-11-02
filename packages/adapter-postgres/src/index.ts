@@ -77,6 +77,8 @@ import type {
   PoolStats,
   TransactionContext,
   TransactionOptions,
+  SessionOptions,
+  StatementSession,
   SqlParam,
   InsertOptions,
   DatabaseError,
@@ -202,20 +204,54 @@ const PG_ERROR_CODES: Record<string, DatabaseErrorKind> = {
  * and create objects in `public` but may not create schemas would fail to
  * connect over a schema that is already there. Reading `pg_namespace` needs no
  * privilege, so only a schema that is genuinely missing asks for one.
+ *
+ * Created inside a transaction holding an advisory lock on the schema's name,
+ * and looked up again once the lock is held. `IF NOT EXISTS` alone is not safe
+ * against itself: two processes connecting at the same moment can both pass its
+ * check, and the second to commit fails with a unique violation on
+ * `pg_namespace_nspname_index`, which fails its connect. The transaction-scoped
+ * lock makes the second wait for the first to commit, and its lookup, a new
+ * statement with a new snapshot, then finds the schema. The transaction is
+ * read committed whatever the database's or role's default: at repeatable
+ * read or serializable the snapshot is fixed by the first statement, the lock
+ * wait, so the lookup would miss the schema and the CREATE that followed would
+ * ask for the database privilege the first paragraph avoids. Released by the commit
+ * or rollback, so it never outlives this one connection's transaction, and a
+ * transaction-mode pooler keeps all of it on one server connection.
  */
 async function ensureSchemaExists(
   client: PoolClient,
   schema: string
 ): Promise<void> {
   const name = assertSchemaName(schema);
+  if (await schemaExists(client, name)) return;
+  await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+  try {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext('nextly:create-schema'), hashtext($1))",
+      [name]
+    );
+    if (!(await schemaExists(client, name))) {
+      // Still `IF NOT EXISTS`: a process of an earlier version takes no lock.
+      await client.query(`CREATE SCHEMA IF NOT EXISTS ${name}`);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  }
+}
+
+/** Whether the database has a schema of this name. Needs no privilege. */
+async function schemaExists(
+  client: PoolClient,
+  name: string
+): Promise<boolean> {
   const existing = await client.query(
     "SELECT 1 FROM pg_namespace WHERE nspname = $1",
     [name]
   );
-  if (existing.rows.length > 0) return;
-  // Still `IF NOT EXISTS`: another process connecting at the same moment may
-  // create it between the lookup and this statement.
-  await client.query(`CREATE SCHEMA IF NOT EXISTS ${name}`);
+  return existing.rows.length > 0;
 }
 
 /**
@@ -537,6 +573,58 @@ export class PostgresAdapter extends DrizzleAdapter {
   }
 
   /**
+   * Runs `work` on one client taken from the pool, outside a transaction,
+   * each statement committing as it runs, so connection-scoped state a
+   * statement sets (a temporary table, a session setting, an advisory lock)
+   * is still there for the next. The client is closed afterwards, whether
+   * `work` finished or threw, never handed back to the pool: that state ends
+   * with it instead of reaching a later caller. No `SessionOptions` field
+   * changes anything on PostgreSQL: strict mode is MySQL's, and PostgreSQL
+   * refuses an overlong value already.
+   */
+  override async withSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    _options?: SessionOptions
+  ): Promise<T> {
+    // A precondition: before any connection is taken.
+    this.refuseSessionInTransaction();
+    const pool = this.ensurePool();
+    // A checkout, taken from the pool like `executeQuery`'s queries are.
+    this.notePoolAccess();
+    let client: PoolClient;
+    try {
+      client = await pool.connect();
+    } catch (error) {
+      throw this.classifyError(error);
+    }
+    try {
+      return await work({
+        execute: async <R = unknown>(
+          statement: string,
+          params: SqlParam[] = []
+        ): Promise<R[]> => {
+          const startTime = Date.now();
+          try {
+            const result = await client.query(statement, params as unknown[]);
+            if (this.config.logger?.query) {
+              this.config.logger.query(
+                statement,
+                params,
+                Date.now() - startTime
+              );
+            }
+            return result.rows as R[];
+          } catch (error) {
+            throw this.classifyError(error, statement);
+          }
+        },
+      });
+    } finally {
+      client.release(true);
+    }
+  }
+
+  /**
    * Executes a raw SQL query.
    *
    * @param sql - SQL statement with $1, $2, ... placeholders
@@ -810,6 +898,10 @@ export class PostgresAdapter extends DrizzleAdapter {
       const result = await this.insert<T>(table, data[0], options);
       return [result];
     }
+
+    // Refused as the single-row insert is: a table this instance never
+    // registered may not match what its code would write.
+    this.resolvedTableObject(table);
 
     // Build multi-row INSERT
     const columns = Object.keys(data[0]);
@@ -1143,7 +1235,10 @@ export class PostgresAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const mapped = this.mapRowToRawSql(this.getTableObject(table), data);
+        // Refused before any statement, as the pooled insert is: a rejected
+        // statement would abort the caller's whole transaction.
+        const tableObj = this.resolvedTableObject(table);
+        const mapped = this.mapRowToRawSql(tableObj, data);
         const columns = Object.keys(mapped);
         const values = Object.values(mapped);
         const placeholders = values.map((_, i) => `$${i + 1}`).join(", ");
@@ -1152,7 +1247,6 @@ export class PostgresAdapter extends DrizzleAdapter {
 
         const ret = options?.returning;
         const returningEmpty = Array.isArray(ret) && ret.length === 0;
-        const tableObj = this.getTableObject(table);
         // Each returned timestamp's wall clock, spelled out by the database.
         // node-postgres turns one into a `Date` in the LOCAL zone before this
         // code sees it, and that conversion cannot be undone: a wall clock
@@ -1184,7 +1278,8 @@ export class PostgresAdapter extends DrizzleAdapter {
       ): Promise<T[]> => {
         if (data.length === 0) return [];
 
-        const tableObj = this.getTableObject(table);
+        // Refused before any statement, as `insert` above is.
+        const tableObj = this.resolvedTableObject(table);
         const mappedRecords = data.map(r => this.mapRowToRawSql(tableObj, r));
         const columns = Object.keys(mappedRecords[0]);
         const params: unknown[] = [];

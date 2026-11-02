@@ -1,0 +1,24 @@
+---
+title: FIELD_GROUP_BACKUP_NOT_CONFIRMED
+description: "`migrate:field-groups --apply` was run without `--backup-confirmed`, so it changed nothing."
+---
+
+## Cause
+
+`migrate:field-groups --apply` was run without `--backup-confirmed`, so it changed nothing.
+
+Applying the field-group storage migration renames tables and rewrites stored rows. It runs only once you state that a restorable backup of the database exists. A preview, without `--apply`, needs no backup.
+
+## Fix
+
+- Take a backup of the database you can restore from.
+- Then run `nextly migrate:field-groups --apply --backup-confirmed`, adding `--down` to roll a migration back.
+
+## Example
+
+```text
+✗ `nextly migrate:field-groups --apply` did not run: it needs `--backup-confirmed`.
+  Why:  Applying renames field-group tables and rewrites stored rows, so it runs only once you confirm a restorable backup of the database exists.
+  Next: Take a backup of the database, then run `nextly migrate:field-groups --apply --backup-confirmed`.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-backup-not-confirmed  (FIELD_GROUP_BACKUP_NOT_CONFIRMED)
+```

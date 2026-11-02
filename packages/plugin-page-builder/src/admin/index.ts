@@ -31,6 +31,21 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 
 import { BUILDER_VIEW_COMPONENT } from "../builder-view";
+/*
+ * The editor's stylesheet, loaded by whatever loads this entry.
+ *
+ * An app reaches this module through the component map `nextly generate:types`
+ * writes, which imports it wherever the plugin is configured. Importing the
+ * sheet here is what makes "configure the plugin" enough: before, every app
+ * also had to import it in its admin page by hand, and one that missed the step
+ * got an unstyled builder with no error. An app that still imports it by hand
+ * loads the same file, which its bundler includes once.
+ *
+ * Relative, and kept external by the build (`tsdown.config.ts`): the sheet is
+ * copied into `dist/styles` rather than bundled, so `dist/admin/index.js`
+ * reaches the shipped file by the same relative path this source file uses.
+ */
+import "../styles/editor.css";
 
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
@@ -75,5 +90,12 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
 });
 
 export { BlocksField, BlocksSummary, PageBuilderView };
+/**
+ * Called by the app's generated component map to hand the editor the block
+ * modules plugins declared (`editorEntry`, `editor.component`). Not for a
+ * plugin to call: the map is what knows every declared path.
+ */
+export { registerBlockEditorModules } from "./contributed-blocks";
+export type { BlockEditorModules } from "./contributed-blocks";
 export type { BlocksFieldProps } from "./BlocksField";
 export type { BlocksSummaryProps } from "./BlocksSummary";

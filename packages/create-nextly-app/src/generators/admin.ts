@@ -1,6 +1,13 @@
+import path from "path";
+
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
+import {
+  ADMIN_LAYOUT,
+  withRelativeConfigImport,
+  type MediaRouteTemplates,
+} from "./media-routes";
 import {
   TSX_FILE,
   appPageExtensions,
@@ -33,38 +40,28 @@ export default function AdminPage() {
 `;
 
 /**
- * Generate the layout template with the correct relative import path
- * to nextly.config based on whether the project uses a src/ directory.
- *
- * With src/:    src/app/admin/[[...params]]/layout.tsx → ../../../../nextly.config
- * Without src:  app/admin/[[...params]]/layout.tsx     → ../../../nextly.config
+ * The admin layout, as the base template holds it, with its config import
+ * pointing at the project's `nextly.config` from where the layout is written.
+ * One source with a new project's layout, so an app Nextly is added to gets
+ * the same per-request admin.
  */
-function getAdminLayoutTemplate(srcDir: boolean): string {
-  const configImportPath = srcDir
-    ? "../../../../nextly.config"
-    : "../../../nextly.config";
-
-  return `import { getBrandingCss } from "nextly/config";
-
-import config from "${configImportPath}";
-
-const brandingCss = getBrandingCss(config.admin?.branding);
-
-export default function AdminLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <>
-      {brandingCss && (
-        <style dangerouslySetInnerHTML={{ __html: brandingCss }} />
-      )}
-      {children}
-    </>
+function adminLayout(
+  cwd: string,
+  adminDir: string,
+  templates: MediaRouteTemplates
+): string {
+  const text = templates.get(ADMIN_LAYOUT.path);
+  if (text === undefined) {
+    throw new Error(
+      `The templates read for this app hold no ${ADMIN_LAYOUT.path}, so Nextly's admin layout cannot be written.`
+    );
+  }
+  return withRelativeConfigImport(
+    text,
+    cwd,
+    path.join(cwd, adminDir, "layout.tsx"),
+    ADMIN_LAYOUT.path
   );
-}
-`;
 }
 
 /**
@@ -73,13 +70,14 @@ export default function AdminLayout({
  */
 export async function generateAdminPage(
   cwd: string,
-  projectInfo: ProjectInfo
+  projectInfo: ProjectInfo,
+  templates: MediaRouteTemplates
 ): Promise<GeneratedFiles> {
   const files = nothingYet();
   const adminDir = `${projectInfo.appDir}/admin/[[...params]]`;
   // The page and its layout are judged one by one: a layout the app has is
   // kept even when the page is missing.
-  const layout = getAdminLayoutTemplate(projectInfo.srcDir);
+  const layout = adminLayout(cwd, adminDir, templates);
   // Where the app sets pageExtensions, Next.js would never serve page.tsx or
   // layout.tsx: each is reported under a name it would serve, which these
   // files, TypeScript with JSX, need to end in tsx, and neither is written.

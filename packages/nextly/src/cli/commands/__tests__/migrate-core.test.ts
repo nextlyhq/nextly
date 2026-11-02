@@ -7,7 +7,8 @@ import {
   migrationChecksum,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
-import { migrateCore } from "../migrate";
+import { CliError } from "../../errors";
+import { migrateCore, migrateExitCode } from "../migrate";
 
 function deps(over: Record<string, unknown> = {}) {
   return {
@@ -24,6 +25,8 @@ function deps(over: Record<string, unknown> = {}) {
     lockMode: "fail-fast" as const,
     reconcileCoreFn: vi.fn(async () => ({ changed: false })),
     runFileMigrationsFn: vi.fn(async () => 0),
+    refuseUnresolvedAttemptsFn: vi.fn(async () => {}),
+    assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
       collectionsRegistered: 0,
@@ -233,6 +236,50 @@ describe("migrateCore", () => {
       "metadata",
       "lock:released",
     ]);
+  });
+
+  it("asks the caller's precondition after the files and before the metadata, inside the lock", async () => {
+    const order: string[] = [];
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 1;
+      }),
+      beforeMetadata: vi.fn(async () => {
+        order.push("precondition");
+      }),
+      reconcileMetadataFn: vi.fn(async () => {
+        order.push("metadata");
+        return {
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+          marked: 0,
+          stillPending: 0,
+          unreadable: [],
+        };
+      }),
+    });
+
+    await migrateCore(d as never);
+
+    expect(order).toEqual(["files", "precondition", "metadata"]);
+  });
+
+  // Refused there, the registry keeps the definitions it had, and the next run judges the same
+  // change again; the files that ran stay applied.
+  it("records no metadata when the caller's precondition refuses, and throws its refusal", async () => {
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => 2),
+      beforeMetadata: vi.fn(async () => {
+        throw new Error("a translations column cannot hold its field");
+      }),
+    });
+
+    await expect(migrateCore(d as never)).rejects.toThrow(
+      /cannot hold its field/
+    );
+    expect(d.runFileMigrationsFn).toHaveBeenCalledOnce();
+    expect(d.reconcileMetadataFn).not.toHaveBeenCalled();
   });
 
   it("THROWS (does not exit) when file migrations reject", async () => {
@@ -459,5 +506,103 @@ describe("a plugin's migration history", () => {
     // what ran before it is under test here.
     await migrateCore(d as never).catch(() => undefined);
     expect(order).toEqual(["ledger", "core"]);
+  });
+});
+
+describe("an unresolved app attempt", () => {
+  it("is refused inside the lock, before the core reconcile writes anything", async () => {
+    const order: string[] = [];
+    const refusal = new Error("unresolved attempt");
+    const d = deps({
+      withLock: async (
+        _db: unknown,
+        _d: unknown,
+        fn: () => Promise<unknown>
+      ) => {
+        order.push("lock");
+        return { ran: true as const, value: await fn() };
+      },
+      refuseUnresolvedAttemptsFn: vi.fn(async (args: { command: string }) => {
+        order.push(`refusal:${args.command}`);
+        throw refusal;
+      }),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+      lockCommand: "boot migrations (db.runMigrationsOnBoot)",
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    // The command it names is the one holding the lock, the boot step's here.
+    expect(order).toEqual([
+      "lock",
+      "refusal:boot migrations (db.runMigrationsOnBoot)",
+    ]);
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("an applied file edited since it ran", () => {
+  it("is refused inside the lock, after the attempt check and before the core reconcile", async () => {
+    const order: string[] = [];
+    const refusal = new CliError("MIGRATION_TAMPERED", {
+      what: "edited",
+      why: "edited",
+      next: "restore it",
+    });
+    const d = deps({
+      refuseUnresolvedAttemptsFn: vi.fn(async () => {
+        order.push("attempts");
+      }),
+      assertAppliedFilesUnchangedFn: vi.fn(
+        async (args: { command: string }) => {
+          order.push(`checksums:${args.command}`);
+          throw refusal;
+        }
+      ),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    expect(order).toEqual(["attempts", "checksums:nextly migrate"]);
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+    // The code the guide documents, so a deploy script can tell it apart.
+    expect(migrateExitCode(refusal)).toBe(2);
+    expect(migrateExitCode(new Error("anything else"))).toBe(1);
+    expect(
+      migrateExitCode(
+        new CliError("MIGRATION_MISSING", { what: "x", why: "x", next: "x" })
+      )
+    ).toBe(1);
+  });
+});
+
+describe("how migrateCore asks for the schema lock", () => {
+  /** The options the lock was asked for, observed on the real call. */
+  async function lockOptions(over: Record<string, unknown> = {}) {
+    const withLock = vi.fn(
+      async (
+        _adapter: unknown,
+        _dialect: unknown,
+        fn: () => Promise<unknown>,
+        _options?: Record<string, unknown>
+      ) => ({ ran: true as const, value: await fn() })
+    );
+    await migrateCore(deps({ withLock, ...over }) as never);
+    return withLock.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
+  }
+
+  // A boot — production or development — runs inside a server, whose shutdown may let the
+  // migration run on after a signal; releasing the lock then would free it under running work.
+  it("leaves the lock to lapse on an interrupt unless its caller asks to release it", async () => {
+    expect((await lockOptions())?.releaseOnInterrupt).toBe(false);
+  });
+
+  it("releases it on an interrupt when the command asks, as `nextly migrate` does", async () => {
+    expect(
+      (await lockOptions({ lockReleaseOnInterrupt: true }))?.releaseOnInterrupt
+    ).toBe(true);
   });
 });

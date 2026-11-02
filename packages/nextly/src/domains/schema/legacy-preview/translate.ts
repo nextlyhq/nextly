@@ -2,9 +2,9 @@
 // + RenameCandidate[]) into the legacy SchemaPreviewResult shape that
 // the admin SchemaChangeDialog renders.
 //
-// F8 PR 3 introduced this file to keep the public framework's
+// This file keeps the public framework's
 // `/api/collections/schema/{slug}/preview` endpoint backwards-
-// compatible while migrating internals onto the new pipeline. The
+// compatible now that its internals run on the new pipeline. The
 // translator is documented compatibility code:
 //   - Single source of truth for preview data is now the pipeline
 //     (Phase A diff + Phase B classifier in `pipeline/preview.ts`).
@@ -19,12 +19,19 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { isVirtualField } from "../../../collections/fields/virtual";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "../pipeline/classifier/count-helpers";
 import type { PipelinePreviewResult } from "../pipeline/preview";
+import {
+  fieldProducesColumn,
+  toSnakeCase,
+} from "../services/field-column-descriptor";
 import { computeFieldDiff } from "../services/field-diff";
 import type {
   AddedField,
@@ -40,6 +47,11 @@ export interface TranslateContext {
   newFields: FieldDefinition[];
   db: unknown;
   dialect: SupportedDialect;
+  /**
+   * Whether the entity is translated now. A translated field's values live in
+   * the companion table, so that is where its removal is counted.
+   */
+  localized?: boolean;
 }
 
 /**
@@ -48,17 +60,17 @@ export interface TranslateContext {
  * What this does:
  *   1. Run `computeFieldDiff` on user-provided fields to produce the
  *      legacy `changes.{added,removed,changed,unchanged}` shape.
- *   2. Query non-null row counts on each removed field (best-effort —
- *      errors return 0). Pre-pipeline `SchemaChangeService.preview`
- *      did the same with `COUNT(*) WHERE col IS NOT NULL`; we compute
- *      it as `countRows - countNulls` to reuse pipeline helpers.
+ *   2. Count the non-null values each removed field holds, where they are
+ *      stored (`countRows - countNulls`, the pipeline's helpers). A count
+ *      that cannot be read never fails the translation; it comes back as
+ *      unknown, and the removal is classed as deleting data.
  *   3. Map each ClassifierEvent to either an InteractiveField (3-option
  *      legacy shape) or a warning string. type_change events become
  *      warnings only — the legacy dialog has no per-field force-cast UX.
  *   4. Compute classification per legacy rules: most-severe-wins across
  *      all field-level classifications, plus the pipeline's level.
  *   5. Default `ddlPreview` to []. Legacy did a best-effort dry-run
- *      pushSchema; in PR 3 we drop that side-channel because it
+ *      pushSchema; that side-channel is gone here because it
  *      coupled preview to drizzle-kit timing. No admin UI consumer
  *      reads `ddlPreview` today.
  */
@@ -67,6 +79,7 @@ export async function translatePipelinePreviewToLegacy(
   context: TranslateContext
 ): Promise<SchemaPreviewResult> {
   const { tableName, currentFields, newFields, db, dialect } = context;
+  const localized = context.localized === true;
 
   // Step 1: legacy field-level diff (pure function).
   const diff = computeFieldDiff(currentFields, newFields);
@@ -88,13 +101,14 @@ export async function translatePipelinePreviewToLegacy(
     };
   }
 
-  // Step 2: row counts on removed fields. Best-effort — never fails the
-  // translation. `countRows - countNulls` mirrors legacy
-  // `COUNT(*) WHERE col IS NOT NULL` semantics with two existing helpers.
+  // Step 2: what each removed field holds, counted where its values are
+  // stored. A count that cannot be read never fails the translation, and never
+  // reads as "nothing is deleted" either: it comes back as unknown.
   const fieldRowCounts = await computeNonNullCounts(
     db,
     dialect,
     tableName,
+    localized,
     diff.removed
   );
 
@@ -151,19 +165,27 @@ export async function translatePipelinePreviewToLegacy(
   });
 
   const removed: RemovedField[] = diff.removed.map(field => {
-    const rowCount = fieldRowCounts[field.name] ?? 0;
+    const count = fieldRowCounts[field.name] ?? UNCOUNTED;
+    // Deletes data when it holds values, and when its values could not be
+    // counted: an unknown count is never taken for an empty column.
+    const deletes = count.unknown || count.rowCount > 0;
     return {
       name: field.name,
       type: field.type,
-      rowCount,
-      classification: rowCount > 0 ? "destructive" : "safe",
+      rowCount: count.rowCount,
+      ...(count.unknown ? { rowCountUnknown: true as const } : {}),
+      classification: deletes ? "destructive" : "safe",
     };
   });
 
   const changed: ChangedField[] = diff.changed.map(change => {
-    const rowCount = fieldRowCounts[change.name] ?? 0;
+    const rowCount = fieldRowCounts[change.name]?.rowCount ?? 0;
     let classification: "safe" | "destructive" | "interactive" = "safe";
-    if (change.reason === "constraint_changed") {
+    if (togglesHasMany(change.name, currentFields, newFields)) {
+      // One related entry or many is stored differently, so switching between
+      // them can lose values, whatever else changed on the field with it.
+      classification = "destructive";
+    } else if (change.reason === "constraint_changed") {
       const matchedEvent = preview.events.find(
         e =>
           e.kind === "add_not_null_with_nulls" && e.columnName === change.name
@@ -202,18 +224,32 @@ export async function translatePipelinePreviewToLegacy(
   }
 
   // Combine field-diff warnings with classifier event warnings.
-  const removedWarnings = removed
-    .filter(f => f.rowCount > 0)
-    .map(
-      f =>
-        `Removing field '${f.name}' will drop ${f.rowCount.toLocaleString()} rows of data.`
-    );
-  const changedWarnings = changed
-    .filter(c => c.classification === "destructive")
-    .map(
-      c =>
-        `Changing field '${c.name}' type (${c.from} -> ${c.to}) may cause data loss.`
-    );
+  const removedWarnings = removed.flatMap(f => {
+    if (f.rowCountUnknown) {
+      return [
+        `Removing field '${f.name}' may delete its values: could not count the rows '${f.name}' holds.`,
+      ];
+    }
+    return f.rowCount > 0
+      ? [
+          `Removing field '${f.name}' will drop ${f.rowCount.toLocaleString()} rows of data.`,
+        ]
+      : [];
+  });
+  // A change can do both, so each says its own part: one warning for the
+  // switch between one and many, one for a change of type.
+  const changedWarnings = changed.flatMap(c => [
+    ...(togglesHasMany(c.name, currentFields, newFields)
+      ? [
+          `Changing '${c.name}' between one and many related entries changes how its values are stored; values may be lost.`,
+        ]
+      : []),
+    ...(c.reason === "type_changed"
+      ? [
+          `Changing field '${c.name}' type (${c.from} -> ${c.to}) may cause data loss.`,
+        ]
+      : []),
+  ]);
   const notNullWarnings = interactiveFields
     .filter(f => f.reason === "nullable_to_not_null_with_nulls")
     .map(
@@ -242,37 +278,86 @@ export async function translatePipelinePreviewToLegacy(
   };
 }
 
-// Compute non-null row counts for each removed field via two count
-// queries per field (countRows + countNulls). Best-effort: any query
-// failure returns 0 for that field so the translator never blocks
-// preview rendering.
+/** A removed field's values, as far as the preview could count them. */
+interface RemovedCount {
+  rowCount: number;
+  /** True when the count could not be read: never taken for an empty column. */
+  unknown: boolean;
+}
+
+const UNCOUNTED: RemovedCount = { rowCount: 0, unknown: true };
+
+/**
+ * Whether a changed field switches between one related entry and many, which
+ * stores its values differently. Read from the fields themselves rather than
+ * from the diff's single reason, which names only the first difference it
+ * finds; an absent flag and `false` both mean one.
+ */
+function togglesHasMany(
+  name: string,
+  currentFields: FieldDefinition[],
+  newFields: FieldDefinition[]
+): boolean {
+  const before = currentFields.find(f => f.name === name);
+  const after = newFields.find(f => f.name === name);
+  if (!before || !after) return false;
+  return (before.hasMany === true) !== (after.hasMany === true);
+}
+
+/**
+ * Count each removed field's non-null values where they are stored:
+ * - a field with no storage (a virtual field) holds nothing;
+ * - a field whose values live in a table of their own (a field group, a
+ *   many-to-many relationship) is not counted here, so its count is unknown;
+ * - a translated field of a translated entity is counted in the companion
+ *   table, across its languages; every other field on the main table;
+ * - the column is the field's stored column name, not its name as written.
+ * Any count that fails is unknown, never 0.
+ */
 async function computeNonNullCounts(
   db: unknown,
   dialect: SupportedDialect,
   tableName: string,
+  localized: boolean,
   removed: FieldDefinition[]
-): Promise<Record<string, number>> {
-  if (removed.length === 0) return {};
-
-  const counts: Record<string, number> = {};
-
-  // One countRows call upfront — same total for every removed field.
-  let total = 0;
-  try {
-    total = await countRowsHelper(db, dialect, tableName);
-  } catch {
-    // Table may not exist (e.g. preview for a still-being-created
-    // collection). Default totals to 0 and short-circuit per-field
-    // null queries since they'd fail too.
-    return Object.fromEntries(removed.map(f => [f.name, 0]));
-  }
+): Promise<Record<string, RemovedCount>> {
+  const counts: Record<string, RemovedCount> = {};
+  // One row count per table, shared by the fields stored in it.
+  const totals = new Map<string, Promise<number>>();
+  const totalOf = (table: string): Promise<number> => {
+    const known = totals.get(table);
+    if (known) return known;
+    const pending = countRowsHelper(db, dialect, table);
+    totals.set(table, pending);
+    return pending;
+  };
 
   for (const field of removed) {
+    if (isVirtualField(field)) {
+      counts[field.name] = { rowCount: 0, unknown: false };
+      continue;
+    }
+    if (!fieldProducesColumn(field)) {
+      counts[field.name] = UNCOUNTED;
+      continue;
+    }
+    const table = isFieldLocalized(field, localized)
+      ? `${tableName}${STORAGE_FORMAT.companionSuffix}`
+      : tableName;
     try {
-      const nulls = await countNullsHelper(db, dialect, tableName, field.name);
-      counts[field.name] = Math.max(0, total - nulls);
+      const total = await totalOf(table);
+      const nulls = await countNullsHelper(
+        db,
+        dialect,
+        table,
+        toSnakeCase(field.name)
+      );
+      counts[field.name] = {
+        rowCount: Math.max(0, total - nulls),
+        unknown: false,
+      };
     } catch {
-      counts[field.name] = 0;
+      counts[field.name] = UNCOUNTED;
     }
   }
   return counts;

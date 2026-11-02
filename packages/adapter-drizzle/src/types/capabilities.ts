@@ -155,6 +155,19 @@ export interface DatabaseCapabilities {
    * @experimental
    */
   sharedRowLock?: boolean;
+
+  /**
+   * Whether the server can key a unique index on an expression, such as `NULLIF(col, '')`.
+   *
+   * @remarks
+   * Reported by the MySQL adapter once it has connected and read the server's version: MySQL
+   * 8.0.13 and later can (functional key parts), and the MySQL-compatible variants are reported
+   * as unable. PostgreSQL and SQLite always can, so their adapters leave it unset. On MySQL, unset
+   * means not known yet.
+   *
+   * @experimental
+   */
+  functionalIndexes?: boolean;
 }
 
 /**

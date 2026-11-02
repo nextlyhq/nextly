@@ -18,6 +18,8 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
+import { z } from "zod";
+
 import {
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
@@ -31,13 +33,18 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import type { UserContext } from "../../domains/collections/services/collection-types";
-import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsAsFirstPushed,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
-import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
+import { applyCompanionTransition } from "../../domains/i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -66,6 +73,7 @@ import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { NextlyError } from "../../errors";
 import {
   applyPluginAdminViews,
@@ -79,16 +87,23 @@ import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
+import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
+  routeAdmittedUpdate,
+  routeVouched,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import {
+  isLeavingSettingsRefusal,
+  leavingSettingsStep,
+} from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -186,10 +201,24 @@ function formatToastSummary(summary: {
 }
 
 /**
+ * The fields the registry records for a collection before a Schema Builder change, as it records
+ * them, so a relationship the change adds over a column an earlier apply already added still gets
+ * its foreign key, and one that apply renamed does not. The preview and the apply both hand the
+ * pipeline this one list, so they plan the same keys.
+ */
+function recordedFieldsOf(collection: {
+  fields?: unknown;
+}): DesiredCollection["fields"] {
+  return Array.isArray(collection.fields)
+    ? (collection.fields as DesiredCollection["fields"])
+    : [];
+}
+
+/**
  * Both directions of the all-locales lifecycle, as one handler.
  *
- * i18n M7 publishes every language of an entry at once; the takedown is its
- * twin. They differ in exactly two things — the service method and the success
+ * Publishing every language of an entry at once has a twin, the takedown.
+ * They differ in exactly two things — the service method and the success
  * message — and everything else about them is the same identity forwarding and
  * the same attestation. Written twice, they were a 40-line clone whose halves
  * could drift in which credentials they passed, and the drift would show up as
@@ -197,12 +226,10 @@ function formatToastSummary(summary: {
  *
  * The parameters are forwarded rather than defaulted for reasons that apply to
  * both: `userRoles` so role-based access evaluates against the real user;
- * `routeAuthorized` to attest that the route middleware already ran the
- * RBAC/code-access gate, so the entry service skips only that redundant
- * re-check while field-level write access still runs — never inferred from a
- * userId; and `authenticatedScope` so a scoped API key's own
- * `publish-`/`unpublish-` grant is judged, since the route authorized this POST
- * only as an `update`.
+ * `routeAuthorized` false, since the route admitted this POST on the
+ * `publish-`/`unpublish-` grant or on update, and attests no gate the service
+ * could skip; and `authenticatedScope` so a scoped API key's own grant and the
+ * rule are judged by the service, in each language the change puts live.
  */
 function allLocalesLifecycle(
   method: "publishAllLocales" | "unpublishAllLocales",
@@ -219,13 +246,46 @@ function allLocalesLifecycle(
         entryId,
         actor: readAuthenticatedActor(),
         ...callerUser(),
-        routeAuthorized: true,
+        routeAuthorized: false,
         authenticatedScope: readAuthenticatedScope(),
       });
       const entry = unwrapServiceResult(result, { collectionName, entryId });
       return respondMutation(result.message ?? successMessage, entry);
     },
   };
+}
+
+/**
+ * The `together` query parameter of a collection delete: slugs separated by
+ * commas, each spelled as a slug is. Absent or empty means none.
+ */
+const TogetherParam = z
+  .string()
+  .max(20_000)
+  .transform(value =>
+    value
+      .split(",")
+      .map(slug => slug.trim())
+      .filter(slug => slug !== "")
+  )
+  .pipe(
+    z
+      .array(
+        z
+          .string()
+          .regex(SLUG_PATTERN, "Each collection must be named by its slug.")
+      )
+      .max(500)
+  );
+
+function parseTogetherParam(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  try {
+    return TogetherParam.parse(value);
+  } catch (error) {
+    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+    throw error;
+  }
 }
 
 /**
@@ -508,8 +568,18 @@ const COLLECTIONS_METHODS: Record<
       };
 
       // The rows and the meta now describe one set, because the allowlist was
-      // a condition on the query that produced both.
-      return respondList(items, toPaginationMeta(baseMeta));
+      // a condition on the query that produced both. A collection removed from
+      // code stays listed, marked, so the admin can say so and name the step
+      // that retires it.
+      // Loaded on first use rather than with the dispatcher, so a module that
+      // imports the dispatcher and never lists does not load the mark.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      return respondList(
+        await withRemovedFromCodeMarks("collection", items),
+        toPaginationMeta(baseMeta)
+      );
     },
   },
   getCollection: {
@@ -530,7 +600,15 @@ const COLLECTIONS_METHODS: Record<
         [collection as CollectionWithAdmin],
         config?.plugins ?? []
       );
-      return respondDoc(collectionWithViews as unknown);
+      // Marked as the listing marks it, so the entity's own screens show the
+      // notice the navigation's mark promises.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      const [marked] = await withRemovedFromCodeMarks("collection", [
+        collectionWithViews as unknown as Record<string, unknown>,
+      ]);
+      return respondDoc(marked as unknown);
     },
   },
   updateCollection: {
@@ -557,12 +635,20 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   deleteCollection: {
-    // The deleted record is the `item`.
+    // The deleted record is the `item`. `?together=a,b` names the collections
+    // a bulk delete removes with this one, in the same operation: the whole
+    // set is checked before anything is removed, so collections that point
+    // only at one another can go together where each alone is refused.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      const result = await svc.deleteCollection({
+      // A variable rather than an inline literal: `CollectionsHandler` types
+      // its parameter by the one key it reads and forwards the object, whole,
+      // to the metadata service, which reads `together` from it.
+      const request: { collectionName: string; together: string[] } = {
         collectionName: p.collectionName,
-      });
+        together: parseTogetherParam(p.together),
+      };
+      const result = await svc.deleteCollection(request);
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
       });
@@ -596,6 +682,13 @@ const COLLECTIONS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { kind: "collection" });
+      // A pair of sibling fields this save would create is refused before anything is planned;
+      // one the entity already holds keeps working (judged against the stored fields).
+      assertNoNewSiblingClashes(
+        { kind: "collection", slug: p.collectionName },
+        fields,
+        collection.fields ?? []
+      );
       // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
       // which has tableName, fields: FieldConfig[], and schemaVersion: number.
       // FieldConfig is structurally compatible with FieldDefinition; cast
@@ -616,7 +709,13 @@ const COLLECTIONS_METHODS: Record<
       desired.collections[p.collectionName] = {
         slug: p.collectionName,
         tableName,
-        fields: fields as DesiredCollection["fields"],
+        // As the apply's first push creates them (`fieldsAsFirstPushed`).
+        fields: fieldsAsFirstPushed({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          entity: collection,
+          requestedLocalized: previewLocalized,
+        }) as DesiredCollection["fields"],
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: collection.status === true,
@@ -634,6 +733,7 @@ const COLLECTIONS_METHODS: Record<
           (collection as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        recordedFields: recordedFieldsOf(collection),
       };
 
       return respondData(
@@ -723,6 +823,14 @@ const COLLECTIONS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { kind: "collection" });
+      // A pair of sibling fields this save would create is refused before any statement or archive
+      // write; one the entity already holds keeps working. Asked here because this road reaches its
+      // DDL through no shared service that could ask it.
+      assertNoNewSiblingClashes(
+        { kind: "collection", slug: p.collectionName },
+        fields,
+        collection.fields ?? []
+      );
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version
@@ -778,25 +886,6 @@ const COLLECTIONS_METHODS: Record<
       // desired snapshot and drizzle-kit offers them as rename
       // candidates for the new collection being saved.
       const desired = await buildFullDesiredSchema();
-
-      // Splice in the user's changes for THIS collection (overwrites
-      // any registry entry for the same slug).
-      desired.collections[p.collectionName] = {
-        slug: p.collectionName,
-        tableName,
-        fields: fields as DesiredCollection["fields"],
-        // Mirror previewSchemaChanges so apply diffs against the same
-        // desired schema preview classified.
-        status: collection.status === true,
-        // i18n: carry the localized flag so the push diff omits translatable
-        // columns from the main table (they live in the companion `_locales`
-        // table, provisioned separately below). Uses the request's flag so a
-        // toggle applies immediately; without this the apply re-adds translatable
-        // columns to the main table.
-        localized: isLocalized,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-      };
 
       // Resolve adapter for the pipeline construction.
       const adapter = getAdapterFromDI();
@@ -896,6 +985,37 @@ const COLLECTIONS_METHODS: Record<
         builtBy: "collection",
       });
 
+      // A Required or Unique field leaving translation is pushed without its setting first, and
+      // the setting is pushed once the companion transition has copied its values in, before its
+      // companion column is dropped.
+      const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        renamed: companionRename,
+      });
+
+      // Splice in the user's changes for THIS collection (overwrites
+      // any registry entry for the same slug).
+      desired.collections[p.collectionName] = {
+        slug: p.collectionName,
+        tableName,
+        fields: (settingsDeferred ?? fields) as DesiredCollection["fields"],
+        // Mirror previewSchemaChanges so apply diffs against the same
+        // desired schema preview classified.
+        status: collection.status === true,
+        // i18n: carry the localized flag so the push diff omits translatable
+        // columns from the main table (they live in the companion `_locales`
+        // table, provisioned separately below). Uses the request's flag so a
+        // toggle applies immediately; without this the apply re-adds translatable
+        // columns to the main table.
+        localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
+        recordedFields: recordedFieldsOf(collection),
+      };
+
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
       await archiveFieldsLeavingTranslation({
@@ -974,6 +1094,7 @@ const COLLECTIONS_METHODS: Record<
             joinedBefore: movedOnto(result, tableName),
             // A translated field the admin renamed: the dialog's answer naming the companion.
             renamed,
+            holdLeavingDrops: settingsDeferred !== undefined,
             // What this database holds now, so a re-apply after a part-applied one finishes it.
             ...(await liveCompanionShape(adapter, {
               tableName,
@@ -983,42 +1104,48 @@ const COLLECTIONS_METHODS: Record<
               companionExists,
             })),
           });
-          // A disable archives non-default translations, so ensure the archive
-          // table exists first. Run each statement individually (executeQuery is
-          // single-statement on some drivers, e.g. sqlite).
-          if (plan.needsArchive) {
-            await ensureI18nArchive(adapter, dialect);
-          }
-          // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
-          // would make a half-finished localization ENABLE look like success, because the planner
-          // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
-          for (const stmt of plan.statements) {
-            await adapter.executeQuery(stmt);
-          }
-
-          // The transition record describes a companion that no longer exists, so it stops being true
-          // the moment the disable succeeds. Left behind, it would refuse the next enable's real
-          // source locale — the check that protects a live transition would block a legitimate one.
-          if (plan.companionDropped) {
-            // The other half of "this companion is gone": readiness remembers only that one
-            // exists.
-            const { forgetCompanionReadiness } = await import(
-              "../../domains/i18n/runtime/companion-readiness"
-            );
-            forgetCompanionReadiness(adapter, `${tableName}_locales`);
-            const { resolveTransitionStore } = await import(
-              "../../domains/i18n/migration/transition-recorder"
-            );
-            const { forgetI18nTransition } = await import(
-              "../../domains/i18n/migration/transition-state"
-            );
-            await forgetI18nTransition(
-              await resolveTransitionStore(adapter),
-              "collection",
-              String(p.collectionName)
-            );
-          }
+          // The settings the first push left off, once the shared columns hold the default
+          // language's values, and only then the leaving fields' companion columns dropped. A new
+          // desired schema rather than an edit of the first: the pipeline keeps the last one it
+          // applied, by reference, to skip a push that changes nothing.
+          await applyCompanionTransition({
+            adapter,
+            plan,
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: String(p.collectionName),
+                  tableName,
+                  builtBy: "collection",
+                  oldFields,
+                  newFields,
+                  renamed: companionRename,
+                  push: () =>
+                    apply(
+                      {
+                        ...desired,
+                        collections: {
+                          ...desired.collections,
+                          [p.collectionName]: {
+                            ...desired.collections[p.collectionName],
+                            fields: fields as DesiredCollection["fields"],
+                          },
+                        },
+                      },
+                      "ui",
+                      { promptChannel: "auto" }
+                    ),
+                })
+              : undefined,
+            kind: "collection",
+            slug: String(p.collectionName),
+            tableName,
+          });
         } catch (err) {
+          // A refused setting is the dialog's answer to the admin, naming the field, and nothing
+          // has been dropped by then, so it is passed on as it is rather than as a companion out
+          // of step.
+          if (isLeavingSettingsRefusal(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           // Fatal to correctness (translatable values have nowhere to live), but
           // the main-table apply already committed — surface loudly rather than
@@ -1073,7 +1200,7 @@ const COLLECTIONS_METHODS: Record<
         );
         // Written past the registry services, so the cached rows are cleared
         // here: a read during the save may have cached the row from before it.
-        clearCollectionRowCache();
+        clearRegistryRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
@@ -1327,10 +1454,12 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Route middleware already ran the RBAC/code-access gate for the
+          // caller it authenticated; attest it so the handler skips only that
+          // redundant re-check (field-level write access still runs). Never
+          // inferred from userId, and never for a visitor, whom the service
+          // judges itself.
+          routeAuthorized: routeVouched(),
           // The route authorized only `create` against an API key's scope; a
           // create-as-published publish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1414,10 +1543,11 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). A caller admitted on publish or unpublish
+          // alone is judged by the service. Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1454,10 +1584,12 @@ const COLLECTIONS_METHODS: Record<
         // Who performed the delete (user vs API key), recorded on the
         // `entry.deleted` outbox event — same attribution as create/update.
         actor: readAuthenticatedActor(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Route middleware already ran the RBAC/code-access gate for the
+        // caller it authenticated; attest it so the handler skips only that
+        // redundant re-check (field-level write access still runs). Never
+        // inferred from userId, and never for a visitor, whom the service
+        // judges itself.
+        routeAuthorized: routeVouched(),
         // The route authorized `delete` against the key's scope; carry the scope
         // so a super-admin-owned key's delete is judged on the key's OWN grant
         // and does not skip stored owner/role delete rules.
@@ -1537,10 +1669,10 @@ const COLLECTIONS_METHODS: Record<
         data: b.data,
         actor: readAuthenticatedActor(),
         ...callerUser(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Where the route admitted the caller on update, attest it so the
+        // handler skips only that redundant re-check (field-level write access
+        // still runs). Never inferred from userId.
+        routeAuthorized: routeAdmittedUpdate(),
         // The route authorized `update` against the key's scope, never
         // publish/unpublish — carry the scope so each per-id transition is
         // judged on the key's OWN grants.
@@ -1595,10 +1727,10 @@ const COLLECTIONS_METHODS: Record<
           data: b.data,
           actor: readAuthenticatedActor(),
           ...callerUser(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized `update` against the key's scope, never
           // publish/unpublish — carry the scope so the collection-level gate and
           // each per-row transition are judged on the key's OWN grants.

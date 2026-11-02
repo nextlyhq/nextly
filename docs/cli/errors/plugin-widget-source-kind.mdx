@@ -1,0 +1,23 @@
+---
+title: PLUGIN_WIDGET_SOURCE_KIND
+description: "A plugin contributes a widget source of a kind the dashboard does not draw."
+---
+
+## Cause
+
+A plugin contributes a widget source of a kind the dashboard does not draw.
+
+The dashboard draws a widget by its source's kind, and knows only its own kinds.
+
+## Fix
+
+Give the source one of the kinds the plugin SDK lists, or update the plugin.
+
+## Example
+
+```text
+✗ "@acme/stats" contributes widget source "acme/visits" with kind "gauge", which the dashboard does not draw.
+  Why:  The dashboard draws a source by its kind, and knows only its own kinds.
+  Next: Give the source one of the kinds the plugin SDK lists, or update the plugin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-widget-source-kind  (PLUGIN_WIDGET_SOURCE_KIND)
+```

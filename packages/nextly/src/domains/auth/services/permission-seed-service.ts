@@ -150,13 +150,10 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     resource: "roles",
     description: "Permission to delete roles",
   },
-  {
-    name: "Manage Media",
-    slug: "manage-media",
-    action: "manage",
-    resource: "media",
-    description: "Permission to upload and manage media files",
-  },
+  // No `manage-` permission is seeded on media, settings, email providers or
+  // email templates: each is retired in favour of the plain read, create,
+  // update and delete below. An install that seeded one keeps its row, so
+  // `nextly upgrade` can still find the roles holding it and convert them.
   {
     name: "Create Media",
     slug: "create-media",
@@ -186,13 +183,6 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description: "Permission to delete media files",
   },
   {
-    name: "Manage Settings",
-    slug: "manage-settings",
-    action: "manage",
-    resource: "settings",
-    description: "Permission to manage system settings",
-  },
-  {
     name: "Read Settings",
     slug: "read-settings",
     action: "read",
@@ -200,11 +190,29 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description: "Permission to read system settings",
   },
   {
-    name: "Manage Email Providers",
-    slug: "manage-email-providers",
-    action: "manage",
-    resource: "email-providers",
-    description: "Permission to manage email providers",
+    name: "Create Settings",
+    slug: "create-settings",
+    action: "create",
+    resource: "settings",
+    // Named by the settings a person adds and removes one by one.
+    description:
+      "Permission to add settings such as user fields and field groups",
+  },
+  {
+    name: "Update Settings",
+    slug: "update-settings",
+    action: "update",
+    resource: "settings",
+    description: "Permission to change system settings",
+  },
+  {
+    name: "Delete Settings",
+    slug: "delete-settings",
+    action: "delete",
+    resource: "settings",
+    // Named by the settings a person adds and removes one by one.
+    description:
+      "Permission to remove settings such as user fields and field groups",
   },
   {
     name: "Create Email Providers",
@@ -221,18 +229,18 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description: "Permission to read email providers",
   },
   {
+    name: "Update Email Providers",
+    slug: "update-email-providers",
+    action: "update",
+    resource: "email-providers",
+    description: "Permission to change email providers",
+  },
+  {
     name: "Delete Email Providers",
     slug: "delete-email-providers",
     action: "delete",
     resource: "email-providers",
     description: "Permission to delete email providers",
-  },
-  {
-    name: "Manage Email Templates",
-    slug: "manage-email-templates",
-    action: "manage",
-    resource: "email-templates",
-    description: "Permission to manage email templates",
   },
   {
     name: "Create Email Templates",
@@ -247,6 +255,13 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     action: "read",
     resource: "email-templates",
     description: "Permission to read email templates",
+  },
+  {
+    name: "Update Email Templates",
+    slug: "update-email-templates",
+    action: "update",
+    resource: "email-templates",
+    description: "Permission to change email templates",
   },
   {
     name: "Delete Email Templates",

@@ -43,6 +43,21 @@ export const submitHeld: SubmitOutcome = {
     "This document can't be saved right now: someone else is editing it, or a past version is on screen.",
 };
 
+/** What a write refused after the editor moved says, wherever it stopped. */
+export const MOVED_MESSAGE =
+  "You moved to another language or document before this was saved; nothing was stored.";
+
+/**
+ * A submission refused because the editor moved to another document or
+ * language after it started: the form now holds that one's values, which
+ * would be written into the one the submission is for.
+ */
+export const submitMoved: SubmitOutcome = {
+  ok: false,
+  reason: "refused",
+  message: MOVED_MESSAGE,
+};
+
 export const submitInvalid: SubmitOutcome = {
   ok: false,
   reason: "invalid",

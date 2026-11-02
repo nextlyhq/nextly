@@ -139,7 +139,11 @@ export class SingleEntryService extends BaseService {
       fieldGroupDataService,
       rbacAccessControlService,
       localizationSource,
-      releaseVisibility
+      releaseVisibility,
+      // The write's own judgement, asked when a read shows a pending change to
+      // a caller who may publish and not update. Read when a read asks it,
+      // after the mutation service below exists.
+      args => this.mutationService.workingDraftPromotionRefused(args)
     );
 
     this.mutationService = new SingleMutationService(
@@ -229,6 +233,16 @@ export class SingleEntryService extends BaseService {
     params: Parameters<SingleMutationService["discardWorkingDraft"]>[0]
   ): Promise<void> {
     await this.discardWorkingDraftCounted(params);
+  }
+
+  /**
+   * Rebuild the record of which media items a Single uses, for
+   * `nextly media reindex-usage`. Returns whether it had a document to read.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async rebuildMediaUsage(slug: string): Promise<boolean> {
+    return this.mutationService.rebuildMediaUsage(slug);
   }
 
   /**

@@ -65,6 +65,10 @@ These ship today but carry no guarantee yet — use them, but expect change:
 - `PluginTransaction` (the handle `ctx.db.transaction` passes its work),
   `PluginInsert` (what `ctx.db.insert` takes for a table) and
   `PluginRawDatabase` (`ctx.db.raw`)
+- Version pins on the plugin's own transaction, `ctx.services.versions.pins`,
+  and their types `PluginVersionPins`, `PluginVersionPinHolder`,
+  `PluginVersionPin`, `PluginPinOptions`, `PluginPinTransaction`,
+  `VersionPinHolderDefinition` and `VersionRef`
 - `PluginMigration.transaction` — `false` runs a migration module outside a
   transaction, statement by statement
 - `onInstall` / `onUninstall`, called by `nextly plugins install` and
@@ -77,7 +81,7 @@ These ship today but carry no guarantee yet — use them, but expect change:
 - Filters & actions (D63): `ctx.filters` / `ctx.actions` + seam types
 - Secrets (D37): `secret`, `Secret`, `isSecret`
 - Client UX (`@nextlyhq/plugin-sdk/client`): `useCan`, `<Can>`
-- Admin dashboard widgets (`PluginAdminWidget`, D22 — rendered; shape still settling)
+- Admin dashboard widgets (`defineWidget` under `contributes.dashboard`, D22 — rendered; shape still settling)
 - `contributes.events`, `dependsOn` / `optionalDependsOn`, `plugin.rename` (D54)
 - Schema extensibility: `contributes.schema` (`tables`, `extend`,
   `migrations`), the `defineTable` / `col.*` DSL, `schema.extendTable`,

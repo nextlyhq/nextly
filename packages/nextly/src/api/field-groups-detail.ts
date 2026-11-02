@@ -18,6 +18,10 @@
  */
 
 import { getService } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -32,7 +36,7 @@ import { withErrorHandler } from "./with-error-handler";
 
 /**
  * Context object for dynamic route handlers.
- * Next.js 15+ requires params to be a Promise.
+ * Next.js passes route params as a Promise.
  */
 interface RouteContext {
   params: Promise<{ slug: string }>;
@@ -99,14 +103,13 @@ async function getComponentRegistry(): Promise<FieldGroupRegistryService> {
 /**
  * GET handler for retrieving a single component by slug.
  *
- * Requires read-settings (or manage-settings), matching the dispatcher's
+ * Requires read-settings, matching the dispatcher's
  * components authorization.
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext) => {
     await requireRouteAnyPermission(request, [
-      { action: "read", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_READ_POLICY.settings.read.anyOf,
     ]);
 
     const { slug } = await context.params;
@@ -120,7 +123,7 @@ export const GET = withErrorHandler(
 /**
  * PATCH handler for updating a component.
  *
- * Requires update-settings (or manage-settings), matching the dispatcher's
+ * Requires update-settings, matching the dispatcher's
  * components authorization. The registry returns 403 (mapped to LOCKED in
  * `logContext`) if the component is locked (code-first components cannot be
  * modified via API).
@@ -131,8 +134,7 @@ export const PATCH = withErrorHandler(
     requireBuilderEnabled("update-component");
 
     await requireRouteAnyPermission(request, [
-      { action: "update", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_WRITE_POLICY.fieldGroups.update.anyOf,
     ]);
 
     const { slug } = await context.params;
@@ -184,7 +186,7 @@ export const PATCH = withErrorHandler(
 /**
  * DELETE handler for removing a component.
  *
- * Requires delete-settings (or manage-settings), matching the dispatcher's
+ * Requires delete-settings, matching the dispatcher's
  * components authorization. The registry returns 403 if the component is
  * locked, or 409 if it is referenced by other entities.
  */
@@ -194,8 +196,7 @@ export const DELETE = withErrorHandler(
     requireBuilderEnabled("delete-component");
 
     await requireRouteAnyPermission(request, [
-      { action: "delete", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_WRITE_POLICY.fieldGroups.delete.anyOf,
     ]);
 
     const { slug } = await context.params;

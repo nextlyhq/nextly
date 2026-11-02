@@ -15,8 +15,10 @@
  */
 import { useCallback, useRef, useState } from "react";
 
+import { toast } from "@admin/components/ui";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 
+import { MOVED_MESSAGE } from "./submit-outcome";
 import type {
   BeforeDocumentAction,
   DocumentActionOutcome,
@@ -61,7 +63,32 @@ const stillWriting: DocumentActionOutcome = {
   ok: false,
   reason: "busy",
   message: "Changes on this page are still being saved. Try again in a moment.",
+  beforeWrite: true,
 };
+
+/**
+ * A store whose editor moved to another document or language while it
+ * readied: the form now holds that one's values, and the store would write
+ * them into the one it started in, so it writes nothing.
+ */
+const moved: DocumentActionOutcome = {
+  ok: false,
+  reason: "refused",
+  message: MOVED_MESSAGE,
+  beforeWrite: true,
+};
+
+/**
+ * A store's refusal said by the gate itself, once: it settled after the
+ * editor moved, so the Save state, which answers for what is on screen now,
+ * doesn't show it.
+ */
+function reportedAfterMove(
+  outcome: Exclude<DocumentActionOutcome, { ok: true }>
+): DocumentActionOutcome {
+  toast.error(outcome.message, { id: "store-after-move" });
+  return { ...outcome, reported: true };
+}
 
 export function useStoringGate(scope: string): StoringGate {
   const beforeActions = useRef(new Set<BeforeDocumentAction>());
@@ -124,6 +151,7 @@ export function useStoringGate(scope: string): StoringGate {
         ok: false,
         reason: "failed",
         message: apiErrorMessage(error, "An open edit couldn't be committed."),
+        beforeWrite: true,
       };
     }
     // Every write registered before the store is awaited, including one
@@ -140,6 +168,7 @@ export function useStoringGate(scope: string): StoringGate {
           ok: false,
           reason: "refused",
           message: `${failure.label} wasn't saved, so this page wasn't either: ${failure.message}`,
+          beforeWrite: true,
         };
   };
 
@@ -158,16 +187,19 @@ export function useStoringGate(scope: string): StoringGate {
     setScopeShown(scope);
     setLastStore({ kind: "none" });
   }
-  const currentScope = useRef(scope);
-  currentScope.current = scope;
+  // This visit to the document and language: a new one each time the scope
+  // changes, so going away and coming back is a move too, as the form has
+  // started afresh from that language's values in between.
+  const currentVisit = useRef({ scope });
+  if (currentVisit.current.scope !== scope) currentVisit.current = { scope };
   const record = (
-    startedIn: string,
+    startedIn: { scope: string },
     action: string,
     outcome: DocumentActionOutcome
   ) => {
     // A store that settles after the scope changed answers for a document no
     // longer on screen.
-    if (startedIn !== currentScope.current) return;
+    if (startedIn !== currentVisit.current) return;
     if (outcome.ok) {
       setLastStore({ kind: "stored", at: new Date() });
     } else if (outcome.reason !== "busy" && outcome.reason !== "cancelled") {
@@ -182,12 +214,22 @@ export function useStoringGate(scope: string): StoringGate {
   const storing =
     (action: string, perform: () => Promise<DocumentActionOutcome>) =>
     async (): Promise<DocumentActionOutcome> => {
-      const startedIn = currentScope.current;
+      const startedIn = currentVisit.current;
       setReadying(n => n + 1);
       try {
-        const outcome = (await readyToStore(action)) ?? (await perform());
+        // Readying awaits the editor's work, and the editor can move to
+        // another document or language meanwhile: asked once it is ready.
+        const outcome =
+          (await readyToStore(action)) ??
+          (currentVisit.current === startedIn ? await perform() : moved);
         record(startedIn, action, outcome);
-        return outcome;
+        // Refused after a move: nothing on screen shows it, so said here.
+        return currentVisit.current === startedIn ||
+          outcome.ok ||
+          outcome.reason === "busy" ||
+          outcome.reason === "cancelled"
+          ? outcome
+          : reportedAfterMove(outcome);
       } finally {
         setReadying(n => n - 1);
       }

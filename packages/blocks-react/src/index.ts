@@ -188,6 +188,11 @@ export type {
  */
 export { pruneHiddenNodes } from "./visibility";
 export { prepareDocumentForRead, rendersOwnMarkup } from "./prepare-document";
+/**
+ * @experimental The tree the renderer walks, placeholders included, for a
+ * surface listing a page's parts beside a picture of it.
+ */
+export { prepareDocumentAsDrawn } from "./prepare-document";
 export type { PrepareDocumentArgs } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";
@@ -262,6 +267,10 @@ export type {
   CompiledPageCss,
   ComponentPath,
   Condition,
+  // Reachable from `BlockDefinition.contentModel`, which a block author
+  // declares; a type reachable through a re-exported one but unnamed is a hole.
+  ContentKind,
+  ContentModel,
   DocumentFormatVersion,
   DocumentKind,
   DocumentLimits,

@@ -8,19 +8,19 @@
 import { createHash } from "node:crypto";
 
 import * as p from "@clack/prompts";
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { serializeCollection } from "../../domains/schema/services/code-generator";
-import { describeError } from "../../errors/index";
-import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import { exitWithError } from "../errors";
+import { demoteCollectionNotFound } from "../errors/areas/sync";
 import type { CommandContext } from "../program";
-import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
 // F1 PR 4: switched from the deleted wrapper/config-loader (jiti-based,
 // took a positional cwd arg) to the canonical cli/utils/config-loader
 // (bundle-require-based, takes an options object). The wrapper helper
 // kept its own signature, so wrap the call here to preserve the
 // downstream code's expectation of `{ config, configPath, ... }`.
 import { loadConfig } from "../utils/config-loader";
+
+import { openCollectionRegistry } from "./db-sync-registry";
 
 async function loadNextlyConfig(cwd: string) {
   return loadConfig({ cwd });
@@ -38,8 +38,7 @@ export async function runDemote(
     const result = await loadNextlyConfig(context.cwd);
     config = result.config;
   } catch (err) {
-    logger.error(`Could not load nextly config: ${describeError(err)}`);
-    process.exit(1);
+    exitWithError(logger, err);
   }
 
   const collections = (config.collections ?? []) as Array<{
@@ -52,28 +51,11 @@ export async function runDemote(
   }>;
   const collection = collections.find(c => c.slug === slug);
   if (!collection) {
-    logger.error(
-      `Collection '${slug}' not found in nextly.config.ts collections.`
-    );
-    process.exit(1);
+    exitWithError(logger, demoteCollectionNotFound(slug));
   }
 
   // 2. Database wiring.
-  const env = validateDatabaseEnv();
-  if (!env.valid) {
-    logger.error(env.errors.join("; "));
-    process.exit(1);
-  }
-  const adapter = await createCliAdapter({ logger });
-  const registry = new CollectionRegistryService(
-    adapter as unknown as DrizzleAdapter,
-    {
-      info: (msg: string) => logger.debug(msg),
-      warn: (msg: string) => logger.warn(msg),
-      error: (msg: string) => logger.error(msg),
-      debug: (msg: string) => logger.debug(msg),
-    }
-  );
+  const registry = await openCollectionRegistry(logger);
 
   // 3. Prompt before any write.
   const fields = collection.fields ?? [];

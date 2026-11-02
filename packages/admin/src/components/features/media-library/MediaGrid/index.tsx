@@ -2,28 +2,22 @@
  * MediaGrid Component
  *
  * Responsive grid container for displaying media files in the Media Library.
- * Renders MediaCard components in a 2-6 column grid based on viewport size.
+ * Renders MediaCard components in as many columns as the grid's width holds.
  *
  * ## Features
  *
- * - **Responsive Grid**: 2 columns (mobile), 4 columns (tablet), 6 columns (desktop)
+ * - **Responsive Grid**: columns of at least 9rem, filled from the grid's own width
  * - **Loading State**: Displays skeleton cards during data fetching
  * - **Empty State**: Clear message with icon when no media files exist
  * - **Error State**: Alert component with retry functionality
  * - **Bulk Selection**: Integrates with useRowSelection hook for multi-select
  * - **Accessibility**: WCAG 2.2 AA compliant (ARIA, keyboard navigation, screen readers)
  *
- * ## Grid Layout
- *
- * - **Mobile (< 768px)**: 2 columns, 16px gap, min 150×150px per card
- * - **Tablet (768px - 1024px)**: 4 columns, 16px gap, min 120×120px per card
- * - **Desktop (≥ 1024px)**: 6 columns, 16px gap, min 120×120px per card
- *
  * ## Design Specifications
  *
  * - Gap: 16px (`gap-4`)
  * - Card aspect ratio: Square (`aspect-square`)
- * - Grid classes: `grid-cols-2 md:grid-cols-4 lg:grid-cols-6`
+ * - Grid classes: `MEDIA_GRID_CLASSES` (auto-fill columns, 9rem minimum)
  * - Loading skeletons: 12 items (DEFAULT_MEDIA_SKELETON_COUNT)
  * - Empty icon: Folder (64px, lucide-react)
  * - Error icon: AlertTriangle (lucide-react, destructive variant)
@@ -98,9 +92,8 @@ import { MediaLibrarySkeleton } from "../MediaLibrarySkeleton";
  *
  * ## Responsive Behavior
  *
- * - Mobile (< 768px): `grid-cols-2` (2 columns)
- * - Tablet (768px - 1024px): `md:grid-cols-4` (4 columns)
- * - Desktop (≥ 1024px): `lg:grid-cols-6` (6 columns)
+ * Columns come from the grid's own width, so the details panel or the folder
+ * tree opening beside it takes columns away rather than shrinking every tile.
  *
  * ## Integration with Bulk Selection
  *
@@ -122,6 +115,7 @@ export function MediaGrid({
   isLoading = false,
   error = null,
   selectedIds = new Set(),
+  currentId = null,
   onSelectionChange,
   onItemClick,
   onEdit,
@@ -201,6 +195,7 @@ export function MediaGrid({
           key={item.id}
           media={item}
           isSelected={selectedIds.has(item.id)}
+          isCurrent={item.id === currentId}
           onSelectionChange={onSelectionChange}
           onClick={onItemClick}
           onEdit={onEdit}

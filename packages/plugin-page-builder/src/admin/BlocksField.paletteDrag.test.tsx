@@ -74,7 +74,7 @@ let componentError: Error | null = null;
  * The real shell draws one at a time and calls `renderPanel` only for that one,
  * so this is how a case says "the author is looking at something else".
  */
-let shownPanel = "insert";
+let shownPanel = "add";
 
 /** How many times the whole LIBRARY was asked for — the panel's read. */
 let routeReads = 0;
@@ -238,6 +238,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: record("insertPanel"),
+    RepairNotice: nothing,
     LayersPanel: nothing,
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
@@ -436,7 +437,7 @@ afterEach(() => {
   componentError = null;
   editorOptions = undefined;
   documentIdentity = null;
-  shownPanel = "insert";
+  shownPanel = "add";
   routeReads = 0;
   componentReads = 0;
   capabilityReads = 0;
@@ -586,8 +587,8 @@ describe("what the editor reads before anyone asks for it", () => {
 
   it("does not read the library while another panel is open", () => {
     // Reading in the editor's own body fetched every saved pattern document on
-    // every editor mount — for authors who open Layers, or Tokens, or no panel
-    // at all, and never visit Insert. The library is the panel's data, so the
+    // every editor mount — for authors who open Layers, or Design, or no panel
+    // at all, and never visit Add. The library is the panel's data, so the
     // panel's mount is when it is asked for.
     shownPanel = "layers";
 
@@ -609,10 +610,10 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(routeReads).toBe(0);
   });
 
-  it("reads it once the insert panel is the one on screen", () => {
+  it("reads it once the Add panel is the one on screen", () => {
     // The control. Without it the assertion above is satisfied by a hook that
     // never reads at all, which is the tier being unreachable again.
-    shownPanel = "insert";
+    shownPanel = "add";
 
     openEditor();
 
@@ -647,6 +648,47 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(
       document.querySelector('[data-recorder="notices"]')?.textContent
     ).toContain("no room left");
+  });
+
+  it("tells the author why an edit a lock refuses did nothing", () => {
+    openEditor();
+
+    const onLockRefused = editorOptions?.onLockRefused as (r: {
+      sentence: string;
+    }) => void;
+    act(() => {
+      onLockRefused({
+        sentence:
+          "This area of Fixed row is locked. Its blocks can't be added, removed or moved.",
+      });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("Fixed row is locked");
+  });
+
+  it("tells the author why an edit was refused for where it put a block", () => {
+    // The op store refuses a placement whichever surface asked for it; this is
+    // where the author learns why.
+    openEditor();
+
+    const onPlacementRefused = editorOptions?.onPlacementRefused as (r: {
+      verdict: unknown;
+    }) => void;
+    act(() => {
+      onPlacementRefused({
+        verdict: {
+          allowed: false,
+          reason: "holds-no-blocks",
+          blockType: "core/button",
+          parentType: "core/heading",
+          slot: "children",
+        },
+      });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("Heading can't hold blocks.");
   });
 
   it("builds the editor under the same caps the canvas draws under, so an apply agrees with the preflight", () => {

@@ -11,7 +11,7 @@
  *
  * In CORE rather than in the admin, where it was first written, because the
  * server needs the same answer: `record-activity` already resolves an entry's
- * heading server-side, and the dashboard's generated widgets have to know which
+ * heading server-side, and the dashboard's list widgets have to know which
  * field to select before the query is made.
  *
  * @module domains/collections/entry-title

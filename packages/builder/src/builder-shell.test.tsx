@@ -18,6 +18,8 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
+  within,
 } from "@testing-library/react";
 import * as React from "react";
 import { renderToString } from "react-dom/server";
@@ -260,36 +262,28 @@ describe("leaving the editor", () => {
 });
 
 describe("panels the host cannot fill", () => {
-  it("shows them, disabled, rather than opening an empty region", () => {
-    // Hiding them would make the rail change shape under an author as features
-    // land. Opening one is worse: it reserves a panel and shrinks the canvas to
-    // display nothing, which reads as a broken control rather than a missing one.
-    renderShell({ availablePanels: ["insert"] });
+  it("leaves them off the rail rather than offering a dead control", () => {
+    // An item that does nothing teaches an author the rail is unreliable, and
+    // opening one reserves a panel and shrinks the canvas to display nothing.
+    renderShell({ availablePanels: ["add"] });
 
-    const layers = screen.getByRole("button", { name: /^Layers/ });
-    expect((layers as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it("says why, rather than presenting a dead control", () => {
-    renderShell({ availablePanels: ["insert"] });
-
-    expect(
-      screen.getByRole("button", { name: "Layers — coming soon" })
-    ).toBeTruthy();
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    expect(within(rail).queryByRole("button", { name: /^Layers/ })).toBeNull();
+    expect(rail.textContent).not.toMatch(/coming soon/i);
   });
 
   it("leaves a panel the host CAN fill fully operable", () => {
     // The positive control. Without it, a shell that disabled every rail button
     // would satisfy both assertions above perfectly.
     renderShell({
-      availablePanels: ["insert"],
+      availablePanels: ["add"],
       renderPanel: panel => <p>{panel} panel</p>,
     });
 
-    const insert = screen.getByRole("button", { name: "Insert" });
+    const insert = screen.getByRole("button", { name: "Add" });
     expect((insert as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(insert);
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(screen.getByText("add panel")).toBeTruthy();
   });
 
   it("does not reserve a panel a RESTORED selection names but the host cannot fill", () => {
@@ -303,7 +297,7 @@ describe("panels the host cannot fill", () => {
     render(
       <BuilderShell
         store={store}
-        availablePanels={["insert"]}
+        availablePanels={["add"]}
         renderPanel={panel => <p>{panel} panel</p>}
       />
     );
@@ -316,10 +310,19 @@ describe("panels the host cannot fill", () => {
     // fill all of them.
     renderShell();
 
-    expect(
-      (screen.getByRole("button", { name: "Layers" }) as HTMLButtonElement)
-        .disabled
-    ).toBe(false);
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const names = within(rail)
+      .getAllByRole("button")
+      .map(button => button.textContent);
+    expect(names).toEqual([
+      "Add",
+      "Layers",
+      "Pages",
+      "Components",
+      "Design",
+      "Settings",
+      "Help",
+    ]);
   });
 });
 
@@ -342,9 +345,9 @@ describe("the rail", () => {
     renderShell({ renderPanel: panel => <p>{panel} panel</p> });
 
     fireEvent.click(screen.getByRole("button", { name: "Layers" }));
-    fireEvent.click(screen.getByRole("button", { name: "Tokens" }));
+    fireEvent.click(screen.getByRole("button", { name: "Design" }));
 
-    expect(screen.getByText("tokens panel")).toBeTruthy();
+    expect(screen.getByText("design panel")).toBeTruthy();
     expect(screen.queryByText("layers panel")).toBeNull();
   });
 
@@ -370,7 +373,141 @@ describe("the rail", () => {
   });
 });
 
-describe("opening the insert panel from outside the shell", () => {
+describe("the rail's groups", () => {
+  it("keeps Settings and Help apart from the daily tools, at the bottom", () => {
+    renderShell();
+
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const [top, bottom] = within(rail).getAllByRole("list");
+    expect(top).toBeDefined();
+    expect(bottom).toBeDefined();
+    if (top === undefined || bottom === undefined) return;
+    expect(
+      within(bottom)
+        .getAllByRole("button")
+        .map(button => button.textContent)
+    ).toEqual(["Settings", "Help"]);
+    expect(within(top).queryByRole("button", { name: "Help" })).toBeNull();
+  });
+});
+
+describe("Help", () => {
+  it("lists the shortcuts in effect, and hands focus back when Escape closes it", async () => {
+    renderShell();
+    const help = screen.getByRole("button", { name: "Help" });
+    help.focus();
+    fireEvent.click(help);
+
+    const dialog = await screen.findByRole("dialog", { name: "Help" });
+    // The shell's own region binding, read from the live registry rather than
+    // from a list written for Help.
+    expect(dialog.textContent).toContain("Move to the next area of the editor");
+
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(help);
+  });
+
+  it("closes when the editor gives way to its narrow-window notice", async () => {
+    // The editor stays mounted, hidden and inert, behind the notice. A Help
+    // left open there would still trap focus and hold the keyboard, with the
+    // notice's Exit button outside its reach.
+    renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "Help" }));
+    await screen.findByRole("dialog", { name: "Help" });
+
+    act(() => stubContainerFits(false));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    act(() => stubContainerFits(true));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("a panel's view", () => {
+  function renderWithView(store = memoryStore()) {
+    const seen: Array<string | null> = [];
+    let choose: (view: string) => void = () => {};
+    stubContainerFits(true);
+    const result = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={(panel, view) => {
+          seen.push(view.current);
+          choose = view.choose;
+          return <p>{panel} panel</p>;
+        }}
+      />
+    );
+    return { seen, choose: (view: string) => choose(view), store, ...result };
+  }
+
+  it("restores a remembered part when nothing else differs from the defaults", () => {
+    // Choosing Classes and then closing Design leaves a record that differs
+    // from the defaults only in the part. Read back as "unchanged", it was
+    // dropped, and Design reopened on its first tab.
+    const shell = renderWithView(
+      memoryStore(
+        JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanelView: "classes" })
+      )
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Design" }));
+    expect(shell.seen.at(-1)).toBe("classes");
+  });
+
+  it("keeps the part an author chose, and stores it with the panel", () => {
+    const shell = renderWithView();
+    fireEvent.click(screen.getByRole("button", { name: "Design" }));
+    expect(shell.seen.at(-1)).toBeNull();
+
+    act(() => shell.choose("classes"));
+
+    expect(shell.seen.at(-1)).toBe("classes");
+    expect(JSON.parse(shell.store.value as string)).toMatchObject({
+      leftPanel: "design",
+      leftPanelView: "classes",
+    });
+  });
+
+  it("opens a panel stored under its old name on the part it became", () => {
+    // Fonts was a panel of its own, and is now Design's Fonts tab. An author
+    // who left it open comes back to it rather than to a closed rail.
+    const shell = renderWithView(
+      memoryStore(
+        JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "fonts" })
+      )
+    );
+
+    expect(screen.getByText("design panel")).toBeTruthy();
+    expect(shell.seen.at(-1)).toBe("fonts");
+  });
+
+  it("opens the part a request names", () => {
+    const store = memoryStore();
+    const seen: Array<string | null> = [];
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={(panel, view) => {
+          seen.push(view.current);
+          return <p>{panel} panel</p>;
+        }}
+        openPanelRequest={{ panel: "design", view: "variables", count: 1 }}
+      />
+    );
+
+    expect(screen.getByText("design panel")).toBeTruthy();
+    expect(seen.at(-1)).toBe("variables");
+  });
+});
+
+describe("opening the Add panel from outside the shell", () => {
   // `rerender` rather than `renderShell` throughout: these assert what
   // happens BETWEEN two renders holding the same store, and `renderShell`
   // builds a fresh store each call, which would additionally exercise the
@@ -387,21 +524,21 @@ describe("opening the insert panel from outside the shell", () => {
         renderPanel={panel => <p>{panel} panel</p>}
       />
     );
-    expect(screen.queryByText("insert panel")).toBeNull();
+    expect(screen.queryByText("add panel")).toBeNull();
 
     rerender(
       <BuilderShell
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openPanelRequest={{ panel: "insert", count: 1 }}
+        openPanelRequest={{ panel: "add", count: 1 }}
       />
     );
 
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(screen.getByText("add panel")).toBeTruthy();
   });
 
-  it("does not close an already-open insert panel when the effect first applies its token", () => {
+  it("does not close an already-open Add panel when the effect first applies its token", () => {
     // The rail's own click handler TOGGLES: a second press on the same item
     // closes the panel. Forcing the panel open must not inherit that —
     // pressing the canvas control again for the same container must never
@@ -409,8 +546,8 @@ describe("opening the insert panel from outside the shell", () => {
     //
     // The panel is opened by a RAIL CLICK here, deliberately not by an
     // earlier token — from `leftPanel: null`, a correct force-set and a
-    // buggy `panelAfterRailClick(current, "insert")` both land on
-    // `"insert"`, so a fixture starting closed cannot tell them apart. Only
+    // buggy `panelAfterRailClick(current, "add")` both land on
+    // `"add"`, so a fixture starting closed cannot tell them apart. Only
     // starting from ALREADY OPEN separates them: the toggle would close it,
     // the force-set leaves it exactly as it was.
     stubContainerFits(true);
@@ -422,8 +559,8 @@ describe("opening the insert panel from outside the shell", () => {
         renderPanel={panel => <p>{panel} panel</p>}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.getByText("add panel")).toBeTruthy();
 
     // The token's FIRST value, applied against a panel already open by the
     // rail rather than by a previous token — so the once-per-token guard is
@@ -433,11 +570,11 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openPanelRequest={{ panel: "insert", count: 1 }}
+        openPanelRequest={{ panel: "add", count: 1 }}
       />
     );
 
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(screen.getByText("add panel")).toBeTruthy();
   });
 
   it("reopens on a NEW token after the author closed the panel by hand", () => {
@@ -448,24 +585,24 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openPanelRequest={{ panel: "insert", count: 1 }}
+        openPanelRequest={{ panel: "add", count: 1 }}
       />
     );
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(screen.getByText("add panel")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
-    expect(screen.queryByText("insert panel")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.queryByText("add panel")).toBeNull();
 
     rerender(
       <BuilderShell
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openPanelRequest={{ panel: "insert", count: 2 }}
+        openPanelRequest={{ panel: "add", count: 2 }}
       />
     );
 
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(screen.getByText("add panel")).toBeTruthy();
   });
 
   it("keeps every stored preference when a token is already set at mount", () => {
@@ -500,18 +637,18 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openPanelRequest={{ panel: "insert", count: 1 }}
+        openPanelRequest={{ panel: "add", count: 1 }}
       />
     );
 
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(screen.getByText("add panel")).toBeTruthy();
     // Queried rather than assumed present: a selector that matched nothing
     // would make the attribute assertion pass on `undefined`.
     const chrome = document.querySelector(".nx-builder-chrome");
     expect(chrome).not.toBeNull();
     expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
     expect(JSON.parse(store.value as string)).toMatchObject({
-      leftPanel: "insert",
+      leftPanel: "add",
       leftPinned: false,
       showEmptyElements: false,
       layouts,
@@ -539,11 +676,11 @@ describe("opening the insert panel from outside the shell", () => {
       <BuilderShell
         onExit={vi.fn()}
         renderPanel={panel => <p>{panel} panel</p>}
-        openPanelRequest={{ panel: "insert", count: 1 }}
+        openPanelRequest={{ panel: "add", count: 1 }}
       />
     );
 
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(screen.getByText("add panel")).toBeTruthy();
     window.localStorage.clear();
   });
 
@@ -608,13 +745,13 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={second}
         renderPanel={panel => <p>{panel} panel</p>}
-        openPanelRequest={{ panel: "insert", count: 1 }}
+        openPanelRequest={{ panel: "add", count: 1 }}
       />
     );
 
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(screen.getByText("add panel")).toBeTruthy();
     expect(JSON.parse(second.value as string)).toMatchObject({
-      leftPanel: "insert",
+      leftPanel: "add",
       leftPinned: true,
       showEmptyElements: true,
       layouts: secondLayouts,
@@ -634,7 +771,7 @@ describe("opening the insert panel from outside the shell", () => {
     // above: a host swapping stores is expected to hand over a new object),
     // so a re-render that swaps stores re-runs this effect even though the
     // TOKEN did not change. The regression this guards: without the
-    // once-per-token guard, that re-run would reapply "insert" over a manual
+    // once-per-token guard, that re-run would reapply "add" over a manual
     // close it had nothing to do with.
     //
     // A `className` change was tried here first and did not exercise this at
@@ -655,13 +792,13 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={storeOverBacking()}
         renderPanel={panel => <p>{panel} panel</p>}
-        openPanelRequest={{ panel: "insert", count: 1 }}
+        openPanelRequest={{ panel: "add", count: 1 }}
       />
     );
-    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(screen.getByText("add panel")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
-    expect(screen.queryByText("insert panel")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.queryByText("add panel")).toBeNull();
 
     // A DIFFERENT store object reading the same backing value — `update`
     // changes identity, `openPanelRequest` does not.
@@ -670,11 +807,11 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={storeOverBacking()}
         renderPanel={panel => <p>{panel} panel</p>}
-        openPanelRequest={{ panel: "insert", count: 1 }}
+        openPanelRequest={{ panel: "add", count: 1 }}
       />
     );
 
-    expect(screen.queryByText("insert panel")).toBeNull();
+    expect(screen.queryByText("add panel")).toBeNull();
   });
 });
 
@@ -686,17 +823,17 @@ describe("preferences", () => {
     stubContainerFits(true);
     render(<BuilderShell onExit={vi.fn()} store={store} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Tokens" }));
+    fireEvent.click(screen.getByRole("button", { name: "Design" }));
 
     expect(store.value).not.toBeNull();
     expect(JSON.parse(store.value as string)).toMatchObject({
-      leftPanel: "tokens",
+      leftPanel: "design",
     });
   });
 
   it("restores the panel that was open when the editor was last left", () => {
     const store = memoryStore(
-      JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "fonts" })
+      JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "design" })
     );
     stubContainerFits(true);
     render(
@@ -707,7 +844,7 @@ describe("preferences", () => {
       />
     );
 
-    expect(screen.getByText("fonts panel")).toBeTruthy();
+    expect(screen.getByText("design panel")).toBeTruthy();
   });
 
   it("a later write does not clobber an earlier one", () => {
@@ -723,7 +860,7 @@ describe("preferences", () => {
     stubContainerFits(true);
     render(<BuilderShell onExit={vi.fn()} store={store} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Tokens" }));
+    fireEvent.click(screen.getByRole("button", { name: "Design" }));
     fireEvent.click(screen.getByRole("button", { name: "Layers" }));
 
     // The second write must have been computed from the FIRST write's result,
@@ -877,7 +1014,7 @@ describe("where overlays inside the shell portal to", () => {
     // structurally because jsdom computes no styles — what it can decide is
     // that the host is not a descendant of any of them.
     renderShell({ renderPanel: panel => <p>{panel} panel</p> });
-    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     const host = overlayHost();
     for (const region of [
@@ -951,7 +1088,7 @@ describe("the server render and the first client render agree", () => {
     // and rebuilding the subtree. A returning author's layout then arrives as a
     // flash rather than a layout.
     const store = memoryStore(
-      JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "fonts" })
+      JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "design" })
     );
 
     const markup = renderToString(
@@ -1561,7 +1698,7 @@ describe("switching between panels", () => {
     // one component for several panels puts the same element type at the same
     // position, so switching tools UPDATES that instance. Its state, its
     // effects and any uncontrolled input values follow the author from Layers
-    // into Tokens, which is a different tool entirely.
+    // into Design, which is a different tool entirely.
     let mounts = 0;
     function Probe({ panel }: { panel: string }) {
       React.useEffect(() => {
@@ -1575,7 +1712,7 @@ describe("switching between panels", () => {
     fireEvent.click(screen.getByRole("button", { name: "Layers" }));
     expect(mounts).toBe(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Tokens" }));
+    fireEvent.click(screen.getByRole("button", { name: "Design" }));
     // A fresh mount, not the same instance handed a new prop. Asserted through
     // a mount-effect rather than through rendered text: the text changes either
     // way, so it cannot tell the two apart.
@@ -1747,5 +1884,176 @@ describe("where the notice region sits", () => {
     expect(
       suppressed(document.querySelector('[data-slot="builder-overlay-host"]'))
     ).not.toBeNull();
+  });
+});
+
+describe("the device being edited", () => {
+  /** A shell whose host asks for devices and records what the shell reports. */
+  function deviceShell(store = memoryStore()) {
+    stubContainerFits(true);
+    const devices: Array<string | null> = [];
+    const zooms: unknown[] = [];
+    const shell = (
+      request?: { breakpoint: string | null; count: number },
+      extra: Partial<Parameters<typeof BuilderShell>[0]> = {}
+    ) => (
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        onZoomChange={zoom => zooms.push(zoom)}
+        onEditingBreakpointChange={device => devices.push(device)}
+        {...(request === undefined
+          ? {}
+          : { editingBreakpointRequest: request })}
+        {...extra}
+      />
+    );
+    const view = render(shell());
+    return { store, devices, zooms, view, shell };
+  }
+
+  it("starts on the base breakpoint, and reports it", () => {
+    const { devices } = deviceShell();
+    expect(devices.at(-1)).toBeNull();
+  });
+
+  it("holds the device a host asks for, and reports it", () => {
+    const { devices, view, shell, store } = deviceShell();
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    expect(devices.at(-1)).toBe("tablet");
+    expect(JSON.parse(store.value ?? "{}").editingBreakpoint).toBe("tablet");
+  });
+
+  it("restores the device the author left, before any request", () => {
+    const { devices } = deviceShell(
+      memoryStore(
+        JSON.stringify({ ...DEFAULT_PREFERENCES, editingBreakpoint: "mobile" })
+      )
+    );
+    expect(devices.at(-1)).toBe("mobile");
+  });
+
+  it("keeps the device when a panel opens or closes", () => {
+    // The defect this guards: the device was read off the canvas's measured
+    // width, so opening a panel narrowed the canvas and moved every edit to a
+    // narrower breakpoint without the author choosing one.
+    const { devices, view, shell } = deviceShell();
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const layers = rail.querySelector<HTMLButtonElement>(
+      '[data-panel="layers"]'
+    );
+    if (layers === null) throw new Error("no Layers item on the rail");
+    fireEvent.click(layers);
+    fireEvent.click(layers);
+    expect(new Set(devices.slice(devices.indexOf("tablet")))).toEqual(
+      new Set(["tablet"])
+    );
+  });
+
+  it("goes back to fitting the canvas when the device changes", () => {
+    const { zooms, view, shell } = deviceShell(
+      memoryStore(JSON.stringify({ ...DEFAULT_PREFERENCES, zoom: 1.5 }))
+    );
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    expect(zooms.at(-1)).toEqual({ kind: "fit" });
+  });
+
+  it("keeps a chosen zoom when the same device is asked for again", () => {
+    // Choosing the device already being edited is not a change of device, and
+    // throwing away the author's zoom for it would be a surprise.
+    const { zooms, view, shell } = deviceShell(
+      memoryStore(
+        JSON.stringify({
+          ...DEFAULT_PREFERENCES,
+          zoom: 1.5,
+          editingBreakpoint: "tablet",
+        })
+      )
+    );
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1.5 });
+  });
+});
+
+describe("zooming from the keyboard", () => {
+  function zoomShell(stored: Record<string, unknown> = {}) {
+    stubContainerFits(true);
+    const zooms: unknown[] = [];
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, ...stored })
+        )}
+        onZoomChange={zoom => zooms.push(zoom)}
+      />
+    );
+    return zooms;
+  }
+
+  it("shows the page at actual size on mod+0", () => {
+    const zooms = zoomShell();
+    fireEvent.keyDown(document, { key: "0", ctrlKey: true, metaKey: false });
+    fireEvent.keyDown(document, { key: "0", metaKey: true, ctrlKey: false });
+    expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1 });
+  });
+
+  it("fits the canvas on Shift+1, whichever character the layout gives", () => {
+    // On a US layout Shift+1 arrives as "!"; on layouts where the digit needs
+    // Shift, it arrives as "1" with Shift held. Both mean the same press.
+    const us = zoomShell({ zoom: 1.5 });
+    fireEvent.keyDown(document, { key: "!", shiftKey: true });
+    expect(us.at(-1)).toEqual({ kind: "fit" });
+    cleanup();
+    const azerty = zoomShell({ zoom: 1.5 });
+    fireEvent.keyDown(document, { key: "1", shiftKey: true });
+    expect(azerty.at(-1)).toEqual({ kind: "fit" });
+  });
+
+  it("zooms only the shell that holds focus when two are mounted", () => {
+    // Two shells share one shortcut manager. The zoom keys must answer for
+    // the shell the author is in, as F6 does, not for whichever registered
+    // last.
+    stubContainerFits(true);
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        onZoomChange={zoom => first.push(zoom)}
+      />
+    );
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        onZoomChange={zoom => second.push(zoom)}
+      />
+    );
+    const [firstRail] = screen.getAllByRole("navigation", {
+      name: "Editor panels",
+    });
+    firstRail?.focus();
+    fireEvent.keyDown(document.activeElement ?? document, {
+      key: "0",
+      ctrlKey: true,
+    });
+    expect(first.at(-1)).toEqual({ kind: "fixed", scale: 1 });
+    expect(second.at(-1)).toEqual({ kind: "fit" });
+  });
+
+  it("leaves Shift+1 to a text field, where it types a character", () => {
+    // On a layout where the digit needs Shift, Shift+1 is how "1" is typed.
+    const zooms = zoomShell({ zoom: 1.5 });
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+    field.focus();
+    fireEvent.keyDown(field, { key: "1", shiftKey: true });
+    fireEvent.keyDown(field, { key: "!", shiftKey: true });
+    expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1.5 });
+    field.remove();
   });
 });

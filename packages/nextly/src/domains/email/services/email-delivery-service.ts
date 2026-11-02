@@ -25,6 +25,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
@@ -35,6 +36,7 @@ import { maskingServiceLogger } from "../../../observability/mask-emails";
 import type { PrincipalRef } from "../../../plugins/principals/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { runAdapterTransaction } from "../../../shared/lib/run-adapter-transaction";
 import { rowLockServer } from "../../audit/audit-log-writer";
 import { runLockedWrite } from "../../audit/person-write";
 import {
@@ -830,16 +832,22 @@ export class EmailDeliveryService extends BaseService {
    * account deletion will ever fire for them. Without a caller of its own, the
    * erasure would cover an arbitrary subset of the people it claims to.
    *
-   * Runs outside a transaction because it stands alone here; `deleteUser`
-   * calls the underlying function directly with its own so the erasure commits
-   * and rolls back with the account removal.
+   * Runs in a transaction of its own, so the erasure commits whole or not at
+   * all, and the queued emails it cancels are read under the row locks that
+   * transaction holds until it commits. `deleteUser` calls the underlying
+   * function directly with its own, so the erasure commits and rolls back with
+   * the account removal.
    */
   async eraseRecipient(address: string): Promise<void> {
     try {
-      await eraseRecipientDeliveries(
-        this.db as Parameters<typeof eraseRecipientDeliveries>[0],
-        this.deliveries,
-        address
+      await runAdapterTransaction<void, TransactionContext>(
+        run => this.adapter.transaction(ctx => run(ctx)),
+        ctx =>
+          eraseRecipientDeliveries(
+            ctx.getDrizzle<Parameters<typeof eraseRecipientDeliveries>[0]>(),
+            this.deliveries,
+            address
+          )
       );
     } catch (err) {
       // Converted like every other read and write on this service. A caller

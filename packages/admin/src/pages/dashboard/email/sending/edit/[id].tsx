@@ -23,6 +23,7 @@ import {
   useEmailProviderTypes,
   useUpdateEmailProvider,
 } from "@admin/hooks/queries/useEmailProviders";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
@@ -46,6 +47,8 @@ export default function EditEmailProviderPage(): JSX.Element {
     error: fetchError,
     refetch,
   } = useEmailProvider(providerId || undefined);
+  // The tab names the provider being edited once it has arrived.
+  useDocumentTitle(provider?.name);
 
   // The provider catalog. The stored record says which type this provider is;
   // the catalog says what that type's fields are, so both are needed before the

@@ -13,6 +13,7 @@
  * - a full uninstall stopped after its first committed drop, which the boot
  *   refuses until the uninstall is run again and finishes.
  */
+import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
@@ -20,9 +21,17 @@ import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
+import {
+  countDeletions,
+  isInteractiveTerminal,
+  NO_CONSENT,
+  resolveDataLossConsent,
+  type DataLossConsent,
+} from "../../../domains/schema/migrate/data-loss-consent";
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { assertBootPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
+import { MYSQL_MIGRATE_LOCK_NAME } from "../../../domains/schema/pipeline/locks";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -78,6 +87,9 @@ vi.mock("../../utils/adapter", () => ({
       },
     }),
 }));
+
+/** The data-loss consent given without targets, as `--accept-data-loss` alone gives it. */
+const EVERY_DELETION = resolveDataLossConsent({ flag: true, env: {} });
 
 const PLUGIN = "@acme/lc";
 const context = {
@@ -168,7 +180,11 @@ describe.each(getConfiguredTestDialects())(
 
     const install = () => runPluginInstall(PLUGIN, {}, context);
     const uninstall = (keepData: boolean) =>
-      runPluginUninstall(PLUGIN, { keepData, yes: true }, context);
+      runPluginUninstall(
+        PLUGIN,
+        { keepData, yes: false, consent: EVERY_DELETION },
+        context
+      );
 
     /** The boot's gate over this database, as a production boot runs it. */
     const boot = () =>
@@ -195,9 +211,18 @@ describe.each(getConfiguredTestDialects())(
      */
     async function endStoppedProcess(): Promise<void> {
       if (dialect !== "mysql") return;
-      const [held] = (await handle.adapter.executeQuery(
-        "SELECT IS_USED_LOCK('nextly:migrate') AS holder"
-      )) as Array<{ holder: number | null }>;
+      const db = handle.adapter.getDrizzle<{
+        execute: (q: unknown) => Promise<unknown>;
+      }>();
+      const result = await db.execute(
+        sql`SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME}) AS holder`
+      );
+      // mysql2 answers [rows, fields].
+      const [held] = (
+        Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result
+      ) as Array<{
+        holder: number | null;
+      }>;
       if (held?.holder) {
         await handle.adapter.executeQuery(`KILL ${String(held.holder)}`);
       }
@@ -266,6 +291,102 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await noteIds()).toEqual(["kept"]);
       await expect(boot()).resolves.toBeUndefined();
+    });
+
+    describe("and the data-loss consent", () => {
+      const uninstallWith = (consent: DataLossConsent) =>
+        runPluginUninstall(
+          PLUGIN,
+          { keepData: false, yes: false, consent },
+          context
+        );
+      const refusalOf = (consent: DataLossConsent) =>
+        uninstallWith(consent).then(
+          () => {
+            throw new Error("the uninstall was not refused");
+          },
+          (error: unknown) => error as { code: string; publicMessage: string }
+        );
+
+      /** The database as an uninstall that changed nothing leaves it. */
+      async function expectUnchanged(notes: string[]): Promise<void> {
+        expect(await exists("lc__notes")).toBe(true);
+        expect(await exists("lc__tags")).toBe(true);
+        expect((await noteIds()).sort()).toEqual(notes);
+        // Still recorded installed: the boot's gate lets it through.
+        await expect(boot()).resolves.toBeUndefined();
+      }
+
+      it("with no terminal and no consent, changes nothing, names the tables with their rows, and ends promptly", async () => {
+        // The run has no terminal to ask, which is what is under test.
+        expect(isInteractiveTerminal()).toBe(false);
+        await install();
+        await writeNote("a");
+        await writeNote("b");
+
+        const started = Date.now();
+        const refusal = await refusalOf(NO_CONSENT);
+        expect(Date.now() - started).toBeLessThan(10_000);
+
+        expect(refusal.code).toBe("PLUGIN_UNINSTALL_UNCONFIRMED");
+        expect(refusal.publicMessage).toContain("table lc__notes (2 rows)");
+        expect(refusal.publicMessage).toContain("table lc__tags (0 rows)");
+        expect(refusal.publicMessage).toMatch(
+          /--accept-data-loss=(lc__notes,lc__tags|lc__tags,lc__notes)/
+        );
+        await expectUnchanged(["a", "b"]);
+      });
+
+      it("applies nothing when the consent names one of its two tables, naming the other", async () => {
+        await install();
+        await writeNote("a");
+
+        const refusal = await refusalOf(
+          resolveDataLossConsent({ flag: "lc__notes", env: {} })
+        );
+
+        expect(refusal.code).toBe("PLUGIN_UNINSTALL_UNCONFIRMED");
+        expect(refusal.publicMessage).toMatch(
+          /does not cover 1 deletion:\n {2}- table lc__tags/
+        );
+        await expectUnchanged(["a"]);
+      });
+
+      it("removes both tables with consent naming them", async () => {
+        await install();
+        await writeNote("a");
+
+        await uninstallWith(
+          resolveDataLossConsent({ flag: "lc__notes,lc__tags", env: {} })
+        );
+
+        expect(await exists("lc__notes")).toBe(false);
+        expect(await exists("lc__tags")).toBe(false);
+      });
+
+      it("counts a table's rows and a column's non-empty values for the listing", async () => {
+        await install();
+        await writeNote("a");
+        await writeNote("b");
+        // A row with no body: counted among the table's rows, not the column's values.
+        await handle.adapter.executeQuery(
+          `INSERT INTO ${q("lc__notes")} (${q("id")}) VALUES ('c')`
+        );
+
+        const counted = await countDeletions(
+          [
+            { kind: "table", table: "lc__notes" },
+            { kind: "column", table: "lc__notes", column: "body" },
+            { kind: "rows", table: "lc__notes" },
+          ],
+          db(),
+          dialect
+        );
+
+        expect(counted.map(d => ("count" in d ? d.count : undefined))).toEqual([
+          3, 2, 3,
+        ]);
+      });
     });
 
     it("refuses the boot after an uninstall stopped at its first committed drop, and finishes when run again", async () => {

@@ -23,19 +23,26 @@ import {
   EditorCommandPalette,
   EmptyContainerAppenders,
   InspectorPanel,
+  RepairNotice,
   OnboardingChecklist,
-  selectableTiers,
   SelectionBreadcrumb,
   SpacingOverlay,
 } from "@nextlyhq/builder/shell";
 import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import type { Control, FieldValues, Path } from "react-hook-form";
+import {
+  useFormState,
+  type Control,
+  type FieldValues,
+  type Path,
+} from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
+import { valueAtPath } from "../snapshot-merge";
 import { UnsavedChangesPill } from "../UnsavedChangesPill";
 
 import { DocumentActionButtons } from "./document-action-buttons";
@@ -52,6 +59,7 @@ import {
   useHostCommit,
   useSavePoint,
 } from "./use-host-commit";
+import { useOpenAtSection } from "./use-open-at-section";
 import {
   useCanvasInputs,
   useSiteStyleInputs,
@@ -187,9 +195,8 @@ function editorTopBar(view: EditorView): React.JSX.Element {
     saveBreakpoints,
     siteStylePending,
     siteStyleError,
-    requestedWidth,
-    measuredWidth,
-    setRequestedTier,
+    editedBreakpoint,
+    chooseDevice,
   } = view;
   return (
     <>
@@ -218,43 +225,17 @@ function editorTopBar(view: EditorView): React.JSX.Element {
       {/*
        * Beside the manager, and gated on the same read for the same
        * reason it is: until the stored style has answered, the set in
-       * hand is the host's config defaults, so this would size the canvas
-       * to a bound the site never chose and every edit made there would
-       * land in whichever tier that bound implies.
+       * hand is the host's config defaults, so a device chosen against it
+       * could name a breakpoint the site never had.
        *
-       * It is handed BOTH widths. The requested one is what the author
-       * chose and is what the control reports as selected; the measured
-       * one is what the box got and is what it names a tier from. Fed
-       * only the measured width it would unselect the option just
-       * clicked whenever the region could not honour it.
+       * The device chosen is the breakpoint being edited. The choice goes
+       * to the shell, which stores it with the author's preferences and
+       * reports it back, so this shows the device the edits go to.
        */}
       <BreakpointSwitcher
         breakpoints={canvasRender.styleContext.breakpoints}
-        width={requestedWidth}
-        appliedWidth={measuredWidth}
-        /*
-         * Stored as the TIER, not as the width it emitted.
-         *
-         * A width identifies an option only until the site's bounds move.
-         * Editing the widest breakpoint changes the width the
-         * unconditional tier applies from, and the number the author's
-         * choice produced is then nobody's — so the canvas was released
-         * and the editor returned to the bounded tier while the option
-         * they had chosen still existed.
-         *
-         * The lookup is unambiguous because `selectableTiers` collapses
-         * tiers sharing a bound to the one the browser paints, which is
-         * the same reason the switcher offers one radio for them.
-         */
-        onSelect={width => {
-          setRequestedTier(
-            width === undefined
-              ? undefined
-              : selectableTiers(canvasRender.styleContext.breakpoints).find(
-                  tier => tier.maxWidth === width
-                )?.id
-          );
-        }}
+        selected={editedBreakpoint}
+        onSelect={chooseDevice}
         status={siteStyleStatus(siteStylePending, siteStyleError)}
       />
       {/* Last, at the bar's far end where the header kept them: the
@@ -276,7 +257,7 @@ function editorInspector(view: EditorView): React.JSX.Element {
     stylePolicy,
     styleCascade,
     canvasRender,
-    setRequestedTier,
+    chooseDevice,
     editedBreakpoint,
     canvasPreviewContainer,
     liveBreakpoints,
@@ -297,6 +278,10 @@ function editorInspector(view: EditorView): React.JSX.Element {
       // very document the page is drawn from, and titled from the row
       // the same read returned.
       componentLibrary={componentLibrary}
+      // A contributed block's own inspector, loaded by the app's generated
+      // component map; a block whose inspector did not load keeps its
+      // generated controls.
+      inspectors={contributedInspector}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
@@ -324,7 +309,7 @@ function editorInspector(view: EditorView): React.JSX.Element {
        */
       // Already a TIER, so it is stored directly rather than converted
       // to a width and back.
-      onJumpToBreakpoint={setRequestedTier}
+      onJumpToBreakpoint={chooseDevice}
       breakpoint={editedBreakpoint}
       previewContainer={canvasPreviewContainer}
       liveBreakpoints={liveBreakpoints}
@@ -392,6 +377,12 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
         state={componentLibrary.state}
         retry={componentLibrary.retry}
       />
+      {/*
+        Beside the other notes about the page as a whole: a locked area that
+        holds what its lock doesn't allow, and the repair the author can review
+        and confirm.
+      */}
+      <RepairNotice editor={editor} />
       {siteStylePending ||
       siteStyleError !== null ||
       componentLibrary.state === "pending" ? (
@@ -529,6 +520,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   onClose,
   name,
   control,
+  openAt,
 }: {
   initialValue: unknown;
   /** The kinds the field accepts, so a seeded document is one it will take. */
@@ -537,8 +529,18 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   onClose: () => void;
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
+  /** The section to open at, as the address names it; none opens at the top. */
+  openAt?: string | undefined;
 }): JSX.Element {
-  const mount = useEditorMount(initialValue, kinds);
+  // The field's value as last loaded or saved: the form resets its defaults to
+  // what a save stored, so the editor holds an edit to the locks against the
+  // same stored copy the next save is judged against.
+  const { defaultValues } = useFormState({ control, name });
+  const mount = useEditorMount(
+    initialValue,
+    kinds,
+    valueAtPath(defaultValues, name)
+  );
   const { editor, inline } = mount;
 
   /*
@@ -579,6 +581,12 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     ...panels,
     documentDirty,
   };
+  useOpenAtSection({
+    sectionId: openAt,
+    editor,
+    canvas: canvas.canvasElement,
+    requestPanel: panels.requestPanel,
+  });
   const {
     notices,
     componentLibrary,
@@ -590,6 +598,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     setShowEmptyElements,
     setZoom,
     appliedScale,
+    deviceRequest,
+    setChosenDevice,
   } = view;
 
   return (
@@ -609,6 +619,10 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // already suppresses the placeholder box it sits over.
         onShowEmptyElementsChange={setShowEmptyElements}
         onZoomChange={setZoom}
+        // The device being edited: chosen here, held and stored by the shell,
+        // and reported back so the canvas and the inspector follow it.
+        editingBreakpointRequest={deviceRequest}
+        onEditingBreakpointChange={setChosenDevice}
         appliedScale={appliedScale}
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is

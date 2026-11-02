@@ -37,7 +37,10 @@ import { NextlyError } from "../../errors";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { entityPermissionSpelling } from "../auth/services/entity-permission-spelling";
-import { documentOfReleaseEvent } from "../releases/release-events";
+import {
+  DOCUMENT_EVENT_KINDS,
+  documentOfReleaseEvent,
+} from "../releases/release-events";
 import { releaseMemberKey } from "../releases/release-member-key";
 import { versionPinKey } from "../versions/version-pins";
 import { versionViewKey } from "../versions/version-views";
@@ -144,6 +147,11 @@ export interface JsonSlugColumn {
    * entity.
    */
   onlyWhereEqual?: Readonly<Record<string, string>>;
+  /**
+   * Columns that must hold one of these values for a row to be read at all,
+   * in the same statement, for the same reason.
+   */
+  onlyWhereIn?: Readonly<Record<string, readonly string[]>>;
   /** Further columns `names` and `rewrite` are handed, by SQL name. */
   reads?: readonly string[];
   /** The kinds whose slugs the value can name. */
@@ -423,6 +431,29 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     onRename: "follow",
   },
   {
+    // Readers' pins of the entity on their dashboards. A pin follows its
+    // target, so every reader keeps what they pinned under the new name.
+    table: "nextly_dashboard_pins",
+    slugColumn: "target_slug",
+    kind: {
+      column: "target_type",
+      values: { collection: ["collection"], single: ["single"] },
+    },
+    onRename: "follow",
+  },
+  {
+    // Which media items the entity's documents use. A row follows its
+    // document, so the item's "Used in" names the entity by its new slug.
+    // An email template's rows carry kind "email-template" and are not moved.
+    table: "nextly_media_usage",
+    slugColumn: "subject_slug",
+    kind: {
+      column: "subject_kind",
+      values: { collection: ["collection"], single: ["single"] },
+    },
+    onRename: "follow",
+  },
+  {
     // The dashboard's activity feed. Its readers take a NULL kind, which rows
     // written before the kind was recorded carry, to be a collection's.
     table: "activity_log",
@@ -518,11 +549,13 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     // document, so it follows the rename: release history keeps showing the
     // document under its new name and its own access, and an entity later
     // created under the old name is never judged in its place. Only release
-    // events are read.
+    // events about a document are read, by the kinds the history reads them
+    // by.
     table: "nextly_content_events",
     jsonColumn: "payload",
     rowId: "id",
     onlyWhereEqual: { subject_kind: "release" },
+    onlyWhereIn: { kind: [...DOCUMENT_EVENT_KINDS] },
     reads: ["kind"],
     renames: ["collection", "single"],
     onRename: "follow-json",

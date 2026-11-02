@@ -58,6 +58,25 @@ export interface LocalizedQueryContext {
   /** The locale to filter on (the requested locale — chain head). */
   locale: string;
   /**
+   * The read's languages in the order it falls back through them, the
+   * requested one first. A localized field is shown from the first of them
+   * that holds a value.
+   */
+  localeChain?: readonly string[];
+  /**
+   * Whether each localized condition must hold in every language of
+   * {@link localeChain} rather than in {@link locale} alone. Set for a read
+   * rule's filter: a field the read shows from a fallback language is then
+   * judged on that language's value too, so the read shows nothing the rule
+   * refuses. A caller's own filter keeps its meaning, the requested language.
+   */
+  inEveryFallbackLanguage?: boolean;
+  /**
+   * The companion table's Drizzle columns, so a localized comparison's
+   * operand is read as its column compares it, as a main-table column's is.
+   */
+  companionTable?: unknown;
+  /**
    * Per-locale status filter (i18n M6). Set (e.g. `"published"`) when the read resolves to a
    * single status and the collection has per-locale status, so localized where/search EXISTS
    * checks only match companion rows in that state. Undefined = no status constraint.
@@ -200,6 +219,18 @@ function refuseKey(column: string, code: string, message: string): never {
  * predicate nobody wrote.
  */
 function resolveColumn(schema: object, column: string): Column {
+  return (
+    findColumn(schema, column) ??
+    refuseKey(
+      column,
+      "FILTER_UNKNOWN_FIELD",
+      `"${column}" is not a field this collection can be filtered on.`
+    )
+  );
+}
+
+/** The column a filter key names on this table, if it names one. */
+function findColumn(schema: object, column: string): Column | undefined {
   // The name as written first, then its snake_case form: a runtime table keys
   // its system timestamps `created_at`, while every response spells them
   // `createdAt`, and a filter written the way rows read must reach them.
@@ -209,11 +240,7 @@ function resolveColumn(schema: object, column: string): Column {
       : undefined;
     if (is(candidate, Column)) return candidate;
   }
-  return refuseKey(
-    column,
-    "FILTER_UNKNOWN_FIELD",
-    `"${column}" is not a field this collection can be filtered on.`
-  );
+  return undefined;
 }
 
 /** The operators that compare a column with a value of the column's own kind. */
@@ -333,12 +360,38 @@ export function buildDrizzleCondition(
       f => f.name === columnParts[0]
     );
     if (localizedCtx && localizedWhereField) {
-      const localizedCond = localizedExists?.(
-        localizedCtx,
-        localizedWhereField.column,
-        op,
-        value
+      // Read as the companion column compares it: a date is the instant it
+      // names, spelled as that column's dialect stores one, as on the main
+      // table. Bound as written, an ISO string beside SQLite's integer
+      // timestamp compares as text, which every number sorts below.
+      const companionColumn =
+        localizedCtx.companionTable === undefined ||
+        localizedCtx.companionTable === null
+          ? undefined
+          : findColumn(localizedCtx.companionTable, localizedWhereField.name);
+      const operand =
+        companionColumn && COMPARISONS.has(op)
+          ? comparisonOperand(companionColumn, column, value)
+          : value;
+      // In every language the read may show the field from, where asked;
+      // else in the requested one.
+      const languages =
+        localizedCtx.inEveryFallbackLanguage && localizedCtx.localeChain?.length
+          ? localizedCtx.localeChain
+          : [localizedCtx.locale];
+      const perLanguage = languages.map(locale =>
+        localizedExists?.(
+          { ...localizedCtx, locale },
+          localizedWhereField.column,
+          op,
+          operand
+        )
       );
+      const localizedCond = perLanguage.every(cond => cond !== undefined)
+        ? perLanguage.length === 1
+          ? perLanguage[0]
+          : and(...perLanguage)
+        : undefined;
       if (localizedCond) return localizedCond;
       // The field lives in the companion table, so the main table has no
       // column to fall back on: without a companion condition it cannot be

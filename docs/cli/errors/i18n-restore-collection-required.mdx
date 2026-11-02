@@ -1,0 +1,23 @@
+---
+title: I18N_RESTORE_COLLECTION_REQUIRED
+description: "`i18n:restore` was run without `--collection`, so it has no entity to restore."
+---
+
+## Cause
+
+`i18n:restore` was run without `--collection`, so it has no entity to restore.
+
+`nextly i18n:restore` brings back the archived translations of one entity, and is told which by its slug.
+
+## Fix
+
+- Run `nextly i18n:restore --collection <slug>` with the slug of the collection, single or field group to restore.
+
+## Example
+
+```text
+✗ --collection <slug> is required.
+  Why:  `nextly i18n:restore` brings back the archived translations of one entity, named by its slug.
+  Next: Run `nextly i18n:restore --collection <slug>` with the slug of the collection, single or field group to restore.
+  Docs: https://nextlyhq.com/docs/cli/errors/i18n-restore-collection-required  (I18N_RESTORE_COLLECTION_REQUIRED)
+```

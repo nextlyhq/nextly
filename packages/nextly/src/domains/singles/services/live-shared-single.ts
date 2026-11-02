@@ -24,6 +24,7 @@ import { readFieldGroupType } from "../../field-groups/storage/field-group-type-
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { perLanguageFieldNames } from "../../i18n/per-language-fields";
 import {
+  asIdSet,
   sharedFieldNames,
   type SharedViews,
 } from "../../versions/shared-publish-base";
@@ -221,12 +222,6 @@ function componentView(
   };
   return value =>
     Array.isArray(value) ? value.map(instance) : instance(value);
-}
-
-/** A junction's ids, in one order. */
-function asIdSet(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
-  return value.map(id => String(id)).sort();
 }
 
 // Which fields hold values per language is one question with one answer, and

@@ -34,8 +34,11 @@ const canReadEntity = vi.fn();
 const callerHoldsPermission = vi.fn();
 vi.mock("../../auth/entity-read-access", () => ({
   readAccessCaller: (caller: { user: unknown }) => caller.user,
-  canReadEntity: (slug: string, caller: unknown) =>
-    canReadEntity(slug, caller) as unknown,
+  // The entity reader's answer, every entry or none; a filter's answer is
+  // the integration test's to judge, against a real document.
+  entityReadFor: async (slug: string, caller: unknown) => ({
+    allowed: (await canReadEntity(slug, caller)) as boolean,
+  }),
   callerHoldsPermission: (slug: string, caller: unknown) =>
     callerHoldsPermission(slug, caller) as unknown,
 }));

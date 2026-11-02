@@ -37,6 +37,11 @@ export interface EntryFieldsPanelProps {
   content: FieldConfig[];
   /** Whether the surrounding form is mid-submit. */
   disabled?: boolean;
+  /**
+   * Whether the fields render uneditable but focusable: the document is
+   * someone else's, or a refused publish's recovery is running.
+   */
+  readOnly?: boolean;
   /** Form mode, which write-only fields adjust their affordances for. */
   mode?: "create" | "edit";
   /**
@@ -108,6 +113,7 @@ export function EntryFieldsPanel({
   page,
   content,
   disabled,
+  readOnly,
   mode,
   slugName,
 }: EntryFieldsPanelProps): React.JSX.Element {
@@ -118,7 +124,12 @@ export function EntryFieldsPanel({
           label="Page"
           description="How this document is identified and addressed."
         >
-          <EntryFormContent fields={page} disabled={disabled} mode={mode} />
+          <EntryFormContent
+            fields={page}
+            disabled={disabled}
+            readOnly={readOnly}
+            mode={mode}
+          />
           {/*
             The same warning the meta strip carries, for the same reason and in
             the only other place the slug is editable. This editor covers the
@@ -137,7 +148,12 @@ export function EntryFieldsPanel({
       )}
       {content.length === 0 ? null : (
         <FormSection label="Fields">
-          <EntryFormContent fields={content} disabled={disabled} mode={mode} />
+          <EntryFormContent
+            fields={content}
+            disabled={disabled}
+            readOnly={readOnly}
+            mode={mode}
+          />
         </FormSection>
       )}
     </div>
@@ -162,6 +178,7 @@ export function fieldsBesidePanel(
   excludePath: string,
   options: {
     disabled?: boolean;
+    readOnly?: boolean;
     mode?: "create" | "edit";
     /**
      * The current values of every field a condition watches. Without them a
@@ -184,6 +201,7 @@ export function fieldsBesidePanel(
       page={beside.page}
       content={beside.content}
       disabled={options.disabled}
+      readOnly={options.readOnly}
       mode={options.mode}
       slugName={
         options.hasPublicAddress === true && slug !== undefined

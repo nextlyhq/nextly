@@ -1,12 +1,14 @@
 /**
  * A card's settings reach the data it shows, on every configured dialect: each setting a widget
  * declares changes the rows its query answers, and a default changed after a card was placed
- * reaches everyone who never changed that setting, and no one who did.
+ * reaches everyone who never changed that setting, and no one who did. The setting is a Filter,
+ * which drives the query by its type: no setting drives a query because of its name.
  *
  * The card's settings go through the real layout endpoint and are read back, so what is applied
- * is what was stored; the declaration is the registry's, which is what the admin is sent; the
- * settings become the query through `applyWidgetSettings`, the one path they take; and the query
- * runs against real rows.
+ * is what was stored; the declared settings are the registry's, which is what the admin is sent;
+ * the settings become the query through `applyWidgetSettings`, the one path they take, over the
+ * query the card asks, as a declared card's `load` builds it; and the query runs against real
+ * rows.
  */
 
 // Must be set before the harness boots (env validation) and to sign tokens.
@@ -27,6 +29,8 @@ import {
 import { createDynamicHandlers } from "../../../routeHandler";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
+import { setDefaultLayoutPlan } from "../default-layout";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery, type WidgetQuery } from "../query";
 import { deregisterWidget, getWidget, registerWidget } from "../registry";
@@ -34,13 +38,31 @@ import { applyWidgetSettings } from "../settings";
 
 const NOTES = "notes";
 const WIDGET = "test/notes";
-/** More rows than any limit below, so each limit is what decides the count. */
+/** More rows than any filter below admits, so each filter is what decides the count. */
 const ROWS = 9;
+/**
+ * The query the notes card asks before its settings change it. A published widget carries no
+ * query -- its declaration's `load` asks one -- so it is held here, as such a load holds it.
+ * Room for every note, so only the Filter decides how many are answered.
+ */
+const NOTES_QUERY: WidgetQuery = {
+  source: `collection:${NOTES}`,
+  op: "list",
+  limit: 10,
+};
+
+/** A Filter admitting the first `count` notes by title, so the rows answered are `count`. */
+function firstNotes(count: number): Record<string, unknown> {
+  return {
+    title: { in: Array.from({ length: count }, (_, i) => `Note ${i}`) },
+  };
+}
 
 interface Placement {
   id: string;
   widgetId: string;
-  width: string;
+  w: number;
+  h: number;
   removed: boolean;
   config?: Record<string, unknown>;
 }
@@ -51,23 +73,33 @@ interface LayoutRead {
   scope: string;
 }
 
-/** The notes card, its `limit` defaulting to `defaultLimit`. */
-function declare(defaultLimit: number): void {
+/**
+ * The notes card, its Filter defaulting to the first `defaultCount` notes, on the default after
+ * core's own cards (as a site's `defaultLayout` names it: nothing is placed that the default does
+ * not name).
+ */
+function declare(defaultCount: number): void {
+  setDefaultLayoutPlan({ cards: [...CORE_DEFAULT_LAYOUT, { widget: WIDGET }] });
   if (getWidget(WIDGET)) deregisterWidget(WIDGET);
   registerWidget(
     {
       id: WIDGET,
       title: "Notes",
       archetype: "list",
-      defaultSize: "md",
-      defaultOrder: 1000,
-      query: { source: `collection:${NOTES}`, op: "list", limit: 5 },
+      size: { default: { w: 4, h: 3 } },
       settings: [
         {
-          name: "limit",
-          type: "number",
-          label: "Rows",
-          defaultValue: defaultLimit,
+          name: "collection",
+          type: "collection",
+          label: "Collection",
+          defaultValue: NOTES,
+        },
+        {
+          name: "where",
+          type: "filter",
+          of: "collection",
+          label: "Filter",
+          defaultValue: firstNotes(defaultCount),
         },
       ],
     },
@@ -141,7 +173,7 @@ describe.each(getConfiguredTestDialects())(
       expect(card).toBeDefined();
       const declared = getWidget(WIDGET)!;
       const query = applyWidgetSettings(
-        declared.query as WidgetQuery,
+        NOTES_QUERY,
         declared.settings,
         card!.config
       );
@@ -205,12 +237,12 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    it("answers the card the number of rows its reader chose", async () => {
+    it("answers the card the rows its reader's Filter admits", async () => {
       declare(5);
       expect(await rowsShown()).toBe(5);
-      await choose({ limit: 3 });
+      await choose({ where: firstNotes(3) });
       expect(await rowsShown()).toBe(3);
-      await choose({ limit: 8 });
+      await choose({ where: firstNotes(8) });
       expect(await rowsShown()).toBe(8);
     });
 
@@ -224,7 +256,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("keeps a reader's own choice when the default changes after it", async () => {
       declare(5);
-      await choose({ limit: 2 });
+      await choose({ where: firstNotes(2) });
       declare(9);
       expect(await rowsShown()).toBe(2);
     });

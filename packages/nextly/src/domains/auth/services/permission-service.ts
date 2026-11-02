@@ -37,8 +37,6 @@ function buildHiddenPermissionConditions(
   const conditions = [
     // Hide the legacy `permissions` resource from assignable/admin permission lists.
     sql`${permissionsTable.resource} <> 'permissions'`,
-    // Hide create/delete actions for `settings` resource.
-    sql`NOT (${permissionsTable.resource} = 'settings' AND ${permissionsTable.action} IN ('create', 'delete'))`,
   ];
 
   if (!options?.includeOrphaned) {
@@ -55,19 +53,13 @@ function buildHiddenPermissionConditions(
 
 /**
  * Whether a permission is one of the hidden internal ones: the legacy
- * `permissions` resource, or create/delete on `settings`, as
- * {@link buildHiddenPermissionConditions} hides them from lists. They are
- * answered as if absent, so nothing confirms they exist.
+ * `permissions` resource, as {@link buildHiddenPermissionConditions} hides it
+ * from lists. It is answered as if absent, so nothing confirms it exists.
+ * Create and delete on `settings` are granted like any other permission, so
+ * they are listed.
  */
-function isHiddenPermission(permission: {
-  action: string;
-  resource: string;
-}): boolean {
-  return (
-    permission.resource === "permissions" ||
-    (permission.resource === "settings" &&
-      (permission.action === "create" || permission.action === "delete"))
-  );
+function isHiddenPermission(permission: { resource: string }): boolean {
+  return permission.resource === "permissions";
 }
 
 /**

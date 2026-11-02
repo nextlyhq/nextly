@@ -48,6 +48,10 @@ const serverEntries = [
   // Templates' catch-all admin route imports from
   // `nextly/runtime`. The root `.` entry must NOT pull this.
   "src/runtime.ts",
+  // The cache handlers `next.config` names by path; Next.js loads each outside
+  // the app's bundle.
+  "src/cache-handler.ts",
+  "src/cache-handlers.ts",
   "src/scripts/load-env.ts",
   "src/api/auth-state.ts",
   "src/api/health.ts",
@@ -68,6 +72,7 @@ const serverEntries = [
   "src/api/email-providers.ts",
   "src/api/email-provider-types.ts",
   "src/api/email-template-preview-types.ts",
+  "src/api/dashboard-summary-types.ts",
   "src/api/jobs-list-types.ts",
   "src/api/auth-ui-types.ts",
   "src/api/email-providers-detail.ts",
@@ -179,6 +184,26 @@ const clientEntries = [
   // every domain it counts -- so the card reaching the vocabulary through it
   // would take all of them, and one writing its own copy would drift.
   "src/domains/widgets/attention-keys.ts",
+  // A card's body height and the list rows it holds, as their own entry. The
+  // admin draws its grid and frame by these numbers and a widget's server
+  // `load` counts its rows by the same formula, so neither keeps a copy; the
+  // module imports only the row limits, so the admin reaching it takes nothing
+  // more.
+  "src/domains/widgets/card-geometry.ts",
+  // The one humaniser of a field's key, as its own entry: the admin names a
+  // field by it on screen and a widget's `describe` read names one by it on
+  // the server, so neither keeps a copy; it imports nothing. Internal: not a
+  // public API.
+  "src/collections/fields/field-label.ts",
+  // Which kind of file a MIME type is, as its own entry: the admin badges an
+  // item by it and the library query narrows to a kind by it, so neither
+  // keeps a copy; it imports nothing. Internal: not a public API.
+  "src/domains/media/media-categories.ts",
+  // The data each of core's declared cards answers, as their own entry: the
+  // card's server `load` is typed to answer it and its admin component to draw
+  // it, and the module holds types alone, so the admin takes nothing more.
+  // Internal: not a public API.
+  "src/domains/widgets/core-widgets/data.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.
@@ -200,6 +225,12 @@ const clientEntries = [
   // `nextly/zod`: the Zod generated schema files import, so they compile in an
   // app that depends on `nextly` and not on `zod`. Pure, so browser-safe.
   "src/zod.ts",
+  // `nextly/testing/widget-card`: a widget's card described and answered as
+  // the dashboard does, for the SDK's card helper. A card test runs under
+  // jsdom, where `nextly/testing`'s harness refuses to load, so this half of
+  // the test surface is its own entry and is held to this list's boundary.
+  // For tests only; no production entry imports it.
+  "src/plugins/test-widget-card.ts",
 ];
 
 // Packages this build never bundles: each name and its subpaths. Exported for

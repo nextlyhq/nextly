@@ -1,7 +1,7 @@
 /**
  * Which dialect a plugin's `ctx.settings` actually builds SQL for.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeAll } from "vitest";
 import { z } from "zod";
 
 const announced = vi.hoisted(() => [] as unknown[]);
@@ -13,6 +13,13 @@ vi.mock("../../domains/plugins/settings-activity", () => ({
 
 import type { PluginDefinition } from "../plugin-context";
 import { createPluginSettings } from "../plugin-settings-provider";
+import { loadDialectTables } from "../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 process.env.NEXTLY_SECRET_KEYS ??= "c".repeat(32);
 

@@ -24,6 +24,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { settingsOf } from "../../domains/schema/migrate-create/entity-settings";
+import type { MinimalConfigField } from "../../domains/schema/migrate-create/generate";
 import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 
@@ -42,6 +44,7 @@ function makeLogger() {
     keyValue: vi.fn(),
     item: vi.fn(),
     table: vi.fn(),
+    getOptions: () => ({}),
   };
 }
 
@@ -63,6 +66,8 @@ const EMPTY_DESIRED: NextlySchemaSnapshot = { tables: [] };
 describe("runChecks (F11 PR 4)", () => {
   let migrationsDir: string;
   let exitSpy: ReturnType<typeof vi.spyOn>;
+  // The error a failing check ends with, printed on standard error in the error shape.
+  let printed: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     const cwd = await mkdtemp(join(tmpdir(), "nextly-migrate-check-test-"));
@@ -71,10 +76,12 @@ describe("runChecks (F11 PR 4)", () => {
     exitSpy = vi
       .spyOn(process, "exit")
       .mockImplementation((() => undefined) as never);
+    printed = vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
 
   afterEach(async () => {
     exitSpy.mockRestore();
+    printed.mockRestore();
     // best-effort cleanup; OS will reap tmpdir anyway
     await rm(migrationsDir, { recursive: true, force: true }).catch(() => {});
   });
@@ -176,6 +183,41 @@ describe("runChecks (F11 PR 4)", () => {
     });
   });
 
+  describe("a new address the rule refuses", () => {
+    it("names it, then exits 1 through the error shape", async () => {
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        // `admin` is a reserved slug, and with no migrations yet it is new.
+        entities: {
+          collections: [{ slug: "admin", tableName: "dc_admin", fields: [] }],
+          singles: [],
+          components: [],
+        },
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      // What the check says about the address is unchanged: the refusal and
+      // what to do about it, on the command's log.
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringMatching(/^SLUG_RESERVED: .*admin/)
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Give each refused address one the rule accepts"
+        )
+      );
+      // Then it ends as every other failed check does: the error shape, here
+      // the code migrate:create ends the same refusal with, and exit 1.
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(CONFIG_INVALID)")
+      );
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(logger.success).not.toHaveBeenCalled();
+    });
+  });
+
   describe("CHECKSUM_MISMATCH", () => {
     it("exits 1 when a .sql file is edited after generation", async () => {
       const original = "CREATE TABLE foo (id text);";
@@ -206,8 +248,8 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("CHECKSUM_MISMATCH")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(CHECKSUM_MISMATCH)")
       );
     });
   });
@@ -229,8 +271,8 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("MISSING_SNAPSHOT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(MISSING_SNAPSHOT)")
       );
     });
   });
@@ -261,10 +303,10 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("INVALID_SNAPSHOT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(INVALID_SNAPSHOT)")
       );
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("JSON parse failed")
       );
     });
@@ -298,10 +340,10 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("INVALID_SNAPSHOT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(INVALID_SNAPSHOT)")
       );
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("expected version: 1, got 2")
       );
     });
@@ -324,8 +366,8 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("MISSING_MIGRATION")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(MISSING_MIGRATION)")
       );
     });
   });
@@ -342,10 +384,10 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("SCHEMA_DRIFT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(SCHEMA_DRIFT)")
       );
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("add_table dc_posts")
       );
     });
@@ -373,10 +415,10 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("SCHEMA_DRIFT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(SCHEMA_DRIFT)")
       );
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("Run `nextly migrate:create")
       );
     });
@@ -412,8 +454,186 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("... and 5 more")
+      );
+    });
+  });
+
+  describe("addresses, by the one address rule", () => {
+    const ADMIN_TABLE = { ...POSTS_TABLE, name: "dc_admin" };
+    const entity = (slug: string, tableName: string) => ({
+      slug,
+      tableName,
+      fields: [],
+    });
+
+    async function seed(snapshot: NextlySchemaSnapshot): Promise<void> {
+      const sqlContent = "-- placeholder";
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        sqlContent,
+        "utf-8"
+      );
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        "20260101_120000_001_initial",
+        snapshot,
+        sqlContent
+      );
+    }
+
+    it("warns once for an existing address the rule refuses, and passes", async () => {
+      // A Builder collection made under `admin` before the rule: its table is in the snapshot.
+      await seed({ tables: [ADMIN_TABLE] });
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: { tables: [ADMIN_TABLE] },
+        entities: {
+          collections: [entity("admin", "dc_admin")],
+          singles: [],
+          components: [],
+        },
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).not.toHaveBeenCalledWith(1);
+      const warnings = logger.warn.mock.calls
+        .map(([line]) => String(line))
+        .filter(line => line.includes("'admin'"));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/SLUG_RESERVED: .*'admin'.*keeps working/);
+    });
+
+    it("fails a new address the rule refuses, naming it and the reason, before the drift", async () => {
+      await seed(POSTS_DESIRED);
+      const CASCADE_TABLE = { ...POSTS_TABLE, name: "dc_cascade" };
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: { tables: [POSTS_TABLE, CASCADE_TABLE] },
+        entities: {
+          collections: [
+            entity("posts", "dc_posts"),
+            entity("cascade", "dc_cascade"),
+          ],
+          singles: [],
+          components: [],
+        },
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(logger.error.mock.calls[0]?.[0]).toMatch(
+        /^SLUG_SQL_KEYWORD: Collection address 'cascade' is a reserved SQL word/
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /the rule accepts\. If an entity already exists under it.*remove it from the configuration, create and apply the migration, then add it back under an accepted address/
+        )
+      );
+      expect(logger.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("SCHEMA_DRIFT")
+      );
+    });
+  });
+
+  describe("sibling fields, by the one sibling rule", () => {
+    const text = (name: string): MinimalConfigField => ({ name, type: "text" });
+    const seo = (names: string[]): MinimalConfigField => ({
+      name: "seo",
+      type: "group",
+      fields: names.map(text),
+    });
+    const postsWith = (fields: MinimalConfigField[]) => ({
+      slug: "posts",
+      tableName: "dc_posts",
+      fields,
+    });
+
+    /** The latest snapshot, recording `posts` with `fields` as declared. */
+    async function seedRecording(fields: MinimalConfigField[]): Promise<void> {
+      const sqlContent = "-- placeholder";
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        sqlContent,
+        "utf-8"
+      );
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        "20260101_120000_001_initial",
+        POSTS_DESIRED,
+        sqlContent,
+        undefined,
+        {
+          collections: {
+            posts: {
+              source: "code",
+              settings: settingsOf({ slug: "posts", fields }, "code"),
+            },
+          },
+          singles: {},
+          fieldGroups: {},
+        }
+      );
+    }
+
+    const check = async (fields: MinimalConfigField[]) => {
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: POSTS_DESIRED,
+        entities: {
+          collections: [postsWith(fields)],
+          singles: [],
+          components: [],
+        },
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+      return logger;
+    };
+
+    it("fails a new pair, naming the entity, the container and both fields", async () => {
+      await seedRecording([text("title"), seo(["fooBar"])]);
+
+      const logger = await check([text("title"), seo(["fooBar", "foo_bar"])]);
+
+      const message =
+        "Collection 'posts': fields 'fooBar' and 'foo_bar' in group 'seo' would both become the column 'foo_bar'. Rename one of them.";
+      expect(logger.error).toHaveBeenCalledWith(message);
+      // It ends in the error shape, naming the pair again, as the address refusal ends.
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining(`fields: ${message}`)
+      );
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(CONFIG_INVALID)")
+      );
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.success).not.toHaveBeenCalled();
+    });
+
+    it("passes a pair the latest snapshot records, warning exactly once per pair", async () => {
+      const fields = [
+        text("fooBar"),
+        text("foo_bar"),
+        seo(["headline", "headline"]),
+      ];
+      await seedRecording(fields);
+
+      const logger = await check(fields);
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn.mock.calls.map(([line]) => line)).toEqual([
+        "Collection 'posts': fields 'fooBar' and 'foo_bar' at the top level already share the column 'foo_bar'. They keep working; rename one of them so each keeps its own value.",
+        "Collection 'posts': fields 'headline' and 'headline' in group 'seo' already share the key 'headline'. They keep working; rename one of them so each keeps its own value.",
+      ]);
+      expect(logger.success).toHaveBeenCalledWith(
+        expect.stringContaining("migrate:check OK")
       );
     });
   });

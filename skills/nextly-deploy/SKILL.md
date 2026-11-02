@@ -8,7 +8,7 @@ description: >-
   Also use when a deployed Nextly app has missing tables, refuses to start,
   or loses uploaded files.
 metadata:
-  nextly-version: 0.0.2-alpha.71
+  nextly-version: 0.0.2-alpha.73
 ---
 
 # Deploy a Nextly project
@@ -244,5 +244,7 @@ could then pick their own address.
 - **Sign-in fails with `CSRF_FAILED` behind a proxy:** add the public origin
   to `NEXTLY_ALLOWED_ORIGINS`.
 - **`next build` fails on a page reading content:** in an app with
-  `cacheComponents: true`, wrap the read in `cachedFind` (the
-  `nextly-collections` skill) or render it inside `<Suspense>`.
+  `cacheComponents: true`, the Nextly default, wrap the read in `cachedFind`
+  (the `nextly-collections` skill) or render it inside `<Suspense>`. An app
+  made by an earlier release may have it off: check `next.config` first, and
+  turn it on as the installation guide describes.

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
+import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import {
   migrationChecksum,
   type PluginMigration,
@@ -21,6 +22,7 @@ import {
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
+import { installRegistryResolver } from "../../utils/registry-resolver";
 import { runPluginUninstall } from "../plugin-lifecycle-runner";
 
 const db = vi.hoisted(() => ({
@@ -68,6 +70,9 @@ vi.mock("../../utils/adapter", () => ({
       },
     }),
 }));
+
+/** The data-loss consent given without targets, as `--accept-data-loss` alone gives it. */
+const EVERY_DELETION = resolveDataLossConsent({ flag: true, env: {} });
 
 const PLUGIN = "@acme/ul";
 const ledgerKey = (module: string) => `plugin:${PLUGIN}/${module}`;
@@ -174,11 +179,19 @@ async function ownerStates(): Promise<string[]> {
 }
 
 const uninstall = () =>
-  runPluginUninstall(PLUGIN, { keepData: false, yes: true }, context);
+  runPluginUninstall(
+    PLUGIN,
+    { keepData: false, yes: false, consent: EVERY_DELETION },
+    context
+  );
 
 beforeEach(async () => {
   const adapter = createSqliteAdapter({ memory: true });
   await adapter.connect();
+  // The static resolver every production adapter carries: the uninstall's lock
+  // seeds its row through a transaction insert, which an adapter refuses for a
+  // table its resolver does not hold.
+  installRegistryResolver(adapter);
   db.adapter = adapter as unknown as typeof db.adapter;
   db.drizzle = adapter.getDrizzle();
   db.afterTransaction = undefined;

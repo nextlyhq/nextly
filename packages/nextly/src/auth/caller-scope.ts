@@ -52,6 +52,12 @@ export interface RequestCaller {
    * no role lookup; absent elsewhere.
    */
   readonly roles?: readonly string[];
+  /**
+   * The action the route admitted the caller on, where a write route accepts
+   * more than one: `update`, or `publish` or `unpublish` for a caller who may
+   * change only an entry's status. Absent where the route asked one action.
+   */
+  readonly routeAction?: string;
 }
 
 const requestCaller = new AsyncLocalStorage<RequestCaller | undefined>();

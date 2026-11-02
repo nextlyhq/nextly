@@ -4,8 +4,8 @@
  *
  * A worker's database is keyed by its `VITEST_POOL_ID` (1 to `maxWorkers`): on
  * SQLite it is the worker process's own in-memory database, and on PostgreSQL
- * it is `<database>_pool<id>`, beside the database `TEST_POSTGRES_URL` names,
- * which the run's global setup creates and drops. So two live workers holding one id
+ * or MySQL it is `<database>_pool<id>`, beside the database `TEST_POSTGRES_URL`
+ * or `TEST_MYSQL_URL` names, which the run's global setup creates and drops. So two live workers holding one id
  * would share a database, and files running at the same moment would drop and
  * recreate each other's tables. Each test file claims its worker's id, in a
  * directory the run creates, for as long as its tests run; a second file
@@ -13,7 +13,7 @@
  * than letting the two collide in silence.
  *
  * The default export is the run's global setup: it creates that directory and
- * the per-worker PostgreSQL databases, and removes both at the end.
+ * the per-worker server databases, and removes both at the end.
  */
 import {
   appendFileSync,
@@ -27,6 +27,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { TestProjectInlineConfiguration } from "vitest/config";
+
 import {
   createDatabaseStatement,
   dropDatabaseStatement,
@@ -39,19 +41,32 @@ export const CLAIMS_ENV = "NEXTLY_INTEGRATION_WORKER_CLAIMS";
 export const WORKERS_ENV = "NEXTLY_INTEGRATION_WORKERS";
 
 /**
- * The PostgreSQL URL the run was given, kept by its global setup when the
- * workers get databases of their own, so each test file derives its worker's
- * URL from it rather than from a `TEST_POSTGRES_URL` it already rewrote.
+ * The server dialects whose workers each get a database of their own: the
+ * variable naming the run's database, and the one the global setup keeps that
+ * URL in, so each test file derives its worker's URL from the URL the run was
+ * given rather than from one it already rewrote.
  */
-export const POSTGRES_BASE_ENV = "NEXTLY_INTEGRATION_POSTGRES_URL";
+export const SERVER_DIALECTS = [
+  {
+    dialect: "postgresql",
+    urlEnv: "TEST_POSTGRES_URL",
+    baseEnv: "NEXTLY_INTEGRATION_POSTGRES_URL",
+  },
+  {
+    dialect: "mysql",
+    urlEnv: "TEST_MYSQL_URL",
+    baseEnv: "NEXTLY_INTEGRATION_MYSQL_URL",
+  },
+] as const;
+
+type ServerDialect = (typeof SERVER_DIALECTS)[number];
 
 /**
  * The worker count a run asked for, refused when more than one would share a
- * database: a MySQL URL names one database every worker would connect to, a
- * SQLite URL names one file, and the older TEST_DATABASE_URL is still read as
- * a PostgreSQL URL by some suites. Without one, SQLite runs in memory in each
- * worker process; with `TEST_POSTGRES_URL`, each worker gets a PostgreSQL
- * database of its own (`workerDatabaseUrl`).
+ * database: a SQLite URL names one file, and the older TEST_DATABASE_URL is
+ * still read as a PostgreSQL URL by some suites. Without one, SQLite runs in
+ * memory in each worker process; with `TEST_POSTGRES_URL` or `TEST_MYSQL_URL`,
+ * each worker gets a database of its own on that server (`workerDatabaseUrl`).
  */
 export function integrationWorkers(
   env: Readonly<Record<string, string | undefined>>
@@ -65,15 +80,13 @@ export function integrationWorkers(
     );
   }
   if (workers === 1) return 1;
-  const shared = [
-    "TEST_MYSQL_URL",
-    "TEST_SQLITE_URL",
-    "TEST_DATABASE_URL",
-  ].filter(name => env[name]);
+  const shared = ["TEST_SQLITE_URL", "TEST_DATABASE_URL"].filter(
+    name => env[name]
+  );
   if (shared.length > 0) {
     throw new Error(
       `${WORKERS_ENV}=${workers} would put every worker on the one database ${shared.join(" and ")} names. ` +
-        `Run more than one worker only on in-memory SQLite or on TEST_POSTGRES_URL, where each worker gets a database of its own.`
+        `Run more than one worker only on in-memory SQLite, TEST_POSTGRES_URL or TEST_MYSQL_URL, where each worker gets a database of its own.`
     );
   }
   return workers;
@@ -110,6 +123,26 @@ export function workerDatabaseUrl(url: string, poolId: number): string {
   return parsed.toString();
 }
 
+/**
+ * Point a test file's server URLs at its worker's databases, for each dialect
+ * whose databases the run's global setup made. Every suite reads
+ * TEST_POSTGRES_URL and TEST_MYSQL_URL, so this moves them all; a run with one
+ * worker, or a unit run, has no kept URL and is left as it is.
+ */
+export function pointAtWorkerDatabases(
+  env: Record<string, string | undefined>
+): void {
+  const made = SERVER_DIALECTS.filter(server => env[server.baseEnv]);
+  if (made.length === 0) return;
+  const poolId = workerPoolId(env.VITEST_POOL_ID, integrationWorkers(env));
+  for (const server of made) {
+    env[server.urlEnv] = workerDatabaseUrl(
+      env[server.baseEnv] as string,
+      poolId
+    );
+  }
+}
+
 function baseDatabase(url: URL): string {
   return decodeURIComponent(url.pathname.replace(/^\//, ""));
 }
@@ -120,32 +153,54 @@ function baseDatabase(url: URL): string {
  * The names go through the test-database DDL helpers, which refuse anything
  * but a plain lowercase identifier.
  */
-async function createWorkerDatabases(
+interface AdminConnection {
+  query(sql: string): Promise<unknown>;
+  end(): Promise<void>;
+}
+
+/** One connection to the server `url` names, for creating and dropping databases. */
+async function openAdmin(
+  dialect: ServerDialect["dialect"],
+  url: string
+): Promise<AdminConnection> {
+  if (dialect === "postgresql") {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: url, max: 1 });
+    return { query: sql => pool.query(sql), end: () => pool.end() };
+  }
+  const { createConnection } = await import("mysql2/promise");
+  const connection = await createConnection({ uri: url });
+  // MySQL's metadata-lock wait defaults to a year, so a drop behind a session
+  // still holding a lock would hang the run's end rather than fail and report.
+  // The connection is open by now, so a refusal closes it before going on:
+  // the caller never gets it to close, and its socket would keep the run alive.
+  try {
+    await connection.query("SET SESSION lock_wait_timeout = 10");
+  } catch (error) {
+    await connection.end().catch(() => {});
+    throw error;
+  }
+  return { query: sql => connection.query(sql), end: () => connection.end() };
+}
+
+export async function createWorkerDatabases(
+  dialect: ServerDialect["dialect"],
   url: string,
-  workers: number
+  workers: number,
+  open: typeof openAdmin = openAdmin
 ): Promise<() => Promise<void>> {
   const base = baseDatabase(new URL(url));
   const names = Array.from({ length: workers }, (_, i) =>
     workerDatabaseName(base, i + 1)
   );
-  const { Pool } = await import("pg");
-  const admin = new Pool({ connectionString: url, max: 1 });
-  try {
-    for (const name of names) {
-      await admin.query(dropDatabaseStatement("postgresql", name));
-      await admin.query(createDatabaseStatement("postgresql", name));
-    }
-  } catch (error) {
-    await admin.end();
-    throw error;
-  }
+  const admin = await open(dialect, url);
   // A worker's connection can outlive its process by a moment, and a database
-  // with a session attached cannot be dropped. A drop that fails here is only
+  // with a session attached cannot be dropped. A drop that fails is only
   // reported: the next run drops what this one left before creating its own.
-  return async () => {
-    for (const name of names) {
+  const dropAndClose = async (made: string[]) => {
+    for (const name of made) {
       await admin
-        .query(dropDatabaseStatement("postgresql", name))
+        .query(dropDatabaseStatement(dialect, name))
         .catch((error: unknown) =>
           console.warn(
             `[integration workers] could not drop ${name}: ${String(error)}`
@@ -154,6 +209,20 @@ async function createWorkerDatabases(
     }
     await admin.end();
   };
+  const made: string[] = [];
+  try {
+    for (const name of names) {
+      await admin.query(dropDatabaseStatement(dialect, name));
+      await admin.query(createDatabaseStatement(dialect, name));
+      made.push(name);
+    }
+  } catch (error) {
+    // A setup that throws returns no teardown, so the databases made before
+    // the failure are dropped here.
+    await dropAndClose(made);
+    throw error;
+  }
+  return () => dropAndClose(names);
 }
 
 /** Whether a process is running, by the signal-0 probe. */
@@ -253,18 +322,95 @@ export function releaseWorker(
 }
 
 /**
- * The run's global setup: the claims directory and, on PostgreSQL with more
- * than one worker, a database per worker. Both are removed when the run ends.
+ * With more than one worker, a database per worker on each server `env` names,
+ * keeping each server's URL as the base the workers derive theirs from.
+ * Answers how to drop them all. When a later server fails, the earlier ones'
+ * databases are dropped before the error goes on: a setup that throws returns
+ * no teardown, so nothing else would drop them or close their connections.
+ */
+export async function provisionServers(
+  env: Record<string, string | undefined>,
+  workers: number,
+  create: typeof createWorkerDatabases = createWorkerDatabases
+): Promise<(() => Promise<void>)[]> {
+  const drops: (() => Promise<void>)[] = [];
+  try {
+    for (const server of SERVER_DIALECTS) {
+      const url = env[server.urlEnv];
+      if (workers > 1 && url) {
+        drops.push(await create(server.dialect, url, workers));
+        env[server.baseEnv] = url;
+      }
+    }
+  } catch (error) {
+    for (const drop of drops) await drop();
+    throw error;
+  }
+  return drops;
+}
+
+/**
+ * Files that take a lock MySQL keeps for the whole server rather than per
+ * database: the migrate lock's old, shared name. A database per worker does not
+ * isolate it, and a migration on another worker checks that name too and,
+ * failing fast, would find it busy. `integration-config.test.ts` finds them by
+ * their source and holds this list to it.
+ */
+export const SERVER_WIDE_LOCK_FILES = [
+  "src/domains/schema/pipeline/__tests__/migrate-lock-mysql-pins-connection.integration.test.ts",
+];
+
+/**
+ * The integration run's projects over `include`, every integration file.
+ * Inline projects inherit the config around
+ * them and merge their arrays into it, so `include` is per project and
+ * `exclude` is shared. Projects run at the same time unless ordered: every
+ * other file runs in the first group, and the files that take a server-wide
+ * lock in a second, one at a time, once nothing else is running.
+ */
+export function integrationProjects({
+  include,
+}: {
+  include: string[];
+}): TestProjectInlineConfiguration[] {
+  return [
+    {
+      extends: true,
+      test: {
+        name: "nextly-integration",
+        include,
+        exclude: SERVER_WIDE_LOCK_FILES,
+        sequence: { groupOrder: 0 },
+      },
+    },
+    {
+      extends: true,
+      test: {
+        name: "nextly-integration (server-wide locks)",
+        include: SERVER_WIDE_LOCK_FILES,
+        fileParallelism: false,
+        sequence: { groupOrder: 1 },
+      },
+    },
+  ];
+}
+
+/**
+ * The run's global setup: the claims directory and, on PostgreSQL or MySQL
+ * with more than one worker, a database per worker on each server the run
+ * names. Both are removed when the run ends.
  */
 export default async function setup(): Promise<() => Promise<void>> {
   const workers = integrationWorkers(process.env);
   const dir = mkdtempSync(join(tmpdir(), "nextly-integration-workers-"));
   process.env[CLAIMS_ENV] = dir;
-  const postgres = process.env.TEST_POSTGRES_URL;
-  let dropDatabases = async (): Promise<void> => {};
-  if (workers > 1 && postgres) {
-    dropDatabases = await createWorkerDatabases(postgres, workers);
-    process.env[POSTGRES_BASE_ENV] = postgres;
+  let drops: (() => Promise<void>)[];
+  try {
+    drops = await provisionServers(process.env, workers);
+  } catch (error) {
+    // No teardown runs after a failed setup, so the claims directory goes here.
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
   }
   return async () => {
     const log = join(dir, CLAIMS_LOG);
@@ -272,6 +418,6 @@ export default async function setup(): Promise<() => Promise<void>> {
       describeClaims(existsSync(log) ? readFileSync(log, "utf8") : "", workers)
     );
     rmSync(dir, { recursive: true, force: true });
-    await dropDatabases();
+    for (const drop of drops) await drop();
   };
 }

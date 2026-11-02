@@ -7,19 +7,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const {
-  getEntrySpy,
-  checkAccessSpy,
-  findByIdSpy,
-  listUsersByIdsSpy,
-  actorForUserSpy,
-} = vi.hoisted(() => ({
-  actorForUserSpy: vi.fn(),
-  getEntrySpy: vi.fn(),
-  checkAccessSpy: vi.fn(),
-  findByIdSpy: vi.fn(),
-  listUsersByIdsSpy: vi.fn(),
-}));
+const { getEntrySpy, findByIdSpy, listUsersByIdsSpy, actorForUserSpy } =
+  vi.hoisted(() => ({
+    actorForUserSpy: vi.fn(),
+    getEntrySpy: vi.fn(),
+    findByIdSpy: vi.fn(),
+    listUsersByIdsSpy: vi.fn(),
+  }));
 
 // A signed-in user's actor: the roles and grants the read decision judges,
 // as one lookup resolves them. Mocked so each case names the grants.
@@ -33,9 +27,6 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
 vi.mock("../../../di", () => ({
   getService: vi.fn((name: string) => {
     if (name === "collectionsHandler") return { getEntry: getEntrySpy };
-    if (name === "rbacAccessControlService") {
-      return { checkAccess: checkAccessSpy };
-    }
     if (name === "mediaService") return { findById: findByIdSpy };
     if (name === "userService") return { listUsersByIds: listUsersByIdsSpy };
     return {};
@@ -48,10 +39,7 @@ vi.mock("../../../di", () => ({
 vi.mock("../../../di/container", () => ({
   container: {
     has: (name: string) => name === "rbacAccessControlService",
-    get: (name: string) =>
-      name === "rbacAccessControlService"
-        ? { checkAccess: checkAccessSpy }
-        : {},
+    get: () => ({}),
   },
 }));
 
@@ -495,7 +483,6 @@ describe("resolveReferenceLabels — API-key scope", () => {
       apiKey(["read-media"])
     );
 
-    expect(checkAccessSpy).not.toHaveBeenCalled();
     expect(actorForUserSpy).not.toHaveBeenCalled();
     expect(findByIdSpy).toHaveBeenCalledWith("m1", {});
     expect(labels.get(referenceLabelKey(req))?.label).toBe("pic.png");
@@ -533,7 +520,6 @@ describe("resolveReferenceLabels — API-key scope", () => {
       apiKey(["read-users"])
     );
 
-    expect(checkAccessSpy).not.toHaveBeenCalled();
     expect(actorForUserSpy).not.toHaveBeenCalled();
     expect(labels.get(referenceLabelKey(req))?.label).toBe("Grace");
   });

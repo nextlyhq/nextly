@@ -56,25 +56,40 @@ import {
   orderedMigrations,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import { assertMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   compileAppStreamTables,
   contributedElementsOf,
   hasAppStreamTables,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
+import {
+  toMinimalEntities,
+  withBuilderSettingsAll,
+} from "../../domains/schema/migrate-create/config-entities";
+import {
+  describeSettingsChange,
+  type EntitySettingsRecord,
+} from "../../domains/schema/migrate-create/entity-settings";
 import {
   formatBlankFile,
   formatTimestamp,
   slugify,
 } from "../../domains/schema/migrate-create/format-file";
-import { generateMigration } from "../../domains/schema/migrate-create/generate";
+import {
+  generateMigration,
+  removedCollectionTables,
+} from "../../domains/schema/migrate-create/generate";
 import {
   generateBlankPluginMigration,
   generatePluginMigration,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
-import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
+import { assertMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
+import {
+  EMPTY_SNAPSHOT,
+  loadLatestSnapshot,
+} from "../../domains/schema/migrate-create/snapshot-io";
 import type {
   ContributedElements,
   TableSpec,
@@ -99,17 +114,29 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../plugins/plugin-slug";
 import { topoSortPlugins } from "../../plugins/topo-sort";
-import { CORE_TABLE_NAMES } from "../../schemas/index";
+import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
+import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { createContext, type CommandContext } from "../program";
+import { createContext, type CommandContext } from "../context";
 import {
+  migrationCreateCancelled,
+  migrationNameRequired,
+  recordSnapshotNeedsAppMigration,
+} from "../errors/areas/migrate-create";
+import { exitWithError } from "../errors/index";
+import {
+  type CLIDatabaseAdapter,
+  createCliAdapter,
   getDialectDisplayName,
-  validateDatabaseEnv,
   type SupportedDialect,
 } from "../utils/adapter";
+import {
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
 import { bundleAndRequire } from "../utils/config-bundler";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { loadConfig } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 // ============================================================================
@@ -162,6 +189,15 @@ export interface MigrateCreateCommandOptions {
    * @default true
    */
   transaction?: boolean;
+
+  /**
+   * Write a migration that changes nothing, whose snapshot records which fields are
+   * translated, for a project whose latest snapshot was written before
+   * snapshots recorded them. Refused while the config has changes to migrate.
+   * The name defaults to `record_translated_fields`.
+   * @default false
+   */
+  recordSnapshot?: boolean;
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
@@ -174,6 +210,48 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
 // ============================================================================
 // Command Implementation
 // ============================================================================
+
+/**
+ * `--record-snapshot` with nothing to record exits 2, as a plain run with
+ * nothing to write does, so a script can tell it from a record to commit.
+ */
+/**
+ * What `--record-snapshot` reads the translations tables through (`liveCompanionColumns`): the
+ * database `DATABASE_URL` names, opened on the first read and closed by `close`. Nothing for any
+ * other run, which stays offline.
+ */
+function recordModeReader(recording: boolean | undefined): {
+  read?: (tableName: string) => Promise<readonly string[]>;
+  close: () => Promise<void>;
+} {
+  if (recording !== true) return { close: () => Promise.resolve() };
+  let adapter: Promise<CLIDatabaseAdapter> | undefined;
+  return {
+    read: async tableName => {
+      adapter ??= createCliAdapter();
+      const { companionColumnNames } = await import(
+        "../../domains/i18n/runtime/companion-io"
+      );
+      return companionColumnNames(
+        (await adapter) as unknown as Parameters<
+          typeof companionColumnNames
+        >[0],
+        tableName
+      );
+    },
+    close: async () => {
+      if (adapter) await (await adapter).disconnect();
+    },
+  };
+}
+
+function nothingToRecord(logger: CommandContext["logger"]): never {
+  logger.newline();
+  logger.info(
+    "Nothing to record: no snapshot here predates the record of which fields are translated."
+  );
+  process.exit(2);
+}
 
 /**
  * Whether the app stream has nothing it could possibly emit.
@@ -203,6 +281,12 @@ export async function runMigrateCreate(
 ): Promise<void> {
   const { logger } = context;
 
+  // The app's snapshot is the one that records translated fields; a blank
+  // file and a plugin module have none.
+  if (options.recordSnapshot === true && (options.blank || options.plugin)) {
+    exitWithError(logger, recordSnapshotNeedsAppMigration());
+  }
+
   if (options.plugin) {
     await runMigrateCreatePlugin(nameArg ?? options.name, options, context);
     return;
@@ -216,6 +300,7 @@ export async function runMigrateCreate(
       publicMessage:
         "--no-transaction writes a blank migration file (with --blank) or a plugin module (with --plugin). A generated migration file is not marked: marking it changes the contents its snapshot was taken over. Put the statements that need to run outside a transaction in a file of their own: nextly migrate:create --blank --no-transaction.",
       statusCode: 400,
+      logContext: { reason: "no-transaction-not-blank" },
     });
   }
 
@@ -226,43 +311,28 @@ export async function runMigrateCreate(
   // F11 PR 3: dialect comes from DATABASE_URL (no DB connection needed —
   // we just need to know which SQL flavor to emit). validateDatabaseEnv
   // handles the parsing without opening a connection.
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables. " +
-        "(migrate:create does not connect to the DB but needs the dialect to emit the right SQL.)"
-    );
-    process.exit(1);
-  }
-  const dialect = dbValidation.dialect!;
+  const dbValidation = requireDatabaseEnv(logger);
+  const dialect = dbValidation.dialect;
 
   // Resolve the migration name. --name flag takes precedence over the
   // positional argument. Required for non-blank invocations.
-  const name = options.name ?? nameArg;
+  const name =
+    options.name ??
+    nameArg ??
+    (options.recordSnapshot === true ? "record_translated_fields" : undefined);
   if (!options.blank && !name) {
-    logger.error(
-      "--name is required for non-blank migrations. " +
-        "Use --blank to create an empty migration without a name, or pass --name=<slug>."
-    );
-    process.exit(1);
+    exitWithError(logger, migrationNameRequired());
   }
 
   // Load config.
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -331,8 +401,7 @@ export async function runMigrateCreate(
       uiSchemaFile: configResult.config.db.uiSchemaFile,
     });
   } catch (error) {
-    logger.error(`Failed to load UI schema: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   // Materialize plugin extends that target Builder-made entities (P8): append
@@ -354,7 +423,12 @@ export async function runMigrateCreate(
       `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
     );
   }
-  const { collections, singles, components } = merged;
+  // Each Builder entity carries its manifest entry as its settings, as each
+  // code-first one carries its config entry, so the snapshot records both.
+  const { collections, singles, components } = withBuilderSettingsAll(
+    merged,
+    manifest
+  );
 
   // Checked on the config's and the manifest's own entries rather than the
   // merged ones: the merge has already dropped shadowed Builder entities by
@@ -399,33 +473,23 @@ export async function runMigrateCreate(
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
   // survived the merge (code-first wins → shadowed UI slugs are skipped).
-  const dropped = new Set(merged.droppedUiSlugs);
-  const tn = (
-    slug: string,
-    prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
-  ) => `${prefix}${slug.replace(/-/g, "_")}`;
-  const metadataUpserts: { tableName: string; sql: string }[] = [];
-  for (const c of manifest.collections) {
-    if (dropped.has(c.slug)) continue;
-    metadataUpserts.push({
-      tableName: tn(c.slug, "dc_"),
-      sql: buildCollectionMetadataUpsert(c, dialect),
-    });
-  }
-  for (const s of manifest.singles) {
-    if (dropped.has(s.slug)) continue;
-    metadataUpserts.push({
-      tableName: tn(s.slug, "single_"),
-      sql: buildSingleMetadataUpsert(s, dialect),
-    });
-  }
-  for (const cp of manifest.components) {
-    if (dropped.has(cp.slug)) continue;
-    metadataUpserts.push({
-      tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
-      sql: buildComponentMetadataUpsert(cp, dialect),
-    });
-  }
+  // Shadowing is per kind, as above: `merged.droppedUiSlugs` is one list for
+  // every kind, and filtering by it would leave out the row of an unshadowed
+  // Single whose slug a shadowed collection shares.
+  const metadataUpserts = builderMetadataUpserts(
+    {
+      collections: survivingOf(
+        manifest.collections,
+        configResult.config.collections
+      ),
+      singles: survivingOf(manifest.singles, configResult.config.singles ?? []),
+      components: survivingOf(
+        manifest.components,
+        configResult.config.fieldGroups ?? []
+      ),
+    },
+    dialect
+  );
 
   // The APP stream's extension schema, compiled the way boot compiles it:
   // tables the app declares through `db.schema.extend`, and elements it
@@ -436,20 +500,77 @@ export async function runMigrateCreate(
   // but extension schema. Taking that early return first meant an
   // extension-only configuration wrote no migration at all and production
   // never received the table.
+  const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
+
+  // Before the app stream compiles: a plugin hook still extending a removed
+  // collection's table would stop that compile with a bare "does not exist",
+  // where this names what the hook adds. A drop of a collection something
+  // still depends on is refused with the message a delete gets. The check and
+  // its readers are loaded only when the migration would drop a collection,
+  // which most runs do not.
+  const removedTables = removedCollectionTables({
+    previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
+    collections,
+    singles,
+    components,
+    dialect,
+  });
+  if (removedTables.length > 0) {
+    try {
+      const [
+        { assertRemovedCollectionsUnused },
+        { compileExtensionSchemaWith },
+      ] = await Promise.all([
+        import("../../domains/schema/migrate-create/removed-collections"),
+        import(
+          "../../domains/collections/services/collection-dependents-schema"
+        ),
+      ]);
+      await assertRemovedCollectionsUnused({
+        removedTables,
+        collections,
+        singles,
+        components,
+        dialect,
+        extensionSchema: removed =>
+          compileExtensionSchemaWith({
+            config: configResult.config,
+            dialect,
+            removedCollections: removed,
+            logger: { warn: m => logger.warn(m) },
+          }),
+      });
+    } catch (error) {
+      exitWithError(logger, error);
+    }
+  }
+
   const appStream = await compileAppStreamTables({
     config: configResult.config,
     dialect,
     logger: { warn: m => logger.warn(m) },
   });
 
-  const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
-  if (
-    nothingToGenerate({
-      entityCount: collections.length + singles.length + components.length,
-      appStream,
-      recordedTableCount: latest?.data.snapshot.tables.length ?? 0,
-    })
-  ) {
+  // A new address is judged by the one address rule before anything is written.
+  assertMigrationAddresses(merged, latest, logger);
+  // And each new pair of sibling fields, against the fields the latest snapshot records.
+  assertMigrationSiblingFields(merged, latest, logger);
+  // The rows as the previous snapshot recorded each Builder entity, for a
+  // migration that writes a row for its settings alone to write back on the
+  // way down. A snapshot with no settings record has none to offer.
+  const previousMetadataUpserts = builderMetadataUpserts(
+    builderEntriesOf(latest?.data.entities),
+    dialect
+  );
+  const nothing = nothingToGenerate({
+    entityCount: collections.length + singles.length + components.length,
+    appStream,
+    recordedTableCount: latest?.data.snapshot.tables.length ?? 0,
+  });
+  // A project with no tables has no translated field to record, and says so as any recording run
+  // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
+  if (nothing && options.recordSnapshot === true) nothingToRecord(logger);
+  if (nothing) {
     logger.warn(
       "No collections, singles, components, or extension tables defined in config."
     );
@@ -460,6 +581,9 @@ export async function runMigrateCreate(
   logger.newline();
   logger.info("Comparing config to latest snapshot...");
 
+  // `--record-snapshot` records which fields are translated as the database holds them, so it reads
+  // the translations tables, connecting only once it has one to check. Every other run stays offline.
+  const live = recordModeReader(options.recordSnapshot);
   let result;
   try {
     result = await generateMigration({
@@ -473,8 +597,11 @@ export async function runMigrateCreate(
       singles,
       components,
       metadataUpserts,
+      previousMetadataUpserts,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
+      recordSnapshot: options.recordSnapshot === true,
+      liveCompanionColumns: live.read,
     });
   } catch (error) {
     // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
@@ -482,11 +609,16 @@ export async function runMigrateCreate(
     // migration: Cancelled by user." stack-style message.
     if (error instanceof PromptCancelledError) {
       // The prompt-renames helper already printed clack's `cancel()`
-      // message before throwing. Just exit.
-      process.exit(1);
+      // message before throwing; the error says what it left undone.
+      exitWithError(logger, migrationCreateCancelled());
     }
-    logger.error(`Failed to generate migration: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
+  } finally {
+    await live.close();
+  }
+
+  if (result === null && options.recordSnapshot === true) {
+    nothingToRecord(logger);
   }
 
   if (result === null) {
@@ -500,10 +632,33 @@ export async function runMigrateCreate(
   }
 
   const duration = Date.now() - startTime;
+  // A settings change is written as the settings-only migration it is, below; its snapshot is
+  // the record.
+  if (options.recordSnapshot === true && result.settingsChanges.length > 0) {
+    logger.newline();
+    logger.info(
+      "The config's settings have changes to migrate, so they are written as a settings-only migration, whose snapshot records which fields are translated."
+    );
+  } else if (options.recordSnapshot === true) {
+    logger.newline();
+    logger.success(`Recorded translated fields → ${result.snapshotPath}`);
+    logger.success(`Migration (changes nothing) → ${result.sqlPath}`);
+    logger.newline();
+    logger.info("Next steps:");
+    logger.item("Commit both files", 1);
+    logger.item(
+      "Make your change to the config, then run `nextly migrate:create --name <name>`",
+      1
+    );
+    return;
+  }
   logger.newline();
   logger.success(`Created migration → ${result.sqlPath}`);
   logger.success(`Snapshot → ${result.snapshotPath}`);
   logger.keyValue("Operations", result.operationCount);
+  for (const change of result.settingsChanges) {
+    logger.item(`Settings: ${describeSettingsChange(change)}`, 1);
+  }
   if (result.renamesAccepted > 0) {
     logger.keyValue("Renames accepted", result.renamesAccepted);
   }
@@ -515,6 +670,66 @@ export async function runMigrateCreate(
   logger.item("Review the generated .sql file", 1);
   logger.item("Commit it to git alongside your nextly.config.ts changes", 1);
   logger.item("Run `nextly migrate` to apply it", 1);
+}
+
+/**
+ * The registry-row upserts for UI-built entities (spec §4.12.7), keyed by data
+ * table. The caller hands in only the entries no code-first entity of the
+ * same kind shadows.
+ */
+function builderMetadataUpserts(
+  entries: {
+    collections: readonly UiSchemaEntity[];
+    singles: readonly UiSchemaEntity[];
+    components: readonly UiSchemaEntity[];
+  },
+  dialect: SupportedDialect
+): { tableName: string; sql: string }[] {
+  const tn = (
+    slug: string,
+    prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
+  ) => `${prefix}${slug.replace(/-/g, "_")}`;
+  const upserts: { tableName: string; sql: string }[] = [];
+  for (const c of entries.collections) {
+    upserts.push({
+      tableName: tn(c.slug, "dc_"),
+      sql: buildCollectionMetadataUpsert(c, dialect),
+    });
+  }
+  for (const s of entries.singles) {
+    upserts.push({
+      tableName: tn(s.slug, "single_"),
+      sql: buildSingleMetadataUpsert(s, dialect),
+    });
+  }
+  for (const cp of entries.components) {
+    upserts.push({
+      tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
+      sql: buildComponentMetadataUpsert(cp, dialect),
+    });
+  }
+  return upserts;
+}
+
+/**
+ * The Builder entities a snapshot's settings record holds, as the manifest
+ * entries they were recorded from: the record is the manifest entry with only
+ * functions left out, and a manifest holds none.
+ */
+function builderEntriesOf(record: EntitySettingsRecord | undefined): {
+  collections: UiSchemaEntity[];
+  singles: UiSchemaEntity[];
+  components: UiSchemaEntity[];
+} {
+  const of = (byslug: EntitySettingsRecord["collections"] | undefined) =>
+    Object.values(byslug ?? {})
+      .filter(entry => entry.source === "builder")
+      .map(entry => entry.settings as unknown as UiSchemaEntity);
+  return {
+    collections: of(record?.collections),
+    singles: of(record?.singles),
+    components: of(record?.fieldGroups),
+  };
 }
 
 // ============================================================================
@@ -662,6 +877,7 @@ async function buildPluginDraft(args: {
         `Singles or field groups, what the hook adds to it is migrated by the APP: \`nextly migrate:create\` ` +
         `in the app writes it, whoever contributed it. Guard the hook with ` +
         `\`schema.getTable("${missing}")\` so it skips the table when compiled for this module.`,
+      logContext: { reason: "plugin-extend-target-outside", target: missing },
     });
   }
 }
@@ -804,7 +1020,7 @@ function pluginDefinitionFrom(
         .join(
           ", "
         )}). Point --plugin at a file that exports one, or export it as the default.`,
-      logContext: { entry },
+      logContext: { reason: "plugin-entry-exports-several", entry },
     });
   }
   if (named.length === 1) return named[0][1] as Partial<PluginDefinition>;
@@ -837,6 +1053,7 @@ async function loadPluginEntry(
       code: "INVALID_INPUT",
       publicMessage: `The plugin entry ${relative(cwd, entryPath)} exports no definition with a name, so its migrations cannot be attributed.`,
       statusCode: 400,
+      logContext: { reason: "plugin-entry-unnamed" },
     });
   }
   if (typeof definition.schemaVersion !== "number") {
@@ -844,6 +1061,7 @@ async function loadPluginEntry(
       code: "INVALID_INPUT",
       publicMessage: `Plugin "${definition.name}" declares no schemaVersion. A plugin needs one before migrations can be generated for it.`,
       statusCode: 400,
+      logContext: { reason: "plugin-schema-version-missing" },
     });
   }
   return definition as GeneratablePlugin;
@@ -906,6 +1124,11 @@ async function loadShippedMigrations(
         `Generation stops here rather than treating it as a first generation — doing that would rewrite the barrel and orphan the modules it lists. ` +
         `Fix the barrel (or the module it imports) and run this again.`,
       statusCode: 400,
+      logContext: {
+        reason: "plugin-migrations-barrel-unreadable",
+        barrel: relative(cwd, barrelPath),
+        detail: describeError(error),
+      },
     });
   }
   const shipped = (loaded.mod as { migrations?: PluginMigration[] }).migrations;
@@ -1274,6 +1497,11 @@ export function registerMigrateCreateCommand(program: Command): void {
       "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"
     )
     .option(
+      "--record-snapshot",
+      "Write a migration that changes nothing, whose snapshot records which fields are translated, for a project whose latest snapshot predates that record. Run it with the config as last migrated",
+      false
+    )
+    .option(
       "--no-transaction",
       "Write a unit that runs outside a transaction: with --blank, a file whose first line is the marker; with --plugin, a module with transaction: false that you can edit"
     )
@@ -1297,8 +1525,7 @@ export function registerMigrateCreateCommand(program: Command): void {
         try {
           await runMigrateCreate(positionalName, resolvedOptions, context);
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );

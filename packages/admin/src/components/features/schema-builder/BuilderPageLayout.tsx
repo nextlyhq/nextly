@@ -82,6 +82,7 @@ export function BuilderPageLayout({
         name={name}
         locked={locked}
         unsavedCount={unsavedCount}
+        onAddField={() => onActiveChange({ kind: "picker", position: {} })}
         onOpenSettings={() => onActiveChange({ kind: "settings" })}
         onSave={onSave}
       />
@@ -98,20 +99,16 @@ export function BuilderPageLayout({
             announcements: builderAnnouncements(builder.fields),
           }}
         >
+          {/* The kind reaches the list so its empty state names what is being
+              built rather than calling every entity a collection. */}
           <BuilderFieldList
+            kind={config.kind}
             fields={builder.fields}
             readOnly={locked}
-            onAddAt={insertAt => onActiveChange({ kind: "picker", insertAt })}
+            onAddAt={position => onActiveChange({ kind: "picker", position })}
             onEditField={fieldId => onActiveChange({ kind: "edit", fieldId })}
             onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
             onDuplicateField={onDuplicateField}
-            onAddInsideParent={parentId =>
-              onActiveChange({
-                kind: "picker",
-                insertAt: 0,
-                parentFieldId: parentId,
-              })
-            }
             onReorder={() => {
               // Reorder is driven by onRowDragEnd above; the field state lives
               // in useFieldBuilder, so there is nothing to notify here.

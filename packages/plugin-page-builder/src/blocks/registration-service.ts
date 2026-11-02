@@ -14,27 +14,17 @@
  * pass 1 and `init` runs in pass 2, so a contributor calling from `init` is
  * guaranteed to reach a live registry whatever order the plugins load in.
  *
- * **What registration buys today, and what it does not.** A registered block is
- * known to `@nextlyhq/blocks-engine`: validation stops calling its type unknown,
- * and generation, manifests and tooling can see it.
- *
- * Whether it RENDERS depends on which renderer, and there are two:
- *
- * - `PageRenderer` from **`@nextlyhq/blocks-react`** resolves through
- *   `registeredBlocks()`, which reads the engine registry this service writes
- *   to. A contributed block renders there with no bridging step.
- * - `PageRenderer` from **`@nextlyhq/plugin-page-builder/render`** defaults to
- *   this package's own `defaultBlockRegistry`, which holds none of them, so the
- *   same block draws the unknown-block placeholder. A host may pass its own
- *   `registry` prop, but the default does not reach the engine.
- *
- * The editor canvas is on that second side too — it reads `defaultBlockRegistry`
- * — so a contributed block cannot yet be inserted or drawn while editing.
- *
- * So the seam does not sit between registration and rendering in general. It
- * sits between the two registries, and a plugin author following THIS package's
- * own documented render path is on the side that does not see contributed
- * blocks.
+ * **Declared blocks reach the editor; blocks registered here do not.** A
+ * registered block is known to `@nextlyhq/blocks-engine` in the server
+ * process: validation stops calling its type unknown, and `PageRenderer` from
+ * `@nextlyhq/blocks-react`, which resolves through the same registry, draws it
+ * on the published site. The editor runs in the admin's browser bundle, whose
+ * registry is a separate copy, and it receives only blocks a plugin DECLARED
+ * (`contributes.declarations`) with an `editorEntry` the app's generated
+ * component map imports. A block registered through this service from `init`
+ * has no module anything could name before the plugin runs, so it stays
+ * server-only, and in development the first registration of each such block
+ * says so.
  *
  * @module blocks/registration-service
  */
@@ -50,7 +40,7 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { collectDeclarations } from "nextly";
 
-import { blocksIn, supportsIn } from "./declared-blocks";
+import { blocksIn, editorEntryIn, supportsIn } from "./declared-blocks";
 
 /** The page builder's own name, as the cross-plugin namespace keys it. */
 export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
@@ -188,9 +178,46 @@ export function blockRegistry(ctx: PluginContext): BlockRegistrationService {
   // call site.
   const source = ctx.self.name;
   return {
-    register: definitions => service.register(definitions, source),
+    register: definitions => {
+      service.register(definitions, source);
+      warnServerOnly(definitions, source, ctx.logger);
+    },
     registerSupport: support => service.registerSupport(support),
   };
+}
+
+/** Blocks already warned about, so a reboot in the same process says it once. */
+const warnedServerOnly = new Set<string>();
+
+/**
+ * In development, say once per block that one registered in code reaches only
+ * the server.
+ *
+ * Every block arriving through `blockRegistry(ctx).register` is one: a block
+ * the same plugin also declared would have collided above, since the page
+ * builder registers declared blocks itself. So the warning needs no second
+ * reading of the declarations. Development only, because the remedy is a
+ * change to the plugin's source, and a production log saying so on every boot
+ * helps nobody who can act on it.
+ */
+function warnServerOnly(
+  definitions: AnyBlockDefinition | AnyBlockDefinition[],
+  source: string,
+  logger: PluginContext["logger"]
+): void {
+  if (process.env.NODE_ENV !== "development") return;
+  for (const definition of Array.isArray(definitions)
+    ? definitions
+    : [definitions]) {
+    if (warnedServerOnly.has(definition.name)) continue;
+    warnedServerOnly.add(definition.name);
+    logger.warn(
+      `[page-builder] Block "${definition.name}" was registered in code by ` +
+        `"${source}" and not declared, so it reaches the server only and the ` +
+        `editor will not offer it. Declare it under contributes.declarations` +
+        `["${PAGE_BUILDER_PLUGIN}"].blocks with an editorEntry instead.`
+    );
+  }
 }
 
 /** Whether a resolved service is the block registry rather than something else. */
@@ -259,6 +286,11 @@ export function registerDeclaredBlocks(ctx: PluginContext): void {
   for (const declaration of declarations) {
     const { blocks, error } = blocksIn(declaration);
     if (error) throw new Error(error);
+    // Judged here, at boot, though only the generated component map reads it:
+    // a malformed entry would otherwise surface as blocks silently missing
+    // from the editor.
+    const entry = editorEntryIn(declaration);
+    if (entry.error) throw new Error(entry.error);
     if (blocks.length > 0) service.register(blocks, declaration.source);
   }
 }

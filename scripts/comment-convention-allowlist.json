@@ -300,8 +300,8 @@
     ]
   },
   "packages/nextly/src/di/registrations/register-collections.ts": {
-    "count": 3,
-    "digests": ["09db9bb23ff09965", "6e9fd7109cc9fc33", "94ff8525e044b8a0"]
+    "count": 2,
+    "digests": ["6e9fd7109cc9fc33", "94ff8525e044b8a0"]
   },
   "packages/nextly/src/direct-api/__tests__/auth.test.ts": {
     "count": 8,
@@ -346,7 +346,7 @@
     ]
   },
   "packages/nextly/src/dispatcher/handlers/collection-dispatcher.ts": {
-    "count": 8,
+    "count": 7,
     "digests": [
       "1e8a73b1b250c068",
       "34be3f05d319e7dd",
@@ -354,8 +354,7 @@
       "56303ebc13cade9c",
       "75f892f575725597",
       "9c894904db58afcf",
-      "d8196efde331f07e",
-      "ec5df2b847c937f8"
+      "d8196efde331f07e"
     ]
   },
   "packages/nextly/src/domains/auth/__tests__/role-service.test.ts": {
@@ -551,10 +550,6 @@
   "packages/nextly/src/domains/schema/legacy-preview/__tests__/translate.test.ts": {
     "count": 1,
     "digests": ["6c1a54197305e411"]
-  },
-  "packages/nextly/src/domains/schema/legacy-preview/translate.ts": {
-    "count": 2,
-    "digests": ["0978648f64091f91", "680c7c3d3336fd24"]
   },
   "packages/nextly/src/domains/schema/migrate-create/__tests__/format-file.test.ts": {
     "count": 1,
@@ -1071,11 +1066,10 @@
     "digests": ["00bbf87050b2aa4e", "9780f092f71bb287", "b64ae3ab9c465ebb"]
   },
   "packages/nextly/src/services/collections-handler.ts": {
-    "count": 10,
+    "count": 9,
     "digests": [
       "452725d4fc8fc3c7",
       "7e24d0d33b9cfad2",
-      "8efa878f3f94f2c2",
       "943a6aa9cb1cd7bd",
       "9d2d27923a2a7341",
       "c0d7765e95047d06",

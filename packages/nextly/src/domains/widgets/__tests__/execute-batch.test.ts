@@ -147,7 +147,9 @@ describe("a timeseries over a range", () => {
     expect(args.now.toISOString()).toBe("2026-03-31T10:20:30.399Z");
     expect(args.where.and.at(-1)?.createdAt).toEqual({
       greater_than_equal: "2026-03-01T10:20:30.400Z",
-      less_than: now.toISOString(),
+      // The rows end past the instant's whole second, which a row MySQL
+      // rounded up is stored within; the intervals are still placed by it.
+      less_than: "2026-03-31T10:20:31.001Z",
     });
   });
 });

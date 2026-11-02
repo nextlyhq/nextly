@@ -218,6 +218,22 @@ export interface AddReleaseMemberPayload {
   action: ReleaseMemberAction;
 }
 
+/**
+ * One document scheduled to go live on its own, in one all-or-nothing step:
+ * the server creates a single-document release named `title`, puts the
+ * document in it and schedules it at `at` in `timezone`, or does none of it.
+ */
+export interface ScheduleDocumentPayload {
+  into: "own";
+  document: ReleaseDocumentRef & { action: "publish" };
+  /** The release's name. */
+  title: string;
+  /** ISO 8601 with an explicit offset or `Z`; the route refuses anything else. */
+  at: string;
+  /** An IANA zone name. The route validates it through `Intl`. */
+  timezone: string;
+}
+
 /** A document, as the release list's `containing` filter names it. */
 export interface ReleaseDocumentRef {
   scopeKind: "collection" | "single";
@@ -380,3 +396,34 @@ export interface ReleaseReadiness {
 export type ReleaseReadinessEntry =
   | (ReleaseReadiness & { checked: true })
   | { releaseId: string; checked: false; reason: "over-member-limit" };
+
+/** A rename, a new description, or both; `null` clears the description. */
+export interface UpdateReleasePayload {
+  title?: string;
+  description?: string | null;
+}
+
+/**
+ * The document a release's member names, as its page shows it: what it is
+ * called, and where it stands now.
+ *
+ * Read for the documents the reader may read, which are the only ones the
+ * members list names. A member the read does not answer for has no entry: a
+ * document deleted since it was added, whose own check then says so.
+ */
+export interface ReleaseDocumentInfo {
+  /** What the document is called, or `null` when nothing in it names it. */
+  title: string | null;
+  /** Its status now, where its collection has one. */
+  status: "draft" | "published" | null;
+  /** Whether it has ever been published, where that is recorded. */
+  everPublished: boolean | null;
+  /** When it was last saved, where that is recorded. */
+  updatedAt: string | null;
+}
+
+/** A collection's or Single's display names, as the release page groups by them. */
+export interface ReleaseScopeNames {
+  singular: string;
+  plural: string;
+}

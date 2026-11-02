@@ -31,6 +31,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
 import {
+  cacheComponentsEnabled,
   cachedFind,
   createContentRoute,
   createPublicContentRoute,
@@ -57,7 +58,7 @@ import type {
   SingleRouteConfig,
 } from "nextly/runtime";
 import type { ReactElement, ReactNode } from "react";
-import { createElement } from "react";
+import { createElement, Suspense } from "react";
 
 import { url } from "./blocks/props";
 import {
@@ -1761,16 +1762,74 @@ function blocksSingleConfig(
 }
 
 /**
+ * Whether this app builds with Cache Components on.
+ *
+ * Read here, in code the app bundles, because Next.js inlines
+ * `process.env.__NEXT_CACHE_COMPONENTS` only into that; nextly, loaded as a
+ * server external, cannot see it. The value is a build-time constant, so the
+ * factories decide once, when they build a route.
+ */
+function underCacheComponents(): boolean {
+  return cacheComponentsEnabled(process.env.__NEXT_CACHE_COMPONENTS);
+}
+
+/**
+ * A route's page body inside a Suspense boundary the page provides, which
+ * only Cache Components needs.
+ *
+ * What a page reads at request time (the draft gate's cookie, an enforced read,
+ * a param the build did not list) is read in the body, so under Cache
+ * Components the boundary is where the prerender stops, and everything above
+ * it is a static shell.
+ *
+ * Without Cache Components the factories return the route's own page instead.
+ * A boundary there would let the shell stream before the body's read, so a page
+ * that calls `notFound()` (an unknown or unpublished entry) would answer 200
+ * with the not-found page rather than a 404.
+ *
+ * The pages below build this before awaiting anything, because a read above
+ * the boundary is the one Cache Components refuses to prerender. They still
+ * return a promise, so each keeps the type of the route page it wraps.
+ */
+function withinBoundary(body: ReactElement): ReactElement {
+  return createElement(Suspense, { fallback: null }, body);
+}
+
+function singleWithinBoundary(
+  route: SingleRoute<ReactElement>
+): SingleRoute<ReactElement> {
+  if (!underCacheComponents()) return route;
+  return {
+    ...route,
+    SinglePage: () =>
+      Promise.resolve(withinBoundary(createElement(route.SinglePage))),
+  };
+}
+
+function contentWithinBoundary<R extends ContentRoute<ReactElement>>(
+  route: R
+): R {
+  if (!underCacheComponents()) return route;
+  return {
+    ...route,
+    ContentPage: args =>
+      Promise.resolve(withinBoundary(createElement(route.ContentPage, args))),
+  };
+}
+
+/**
  * A Single rendered as a blocks page, over ACCESS-ENFORCED content.
  *
  * The secure default, and the one to reach for unless the Single is wholly
- * public: it reads as the visitor would and marks the render dynamic, so the
+ * public: it reads as the visitor would and waits for the request, so the
  * build touches no database.
  */
 export function createSinglePage(
   config: BlocksSinglePageConfig
 ): SingleRoute<ReactElement> {
-  return createSingleRoute<ReactElement>(blocksSingleConfig(config, false));
+  return singleWithinBoundary(
+    createSingleRoute<ReactElement>(blocksSingleConfig(config, false))
+  );
 }
 
 /**
@@ -1784,15 +1843,17 @@ export function createSinglePage(
 export function createPublicSinglePage(
   config: BlocksSinglePageConfig
 ): SingleRoute<ReactElement> {
-  return createPublicSingleRoute<ReactElement>(
-    blocksSingleConfig(config, true)
+  return singleWithinBoundary(
+    createPublicSingleRoute<ReactElement>(blocksSingleConfig(config, true))
   );
 }
 
 export function createBlocksPage(
   config: BlocksPageConfig
 ): ContentRoute<ReactElement> {
-  return createContentRoute<ReactElement>(blocksRouteConfig(config, false));
+  return contentWithinBoundary(
+    createContentRoute<ReactElement>(blocksRouteConfig(config, false))
+  );
 }
 
 /**
@@ -1803,8 +1864,8 @@ export function createBlocksPage(
 export function createPublicBlocksPage(
   config: BlocksPageConfig
 ): StaticContentRoute<ReactElement> {
-  return createPublicContentRoute<ReactElement>(
-    blocksRouteConfig(config, true)
+  return contentWithinBoundary(
+    createPublicContentRoute<ReactElement>(blocksRouteConfig(config, true))
   );
 }
 

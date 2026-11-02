@@ -1,20 +1,24 @@
 /**
  * What the settings sheet needs to know about a card's content settings
- * (Collection, Filter, Sort, Group by) beyond drawing them: which settings
- * follow a collection, and which stored values name a field the reader may no
- * longer be offered.
+ * (Collection, Filter, Sort, Group by, Fields, Field) beyond drawing them:
+ * which settings follow a collection, and which stored values name a field
+ * the reader may no longer be offered.
  *
  * Pure, and read from what the server sent: `widgetSources` lists only the
  * fields no read rule can refuse, so a field missing from it is one this
  * reader may not filter, sort or group by now, whatever the stored value says.
  */
-import type {
-  AnyWidgetSetting,
-  ContentSetting,
-  PublishedContentSource,
+import {
+  contentFieldFits,
+  staleValueTakesDefault,
+  startsAtDefault,
+  type AnyWidgetSetting,
+  type ContentSetting,
+  type PublishedContentSource,
+  unfitContentField,
 } from "nextly/config";
 
-import { whereToCondition } from "./content-filter";
+import { filterFieldNames } from "./content-filter";
 
 /** A content setting that works over a Collection setting of the widget. */
 export type DependentSetting = Extract<ContentSetting, { of: string }>;
@@ -26,7 +30,9 @@ export function isContentSetting(
     setting.type === "collection" ||
     setting.type === "filter" ||
     setting.type === "sort" ||
-    setting.type === "groupBy"
+    setting.type === "groupBy" ||
+    setting.type === "fields" ||
+    setting.type === "field"
   );
 }
 
@@ -47,16 +53,30 @@ export function dependentsOf(
   );
 }
 
-/** The one field a dependent setting's value names, or none when unset. */
-export function fieldNamedBy(
+/**
+ * The fields a dependent setting's value names: a filter's, sort's,
+ * grouping's or Field setting's one, or each of a Fields setting's, and none
+ * when unset.
+ */
+export function fieldsNamedBy(
   setting: DependentSetting,
   value: unknown
-): string | undefined {
-  if (setting.type === "filter") {
-    return whereToCondition(value, () => undefined)?.field;
+): string[] {
+  // Every field of every condition: a chip naming a field the collection no
+  // longer offers is stale whichever chip it is.
+  if (setting.type === "filter") return filterFieldNames(value);
+  if (setting.type === "fields") {
+    return Array.isArray(value)
+      ? value.filter((name): name is string => typeof name === "string")
+      : [];
   }
-  if (typeof value !== "string" || value === "") return undefined;
-  return setting.type === "sort" ? value.replace(/^-/, "") : value;
+  if (typeof value !== "string" || value === "") return [];
+  return [setting.type === "sort" ? value.replace(/^-/, "") : value];
+}
+
+/** A dependent setting's value when it names nothing: no fields, or no field. */
+function noneFor(setting: DependentSetting): unknown {
+  return setting.type === "fields" ? [] : "";
 }
 
 /**
@@ -92,45 +112,86 @@ function canonical(value: unknown): string {
 type SourceField = PublishedContentSource["fields"][number];
 
 /**
- * Whether a source field may be what this dependent setting names: offered at
- * all, and for Group by, one the read will group by.
+ * Whether a source field may be what this dependent setting names: the rule
+ * the server also judges a stored value by (`contentFieldFits`).
  */
 export function fieldFits(
   setting: DependentSetting,
-  field: SourceField
+  field: SourceField,
+  titleField?: string
 ): boolean {
-  return setting.type !== "groupBy" || field.groupable !== false;
+  return contentFieldFits(setting.type, field, titleField);
 }
 
-/** Whether a dependent setting's value names a field it may use here. */
-function valueFits(
+/** The first field a dependent setting's value names that it may not use here. */
+function unfitField(
   setting: DependentSetting,
   value: unknown,
   source: PublishedContentSource
-): boolean {
-  const name = fieldNamedBy(setting, value);
-  if (name === undefined) return true;
-  const field = source.fields.find(candidate => candidate.name === name);
-  return field !== undefined && fieldFits(setting, field);
+): string | undefined {
+  return unfitContentField(setting.type, fieldsNamedBy(setting, value), source);
+}
+
+/**
+ * The first field a dependent setting's value names that the collection the
+ * form holds for it does not offer it, with that collection's source; or
+ * `undefined` where every field fits, and where the collection has no source
+ * to judge by.
+ */
+function unavailableField(
+  setting: DependentSetting,
+  values: Readonly<Record<string, unknown>>,
+  sources: readonly PublishedContentSource[]
+): { field: string; source: PublishedContentSource } | undefined {
+  const source = sources.find(
+    candidate => candidate.collection === values[setting.of]
+  );
+  if (source === undefined) return undefined;
+  const field = unfitField(setting, values[setting.name], source);
+  return field === undefined ? undefined : { field, source };
+}
+
+/**
+ * Why a Field setting's value cannot be saved, or `undefined`: it names a
+ * field the collection the form holds now does not offer this reader. The
+ * field-fit rule is core's (`unfitContentField`), the one the layout write
+ * refuses such a value by, and the words are the ones it refuses it with, so
+ * a value it would refuse is named under its own control instead.
+ *
+ * Judged where the sheet judges a stale value (`staleContentValues`): nothing
+ * while the sources have not arrived, or over a collection with no source.
+ */
+export function unavailableFieldProblem(
+  setting: AnyWidgetSetting,
+  values: Readonly<Record<string, unknown>>,
+  sources: readonly PublishedContentSource[] | undefined
+): string | undefined {
+  if (setting.type !== "field" || sources === undefined) return undefined;
+  if (unavailableField(setting, values, sources) === undefined) {
+    return undefined;
+  }
+  return `"${setting.label ?? setting.name}" names a field that is not available.`;
 }
 
 /**
  * What a dependent setting starts at over `collection`: its default when the
  * default names a field it may use there, and none otherwise. A collection
  * whose fields were not sent leaves the default alone, as there is nothing to
- * judge it by.
+ * judge it by. The rule is core's (`startsAtDefault`), which the server reads
+ * too.
  */
 export function startingValue(
   setting: DependentSetting,
   collection: unknown,
   sources: readonly PublishedContentSource[] | undefined
 ): unknown {
-  const fallback = setting.defaultValue ?? "";
+  const fallback = setting.defaultValue ?? noneFor(setting);
   const source = sources?.find(
     candidate => candidate.collection === collection
   );
-  if (source === undefined) return fallback;
-  return valueFits(setting, fallback, source) ? fallback : "";
+  return startsAtDefault(setting.type, fieldsNamedBy(setting, fallback), source)
+    ? fallback
+    : noneFor(setting);
 }
 
 /** A value the sheet replaces, what it replaces it with, and why. */
@@ -178,24 +239,34 @@ function staleDependent(
   values: Readonly<Record<string, unknown>>,
   sources: readonly PublishedContentSource[]
 ): StaleContentValue | undefined {
+  const unavailable = unavailableField(setting, values, sources);
+  if (unavailable === undefined) return undefined;
+  const { field, source } = unavailable;
   const value = values[setting.name];
-  const source = sources.find(
-    candidate => candidate.collection === values[setting.of]
-  );
-  if (source === undefined || valueFits(setting, value, source)) {
-    return undefined;
-  }
-  const field = fieldNamedBy(setting, value);
   const label = setting.label ?? setting.name;
   const isDefault = sameSettingValue(value, setting.defaultValue);
+  // Replaced by the rule the server applies before a card's `load` is handed
+  // the value (`staleValueTakesDefault`), so the card loads with what the
+  // sheet shows.
+  const takesDefault = staleValueTakesDefault(
+    setting.type,
+    {
+      isDefault,
+      defaultNames: fieldsNamedBy(
+        setting,
+        setting.defaultValue ?? noneFor(setting)
+      ),
+    },
+    source
+  );
   return {
     name: setting.name,
     notice: isDefault
       ? `${label}'s default, ${field}, is not available for ${source.label}`
       : `${label} was reset: ${field} is no longer available`,
-    replacement: isDefault
-      ? ""
-      : startingValue(setting, values[setting.of], sources),
+    replacement: takesDefault
+      ? (setting.defaultValue ?? noneFor(setting))
+      : noneFor(setting),
   };
 }
 
@@ -228,4 +299,49 @@ function staleCollection(
         ? setting.defaultValue
         : "",
   };
+}
+
+/** A section of a card's settings panel: Data, Display or Advanced. */
+export type SettingSection = NonNullable<AnyWidgetSetting["section"]>;
+
+/**
+ * The section of the settings panel a setting is drawn in: the one it names,
+ * else Data for a setting over the card's content (its Collection, Filter,
+ * Sort, Group by and Field), and Display for every other, the fields each row
+ * shows included. A setting is folded under Advanced only when it says so.
+ * The one reading of where a setting goes.
+ */
+export function sectionOf(setting: AnyWidgetSetting): SettingSection {
+  if (setting.section !== undefined) return setting.section;
+  return isContentSetting(setting) && setting.type !== "fields"
+    ? "data"
+    : "display";
+}
+
+/**
+ * A Collection setting's choices: the collections the server sent, and its
+ * own default when that names none of them. A widget may declare a default
+ * that is not a collection (one meaning every collection, say); it is what
+ * the card uses until the reader chooses, so it is offered by name rather
+ * than left as a value the select cannot show or return to. A card's quick
+ * popover offers the same choices. Kept here, apart from the panel's controls, so the
+ * dashboard, which the popover is drawn on, does not load those controls to ask it.
+ */
+export function collectionOptions(
+  setting: Extract<ContentSetting, { type: "collection" }>,
+  sources: readonly PublishedContentSource[]
+): { label: string; value: string }[] {
+  const options = sources.map(source => ({
+    label: source.label,
+    value: source.collection,
+  }));
+  const fallback = setting.defaultValue;
+  if (
+    fallback === undefined ||
+    fallback === "" ||
+    options.some(option => option.value === fallback)
+  ) {
+    return options;
+  }
+  return [{ label: "Default", value: fallback }, ...options];
 }

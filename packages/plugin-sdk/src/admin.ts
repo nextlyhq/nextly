@@ -5,9 +5,8 @@
  * shell (which provides `@nextlyhq/admin` + React).
  *
  * @public Graduated in P9 — `plugin-form-builder` exercises the menu/pages/views
- *   registration. Dashboard widgets (`PluginAdminWidget`, D22) render, but the
- *   contribution shape is still settling, so they remain `@experimental`.
- *   See `STABILITY.md`.
+ *   registration. Dashboard widgets are declared with `defineWidget` under
+ *   `contributes.dashboard`, which remains `@experimental`. See `STABILITY.md`.
  */
 export {
   registerComponent,
@@ -94,6 +93,19 @@ export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin";
  * ordinary answer to handle, not an error.
  */
 export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin";
+
+/**
+ * The surrounding document's full-page preview (@experimental).
+ *
+ * For a field that shows the page it holds — the page builder's entry view —
+ * and offers to open it whole. `open` is the editor's own Preview handler, so
+ * the field opens the page the header would, in the language being edited.
+ *
+ * `null` wherever the editor offers no Preview action: no preview configured,
+ * an entry never saved, a reader, and outside a form. A field shows no such
+ * control then, rather than one that opens nothing.
+ */
+export { useDocumentPreview, type DocumentPreview } from "@nextlyhq/admin";
 
 /**
  * How the surrounding document stands (@experimental).
@@ -360,6 +372,80 @@ export type {
 } from "@nextlyhq/admin";
 
 /**
+ * @experimental The widget kit: the parts core's own dashboard cards are drawn
+ * from, for a widget's own component (`defineWidget` with
+ * `view: { component }`). The host always draws the card's frame and every
+ * state; these are the body-level parts, reading the card's size tier and the
+ * admin's theme tokens, so a plugin card matches core's beside it in light and
+ * dark.
+ *
+ * - `FrameState`: what a component returns when its own data says the card is
+ *   not ready (empty, not available, an error, or still loading), which the
+ *   frame then draws in its place, as on every other card.
+ * - `Widget`: the parts of a card's body core's own cards are drawn with.
+ *   `Widget.Figure` (one number, written for the card's tier), `Widget.List`
+ *   (rows with one action each), `Widget.Table` (rows across named columns, a
+ *   table on a wide card), `Widget.BarChart` and `Widget.SeriesChart` (charts
+ *   that take plain data, drawn in the shared chart colours, with an optional
+ *   `unit` for their tooltips), `Widget.FooterLink` (one link drawn in the
+ *   card's own footer, where core's cards draw "View all") and
+ *   `Widget.useTitleCount` (a hook: the count it is given is drawn beside the
+ *   card's title and read with it, as the Needs your attention card shows its
+ *   items: a number, a short phrase such as "2 of 5 done", or with `true`
+ *   after it a floor drawn "N+"; `undefined` shows none).
+ *
+ * The number and change formatters and the chart colour accessor are exported
+ * from this package's root, not here: every module of the admin is a client
+ * module, and the root is server-safe, so a Server Component can call them.
+ *
+ * Import them from here, never from `@nextlyhq/admin` directly: the admin is the
+ * host's single copy, and a plugin that bundled its own would draw its parts
+ * outside the card it sits in.
+ */
+export { FrameState, Widget } from "@nextlyhq/admin";
+/**
+ * @experimental A row's time as core's list cards word it, and the clock they
+ * move it on with, for a widget's own list:
+ *
+ * - `formatWidgetTime(iso, now)`: "just now", "5m ago", "3h ago", "2d ago",
+ *   and from a week on the date, in the timezone and date format the admin is
+ *   set to, with its year.
+ * - `useWidgetClock()`: the current time, moved on once a minute while the
+ *   card is mounted and stopped when it unmounts, the `now` to word times
+ *   from, so "just now" does not stay "just now".
+ *
+ * Core's own, so a plugin's times read and move as the cards beside it do.
+ */
+export { formatWidgetTime, useWidgetClock } from "@nextlyhq/admin";
+/**
+ * @experimental `useRefreshDashboard()`: a function that asks every card on
+ * the dashboard, and the header's summary, again, for a widget whose own
+ * write changes what they answer (a card marking a row done, say). Each card
+ * keeps what it shows until its answer arrives. Core's own reads, so a plugin
+ * names no query of the admin's.
+ */
+export { useRefreshDashboard } from "@nextlyhq/admin";
+export type {
+  CardEmptyContent,
+  CardState,
+  SkeletonShape,
+  WidgetBarChartGroup,
+  WidgetBarChartProps,
+  WidgetChartUnit,
+  WidgetFigureProps,
+  WidgetListProps,
+  WidgetListTotal,
+  WidgetRenderSize,
+  WidgetRowAction,
+  WidgetSeries,
+  WidgetSeriesChartProps,
+  WidgetSeriesInterval,
+  WidgetSeriesPoint,
+  WidgetTableColumn,
+  WidgetTableProps,
+} from "@nextlyhq/admin";
+
+/**
  * The controls a form is built from (@experimental).
  *
  * Layout primitives alone left an author with a `Card` and a `Grid` and nothing
@@ -376,9 +462,10 @@ export type {
  * a smaller event than a name withdrawn.
  *
  * Routed through `@nextlyhq/admin` rather than `@nextlyhq/ui`, as every block
- * in this file is. That is not a formality — `plugin-sdk` peers on `admin` and
- * does not depend on `ui` at all, and `ui`'s root barrel carries a
- * `"use client"` banner that the layering guard admits only by subpath.
+ * in this file is. That is not a formality — `plugin-sdk` peers on `admin`, and
+ * takes from `ui` only its server-safe subpaths, for its root; `ui`'s root
+ * barrel carries a `"use client"` banner that the layering guard admits only
+ * by subpath.
  */
 export {
   Button,
@@ -506,6 +593,30 @@ export {
   ValidationRulesEditor,
   drawsAnyValidationRule,
   EDITABLE_VALIDATION_RULES,
+} from "@nextlyhq/admin";
+
+/**
+ * The shared field picker (@experimental), beside the field-UI kit above and
+ * replacing its `FieldTypePicker` for adding a field. One picker serves every
+ * surface: search first (names, descriptions, categories and synonyms, older
+ * and developer names included), a most-used group then categories, keyboard
+ * alone, and a label-only add step with "Add and add another". Your surface
+ * configures it with `FieldPickerConfig` (its built-in `types`, the `surface`
+ * whose plugin types join them, `exclude`, `mostUsed`, `deriveName`, and
+ * optionally `fieldGroups`) and owns where the field goes: `onAdd` hands you
+ * the choice and the picker writes nothing.
+ * - `describeFieldTypes` turns catalog rows into the `FieldTypeDescription`s
+ *   the picker takes (each row plus its search words).
+ * Experimental until every built-in surface uses it; the kit above stays
+ * exported and working beside it.
+ */
+export { FieldPicker, describeFieldTypes } from "@nextlyhq/admin";
+export type {
+  FieldPickerProps,
+  FieldPickerConfig,
+  FieldPickerChoice,
+  FieldGroupOption,
+  FieldTypeDescription,
 } from "@nextlyhq/admin";
 
 /**

@@ -4,6 +4,8 @@ import type { PluginMetadata } from "@admin/types/branding";
 
 import type { MainMenuItem } from "../sidebar-types";
 
+import { CONTENT_RAIL_ID } from "./content-rail";
+
 // Where a primary sidebar icon points.
 //
 // Collections and singles land on their section page, whose smart-redirect
@@ -30,8 +32,12 @@ export function resolveItemHref(
   // guarded page would bounce them to the dashboard and remove their only route
   // to content they are allowed to see, so for them the icon stays a
   // sub-sidebar opener.
-  canOpenPluginsPage = false
+  canOpenPluginsPage = false,
+  // Where the Content item goes: `#` while it opens a panel, a part's page when
+  // the panel is suppressed. Decided by `contentItemHref`.
+  contentHref = "#"
 ): string {
+  if (item.id === CONTENT_RAIL_ID) return contentHref;
   if (item.id === "collections") return ROUTES.COLLECTIONS;
   if (item.id === "singles") return ROUTES.SINGLES;
   if (item.id === "plugins") return canOpenPluginsPage ? ROUTES.PLUGINS : "#";

@@ -114,5 +114,11 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // A heading with a destination renders an `<a>` inside it, so it is
+  // interactive while linked. Read through `url()`, as the renderer reads it.
+  contentModel: props =>
+    url(props.href) === undefined
+      ? { is: ["flow"] }
+      : { is: ["flow", "interactive"] },
   render: renderHeading,
 });

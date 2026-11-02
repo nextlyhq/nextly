@@ -1,0 +1,103 @@
+/**
+ * Every widget reaches the dashboard through one internal call: core's own
+ * declarations, each plugin's `contributes.dashboard.widgets` and the site config's
+ * `admin.dashboard.widgets`. Observed on the call itself, wrapped around the
+ * real one, rather than reconstructed from what it registers.
+ */
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  CORE_CONDITIONS,
+  CORE_DECLARATIONS,
+  CORE_WIDGET_IDS,
+} from "../../domains/widgets/core-widgets";
+import * as declaredWidgets from "../../domains/widgets/declaration/declared-widgets";
+import {
+  adminComponentPlugins,
+  adminSiteDashboard,
+} from "../../domains/widgets/declaration/component-map-store";
+import { SITE_CONFIG } from "../../domains/widgets/declaration/site-dashboard";
+import {
+  dashboard,
+  revenue,
+} from "../../domains/widgets/declaration/__tests__/plugin/widgets";
+import { getWidget, widgetSource } from "../../domains/widgets/registry";
+import { definePlugin } from "../../plugins/plugin-context";
+import { resetWidgetRegistries } from "../registrations/register-widgets";
+
+vi.mock(
+  "../../domains/widgets/declaration/declared-widgets",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../domains/widgets/declaration/declared-widgets")
+      >();
+    return {
+      ...actual,
+      registerDashboardWidgets: vi.fn(actual.registerDashboardWidgets),
+    };
+  }
+);
+
+const shop = definePlugin({
+  name: "@acme/shop",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: { dashboard },
+});
+
+afterEach(() => {
+  vi.mocked(declaredWidgets.registerDashboardWidgets).mockClear();
+});
+
+describe("the one call", () => {
+  it("takes core's declarations, each plugin's widgets and the site's, in one call per boot", () => {
+    const site = { ...revenue, id: "site/revenue" };
+    resetWidgetRegistries([shop], { widgets: [site] });
+
+    const call = vi.mocked(declaredWidgets.registerDashboardWidgets);
+    expect(call).toHaveBeenCalledTimes(1);
+    const [given] = call.mock.calls[0];
+    // Core is a group like any owner's: the call takes no list beside them.
+    expect(Object.keys(given).sort()).toEqual(["groups", "references"]);
+    // Core's own declarations come first, marked as core's, then each
+    // plugin's, then the site's own.
+    expect(given.groups?.map(group => group.owner)).toEqual([
+      "core",
+      'plugin "@acme/shop"',
+      SITE_CONFIG,
+    ]);
+    expect(given.groups?.[0]).toEqual({
+      owner: "core",
+      core: true,
+      declarations: CORE_DECLARATIONS,
+      conditions: CORE_CONDITIONS,
+    });
+    // Only core's group is marked, and only it names conditions: a plugin's never does.
+    expect(given.groups?.[1]?.core).toBeUndefined();
+    expect(given.groups?.[1]?.conditions).toBeUndefined();
+    expect(given.groups?.[2]).toEqual({
+      owner: SITE_CONFIG,
+      declarations: [site],
+    });
+    // Through it, core's widgets reach the registry under core, and the
+    // plugin's under the plugin.
+    for (const id of CORE_WIDGET_IDS) {
+      expect(widgetSource(id), id).toBe(declaredWidgets.CORE_OWNER);
+    }
+    expect(getWidget(revenue.id)).toBeDefined();
+    // And the site's under the site config, as a plugin's are kept.
+    expect(widgetSource(site.id)).toBe(SITE_CONFIG);
+  });
+});
+
+describe("what the component map is checked against", () => {
+  it("is the plugins and the site dashboard this boot registered", () => {
+    const siteDashboard = {
+      widgets: [{ ...revenue, id: "site/notes" }],
+    };
+    resetWidgetRegistries([shop], siteDashboard);
+    expect(adminComponentPlugins()).toEqual([shop]);
+    expect(adminSiteDashboard()).toBe(siteDashboard);
+  });
+});

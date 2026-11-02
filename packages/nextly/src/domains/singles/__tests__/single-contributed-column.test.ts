@@ -8,7 +8,7 @@
  * Its contributor writes it through `ctx.db.contributed`; the Single's read and write
  * responses must not return it, and a Single write must not set it.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearActiveExtensionSchema,
@@ -27,6 +27,16 @@ import {
   createSilentLogger,
   siteSettingsMeta,
 } from "./single-test-helpers";
+
+// A visitor holds what the faked Public role grants: the read these reads
+// make, as the target declares no rule.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
+  const fake = await import("../../../auth/access/__tests__/fake-caller");
+  return {
+    ...(await importOriginal<object>()),
+    actorForVisitor: fake.fakeActorForVisitor,
+  };
+});
 
 const TABLE = "single_site_settings";
 

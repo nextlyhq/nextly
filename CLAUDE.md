@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (865cc36990e88c8a). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (bcc8a83411172ffb). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -21,10 +21,9 @@ Procedures live in `.agents/skills/` rather than here, because a procedure
 needed once per task should not occupy context in every session. Codex reads
 them there; Claude Code reads `.claude/skills/`, a generated copy that
 `pnpm skills:sync` rewrites and `pnpm check:agent-contract` holds identical —
-edit the skills, never the copy. This table is the router: an agent selects a
-skill from its description, and the table is what survives a description that
-underperforms. Load the skill BEFORE the act, not
-after it goes wrong.
+edit the skills, never the copy. This table is the router, for when a skill's
+description underperforms. Load the skill BEFORE the act, not after it goes
+wrong.
 
 | Load this                     | When you are about to                                    |
 | ----------------------------- | -------------------------------------------------------- |
@@ -41,6 +40,7 @@ after it goes wrong.
 | `running-builds-and-tests`    | build, typecheck, lint or run tests, or size a local run |
 | `working-in-worktrees`        | create, work in or remove a worktree                     |
 | `running-the-fallow-gate`     | commit, push, or act on a fallow or code-hygiene finding |
+| `visual-check`                | change how an admin screen looks, before its PR          |
 
 A rule both tools must hold in every session lives in this file, since only it
 reaches both: the whole-file write rule below. `.claude/rules/` keeps the rule
@@ -299,8 +299,8 @@ pnpm worktree remove <branch>
 ```
 
 Stopping the test containers is safe and cheap — `docker start` by name brings
-them back with their data, which is why the start commands in the
-`running-builds-and-tests` skill are `start` rather than `compose up`.
+them back (empty: run `pnpm worktree provision`), which is why the start
+commands in the `running-builds-and-tests` skill are `start`, not `compose up`.
 
 ## A whole-file write is a delete plus a create
 
@@ -391,9 +391,8 @@ already in hand may move; preconditions may not.
 `overrideAccess: false` is judged by a single gate. Flag a second place that
 decides whether a caller may read or write, a hand-assembled caller literal
 instead of `readAccessCaller`, or a rule handed permissions not spelled as
-stored (`read-posts`); the earlier `posts:read` also rides along, warned, for
-one release. Two doors that answer one key differently is a defect this
-repository has already had.
+stored (`read-posts`), such as the earlier `posts:read`. Two doors that answer
+one key differently is a defect this repository has already had.
 
 ### One question has one implementation
 

@@ -898,6 +898,7 @@ describe("RoleService", () => {
         description: "A fully detailed role",
         level: 75,
         isSystem: false,
+        assignable: true,
       });
     });
 

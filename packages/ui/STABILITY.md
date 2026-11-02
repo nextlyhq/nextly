@@ -304,4 +304,6 @@ of the same hue rather than a different one.
 from 1,000 compact ("1.2k", "3.4M"); a floor reads "N+"; the accessible name is always the full
 value ("1,248", "100 or more"). `formatChange` carries a change's direction in an arrow and a
 sign as well as in words. Every figure a card shows, in its body, chart, tooltip, table and text
-alternative, goes through these, so one value never reads two ways.
+alternative, goes through these, so one value never reads two ways. `chartColour(slot)` names the five shared
+chart colours as the `--nx-chart-N` token a mark is drawn in, beside the formatters, so a chart a
+server renders names its colours exactly as the admin's do.

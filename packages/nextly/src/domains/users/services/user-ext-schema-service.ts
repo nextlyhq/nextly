@@ -98,6 +98,11 @@ import {
 } from "../../schema/field-types/field-type-registry";
 import { runRaw } from "../../schema/pipeline/pre-resolution/executor";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
+import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
+import {
+  columnTypeIsIndexable,
+  uniquenessCanBeAnIndex,
+} from "../../schema/services/index-name";
 import { sqliteTimestampColumns } from "../../schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -417,9 +422,8 @@ export class UserExtSchemaService {
    */
   private canCarryUniqueIndex(columnType: string): boolean {
     if (/json/i.test(columnType)) return false;
-    return !(
-      this.dialect === "mysql" && columnType === SQL_COLUMN_TYPES.mysql.text
-    );
+    // The shared rule collections and components ask, which knows every TEXT and BLOB size.
+    return uniquenessCanBeAnIndex(columnType, this.dialect);
   }
 
   /**
@@ -777,16 +781,22 @@ export class UserExtSchemaService {
 
       const columnName = this.toSnakeCase(field.name);
       const indexName = `idx_${TABLE_NAME}_${columnName}`;
+      const columnType = this.getColumnType(field) ?? "";
+      // A column the dialect cannot index at all (MySQL's JSON) gets none, as a collection's and a
+      // component's do, rather than a statement the server refuses.
+      if (!columnTypeIsIndexable(columnType, this.dialect)) continue;
 
-      if (this.dialect === "mysql") {
-        indexStatements.push(
-          `CREATE INDEX ${this.q}${indexName}${this.q} ON ${this.q}${TABLE_NAME}${this.q}(${this.q}${columnName}${this.q});`
-        );
-      } else {
-        indexStatements.push(
-          `CREATE INDEX IF NOT EXISTS ${this.q}${indexName}${this.q} ON ${this.q}${TABLE_NAME}${this.q}(${this.q}${columnName}${this.q});`
-        );
-      }
+      // Rendered by the schema pipeline's own rule, so an unbounded text, a TEXT column MySQL
+      // refuses to index whole, is keyed by the same prefix a collection's column is.
+      const indexSql = columnIndexSql(
+        TABLE_NAME,
+        indexName,
+        columnName,
+        columnType,
+        this.dialect,
+        name => `${this.q}${name}${this.q}`
+      );
+      indexStatements.push(`${indexSql};`);
     }
 
     // Append indexes with statement breakpoints
@@ -1230,6 +1240,21 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
       // an entries-only type must never be treated as a user column.
       isPluginFieldTypeOnSurface(fieldType, "users")
     );
+  }
+
+  /**
+   * The column type this dialect gives `field`, spelled exactly as the CREATE TABLE and ADD COLUMN
+   * statements spell it.
+   *
+   * The same value `generateColumnSQL`, `generateAlterTableMigration` and `ensureUserExtSchema` put
+   * into their column definitions, exposed so a caller that needs only the type can ask for it
+   * instead of restating this mapping or recovering it from rendered SQL.
+   *
+   * `null` where this service would emit no column at all, which is the same condition that makes
+   * those statements skip a field.
+   */
+  columnTypeFor(field: UserFieldConfig): string | null {
+    return this.getColumnType(field);
   }
 
   private getColumnType(field: UserFieldConfig): string | null {

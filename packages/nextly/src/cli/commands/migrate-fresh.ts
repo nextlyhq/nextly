@@ -19,8 +19,8 @@
  * # Drop all tables and re-run migrations (with confirmation)
  * nextly migrate:fresh
  *
- * # Skip confirmation prompt
- * nextly migrate:fresh --force
+ * # Consent to deleting every table, for a run with no terminal
+ * nextly migrate:fresh --accept-data-loss
  *
  * # Run seeders after migrations (placeholder)
  * nextly migrate:fresh --seed
@@ -41,18 +41,29 @@ import { seedAll, type SeederResult } from "../../database/seeders/index";
 // F8 PR 2: was `DrizzlePushService` (legacy). Switched to the freshPushSchema
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
+import {
+  isInteractiveTerminal,
+  judgeDataLoss,
+} from "../../domains/schema/migrate/data-loss-consent";
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
+import { dataLossRefusal, exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
-  validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import {
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
+import {
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
 
 import { runMigrate } from "./migrate";
@@ -66,7 +77,13 @@ import { runMigrate } from "./migrate";
  */
 export interface MigrateFreshCommandOptions {
   /**
-   * Skip confirmation prompt.
+   * The data-loss consent, in the form without targets: the command deletes
+   * every table, so a list of them is refused.
+   */
+  acceptDataLoss?: AcceptDataLossOption;
+
+  /**
+   * The earlier spelling of the consent, honoured with a deprecation notice.
    * @default false
    */
   force?: boolean;
@@ -123,36 +140,22 @@ export async function runMigrateFresh(
 
   // Step 1: Validate database environment
   logger.debug("Validating database environment...");
-  const dbValidation = validateDatabaseEnv();
+  const dbValidation = requireDatabaseEnv(logger);
 
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
-  }
-
-  const dialect = dbValidation.dialect!;
+  const dialect = dbValidation.dialect;
   logger.debug(`Database dialect: ${dialect}`);
 
   // Step 2: Load configuration
   logger.info("Loading configuration...");
 
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -167,18 +170,36 @@ export async function runMigrateFresh(
   logger.warn("This command will DROP ALL TABLES in your database.");
   logger.warn("All data will be permanently lost.");
 
-  if (!options.force) {
-    const confirmed = await confirmDestructiveAction(
-      "Are you sure you want to proceed? (yes/no): "
-    );
-
-    if (!confirmed) {
-      logger.newline();
-      logger.info("Operation cancelled.");
-      process.exit(0);
-    }
-  } else {
-    logger.debug("Skipping confirmation (--force flag used)");
+  // The data-loss consent decides, before the database is touched: covered,
+  // the run proceeds; at a terminal, it asks; otherwise it refuses at once
+  // rather than waiting on input nobody will give. What it deletes is every
+  // table, which no list of tables can be said to cover.
+  let verdict: Awaited<ReturnType<typeof judgeDataLoss>>;
+  try {
+    verdict = await judgeDataLoss({
+      deletions: [
+        { kind: "unnamed", description: "every table in the database" },
+      ],
+      consent: readDataLossConsent({
+        flag: options.acceptDataLoss,
+        honours: ["migrate:fresh --force"],
+        earlierFlags: options.force ? ["migrate:fresh --force"] : [],
+        warn: message => logger.warn(message),
+      }),
+      interactive: isInteractiveTerminal(),
+      ask: question => confirmDestructiveAction(`${question} (yes/no): `),
+      print: line => logger.warn(line),
+    });
+  } catch (error) {
+    exitWithError(logger, error);
+  }
+  if (verdict.kind === "declined") {
+    logger.newline();
+    logger.info("Operation cancelled.");
+    process.exit(0);
+  }
+  if (verdict.kind === "refused") {
+    exitWithError(logger, dataLossRefusal(verdict));
   }
 
   // Step 4: Connect to database
@@ -194,8 +215,7 @@ export async function runMigrateFresh(
     });
     logger.success("Database connected");
   } catch (error) {
-    logger.error(`Failed to connect to database: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   try {
@@ -571,7 +591,11 @@ export function registerMigrateFreshCommand(program: Command): void {
   program
     .command("migrate:fresh")
     .description("Drop all tables and re-run all migrations")
-    .option("-f, --force", "Skip confirmation prompt", false)
+    .option(
+      "--accept-data-loss [targets]",
+      "Consent to deleting every table, for a run with no terminal; takes no targets. Same as NEXTLY_ACCEPT_DATA_LOSS=1."
+    )
+    .option("-f, --force", "Deprecated: use --accept-data-loss", false)
     .option("--seed", "Run seeders after migrations", false)
     .action(async (cmdOptions: MigrateFreshCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();
@@ -588,8 +612,7 @@ export function registerMigrateFreshCommand(program: Command): void {
       try {
         await runMigrateFresh(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

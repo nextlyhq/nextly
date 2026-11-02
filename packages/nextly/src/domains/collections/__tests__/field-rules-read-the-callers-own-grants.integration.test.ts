@@ -45,13 +45,12 @@ async function boot(): Promise<CollectionsHandler> {
           text({
             name: "secret",
             access: {
-              // The spelling a rule actually sees. `ruleFacingPermissions`
-              // projects a key's grant ROWS to `resource:action`, so a rule
-              // written against the stored slug would never match a real key.
+              // The spelling a rule actually sees: a key's grant as stored,
+              // `write-secret`, the slug the role screen shows.
               update: ({ permissions }) =>
-                (permissions as string[]).includes("secret:write"),
+                (permissions as string[]).includes("write-secret"),
               create: ({ permissions }) =>
-                (permissions as string[]).includes("secret:write"),
+                (permissions as string[]).includes("write-secret"),
             },
           }),
         ],

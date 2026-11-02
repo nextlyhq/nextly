@@ -244,7 +244,9 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(refused.success).toBe(false);
-      expect(refused.statusCode).toBe(403);
+      // The editor holds update but not read, so the refusal is answered as
+      // the entry being missing rather than as a 403.
+      expect(refused.statusCode).toBe(404);
       // The German translation is still live: the refusal rolled the sweep back
       // rather than denying after the fact.
       const after = await companionStatuses(t, `dc_${SLUG}_locales`);

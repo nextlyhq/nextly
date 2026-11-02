@@ -3,9 +3,8 @@
  * one spelling of the permissions in it.
  *
  * Each block names the property that separates the builder from a plausible
- * broken one: a list that still hands a rule only `posts:read`, one that
- * drops the old spelling before its release is out, a warning that repeats on
- * every call or never fires, and a context that loses a property a rule
+ * broken one: a list that still hands a rule the earlier `posts:read`, so a
+ * rule checking it still allows, and a context that loses a property a rule
  * written against today's shapes reads.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,10 +37,10 @@ const readPosts = {
 function ask<T>(
   rule: (ctx: AccessRuleContext) => T,
   caller: RuleCaller = editor,
-  question: Parameters<typeof buildRuleContext>[2] = readPosts,
-  entry?: Parameters<typeof buildRuleContext>[3]
+  question: Parameters<typeof buildRuleContext>[1] = readPosts,
+  entry?: Parameters<typeof buildRuleContext>[2]
 ): T {
-  return rule(buildRuleContext(rule, caller, question, entry));
+  return rule(buildRuleContext(caller, question, entry));
 }
 
 let warn: ReturnType<typeof vi.spyOn>;
@@ -69,26 +68,18 @@ describe("the permissions a rule is handed", () => {
         { slug: "manage-api-keys", action: "update", resource: "api-keys" },
       ],
     };
-    const ctx = buildRuleContext(() => true, manager, readPosts);
-    expect([...ctx.permissions]).toEqual([
-      "manage-api-keys",
-      "api-keys:update",
-    ]);
+    const ctx = buildRuleContext(manager, readPosts);
+    expect([...ctx.permissions]).toEqual(["manage-api-keys"]);
   });
 
-  it("carry the old spelling after the role screen's, for one release", () => {
-    const ctx = buildRuleContext(() => true, editor, readPosts);
-    expect([...ctx.permissions]).toEqual([
-      "read-posts",
-      "update-posts",
-      "posts:read",
-      "posts:update",
-    ]);
+  it("carry only the role screen's spelling, never the earlier one", () => {
+    const ctx = buildRuleContext(editor, readPosts);
+    expect([...ctx.permissions]).toEqual(["read-posts", "update-posts"]);
   });
 
   it("hand a slug held without its row as stored, with no old spelling to derive", () => {
     const slugsOnly: RuleCaller = { ...editor, permissions: ["read-posts"] };
-    const ctx = buildRuleContext(() => true, slugsOnly, readPosts);
+    const ctx = buildRuleContext(slugsOnly, readPosts);
     expect([...ctx.permissions]).toEqual(["read-posts"]);
   });
 
@@ -97,53 +88,22 @@ describe("the permissions a rule is handed", () => {
       ...editor,
       permissions: [grant("read", "posts"), grant("read", "posts")],
     };
-    const ctx = buildRuleContext(() => true, twice, readPosts);
-    expect([...ctx.permissions]).toEqual(["read-posts", "posts:read"]);
+    const ctx = buildRuleContext(twice, readPosts);
+    expect([...ctx.permissions]).toEqual(["read-posts"]);
   });
 });
 
-describe("a rule checking the old spelling", () => {
-  it("still allows, and is warned once however often it runs", () => {
-    const rule = ({ permissions }: AccessRuleContext) =>
-      permissions.includes("posts:read");
-    expect(ask(rule)).toBe(true);
-    expect(ask(rule)).toBe(true);
-    expect(warn).toHaveBeenCalledTimes(1);
-    const [line] = warn.mock.calls[0] as [string];
-    expect(line).toContain('"posts:read"');
-    expect(line).toContain('"read-posts"');
-    expect(line).toContain('"posts"');
-  });
-
-  it("is warned per rule, so a second rule using it is named as well", () => {
-    ask(({ permissions }) => permissions.includes("posts:read"));
-    ask(({ permissions }) => permissions.indexOf("posts:update") >= 0);
-    expect(warn).toHaveBeenCalledTimes(2);
-  });
-
-  it("is warned even when the caller lacks the permission it names, with no slug guessed", () => {
-    // A slug can be custom (`manage-api-keys` grants `update` on `api-keys`),
-    // and only a held row says which, so an unheld permission is named by its
-    // action and resource rather than by a slug that may not exist.
-    const rule = ({ permissions }: AccessRuleContext) =>
-      permissions.includes("api-keys:update");
-    expect(ask(rule)).toBe(false);
-    expect(warn).toHaveBeenCalledTimes(1);
-    const [line] = warn.mock.calls[0] as [string];
-    expect(line).toContain('"api-keys:update"');
-    expect(line).toContain('action "update" on "api-keys"');
-    expect(line).not.toContain("update-api-keys");
-  });
-
-  it("is told the stored slug where the role screen's spelling is a custom one", () => {
-    const manager: RuleCaller = {
-      ...editor,
-      permissions: [
-        { slug: "manage-api-keys", action: "update", resource: "api-keys" },
-      ],
-    };
-    ask(({ permissions }) => permissions.includes("api-keys:update"), manager);
-    expect(warn.mock.calls[0][0]).toContain('"manage-api-keys"');
+describe("a rule checking the earlier spelling", () => {
+  it("no longer allows, and is not warned about", () => {
+    // The caller holds `read-posts`, which the rule names in the spelling
+    // rules were handed before; that spelling is no longer in the list.
+    expect(ask(({ permissions }) => permissions.includes("posts:read"))).toBe(
+      false
+    );
+    expect(ask(({ permissions }) => permissions.indexOf("posts:update"))).toBe(
+      -1
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("is never warned for the role screen's spelling", () => {
@@ -155,7 +115,7 @@ describe("a rule checking the old spelling", () => {
 
 describe("the one context", () => {
   it("names the language it judges, and every language the operation involves", () => {
-    const ctx = buildRuleContext(() => true, editor, {
+    const ctx = buildRuleContext(editor, {
       operation: "publish",
       target: { kind: "collection", slug: "posts" },
       locale: "fr",
@@ -166,7 +126,7 @@ describe("the one context", () => {
   });
 
   it("names a language judged alone as the only one involved", () => {
-    const ctx = buildRuleContext(() => true, editor, {
+    const ctx = buildRuleContext(editor, {
       ...readPosts,
       locale: "de",
     });
@@ -175,14 +135,14 @@ describe("the one context", () => {
   });
 
   it("names no language where the operation involves none", () => {
-    const ctx = buildRuleContext(() => true, editor, readPosts);
+    const ctx = buildRuleContext(editor, readPosts);
     expect(ctx.locale).toBeUndefined();
     expect(ctx.locales).toEqual([]);
   });
 
   it("hands each rule its own list of languages", () => {
     const locales = ["en", "fr"];
-    const ctx = buildRuleContext(() => true, editor, {
+    const ctx = buildRuleContext(editor, {
       ...readPosts,
       locale: "en",
       locales,
@@ -192,7 +152,7 @@ describe("the one context", () => {
   });
 
   it("names the caller, the operation and the target, with no entry at a collection's gate", () => {
-    const ctx = buildRuleContext(() => true, editor, {
+    const ctx = buildRuleContext(editor, {
       operation: "delete",
       target: { kind: "collection", slug: "posts" },
     });
@@ -210,7 +170,7 @@ describe("the one context", () => {
   });
 
   it("names a Single as a Single", () => {
-    const ctx = buildRuleContext(() => true, editor, {
+    const ctx = buildRuleContext(editor, {
       operation: "update",
       target: { kind: "single", slug: "site-settings" },
     });
@@ -221,7 +181,6 @@ describe("the one context", () => {
   it("hands a plugin's person as the principal, with no user", () => {
     const member = makePrincipal("members:member", "m1", {});
     const ctx = buildRuleContext(
-      () => true,
       { user: null, roles: [], permissions: [], principal: member },
       readPosts
     );
@@ -233,11 +192,7 @@ describe("the one context", () => {
 
   it("carries the request's own user object where the caller has one", () => {
     const requestUser = { id: "u1", email: "e@x.test", role: "editor" };
-    const ctx = buildRuleContext(
-      () => true,
-      { ...editor, requestUser },
-      readPosts
-    );
+    const ctx = buildRuleContext({ ...editor, requestUser }, readPosts);
     expect(ctx.req.user).toBe(requestUser);
     expect(ctx.user).toEqual({ id: "u1" });
   });
@@ -254,7 +209,7 @@ describe("the one context", () => {
         return { owner: "u1" };
       },
     };
-    const ctx = buildRuleContext(() => true, editor, readPosts, entry);
+    const ctx = buildRuleContext(editor, readPosts, entry);
     expect(read).toBe(0);
     expect(ctx.id).toBe("e1");
     expect(ctx.data).toEqual({ owner: "u1" });
@@ -279,7 +234,7 @@ describe("the one context", () => {
     }) =>
       user?.id === "u1" &&
       roles.includes("editor") &&
-      permissions.includes("posts:read") &&
+      permissions.includes("read-posts") &&
       principal === null &&
       operation === "read" &&
       collection === "posts";
@@ -305,7 +260,7 @@ describe("the one context", () => {
       req.user?.id === "u1" &&
       id === "e1" &&
       data?.owner === "u1" &&
-      permissions.includes("posts:update") &&
+      permissions.includes("update-posts") &&
       roles.includes("editor") &&
       principal === null;
     expect(

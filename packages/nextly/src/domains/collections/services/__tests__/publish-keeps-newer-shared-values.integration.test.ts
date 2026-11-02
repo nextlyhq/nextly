@@ -54,6 +54,18 @@ async function boot(
           text({ name: "title" }),
           number({ name: "articleCount" }),
           text({ name: "note", localized: false }),
+          // A rule that reads a sibling: the price may be written only while
+          // the document's lock is open.
+          text({ name: "lockState", localized: false }),
+          number({
+            name: "price",
+            localized: false,
+            access: {
+              update: ({ data }) =>
+                (data as { lockState?: unknown } | undefined)?.lockState ===
+                "open",
+            },
+          }),
         ],
       }),
       // No languages: every field is the document's own.
@@ -312,6 +324,48 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(await pendingLocales(id)).toEqual([]);
     });
+
+    // A field rule that reads a sibling is judged on the change as it will
+    // be, the sibling included, not on the fields taken alone.
+    it.each([
+      ["leaves the lock open, so the price is taken", "open", ["price"], []],
+      ["closes the lock, so the price is left", "closed", [], ["price"]],
+    ])(
+      "judges a sibling-dependent rule on the whole change: English %s",
+      async (_label, lockState, taken, outOfDate) => {
+        const entries = await boot(dialect);
+        const id = await live(entries);
+        expect(
+          (await save(entries, id, "en", { lockState: "open", price: 10 }))
+            .success
+        ).toBe(true);
+        expect((await publish(entries, id, "en")).success).toBe(true);
+        expect(
+          (await save(entries, id, "en", { title: "en edited", lockState }))
+            .success
+        ).toBe(true);
+        expect((await save(entries, id, "es", { price: 13 })).success).toBe(
+          true
+        );
+        expect((await publish(entries, id, "es")).success).toBe(true);
+
+        const result = await entries.takeLiveSharedValues({
+          collectionName: COLLECTION,
+          entryId: id,
+          locale: "en",
+          // As the REST route asks: the document's update gate already
+          // passed, and the field rules still apply.
+          overrideAccess: false,
+          routeAuthorized: true,
+          user: { id: "u1" },
+        });
+
+        expect(result.data, JSON.stringify(result)).toEqual({
+          taken,
+          outOfDate,
+        });
+      }
+    );
 
     it("publishes a change whose shared values nobody else moved, its own edit included", async () => {
       const entries = await boot(dialect);

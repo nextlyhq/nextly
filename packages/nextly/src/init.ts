@@ -33,7 +33,10 @@
  * ```
  */
 
-import { warnIfCacheComponentsOn } from "./cache-components";
+import {
+  cacheComponentsEnabled,
+  warnIfRegisteredWithCacheComponentsOff,
+} from "./cache-components";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
 import { recordRegisteredLocalization } from "./di/registered-localization";
@@ -60,6 +63,7 @@ import {
 // detects code-first config edits and flips a reload flag; the next
 // getNextly() call drains the flag, calls reloadNextlyConfig, and then
 // returns the cached instance with refreshed schema state.
+import { recordCacheComponents } from "./runtime/cache/registered-read";
 import {
   ensureHmrListener,
   consumeHmrReloadFlag,
@@ -258,10 +262,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // call-site fix lives in the logMessage so it shows up in the dev console without
   // wire responses if this surfaces inside withErrorHandler.
   if (!options?.config) {
-    throw new NextlyError({
-      code: "CONFIGURATION_ERROR",
-      statusCode: 500,
-      publicMessage: "Server configuration error.",
+    throw NextlyError.configuration({
       logMessage:
         "getNextly() requires a `config` parameter. Import your config " +
         "and pass it: `getNextly({ config })`. If you are inside a " +
@@ -538,10 +539,7 @@ export async function getCachedNextly(): Promise<Nextly> {
     return instance;
   }
 
-  throw new NextlyError({
-    code: "CONFIGURATION_ERROR",
-    statusCode: 500,
-    publicMessage: "Server configuration error.",
+  throw NextlyError.configuration({
     logMessage:
       "getCachedNextly() called before initialization. Ensure " +
       "`getNextly({ config })` (or `createRegister(config)` from " +
@@ -576,20 +574,26 @@ export async function getCachedNextly(): Promise<Nextly> {
  *
  * @param host - What the app's own `instrumentation.ts` knows about the Next.js
  *               build it runs in. `cacheComponents` is the value Next.js
- *               inlines there for `process.env.__NEXT_CACHE_COMPONENTS`; Nextly
- *               warns when it says Cache Components is on, which it does not
- *               support yet.
+ *               inlines there for `process.env.__NEXT_CACHE_COMPONENTS`. With
+ *               it on, a cached read finding no `"use cache"` read function
+ *               registered is said once, naming the file to add. With it off,
+ *               or not passed, Nextly warns once at start: it supports only
+ *               Cache Components on.
  */
 export function createRegister(
   config: SanitizedNextlyConfig,
   host: { cacheComponents?: string | boolean } = {}
 ): () => Promise<void> {
   return async function register() {
-    // Before anything starts. Nextly cannot read this itself: Next.js inlines
-    // the setting only into code it bundles, and Nextly is a server-external
-    // package. `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;
+    // Kept for the cached reads: under Cache Components they go through the
+    // app's `"use cache"` function, and one that was never registered is said.
+    // Nextly cannot read this itself: Next.js inlines the setting only into
+    // code it bundles, and Nextly is a server-external package.
+    // `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;
     // `cache-components.test.ts` pins it, so a rename fails loudly there.
-    warnIfCacheComponentsOn(host.cacheComponents, "this Next.js build");
+    recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
+    // Before Nextly starts, so the line comes first in the server's output.
+    warnIfRegisteredWithCacheComponentsOff(host.cacheComponents);
     await getNextly({ config });
   };
 }

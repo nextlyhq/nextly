@@ -3,8 +3,7 @@
  *
  * The headings are the point of this archetype's tests. They come from the
  * RESULT, because the server strips fields a reader may not see before it
- * answers — so a table headed from the declaration would name a column no row
- * can fill and print the label of a field this reader was denied.
+ * answers — so the table names only the columns its rows can fill.
  */
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -14,21 +13,18 @@ import type {
   WidgetResult,
 } from "@admin/types/dashboard/widgets";
 
-import { tableAccepts, tableBody } from "../table";
+import { tableBody } from "../table";
 import { CardEmpty } from "../../frame/states";
 import { CardTierContext } from "../../frame/tier";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
-const widget = (select?: string[]): DashboardWidget =>
+// A declared table card, answered on the server: its columns are its answer's.
+const widget = (): DashboardWidget =>
   ({
     id: "acme/posts",
     title: "Recent posts",
     archetype: "table",
-    size: "lg",
-    query: {
-      source: "collection:posts",
-      op: "list",
-      ...(select && { select }),
-    },
+    size: gridBounds(6),
   }) as DashboardWidget;
 
 const listOf = (
@@ -58,41 +54,52 @@ describe("the table archetype", () => {
           { name: "publishedAt", label: "Published at" },
         ]
       ),
-      widget(["title", "publishedAt"])
+      widget()
     );
     expect(screen.getByText("Published at")).toBeInTheDocument();
     // The storage name is NOT what a reader sees when a label exists.
     expect(screen.queryByText("publishedAt")).not.toBeInTheDocument();
   });
 
-  it("falls back to the field name when the source has no label", () => {
-    // A field name is a poor heading, but it is true — which an invented one
-    // derived from the identifier would not be.
-    draw(listOf([{ slug: "hello" }], [{ name: "slug" }]), widget(["slug"]));
-    expect(screen.getByText("slug")).toBeInTheDocument();
+  it("falls back to the field name, written as the admin writes any field's, when the source has no label", () => {
+    // 🔴 The admin names a field one way on every surface (`lib/field-label`): the entry list
+    // heads this column "Slug", so a card heading it "slug" names one field two ways.
+    draw(
+      listOf(
+        [{ title: "Hello", slug: "hello" }],
+        [{ name: "title", label: "Title" }, { name: "slug" }]
+      ),
+      widget()
+    );
+    expect(
+      screen.getAllByRole("columnheader").map(node => node.textContent)
+    ).toEqual(["Title", "Slug"]);
   });
 
-  it("draws only the columns the SERVER described, not those selected", () => {
-    // The access case. `select` asked for two fields; the server answered with
-    // one, because the other carries a read rule denying this caller. Heading
-    // the table from the declaration would print "Salary" above a column every
-    // row leaves empty.
+  it("draws only the columns the SERVER described", () => {
+    // The access case. A field carrying a read rule denying this caller is
+    // stripped before the answer is built, so its column is never named.
     draw(
-      listOf([{ title: "Hello" }], [{ name: "title", label: "Title" }]),
-      widget(["title", "salary"])
+      listOf(
+        [{ title: "Hello", views: 3 }],
+        [
+          { name: "title", label: "Title" },
+          { name: "views", label: "Views" },
+        ]
+      ),
+      widget()
     );
     expect(screen.getByText("Title")).toBeInTheDocument();
     expect(screen.queryByText(/salary/i)).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("widget-table-heading")).toHaveLength(1);
+    expect(
+      screen.getAllByRole("columnheader").map(node => node.textContent)
+    ).toEqual(["Title", "Views"]);
   });
 
-  it("refuses rows the server did not describe rather than reading select", () => {
-    // The tempting fallback is the one thing that must not happen: heading the
-    // table from `query.select` would undo the server's access filtering.
-    const outcome = tableBody(
-      listOf([{ title: "Hello" }]),
-      widget(["title", "salary"])
-    );
+  it("refuses rows that carry nothing to head a column with", () => {
+    // Undescribed rows are headed by their first row's own keys; a row with
+    // none leaves no column to name.
+    const outcome = tableBody(listOf([{}]), widget());
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.message).toMatch(
       /did not describe/i
@@ -100,7 +107,7 @@ describe("the table archetype", () => {
   });
 
   it("refuses a count payload, naming both ops", () => {
-    const outcome = tableBody({ op: "count", total: 3 }, widget(["title"]));
+    const outcome = tableBody({ op: "count", total: 3 }, widget());
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.message).toMatch(
       /expected a table/i
@@ -109,34 +116,35 @@ describe("the table archetype", () => {
   });
 
   it("says nothing is there rather than drawing an empty table", () => {
-    draw(listOf([]), widget(["title"]));
+    draw(listOf([]), widget());
     // The frame's one empty state, not a table of nothing.
     expect(screen.getByTestId("card-empty")).toBeInTheDocument();
-    expect(screen.queryByTestId("widget-table")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("list-card-table")).not.toBeInTheDocument();
   });
 
-  it("caps the rows it draws", () => {
-    const many = Array.from({ length: 12 }, (_, i) => ({ title: `Row ${i}` }));
-    draw(listOf(many, [{ name: "title" }]), widget(["title"]));
-    expect(screen.getAllByTestId("widget-table-row")).toHaveLength(5);
+  it("draws the card's number of items, five when it names none", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      title: `Row ${i}`,
+      views: i,
+    }));
+    draw(listOf(many, [{ name: "title" }, { name: "views" }]), widget());
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(5);
   });
 
   it("does NOT stringify an object cell into [object Object]", () => {
     draw(
-      listOf([{ title: { en: "Localised" } }], [{ name: "title" }]),
-      widget(["title"])
+      listOf(
+        [{ title: { en: "Localised" }, views: { total: 3 } }],
+        [{ name: "title" }, { name: "views" }]
+      ),
+      widget()
     );
     expect(screen.queryByText(/object Object/)).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("widget-table-row")).toHaveLength(1);
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(1);
   });
 
   it("prints a zero rather than dropping it", () => {
-    draw(listOf([{ views: 0 }], [{ name: "views" }]), widget(["views"]));
+    draw(listOf([{ views: 0 }], [{ name: "views" }]), widget());
     expect(screen.getByText("0")).toBeInTheDocument();
-  });
-
-  it("refuses a declaration that selects nothing, before any query runs", () => {
-    expect(tableAccepts(widget())).toMatch(/selects no fields/i);
-    expect(tableAccepts(widget(["title"]))).toBeUndefined();
   });
 });

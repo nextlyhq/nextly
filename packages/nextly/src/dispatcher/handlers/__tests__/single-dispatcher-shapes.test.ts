@@ -9,7 +9,7 @@
 //                    updateSingleSchema (200)
 //   respondAction:   deleteSingle (no record to surface; slug echoed)
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The dispatcher resolves its services via DI helpers. Mock the helpers
 // up-front so each test can drop in a fake registry/entry pair without
@@ -23,6 +23,18 @@ vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn().mockReturnValue(undefined),
   getAdapterFromDI: vi.fn(),
 }));
+
+// Observed at the reader the removed-from-code mark derives its state from:
+// which entities a handler asks about, and that it hands back the answer.
+vi.mock(
+  "../../../domains/dynamic-collections/services/removed-from-code-state",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/dynamic-collections/services/removed-from-code-state")
+    >()),
+    readRemovedFromCodeStates: vi.fn(),
+  })
+);
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -58,6 +70,7 @@ import { SingleMetadataService } from "../../../domains/singles/services/single-
 import type { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
 import type { Logger } from "../../../shared/types";
 import {
+  getAdapterFromDI,
   getSingleEntryServiceFromDI,
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
@@ -67,6 +80,8 @@ import {
   keyCaller,
   sessionCaller,
 } from "../../__tests__/request-caller";
+import { readRemovedFromCodeStates } from "../../../domains/dynamic-collections/services/removed-from-code-state";
+import { publishDeclaredEntities } from "../../../domains/dynamic-collections/services/removed-from-code-writes";
 import { dispatchSingles } from "../single-dispatcher";
 
 /** Silent: these tests read Response shapes, not the log. */
@@ -82,6 +97,7 @@ type Registry = {
   registerSingle: ReturnType<typeof vi.fn>;
   updateMigrationStatus: ReturnType<typeof vi.fn>;
   getSingleBySlug: ReturnType<typeof vi.fn>;
+  getSingleForWrite: ReturnType<typeof vi.fn>;
   getAllSingles: ReturnType<typeof vi.fn>;
   updateSingle: ReturnType<typeof vi.fn>;
   deleteSingle: ReturnType<typeof vi.fn>;
@@ -99,6 +115,8 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
     // double without it fails the request rather than the assertion under test.
     updateMigrationStatus: vi.fn(),
     getSingleBySlug: vi.fn(),
+    // A schema save or delete reads the Single as stored, past the registry row cache.
+    getSingleForWrite: vi.fn(),
     // Answers "no single owns that table" so a create reaches the path under test. The handler
     // asks before it emits any DDL, so a double that cannot answer fails the request instead.
     getAllSingles: vi.fn().mockResolvedValue([]),
@@ -461,7 +479,7 @@ describe("dispatchSingles, mutations (respondMutation)", () => {
     };
     const updated = { ...existing, label: "Site (renamed)" };
     const registry = makeRegistry({
-      getSingleBySlug: vi.fn().mockResolvedValue(existing),
+      getSingleForWrite: vi.fn().mockResolvedValue(existing),
       updateSingle: vi.fn().mockResolvedValue(updated),
     });
     wireDi(registry, makeEntry());
@@ -495,7 +513,7 @@ describe("dispatchSingles, actions (respondAction)", () => {
       migrationStatus: "applied" as const,
     };
     const registry = makeRegistry({
-      getSingleBySlug: vi.fn().mockResolvedValue(existing),
+      getSingleForWrite: vi.fn().mockResolvedValue(existing),
       deleteSingle: vi.fn().mockResolvedValue(undefined),
     });
     wireDi(registry, makeEntry());
@@ -594,5 +612,99 @@ describe("dispatchSingles getSingleDocument — read access forwarding", () => {
       actorType: "apiKey",
       permissions: ["singles:read"],
     });
+  });
+});
+
+/**
+ * A listing or schema read of a collection or Single removed from code (a
+ * code row whose slug the published configuration no longer declares) marks
+ * it, with where its retirement stands, and leaves every other row's body as
+ * it was: a Builder row, a plugin row and a declared code row are never
+ * marked. The state is the reader's answer, handed back as it is.
+ */
+const fakeRetirementAdapter = {
+  dialect: "sqlite" as const,
+  tableExists: vi.fn(),
+  getDrizzle: vi.fn(),
+};
+
+function answerRemovedStates(): void {
+  vi.mocked(readRemovedFromCodeStates).mockReset();
+  vi.mocked(readRemovedFromCodeStates).mockImplementation(
+    async ({ entities }) =>
+      new Map(
+        entities.map(entity => [
+          `${entity.kind}:${entity.slug}`,
+          entity.kind === "single"
+            ? { state: "half-retired" as const }
+            : { state: "drop-pending" as const, migration: "0002_drop.sql" },
+        ])
+      )
+  );
+}
+
+describe("dispatchSingles, the removed-from-code mark", () => {
+  const rows = [
+    { slug: "settings", source: "code", tableName: "single_settings" },
+    { slug: "banner", source: "code", tableName: "single_banner" },
+    { slug: "footer", source: "ui", tableName: "single_footer" },
+  ];
+  const bodyOf = async (result: unknown) =>
+    (await (result as Response).json()) as Record<string, unknown>;
+
+  beforeEach(() => {
+    publishDeclaredEntities({
+      collections: [],
+      singles: [{ slug: "settings" }],
+    });
+    vi.mocked(getAdapterFromDI).mockReturnValue(fakeRetirementAdapter as never);
+    answerRemovedStates();
+    wireDi(
+      makeRegistry({
+        listSingles: vi.fn().mockResolvedValue({ data: rows, total: 3 }),
+        getSingleBySlug: vi.fn(async (slug: string) =>
+          rows.find(row => row.slug === slug)
+        ),
+      }),
+      makeEntry()
+    );
+  });
+
+  afterEach(() => {
+    publishDeclaredEntities(undefined);
+    vi.mocked(getAdapterFromDI).mockReset();
+  });
+
+  it("listSingles marks the removed Single with its state, and no other", async () => {
+    const body = await bodyOf(
+      await dispatchSingles("listSingles", {}, undefined)
+    );
+    const items = body.items as Array<Record<string, unknown>>;
+    expect(items.map(item => [item.slug, item.removedFromCode])).toEqual([
+      ["settings", undefined],
+      ["banner", true],
+      ["footer", undefined],
+    ]);
+    expect(items[1]!.removedFromCodeState).toEqual({ state: "half-retired" });
+    expect(
+      vi.mocked(readRemovedFromCodeStates).mock.calls[0]![0].entities
+    ).toEqual([{ kind: "single", slug: "banner", tableName: "single_banner" }]);
+  });
+
+  it("getSingleSchema marks the removed Single, and leaves another as it was", async () => {
+    expect(
+      await bodyOf(
+        await dispatchSingles("getSingleSchema", { slug: "banner" }, undefined)
+      )
+    ).toMatchObject({
+      slug: "banner",
+      removedFromCode: true,
+      removedFromCodeState: { state: "half-retired" },
+    });
+    expect(
+      await bodyOf(
+        await dispatchSingles("getSingleSchema", { slug: "footer" }, undefined)
+      )
+    ).not.toHaveProperty("removedFromCode");
   });
 });

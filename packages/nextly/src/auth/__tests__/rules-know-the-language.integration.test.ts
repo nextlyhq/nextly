@@ -29,6 +29,7 @@ import {
   grantTo,
   userWhoMay,
 } from "../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../__tests__/helpers/public-role";
 import { assertEntryPreviewable } from "../../api/preview-access";
 import {
   registeredWriteAsNamedLanguagesFor,
@@ -92,6 +93,9 @@ const PREVIEW_EDIT_CLOSED = "previeweditclosed";
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // The boot's seeding, which makes the Public role the visitor below is
+    // judged by.
+    seedPublic: true,
     localization: { locales: ["en", "fr", "de"], defaultLocale: "en" },
     fieldGroups: [
       defineFieldGroup({
@@ -260,6 +264,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   await grantTo(current, "user-1", "update", [...collections, SETTINGS]);
   await grantTo(current, "user-1", "create", collections);
   await grantTo(current, "user-1", "delete", collections);
+  // The visitor, judged by the Public role, holds the same, as a site admin
+  // would grant it, so for it too the rules alone decide what it is refused.
+  // Boot grants Public none of the writes, and no read whose rule answers
+  // `true` in no language, which would refuse the visitor before any rule
+  // was told a language.
+  await grantPublic(current, [
+    ...[...collections, SETTINGS].flatMap(slug => [
+      `read-${slug}`,
+      `update-${slug}`,
+    ]),
+    ...collections.flatMap(slug => [`create-${slug}`, `delete-${slug}`]),
+  ]);
   return current;
 }
 
@@ -282,6 +298,21 @@ async function seed(t: TestNextly, collection: string): Promise<string> {
       data: { body: "hello" },
     })
   );
+}
+
+/** An entry of `collection` holding content in English and in French. */
+async function seedWithFrench(
+  t: TestNextly,
+  collection: string
+): Promise<string> {
+  const id = await seed(t, collection);
+  await t.nextly.update({
+    collection,
+    id,
+    locale: "fr",
+    data: { body: "bonjour" },
+  } as never);
+  return id;
 }
 
 /** A visitor, and a signed-in user who is not a super-admin. */
@@ -402,10 +433,13 @@ describe.each(getConfiguredTestDialects())(
         expect((await write("en")).success).toBe(true);
       });
 
-      it("refuses a delete, which removes every language, where the rule closes one", async () => {
+      it("refuses a delete of an entry holding the language the rule closes, and deletes one holding none of it", async () => {
         const t = await boot(dialect);
-        const closed = await seed(t, NOTES);
-        const open = await seed(t, OPEN);
+        // A delete removes each language its entry holds, so it is asked in
+        // each: French content is refused, English content alone is not.
+        const closed = await seedWithFrench(t, NOTES);
+        const englishAlone = await seed(t, NOTES);
+        const open = await seedWithFrench(t, OPEN);
         const remove = (collectionName: string, entryId: string) =>
           handlerOf(t).deleteEntry({
             collectionName,
@@ -417,6 +451,7 @@ describe.each(getConfiguredTestDialects())(
         const refused = await remove(NOTES, closed);
         expect(refused.success).toBe(false);
         expect(refused.statusCode).toBe(403);
+        expect((await remove(NOTES, englishAlone)).success).toBe(true);
         // The control: the same delete under a rule open to every language.
         expect((await remove(OPEN, open)).success).toBe(true);
       });
@@ -542,17 +577,19 @@ describe.each(getConfiguredTestDialects())(
         ).rejects.toMatchObject({ statusCode: 403 });
       });
 
-      it("judges a delete in every language, so a rule open in one refuses it", async () => {
+      it("judges a delete in each language its entry holds, so a rule open in English alone refuses one holding French", async () => {
         const t = await boot(dialect);
-        const id = await seed(t, ENGLISH);
-        const refused = await handlerOf(t).deleteEntry({
-          collectionName: ENGLISH,
-          entryId: id,
-          overrideAccess: false,
-          ...context,
-        });
+        const remove = (entryId: string) =>
+          handlerOf(t).deleteEntry({
+            collectionName: ENGLISH,
+            entryId,
+            overrideAccess: false,
+            ...context,
+          });
+        const refused = await remove(await seedWithFrench(t, ENGLISH));
         expect(refused.success).toBe(false);
         expect(refused.statusCode).toBe(403);
+        expect((await remove(await seed(t, ENGLISH))).success).toBe(true);
       });
     });
 

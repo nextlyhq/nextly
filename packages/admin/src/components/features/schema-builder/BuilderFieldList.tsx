@@ -20,38 +20,45 @@ import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { builderRowId, builderRows } from "@admin/lib/builder/builder-rows";
+import {
+  positionAfter,
+  type FieldInsertPosition,
+} from "@admin/lib/builder/insert-field";
 
+import type { BuilderKind } from "./builder-config";
 import { EmptyState } from "./builder-field-list/EmptyState";
+import { InsertBetweenButton } from "./builder-field-list/InsertBetweenButton";
 import { NestedFieldGroup } from "./builder-field-list/NestedFieldGroup";
 import { SortableRow } from "./builder-field-list/SortableRow";
 import { SystemFieldsRow } from "./builder-field-list/SystemFieldsRow";
 import type { BuilderField } from "./types";
 
 type Props = {
+  /** The kind of entity being built; the empty state names it. */
+  kind: BuilderKind;
   fields: readonly BuilderField[];
-  /** Called when the user wants to insert a new field. index = position. */
-  onAddAt: (index: number) => void;
+  /**
+   * Opens the picker for a new field at `position`: the end of the list from
+   * its add button, before a row from the "+" between rows, inside a
+   * container from its own add or its "+", and right after a field from "/".
+   */
+  onAddAt: (position: FieldInsertPosition) => void;
   onEditField: (id: string) => void;
   onDeleteField: (id: string) => void;
   onDuplicateField: (id: string) => void;
   /** Reorder callback — wired by the parent's DndContext.onDragEnd. */
   onReorder: (orderedIds: readonly string[]) => void;
-  /**
-   * PR I: called when the user clicks "+ Add field inside <parent>" in
-   * a nested area. The page opens FieldPickerModal scoped to parentId.
-   */
-  onAddInsideParent: (parentId: string) => void;
   /** Lock all editing affordances for code-first / locked collections. */
   readOnly?: boolean;
 };
 
 export function BuilderFieldList({
+  kind,
   fields,
   onAddAt,
   onEditField,
   onDeleteField,
   onDuplicateField,
-  onAddInsideParent,
   readOnly = false,
 }: Props): JSX.Element {
   const systemFields = fields.filter(f => f.isSystem);
@@ -59,21 +66,29 @@ export function BuilderFieldList({
   // too, so the row a reader sees is the row they move.
   const rows = builderRows(fields);
   const userFields = rows.flat().map(item => item._field);
+  // "/" on a field adds right after it, in its own container.
+  const addAfter = (fieldId: string) => {
+    const position = positionAfter(fields, fieldId);
+    if (position) onAddAt(position);
+  };
 
   return (
     <div className="space-y-6 p-4">
       <SystemFieldsContainer systemFields={systemFields} />
 
       <div className="space-y-2">
-        {/* PR H feedback 2.2: top header dropped its "+ Add field"
-            button. The sole + Add affordance is the centered/bordered
-            box at the bottom. */}
+        {/* The toolbar's "Add field", a "+" between rows, "/" on a field
+            and the box at the bottom each open the picker at their place. */}
         <div className="text-xs uppercase tracking-wider text-muted-foreground">
           Your fields
         </div>
 
         {userFields.length === 0 ? (
-          <EmptyState onAdd={() => onAddAt(0)} readOnly={readOnly} />
+          <EmptyState
+            kind={kind}
+            onAdd={() => onAddAt({})}
+            readOnly={readOnly}
+          />
         ) : (
           // Why: dnd-kit's useSortable inside SortableRow needs an
           // enclosing SortableContext that knows the ordered list of
@@ -96,7 +111,15 @@ export function BuilderFieldList({
                   onlyField !== null &&
                   (onlyField.type === "repeater" || onlyField.type === "group");
                 return (
-                  <div key={`row-${idx}`}>
+                  <div key={`row-${idx}`} className="space-y-2">
+                    {idx > 0 && !readOnly && (
+                      <InsertBetweenButton
+                        before={rowFields[0]}
+                        onClick={() =>
+                          onAddAt({ beforeFieldId: rowFields[0].id })
+                        }
+                      />
+                    )}
                     <SortableRow
                       rowId={builderRowId(idx)}
                       fields={rowFields}
@@ -104,6 +127,10 @@ export function BuilderFieldList({
                       onEditField={onEditField}
                       onDeleteField={onDeleteField}
                       onDuplicateField={onDuplicateField}
+                      // Read-only rows take no "/": a locked card has no key
+                      // handling at all (SortableRow's isFieldLocked), so the
+                      // one guard is there rather than a second one here.
+                      onAddAfter={addAfter}
                     />
                     {isContainer && onlyField && (
                       <NestedFieldGroup
@@ -112,7 +139,7 @@ export function BuilderFieldList({
                         onEditField={onEditField}
                         onDeleteField={onDeleteField}
                         onDuplicateField={onDuplicateField}
-                        onAddInsideParent={onAddInsideParent}
+                        onAddAt={onAddAt}
                       />
                     )}
                   </div>
@@ -123,15 +150,10 @@ export function BuilderFieldList({
         )}
 
         {!readOnly && userFields.length > 0 && (
-          // Why: PR H feedback 2.2 -- always show the "+ Add field"
-          // affordance as a centered button inside a dashed bordered
-          // box (matches the empty state's visual treatment). The
-          // top header's button was removed since this one is now the
-          // single, prominent affordance.
+          // The end-of-list add, a centered button inside a dashed box that
+          // matches the empty state's.
           <div className="border border-dashed border-border rounded-md p-6 text-center mt-2">
-            <Button onClick={() => onAddAt(userFields.length)}>
-              + Add field
-            </Button>
+            <Button onClick={() => onAddAt({})}>+ Add field</Button>
           </div>
         )}
       </div>

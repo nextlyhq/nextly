@@ -13,6 +13,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import { isVirtualField } from "../../../collections/fields/virtual";
 import { toDbError } from "../../../database/errors";
+import { missingSchemaObject } from "../../../database/missing-column";
 // Database failures cross this boundary through `NextlyError.fromDatabaseError`,
 // and rethrow guards use `NextlyError.is(...)` so an error travelling through
 // the shim keeps its original type.
@@ -22,7 +23,10 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { keepDeniedAtStored } from "../../../shared/lib/denied-change";
-import { validateEntryData } from "../../../shared/lib/entry-validation";
+import {
+  validateEntryData,
+  type ValidationIssue,
+} from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldWriteAccess,
@@ -30,13 +34,22 @@ import {
   callerAccessGrants,
   getFieldFunctions,
   type CallerGrants,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
-import { hashPasswordFieldValues } from "../../../shared/lib/password-fields";
+import {
+  carryStoredPasswords,
+  type FieldGroupReach,
+  hashPasswordFieldValues,
+  NO_FIELD_GROUPS,
+  reachesPasswordField,
+  storedPasswordValues,
+} from "../../../shared/lib/password-fields";
+import { issuesTheReaderMaySee } from "../../../shared/lib/unreadable-field-issues";
 import type { Logger } from "../../../shared/types";
 import {
   COMPANION_LOCALE_COLUMN,
@@ -101,21 +114,35 @@ export interface FieldGroupWriteAccess {
   authenticatedScope?: AuthenticatedScope;
   /** The parent write's grants resolver, shared so roles are read once. */
   grants?: () => Promise<CallerGrants>;
+  /**
+   * Where a visitor's Public grants are read when no `grants` is handed in:
+   * the parent service's, so its gate and these rules read one Public role.
+   */
+  visitor?: VisitorGrantsLoader;
 }
 
 /**
  * The access a write made as `caller` hands its field-group save: the one
  * spelling of it, so every door states trust, user and key scope alike.
+ *
+ * `visitor` is the writing service's own Public-grants loader. A service over
+ * a database of its own passes it, so a visitor's field-group rules read the
+ * Public role that database records, as its gate does, rather than the
+ * process's, which may be unset or another instance's.
  */
-export function fieldGroupWriteAccessOf(caller: {
-  overrideAccess?: boolean;
-  user?: Record<string, unknown>;
-  authenticatedScope?: AuthenticatedScope;
-}): FieldGroupWriteAccess {
+export function fieldGroupWriteAccessOf(
+  caller: {
+    overrideAccess?: boolean;
+    user?: Record<string, unknown>;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  visitor?: VisitorGrantsLoader
+): FieldGroupWriteAccess {
   return {
     overrideAccess: caller.overrideAccess === true,
     user: caller.user,
     authenticatedScope: caller.authenticatedScope,
+    visitor,
   };
 }
 
@@ -213,7 +240,12 @@ function newWriteScope(
   // every instance it judges reads the caller's roles once.
   const grants =
     access.grants ??
-    callerAccessGrants(access.user, access.authenticatedScope, executor);
+    callerAccessGrants(
+      access.user,
+      access.authenticatedScope,
+      executor,
+      access.visitor
+    );
   return {
     executor,
     access: { ...access, grants },
@@ -269,49 +301,11 @@ function parsedColumn(value: unknown): unknown {
 }
 
 /**
- * Every password value `containers` hold, at any depth: the stored hashes an
- * update's restore may put back.
+ * Where the password walk follows the field groups an instance holds inline:
+ * the resolver of their fields, or none where its containers hold none.
  */
-function storedPasswordValues(
-  containers: Record<string, unknown>,
-  fields: readonly FieldConfig[]
-): Set<string> {
-  const found = new Set<string>();
-  collectPasswords(containers, fields, found);
-  return found;
-}
-
-/** {@link storedPasswordValues} for one value: a record or a list of them. */
-function collectPasswords(
-  value: unknown,
-  level: readonly FieldConfig[],
-  found: Set<string>
-): void {
-  for (const row of Array.isArray(value) ? value : [value]) {
-    if (row === null || typeof row !== "object") continue;
-    for (const field of level) {
-      collectFieldPasswords(row as Record<string, unknown>, field, found);
-    }
-  }
-}
-
-/** The password values one field of `record` holds, at any depth. */
-function collectFieldPasswords(
-  record: Record<string, unknown>,
-  field: FieldConfig,
-  found: Set<string>
-): void {
-  const { name, type, fields } = field as {
-    name?: unknown;
-    type?: unknown;
-    fields?: unknown;
-  };
-  if (typeof name !== "string") return;
-  const held = record[name];
-  if (type === "password" && typeof held === "string") found.add(held);
-  else if (Array.isArray(fields)) {
-    collectPasswords(held, fields as FieldConfig[], found);
-  }
+function reachOf(nested: ComponentFieldResolver | undefined): FieldGroupReach {
+  return nested ? { fieldsOf: nested } : NO_FIELD_GROUPS;
 }
 
 /**
@@ -1220,7 +1214,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
 
         // i18n: split translatable values out per instance (companion-owned). The
@@ -1357,7 +1353,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
         // Validation only: judge every instance, store none.
         if (validateOnly) continue;
@@ -1665,6 +1663,9 @@ export class FieldGroupMutationService extends BaseService {
             existingByTable.set(meta.tableName, rows);
           }
         } catch (error) {
+          // As in `getExistingInstancesInTx`: an unregistered table is never
+          // taken for one holding no instances.
+          if (isUnregisteredTable(error)) throw error;
           this.logger.debug(
             "Could not load component for multi-component field",
             {
@@ -1880,6 +1881,10 @@ export class FieldGroupMutationService extends BaseService {
         })
       );
     } catch (error) {
+      // A table this running instance has not registered is refused, not
+      // read as empty: taken for empty, the save judges an update a create
+      // and writes a second instance beside the one it could not see.
+      if (isUnregisteredTable(error)) throw error;
       this.logger.debug("Could not query component table in tx", {
         tableName,
         error: error instanceof Error ? error.message : String(error),
@@ -2006,9 +2011,39 @@ export class FieldGroupMutationService extends BaseService {
       )),
     ];
     if (issues.length > 0) {
-      throw NextlyError.validation({ errors: issues });
+      throw NextlyError.validation({
+        errors: await this.instanceIssuesTheWriterMaySee(issues, {
+          instance,
+          componentFields,
+          slug,
+          storedId,
+        }),
+      });
     }
-    await hashPasswordFieldValues(instance, componentFields, restoredHashes);
+    // After validation, which judges what the writer sent: each password an
+    // update left out of a container keeps its stored hash, whoever writes.
+    const keep = new Set(restoredHashes);
+    if (mode === "update" && slug !== undefined && storedId !== undefined) {
+      const reach = reachOf(nested);
+      if (reachesPasswordField(componentFields, reach)) {
+        const carried = carryStoredPasswords(
+          instance,
+          await this.storedContainerValues(slug, storedId, componentFields),
+          componentFields,
+          reach
+        );
+        for (const hash of carried) keep.add(hash);
+      }
+    }
+    // Through the field groups held inline in this one's containers too: their
+    // passwords are stored in those containers, which no save of their own
+    // reaches.
+    await hashPasswordFieldValues(
+      instance,
+      componentFields,
+      reachOf(nested),
+      keep
+    );
   }
 
   /**
@@ -2016,6 +2051,54 @@ export class FieldGroupMutationService extends BaseService {
    * what its defaults bring in for a new one; see `prepareInstanceForWrite`.
    * Returns the stored hashes an update's restore put back.
    */
+  /**
+   * `issues` as the writer may be told them: an instance can hold stored
+   * values, a promoted draft's among them, and an issue on a field of it the
+   * writer may not read is told without naming it or its value, by the field
+   * group's own read rules. Trusted writes are told every issue. A write
+   * with no caller to judge was already refused by the write rules
+   * (`applyInstanceWriteRules`), which ask the same.
+   */
+  private async instanceIssuesTheWriterMaySee(
+    issues: ValidationIssue[],
+    args: {
+      instance: ComponentInstanceData;
+      componentFields: FieldConfig[];
+      slug: string | undefined;
+      storedId: string | undefined;
+    }
+  ): Promise<ValidationIssue[]> {
+    const access = writeScope.getStore()?.access;
+    if (access === undefined || args.slug === undefined) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "field-group-write-unjudged",
+          fieldGroup: args.slug ?? null,
+        },
+      });
+    }
+    return issuesTheReaderMaySee(issues, {
+      kind: "fieldGroup",
+      slug: args.slug,
+      document: args.instance,
+      fields: args.componentFields,
+      entryId: args.storedId,
+      reader: {
+        user: access.user,
+        authenticatedScope: access.authenticatedScope,
+        overrideAccess: access.overrideAccess,
+        grants:
+          access.grants ??
+          callerAccessGrants(
+            access.user,
+            access.authenticatedScope,
+            undefined,
+            access.visitor
+          ),
+      },
+    });
+  }
+
   private async judgeInstanceForWrite(
     instance: ComponentInstanceData,
     componentFields: FieldConfig[],
@@ -2117,8 +2200,12 @@ export class FieldGroupMutationService extends BaseService {
     }
     await keepContainersAtStored(instance, stored, judge);
     // The stored hashes the write may put back, so the hashing pass leaves
-    // them as they are.
-    return storedPasswordValues(stored, componentFields);
+    // them as they are: at every depth, as the hashing pass reaches them.
+    return storedPasswordValues(
+      stored,
+      componentFields,
+      reachOf(await this.nestedComponentsOf(componentFields as FieldConfig[]))
+    );
   }
 
   /**
@@ -2174,6 +2261,20 @@ export class FieldGroupMutationService extends BaseService {
       status: false,
     });
     if (!schema) return undefined;
+    // Before its migration the companion is not there, and a translated
+    // container is still on the instance's own row. Off a transaction the
+    // verdict is resolved here, so a cold cache cannot skip the read; inside
+    // one only the cached verdict is read, which the write resolved before
+    // opening it.
+    const readiness =
+      scope.executor === undefined
+        ? await resolveCompanionReadiness(this.adapter, {
+            companionTableName: schema.companionTableName,
+            mainTableName: meta.tableName,
+            localizedColumns: schema.localizedFields.map(f => f.column),
+          })
+        : cachedCompanionReadiness(this.adapter, schema.companionTableName);
+    if (readiness !== "ready") return undefined;
     const rows = await scope.select(schema.companionTableName, {
       where: this.whereAnd({
         [COMPANION_PARENT_COLUMN]: instanceId,
@@ -2339,7 +2440,9 @@ export class FieldGroupMutationService extends BaseService {
       componentFields,
       existingEntry ? "update" : "create",
       args.req,
-      meta.slug
+      meta.slug,
+      // The stored row an existing block is, for its stored passwords.
+      existingEntry ? instanceId : undefined
     );
     return { meta, componentFields, instanceId, existingEntry };
   }
@@ -2386,4 +2489,12 @@ export class FieldGroupMutationService extends BaseService {
     }
     return [];
   }
+}
+
+/**
+ * Whether `error` is the refusal of a table this running instance has not
+ * registered, read as every not-migrated answer reads it.
+ */
+function isUnregisteredTable(error: unknown): boolean {
+  return missingSchemaObject(error)?.object === "unregistered";
 }

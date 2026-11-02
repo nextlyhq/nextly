@@ -23,7 +23,6 @@
  *
  * @module cli/commands/migrate-baseline
  */
-import { createHash } from "node:crypto";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -41,6 +40,7 @@ import {
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import {
   EMPTY_SNAPSHOT,
   planBaseline,
@@ -70,14 +70,12 @@ import {
   snapshotComparableTables,
 } from "../../domains/schema/pipeline/managed-tables";
 import { generateStatements } from "../../domains/schema/pipeline/sql-templates/index";
-import { describeError, NextlyError } from "../../errors/index";
+import { NextlyError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
-import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
+import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
 import { maybeForceUnlock } from "./migrate";
@@ -365,6 +363,8 @@ export interface BaselineCoreDeps {
    * project that configured a shorter takeover for far longer than it asked.
    */
   ttlSeconds?: number;
+  /** How long a held schema lock is waited for, in milliseconds. Absent, about a minute. */
+  lockWaitMs?: number;
   /**
    * Adopt a companion holding translated columns the config does not describe.
    *
@@ -414,7 +414,7 @@ export async function baselineCore(
   // AND a journal row, and a concurrent `migrate` deciding what to apply must
   // not see one without the other.
   const result = await withMigrateLock<BaselineCoreResult>(
-    db,
+    adapter as unknown as DrizzleAdapter,
     dialect,
     async () => {
       const latest = await loadLatestSnapshot(metaDir);
@@ -597,11 +597,10 @@ export async function baselineCore(
         eventType: "file_apply",
         source: "cli-migrate",
         filename: `${baseName}.sql`,
-        // `migrate:status` compares this against the file's checksum and reads
-        // a missing value as the empty string, so a row recorded without it
-        // reports the file as edited since it was applied — on a project that
-        // has just generated it and touched nothing.
-        sha256: createHash("sha256").update(sqlContent).digest("hex"),
+        // The checksum of the text written, as a run records it, so a later
+        // edit to the baseline stops `nextly migrate` and reads as modified
+        // in `migrate:status`.
+        sha256: checksumOf(sqlContent),
       });
       await repo.markApplied(eventId, {
         statementsExecuted: 0,
@@ -617,10 +616,16 @@ export async function baselineCore(
         tableCount: plan.snapshot.tables.length,
       };
     },
-    { ttlSeconds: deps.ttlSeconds }
+    // A held lock is waited for, about a minute, and then the run stops naming its holder.
+    {
+      command: "nextly migrate:baseline",
+      mode: "wait",
+      waitMs: deps.lockWaitMs,
+      ttlSeconds: deps.ttlSeconds,
+    }
   );
 
-  // `withMigrateLock` reports `ran: false` only in "wait" mode. Adoption is
+  // `withMigrateLock` reports `ran: false` only for an `isSettled` wait, which this does not pass. Adoption is
   // never a case where someone else did the work: nobody else is going to
   // baseline this database, so returning here would mean reporting success for
   // a history that was never started.
@@ -642,11 +647,7 @@ export async function runMigrateBaseline(
   const { logger } = context;
   logger.header("Migrate Baseline");
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid || !dbValidation.dialect) {
-    for (const err of dbValidation.errors ?? []) logger.error(err);
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
   const dialect = dbValidation.dialect;
 
   const configResult = await loadConfig({
@@ -821,8 +822,7 @@ export function registerMigrateBaselineCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

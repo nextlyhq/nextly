@@ -34,6 +34,21 @@ export type RegisteredDocumentView = NonNullable<
  */
 export type DocumentKind = "collection" | "single";
 
+/**
+ * The query keys a document view's address uses to name a part of the
+ * document: `field`, which of its fields the view edits, and `section`, the
+ * part of that field it opens at. The form does not read them, so moving
+ * between the document's edit address and its views with or without them stays
+ * on the same document, and leaving a view drops them.
+ *
+ * One list for both of those readers. Kept apart, the leave guard came to
+ * accept a key the way back still carried, or the reverse.
+ */
+export const DOCUMENT_VIEW_ADDRESS_PARAMS: readonly string[] = [
+  "field",
+  "section",
+];
+
 const registry = new Map<string, RegisteredDocumentView>();
 
 /**
@@ -93,8 +108,13 @@ interface AddressableField<F extends object> {
  * The fields a document addresses at its top level: its own, plus those of any
  * UNNAMED group, which is presentation only and adds nothing to their paths. A
  * named group or a repeater moves its fields down a level, out of reach.
+ *
+ * Raw config can hold a cycle, an unnamed group that lays itself out directly
+ * or through another, so a group already open on its own path (`within`) is
+ * not walked again: without that, every caller recursed until the stack ran
+ * out.
  */
-function addressableFieldsWithin<F extends object>(
+export function addressableFieldsWithin<F extends object>(
   fields: readonly F[] | undefined,
   within: F[] = []
 ): AddressableField<F>[] {
@@ -104,6 +124,7 @@ function addressableFieldsWithin<F extends object>(
       field.type === "group" &&
       !("name" in field && typeof field.name === "string" && field.name !== "");
     if (!unnamedGroup) return [{ field, within }];
+    if (within.includes(field)) return [];
     const children = "fields" in field ? field.fields : undefined;
     // A group's children are declarations of the same kind as the group, so
     // they are read as the caller's field type.

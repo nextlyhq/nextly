@@ -28,18 +28,29 @@ import { useEffect, useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
 
-import type { AdvancedField } from "../builder-config";
+import {
+  BUILDER_KIND_NOUN,
+  type AdvancedField,
+  type BuilderKind,
+} from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 
 const SHOW_SYSTEM_STORAGE_KEY = "builder.showSystemInternals";
 
 type Props = {
   fields: readonly AdvancedField[];
+  /** The kind being configured; the webhook help names it. */
+  kind: BuilderKind;
   values: BuilderSettingsValues;
   onChange: (next: BuilderSettingsValues) => void;
 };
 
-export function AdvancedTab({ fields, values, onChange }: Props): JSX.Element {
+export function AdvancedTab({
+  fields,
+  kind,
+  values,
+  onChange,
+}: Props): JSX.Element {
   const set = <K extends keyof BuilderSettingsValues>(
     key: K,
     value: BuilderSettingsValues[K]
@@ -134,7 +145,9 @@ export function AdvancedTab({ fields, values, onChange }: Props): JSX.Element {
         <SwitchRow
           ariaLabel="Webhook recording"
           label="Webhook recording"
-          help="Send this entity's changes to subscribed webhook endpoints. On by default; turn it off for content that holds personal data, such as form submissions, so payloads never leave your app."
+          // Names the kind rather than "entity", which is not a word the
+          // person configuring it uses for what they are editing.
+          help={`Send this ${BUILDER_KIND_NOUN[kind]}'s changes to subscribed webhook endpoints. On by default; turn it off for content that holds personal data, such as form submissions, so payloads never leave your app.`}
           checked={values.webhooks ?? true}
           onChange={v => set("webhooks", v)}
         />

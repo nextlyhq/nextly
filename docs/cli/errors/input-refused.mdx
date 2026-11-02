@@ -1,0 +1,23 @@
+---
+title: INPUT_REFUSED
+description: "A command refused something it was given or read as not valid, for the reason its message names."
+---
+
+## Cause
+
+A command refused something it was given or read as not valid, for the reason its message names.
+
+A check refused something the command was given or read, and no other code describes that refusal more closely. The What and Why lines are the check's own words.
+
+## Fix
+
+Correct what the message names, then run the command again. Run it with `--verbose` to see where it was refused.
+
+## Example
+
+```text
+✗ The block "hero" declares the prop "size" twice.
+  Why:  Each prop name may appear once.
+  Next: Correct what the message names, then run the command again; `--verbose` shows where it was refused.
+  Docs: https://nextlyhq.com/docs/cli/errors/input-refused  (INPUT_REFUSED)
+```

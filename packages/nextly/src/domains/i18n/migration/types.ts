@@ -105,4 +105,10 @@ export interface CompanionMigrationSpec {
    * publishes independently. On an ENABLE seed, existing rows carry the main row's `status`.
    */
   status?: boolean;
+  /**
+   * The translated fields a `unique` file's UP indexes, each with its companion column. Recorded
+   * so `nextly migrate` can refuse the file, before any statement, where a language already holds
+   * a value twice or the server cannot build the index. Present only on a `unique` file.
+   */
+  unique?: { field: string; column: string }[];
 }

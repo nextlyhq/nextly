@@ -238,6 +238,17 @@ const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
   })
 );
 
+// A success toast: its text on its own surface, both handed to the toast
+// library by the Toaster in place of the library's own colours.
+const TOAST: Pairing[] = [
+  {
+    fg: "--nx-toast-success-text",
+    bg: "--nx-toast-success-bg",
+    kind: "text",
+    label: "success toast text on its surface",
+  },
+];
+
 // The 600 shade is also painted directly on the muted surface, in the entry
 // meta strip, rather than only on its own tint. It is a `color-mix()` step
 // rather than the base token, so the base pairing above does not cover it: it
@@ -256,6 +267,26 @@ const STATUS_SHADE_ON_SURFACE: Pairing[] = STATUSES.flatMap((s): Pairing[] =>
     label: `${s} 600 on ${name} (light)`,
   }))
 );
+
+// Destructive words on a plain surface where the base red reads under 4.5:1
+// in light mode (contrast/accepted.ts): the media details' Delete, failed-save
+// and focus point messages take the 700 shade in light mode and the base token
+// in dark, which the status text pairs above already assert. These are the
+// light surfaces they sit on: the panel's card, the viewer's page and the
+// muted backdrop around the viewer's image.
+const DESTRUCTIVE_TEXT_ON_LIGHT_SURFACE: Pairing[] = (
+  [
+    ["--nx-card", "card"],
+    ["--nx-background", "page"],
+    ["--nx-muted", "muted"],
+  ] as const
+).map(([bg, name]) => ({
+  fg: "--color-destructive-700",
+  bg,
+  kind: "text" as const,
+  mode: "light" as const,
+  label: `destructive 700 on ${name} (light)`,
+}));
 
 // Tinted status surfaces (badges, alerts, chips). These are `color-mix()`
 // shades, and the light/dark shade choices flip, so each is mode-specific. The
@@ -549,7 +580,9 @@ export const PAIRINGS: Pairing[] = [
   ...CODE_TEXT,
   ...STATUS_TEXT,
   ...STATUS_ON_SOLID,
+  ...TOAST,
   ...STATUS_SHADE_ON_SURFACE,
+  ...DESTRUCTIVE_TEXT_ON_LIGHT_SURFACE,
   ...STATUS_SHADES,
   ...ALERT_ACCENT,
   ...PRIMARY_BADGE,

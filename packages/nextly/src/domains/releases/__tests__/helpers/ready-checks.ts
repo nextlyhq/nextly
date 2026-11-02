@@ -20,7 +20,7 @@ export { perEntry };
 
 export const READY_CHECKS: ReleaseDocumentChecks = {
   actingAs: async authorId => ({ id: authorId, roles: [] }),
-  mayPerform: async () => true,
+  mayPerform: async (_user, _scope, _action, entryIds) => new Set(entryIds),
   existing: async refs => new Set(refs.map(documentRefKey)),
   publishProblems: perEntry(() => []),
   heldDraftLocales: perEntry(() => []),

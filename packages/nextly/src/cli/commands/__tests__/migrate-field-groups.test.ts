@@ -12,7 +12,7 @@
  * total, or quietly dropped `basis` and `lock`, would satisfy every "it ran" assertion while giving
  * the operator less than the engine took care to provide.
  */
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 
 const runFieldGroupMigration = vi.fn();
 
@@ -23,7 +23,13 @@ vi.mock("../../../domains/field-groups/migration/run", () => ({
 const setTableResolver = vi.fn();
 
 vi.mock("../../utils/adapter", () => ({
-  validateDatabaseEnv: () => ({ valid: true, errors: [] }),
+  // As the real check answers for a valid environment: the dialect and URL come with it.
+  validateDatabaseEnv: () => ({
+    valid: true,
+    errors: [],
+    dialect: "postgresql",
+    databaseUrl: "postgres://localhost/test",
+  }),
   withAdapter: async (
     work: (adapter: unknown) => Promise<void>
   ): Promise<void> => {
@@ -35,6 +41,13 @@ vi.mock("../../utils/adapter", () => ({
 }));
 
 import { runMigrateFieldGroups } from "../migrate-field-groups";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 /** Everything printed, in order, so the report can be asserted by content. */
 const printed: string[] = [];

@@ -6,7 +6,7 @@
  * `create-admin.integration.test.ts`.
  */
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CommandContext } from "../../program";
 import {
@@ -23,6 +23,18 @@ import {
 const STRONG = "Correct-Horse-Battery-9";
 
 const DETAILS = { email: "ada@example.com", name: "Ada", password: STRONG };
+
+/** What the command printed on standard error, where a refusal's error shape goes. */
+let stderr: string[] = [];
+beforeEach(() => {
+  stderr = [];
+  vi.spyOn(console, "error").mockImplementation((message: unknown) => {
+    stderr.push(String(message));
+  });
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /** A setup whose every step is recorded, in order. */
 function recordingSetup(
@@ -59,7 +71,13 @@ function context(): CommandContext & {
   };
 } {
   return {
-    logger: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    logger: {
+      error: vi.fn(),
+      success: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      getOptions: () => ({ noColor: true }),
+    },
     options: {},
     cwd: "/app",
   } as unknown as CommandContext & {
@@ -218,7 +236,8 @@ describe("runCreateAdmin", () => {
     // before.
     expect(run.connect).toHaveBeenCalled();
     expect(code).toBe(1);
-    expect(ctx.logger.error).toHaveBeenCalledWith("That password is too weak:");
+    expect(stderr.join("\n")).toContain("That password is too weak");
+    expect(stderr.join("\n")).toContain("(ADMIN_PASSWORD_TOO_WEAK)");
   });
 
   it("names the variable when no password can be had, and connects to nothing", async () => {
@@ -230,9 +249,8 @@ describe("runCreateAdmin", () => {
       run
     );
     expect(code).toBe(1);
-    expect(ctx.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining(ADMIN_PASSWORD_ENV)
-    );
+    expect(stderr.join("\n")).toContain(ADMIN_PASSWORD_ENV);
+    expect(stderr.join("\n")).toContain("(ADMIN_PASSWORD_MISSING)");
     expect(run.connect).not.toHaveBeenCalled();
   });
 
@@ -242,6 +260,7 @@ describe("runCreateAdmin", () => {
     expect(
       await runCreateAdmin({ email: "not-an-email", name: "Ada" }, ctx, run)
     ).toBe(1);
+    expect(stderr.join("\n")).toContain("(ADMIN_EMAIL_INVALID)");
     expect(run.connect).not.toHaveBeenCalled();
   });
 
@@ -261,9 +280,8 @@ describe("runCreateAdmin", () => {
         run
       )
     ).toBe(1);
-    expect(ctx.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("Setup is already complete")
-    );
+    expect(stderr.join("\n")).toContain("Setup is already complete");
+    expect(stderr.join("\n")).toContain("(SETUP_ALREADY_COMPLETE)");
   });
 });
 

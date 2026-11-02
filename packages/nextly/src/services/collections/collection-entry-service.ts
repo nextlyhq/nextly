@@ -24,6 +24,7 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
 import {
   everyLanguageOf,
+  queryWriteLanguagesFor,
   readLanguagesFor,
   withRuleLanguage,
   writeAsNamedLanguagesFor,
@@ -70,7 +71,7 @@ import type { Logger } from "../shared";
 
 import type { CollectionRelationshipService } from "./collection-relationship-service";
 import type { WhereFilter } from "./query-operators";
-import type { TrustBound } from "./trust-grant";
+import type { HookExemptRead, TrustBound } from "./trust-grant";
 
 export {
   type CollectionServiceResult,
@@ -236,7 +237,11 @@ export class CollectionEntryService extends BaseService {
       this.hookService,
       fieldGroupDataService,
       localizationSource,
-      releaseVisibility
+      releaseVisibility,
+      // The write's own judgement, asked when the read shows a pending change
+      // to a caller who may publish and not update. Read when a read asks it,
+      // after the mutation service below exists.
+      args => this.mutationService.workingDraftPromotionRefused(args)
     );
     this.mutationService = new CollectionMutationService(
       adapter,
@@ -307,6 +312,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
       refusedFilter(params.where) ??
@@ -347,6 +354,8 @@ export class CollectionEntryService extends BaseService {
      * one thing nobody re-checks is an option that appears not to exist.
      */
     status?: "published" | "draft" | "all";
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
       refusedFilter(params.where) ??
@@ -443,6 +452,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }) {
     return withRuleLanguage(this.readLanguages(params), () =>
       this.queryService.getEntry(params)
@@ -704,6 +715,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** API-key scope; judges the update gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
   }
@@ -723,6 +736,21 @@ export class CollectionEntryService extends BaseService {
   }): Promise<Map<string, ValidationIssue[]>> {
     return withRuleLanguage(everyLanguageOf(this.localization), () =>
       this.mutationService.releasePublishIssues(params)
+    );
+  }
+
+  /**
+   * Which of these entries a write of the action by this caller would find
+   * inside its rule's filter, judged as a write to every language is. See the
+   * mutation service.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(
+    params: Parameters<CollectionMutationService["entriesWithinWriteFilter"]>[0]
+  ): ReturnType<CollectionMutationService["entriesWithinWriteFilter"]> {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.entriesWithinWriteFilter(params)
     );
   }
 
@@ -904,6 +932,14 @@ export class CollectionEntryService extends BaseService {
    */
   async warmLocalizedReadiness(collectionName: string): Promise<void> {
     return this.mutationService.warmLocalizedReadiness(collectionName);
+  }
+
+  /**
+   * Rebuild the record of which media items every entry of a collection uses,
+   * for `nextly media reindex-usage`. Returns how many entries it read.
+   */
+  async rebuildMediaUsage(collectionName: string): Promise<number> {
+    return this.mutationService.rebuildMediaUsage(collectionName);
   }
 
   /**
@@ -1142,11 +1178,12 @@ export class CollectionEntryService extends BaseService {
     // Thrown, as the bulk service throws any request-level refusal: there are
     // no items yet to report a partial failure on.
     assertWellFormedFilter(params.where, { allowTranslated: true });
-    // It writes the default language, but its filter may choose the rows by
-    // any language's translation state, so it is told every language: the
-    // REST gate, which cannot see the filter in the body, tells the same.
+    // It writes the default language, so its rule judges that one, while
+    // its filter may choose the rows by any language's translation state, so
+    // it is told every language as well: the REST gate, which cannot see the
+    // filter in the body, tells the same.
     const result = await withRuleLanguage(
-      everyLanguageOf(this.localization),
+      queryWriteLanguagesFor(this.localization),
       () => this.bulkService.bulkUpdateByQuery(params, options)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);

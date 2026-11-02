@@ -6,17 +6,30 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   claimWorker,
+  createWorkerDatabases,
   describeClaims,
   integrationWorkers,
+  provisionServers,
   releaseWorker,
   workerDatabaseName,
   workerDatabaseUrl,
   workerPoolId,
+  pointAtWorkerDatabases,
 } from "./worker-database-guard";
+
+// The MySQL driver, as the admin connection opens it: one connection whose
+// queries and close a case can watch.
+const mysqlConnection = vi.hoisted(() => ({
+  query: vi.fn(async () => []),
+  end: vi.fn(async () => {}),
+}));
+vi.mock("mysql2/promise", () => ({
+  createConnection: async () => mysqlConnection,
+}));
 
 describe("integrationWorkers", () => {
   it("runs one worker unless asked for more", () => {
@@ -35,11 +48,7 @@ describe("integrationWorkers", () => {
   });
 
   it("refuses more than one worker on a database a URL names, which every worker would share", () => {
-    for (const name of [
-      "TEST_MYSQL_URL",
-      "TEST_SQLITE_URL",
-      "TEST_DATABASE_URL",
-    ]) {
+    for (const name of ["TEST_SQLITE_URL", "TEST_DATABASE_URL"]) {
       expect(
         () =>
           integrationWorkers({ NEXTLY_INTEGRATION_WORKERS: "2", [name]: "x" }),
@@ -55,25 +64,76 @@ describe("integrationWorkers", () => {
     ).toBe(1);
   });
 
-  it("allows more than one worker on PostgreSQL, where each gets a database of its own", () => {
+  it("allows more than one worker on PostgreSQL and MySQL, where each gets a database of its own", () => {
     expect(
       integrationWorkers({
         NEXTLY_INTEGRATION_WORKERS: "2",
         TEST_POSTGRES_URL: "postgres://u:p@localhost:5432/nextly_test",
+        TEST_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
       })
     ).toBe(2);
     // Still refused beside a URL every worker would share.
     expect(() =>
       integrationWorkers({
         NEXTLY_INTEGRATION_WORKERS: "2",
-        TEST_POSTGRES_URL: "postgres://u:p@localhost:5432/nextly_test",
         TEST_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
+        TEST_SQLITE_URL: "file:./one.db",
       })
-    ).toThrow("TEST_MYSQL_URL");
+    ).toThrow("TEST_SQLITE_URL");
   });
 });
 
-describe("a worker's PostgreSQL database", () => {
+describe("pointing a test file at its worker's databases", () => {
+  const run = {
+    NEXTLY_INTEGRATION_WORKERS: "2",
+    NEXTLY_INTEGRATION_POSTGRES_URL:
+      "postgres://u:p@localhost:5432/nextly_test",
+    NEXTLY_INTEGRATION_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
+  };
+
+  it("moves each server's URL to the worker's database on it", () => {
+    const env: Record<string, string | undefined> = {
+      ...run,
+      VITEST_POOL_ID: "2",
+    };
+    pointAtWorkerDatabases(env);
+    expect(env.TEST_POSTGRES_URL).toBe(
+      "postgres://u:p@localhost:5432/nextly_test_pool2"
+    );
+    expect(env.TEST_MYSQL_URL).toBe(
+      "mysql://u:p@localhost:3306/nextly_test_pool2"
+    );
+  });
+
+  it("derives from the run's URL, so a second file in the process lands on the same database", () => {
+    const env: Record<string, string | undefined> = {
+      ...run,
+      VITEST_POOL_ID: "1",
+    };
+    pointAtWorkerDatabases(env);
+    pointAtWorkerDatabases(env);
+    expect(env.TEST_MYSQL_URL).toBe(
+      "mysql://u:p@localhost:3306/nextly_test_pool1"
+    );
+  });
+
+  it("leaves a run whose setup made no databases as it is", () => {
+    const env: Record<string, string | undefined> = {
+      TEST_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
+      VITEST_POOL_ID: "3",
+    };
+    pointAtWorkerDatabases(env);
+    expect(env.TEST_MYSQL_URL).toBe("mysql://u:p@localhost:3306/nextly_test");
+  });
+
+  it("refuses a worker the setup made no database for", () => {
+    expect(() =>
+      pointAtWorkerDatabases({ ...run, VITEST_POOL_ID: "3" })
+    ).toThrow("has no database of its own");
+  });
+});
+
+describe("a worker's server database", () => {
   it("is the run's database suffixed with the pool id, on the same server", () => {
     expect(workerDatabaseName("nextly_test_w7", 2)).toBe(
       "nextly_test_w7_pool2"
@@ -141,6 +201,95 @@ describe("claimWorker", () => {
     // The id is free for the next process in the slot.
     claimWorker(dir, "1", 300, () => true);
     expect(readFileSync(join(dir, "pool-1"), "utf8")).toBe("300");
+  });
+});
+
+describe("createWorkerDatabases", () => {
+  it("closes a MySQL connection whose session setting is refused, then fails", async () => {
+    // The connection opened, so it is closed before the error goes on;
+    // otherwise its socket keeps the run's process alive.
+    mysqlConnection.query.mockRejectedValueOnce(new Error("setting refused"));
+    mysqlConnection.end.mockClear();
+    await expect(
+      createWorkerDatabases("mysql", "mysql://u@localhost/nextly_test", 2)
+    ).rejects.toThrow("setting refused");
+    expect(mysqlConnection.end).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the worker databases it made when a later one fails, closes, then fails", async () => {
+    // A setup that throws returns no teardown, so nothing else would drop
+    // pool 1's database when pool 2's cannot be created. Like a real driver,
+    // the connection refuses a query once closed, and only the statements it
+    // ran are recorded: a drop issued after the close goes unrecorded.
+    const statements: string[] = [];
+    let ended = false;
+    const open = async () => ({
+      query: async (sql: string) => {
+        if (ended) throw new Error("connection closed");
+        statements.push(sql);
+        if (/CREATE DATABASE/i.test(sql) && sql.includes("_pool2")) {
+          throw new Error("no room for pool 2");
+        }
+        return [];
+      },
+      end: async () => {
+        ended = true;
+      },
+    });
+    await expect(
+      createWorkerDatabases(
+        "postgresql",
+        "postgres://u@localhost/nextly_test",
+        2,
+        open
+      )
+    ).rejects.toThrow("no room for pool 2");
+    const afterFailure = statements.slice(
+      statements.findIndex(
+        sql => /CREATE DATABASE/i.test(sql) && sql.includes("_pool2")
+      ) + 1
+    );
+    expect(afterFailure).toHaveLength(1);
+    expect(afterFailure[0]).toMatch(/DROP DATABASE/i);
+    expect(afterFailure[0]).toContain("nextly_test_pool1");
+    expect(ended).toBe(true);
+  });
+});
+
+describe("provisionServers", () => {
+  it("drops the databases made on one server when the next server's fail, then fails", async () => {
+    // A setup that throws returns no teardown, so nothing else would drop
+    // the first server's databases or close its admin connection.
+    const env: Record<string, string | undefined> = {
+      TEST_POSTGRES_URL: "postgres://u@localhost/nextly_test",
+      TEST_MYSQL_URL: "mysql://u@localhost/nextly_test",
+    };
+    const dropped: string[] = [];
+    const create = async (dialect: "postgresql" | "mysql") => {
+      if (dialect === "mysql") throw new Error("mysql refused");
+      return async () => {
+        dropped.push(dialect);
+      };
+    };
+    await expect(provisionServers(env, 2, create)).rejects.toThrow(
+      "mysql refused"
+    );
+    expect(dropped).toEqual(["postgresql"]);
+  });
+
+  it("makes nothing for one worker, and keeps each named server's URL as its base", async () => {
+    const env: Record<string, string | undefined> = {
+      TEST_MYSQL_URL: "mysql://u@localhost/nextly_test",
+    };
+    const made: string[] = [];
+    const create = async (dialect: "postgresql" | "mysql") => {
+      made.push(dialect);
+      return async () => {};
+    };
+    expect(await provisionServers(env, 1, create)).toEqual([]);
+    expect(await provisionServers(env, 2, create)).toHaveLength(1);
+    expect(made).toEqual(["mysql"]);
+    expect(env.NEXTLY_INTEGRATION_MYSQL_URL).toBe(env.TEST_MYSQL_URL);
   });
 });
 

@@ -1,0 +1,24 @@
+---
+title: CORE_TABLES_NOT_RECONCILED
+description: "The database's existing core tables could not be brought up to date before the sync."
+---
+
+## Cause
+
+The database's existing core tables could not be brought up to date before the sync.
+
+Before a sync, `nextly db:sync` brings an existing database's system tables up to date with the version of Nextly installed, adding the ones it introduced since. That step failed, so the sync did not run.
+
+## Fix
+
+- Run `nextly migrate` to repair the schema, then run `nextly db:sync` again.
+- Run `nextly db:sync --verbose` to see the statement that failed.
+
+## Example
+
+```text
+✗ Core tables could not be reconciled.
+  Why:  Creating the system tables this version of Nextly adds failed on the existing database; `--verbose` shows the statement that failed.
+  Next: Run `nextly migrate` to repair the schema before syncing.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-tables-not-reconciled  (CORE_TABLES_NOT_RECONCILED)
+```

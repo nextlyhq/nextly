@@ -16,6 +16,11 @@ import { publicApi } from "../api/publicApi";
 
 /** What setup-status answers, as the admin reads it. */
 interface SetupStatus {
+  /**
+   * Whether the server answered. False only on the fail-safe path below, where
+   * `isSetup` and `requiresSetupToken` are defaults rather than the server's.
+   */
+  answered: boolean;
   isSetup: boolean;
   /** Whether setup needs its setup token: in production, until it is done. */
   requiresSetupToken: boolean;
@@ -47,17 +52,39 @@ async function fetchSetupStatus(): Promise<SetupStatus> {
     // package doesn't carry a NextlyError dependency, and a bare throw
     // would just be local control flow with no payload.
     return {
+      answered: typeof result?.isSetup === "boolean",
       isSetup: typeof result?.isSetup === "boolean" ? result.isSetup : true,
       requiresSetupToken: result?.requiresSetupToken !== false,
     };
   } catch {
-    return { isSetup: true, requiresSetupToken: true };
+    return { answered: false, isSetup: true, requiresSetupToken: true };
   }
 }
 
 function readSetupStatus(): Promise<SetupStatus> {
-  setupStatusCache ??= fetchSetupStatus();
-  return setupStatusCache;
+  if (setupStatusCache) return setupStatusCache;
+  const pending = fetchSetupStatus().then(status => {
+    // A fail-safe default is not an answer to keep: the server may be starting,
+    // and the next reader should ask it again rather than inherit the default
+    // for the rest of the page's life.
+    if (!status.answered && setupStatusCache === pending) {
+      setupStatusCache = null;
+    }
+    return status;
+  });
+  setupStatusCache = pending;
+  return pending;
+}
+
+/**
+ * Setup status as the server gave it, with `answered: false` where it gave
+ * none, for a reader that must not mistake the fail-safe for an answer.
+ */
+export function readSetupState(): Promise<{
+  answered: boolean;
+  isSetup: boolean;
+}> {
+  return readSetupStatus();
 }
 
 /** Whether initial setup has been completed. */

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
+import { componentImportMapPaths } from "../../plugins/codegen/component-import-map";
 import { NO_PLUGIN_CONSENT } from "../../plugins/plugin-consent";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type { SingleConfig } from "../../singles/config/types";
@@ -115,5 +116,30 @@ describe("mergeSetupResultIntoConfig (CLI fold — D3/D12/D50)", () => {
 
     expect(result.webhookRetention).toBeNull();
     expect(result.webhookAuditEnabled).toBe(true);
+  });
+
+  it("carries the site dashboard a plugin setup() adds, so the component map lists its widget", () => {
+    // The boot registers the dashboard of the transformed config; `generate:types` and its
+    // `--check` list components from this merge, so a widget a setup() adds must reach it.
+    const notes = {
+      id: "site/notes",
+      title: "Notes",
+      description: "The team's notes.",
+      size: { default: { w: 6, h: 3 } },
+      load: async () => ({ notes: [] }),
+      view: { component: "./dashboard/notes#NotesCard" },
+      isEmpty: () => true,
+    };
+    const transformed = {
+      ...base(),
+      plugins: [],
+      admin: { dashboard: { widgets: [notes] } },
+    } as unknown as SanitizedNextlyConfig;
+
+    const result = mergeSetupResultIntoConfig(base(), transformed, []);
+
+    expect(
+      componentImportMapPaths(result.plugins ?? [], result.admin?.dashboard)
+    ).toEqual(["./dashboard/notes#NotesCard"]);
   });
 });

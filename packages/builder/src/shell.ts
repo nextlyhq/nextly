@@ -130,7 +130,10 @@ export type { CanvasPreview, CanvasProps } from "./canvas";
  * with this one about the merge rule for a patch.
  */
 export { InspectorPanel } from "./inspector-panel";
-export type { InspectorPanelProps } from "./inspector-panel";
+export type {
+  BlockInspectorResolver,
+  InspectorPanelProps,
+} from "./inspector-panel";
 
 /**
  * The Style half of the same inspector.
@@ -197,8 +200,11 @@ export type { CanvasZoomControlProps } from "./canvas-zoom-control";
 export type { CanvasZoom } from "./canvas-zoom";
 export {
   breakpointsAtWidth,
+  DESKTOP_PREVIEW_WIDTH,
   editedBreakpointAtWidth,
+  editingBreakpointOf,
   offeredTiers,
+  previewWidth,
   selectableTiers,
   widthForBreakpoint,
 } from "./canvas-width";
@@ -271,6 +277,13 @@ export type { BlockToolbarProps } from "./block-toolbar";
  */
 export { SpacingOverlay } from "./spacing-overlay";
 export type { SpacingOverlayProps } from "./spacing-overlay";
+/*
+ * The notice a host renders above the canvas while a locked area holds what
+ * its lock doesn't allow: it shows the repair's steps and applies them, once
+ * confirmed, as one edit. `@experimental` until the editor's lock surfaces
+ * ship together.
+ */
+export { RepairNotice } from "./repair-notice";
 /*
  * The scrub context a host has to supply for a handle to write anywhere but the
  * base breakpoint of the resting state. The overlay defaults to that tier and

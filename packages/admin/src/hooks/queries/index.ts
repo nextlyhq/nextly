@@ -86,6 +86,7 @@ export { entryKeys } from "@admin/services/entryApi";
 // Single query and mutation hooks
 export {
   singleKeys, // Query key factory for stable caching
+  NAV_SINGLES_PARAMS,
   useSingle,
   useSingles,
   useCreateSingle,

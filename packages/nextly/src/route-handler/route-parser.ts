@@ -1431,9 +1431,9 @@ function parseSingleRoutes(
   }
 
   // POST /api/singles/[slug]/publish-all → publish every language at once.
-  // Authorized as an `update` like the collection entry equivalent: the route
-  // gate cannot express `publish`, so the service checks `publish-{slug}` for
-  // itself on top of the update the route authorized.
+  // Admitted on `publish-{slug}` like the collection entry equivalent (see
+  // the route's resolveAuthorization); the service asks the publish rule in
+  // each language the publish puts live.
   if (id && subresource === "publish-all" && !subId && httpMethod === "POST") {
     routeParams.slug = id;
     return {
@@ -2200,8 +2200,12 @@ interface ReleaseRoute {
   id: boolean | string;
   /** The segment after the id, or `null` for none. */
   subresource: string | null;
-  /** Whether the path carries a fourth segment, such as a member id. */
-  subId: boolean;
+  /**
+   * Whether the path carries a fourth segment, such as a member id, or the
+   * word a step over several members is named by in that place. Member ids
+   * are UUIDs, so a word never names a member.
+   */
+  subId: boolean | string;
   verb: string;
   operation: OperationType;
   method: string;
@@ -2233,6 +2237,17 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "GET",
     operation: "list",
     method: "releaseCalendar",
+  },
+  // Scheduling a document in one step: on its own, with an existing release
+  // or in a new one, the path chosen by the body. A word in the id's place,
+  // before the route that reads one release by id, as the calendar is.
+  {
+    id: "schedule-document",
+    subresource: null,
+    subId: false,
+    verb: "POST",
+    operation: "create",
+    method: "scheduleDocument",
   },
   // The readiness of a page of releases at once, named by `?ids=`. Before the
   // route that reads one release by id, like the calendar, for the same
@@ -2287,6 +2302,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "POST",
     operation: "create",
     method: "addReleaseMember",
+  },
+  // Several documents added in one step, all or none. A word in the member
+  // id's place, so it is matched before any route taking a member id.
+  {
+    id: true,
+    subresource: "members",
+    subId: "batch",
+    verb: "POST",
+    operation: "create",
+    method: "addReleaseMembers",
   },
   {
     id: true,
@@ -2390,14 +2415,17 @@ function parseReleaseRoutes(
         ? candidate.id === id
         : candidate.id === Boolean(id)) &&
       candidate.subresource === (subresource ?? null) &&
-      candidate.subId === Boolean(subId) &&
+      (typeof candidate.subId === "string"
+        ? candidate.subId === subId
+        : candidate.subId === Boolean(subId)) &&
       candidate.verb === httpMethod
   );
   if (!route) return null;
 
   // A word in the id's place names the route, not a release.
   if (id && route.id === true) routeParams.releaseId = id;
-  if (subId) routeParams.memberId = subId;
+  // A word in the member id's place names the route, not a member.
+  if (subId && route.subId === true) routeParams.memberId = subId;
 
   return {
     service: "releases",
@@ -2744,22 +2772,30 @@ const DASHBOARD_ROUTES: Readonly<
 > = {
   GET: {
     stats: { operation: "list", method: "getDashboardStats" },
-    onboarding: { operation: "list", method: "getDashboardOnboarding" },
     "recent-entries": {
       operation: "list",
       method: "getDashboardRecentEntries",
     },
     activity: { operation: "list", method: "getDashboardActivity" },
     layout: { operation: "list", method: "getWidgetLayout" },
+    gallery: { operation: "list", method: "getDashboardGallery" },
+    pins: { operation: "list", method: "getDashboardPins" },
+    summary: { operation: "list", method: "getDashboardSummary" },
+    "new-types": { operation: "list", method: "getDashboardNewTypes" },
+    setup: { operation: "list", method: "getDashboardSetup" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
+    pins: { operation: "create", method: "postDashboardPin" },
+    "new-types": { operation: "create", method: "postDashboardNewType" },
   },
   PUT: {
     layout: { operation: "update", method: "putWidgetLayout" },
+    setup: { operation: "update", method: "putDashboardSetup" },
   },
   DELETE: {
     layout: { operation: "delete", method: "deleteWidgetLayout" },
+    pins: { operation: "delete", method: "deleteDashboardPin" },
   },
 };
 
@@ -2767,13 +2803,21 @@ const DASHBOARD_ROUTES: Readonly<
  * Parse dashboard-related routes.
  *
  *   GET  /api/dashboard/stats          → getDashboardStats
- *   GET  /api/dashboard/onboarding     → getDashboardOnboarding
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
+ *   GET  /api/dashboard/gallery        → getDashboardGallery
+ *   GET  /api/dashboard/summary        → getDashboardSummary
  *   PUT  /api/dashboard/layout         → putWidgetLayout
  *   DELETE /api/dashboard/layout       → deleteWidgetLayout
  *   POST /api/dashboard/query          → postWidgetQuery
+ *   GET  /api/dashboard/pins           → getDashboardPins
+ *   POST /api/dashboard/pins           → postDashboardPin
+ *   DELETE /api/dashboard/pins         → deleteDashboardPin
+ *   GET  /api/dashboard/new-types      → getDashboardNewTypes
+ *   POST /api/dashboard/new-types      → postDashboardNewType
+ *   GET  /api/dashboard/setup          → getDashboardSetup
+ *   PUT  /api/dashboard/setup          → putDashboardSetup
  *
  * All require authentication (no specific permission). Handlers manage their
  * own auth.
@@ -3241,8 +3285,9 @@ export function parseRestRoute(
     if (result) return result;
   }
 
-  // The site's content languages, for Settings.
-  if (resource === "languages") {
+  // The site's content languages, for Settings. Only the bare path: a trailing segment is another
+  // address, which must answer not found rather than list or change the languages.
+  if (resource === "languages" && id === undefined) {
     const method = httpMethod === "GET" ? "getLanguages" : "changeLanguages";
     const operation = httpMethod === "GET" ? "list" : "update";
     return { service: "languages", operation, method, routeParams };
@@ -3256,33 +3301,7 @@ export function parseRestRoute(
     return { service: "generalSettings", operation, method, routeParams };
   }
 
-  // Handle Image Sizes endpoints
-  if (resource === "image-sizes") {
-    // Sub-routes for regeneration
-    if (id === "regeneration-status") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerationStatus",
-        routeParams,
-      };
-    }
-    if (id === "regenerate") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerate",
-        routeParams,
-      };
-    }
-    if (id) routeParams.imageId = id;
-    return {
-      service: "imageSizes",
-      operation: "list",
-      method: "imageSizes",
-      routeParams,
-    };
-  }
-
+  // Nothing matched: answered as an unknown route. `image-sizes` is among
+  // these, since image sizes are no longer made or offered.
   return {};
 }

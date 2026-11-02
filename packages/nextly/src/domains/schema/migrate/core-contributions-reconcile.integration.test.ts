@@ -319,10 +319,36 @@ describeEachDialect(
     }, 90_000);
 
     if (dialect === "sqlite") {
-      it("keeps a contributed column's VALUES through a rebuild of the core table", async () => {
+      it("keeps a contributed column's VALUES and its index through a rebuild of the core table", async () => {
         const { adapter, close } = await openDatabase(dialect);
         try {
           const { run, users } = await setUp(dialect, adapter);
+          // The index as declared: over `nickname`, NOT unique, with no
+          // predicate or expression. A rebuild that kept the name and columns
+          // but made it unique would refuse duplicate nicknames.
+          const contributedIndex = async () => {
+            const index = (await users())?.indexes?.find(
+              i => i.name === "idx_users_nickname"
+            );
+            return index === undefined
+              ? undefined
+              : {
+                  columns: index.columns,
+                  unique: index.unique,
+                  where: index.where ?? null,
+                  expression: index.expression ?? null,
+                };
+          };
+          const declaredIndex = {
+            columns: ["nickname"],
+            unique: false,
+            where: null,
+            expression: null,
+          };
+          // The control: the index is there before the rebuild, so finding it
+          // afterwards means the rebuild kept it rather than that it was
+          // never looked for.
+          expect(await contributedIndex()).toEqual(declaredIndex);
           await adapter.executeQuery(
             `INSERT INTO users (id, email, is_active, failed_login_attempts, created_at, updated_at, nickname) ` +
               `VALUES ('u1', 'a@example.com', 0, 0, 0, 0, 'Ace')`
@@ -343,6 +369,10 @@ describeEachDialect(
           for (const statement of sqliteTableRebuildStatements(drifted)) {
             await adapter.executeQuery(statement);
           }
+          // Still there before the reconcile runs, so finding it after means
+          // the reconcile's own rebuild kept it, not that it put a dropped
+          // one back.
+          expect(await contributedIndex()).toEqual(declaredIndex);
 
           expect((await run()).changed).toBe(true);
           const after = await users();
@@ -353,6 +383,9 @@ describeEachDialect(
             `SELECT nickname FROM users WHERE id = 'u1'`
           )) as { nickname: string | null }[];
           expect(rows[0]?.nickname).toBe("Ace");
+          // A rebuild recreates the table from its target definition, so an
+          // index left out of that definition is not recreated with it.
+          expect(await contributedIndex()).toEqual(declaredIndex);
           // The core table's own account-state values are copied by the
           // same rebuild.
           expect(await accountState(adapter, "u-link")).toEqual({

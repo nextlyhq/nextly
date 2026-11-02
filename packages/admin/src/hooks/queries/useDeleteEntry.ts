@@ -32,12 +32,15 @@ import {
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import {
   toastMutationResult,
   type MutationResult,
 } from "@admin/lib/mutation-warnings";
 import { entryApi, entryKeys } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
+
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /**
  * Options for useDeleteEntry hook
@@ -201,8 +204,13 @@ export function useDeleteEntry<T = Entry>({
     },
 
     onError: (error: Error) => {
+      // A refusal because the collection was removed from code reads its
+      // schema again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
       if (showToast) {
-        toast.error(`Failed to delete entry: ${error.message}`);
+        // The server's message already says what was refused ("You can't
+        // delete this post."), so it is shown as it is, with nothing in front.
+        toast.error(apiErrorMessage(error, "The entry couldn't be deleted."));
       }
 
       onError?.(error);

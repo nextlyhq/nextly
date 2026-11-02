@@ -4,6 +4,7 @@
  * config-gating logic is small and unit-testable without a database.
  */
 import {
+  computeCollectionRevalidation,
   computeEntryRevalidation,
   computeSingleRevalidation,
 } from "./compute-tags";
@@ -46,6 +47,21 @@ export function buildEntryRevalidationIntent(
     previousSlug: fields.previousSlug,
     locale: fields.locale,
     localizedSlugs: fields.localizedSlugs,
+    extraTags: revalidateConfig?.tags,
+  });
+}
+
+/**
+ * The revalidation intent for a change to every entry of a collection at once, or undefined when
+ * revalidation is disabled for the collection.
+ */
+export function buildCollectionRevalidationIntent(
+  collectionName: string,
+  revalidateConfig: RevalidateConfig | undefined
+): RevalidationIntent | undefined {
+  if (revalidateConfig?.disable) return undefined;
+  return computeCollectionRevalidation({
+    collection: collectionName,
     extraTags: revalidateConfig?.tags,
   });
 }

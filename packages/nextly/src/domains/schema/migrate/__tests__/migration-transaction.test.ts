@@ -279,3 +279,91 @@ describe("the runner's own writes after a unit's statements", () => {
     expect(log).toEqual([...statements, "after"]);
   });
 });
+
+describe("a unit run outside a transaction, on MySQL and PostgreSQL", () => {
+  /**
+   * An adapter that logs where each statement ran: through `withSession`,
+   * with the options it was given, or through `executeQuery` on the pool.
+   */
+  function sessionAdapter(dialect: "postgresql" | "mysql", failOn?: string) {
+    const log: string[] = [];
+    const run = async (where: string, statement: string) => {
+      if (statement === failOn) throw new Error(`refused: ${statement}`);
+      log.push(`${where}: ${statement}`);
+      return [];
+    };
+    const fake = {
+      getCapabilities: () => ({ dialect }),
+      getDrizzle: () => ({}),
+      executeQuery: (statement: string) => run("pool", statement),
+      withSession: async <T>(
+        work: (session: {
+          execute: (statement: string) => Promise<unknown[]>;
+        }) => Promise<T>,
+        options?: { strictSqlMode?: boolean }
+      ): Promise<T> => {
+        log.push(`session open ${JSON.stringify(options ?? {})}`);
+        try {
+          return await work({ execute: s => run("session", s) });
+        } finally {
+          log.push("session closed");
+        }
+      },
+    };
+    return { log, adapter: fake as unknown as DrizzleAdapter };
+  }
+
+  const statements = [
+    "ALTER TABLE t MODIFY COLUMN v varchar(5)",
+    "CREATE INDEX t_v ON t (v)",
+  ];
+  const unit = { source: "0001_x.sql", transaction: false };
+
+  it("runs every statement on one MySQL session in strict mode", async () => {
+    const { log, adapter: mysqlAdapter } = sessionAdapter("mysql");
+    await runMigrationStatements(mysqlAdapter, statements, unit, async () => {
+      log.push("after");
+    });
+    expect(log).toEqual([
+      'session open {"strictSqlMode":true}',
+      `session: ${statements[0]}`,
+      `session: ${statements[1]}`,
+      "session closed",
+      "after",
+    ]);
+  });
+
+  it("still reports a MySQL statement that failed part-way, with the session closed", async () => {
+    const { log, adapter: mysqlAdapter } = sessionAdapter(
+      "mysql",
+      statements[1]
+    );
+    const thrown = await runMigrationStatements(
+      mysqlAdapter,
+      statements,
+      unit
+    ).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(thrown).toBeInstanceOf(NextlyError);
+    expect((thrown as NextlyError).code).toBe(
+      "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
+    );
+    expect((thrown as NextlyError).logContext).toMatchObject({
+      failedStatement: 2,
+      statements: 2,
+    });
+    expect(log).toEqual([
+      'session open {"strictSqlMode":true}',
+      `session: ${statements[0]}`,
+      "session closed",
+    ]);
+  });
+
+  it("leaves PostgreSQL's statements on the pool, one by one, as before", async () => {
+    const { log, adapter: pgAdapter } = sessionAdapter("postgresql");
+    await runMigrationStatements(pgAdapter, statements, unit);
+    expect(log).toEqual(statements.map(s => `pool: ${s}`));
+  });
+});

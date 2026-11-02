@@ -71,6 +71,32 @@ export interface TransactionOptions {
 }
 
 /**
+ * Options for a session run outside a transaction (`withSession`).
+ *
+ * @public
+ */
+export interface SessionOptions {
+  /**
+   * MySQL only: run the session in strict mode, as `TransactionOptions`'s
+   * option of the same name does for a transaction, and restore the
+   * session's own mode before the connection returns to the pool.
+   * PostgreSQL and SQLite ignore it.
+   */
+  strictSqlMode?: boolean;
+}
+
+/**
+ * Statements run one after another outside a transaction, each committing as
+ * it runs, on the connection `withSession` holds for them.
+ *
+ * @public
+ */
+export interface StatementSession {
+  /** Runs one statement and returns its rows. */
+  execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
+}
+
+/**
  * Transaction context for executing operations within a transaction.
  *
  * @remarks

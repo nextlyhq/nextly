@@ -47,6 +47,8 @@ import {
   type PoolStats,
   type TransactionContext,
   type TransactionOptions,
+  type SessionOptions,
+  type StatementSession,
   type SqlParam,
   type WhereClause,
   type WhereCondition,
@@ -544,21 +546,55 @@ export class SqliteAdapter extends DrizzleAdapter {
       // interleaved savepoints would release or roll back each other.
       return enqueueIn(parent, () => this.runSavepoint(work, parent));
     }
-    const run = async (): Promise<Committed<T>> => this.runTransaction(work);
-    const previous = this.transactionQueue;
-    // The one connection is this queue's to hand out, so its wait is the
-    // wait `pool.connectionTimeoutMs` bounds on the other dialects: past it,
-    // the transaction fails as busy without having begun.
-    const next = waitForTurn(previous, this.transactionWaitMs()).then(run);
-    // The queue moves on once the transaction before this one AND this one
-    // are done. One that gave up waiting never ran, and the next must still
-    // wait for the one it gave up on, or it would begin inside it.
-    this.transactionQueue = previous.then(() => next).catch(() => undefined);
-    const { result, effects } = await next;
+    const { result, effects } = await this.takeTurn(() =>
+      this.runTransaction(work)
+    );
     // After the queue has moved on rather than inside it: an effect that opens
     // a transaction of its own would otherwise wait behind the one running it.
     await this.runHeldEffects(effects);
     return result;
+  }
+
+  /**
+   * Runs `work` outside a transaction, each statement committing as it runs,
+   * once no other flow's transaction is open on the one connection.
+   *
+   * @remarks
+   * Waits its turn in `transactionQueue` as a transaction does: a statement
+   * run while another flow's transaction is open would join it, and be undone
+   * if it rolled back. Transactions begun meanwhile wait behind the session in
+   * turn, so `work` must not open one of its own: it would wait behind the
+   * session that waits for it, until it fails as busy.
+   */
+  override async withSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    _options?: SessionOptions
+  ): Promise<T> {
+    // A precondition: before the session takes its turn.
+    this.refuseSessionInTransaction();
+    return this.takeTurn(() =>
+      work({
+        execute: <R = unknown>(statement: string, params?: SqlParam[]) =>
+          this.executeQuery<R>(statement, params),
+      })
+    );
+  }
+
+  /**
+   * Runs `run` once every turn queued before it in `transactionQueue` is
+   * done, and holds the queue until `run` is done too.
+   */
+  private takeTurn<R>(run: () => Promise<R>): Promise<R> {
+    const previous = this.transactionQueue;
+    // The one connection is this queue's to hand out, so its wait is the
+    // wait `pool.connectionTimeoutMs` bounds on the other dialects: past it,
+    // the turn fails as busy without having begun.
+    const next = waitForTurn(previous, this.transactionWaitMs()).then(run);
+    // The queue moves on once the turn before this one AND this one are
+    // done. One that gave up waiting never ran, and the next must still wait
+    // for the one it gave up on, or it would begin inside it.
+    this.transactionQueue = previous.then(() => next).catch(() => undefined);
+    return next;
   }
 
   /**
@@ -866,6 +902,10 @@ export class SqliteAdapter extends DrizzleAdapter {
       return [result];
     }
 
+    // Refused as the single-row insert is: a table this instance never
+    // registered may not match what its code would write.
+    const tableObj = this.resolvedTableObject(table);
+
     // Build multi-row INSERT
     const columns = Object.keys(data[0]);
     const params: SqlParam[] = [];
@@ -902,7 +942,6 @@ export class SqliteAdapter extends DrizzleAdapter {
       // SQLite stores a timestamp as an integer and hands it back as one. The
       // Drizzle read paths decode it through the column definition, so without
       // this a bulk insert answers with numbers where a read answers `Date`.
-      const tableObj = this.getTableObject(table);
       return rows.map(r => this.mapRowFromRawSql(tableObj, r));
     } catch (error) {
       throw this.handleQueryError(error, "insertMany", table);
@@ -1056,10 +1095,10 @@ export class SqliteAdapter extends DrizzleAdapter {
         options?: InsertOptions
         // eslint-disable-next-line @typescript-eslint/require-await -- async so a synchronous throw becomes a rejection
       ): Promise<T> => {
-        const mapped = this.mapKeysToSqlColumns(
-          this.getTableObject(table),
-          data
-        );
+        // Refused before any statement, as the pooled insert is: a table this
+        // instance never registered may not match what its code would write.
+        const tableObj = this.resolvedTableObject(table);
+        const mapped = this.mapKeysToSqlColumns(tableObj, data);
         const columns = Object.keys(mapped);
         const values = Object.values(mapped).map(sanitizeSqliteValue);
         const placeholders = values.map(() => "?").join(", ");
@@ -1072,7 +1111,7 @@ export class SqliteAdapter extends DrizzleAdapter {
           const returning =
             !ret || ret === "*"
               ? "*"
-              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
+              : this.mapColumnNamesToSql(tableObj, ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;
@@ -1089,7 +1128,7 @@ export class SqliteAdapter extends DrizzleAdapter {
         // Return JS property-named keys AND Drizzle-decoded date values, so a
         // write inside a transaction answers with the same representation a
         // read of the same row gives.
-        return this.mapRowFromRawSql(this.getTableObject(table), rows[0]);
+        return this.mapRowFromRawSql(tableObj, rows[0]);
       },
 
       insertMany: async <T = unknown>(
@@ -1100,7 +1139,8 @@ export class SqliteAdapter extends DrizzleAdapter {
       ): Promise<T[]> => {
         if (data.length === 0) return [];
 
-        const tableObj = this.getTableObject(table);
+        // Refused before any statement, as `insert` above is.
+        const tableObj = this.resolvedTableObject(table);
         const mappedRecords = data.map(r =>
           this.mapKeysToSqlColumns(tableObj, r)
         );
@@ -1125,7 +1165,7 @@ export class SqliteAdapter extends DrizzleAdapter {
           const returning =
             !ret || ret === "*"
               ? "*"
-              : this.mapColumnNamesToSql(this.getTableObject(table), ret)
+              : this.mapColumnNamesToSql(tableObj, ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
           sql += ` RETURNING ${returning}`;

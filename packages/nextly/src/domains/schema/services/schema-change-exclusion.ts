@@ -41,7 +41,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Logger } from "../../../shared/types";
 
 /**
- * Run a schema change with a field-group storage migration excluded throughout.
+ * Run a schema change holding the schema lock throughout, so no migration of any kind — the
+ * field-group storage migration, `nextly migrate`, `db:sync` — runs beside it.
  *
  * `issuesDdl` decides whether the lock table may be CREATED when it is missing, and the two answers
  * are not interchangeable. A path that issues DDL must be able to create it: otherwise a first-ever
@@ -86,6 +87,10 @@ export async function withSchemaChangeExcluded<T>(
       // here would hand the row to a migration while this change was still writing its DDL and its
       // registry row — neither atomic nor idempotent, and the exact overlap being prevented.
       releaseOnInterrupt: false,
+      // Refused at once while a migration holds the schema lock, with a message that tells the
+      // editor to save again once it ends: a request is not held open for a minute.
+      whenHeld: "refuse",
+      refusal: "editor",
     },
     work
   );

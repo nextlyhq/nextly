@@ -2,11 +2,14 @@
  * Tests for file generators
  */
 
+import { readFileSync } from "node:fs";
+
 import fs from "fs-extra";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { generateAdminPage } from "../generators/admin";
 import { generateConfig } from "../generators/config";
+import { ADMIN_LAYOUT } from "../generators/media-routes";
 import { patchNextConfig } from "../generators/next-config";
 import { generateRoutes } from "../generators/routes";
 import { generateTypesDirectory } from "../generators/types";
@@ -35,6 +38,17 @@ const mockPathExists = vi.mocked(fs.pathExists);
 const mockWriteFile = vi.mocked(fs.writeFile);
 const mockReadFile = vi.mocked(fs.readFile);
 const mockEnsureDir = vi.mocked(fs.ensureDir);
+
+// The base template's admin layout, read past the mocked file system: the one
+// source a generated admin layout is taken from.
+const ADMIN_LAYOUT_TEXT = readFileSync(
+  new URL(
+    `../../../../templates/base/src/app/${ADMIN_LAYOUT.path}`,
+    import.meta.url
+  ),
+  "utf8"
+);
+const templates = new Map([[ADMIN_LAYOUT.path, ADMIN_LAYOUT_TEXT]]);
 
 const srcLayout: ProjectInfo = {
   isNextJs: true,
@@ -250,7 +264,7 @@ describe("generateAdminPage", () => {
       appDir: "src/app",
     };
 
-    await generateAdminPage("/test/project", projectInfo);
+    await generateAdminPage("/test/project", projectInfo, templates);
 
     expect(mockEnsureDir).toHaveBeenCalled();
     expect(mockWriteFile).toHaveBeenCalledTimes(2);
@@ -270,13 +284,8 @@ describe("generateAdminPage", () => {
     expect(posix(layoutPath)).toContain(
       "src/app/admin/[[...params]]/layout.tsx"
     );
-    expect(layoutContent).toContain(
-      'import { getBrandingCss } from "nextly/config"'
-    );
-    expect(layoutContent).toContain(
-      'import config from "../../../../nextly.config"'
-    );
-    expect(layoutContent).toContain("getBrandingCss(config.admin?.branding)");
+    // The template's own layout, whose config import already suits src/.
+    expect(layoutContent).toBe(ADMIN_LAYOUT_TEXT);
   });
 
   it("should generate admin page in app directory (no src)", async () => {
@@ -290,7 +299,7 @@ describe("generateAdminPage", () => {
       appDir: "app",
     };
 
-    await generateAdminPage("/test/project", projectInfo);
+    await generateAdminPage("/test/project", projectInfo, templates);
 
     const [pagePath] = mockWriteFile.mock.calls[0];
     expect(posix(pagePath)).toContain("app/admin/[[...params]]/page.tsx");
@@ -298,8 +307,11 @@ describe("generateAdminPage", () => {
 
     // Without src/, config import should be 3 levels up
     const [, layoutContent] = mockWriteFile.mock.calls[1];
-    expect(layoutContent).toContain(
-      'import config from "../../../nextly.config"'
+    expect(layoutContent).toBe(
+      ADMIN_LAYOUT_TEXT.replace(
+        '"../../../../nextly.config"',
+        '"../../../nextly.config"'
+      )
     );
   });
 

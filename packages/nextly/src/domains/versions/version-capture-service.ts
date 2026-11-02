@@ -224,7 +224,7 @@ async function insertWithRetry(
  * rolls back only `work` and the transaction carries on; without them, run it
  * plainly.
  */
-async function underSavepoint<T>(
+export async function underSavepoint<T>(
   db: VersionsDbApi,
   work: () => Promise<T>
 ): Promise<T> {

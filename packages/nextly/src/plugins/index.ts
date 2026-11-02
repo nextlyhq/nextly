@@ -48,6 +48,13 @@ export {
   type PluginHookRegistry,
   type PluginSettingsApi,
 } from "./plugin-context";
+export type {
+  PluginPinOptions,
+  PluginPinTransaction,
+  PluginVersionPin,
+  PluginVersionPinHolder,
+  PluginVersionPins,
+} from "./plugin-version-pins";
 export {
   PasswordTooLongError,
   type PasswordCheck,
@@ -106,13 +113,6 @@ export type {
   JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
-  PluginAdminWidget,
-  PluginAdminCustomWidget,
-  PluginAdminDataWidget,
-  PluginAdminStatsWidget,
-  PluginAdminDeclarativeWidget,
-  PluginAdminQuerylessWidget,
-  DeclarativeWidgetArchetype,
   PluginCollectionView,
   PluginDocumentView,
   PluginFieldTypeDocumentView,

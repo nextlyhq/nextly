@@ -90,7 +90,7 @@ import {
   walkNodes,
 } from "./tree";
 import type { DomIdPolicy } from "./tree";
-import { componentEnvelopeIssues } from "./validation";
+import { componentEnvelopeIssues, isErrorIssue } from "./validation";
 import type { ValidationIssue } from "./validation";
 import { isConditionGated } from "./visibility";
 
@@ -1313,7 +1313,9 @@ export function planDuplicateComponent<TFields>(
   if (overIndexBound(survey)) return { problem: "exceeds-limits" };
 
   const issues = componentEnvelopeIssues(duplicate, limits);
-  if (issues.length > 0) return { problem: "invalid-exposure", issues };
+  if (issues.some(isErrorIssue)) {
+    return { problem: "invalid-exposure", issues: issues.filter(isErrorIssue) };
+  }
 
   // Two nodes rendering ONE id. The copy keeps DOM ids, so a source that
   // already spelled one twice hands the duplicate the same fault — and nothing
@@ -1451,7 +1453,9 @@ function componentDocument(
   // is given the host's limits; a dry run using its own would refuse a
   // component the apply would publish, which is the direction nobody can debug.
   const issues = componentEnvelopeIssues(definition, limits);
-  if (issues.length > 0) return { problem: "invalid-exposure", issues };
+  if (issues.some(isErrorIssue)) {
+    return { problem: "invalid-exposure", issues: issues.filter(isErrorIssue) };
+  }
 
   // The stored-document rule, asked of the definition WITH its envelope on.
   // `savedPatternDocument` asks it of the tree, before there is an envelope —

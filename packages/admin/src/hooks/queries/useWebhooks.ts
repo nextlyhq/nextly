@@ -52,14 +52,19 @@ export function useWebhooks(options?: {
   });
 }
 
-/** One endpoint, for the edit page. */
+/**
+ * One endpoint, for the edit page. `enabled: false` lets a caller read an
+ * endpoint another page already loaded without asking for it, as the browser
+ * tab's title does on a delivery's page.
+ */
 export function useWebhook(
-  id: string
+  id: string,
+  options?: { enabled?: boolean }
 ): UseQueryResult<WebhookEndpointSummary, Error> {
   return useQuery<WebhookEndpointSummary, Error>({
     queryKey: webhookKeys.detail(id),
     queryFn: () => webhookApi.getWebhook(id),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && (options?.enabled ?? true),
   });
 }
 

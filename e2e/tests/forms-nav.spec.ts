@@ -22,22 +22,29 @@ test("Forms lives in the main rail exactly once, with its collections inside", a
 
   // The old duplicates are gone: the Collections sub-sidebar carries no
   // Forms group (the plugin's collections moved into the standalone
-  // section wholesale).
-  await rail.locator('a[href="/admin/collections"]').click();
+  // section wholesale). The rail's one Content item opens the panel, named
+  // by its label since it is a link or a button by surface, and the panel's
+  // Collections part is chosen in its "Content type" switch.
+  await rail.getByLabel("Content", { exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Content type" })
+    .getByRole("link", { name: "Collections" })
+    .click();
+  // The rail's own Forms item is named "Forms" for assistive technology, so
+  // it is the one visible link of that name: the Collections panel adds none.
+  const formsLinks = page
+    .getByRole("link", { name: "Forms", exact: true })
+    .filter({ visible: true });
+  await expect(formsLinks).toHaveCount(1);
   await expect(
-    page
-      .getByRole("link", { name: "Forms", exact: true })
-      .filter({ visible: true })
-  ).toHaveCount(0);
+    rail.getByRole("link", { name: "Forms", exact: true })
+  ).toHaveCount(1);
 
   // The rail item opens the standalone sub-sidebar with the plugin's
   // collections as links.
   await railForms.click();
-  await expect(
-    page
-      .getByRole("link", { name: "Forms", exact: true })
-      .filter({ visible: true })
-  ).toBeVisible();
+  // The standalone panel's Forms link joins the rail's.
+  await expect(formsLinks).toHaveCount(2);
   const submissionsLink = page
     .getByRole("link", { name: "Submissions", exact: true })
     .filter({ visible: true });

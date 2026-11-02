@@ -9,7 +9,9 @@
 
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
+import type { ActivityEvent } from "nextly/widget-result";
 
+import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { describeActivityActor } from "@admin/lib/dashboard";
 import type {
@@ -38,6 +40,8 @@ interface ActivityLogEntry {
   /** Null once the actor's account was deleted and their identity erased. */
   userEmail: string | null;
   action: "create" | "update" | "delete";
+  /** What happened, by the server's closed set. Absent from an older server, or for a row it names none for. */
+  event?: ActivityEvent;
   collection: string;
   entryId: string | null;
   entryTitle: string | null;
@@ -119,6 +123,7 @@ function shared(
     user: describeActivityActor(entry),
     type: entry.action,
     action: ACTION_LABELS[entry.action] ?? entry.action,
+    ...(entry.event === undefined ? {} : { event: entry.event }),
     category: ACTION_CATEGORIES[entry.action] ?? "info",
     timestamp: entry.createdAt,
     count: entry.count ?? 1,
@@ -131,6 +136,18 @@ function shared(
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ACTIONS: ReadonlySet<string> = new Set(["create", "update", "delete"]);
+/**
+ * Every event the server names, keyed so the list cannot miss one: a key the union lacks, or a
+ * member without a key, fails to compile.
+ */
+const EVENT_KEYS = {
+  created: true,
+  saved: true,
+  published: true,
+  unpublished: true,
+  deleted: true,
+} as const satisfies Record<ActivityEvent, true>;
+const EVENTS: ReadonlySet<string> = new Set(Object.keys(EVENT_KEYS));
 const ACTOR_TYPES: ReadonlySet<string> = new Set(["user", "apiKey", "system"]);
 const SUBJECT_KINDS: ReadonlySet<string> = new Set([
   "collection",
@@ -179,10 +196,13 @@ export function activityFromRow(
     row.subjectKind,
     SUBJECT_KINDS
   );
+  // An event this build does not know is read as absent, so the row says its action instead.
+  const event = oneOf<ActivityEvent>(row.event, EVENTS);
   return mapEntry({
     id,
     userId,
     action,
+    ...(event ? { event } : {}),
     collection,
     createdAt,
     ...(actorType ? { actorType } : {}),
@@ -198,6 +218,27 @@ export function activityFromRow(
       ? { countAtLeast: row.countAtLeast }
       : {}),
   });
+}
+
+/**
+ * Where an activity row leads: the entry it is about, or the Single. Nothing for a deletion,
+ * whose subject is gone, for a change to settings, or for a row naming no entry. The feed holds
+ * only events about what the reader may read, so the link opens something they may open.
+ */
+export function activityHref(row: Record<string, unknown>): string | undefined {
+  const collection = textOrNull(row.collection);
+  if (!collection || row.action === "delete") return undefined;
+  if (row.subjectKind === "single") {
+    return buildRoute(ROUTES.SINGLE_EDIT, { slug: collection });
+  }
+  if (row.subjectKind === "settings") return undefined;
+  const entryId = textOrNull(row.entryId);
+  return entryId
+    ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+        slug: collection,
+        id: entryId,
+      })
+    : undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

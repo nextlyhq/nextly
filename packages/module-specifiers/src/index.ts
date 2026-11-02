@@ -111,6 +111,13 @@ export interface ModuleSpecifierRef {
    * governing the whole clause would erase a real runtime edge.
    */
   readonly typeOnly: boolean;
+  /**
+   * Whether the module is loaded only when the expression runs: true for
+   * `import(...)`, false for every reference loaded with the file that names
+   * it. A static walk of what a file loads at once follows only the others; a
+   * lazy `import()` inside a function costs nothing until it is called.
+   */
+  readonly dynamic: boolean;
 }
 
 /** A reference and where it starts, so references from the tree and from comments merge in source order. */
@@ -221,6 +228,7 @@ function jsDocRefs(comment: Comment): PlacedRef[] {
     found.push({
       specifier: decodedSpecifier(from?.[1]),
       typeOnly: true,
+      dynamic: false,
       start: at(tag.index),
     });
   }
@@ -236,6 +244,7 @@ function jsDocRefs(comment: Comment): PlacedRef[] {
       found.push({
         specifier: decodedSpecifier(call[1]),
         typeOnly: true,
+        dynamic: false,
         start: at(open + 1 + call.index),
       });
     }
@@ -310,7 +319,14 @@ function typeReferenceRefs(comments: Comment[], program: Program): PlacedRef[] {
       attributes ?? ""
     )?.[2];
     return types
-      ? [{ specifier: types, typeOnly: true, start: comment.start }]
+      ? [
+          {
+            specifier: types,
+            typeOnly: true,
+            dynamic: false,
+            start: comment.start,
+          },
+        ]
       : [];
   });
 }
@@ -360,11 +376,13 @@ export function moduleSpecifierRefs(
   const add = (
     start: number,
     target: Expression | null | undefined,
-    typeOnly: boolean
+    typeOnly: boolean,
+    dynamic = false
   ): void => {
     found.push({
       specifier: literalText(target) ?? UNRESOLVABLE_SPECIFIER,
       typeOnly,
+      dynamic,
       start,
     });
   };
@@ -380,7 +398,7 @@ export function moduleSpecifierRefs(
       add(node.start, node.source, node.exportKind === "type");
     },
     ImportExpression(node) {
-      add(node.start, node.source, false);
+      add(node.start, node.source, false, true);
     },
     TSImportType(node) {
       add(node.start, node.source, true);
@@ -404,6 +422,7 @@ export function moduleSpecifierRefs(
         moduleRequires.push({
           specifier: literalText(target) ?? UNRESOLVABLE_SPECIFIER,
           typeOnly: false,
+          dynamic: false,
           start: node.start,
         });
       }
@@ -445,5 +464,9 @@ export function moduleSpecifierRefs(
 
   return found
     .sort((a, b) => a.start - b.start)
-    .map(({ specifier, typeOnly }) => ({ specifier, typeOnly }));
+    .map(({ specifier, typeOnly, dynamic }) => ({
+      specifier,
+      typeOnly,
+      dynamic,
+    }));
 }

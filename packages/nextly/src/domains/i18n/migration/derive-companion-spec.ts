@@ -58,7 +58,15 @@ export function deriveCompanionSpec(
     if (col) columns.push(col);
   }
   if (columns.length === 0) return null;
+  return { ...companionSpecShell(args), columns };
+}
 
+/**
+ * The companion an entity's translation uses, named as `deriveCompanionSpec` names it, with no
+ * columns: for a change that must still address the companion once no field of the entity is
+ * translated, such as dropping the per-language unique index of the last field to leave.
+ */
+export function companionSpecShell(args: DeriveArgs): CompanionMigrationSpec {
   // Use the caller-supplied physical table name verbatim (all callers pass the resolved
   // `tableName`, e.g. `dc_authors`, `single_site_settings`, `comp_seo`). Only fall back to
   // the `dc_` collection convention when no dbName is given. Do NOT route through
@@ -74,7 +82,7 @@ export function deriveCompanionSpec(
     companionTable: `${mainTable}_locales`,
     defaultLocale: args.defaultLocale,
     parentIdType: parentIdType(args.dialect),
-    columns,
+    columns: [],
     status: args.status === true,
   };
 }

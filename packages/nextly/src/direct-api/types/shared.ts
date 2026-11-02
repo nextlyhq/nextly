@@ -419,7 +419,7 @@ export interface DirectAPIConfig {
    * Bypass access control checks.
    *
    * When `true` (default for Direct API), all access control is skipped.
-   * Set to `false` to enforce collection, field, and row-level permissions.
+   * Set to `false` to enforce collection and field access rules.
    *
    * @default true
    */
@@ -513,8 +513,9 @@ export interface DirectAPIConfig {
   /**
    * User context for access control.
    *
-   * Required when `overrideAccess` is `false`. Provides the user identity
-   * and role for permission checks.
+   * Whose access is judged when `overrideAccess` is `false`: the identity
+   * and role permission checks read. Without one, the call is judged as a
+   * signed-out visitor.
    */
   user?: UserContext;
 

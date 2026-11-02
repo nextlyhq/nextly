@@ -20,9 +20,18 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import {
+  ownDatabaseVisitor,
+  visitorWithoutAccessService,
+} from "../../../auth/access/own-database-visitor";
 import { askEachLanguage } from "../../../auth/access/rule-language";
 import { actorForWrite } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  asNotMigrated,
+  type NotMigratedEntity,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -38,10 +47,13 @@ import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversio
 import {
   resolvedCallerGrants,
   type CallerGrants,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
+import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordTransitionEvents } from "../../content-events/write-event";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import {
   fieldGroupWriteAccessOf,
@@ -120,9 +132,11 @@ import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
   promoteCallerFor,
+  readsSingleInEveryLanguage,
 } from "./promote-gate";
 import {
   checkSingleAccess,
+  singleGrantRefusal,
   type SingleQueryService,
 } from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -215,6 +229,25 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
+   * Where this service's Single gate and promotion field rules read a
+   * visitor's Public grants: the read service's, built over the same database
+   * and access-control service, so publishing judges the Public role the read
+   * and update paths do. A service built without one reads its own database
+   * the same way.
+   */
+  private get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    if (this.queryService) return this.queryService.fieldRuleVisitor;
+    return visitorWithoutAccessService(
+      this.rbacAccessControlService,
+      ownDatabaseVisitor({
+        adapter: this.adapter,
+        logger: this.logger,
+        db: () => this.db,
+      })
+    );
+  }
+
+  /**
    * Set every language of this Single to published, atomically.
    *
    * The main row's status and every companion `_status` move in ONE
@@ -230,6 +263,9 @@ export class SinglePublishAllService extends BaseService {
     slug: string,
     options: PublishAllSingleLocalesOptions = {}
   ): Promise<SingleResult<PublishAllSingleResult>> {
+    // Refused first when the Single is removed from code, before any hook or
+    // read of its document, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("single", slug);
     this.logger.debug("Publishing all languages of a Single", { slug });
 
     // A refusal inside the transaction (the languages going live changed under
@@ -264,8 +300,16 @@ export class SinglePublishAllService extends BaseService {
       // transaction is holding.
       const promoteGrants = await resolvedCallerGrants(
         options.user,
-        options.authenticatedScope
+        options.authenticatedScope,
+        this.fieldRuleVisitor
       );
+      // Whether the caller may read the Single, which decides what a refusal
+      // of the promotion may name; asked here for the same reason. Trusted
+      // code is told every issue, so it is not asked.
+      const promoteReads =
+        options.overrideAccess === true
+          ? undefined
+          : await this.readsSingle(plan.slug, options);
 
       // Every component type's readiness, resolved before the transaction:
       // the drafts' component values are written inside it, where a verdict
@@ -285,7 +329,8 @@ export class SinglePublishAllService extends BaseService {
             options,
             refused,
             askedLanguages,
-            promoteGrants
+            promoteGrants,
+            promoteReads
           )
         )
       );
@@ -320,23 +365,24 @@ export class SinglePublishAllService extends BaseService {
       };
     } catch (error) {
       if (refused.denied) return refused.denied;
-      if (error instanceof NextlyError) throw error;
-      throw NextlyError.internal({
-        cause: error instanceof Error ? error : undefined,
-        logContext: { reason: "single-publish-all", single: slug },
-      });
+      throw await publishAllFailure(
+        error,
+        singleNotMigrated(this.singleRegistryService, slug, {
+          trusted: fieldTrustOf(options),
+        })
+      );
     }
   }
 
   /**
    * Resolve what this publish would act on, or the answer that ends it early.
    *
-   * Three things end it before any authorization to publish: no such Single, no
-   * document to publish, and a caller who may not update this Single at all.
-   * A fourth ends it successfully — a Single with no draft/published lifecycle
-   * has nothing to publish, and that answer is produced HERE, before the
-   * publish permission is asked for, so a caller holding update but not publish
-   * is not refused for a call that would change nothing.
+   * Two things end it before any authorization to publish: no such Single, and
+   * no document to publish. A third ends it successfully — a Single with no
+   * draft/published lifecycle has nothing to publish, and that answer is
+   * produced HERE, to a caller who may update it, before the publish
+   * permission is asked for, so a caller holding update but not publish is
+   * not refused for a call that would change nothing.
    */
   private async resolvePublishTarget(
     slug: string,
@@ -348,7 +394,9 @@ export class SinglePublishAllService extends BaseService {
       this.adapter,
       this.singleRegistryService,
       slug,
-      this.logger
+      this.logger,
+      // A write: refused in production where the Single was never registered.
+      { intent: "write" }
     );
     if (!singleMeta) {
       return {
@@ -379,25 +427,45 @@ export class SinglePublishAllService extends BaseService {
       };
     }
 
-    const accessDenied = await checkSingleAccess({
-      slug,
-      operation: "update",
-      user: options.user,
-      overrideAccess: options.overrideAccess,
-      // The route ran the `update` gate already (against an API key's scope
-      // where applicable), so skip only that redundant RBAC re-check; the
-      // publish gate still runs.
-      routeAuthorized: options.routeAuthorized,
-      rbacAccessControlService: this.rbacAccessControlService,
-      authenticatedScope: options.authenticatedScope,
-      logger: this.logger,
-    });
-    if (accessDenied) return { result: accessDenied };
+    // A Single with a lifecycle is asked the publish grant here, before any
+    // work only a publish needs; its rule is asked below, once the languages
+    // going live are known. A caller without the grant is refused as the full
+    // gate words it.
+    const refused =
+      (singleMeta as { status?: boolean }).status === true
+        ? await singleGrantRefusal({
+            slug,
+            operation: "publish",
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            rbacAccessControlService: this.rbacAccessControlService,
+            visitor: this.fieldRuleVisitor,
+            authenticatedScope: options.authenticatedScope,
+            logger: this.logger,
+          })
+        : null;
+    if (refused) return { result: refused };
 
     const { hasMainStatus, companion, companionPublishable } =
       await this.resolveLifecycle(slug, singleMeta);
 
     if (!hasMainStatus && !companionPublishable) {
+      // Nothing moves, so this is no publish: the caller's update gate decides
+      // whether they are told so. A Single with a lifecycle asks no update
+      // gate, since publishing every language changes only its status and the
+      // publish gate judges that.
+      const accessDenied = await checkSingleAccess({
+        slug,
+        operation: "update",
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+        routeAuthorized: options.routeAuthorized,
+        rbacAccessControlService: this.rbacAccessControlService,
+        visitor: this.fieldRuleVisitor,
+        authenticatedScope: options.authenticatedScope,
+        logger: this.logger,
+      });
+      if (accessDenied) return { result: accessDenied };
       return {
         result: {
           success: true,
@@ -473,12 +541,32 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * Check `publish-{slug}` on top of the update already granted, and decide
+   * Check `publish-{slug}`, the whole of what publishing every language needs
+   * since it changes only the status, and decide
    * whether the Single's stored publish rule has to be re-judged under the lock.
    *
    * Checked directly rather than through a transition, since this publishes
    * companion locales even when the main row is already published.
    */
+  /**
+   * Whether `options`' caller may read the Single in every language; see
+   * `readsSingleInEveryLanguage`.
+   */
+  private async readsSingle(
+    slug: string,
+    options: PublishAllSingleLocalesOptions
+  ): Promise<boolean> {
+    return readsSingleInEveryLanguage({
+      slug,
+      user: options.user,
+      authenticatedScope: options.authenticatedScope,
+      rbacAccessControlService: this.rbacAccessControlService,
+      visitor: this.fieldRuleVisitor,
+      logger: this.logger,
+      localization: this.localization,
+    });
+  }
+
   private async authorizePublish(
     plan: PublishPlan,
     options: PublishAllSingleLocalesOptions
@@ -493,6 +581,7 @@ export class SinglePublishAllService extends BaseService {
         // the publish permission is checked here for the first time.
         routeAuthorized: false,
         rbacAccessControlService: this.rbacAccessControlService,
+        visitor: this.fieldRuleVisitor,
         // A scoped API key is judged on its own `publish-{slug}` grant, not the
         // key owner's — the route checked only `update` against the scope.
         authenticatedScope: options.authenticatedScope,
@@ -657,7 +746,9 @@ export class SinglePublishAllService extends BaseService {
     /** The languages the publish rule was asked about before this transaction. */
     askedLanguages: readonly string[],
     /** Resolved before this transaction opened; see `publishAllLocales`. */
-    promoteGrants?: () => Promise<CallerGrants>
+    promoteGrants?: () => Promise<CallerGrants>,
+    /** Whether the caller may read the Single, asked with `promoteGrants`. */
+    promoteReads?: boolean
   ): Promise<PublishOutcome> {
     const { slug, singleMeta, existingDoc, hasMainStatus } = plan;
 
@@ -739,7 +830,8 @@ export class SinglePublishAllService extends BaseService {
       lockedRow,
       judged,
       options,
-      promoteGrants
+      promoteGrants,
+      promoteReads
     );
 
     // The components as they stood before the drafts are promoted, for each
@@ -758,7 +850,9 @@ export class SinglePublishAllService extends BaseService {
       lockedRow,
       priorCompanionStatuses,
       pending,
-      fieldGroupWriteAccessOf(options)
+      // A visitor's promoted field groups judged by the Public role this
+      // service's gate reads.
+      fieldGroupWriteAccessOf(options, this.fieldRuleVisitor)
     );
 
     let publishVersionNo: number | null = null;
@@ -775,6 +869,26 @@ export class SinglePublishAllService extends BaseService {
       );
     }
 
+    // Which media items the Single uses now. A publish that promoted held
+    // working drafts wrote their content, in any language, so every language
+    // is read again. Loaded when it is recorded, not with the service.
+    const { recordSingleMediaUsage } = await import("./single-media-usage");
+    await recordSingleMediaUsage(
+      tx,
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        fieldGroupDataService: this.fieldGroupDataService,
+        localization: this.localizationSource,
+      },
+      {
+        slug: plan.slug,
+        rowId: plan.existingDoc.id,
+        tableName: plan.singleMeta.tableName,
+        fields: plan.fieldConfigs,
+        companion: plan.companion,
+      }
+    );
     await this.recordPublishHistory(tx, plan, {
       user: options.user,
       mainFrom: lockedRow.status as string | null,
@@ -939,7 +1053,8 @@ export class SinglePublishAllService extends BaseService {
     lockedRow: Record<string, unknown>,
     pending: ReadonlyArray<{ locale: string | null; snapshot: unknown }>,
     options: PublishAllSingleLocalesOptions,
-    promoteGrants?: () => Promise<CallerGrants>
+    promoteGrants?: () => Promise<CallerGrants>,
+    promoteReads?: boolean
   ): Promise<void> {
     // Nothing goes live that was not live already: nothing to judge.
     if (pending.length === 0) return;
@@ -975,6 +1090,9 @@ export class SinglePublishAllService extends BaseService {
         componentFields,
         options,
         grants: promoteGrants,
+        readsEntry: promoteReads,
+        localization: this.localization,
+        tableName: singleMeta.tableName,
       }),
       entryId: existingDoc.id,
       toLogical: doc =>
@@ -2010,4 +2128,23 @@ function withSharedState(
       ),
     },
   };
+}
+
+/**
+ * What a Single's publish-all throws for `error`: a typed error as it is, the
+ * not-migrated answer for a database not migrated for the Single, and an
+ * internal error for anything else. Nothing after the publish's transaction
+ * reads the database, so a failure here never follows a written row.
+ */
+async function publishAllFailure(
+  error: unknown,
+  single: NotMigratedEntity
+): Promise<NextlyError> {
+  if (error instanceof NextlyError) return error;
+  const notMigrated = await asNotMigrated(error, single);
+  if (NextlyError.is(notMigrated)) return notMigrated;
+  return NextlyError.internal({
+    cause: error instanceof Error ? error : undefined,
+    logContext: { reason: "single-publish-all", single: single.slug },
+  });
 }

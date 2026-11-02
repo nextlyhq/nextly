@@ -222,7 +222,10 @@ export function outsideTransactionNotice(source: string): string {
  * as it runs, which is what lets PostgreSQL's `CREATE INDEX CONCURRENTLY`
  * run at all. A statement that fails stops the unit, and nothing undoes the
  * statements before it; the error says how many of them stayed applied.
- * `after` runs once every statement has, with the adapter's own handle.
+ * `after` runs once every statement has, with the adapter's own handle. On
+ * MySQL the statements share one connection whose session runs in strict
+ * mode, as a unit run in a transaction does, so a statement that would cut a
+ * stored value short fails rather than applying with a warning.
  *
  * On SQLite a unit run outside a transaction keeps the foreign-key contract
  * `executeTransaction` gives one run in a transaction, except the rollback:
@@ -252,16 +255,20 @@ export async function runMigrationStatements(
     });
     return statements.length;
   }
-  const runEach = async (): Promise<void> => {
+  const runEach = async (
+    execute: (statement: string) => Promise<unknown>
+  ): Promise<void> => {
     for (const [index, statement] of statements.entries()) {
       try {
-        await adapter.executeQuery(statement);
+        await execute(statement);
       } catch (error) {
         throw partialFailure(unit, index, statements.length, error);
       }
     }
   };
-  if (adapter.getCapabilities().dialect === "sqlite") {
+  const onPool = (statement: string) => adapter.executeQuery(statement);
+  const dialect = adapter.getCapabilities().dialect;
+  if (dialect === "sqlite") {
     const session: SqliteForeignKeySession = {
       read: statement => adapter.executeQuery(statement),
       run: async statement => {
@@ -272,13 +279,24 @@ export async function runMigrationStatements(
       await assertForeignKeysOff(session);
       await refusingNewDanglingReferences(
         session,
-        runEach,
+        () => runEach(onPool),
         (count, pairs) =>
           `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows${unit.direction === "down" ? "" : `, then ${markAppliedAdvice(unit.source)}`}.`
       );
     });
+  } else if (dialect === "mysql") {
+    // Strict mode, as `executeTransaction` gives a unit run in a transaction:
+    // a statement that would cut a value short, such as a column narrowed
+    // below a stored value's length, fails instead of applying with a
+    // warning nobody reads. A session setting covers only its own
+    // connection, so every statement runs on the one connection the session
+    // holds, which is closed afterwards rather than pooled.
+    await adapter.withSession(
+      session => runEach(statement => session.execute(statement)),
+      { strictSqlMode: true }
+    );
   } else {
-    await runEach();
+    await runEach(onPool);
   }
   await after?.(adapter.getDrizzle(), statements.length);
   return statements.length;

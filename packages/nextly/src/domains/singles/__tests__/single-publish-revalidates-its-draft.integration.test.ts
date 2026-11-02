@@ -45,8 +45,11 @@ let dir: string;
 let dbPath: string;
 let current: TestNextly | undefined;
 let previousDialect: string | undefined;
+/** Whether this test's database already holds the two publishers. */
+let publishersSeeded = false;
 
 beforeEach(() => {
+  publishersSeeded = false;
   previousDialect = process.env.DB_DIALECT;
   dir = mkdtempSync(join(tmpdir(), "nextly-single-promote-"));
   dbPath = join(dir, "test.db");
@@ -150,7 +153,20 @@ async function boot(
       }),
     ],
   });
+  // A publish is asked of a write that names only the status, even where the
+  // Single is already published and the status does not move, so both
+  // publishers hold publish-prefs. Seeded once per test: a reboot reopens the
+  // same database.
+  if (!publishersSeeded) await seedPublishers(current);
   return current.getService("singleEntryService");
+}
+
+/** Gives both publishers publish-prefs, once per test's database. */
+async function seedPublishers(t: TestNextly): Promise<void> {
+  for (const publisher of [BOSS, CLERK]) {
+    await userWhoMay(t, publisher.id, "publish", [SLUG]);
+  }
+  publishersSeeded = true;
 }
 
 async function reboot(strict: boolean): Promise<SingleEntryService> {
@@ -546,6 +562,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         }),
       ],
     });
+    await seedPublishers(current);
     const singles = current.getService<"singleEntryService">(
       "singleEntryService"
     ) as unknown as SingleEntryService;
@@ -668,6 +685,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         }),
       ],
     });
+    await seedPublishers(current);
     const singles = current.getService<"singleEntryService">(
       "singleEntryService"
     ) as unknown as SingleEntryService;
@@ -703,18 +721,10 @@ describe("a Single's publish re-judges the draft it promotes", () => {
   });
 
   /**
-   * Three languages of a Single whose shared `guarded` only BOSS may write.
-   * English holds a change that edits `guarded` from "L" to "X". German then
-   * publishes "X", begins a change from it and edits it back to "L", and,
-   * unless `revertLive` is false, French publishes "L" again.
-   *
-   * Publishing every language takes each held change's own shared edits,
-   * measured against the version it began from, and keeps the later of two
-   * edits to one field, dated by when that language's history began holding
-   * the value: German's "L", whose history held "X" after English's edit.
-   * English's snapshot still holds "X".
+   * A Single in English, German and French whose shared `guarded` only BOSS
+   * may write, live in every language with `guarded` at "L".
    */
-  async function heldEditsToGuarded(revertLive: boolean) {
+  async function guardedSingle() {
     process.env.DB_DIALECT = "sqlite";
     const adapter = await createAdapter({
       type: "sqlite",
@@ -776,6 +786,23 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         { overrideAccess: true, locale }
       );
     }
+    return { singles, asBoss, ok };
+  }
+
+  /**
+   * Three languages of a Single whose shared `guarded` only BOSS may write.
+   * English holds a change that edits `guarded` from "L" to "X". German then
+   * publishes "X", begins a change from it and edits it back to "L", and,
+   * unless `revertLive` is false, French publishes "L" again.
+   *
+   * Publishing every language takes each held change's own shared edits,
+   * measured against the version it began from, and keeps the later of two
+   * edits to one field, dated by when that language's history began holding
+   * the value: German's "L", whose history held "X" after English's edit.
+   * English's snapshot still holds "X".
+   */
+  async function heldEditsToGuarded(revertLive: boolean) {
+    const { singles, asBoss, ok } = await guardedSingle();
     // English's held change edits the shared field, beginning from "L".
     ok(
       await singles.update(
@@ -850,6 +877,44 @@ describe("a Single's publish re-judges the draft it promotes", () => {
       user: BOSS,
     });
     expect(published.success, JSON.stringify(published)).toBe(true);
+    const live = await singles.get(SLUG, {
+      overrideAccess: true,
+      locale: "en",
+    });
+    expect((live.data as { guarded?: unknown }).guarded).toBe("L");
+  });
+
+  it("refuses a publish-all that writes an earlier language's shared edit a later change leaves alone", async () => {
+    const { singles, asBoss, ok } = await guardedSingle();
+    // Only English's held change edits the shared field. German's, saved
+    // later, edits only its own words, so its copy of `guarded` is still the
+    // live "L" and is no edit: "X" is what publishing every language writes.
+    ok(
+      await singles.update(
+        SLUG,
+        { headline: "EN2", guarded: "X" },
+        asBoss("en")
+      )
+    );
+    ok(await singles.update(SLUG, { headline: "DE2" }, asBoss("de")));
+
+    // A publisher who may not write `guarded` is refused, naming it. Judged
+    // on each change as stored, German's later copy of "L" would stand in for
+    // the "X" written, and that publisher would put it live.
+    let issues: Array<{ path: string; code: string }> | undefined;
+    await expect(
+      singles
+        .publishAllLocales(SLUG, { routeAuthorized: true, user: CLERK })
+        .catch(error => {
+          issues = (
+            error as {
+              publicData?: { errors?: Array<{ path: string; code: string }> };
+            }
+          ).publicData?.errors;
+          throw error;
+        })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
     const live = await singles.get(SLUG, {
       overrideAccess: true,
       locale: "en",

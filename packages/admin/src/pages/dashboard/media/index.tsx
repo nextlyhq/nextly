@@ -21,7 +21,10 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 export default function MediaLibraryPage(): JSX.Element {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer className="overflow-hidden">
+      {/* Clipped sideways rather than `overflow-hidden`: hidden overflow makes
+          the container a scroll box of its own, and the details panel would
+          then stick to it instead of to the page's scrolling area. */}
+      <PageContainer className="overflow-x-clip">
         {/* MediaLibrary component handles its own header, sidebar, and content */}
         <MediaLibrary />
       </PageContainer>

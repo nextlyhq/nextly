@@ -21,6 +21,7 @@ import type { JSX } from "react";
 import { useState } from "react";
 
 import { CheckIcon, ChevronDownIcon, X, Shield } from "@admin/components/icons";
+import { assignableRoles } from "@admin/lib/roles/assignable";
 import { cn } from "@admin/lib/utils";
 import type { Role } from "@admin/types/entities";
 
@@ -235,7 +236,7 @@ export function UserRoleSelector({
                 <CommandList className="w-full overflow-x-hidden p-0">
                   <CommandEmpty>No roles found.</CommandEmpty>
                   <CommandGroup className="p-0">
-                    {roles.map((role, index) => {
+                    {assignableRoles(roles).map((role, index) => {
                       const isSelected = value.includes(role.id);
                       const isSystem = isSystemRole(role);
 

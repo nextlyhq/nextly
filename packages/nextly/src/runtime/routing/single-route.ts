@@ -36,10 +36,10 @@ import type { Nextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
 import { cachedFind } from "../cache/cached-find";
-import { nextlySingleTags } from "../cache/nextly-tags";
+import { nextlySingleTags, readTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
-import { markDynamic } from "./mark-dynamic";
+import { deferToRequest } from "./defer-to-request";
 import { triggerNotFound } from "./not-found";
 
 /** A resolved Single (loose by design — the shape is the app's own). */
@@ -284,9 +284,10 @@ export interface SingleRoute<TNode> {
  * Whether a failed read means "this page is not here" rather than "the read
  * broke".
  *
- * Both a genuine miss and an access denial become a 404, deliberately: a Single
- * the visitor may not see must not be distinguishable from one that does not
- * exist, or the route answers a question the access rule refused.
+ * A genuine miss, an access denial and a visitor asked to sign in all become a
+ * 404, deliberately: a Single the visitor may not see must not be
+ * distinguishable from one that does not exist, or the route answers a
+ * question the access rule refused.
  *
  * Everything else RETHROWS. A database blip degraded to `null` would be
  * rendered as a 404 and — on a public route — cached as one, so a transient
@@ -299,8 +300,11 @@ export interface SingleRoute<TNode> {
  */
 function isMissOrDenied(error: unknown): boolean {
   return (
-    NextlyError.is(error) &&
-    (error.statusCode === 404 || error.statusCode === 403)
+    (NextlyError.is(error) &&
+      (error.statusCode === 404 || error.statusCode === 403)) ||
+    // The visitor refusal only: another 401, such as an invalid or expired
+    // credential, is the caller's to fix and rethrows.
+    NextlyError.isCode(error, "AUTH_REQUIRED")
   );
 }
 
@@ -402,17 +406,18 @@ function buildSingleRoute<TNode>(
     // cache nor the route cache: one cached draft is served to everyone who asks
     // next, which turns a link scoped to one reviewer into a site-wide leak of
     // unpublished content. Bypassing the data cache alone does not opt out of
-    // the route cache, which is why this marks the render dynamic as well.
+    // the route cache, which is why this waits for the request as well.
     if (draft !== null) {
-      markDynamic();
+      await deferToRequest();
       return read(draft);
     }
 
     if (!trusted) {
       // An enforced read depends on who is asking, so it must not be frozen
       // into a build-time prerender or held in the route cache. Bypassing the
-      // data cache alone does not opt out of the route cache.
-      markDynamic();
+      // data cache alone does not opt out of the route cache, so this waits
+      // for the request, and the read takes its clock after it.
+      await deferToRequest();
       return read(null);
     }
     // Bounded by the next scheduled release, exactly as the collection route
@@ -420,7 +425,7 @@ function buildSingleRoute<TNode>(
     // serving its pre-release document until something unrelated busts a tag.
     const cacheSeconds = await releaseBoundedRevalidate(config.revalidate);
     return cachedFind(() => read(null), {
-      tags: [...nextlySingleTags(config.slug), ...(config.tags ?? [])],
+      tags: readTags(nextlySingleTags(config.slug), config.tags),
       // The locale is part of the key: one Single serves a different document
       // per language, and a key that omitted it would serve whichever language
       // warmed the cache first to everyone.

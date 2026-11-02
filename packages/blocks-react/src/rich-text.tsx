@@ -336,6 +336,39 @@ export function holdsInteractive(
 }
 
 /**
+ * Whether this passage DRAWS an interactive element: a link whose destination
+ * survives `url()`, or a button the row would render. Asked with the same
+ * decisions the views below make, so a link the renderer turns back into text
+ * makes nothing interactive. What a block's content model reads; the anchor
+ * nesting guard above keeps the coarser type scan.
+ */
+export function drawsInteractive(
+  nodes: readonly RichTextNode[] | undefined
+): boolean {
+  return anyDescendant(nodes, node => {
+    switch (node.type) {
+      case "link":
+      case "autolink":
+        return url(node.url) !== undefined;
+      case "button-link":
+        return isRenderable(node);
+      case "button-group":
+        return (
+          Array.isArray(node.buttons) &&
+          node.buttons.some(
+            entry =>
+              entry !== null &&
+              typeof entry === "object" &&
+              isRenderable(entry as Readonly<Record<string, unknown>>)
+          )
+        );
+      default:
+        return false;
+    }
+  });
+}
+
+/**
  * Whether any node in this subtree satisfies a test.
  *
  * ITERATIVE, with an explicit stack, and that is load-bearing rather than a

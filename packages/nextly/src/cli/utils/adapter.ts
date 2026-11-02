@@ -13,6 +13,8 @@ import {
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
+import { announceMode } from "../environment";
+import { connectionFailure, databaseEnvError } from "../errors/areas/database";
 
 import type { Logger } from "./logger";
 
@@ -61,6 +63,11 @@ export interface DatabaseEnvValidation {
   valid: boolean;
   /** Error messages if invalid */
   errors: string[];
+  /**
+   * The first thing to fix, when invalid: what the CLI's error code is chosen by, so the code
+   * never depends on the wording of `errors`.
+   */
+  problem?: "url-missing" | "dialect-undetected" | "dialect-invalid";
   /** Detected dialect */
   dialect?: SupportedDialect;
   /** Database URL */
@@ -89,12 +96,17 @@ export function detectDialectFromUrl(
  * @returns Validation result with errors if any
  */
 export function validateDatabaseEnv(): DatabaseEnvValidation {
+  // Every command that reaches a database checks its settings here first, so
+  // this is where the run names its mode and where its URL came from.
+  announceMode();
   const errors: string[] = [];
+  let problem: DatabaseEnvValidation["problem"];
   const databaseUrl = process.env.DATABASE_URL;
   const dialectEnv = process.env.DB_DIALECT as SupportedDialect | undefined;
 
   if (!databaseUrl) {
     errors.push("DATABASE_URL environment variable is required");
+    problem = "url-missing";
   }
 
   let dialect: SupportedDialect | undefined = dialectEnv;
@@ -106,15 +118,18 @@ export function validateDatabaseEnv(): DatabaseEnvValidation {
     errors.push(
       "Could not detect database dialect. Set DB_DIALECT to one of: postgresql, mysql, sqlite"
     );
+    problem ??= "dialect-undetected";
   } else if (!["postgresql", "mysql", "sqlite"].includes(dialect)) {
     errors.push(
       `Invalid DB_DIALECT: ${dialect}. Must be one of: postgresql, mysql, sqlite`
     );
+    problem ??= "dialect-invalid";
   }
 
   return {
     valid: errors.length === 0,
     errors,
+    problem,
     dialect: errors.length === 0 ? dialect : undefined,
     databaseUrl: errors.length === 0 ? databaseUrl : undefined,
   };
@@ -159,6 +174,9 @@ export async function createCliAdapter(
   options: CreateCliAdapterOptions = {}
 ): Promise<CLIDatabaseAdapter> {
   const { logger } = options;
+  // A command may connect without the settings check first, as
+  // `plugins install` does; it names its mode here instead (once a run).
+  announceMode();
 
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL;
   let dialect = options.dialect;
@@ -170,13 +188,21 @@ export async function createCliAdapter(
     dialect = process.env.DB_DIALECT as SupportedDialect | undefined;
   }
 
+  // The same errors the environment check gives, so a command that connects without checking
+  // first still ends with the code for what is missing.
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required");
+    throw databaseEnvError({
+      valid: false,
+      errors: [],
+      problem: "url-missing",
+    });
   }
   if (!dialect) {
-    throw new Error(
-      "Could not detect database dialect. Set DB_DIALECT environment variable."
-    );
+    throw databaseEnvError({
+      valid: false,
+      errors: [],
+      problem: "dialect-undetected",
+    });
   }
 
   logger?.debug(`Creating ${dialect} adapter...`);
@@ -197,7 +223,18 @@ export async function createCliAdapter(
     const adapter = await createAdapterFromEnv(
       schema === DEFAULT_POSTGRES_SCHEMA ? undefined : { schema }
     );
+    // The static system tables, resolvable by name from the moment the adapter exists. The
+    // adapter writes only to a table its resolver holds, and several commands install no resolver
+    // of their own before they write one: the schema lock seeds its field-group row through a
+    // transaction insert, inside `migrate:resolve`, `migrate:baseline`, `migrate:down`, `upgrade`
+    // and plugin install and uninstall. A command that installs its own resolver replaces this one.
+    // Loaded here, as the factory is, so the CLI's light entry points do not import the tables.
+    const { installRegistryResolver } = await import("./registry-resolver");
+    installRegistryResolver(adapter);
     return adapter;
+  } catch (error) {
+    // Read here, once, so every command that opens a database ends with the same code for it.
+    throw connectionFailure(dialect, error);
   } finally {
     if (originalDialect !== undefined) {
       process.env.DB_DIALECT = originalDialect;

@@ -35,7 +35,7 @@ const shop = {
       widgets: [
         {
           id: "acme/revenue",
-          display: { component: "@acme/shop/admin#Revenue" },
+          view: { component: "@acme/shop/admin#Revenue" },
         },
       ],
     },

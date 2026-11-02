@@ -222,7 +222,10 @@ describe("BulkActionBar — publish permission gating", () => {
   });
 
   it("hides both when the caller holds neither permission", () => {
-    canFor.mockImplementation(() => false);
+    // Neither publish permission, the delete permission still held.
+    canFor.mockImplementation(
+      slug => !slug.startsWith("publish-") && !slug.startsWith("unpublish-")
+    );
 
     render(
       <BulkActionBar
@@ -241,7 +244,7 @@ describe("BulkActionBar — publish permission gating", () => {
     expect(
       screen.queryByRole("button", { name: /unpublish selected/i })
     ).not.toBeInTheDocument();
-    // Delete stays — it is a different permission surface, unchanged here.
+    // Delete stays — it follows its own permission, not the publish ones.
     expect(
       screen.getByRole("button", { name: /delete selected/i })
     ).toBeInTheDocument();

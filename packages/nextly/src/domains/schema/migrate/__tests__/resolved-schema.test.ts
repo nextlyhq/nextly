@@ -235,3 +235,33 @@ describe("resolveDeclaredSchema — code-first shadowing", () => {
     expect(resolved.knownJunctions.has("articles_tags")).toBe(true);
   });
 });
+
+describe("resolveDeclaredSchema — which registry each entity's row is in", () => {
+  it("tags every entity with its kind, from the config and the manifest alike", async () => {
+    // One slug of each kind on each side: the slug alone cannot say which
+    // registry a row belongs in, so the kind has to travel with the entity.
+    await writeManifest({
+      collections: [{ slug: "b_about", fields: [] }],
+      singles: [{ slug: "b_about", fields: [] }],
+      components: [{ slug: "b_about", fields: [] }],
+    });
+
+    const resolved = await resolveDeclaredSchema({
+      projectRoot,
+      config: config({
+        collections: [{ slug: "c_about", fields: [] }],
+        singles: [{ slug: "c_about", fields: [] }],
+        fieldGroups: [{ slug: "c_about", fields: [] }],
+      }),
+    });
+
+    expect(resolved.entities.map(e => [e.slug, e.kind, e.builtBy])).toEqual([
+      ["c_about", "collection", "codeFirst"],
+      ["c_about", "single", "codeFirst"],
+      ["c_about", "fieldGroup", "codeFirst"],
+      ["b_about", "collection", "collection"],
+      ["b_about", "single", "collection"],
+      ["b_about", "fieldGroup", "fieldGroup"],
+    ]);
+  });
+});

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DOCUMENT_VIEW_COLLISION
+description: "Two plugin document views answer the same address."
+---
+
+## Cause
+
+Two plugin document views answer the same address.
+
+A document view is a screen at an address under a document in the admin. Two plugins declare a view at the same address, on the same collection or on a field type that can be on it, and one address can draw one screen.
+
+## Fix
+
+- Rename the path of one of the two views.
+- Or configure only one of the two plugins.
+
+## Example
+
+```text
+✗ Plugin "analytics" contributes a document view that on "posts" at "insights", where "seo" already declares a view on "posts".
+  Why:  One address can draw one screen.
+  Next: Rename one of the two paths.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-view-collision  (PLUGIN_DOCUMENT_VIEW_COLLISION)
+```

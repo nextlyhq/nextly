@@ -69,6 +69,14 @@ export interface MediaGridProps {
   selectedIds?: Set<string>;
 
   /**
+   * The item whose details are open beside the grid, so its tile is marked.
+   * `null` when none is open.
+   *
+   * @default null
+   */
+  currentId?: string | null;
+
+  /**
    * Callback fired when a media item's selection state changes.
    * Typically toggles the item in selectedIds Set.
    *

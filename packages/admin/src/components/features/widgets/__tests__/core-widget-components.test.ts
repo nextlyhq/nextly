@@ -3,7 +3,7 @@
  *
  * 🔴 The two halves live in packages that do not depend on each other. A core
  * card declares its body as a string in `packages/nextly`
- * (`core-widgets.ts`), and the component behind that string is bound here
+ * (`core-widgets/`), and the component behind that string is bound here
  * (`core-components.ts`) -- so no type, no import and no build step can notice
  * that one names something the other never registered. That is the same
  * two-halves-of-one-name hazard `system-source-ids.ts` exists to manage for a
@@ -26,8 +26,8 @@
  * build.
  *
  * `core-components.ts` cannot be imported at all. It sits in a PRE-EXISTING
- * import cycle -- it imports `TeamSummary` and `CollectionQuickLinks`, which
- * reach the `@admin/hooks/queries` barrel, which reaches
+ * import cycle -- it imports the dashboard's cards, and a card that
+ * reaches the `@admin/hooks/queries` barrel reaches
  * `pages/dashboard/index.tsx`, which imports `WidgetGrid`, which calls
  * `registerCoreWidgetComponents()` at module scope and so re-enters the module
  * being evaluated. Importing it from a test throws `Cannot access ... before
@@ -48,8 +48,7 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { CORE_WIDGETS } from "../../../../../../nextly/src/domains/widgets/core-widgets";
-import { LIST_RENDERED_FIELDS } from "../archetypes/list";
+import { CORE_DECLARATIONS } from "../../../../../../nextly/src/domains/widgets/core-widgets";
 
 /**
  * Resolved from this file rather than from `process.cwd()`, so the test reads
@@ -61,15 +60,15 @@ const CORE_COMPONENTS = join(
 );
 
 /**
- * The paths core's cards NAME, read off the definitions rather than matched out
- * of their source text.
- *
- * A `custom` card is the only kind that names one; the archetype-drawn cards
- * carry a `query` instead and are correctly absent here.
+ * The paths core's cards NAME, read off the declarations rather than matched
+ * out of their source text: a declaration whose view is a component of core's
+ * own names one, and a core view names no path, so it is correctly absent here.
  */
-const named = CORE_WIDGETS.map(widget => widget.component).filter(
-  (path): path is string => typeof path === "string"
-);
+const named = [
+  ...CORE_DECLARATIONS.map((widget): string | undefined =>
+    typeof widget.view === "object" ? widget.view.component : undefined
+  ),
+].filter((path): path is string => typeof path === "string");
 
 /**
  * The paths this package REGISTERS.
@@ -99,13 +98,13 @@ describe("core widget component paths resolve", () => {
    */
   it("reads a non-empty set of named paths from core", () => {
     expect(named).toEqual(
-      expect.arrayContaining(["core#TeamSummary", "core#RecentActivity"])
+      expect.arrayContaining(["core#TeamSummary", "core#TeamActivity"])
     );
   });
 
   it("reads a non-empty set of registrations from the admin", () => {
     expect(registered).toEqual(
-      expect.arrayContaining(["core#TeamSummary", "core#RecentActivity"])
+      expect.arrayContaining(["core#TeamSummary", "core#TeamActivity"])
     );
   });
 
@@ -117,43 +116,5 @@ describe("core widget component paths resolve", () => {
    */
   it("names exactly what it registers", () => {
     expect([...registered].sort()).toEqual([...named].sort());
-  });
-});
-
-/**
- * A list card asking for fields its renderer will not draw.
- *
- * 🔴 This is the OTHER cross-package silence, and it fails more quietly than an
- * unregistered component: the card renders, correctly, showing fewer columns
- * than its author selected. Nothing throws, nothing logs, and the row looks
- * deliberate -- so it survives review by anyone who does not happen to know the
- * renderer takes two. Both shipped list cards were wrong this way, and one of
- * them dropped the timestamp from a card whose description promises "newest
- * first".
- *
- * The bound is IMPORTED from the renderer rather than written here, so drawing a
- * third field is a one-line change in one file rather than a number to find in
- * two.
- */
-describe("core list cards select only fields that get drawn", () => {
-  const listCards = CORE_WIDGETS.filter(
-    widget => widget.archetype === "list"
-  ).map(widget => [widget.id, widget.query?.select ?? []] as const);
-
-  /*
-   * The population, pinned rather than merely non-empty. Core declares no
-   * list card today: Recently edited and Upcoming releases each draw through a
-   * component of their own. Pinned, a card that becomes a list card fails here
-   * until it is named, and is then checked below; a bare loop over an empty
-   * list would pass having checked nothing.
-   */
-  it("knows which core cards are list cards", () => {
-    expect(listCards.map(([id]) => id)).toEqual([]);
-  });
-
-  it("holds each core list card to what is drawn", () => {
-    for (const [id, select] of listCards) {
-      expect(select.length, id).toBeLessThanOrEqual(LIST_RENDERED_FIELDS);
-    }
   });
 });
