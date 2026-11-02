@@ -75,6 +75,28 @@ function safeLimit(limit: number | undefined): number {
   return Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, Math.floor(limit)));
 }
 
+/**
+ * Whether a read failed because its sort was refused, and nothing else.
+ *
+ * Recognized by its shape, not its class, because this package does not
+ * import the CMS: a refusal lists its problems, and every one is a sort key
+ * the reader would not order by. That refusal comes before any read, so a
+ * retry in id order costs no second read; any other failure, a timeout
+ * included, may have reached the database and is not retried.
+ */
+function sortWasRefused(error: unknown): boolean {
+  const errors = (error as { publicData?: { errors?: unknown } } | null)
+    ?.publicData?.errors;
+  return (
+    Array.isArray(errors) &&
+    errors.length > 0 &&
+    errors.every(
+      problem =>
+        (problem as { code?: unknown } | null)?.code === "FIELD_NOT_SORTABLE"
+    )
+  );
+}
+
 export async function renderCollectionLoop({
   props,
   renderSlot,
@@ -130,9 +152,8 @@ export async function renderCollectionLoop({
       // A stored sort the reader refuses (a field since removed, or one the
       // public may not read) would otherwise empty a published list. Once
       // more in id order: the refusal comes before any read, so the one
-      // claim above still covers it. Anything else fails again and is
-      // contained below.
-      if (sort === undefined) throw error;
+      // claim above still covers it. Any other failure is contained below.
+      if (sort === undefined || !sortWasRefused(error)) throw error;
       result = await read([]);
     }
     items = Array.isArray(result.items) ? [...result.items] : [];

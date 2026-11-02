@@ -238,7 +238,13 @@ describe("core/collection-loop", () => {
         calls.push(query);
         return Array.isArray(query.sort) && query.sort.length === 0
           ? Promise.resolve({ items: [{ id: "a" }] })
-          : Promise.reject(new Error('"secret" is not a sortable field'));
+          : Promise.reject(
+              Object.assign(new Error("Validation failed."), {
+                publicData: {
+                  errors: [{ path: "sort.secret", code: "FIELD_NOT_SORTABLE" }],
+                },
+              })
+            );
       },
     };
     let claims = 0;
@@ -257,6 +263,24 @@ describe("core/collection-loop", () => {
     expect(calls.map(call => call.sort)).toEqual(["-secret", []]);
     // The refusal comes before any read, so the retry claims nothing more.
     expect(claims).toBe(1);
+  });
+
+  it("does not retry a sorted read that failed for another reason", async () => {
+    let reads = 0;
+    const timingOut: BlocksDataProvider = {
+      find: () => {
+        reads += 1;
+        return Promise.reject(new Error("connection reset"));
+      },
+    };
+    const element = await renderCollectionLoop(
+      args<{ collection?: string; sort?: string }>(
+        { collection: "posts", sort: "-date" },
+        testContext({ data: timingOut })
+      )
+    );
+    expect(reads).toBe(1);
+    expect(renderToStaticMarkup(element)).toBe('<div class="nx-n1"></div>');
   });
 
   it("does not retry a read that failed with no sort to drop", async () => {

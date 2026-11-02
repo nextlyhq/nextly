@@ -38,10 +38,11 @@ them, in the route's language. Each read is cached and tagged with its collectio
 `reader => createDefaultDataProvider(reader, { collections: ["posts"] })`. **Breaking:** a
 provider object is refused when the route is built; wrap it, or drop it to use the default.
 `@nextlyhq/blocks-react` exports `createDefaultDataProvider` and the reader's types
-(`@experimental`), and `BlocksQuery` carries filter rows, several sort keys, `page`,
-`select` and `populate`.
+(`@experimental`), and `BlocksQuery` carries filter rows, several sort keys, `page` and
+`select`.
 
 `core/collection-loop` always sends a sort, so a loop without one lists in id order, and a
-stored sort the reader refuses lists in id order instead of rendering empty.
+stored sort the reader refuses lists in id order instead of rendering empty (any other
+failure is not retried).
 
 `createPublicReader` needs only `find`; `count` is a one-row read of ids.

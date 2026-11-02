@@ -63,10 +63,8 @@ export interface BlocksQuery {
   /** A page of `limit` rows after the offset, from 1. */
   page?: number;
   locale?: string;
-  /** The fields each row carries, besides its id. */
+  /** The fields each row carries, besides its id; a relationship as its id. */
   select?: readonly string[];
-  /** Relationship fields to fill with their entry, one level deep. */
-  populate?: readonly string[];
 }
 
 /** What a host returns for a {@link BlocksQuery}. */
