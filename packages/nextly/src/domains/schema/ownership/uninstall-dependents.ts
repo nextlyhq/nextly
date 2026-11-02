@@ -486,9 +486,7 @@ async function onItsContributedColumns(
   own: ReadonlySet<string>,
   found: Found
 ): Promise<void> {
-  const contributed = input.owned.filter(
-    row => row.elementKind === "column" && !own.has(row.tableName)
-  );
+  const contributed = contributedColumnsOf(input.owned, own);
   if (contributed.length === 0) return;
   // Loaded when asked, as `elementsAddedTo` loads it: the index naming rule
   // lives beside the compiler, which nothing else here needs.
@@ -587,9 +585,7 @@ async function liveKeysPointingIn(
   own: ReadonlySet<string>,
   found: Found
 ): Promise<void> {
-  const contributed = input.owned.filter(
-    row => row.elementKind === "column" && !own.has(row.tableName)
-  );
+  const contributed = contributedColumnsOf(input.owned, own);
   if (own.size === 0 && contributed.length === 0) return;
   const pointing = keysPointingIn(
     await input.liveForeignKeys(),
@@ -597,28 +593,16 @@ async function liveKeysPointingIn(
     contributed
   );
   if (pointing.length === 0) return;
-  const schema = await input.sources.extensionSchema();
-  const declared = new Set(
-    (schema?.specs ?? []).flatMap(spec =>
-      (spec.foreignKeys ?? []).map(
-        key => `${folded(spec.name)}\u0000${folded(key.name)}`
-      )
-    )
-  );
-  const undeclared = pointing.filter(
-    key => !declared.has(`${folded(key.table)}\u0000${folded(key.name)}`)
+  const undeclared = undeclaredKeys(
+    await input.sources.extensionSchema(),
+    pointing
   );
   if (undeclared.length === 0) return;
   const recorded = elementsFromOwnerRows(
     await input.recordedRowsOn([...new Set(undeclared.map(key => key.table))])
   );
   for (const key of undeclared) {
-    const owner = recorded.find(
-      element =>
-        element.kind === "fk" &&
-        folded(element.table) === folded(key.table) &&
-        folded(element.name) === folded(key.name)
-    )?.owner;
+    const owner = recordedOwnerOf(recorded, key);
     if (owner !== undefined && isThePlugin(owner, input.pluginName)) continue;
     found.add({
       kind: "foreign key",
@@ -630,6 +614,46 @@ async function liveKeysPointingIn(
           : `${describeOwner(owner)}, which no longer declares it`,
     });
   }
+}
+
+/** The plugin's column rows on other owners' tables: the columns it contributed. */
+function contributedColumnsOf(
+  owned: readonly OwnerRecord[],
+  own: ReadonlySet<string>
+): OwnerRecord[] {
+  return owned.filter(
+    row => row.elementKind === "column" && !own.has(row.tableName)
+  );
+}
+
+/** The live keys among `keys` that no compiled declaration names. */
+function undeclaredKeys(
+  schema: ExtensionSchemaRecord | null,
+  keys: readonly LiveForeignKey[]
+): LiveForeignKey[] {
+  const declared = new Set(
+    (schema?.specs ?? []).flatMap(spec =>
+      (spec.foreignKeys ?? []).map(
+        key => `${folded(spec.name)}\u0000${folded(key.name)}`
+      )
+    )
+  );
+  return keys.filter(
+    key => !declared.has(`${folded(key.table)}\u0000${folded(key.name)}`)
+  );
+}
+
+/** Who the ownership record names as a live key's owner, if it records one. */
+function recordedOwnerOf(
+  recorded: readonly ElementOnTable[],
+  key: LiveForeignKey
+): ElementOnTable["owner"] | undefined {
+  return recorded.find(
+    element =>
+      element.kind === "fk" &&
+      folded(element.table) === folded(key.table) &&
+      folded(element.name) === folded(key.name)
+  )?.owner;
 }
 
 /**
