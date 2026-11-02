@@ -43,6 +43,7 @@ import {
   type ContentControlType,
 } from "./content-control-types";
 import { fieldLabel, type EditableProp } from "./inspector";
+import { RelationControl } from "./relation-control";
 import { useStoredDraft } from "./stored-draft";
 import type { InlineRichTextEditorLoader } from "./use-inline-rich-text";
 
@@ -63,6 +64,23 @@ export interface MediaPickerProps {
   title?: string;
 }
 
+/** What a relation control asks the host for: one collection's entries. */
+export interface EntryQuery {
+  readonly collection: string;
+  /** Entries whose title holds this, ignoring case; empty for the first few. */
+  readonly search?: string;
+  /** These entries by id, to name the one a prop stores. */
+  readonly ids?: readonly string[];
+  readonly limit?: number;
+  readonly signal?: AbortSignal;
+}
+
+/** One entry as a relation control shows it: its id and its title, nothing else. */
+export interface FoundEntry {
+  readonly id: string;
+  readonly title: string;
+}
+
 /**
  * What the host lends the Content tab: the parts of the admin this package
  * cannot reach itself. Each is optional, and a control whose service is absent
@@ -75,6 +93,11 @@ export interface ContentServices {
   readonly MediaPicker?: React.ComponentType<MediaPickerProps>;
   /** The shared rich-text editor, loaded when a passage is first focused. */
   readonly loadRichTextEditor?: InlineRichTextEditorLoader;
+  /**
+   * A collection's entries, read with the signed-in author's own access, for
+   * a prop that points at one of them.
+   */
+  readonly findEntries?: (query: EntryQuery) => Promise<readonly FoundEntry[]>;
 }
 
 /** What every content control is given. */
@@ -635,6 +658,7 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   media: MediaControl,
   richText: RichTextControl,
   array: ArrayControl,
+  relation: RelationControl,
 };
 
 /**

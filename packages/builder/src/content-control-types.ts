@@ -20,6 +20,7 @@ export const CONTENT_CONTROL_TYPES = [
   "media",
   "richText",
   "array",
+  "relation",
 ] as const;
 
 export type ContentControlType = (typeof CONTENT_CONTROL_TYPES)[number];
