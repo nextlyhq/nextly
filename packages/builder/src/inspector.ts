@@ -39,8 +39,9 @@ import {
 import type { RefusalWording } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
 import { blockLabel } from "./inserter";
+import { layerLabel } from "./layers";
 import { lockRefusalWording } from "./lock-refusal";
-import { isLocked } from "./locking";
+import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp, NodePatch } from "./ops";
 
@@ -417,7 +418,7 @@ function inspectorOf(
 
 /**
  * Whether the block may not be changed from the inspector at all: locked in
- * Layers, or no longer in the document.
+ * Layers, itself or by a block it sits inside, or no longer in the document.
  *
  * Asked of the LIVE document at the moment a change is attempted, not of the
  * one a panel rendered with: a lock set in Layers after the panel drew must
@@ -425,7 +426,7 @@ function inspectorOf(
  */
 export function blockIsReadOnly(document: BlockDocument, id: string): boolean {
   const node = findNode(document.nodes, id);
-  return node === undefined || isLocked(node);
+  return node === undefined || lockBlockingEdit(document, id) !== undefined;
 }
 
 /**
@@ -542,7 +543,13 @@ export function lockViewOf(
  *   declares that slot sets in code. Nothing on the page can lift it.
  */
 export interface BlockLockStatus {
+  /** Whether the block itself is locked in Layers. */
   readonly layers: boolean;
+  /**
+   * The name of the block locked in Layers that this one sits inside, when
+   * it is not locked itself: a lock covers everything inside the block.
+   */
+  readonly inheritedFrom?: string | undefined;
   /**
    * The lock of the slot the block sits in, and the label of the block that
    * sets it, or `undefined` where no slot lock applies.
@@ -597,11 +604,16 @@ export function lockStatusOf(
 ): BlockLockStatus {
   const node = findNode(document.nodes, id);
   const layers = node !== undefined && isLocked(node);
+  const around =
+    node === undefined || layers ? undefined : lockedAncestorOf(document, id);
+  const inherited =
+    around === undefined ? {} : { inheritedFrom: layerLabel(around) };
   const area = contentOnlyAreaOf(document, id, view);
   if (area !== undefined) {
     const held = designLockOf(document, id, view);
     return {
       layers,
+      ...inherited,
       slot: {
         lock: "contentOnly",
         holder: blockLabel(area.area.holderType),
@@ -623,13 +635,14 @@ export function lockStatusOf(
     .find(({ at }) => at?.lock !== undefined);
   const lock = found?.at?.lock;
   if (found === undefined || lock === undefined || lock === "contentOnly") {
-    return { layers, slot: undefined };
+    return { layers, ...inherited, slot: undefined };
   }
   const holderType = declaringAncestor(found.tree, id, source);
   const holder =
     holderType === undefined ? "The block it sits in" : blockLabel(holderType);
   return {
     layers,
+    ...inherited,
     slot: {
       lock,
       holder,
@@ -680,7 +693,12 @@ export function designReadOnlyReason(
   if (findNode(document.nodes, id) === undefined) {
     return "This block is no longer on the page.";
   }
-  if (lockStatusOf(document, id, view).layers) return LAYERS_LOCK_REASON;
+  const status = lockStatusOf(document, id, view);
+  if (status.layers) return LAYERS_LOCK_REASON;
+  // Inside a block locked in Layers: that block's lock covers this one.
+  if (status.inheritedFrom !== undefined) {
+    return `Locked by ${status.inheritedFrom}: this block is inside it, so it can't be moved, deleted or edited. Unlock ${status.inheritedFrom} to change it.`;
+  }
   // A `contentOnly` area's reason is the lock refusal's own wording, so the
   // inspector, a refused move and a refused save say one thing.
   const held = designLockOf(document, id, view);

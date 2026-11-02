@@ -91,7 +91,15 @@ const declaring = definePlugin({
   version: "1.0.0",
   nextly: ">=0.0.0",
   contributes: {
-    declarations: { [PAGE_BUILDER_PLUGIN]: { blocks: [teaser] } },
+    declarations: {
+      [PAGE_BUILDER_PLUGIN]: {
+        blocks: [teaser],
+        // Named as the editor's module: the route reads only for relation
+        // props of blocks the editor can draw, and a declaration without an
+        // editor entry reaches the server alone.
+        editorEntry: "@test/relation-blocks/editor#blocks",
+      },
+    },
   },
 } as never);
 

@@ -519,7 +519,7 @@ describe("dragging a Layers row", () => {
     moveTo(container, X, 2 * ROW - 4);
     expect(line(container)?.hasAttribute("data-refused")).toBe(true);
     expect(screen.getByRole("status").textContent).toContain(
-      "Heading is locked. Unlock it to move it."
+      "Heading inside this block is locked. Unlock Heading to move this block."
     );
     release(container, X, 2 * ROW - 4);
     expect(structure()).toEqual(["box", "box>caption", "h"]);
@@ -580,7 +580,9 @@ describe("dragging a Layers row", () => {
     expect(structure()).toEqual(["a", "b", "c"]);
   });
 
-  it("starts no drag on a locked block", () => {
+  it("refuses every drop for a locked block, saying it is locked", () => {
+    // The drag starts so that it can say why it lands nowhere: a block that
+    // simply would not lift would leave the author guessing.
     const { container } = render(
       <Host
         document={page([
@@ -592,8 +594,11 @@ describe("dragging a Layers row", () => {
     press("a", 10);
     moveTo(container, X, 20);
     moveTo(container, X, 2 * ROW - 4);
+    expect(line(container)?.hasAttribute("data-refused")).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain(
+      "Heading is locked. Unlock it to move it."
+    );
     release(container, X, 2 * ROW - 4);
-    expect(captured).toEqual([]);
     expect(structure()).toEqual(["a", "b"]);
   });
 

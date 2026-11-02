@@ -552,10 +552,19 @@ export function InspectorPanel({
         name={block.identity.name}
         description={block.description}
         lock={lock}
-        onRename={name => editor.apply(renameOp(block.nodeId, name))}
+        // Withheld while a Layers lock holds the block, its own or one around
+        // it: renaming is a change like any other, and the op layer refuses it.
+        onRename={
+          lock.layers || lock.inheritedFrom !== undefined
+            ? undefined
+            : name => editor.apply(renameOp(block.nodeId, name))
+        }
         onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
         // Held inside a `contentOnly` area, which pins the node's own lock
-        // with its design: the save would refuse the change.
+        // with its design: the save would refuse the change. The one predicate
+        // the multi-selection card asks too, so a block's Lock is offered alike
+        // however it was selected; inside a block locked in Layers it stays
+        // offered, since a change to the lock alone is always allowed.
         lockHeld={
           layersLockChangeable(lock)
             ? undefined
