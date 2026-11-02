@@ -34,10 +34,13 @@ export interface EffectiveLayoutDeps {
 }
 
 /**
- * The Layout `page` is drawn inside, by the shared rule.
+ * The Layout `page` gets, by the shared rule.
  *
- * A page's stored `layout` may arrive populated, so it is read as an id. When
- * the answer is `no-default` the page renders with no regions and says why.
+ * A page's stored `layout` may arrive populated, so it is read as an id. A
+ * `no-default` answer means no regions, with the reason.
+ *
+ * @experimental The page route does not draw Layouts yet, and nothing in this
+ * package calls this; it may change when the renderer that uses it lands.
  */
 export async function effectiveLayoutFor(
   // The stored page as read: `layout` an id or a populated row.

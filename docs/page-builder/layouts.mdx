@@ -8,19 +8,28 @@ footer. Layouts live under **Page Builder → Layouts** in the admin. A Layout i
 published like a component: its draft can change without the site seeing it until you
 publish.
 
+<Callout type="warn">
+  Layouts are experimental. Pages store their Layout and their switch, and the
+  site keeps one protected default Layout, but the page route does not draw
+  Layouts yet: a page renders without its header and footer for now. Drawing
+  them lands with a later release of the renderer.
+</Callout>
+
 ## Which Layout a page gets
 
 Each page has two settings:
 
-- **Layout**: the Layout this page is drawn inside. Leave it empty to use the site's
-  default Layout, which is what most pages do.
-- **No header or footer**: draws the page with no Layout at all. It always wins, even
-  when the page also names a Layout, so a landing page you switched off stays switched
-  off.
+- **Layout**: the Layout the page asks for. Leave it empty to use the site's default
+  Layout, which is what most pages do.
+- **No header or footer**: asks for no Layout at all. It always wins, even when the
+  page also names a Layout, so a landing page you switched off stays switched off.
 
-When a page names a Layout that is not published (or was deleted), the page uses the
-site's default Layout instead. When the default itself is not usable, the page is
-drawn with no header or footer.
+The rule for which Layout a page gets is: the switch first, then the Layout the page
+names while it is published, then the site's default while it is published, and
+otherwise none. So a page naming a Layout that is not published (or was deleted) gets
+the site's default, and a page whose default is not usable gets no header or footer.
+`effectiveLayoutFor` from `@nextlyhq/plugin-page-builder` answers this for a stored
+page; it is experimental while the renderer does not use it yet.
 
 ## The default Layout
 

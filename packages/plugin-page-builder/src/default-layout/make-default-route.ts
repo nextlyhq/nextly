@@ -30,8 +30,7 @@
  *
  * @module default-layout/make-default-route
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
-import { respondMutation } from "nextly";
+import { NextlyError, respondMutation } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";

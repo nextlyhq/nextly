@@ -31,8 +31,11 @@
  *
  * @module default-layout/ensure-default
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
-import { defineJob, type JobDefinition } from "nextly";
+import {
+  defineJob,
+  NextlyError,
+  type JobDefinition,
+} from "@nextlyhq/plugin-sdk";
 
 import { seedSlug, seedTitle } from "./seed-names";
 import {
@@ -57,6 +60,13 @@ const REPAIR_DEDUPE_KEY = `${DEFAULT_LAYOUT_JOB}:repair`;
 
 /** How many Layouts one page of the name scan reads. */
 const NAME_SCAN_PAGE_SIZE = 100;
+
+/**
+ * How many slugs the seed tries when the database refuses one the scan saw as
+ * free. Bounded, so a store that refuses every slug fails the run instead of
+ * looping; the sweep tries again later.
+ */
+const SEED_SLUG_ATTEMPTS = 5;
 
 /** What the repair needs: the Direct API, the resolved slugs and a log. */
 export interface EnsureDefaultDeps {
@@ -143,6 +153,7 @@ async function repointToSeed(
       overrideAccess: true,
     });
   }
+  if (!(await stillDefault(deps, previous))) return "kept";
   await writeLayoutSettings(deps.nextly, deps.slugs, { defaultLayout: seed });
   deps.warn(
     "[page-builder] the default Layout was missing or not published, so the default now names the seeded Layout again",
@@ -161,16 +172,18 @@ async function reseed(
 ): Promise<EnsureOutcome> {
   // Read again just before creating: another process may have seeded since
   // the first read, and its seed is the one to keep.
+  // A newer default chosen since then is kept too.
   const latest = await readLayoutSettings(deps.nextly, deps.slugs);
   if (
-    latest.seededLayout !== null &&
-    latest.seededLayout !== settings.seededLayout
+    (latest.seededLayout !== null &&
+      latest.seededLayout !== settings.seededLayout) ||
+    latest.defaultLayout !== settings.defaultLayout
   ) {
     return "kept";
   }
 
   const created = await createSeed(deps);
-  await recordSeed(deps, created);
+  await recordSeed(deps, created, settings.defaultLayout);
   deps.warn(
     settings.seededLayout === null
       ? "[page-builder] the site had no usable default Layout, so a 'Default (site)' Layout was created and made the default"
@@ -185,6 +198,26 @@ async function reseed(
 }
 
 /**
+ * Whether the settings still name `observed` as the default, read again just
+ * before the repair writes over it.
+ *
+ * A make-default that lands while the repair runs owns the default, and
+ * writing the seed over it would undo that request. This narrows the window
+ * rather than closing it: the read and the write are two statements, not a
+ * compare-and-set, so a make-default landing between them can still be
+ * overwritten, and that choice is then lost.
+ */
+async function stillDefault(
+  deps: EnsureDefaultDeps,
+  observed: string | null
+): Promise<boolean> {
+  return (
+    (await readLayoutSettings(deps.nextly, deps.slugs)).defaultLayout ===
+    observed
+  );
+}
+
+/**
  * Record a just-created seed as the default, or remove it again.
  *
  * The create and this write are separate, so when this one fails the seed is
@@ -193,15 +226,22 @@ async function reseed(
  * deleted as the system (best effort, and logged when even that fails) and
  * the failure rethrown, which fails the run for the sweep to retry. The delete
  * passes the guard: the seed is not the default, since the write failed.
+ *
+ * The seed is made the default only while the default is still `observed`,
+ * the unusable one this run set out to replace; a make-default that landed
+ * while the seed was being created keeps its choice, and the seed is recorded
+ * as the seed alone (see {@link stillDefault}).
  */
 async function recordSeed(
   deps: EnsureDefaultDeps,
-  created: string
+  created: string,
+  observed: string | null
 ): Promise<void> {
   try {
+    const takeDefault = await stillDefault(deps, observed);
     await writeLayoutSettings(deps.nextly, deps.slugs, {
       seededLayout: created,
-      defaultLayout: created,
+      ...(takeDefault ? { defaultLayout: created } : {}),
     });
   } catch (error) {
     await deps.nextly
@@ -229,8 +269,41 @@ async function recordSeed(
  * Every stored Layout is read, whatever its state, because a draft holds its
  * slug's unique value as firmly as a published one does. Paged to the end, so
  * a clash past the first page still moves the seed's name.
+ *
+ * The database can still refuse the slug the scan found free: MySQL compares
+ * slugs without case or accents, so `Default-Site` holds `default-site` there.
+ * A refusal as a duplicate adds the slug to the taken set and tries the next
+ * numbered one, a bounded number of times; past that the run fails, and the
+ * sweep tries again later.
  */
 async function createSeed(deps: EnsureDefaultDeps): Promise<string> {
+  const { titles, slugs } = await takenNames(deps);
+  for (let attempt = 1; ; attempt += 1) {
+    const slug = seedSlug(slugs);
+    try {
+      return await createNamed(deps, seedTitle(titles), slug);
+    } catch (error) {
+      if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
+      if (attempt >= SEED_SLUG_ATTEMPTS) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message: "The default Layout could not be given a free address.",
+          logContext: {
+            reason: "default-layout-seed-slug-exhausted",
+            attempts: attempt,
+            lastSlug: slug,
+          },
+        });
+      }
+      slugs.add(slug);
+    }
+  }
+}
+
+/** Every stored Layout's title and slug, read as the only columns asked for. */
+async function takenNames(
+  deps: EnsureDefaultDeps
+): Promise<{ titles: Set<string>; slugs: Set<string> }> {
   const titles = new Set<string>();
   const slugs = new Set<string>();
   for (let page = 1; ; page += 1) {
@@ -239,9 +312,12 @@ async function createSeed(deps: EnsureDefaultDeps): Promise<string> {
       status: "all",
       limit: NAME_SCAN_PAGE_SIZE,
       page,
-      // A fixed order, so the pages partition the rows.
+      // A fixed order, so the pages partition the rows. Sorting by id needs
+      // no id in the selection.
       sort: "id",
       depth: 0,
+      // The scan compares names and nothing else.
+      select: { title: true, slug: true },
       overrideAccess: true,
     });
     for (const row of found.items) {
@@ -249,14 +325,21 @@ async function createSeed(deps: EnsureDefaultDeps): Promise<string> {
       if (typeof title === "string") titles.add(title);
       if (typeof slug === "string") slugs.add(slug);
     }
-    if (!found.meta.hasNext) break;
+    if (!found.meta.hasNext) return { titles, slugs };
   }
+}
 
+/** Create the seed Layout under one title and slug, answering its id. */
+async function createNamed(
+  deps: EnsureDefaultDeps,
+  title: string,
+  slug: string
+): Promise<string> {
   const created = await deps.nextly.create({
     collection: deps.slugs.layouts,
     data: {
-      title: seedTitle(titles),
-      slug: seedSlug(slugs),
+      title,
+      slug,
       // No areas: a seed that named components would be choosing a header for
       // the site. Empty, it draws pages with no regions until someone fills it.
       areas: [],

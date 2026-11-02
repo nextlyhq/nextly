@@ -1,13 +1,21 @@
 /**
- * A seed whose settings write fails is removed again.
+ * The repair, against a site whose state it can be made to race.
  *
- * The seed is created first and recorded in the settings Single second, and
- * the two are separate writes. When the second fails, the created Layout is
- * recorded nowhere, so no later run would ever find it by id: it would sit in
- * the Layouts list for good while the next run seeds another. The property
- * that separates a correct run from that is the count of seed rows after a
- * failed run and a successful one: exactly one.
+ * The fake keeps rows and the settings Single in memory, so every assertion
+ * is about the state a run leaves behind rather than the calls it made: the
+ * property each case separates is what the site holds afterwards.
+ *
+ * - A seed whose settings write fails is removed again: the seed is created
+ *   first and recorded second, and an unrecorded seed would sit in the
+ *   Layouts list for good beside the next run's.
+ * - A make-default that lands while a run is repairing keeps its choice: the
+ *   run writes only while the default is still the unusable one it saw.
+ * - A slug the database refuses as taken, though the scan did not see it
+ *   (MySQL compares slugs without case or accents), moves the seed to the
+ *   next numbered slug.
+ * - The name scan reads only the columns it compares.
  */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import { ensureDefaultLayout } from "./ensure-default";
@@ -22,14 +30,27 @@ interface Row {
   status: string;
 }
 
-/**
- * A site with no Layouts and an empty settings Single, whose first settings
- * write fails. Creates and deletes act on `rows`, so later reads see them.
- */
-function site() {
-  const rows: Row[] = [];
+interface SiteOptions {
+  rows?: Row[];
+  settings?: Record<string, unknown>;
+  /** The first settings write fails. */
+  failFirstSettingsWrite?: boolean;
+  /**
+   * Another request's settings write, landing right after the settings read
+   * numbered `after` (1-based) has answered.
+   */
+  landing?: { after: number; data: Record<string, unknown> };
+  /** Slugs the database refuses as taken, whatever the scan reported. */
+  refusedSlugs?: readonly string[];
+}
+
+/** A site in memory. Creates, updates and deletes act on its rows. */
+function site(options: SiteOptions = {}) {
+  const rows: Row[] = [...(options.rows ?? [])];
   const deleted: string[] = [];
-  let settings: Record<string, unknown> = {};
+  const finds: Record<string, unknown>[] = [];
+  let settings: Record<string, unknown> = { ...(options.settings ?? {}) };
+  let settingsReads = 0;
   let settingsWrites = 0;
   let created = 0;
 
@@ -47,18 +68,33 @@ function site() {
   };
 
   const nextly = {
-    findSingle: async () => settings,
+    findSingle: async () => {
+      const answer = { ...settings };
+      settingsReads += 1;
+      if (options.landing?.after === settingsReads) {
+        settings = { ...settings, ...options.landing.data };
+      }
+      return answer;
+    },
     updateSingle: async ({ data }: { data: Record<string, unknown> }) => {
       settingsWrites += 1;
-      if (settingsWrites === 1) throw new Error("the settings write failed");
+      if (options.failFirstSettingsWrite === true && settingsWrites === 1) {
+        throw new Error("the settings write failed");
+      }
       settings = { ...settings, ...data };
       return { item: settings };
     },
-    find: async (args: { where?: unknown; status?: string }) => ({
-      items: rows.filter(row => matches(row, args)),
-      meta: { hasNext: false },
-    }),
+    find: async (args: Record<string, unknown>) => {
+      finds.push(args);
+      return {
+        items: rows.filter(row => matches(row, args)),
+        meta: { hasNext: false },
+      };
+    },
     create: async ({ data }: { data: Record<string, unknown> }) => {
+      if (options.refusedSlugs?.includes(String(data.slug)) === true) {
+        throw NextlyError.duplicate();
+      }
       created += 1;
       const row = {
         id: `seed-${String(created)}`,
@@ -67,6 +103,19 @@ function site() {
         status: String(data.status),
       };
       rows.push(row);
+      return { item: row };
+    },
+    update: async ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: Record<string, unknown>;
+    }) => {
+      const row = rows.find(candidate => candidate.id === id);
+      if (row !== undefined && typeof data.status === "string") {
+        row.status = data.status;
+      }
       return { item: row };
     },
     delete: async ({ id }: { id: string }) => {
@@ -79,30 +128,117 @@ function site() {
     },
   } as unknown as DefaultLayoutDirectApi;
 
-  return { nextly, rows, deleted, settings: () => settings };
+  return { nextly, rows, deleted, finds, settings: () => settings };
+}
+
+function depsFor(s: ReturnType<typeof site>) {
+  return { nextly: s.nextly, slugs: SLUGS, warn: () => {} };
 }
 
 describe("a seed whose settings write fails", () => {
   it("is deleted again, and the next run leaves exactly one seed", async () => {
-    const s = site();
-    const warnings: string[] = [];
-    const deps = {
-      nextly: s.nextly,
-      slugs: SLUGS,
-      warn: (message: string) => warnings.push(message),
-    };
+    const s = site({ failFirstSettingsWrite: true });
 
-    await expect(ensureDefaultLayout(deps)).rejects.toThrow(
+    await expect(ensureDefaultLayout(depsFor(s))).rejects.toThrow(
       "the settings write failed"
     );
     expect(s.deleted).toEqual(["seed-1"]);
     expect(s.rows).toHaveLength(0);
 
-    await expect(ensureDefaultLayout(deps)).resolves.toBe("seeded");
+    await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("seeded");
     expect(s.rows.map(row => row.slug)).toEqual(["default-site"]);
     expect(s.settings()).toMatchObject({
       defaultLayout: s.rows[0]?.id,
       seededLayout: s.rows[0]?.id,
+    });
+  });
+});
+
+describe("a make-default landing while the repair runs", () => {
+  const newer: Row = {
+    id: "newer",
+    title: "Landing",
+    slug: "landing",
+    status: "published",
+  };
+
+  it("keeps the newer default when the repair would point it back at the seed", async () => {
+    const seed: Row = {
+      id: "seed",
+      title: "Default (site)",
+      slug: "default-site",
+      status: "published",
+    };
+    const s = site({
+      rows: [seed, newer],
+      settings: { defaultLayout: "gone", seededLayout: "seed" },
+      landing: { after: 1, data: { defaultLayout: "newer" } },
+    });
+
+    await ensureDefaultLayout(depsFor(s));
+
+    expect(s.settings()).toMatchObject({
+      defaultLayout: "newer",
+      seededLayout: "seed",
+    });
+  });
+
+  it("keeps the newer default when it lands while a new seed is being created, and still records the seed", async () => {
+    const s = site({
+      rows: [newer],
+      settings: { defaultLayout: null, seededLayout: null },
+      landing: { after: 2, data: { defaultLayout: "newer" } },
+    });
+
+    await ensureDefaultLayout(depsFor(s));
+
+    const created = s.rows.find(row => row.id !== "newer");
+    expect(created?.slug).toBe("default-site");
+    expect(s.settings()).toMatchObject({
+      defaultLayout: "newer",
+      seededLayout: created?.id,
+    });
+  });
+});
+
+describe("a slug the database refuses as taken", () => {
+  it("moves the seed to the next numbered slug", async () => {
+    const s = site({ refusedSlugs: ["default-site"] });
+
+    await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("seeded");
+
+    expect(s.rows.map(row => row.slug)).toEqual(["default-site-2"]);
+    expect(s.settings()).toMatchObject({ defaultLayout: s.rows[0]?.id });
+  });
+
+  it("gives up after a bounded number of refusals, creating nothing", async () => {
+    const s = site({
+      refusedSlugs: [
+        "default-site",
+        "default-site-2",
+        "default-site-3",
+        "default-site-4",
+        "default-site-5",
+        "default-site-6",
+      ],
+    });
+
+    await expect(ensureDefaultLayout(depsFor(s))).rejects.toThrow();
+    expect(s.rows).toHaveLength(0);
+  });
+});
+
+describe("the name scan", () => {
+  it("reads only the title and slug of each Layout", async () => {
+    const s = site();
+
+    await ensureDefaultLayout(depsFor(s));
+
+    const scans = s.finds.filter(args => args.where === undefined);
+    expect(scans).toHaveLength(1);
+    expect(scans[0]).toMatchObject({
+      status: "all",
+      select: { title: true, slug: true },
     });
   });
 });
