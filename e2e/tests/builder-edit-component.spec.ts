@@ -115,7 +115,7 @@ test.describe("Edit component", () => {
     );
     await expect(banner(page)).toContainText(seeded.title);
     await expect(banner(page)).toContainText(
-      /Changes reach (at least )?the 1 document that place it\./
+      /Changes reach (at least )?the 1 document that places it\./
     );
     // The component alone: its own blocks, none of the page's.
     await openLayers(page);

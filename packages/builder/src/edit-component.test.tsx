@@ -144,7 +144,9 @@ describe("the Edit component verb", () => {
     const { result, rerender } = verbsFor(opened);
     result.current.editor.select("h");
     rerender();
-    result.current.result.actions.editComponent();
+    // Present, so the call below runs the verb rather than nothing.
+    expect(result.current.result.actions.editComponent).toBeTypeOf("function");
+    result.current.result.actions.editComponent?.();
     expect(opened).not.toHaveBeenCalled();
   });
 });
@@ -185,7 +187,7 @@ describe("the banner over a component's own view", () => {
     render(<ComponentBanner name="Hero" reach={undefined} />);
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
     expect(reachSentence({ count: 1, complete: true })).toBe(
-      "Changes reach the 1 document that place it."
+      "Changes reach the 1 document that places it."
     );
     expect(reachSentence({ count: 0, complete: false })).toBeUndefined();
     expect(reachSentence({ count: 0, complete: true })).toBe(

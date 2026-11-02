@@ -32,10 +32,13 @@ export function reachSentence(
   if (reach.count === 0) {
     return reach.complete ? "Nothing places it yet." : undefined;
   }
-  const documents = `${reach.count} ${reach.count === 1 ? "document" : "documents"}`;
+  const documents =
+    reach.count === 1
+      ? "the 1 document that places it"
+      : `the ${reach.count} documents that place it`;
   return reach.complete
-    ? `Changes reach the ${documents} that place it.`
-    : `Changes reach at least the ${documents} that place it.`;
+    ? `Changes reach ${documents}.`
+    : `Changes reach at least ${documents}.`;
 }
 
 /** @experimental Settles when the component editor ships. */
