@@ -18,6 +18,7 @@
  */
 import type { ValidationIssue } from "@nextlyhq/plugin-sdk/admin";
 import { renderHook, act } from "@testing-library/react";
+import type * as React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** What the stubbed read answers with for the test in hand. */
@@ -72,7 +73,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
 }));
 
-const { useSaveSiteStyle, useSiteStyle } = await import("./site-style-client");
+const { SiteStyleHistoryContext, useSaveSiteStyle, useSiteStyle } =
+  await import("./site-style-client");
 
 /** A defaults tier a host states in code. */
 const DEFAULTS = {
@@ -266,5 +268,124 @@ describe("writing one section", () => {
     });
 
     expect(verdict?.saved).toBe(true);
+  });
+});
+
+describe("a save inside the editor, as a step of its history", () => {
+  type Step = { undo: () => Promise<boolean>; redo: () => Promise<boolean> };
+
+  /** The editor's side: what was recorded, and what each section last held. */
+  function editorHistory() {
+    const steps: Step[] = [];
+    const value = {
+      record: (step: Step) => {
+        steps.push(step);
+      },
+      written: new Map(),
+    };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SiteStyleHistoryContext.Provider value={value}>
+        {children}
+      </SiteStyleHistoryContext.Provider>
+    );
+    return { steps, wrapper };
+  }
+
+  it("records a step that writes the section back to what was stored, and forward again", async () => {
+    readAnswer = {
+      data: { tokens: { tokens: [{ name: "brand", kind: "color" }] } },
+      isPending: false,
+      error: null,
+    };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+    expect(steps).toHaveLength(1);
+
+    let undone: boolean | undefined;
+    await act(async () => {
+      undone = await steps[0]?.undo();
+    });
+    expect(undone).toBe(true);
+    expect(writes.at(-1)).toEqual({
+      tokens: { tokens: [{ name: "brand", kind: "color" }] },
+    });
+
+    await act(async () => {
+      await steps[0]?.redo();
+    });
+    expect(writes.at(-1)).toEqual({ tokens: { tokens: [] } });
+  });
+
+  it("undoes a first write to a section by clearing it", async () => {
+    // Nothing was stored: taking the change back stores nothing again, so the
+    // site's own defaults show through.
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("classes", [{ id: "c1", slug: "card" }]);
+    });
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: null });
+  });
+
+  it("builds each step on the write before it, not on a read that has not caught up", async () => {
+    // Two saves before the read refreshes: undoing the second must return
+    // the section to the first, not to what the stale read still holds.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const first = [{ id: "c1", slug: "card" }];
+    const second = [...first, { id: "c2", slug: "hero" }];
+    await act(async () => {
+      await result.current.save("classes", first);
+      await result.current.save("classes", second);
+    });
+    await act(async () => {
+      await steps[1]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: first });
+  });
+
+  it("records nothing for a refused save", async () => {
+    writeBehaviour = async () => {
+      throw new Error("refused");
+    };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+    expect(steps).toEqual([]);
+  });
+
+  it("answers false when the write taking the change back is refused", async () => {
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+    writeBehaviour = async () => {
+      throw new Error("refused");
+    };
+    let undone: boolean | undefined;
+    await act(async () => {
+      undone = await steps[0]?.undo();
+    });
+    expect(undone).toBe(false);
+  });
+
+  it("records nothing outside an editor", async () => {
+    // The admin's own screens save without a history to join.
+    const { result } = renderHook(() => useSaveSiteStyle());
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+    expect(writes).toHaveLength(1);
   });
 });

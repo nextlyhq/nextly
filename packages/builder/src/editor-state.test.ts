@@ -1435,3 +1435,169 @@ describe("the placement rule on every edit", () => {
     expect(ids(result.current.document)).toEqual(["card", "after"]);
   });
 });
+
+/**
+ * A change made outside the document, such as a shared style, recorded as one
+ * step of the same history. Its two halves answer whether they took effect.
+ */
+function step(calls: string[], name: string, works = true) {
+  return {
+    undo: () => {
+      calls.push(`undo ${name}`);
+      return Promise.resolve(works);
+    },
+    redo: () => {
+      calls.push(`redo ${name}`);
+      return Promise.resolve(works);
+    },
+  };
+}
+
+describe("a step recorded from outside the document", () => {
+  const insert = (id: string, index: number) =>
+    ({ kind: "insert", node: node(id), at: { index } }) as const;
+
+  it("is undone and redone as one step of the same history", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => result.current.recordStep(step(calls, "style")));
+    expect(result.current.canUndo).toBe(true);
+
+    await act(async () => result.current.undo());
+    expect(calls).toEqual(["undo style"]);
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.canRedo).toBe(true);
+
+    await act(async () => result.current.redo());
+    expect(calls).toEqual(["undo style", "redo style"]);
+    expect(result.current.canUndo).toBe(true);
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("takes its place among document edits, undone in the order they were made", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    act(() => result.current.recordStep(step(calls, "style")));
+    act(() => {
+      result.current.apply(insert("c", 2));
+    });
+
+    await act(async () => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+    expect(calls).toEqual([]);
+
+    await act(async () => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+    expect(calls).toEqual(["undo style"]);
+
+    await act(async () => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a"]);
+
+    await act(async () => result.current.redo());
+    await act(async () => result.current.redo());
+    expect(calls).toEqual(["undo style", "redo style"]);
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("leaves the document's undo depth alone, so the page's save state does not move", async () => {
+    // The depth is what the host compares with its save point. A style is
+    // stored as it is changed, so its step is no unsaved work on the page.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    expect(result.current.undoDepth).toBe(1);
+
+    act(() => result.current.recordStep(step(calls, "style")));
+    expect(result.current.undoDepth).toBe(1);
+
+    await act(async () => result.current.undo());
+    expect(calls).toEqual(["undo style"]);
+    expect(result.current.undoDepth).toBe(1);
+
+    await act(async () => result.current.redo());
+    expect(result.current.undoDepth).toBe(1);
+  });
+
+  it("ends the redo branch, as a new document edit does", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => result.current.undo());
+    expect(result.current.canRedo).toBe(true);
+
+    act(() => result.current.recordStep(step(calls, "style")));
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("is dropped when it can no longer be taken back", async () => {
+    // A refused write changed nothing: keeping the step would offer a redo
+    // of a change that is still in place, and an undo that never clears.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    act(() => result.current.recordStep(step(calls, "style", false)));
+
+    await act(async () => result.current.undo());
+    expect(calls).toEqual(["undo style"]);
+    expect(result.current.canRedo).toBe(false);
+
+    // The next undo reaches the edit before it.
+    await act(async () => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a"]);
+  });
+
+  it("is dropped when its undo throws", async () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() =>
+      result.current.recordStep({
+        undo: () => Promise.reject(new Error("offline")),
+        redo: () => Promise.resolve(true),
+      })
+    );
+    await act(async () => result.current.undo());
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("counts toward the history's bound", () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([]) })
+    );
+    act(() => {
+      result.current.apply(insert("first", 0));
+      for (let i = 0; i < MAX_HISTORY; i += 1) {
+        result.current.recordStep(step(calls, `s${i}`));
+      }
+    });
+    // The oldest entry, the insert, fell off the old end.
+    expect(result.current.undoDepth).toBe(0);
+    expect(result.current.canUndo).toBe(true);
+  });
+});

@@ -71,6 +71,41 @@ import {
 /** How deep the undo history goes before the oldest step is dropped. */
 export const MAX_HISTORY = 100;
 
+/**
+ * A change made outside the document that the editor's history takes back and
+ * puts forward, such as a write to the site's shared styles.
+ *
+ * Each half resolves whether it took effect. A half that did not (a refused
+ * or failed write) leaves the change where it was, so the step is dropped
+ * rather than kept as an undo that never clears.
+ */
+interface HistoryStep {
+  /** Takes the change back. */
+  readonly undo: () => Promise<boolean>;
+  /** Makes the change again. */
+  readonly redo: () => Promise<boolean>;
+}
+
+/**
+ * One entry of the history: a group of the op layer's inverses, or a step
+ * recorded from outside the document. Both stacks hold the entry to replay
+ * next, so a step on the redo stack is the recorded one with its halves
+ * swapped.
+ */
+type HistoryEntry =
+  | { readonly kind: "ops"; readonly ops: readonly BuilderOp[] }
+  | { readonly kind: "step"; readonly step: HistoryStep };
+
+/** The step that replays `step` the other way, for the opposite stack. */
+function reversed(step: HistoryStep): HistoryStep {
+  return { undo: step.redo, redo: step.undo };
+}
+
+/** How many entries change the document, which is what a save point counts. */
+function documentEntries(stack: readonly HistoryEntry[]): number {
+  return stack.filter(entry => entry.kind === "ops").length;
+}
+
 export interface EditorState {
   /** The document as it currently stands. */
   document: BlockDocument;
@@ -139,6 +174,12 @@ export interface EditorState {
   lockDefinitions: SlotDefaultSource;
   undo: () => void;
   redo: () => void;
+  /**
+   * Record a change made outside the document as one step of this history,
+   * after it has taken effect. It ends the redo branch, as an edit does.
+   * @experimental
+   */
+  recordStep: (step: HistoryStep) => void;
   canUndo: boolean;
   canRedo: boolean;
   /**
@@ -153,7 +194,8 @@ export interface EditorState {
    */
   limits: DocumentLimits;
   /**
-   * How many edits are on the undo stack.
+   * How many document edits are on the undo stack. A recorded step is not
+   * one: it is stored where it was made, so it is no unsaved work here.
    *
    * Exported because "did anything change" is not answerable from the document
    * alone: an edit and its undo leave a document equal to the original but not
@@ -664,6 +706,96 @@ function lockSourcesOf(
 }
 
 /**
+ * The undo and redo stacks, and the depths a render reads from them.
+ *
+ * READONLY groups. A recorded inverse describes the document as it stood when
+ * its op ran, so nothing may append to or reorder one after the fact — the
+ * history would then describe an edit that never happened. `applyOps` returns
+ * them already in undo order and already frozen to the type.
+ */
+function useHistoryStacks(): {
+  depths: { undo: number; redo: number; document: number };
+  push: (entry: HistoryEntry, into: "undo" | "redo" | "new") => void;
+  pop: (from: "undo" | "redo") => HistoryEntry | undefined;
+  remove: (entry: HistoryEntry) => void;
+} {
+  const undoStack = useRef<HistoryEntry[]>([]);
+  const redoStack = useRef<HistoryEntry[]>([]);
+  // Mirrors the stack lengths so the flags below are STATE and re-render when
+  // they change. Reading `undoStack.current.length` directly would leave an
+  // undo button disabled after the first edit, because a ref mutation does not
+  // schedule a render.
+  const [depths, setDepths] = useState({ undo: 0, redo: 0, document: 0 });
+  const sync = useCallback(() => {
+    setDepths({
+      undo: undoStack.current.length,
+      redo: redoStack.current.length,
+      document: documentEntries(undoStack.current),
+    });
+  }, []);
+  const push = useCallback(
+    (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
+      if (into === "redo") {
+        redoStack.current.push(entry);
+      } else {
+        undoStack.current.push(entry);
+      }
+      if (into === "new") {
+        // Bounded from the OLD end. Dropping the newest would make the most
+        // recent edit unrepeatable, which is the one an author is most likely
+        // to want back.
+        if (undoStack.current.length > MAX_HISTORY) undoStack.current.shift();
+        // A new edit invalidates the redo branch: those inverses were computed
+        // against a document that no longer exists, so replaying one would
+        // apply an edit derived from a tree that has since changed.
+        redoStack.current = [];
+      }
+      sync();
+    },
+    [sync]
+  );
+  const pop = useCallback(
+    (from: "undo" | "redo") => {
+      const entry = (from === "undo" ? undoStack : redoStack).current.pop();
+      sync();
+      return entry;
+    },
+    [sync]
+  );
+  const remove = useCallback(
+    (entry: HistoryEntry) => {
+      undoStack.current = undoStack.current.filter(held => held !== entry);
+      redoStack.current = redoStack.current.filter(held => held !== entry);
+      sync();
+    },
+    [sync]
+  );
+  return { depths, push, pop, remove };
+}
+
+/**
+ * Replay a recorded step and move it to the other stack at once, so a second
+ * press reaches the entry before it rather than waiting on a write. Dropped
+ * again if the replay did not take effect, for the reason a refused inverse is
+ * not pushed back.
+ */
+function replayStep(
+  step: HistoryStep,
+  into: "undo" | "redo",
+  push: (entry: HistoryEntry, into: "undo" | "redo") => void,
+  remove: (entry: HistoryEntry) => void
+): void {
+  const moved: HistoryEntry = { kind: "step", step: reversed(step) };
+  push(moved, into);
+  step.undo().then(
+    took => {
+      if (!took) remove(moved);
+    },
+    () => remove(moved)
+  );
+}
+
+/**
  * Hold a document and the edits made to it.
  *
  * The document is state and the history is a ref: history changes on every edit
@@ -734,17 +866,7 @@ export function useEditorState({
     );
   latestDocument.current = document;
 
-  // READONLY groups. A recorded inverse describes the document as it stood when
-  // its op ran, so nothing may append to or reorder one after the fact — the
-  // history would then describe an edit that never happened. `applyOps` returns
-  // them already in undo order and already frozen to the type.
-  const undoStack = useRef<(readonly BuilderOp[])[]>([]);
-  const redoStack = useRef<(readonly BuilderOp[])[]>([]);
-  // Mirrors the stack lengths so the flags below are STATE and re-render when
-  // they change. Reading `undoStack.current.length` directly would leave an
-  // undo button disabled after the first edit, because a ref mutation does not
-  // schedule a render.
-  const [depths, setDepths] = useState({ undo: 0, redo: 0 });
+  const { depths, push, pop, remove } = useHistoryStacks();
 
   /**
    * Run an op and record its inverse on the given stack.
@@ -850,27 +972,9 @@ export function useEditorState({
       }
 
       const applied = { document: group.document, inverse: group.inverses };
+      const entry: HistoryEntry = { kind: "ops", ops: applied.inverse };
 
-      if (into === "new") {
-        undoStack.current.push(applied.inverse);
-        // Bounded from the OLD end. Dropping the newest would make the most
-        // recent edit unrepeatable, which is the one an author is most likely
-        // to want back.
-        if (undoStack.current.length > MAX_HISTORY) undoStack.current.shift();
-        // A new edit invalidates the redo branch: those inverses were computed
-        // against a document that no longer exists, so replaying one would
-        // apply an edit derived from a tree that has since changed.
-        redoStack.current = [];
-      } else if (into === "undo") {
-        undoStack.current.push(applied.inverse);
-      } else {
-        redoStack.current.push(applied.inverse);
-      }
-
-      setDepths({
-        undo: undoStack.current.length,
-        redo: redoStack.current.length,
-      });
+      push(entry, into);
       // Ahead of `setDocument`, which does not take effect until the next
       // render: two ops applied in one tick must see each other, or the second
       // is folded onto the document the first already replaced.
@@ -890,7 +994,7 @@ export function useEditorState({
     // would rebuild these callbacks every edit for a value none of them close
     // over. Stable identity is also the point — a stale `run` is now the same
     // `run`, folding onto the tree as it stands.
-    [limits, composerNow]
+    [limits, composerNow, push]
   );
 
   const apply = useCallback((op: BuilderOp) => run([op], "new"), [run]);
@@ -900,23 +1004,32 @@ export function useEditorState({
     [run]
   );
 
-  const undo = useCallback(() => {
-    const group = undoStack.current.pop();
-    if (group === undefined) return;
-    // Popped before running, and NOT pushed back on failure. A refused undo
-    // means the inverse no longer applies to this document, so keeping it would
-    // leave a step that fails every time it is reached — an undo button that
-    // does nothing and never clears.
-    setDepths(d => ({ ...d, undo: undoStack.current.length }));
-    run(group, "redo");
-  }, [run]);
-
-  const redo = useCallback(() => {
-    const group = redoStack.current.pop();
-    if (group === undefined) return;
-    setDepths(d => ({ ...d, redo: redoStack.current.length }));
-    run(group, "undo");
-  }, [run]);
+  /**
+   * Take the newest entry off one stack and replay it, recording what takes
+   * it back on the other.
+   *
+   * Popped before running, and NOT pushed back on failure. A refused undo
+   * means the inverse no longer applies to this document, so keeping it would
+   * leave a step that fails every time it is reached — an undo button that
+   * does nothing and never clears.
+   */
+  const replay = useCallback(
+    (from: "undo" | "redo") => {
+      const entry = pop(from);
+      if (entry === undefined) return;
+      const into = from === "undo" ? "redo" : "undo";
+      if (entry.kind === "step") replayStep(entry.step, into, push, remove);
+      else run(entry.ops, into);
+    },
+    [pop, push, remove, run]
+  );
+  const undo = useCallback(() => replay("undo"), [replay]);
+  const redo = useCallback(() => replay("redo"), [replay]);
+  // Bounded and branch-ending exactly as a fresh document edit is.
+  const recordStep = useCallback(
+    (step: HistoryStep) => push({ kind: "step", step }, "new"),
+    [push]
+  );
 
   const select = useCallback(
     (id: string | null, mode: SelectionMode = "replace") =>
@@ -940,10 +1053,11 @@ export function useEditorState({
       lockDefinitions,
       undo,
       redo,
+      recordStep,
       canUndo: depths.undo > 0,
       canRedo: depths.redo > 0,
       limits,
-      undoDepth: depths.undo,
+      undoDepth: depths.document,
     }),
     [
       document,
@@ -957,6 +1071,7 @@ export function useEditorState({
       lockDefinitions,
       undo,
       redo,
+      recordStep,
       depths,
       limits,
     ]

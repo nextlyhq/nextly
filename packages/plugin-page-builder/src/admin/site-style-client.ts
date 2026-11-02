@@ -35,7 +35,14 @@ import {
   useUpdateSingleDocument,
   validationIssues,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useMemo } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  type Context,
+} from "react";
 
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import {
@@ -167,6 +174,42 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
   return issues;
 }
 
+/**
+ * A stored style change as one step of the editor's undo history. Each half
+ * writes the section and answers whether the write was stored.
+ */
+export interface SiteStyleStep {
+  readonly undo: () => Promise<boolean>;
+  readonly redo: () => Promise<boolean>;
+}
+
+/**
+ * Where saves made inside the editor become steps of its history.
+ *
+ * A style is stored the moment it changes, so undoing one is another write:
+ * the section as it was before. `written` holds what each section was last
+ * written with in this editor, shared by every studio, because the read only
+ * catches up after a save comes back through the cache: two saves before it
+ * does would otherwise both remember the value from before the first.
+ */
+export interface SiteStyleHistory {
+  readonly record: (step: SiteStyleStep) => void;
+  readonly written: Map<SiteStyleSection, unknown>;
+}
+
+/** Null outside the editor, where a save joins no history. */
+export const SiteStyleHistoryContext: Context<SiteStyleHistory | null> =
+  createContext<SiteStyleHistory | null>(null);
+
+/**
+ * A section as the stored document holds it, or `null` when it holds none.
+ * Raw rather than narrowed, so writing it back stores exactly what was there.
+ */
+function storedSection(document: unknown, section: SiteStyleSection): unknown {
+  if (typeof document !== "object" || document === null) return null;
+  return (document as Record<string, unknown>)[section] ?? null;
+}
+
 /** Saving one section, and what the last attempt said. */
 export interface SiteStyleWrite {
   /** Save ONE section. Every other section is left exactly as it was. */
@@ -193,14 +236,20 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   const mutation = useUpdateSingleDocument(SITE_STYLE_SLUG, undefined, {
     scopeId: SITE_STYLE_SLUG,
   });
+  // The stored document, read at the moment of a save rather than closed over.
+  const { data } = useSingleDocument(SITE_STYLE_SLUG);
+  const stored = useRef(data);
+  stored.current = data;
+  const history = useContext(SiteStyleHistoryContext);
 
-  const save = useCallback(
+  const write = useCallback(
     async (
       section: SiteStyleSection,
       value: unknown
     ): Promise<SiteStyleSaveResult> => {
       try {
         await mutation.mutateAsync({ [section]: value });
+        history?.written.set(section, value);
         return { saved: true, issues: {} };
       } catch (reason) {
         // Caught rather than propagated, because a studio needs the reason
@@ -222,7 +271,30 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         return { saved: false, issues };
       }
     },
-    [mutation]
+    [mutation, history]
+  );
+
+  /*
+   * A stored save inside the editor is also a step of its history, recorded
+   * once the write is stored: a refused one changed nothing to take back.
+   */
+  const save = useCallback(
+    async (
+      section: SiteStyleSection,
+      value: unknown
+    ): Promise<SiteStyleSaveResult> => {
+      const before = history?.written.has(section)
+        ? history.written.get(section)
+        : storedSection(stored.current, section);
+      const result = await write(section, value);
+      if (result.saved && history !== null) {
+        const to = (next: unknown) => async () =>
+          (await write(section, next)).saved;
+        history.record({ undo: to(before), redo: to(value) });
+      }
+      return result;
+    },
+    [write, history]
   );
 
   return { save, saving: mutation.isPending };

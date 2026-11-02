@@ -42,6 +42,7 @@ import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
 import { useMayCreatePattern } from "../pattern-capability-client";
 
+import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
 
@@ -234,6 +235,9 @@ export function useEditorMount(
     // rather than seeing the edit silently not happen.
     onPlacementRefused: refusal => notices.raise(placementSentence(refusal)),
   });
+  // A shared style change saved while this editor is open is a step of its
+  // history, so the editor connects the history to the style writers.
+  useConnectStyleHistory(editor.recordStep);
 
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values

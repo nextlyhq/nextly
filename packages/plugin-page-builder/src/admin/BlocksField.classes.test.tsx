@@ -21,7 +21,7 @@
  *
  * @module admin/BlocksField.classes.test
  */
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,6 +40,11 @@ let storedRead: { data: unknown; isPending: boolean; error: unknown };
 /** What a save answers, and what it was handed. */
 let saveResult: { success: boolean } | Error;
 const saved: Array<Record<string, unknown>> = [];
+/** The steps the editor's history was handed. */
+const recorded: Array<{
+  undo: () => Promise<boolean>;
+  redo: () => Promise<boolean>;
+}> = [];
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
@@ -120,6 +125,9 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       select: () => {},
       undo: () => {},
       redo: () => {},
+      recordStep: (step: (typeof recorded)[number]) => {
+        recorded.push(step);
+      },
       canUndo: false,
       canRedo: false,
       undoDepth: 0,
@@ -222,6 +230,7 @@ beforeEach(() => {
   storedRead = { data: undefined, isPending: false, error: null };
   saveResult = { success: true };
   saved.length = 0;
+  recorded.length = 0;
 });
 
 afterEach(cleanup);
@@ -410,5 +419,42 @@ describe("creating a class", () => {
 
     expect(created.ok).toBe(false);
     expect(created.ok === false && created.reason.length).toBeGreaterThan(0);
+  });
+});
+
+describe("undoing a class created from the editor", () => {
+  it("records the creation as a step that writes the library back, and forward again", async () => {
+    // The class writer runs in the editor component itself, so this is also
+    // the proof that the history reaches it there.
+    const hero = { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} };
+    storedRead = {
+      data: { classes: [hero] },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+
+    await classProps().onCreateClass!("call-to-action");
+    expect(recorded).toHaveLength(1);
+    const created = saved.at(-1);
+
+    let undone: boolean | undefined;
+    await act(async () => {
+      undone = await recorded[0]?.undo();
+    });
+    expect(undone).toBe(true);
+    expect(saved.at(-1)).toEqual({ classes: [hero] });
+
+    await act(async () => {
+      await recorded[0]?.redo();
+    });
+    expect(saved.at(-1)).toEqual(created);
+  });
+
+  it("records nothing when the creation is refused", async () => {
+    saveResult = new Error("refused");
+    openEditor();
+    await classProps().onCreateClass!("call-to-action");
+    expect(recorded).toEqual([]);
   });
 });

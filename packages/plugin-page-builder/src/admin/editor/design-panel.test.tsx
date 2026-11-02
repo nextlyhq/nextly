@@ -11,7 +11,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import * as React from "react";
+
 import { DesignPanel, designViewOf } from "./design-panel";
+import { StyleRevisionContext } from "./site-style-history";
 
 afterEach(cleanup);
 
@@ -60,5 +63,41 @@ describe("DesignPanel", () => {
     });
 
     expect(choose).toHaveBeenCalledWith("classes");
+  });
+});
+
+describe("a style change undone behind the open tab", () => {
+  it("mounts the tab afresh, so it reads the section again", () => {
+    // The tab holds its own copy while open; one kept across an undo would
+    // write the undone value back on its next edit.
+    function Studio(): React.JSX.Element {
+      const [draft, setDraft] = React.useState("stored");
+      return (
+        <button type="button" onClick={() => setDraft("edited")}>
+          {draft}
+        </button>
+      );
+    }
+    const panel = (revision: number) => (
+      <StyleRevisionContext.Provider value={revision}>
+        <DesignPanel
+          view={{ current: "variables", choose: vi.fn() }}
+          tabs={{
+            variables: () => <Studio />,
+            classes: () => null,
+            fonts: () => null,
+          }}
+        />
+      </StyleRevisionContext.Provider>
+    );
+    const { rerender } = render(panel(0));
+    fireEvent.click(screen.getByRole("button", { name: "stored" }));
+    expect(screen.getByRole("button", { name: "edited" })).toBeTruthy();
+
+    rerender(panel(0));
+    expect(screen.getByRole("button", { name: "edited" })).toBeTruthy();
+
+    rerender(panel(1));
+    expect(screen.getByRole("button", { name: "stored" })).toBeTruthy();
   });
 });
