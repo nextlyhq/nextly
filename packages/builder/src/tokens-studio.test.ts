@@ -627,3 +627,25 @@ describe("variables, grouped as the Design panel shows them", () => {
     expect(brand.tokens[colour.at]?.label).toBe("Brand");
   });
 });
+
+describe("a type size's name", () => {
+  const PAIR: SiteTokenSet = {
+    tokens: [
+      { name: "font-size.body", kind: "dimension", values: { light: "16px" } },
+      {
+        name: "line-height.body",
+        kind: "dimension",
+        values: { light: "24px" },
+      },
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+    ],
+  };
+  it("is one name for the pair, which is one row", () => {
+    // Its line height derives "Body" too, and is no other variable.
+    expect(variableLabelIssue(PAIR, 0, "Body")).toBeUndefined();
+    expect(variableLabelIssue(PAIR, 0, "Body copy")).toBeUndefined();
+    expect(variableLabelIssue(PAIR, 2, "Body")).toMatch(
+      /already called "Body"/
+    );
+  });
+});

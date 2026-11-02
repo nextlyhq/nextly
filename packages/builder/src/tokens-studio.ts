@@ -672,39 +672,50 @@ export function variableLabelIssue(
   if (trimmed === "") return undefined;
   const problem = tokenLabelIssue(trimmed);
   if (problem !== undefined) return problem;
-  const clash = (tokens?.tokens ?? []).find(
-    (token, index) =>
-      index !== at && labelKey(token) === labelKey({ label: trimmed, name: "" })
+  const wanted = trimmed.toLowerCase();
+  const clash = visibleNames(tokens).find(
+    shown => !shown.ats.includes(at) && shown.label.toLowerCase() === wanted
   );
   return clash === undefined
     ? undefined
-    : `Another variable is already called "${tokenDisplayLabel(clash)}".`;
+    : `Another variable is already called "${clash.label}".`;
 }
 
 /**
- * What two variables' names are compared by: the name shown, ignoring case,
- * since "Brand" and "brand" cannot be told apart in a list.
+ * Each variable as the panel shows it: its name, and the stored positions
+ * behind it, two for a type size and its paired line height. Names are
+ * compared here, over the rows an author sees, so a pair is one name.
  */
-function labelKey(token: { name: string; label?: string }): string {
-  return tokenDisplayLabel(token).toLowerCase();
+function visibleNames(
+  tokens: SiteTokenSet | undefined
+): { label: string; ats: number[] }[] {
+  return variableGroups(tokens).flatMap(group =>
+    group.entries.map(entry => ({
+      label: entry.label,
+      ats:
+        entry.lineHeight === undefined
+          ? [entry.row.at]
+          : [entry.row.at, entry.lineHeight.at],
+    }))
+  );
 }
 
 /**
- * The names shown for more than one variable in a set, once each.
+ * The names shown for more than one variable in a set, once each, ignoring
+ * case, since "Brand" and "brand" cannot be told apart in a list.
  *
  * The same rule {@link variableLabelIssue} holds one edit to, asked of a whole
  * set, as an import produces one.
  */
 export function labelClashes(tokens: SiteTokenSet): string[] {
-  const seen = new Map<string, string>();
-  const clashes = new Set<string>();
-  for (const token of tokens.tokens) {
-    const key = labelKey(token);
-    const first = seen.get(key);
-    if (first === undefined) seen.set(key, tokenDisplayLabel(token));
-    else clashes.add(first);
+  const seen = new Set<string>();
+  const clashes = new Map<string, string>();
+  for (const { label } of visibleNames(tokens)) {
+    const key = label.toLowerCase();
+    if (seen.has(key)) clashes.set(key, label);
+    seen.add(key);
   }
-  return [...clashes];
+  return [...clashes.values()];
 }
 
 /**

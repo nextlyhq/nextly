@@ -1747,3 +1747,58 @@ describe("an import that would give two variables one name", () => {
     if (!result.ok) expect(result.error).toMatch(/"Brand"/);
   });
 });
+
+describe("an import of a type size", () => {
+  it("does not count a size and its paired line height as two variables with one name", () => {
+    const file = exportDtcg({
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
+      ],
+    }).text;
+    const plan = planImport([{ name: "type.tokens.json", text: file }], {
+      tokens: [],
+    });
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.labelClashes).toEqual([]);
+    expect(applyImport(plan, { tokens: [] }, new Map()).ok).toBe(true);
+  });
+});
+
+describe("a file naming one variable twice", () => {
+  it("previews the one that will be applied, and says the other was dropped", () => {
+    const entry = (hex: string, id: string) => ({
+      $type: "color",
+      $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+      $extensions: {
+        "com.nextlyhq.nextly": { css: { light: hex }, kind: "color", id },
+      },
+    });
+    const text = JSON.stringify({
+      color: {
+        first: entry("#111111", "color.ink"),
+        second: entry("#222222", "color.ink"),
+      },
+    });
+    const site: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      ],
+    };
+    const plan = planImport([{ name: "twice.tokens.json", text }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.unchanged).toEqual([]);
+    expect(plan.conflicts.map(c => c.imported.values.light)).toEqual([
+      "#222222",
+    ]);
+    expect(plan.skipped.join(" ")).toMatch(/color\.ink/);
+  });
+});

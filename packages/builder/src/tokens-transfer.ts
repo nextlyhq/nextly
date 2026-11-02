@@ -235,10 +235,17 @@ export function planImport(
       skipped,
     };
   }
+  // One entry per identity, chosen once, so the preview shows exactly what
+  // applying will merge: the last of two entries sharing an identity, with
+  // the first reported.
+  const dropped: string[] = [];
+  const unique = [
+    ...oneEach(withStoredIds(read.tokens, into), dropped).values(),
+  ];
   return {
     ok: true,
-    skipped,
-    ...planned(withStoredIds(read.tokens, into), into),
+    skipped: [...skipped, ...dropped],
+    ...planned(unique, into),
   };
 }
 
