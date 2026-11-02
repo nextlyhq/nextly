@@ -433,10 +433,24 @@ describe("the editing colours drawn on the page", () => {
     expect(declared(layer, "z-index")).toBeUndefined();
     const page = ruleFor(".nx-canvas > .nx-pb-page");
     expect(declared(page, "isolation")).toBe("isolate");
-    // The ground a blended block in the page mixes with, as published.
-    expect(declared(page, "background-color")).toBe(
-      "var(--nx-canvas-site-ground, Canvas)"
-    );
+    /*
+     * The page root stays an ordinary block — a flex or grid item would be its
+     * own formatting context and change how its children's margins collapse —
+     * and paints NO ground of its own unless the site's ground is opaque:
+     * laid over the canvas's ground, a translucent one is composited twice.
+     */
+    for (const property of ["display", "background-color", "background"]) {
+      expect(declared(page, property), `the page root's ${property}`).toBe(
+        undefined
+      );
+    }
+    // Where the ground IS opaque, the page carries it for a blend to mix with.
+    expect(
+      declared(
+        ruleFor(".nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page"),
+        "background-color"
+      )
+    ).toBe("var(--nx-canvas-site-ground, Canvas)");
     /*
      * On the editor's own element: the ring redrawn as the element carries
      * it, with the white band as an inset shadow beneath, so the two stay

@@ -30,3 +30,18 @@ export function nodeElements(root: HTMLElement): readonly Element[] {
   });
   return found;
 }
+
+/**
+ * The node elements in a subtree, the subtree's own root included: what a
+ * node arriving in the rendered tree brings with it, or takes with it when it
+ * leaves.
+ */
+export function nodeElementsIn(subtree: Element): readonly Element[] {
+  const found: Element[] = subtree.hasAttribute(NODE_ID_ATTRIBUTE)
+    ? [subtree]
+    : [];
+  subtree.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+    found.push(element);
+  });
+  return found;
+}

@@ -582,16 +582,27 @@
  * `z-index: 5` orders the page's own content among itself and cannot rise
  * above the editor's layers drawn over it.
  *
- * Isolation changes nothing about the page's own stacking: its layers keep
- * their order relative to each other. What it does change is the backdrop a
- * `mix-blend-mode` inside the page blends with — an isolated group starts
- * from its own background — so the page root carries the same ground the
- * canvas paints behind it, and a blended block mixes with the site's ground
- * here exactly as it does with the published page's. A ground the page's own
- * styles give the root outweighs this rule, as it should.
+ * Isolation changes nothing about the page's own stacking or layout: its
+ * layers keep their order, and the page root stays an ordinary block, so its
+ * children's margins collapse as they do when published. What it does change
+ * is the backdrop a `mix-blend-mode` inside the page blends with — an isolated
+ * group starts from its own background.
  */
 .nx-canvas > .nx-pb-page {
   isolation: isolate;
+}
+
+/*
+ * The site's ground on the page root too, so a blended block inside the
+ * isolated page mixes with it as it does with the published page's — but only
+ * where the ground is fully OPAQUE, which the canvas root states from the
+ * site's tokens. Over the canvas's own ground an opaque one looks exactly as
+ * it does painted once; a translucent ground would be composited twice and
+ * read darker, so there the canvas root's ground is the only one, and a blend
+ * inside the page mixes with the page's own content alone. A ground the page's
+ * own styles give its root outweighs this rule, as it should.
+ */
+.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page {
   background-color: var(--nx-canvas-site-ground, Canvas);
 }
 

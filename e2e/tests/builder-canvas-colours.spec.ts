@@ -116,6 +116,14 @@ async function seed(page: Page): Promise<void> {
   );
 }
 
+/**
+ * The rendered page inside the canvas, which paints the page's ground there:
+ * where the canvas holds a page, its own root is transparent.
+ */
+function canvasPage(page: Page): Locator {
+  return page.locator(".nx-canvas > .nx-pb-page").first();
+}
+
 /** The text block's element on the canvas. */
 function canvasText(page: Page): Locator {
   return page.locator('.nx-canvas [data-nx-node="lead"]').first();
@@ -182,7 +190,7 @@ for (const theme of ["dark", "light"] as const) {
       const canvas = page.locator(".nx-canvas");
 
       expect(
-        await toRgb(page, await groundBehind(canvas)),
+        await toRgb(page, await groundBehind(canvasPage(page))),
         "the page behind the blocks is the site's ground, as published"
       ).toEqual(site.ground);
 
@@ -259,10 +267,7 @@ for (const theme of ["dark", "light"] as const) {
       expect(ring, "the selection ring is the select blue").toEqual([
         37, 99, 235,
       ]);
-      const ground = await toRgb(
-        page,
-        await groundBehind(page.locator(".nx-canvas"))
-      );
+      const ground = await toRgb(page, await groundBehind(canvasPage(page)));
       expect(
         contrastRatio(ring, ground),
         "the ring stands out from the page it is drawn on"
@@ -349,7 +354,7 @@ test.describe("with the system in dark mode", () => {
     expect(
       await canvas.evaluate(element => getComputedStyle(element).colorScheme)
     ).toBe("dark");
-    const ground = await toRgb(page, await groundBehind(canvas));
+    const ground = await toRgb(page, await groundBehind(canvasPage(page)));
     expect(
       ground,
       "the canvas ground is the site's background token, at its dark value"
@@ -583,3 +588,86 @@ test.describe("the selection halo", () => {
     ).toBe(true);
   });
 });
+
+test.describe("a translucent site ground", () => {
+  test("is composited once over what sits behind the canvas", async ({
+    page,
+  }) => {
+    /*
+     * The ground is painted on ONE surface. Laid on the canvas root and again
+     * on the page root, a half-transparent ground composited over itself and
+     * the editor's page read darker than the published one.
+     */
+    test.slow();
+    // Stored as the site's own ground, the way an author sets it, and cleared
+    // afterwards: the e2e site stores no tokens of its own.
+    const SITE_STYLE = "/admin/api/singles/site-style";
+    const stored = await page.request.patch(SITE_STYLE, {
+      data: {
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "rgb(0 0 0 / 50%)" },
+            },
+          ],
+        },
+      },
+    });
+    expect(stored.ok(), `storing the ground: ${stored.status()}`).toBe(true);
+    try {
+      await openBuilder(page, "light");
+      await expectGroundOnce(page);
+    } finally {
+      const cleared = await page.request.patch(SITE_STYLE, {
+        data: { tokens: null },
+      });
+      expect(cleared.ok(), `clearing the ground: ${cleared.status()}`).toBe(
+        true
+      );
+    }
+  });
+});
+
+/** One layer of the half-transparent ground over what sits behind the canvas. */
+async function expectGroundOnce(page: Page): Promise<void> {
+  const canvas = page.locator(".nx-canvas");
+  // What the canvas sits on: the first painted surface above it.
+  const backdrop = await toRgb(
+    page,
+    await canvas.evaluate(element => {
+      for (let at = element.parentElement; at !== null; at = at.parentElement) {
+        const fill = getComputedStyle(at).backgroundColor;
+        if (fill !== "rgba(0, 0, 0, 0)" && fill !== "transparent") return fill;
+      }
+      return "rgb(255, 255, 255)";
+    })
+  );
+  /*
+   * A spot of bare page: a gap the test opens above the card, where nothing
+   * but the page's ground is painted.
+   */
+  await page.addStyleTag({
+    content: ".nx-pb-page p[data-nx-node='card'] { margin-top: 48px; }",
+  });
+  const card = page.locator('.nx-canvas [data-nx-node="card"]').first();
+  await expect(card).toBeVisible();
+  const box = await card.boundingBox();
+  expect(box, "the card is measurable").not.toBeNull();
+  if (box === null) return;
+  const [pixel] = await pixelsIn(page, {
+    x: Math.round(box.x + box.width / 4),
+    y: Math.round(box.y - 12),
+    width: 1,
+    height: 1,
+  });
+  // One layer of half-transparent black over the backdrop.
+  const once = backdrop.map(channel => Math.round(channel / 2));
+  for (const [index, channel] of (pixel ?? [0, 0, 0]).entries()) {
+    expect(
+      Math.abs(channel - (once[index] ?? 0)),
+      `channel ${index}: ${JSON.stringify(pixel)} against one layer ${JSON.stringify(once)}`
+    ).toBeLessThanOrEqual(2);
+  }
+}

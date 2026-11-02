@@ -64,6 +64,7 @@ import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import {
   type JSX,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -74,7 +75,10 @@ import {
 import { scaleCornerRadii, type CornerRadii } from "./border-radii";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
-import { watchCanvasFor } from "./canvas-geometry-watch";
+import {
+  OVERLAY_OUTPUT_ATTRIBUTE,
+  watchCanvasFor,
+} from "./canvas-geometry-watch";
 import { guardCanvasNavigation } from "./canvas-link-guard";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
@@ -217,6 +221,8 @@ interface SiteSurface {
   readonly darkMode: "attribute" | "media";
   /** Whether the site's background token has a DARK value for that state. */
   readonly darkGround: boolean;
+  /** Whether every value of the site's background token is fully opaque. */
+  readonly opaqueGround: boolean;
 }
 
 /**
@@ -251,13 +257,19 @@ function siteSurface(
     style[property] = `var(${tokenCustomProperty(token, prefix)}, ${fallback})`;
   }
   const tokens = resolveSiteTokens(siteStyles.tokens);
-  const ground = tokens.tokens.find(
+  const values = tokens.tokens.find(
     token => tokenIdentity(token) === SITE_GROUND_TOKEN
-  )?.values.dark;
+  )?.values;
+  const ground = values?.dark;
   return {
     style,
     darkMode: tokens.darkMode ?? "attribute",
     darkGround: ground !== undefined && isDarkGround(ground),
+    opaqueGround:
+      values !== undefined &&
+      [values.light, values.dark].every(
+        value => value === undefined || alphaOf(value.trim()) === 1
+      ),
   };
 }
 
@@ -341,6 +353,28 @@ function colourFunction(
 }
 
 /**
+ * A colour's alpha, 0–1, or `undefined` when it cannot be told.
+ *
+ * Hex and `rgb()` from the engine's parser; `oklch()` and `hsl()` from their
+ * own alpha component, 1 when they state none. A bare colour keyword is opaque
+ * — every named colour is — except `transparent`, and a keyword this cannot
+ * place, such as `currentColor`, is unknown, as is a reference or a function
+ * this does not read.
+ */
+function alphaOf(text: string): number | undefined {
+  const rgb = parseColor(text);
+  if (rgb !== undefined) return rgb.a;
+  const call = colourFunction(text);
+  if (call !== undefined) {
+    return call.alpha === undefined ? 1 : fractionOf(call.alpha, 1);
+  }
+  if (!/^[a-z]+$/i.test(text)) return undefined;
+  const keyword = text.toLowerCase();
+  if (keyword === "transparent") return 0;
+  return keyword === "currentcolor" ? undefined : 1;
+}
+
+/**
  * The relative luminance of a ground colour, or `undefined` when it cannot be
  * told. Hex and `rgb()` go through the engine's own parser. `oklch()`, which
  * Tailwind themes write, carries perceptual lightness directly: its L cubed is
@@ -353,14 +387,11 @@ function colourFunction(
  * so is an alpha this cannot read.
  */
 function groundLuminance(text: string): number | undefined {
+  if (alphaOf(text) !== 1) return undefined;
   const rgb = parseColor(text);
-  if (rgb !== undefined) {
-    return rgb.a < 1 ? undefined : relativeLuminance(rgb);
-  }
+  if (rgb !== undefined) return relativeLuminance(rgb);
   const call = colourFunction(text);
   if (call === undefined) return undefined;
-  const alpha = call.alpha === undefined ? 1 : fractionOf(call.alpha, 1);
-  if (alpha === undefined || alpha < 1) return undefined;
   const [first, second, third] = call.components;
   if (call.name === "oklch") {
     // L is a number in 0–1, or a percentage.
@@ -2368,6 +2399,16 @@ export function Canvas({
         surface?.darkGround === true ? surface.darkMode : undefined
       }
       /*
+       * Whether the site's ground is fully opaque, in every mode. Only then
+       * does the rendered page carry the ground as well as the canvas: painted
+       * twice, an opaque ground looks exactly as it does once, while a
+       * translucent one would darken where the layers overlap. See the page
+       * root's rule in `builder-chrome.css` for why the page wants it.
+       */
+      data-nx-site-ground-opaque={
+        surface?.opaqueGround === true ? "" : undefined
+      }
+      /*
        * What the pointer means, for the cursor.
        *
        * On the ROOT rather than per block, because a cursor during a drag is a
@@ -2399,7 +2440,14 @@ export function Canvas({
        * The white halo inside every selected rendering's ring, part of what
        * selecting a block draws, so every host of this canvas has it.
        */}
-      <SelectionHalos active={marked.length > 0} />
+      <SelectionHalos
+        /*
+         * Suppressed for the duration of a drag, as the toolbar and the spacing
+         * bands are: the selection is mid-move, and a drag reads no geometry
+         * per pointer move beyond the rectangles it cached when it began.
+         */
+        active={marked.length > 0 && drag?.draggingBlockName == null}
+      />
       {overlay}
       {refusalDrawn === null ? null : (
         <DropRefusalNotice
@@ -2520,7 +2568,11 @@ function haloFor(selected: Element, root: HTMLElement): Halo | undefined {
  * geometry watch — which hears attribute changes on the page — draws the first
  * halo, as well as moving every halo with the layout.
  */
-function SelectionHalos({ active }: { active: boolean }): JSX.Element {
+const SelectionHalos = memo(function SelectionHalos({
+  active,
+}: {
+  active: boolean;
+}): JSX.Element {
   const layer = useRef<HTMLDivElement | null>(null);
   const [halos, setHalos] = useState<readonly Halo[]>(NO_HALOS);
 
@@ -2540,10 +2592,15 @@ function SelectionHalos({ active }: { active: boolean }): JSX.Element {
     setHalos(current => (sameHalos(current, next) ? current : next));
   }, [active]);
 
-  // Before paint, so a halo never shows where the block was a render ago.
+  /*
+   * Before paint, once per change of whether there is anything to draw — not
+   * on every render of the canvas, which re-renders on every pointer move of a
+   * drag. Everything that moves a selected block after that, the selection
+   * marks included, reaches the geometry watch below.
+   */
   useIsomorphicLayoutEffect(() => {
     measure();
-  });
+  }, [measure]);
 
   // Every later move: a selection mark changing, an image loading, a resize, a
   // scroll. The layer is how the watch finds the root and ignores its own
@@ -2556,7 +2613,14 @@ function SelectionHalos({ active }: { active: boolean }): JSX.Element {
   );
 
   return (
-    <div ref={layer} className="nx-selection-halos" aria-hidden="true">
+    <div
+      ref={layer}
+      className="nx-selection-halos"
+      aria-hidden="true"
+      // Drawn over the page and moving nothing in it, so another overlay's
+      // watch does not re-measure for a halo being drawn.
+      {...{ [OVERLAY_OUTPUT_ATTRIBUTE]: "" }}
+    >
       {halos.map((halo, index) => (
         <div
           // By position in document order: the halos carry no identity of their
@@ -2579,4 +2643,4 @@ function SelectionHalos({ active }: { active: boolean }): JSX.Element {
       ))}
     </div>
   );
-}
+});

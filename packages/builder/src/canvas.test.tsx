@@ -3510,6 +3510,35 @@ describe("the site's ground and text on the canvas root", () => {
     }
   });
 
+  it("marks the ground opaque only when every value of it is", () => {
+    /*
+     * The page root repeats an opaque ground so a blend inside the isolated
+     * page mixes with it; a translucent one repeated would be composited
+     * twice. So the canvas states which it has, from the same token set.
+     */
+    const opaque = (light: string, dark?: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: dark === undefined ? { light } : { light, dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-ground-opaque");
+    expect(opaque("#ffffff", "#0b0f19")).toBe(true);
+    expect(opaque("white")).toBe(true);
+    expect(opaque("oklch(0.98 0 0)", "hsl(222 47% 11% / 1)")).toBe(true);
+    expect(opaque("rgb(0 0 0 / 50%)")).toBe(false);
+    expect(opaque("#ffffff", "#0b0f1980")).toBe(false);
+    expect(opaque("transparent")).toBe(false);
+    // A value this cannot read is not called opaque.
+    expect(opaque("var(--elsewhere)")).toBe(false);
+  });
+
   it("names nothing when the host serves no site sheet", () => {
     const root = rootOf(false);
     expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");
