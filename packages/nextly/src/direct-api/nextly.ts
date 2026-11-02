@@ -907,13 +907,17 @@ export const nextly = {
     requireNextly().duplicate(args),
 
   // Generic in `TCreate` as the method is, so this delegate answers the same
-  // type for the same call.
+  // type for the same call. The answer type and the inner call's type
+  // arguments are stated rather than inferred: inferred, a call that left
+  // `createIfMissing` out resolved the inner `TCreate` to nothing and answered
+  // `never`.
   findSingle: <
     TSlug extends SingleSlug,
     TCreate extends boolean | undefined = undefined,
   >(
     args: FindSingleArgs<TSlug> & { createIfMissing?: TCreate }
-  ) => requireNextly().findSingle(args),
+  ): Promise<FoundSingle<TSlug, TCreate>> =>
+    requireNextly().findSingle<TSlug, TCreate>(args),
   updateSingle: <TSlug extends SingleSlug>(args: UpdateSingleArgs<TSlug>) =>
     requireNextly().updateSingle(args),
   findSingles: (args?: FindSinglesArgs) =>

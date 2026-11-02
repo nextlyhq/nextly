@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { verifyPassword } from "../../../auth/password";
 import {
+  queriesPassword,
   carryStoredPasswords,
   hashPasswordFieldValues,
   hasPasswordField,
@@ -336,5 +337,36 @@ describe("carryStoredPasswords", () => {
     );
 
     expect((data.box as Record<string, unknown>).pw).toBe(HASH_A);
+  });
+});
+
+describe("queriesPassword", () => {
+  const fields = [
+    { name: "title", type: "text" },
+    { name: "pin", type: "password" },
+    {
+      name: "account",
+      type: "group",
+      fields: [{ name: "code", type: "password" }],
+    },
+    { name: "profile", type: "group", fields: [{ name: "bio", type: "text" }] },
+    // An unnamed container: its children are columns of the table itself.
+    { type: "row", fields: [{ name: "recoveryCode", type: "password" }] },
+  ];
+
+  it("finds a password, and a container holding one, in any spelling", () => {
+    expect(queriesPassword(fields, "pin")).toBe(true);
+    expect(queriesPassword(fields, "account")).toBe(true);
+    expect(queriesPassword(fields, "account.code")).toBe(true);
+    expect(queriesPassword(fields, "recovery_code")).toBe(true);
+  });
+
+  it("finds a password inside an unnamed container by its own name", () => {
+    expect(queriesPassword(fields, "recoveryCode")).toBe(true);
+  });
+
+  it("leaves fields that hold no password alone", () => {
+    expect(queriesPassword(fields, "title")).toBe(false);
+    expect(queriesPassword(fields, "profile.bio")).toBe(false);
   });
 });
