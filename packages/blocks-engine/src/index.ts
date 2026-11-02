@@ -6,6 +6,14 @@
  * created, inspected, and transformed from any JavaScript environment.
  */
 export { deriveSeoFromDocument } from "./derive-seo";
+// Which Layout a page is drawn inside: the one rule the render, the editor
+// and the tests share.
+export { resolvePageLayout } from "./resolve-layout";
+export type {
+  LayoutResolution,
+  LayoutSite,
+  PageLayoutChoice,
+} from "./resolve-layout";
 export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 
 export {

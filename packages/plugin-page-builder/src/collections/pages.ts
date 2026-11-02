@@ -1,12 +1,16 @@
 import {
+  checkbox,
   defineCollection,
   previewUrlFromTemplate,
+  relationship,
   text,
   type CollectionConfig,
   type PreviewViewportsDeclaration,
 } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
+
+import { LAYOUTS_SLUG } from "./layouts";
 /**
  * There is no page-level custom CSS field.
  *
@@ -118,6 +122,26 @@ export function pagesCollection(
       // builder arm: a page already holding a block document keeps rendering
       // rather than reading as empty against a field with a new name.
       blocks({ name: "content", label: "Page Builder" }),
+      // The Layout this page is drawn inside. Empty means the site's default,
+      // which is the ordinary case: a page names a Layout only to differ from
+      // the rest of the site. A named Layout that is not published falls back
+      // to the default rather than drawing unpublished regions.
+      relationship({
+        name: "layout",
+        label: "Layout",
+        relationTo: LAYOUTS_SLUG,
+        admin: { description: "Leave empty to use the site's default Layout." },
+      }),
+      // Draw this page with no header or footer at all. It wins over any
+      // Layout the page also names, whoever wrote either field: a landing page
+      // switched off stays switched off when someone later picks a Layout.
+      // Any writer that may update the page may set it; it changes this page
+      // only.
+      checkbox({
+        name: "noHeaderFooter",
+        label: "No header or footer",
+        defaultValue: false,
+      }),
     ],
     status: true,
     // Pages are what a site shows its visitors, so anyone may read one. A
