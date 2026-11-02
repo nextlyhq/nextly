@@ -124,6 +124,27 @@ function sharedValue(
     : null;
 }
 
+/**
+ * The system fields `define*` adds at a collection's and a Single's top level
+ * (`title`, `slug`). Each is added only when no declared field takes its
+ * column, so one beside a declared sibling that shares no stored value with it
+ * (a column-less `Title`, a `TITLE` whose column is `t_i_t_l_e`) is a pair the
+ * author never wrote, and the definition stands as `define*` accepted it.
+ */
+const SYSTEM_FIELD_NAMES: ReadonlySet<string> = new Set(["title", "slug"]);
+
+/** A field shaped as `define*` adds one: a system name, with a column of its own. */
+function isSystemShaped(field: NamedField): boolean {
+  return SYSTEM_FIELD_NAMES.has(field.name) && fieldProducesColumn(field);
+}
+
+/**
+ * The pairs one of whose fields is shaped as an added system field, recorded
+ * while the walk still holds the fields. Two column-less fields of a system
+ * name are not among them: neither is the field `define*` adds.
+ */
+const SYSTEM_SHAPED_PAIRS = new WeakSet<SiblingClash>();
+
 function containerLabel(path: readonly string[], type: string): string {
   return path.length === 0 ? "the top level" : `${type} '${path.join(".")}'`;
 }
@@ -140,14 +161,18 @@ function walk(
     for (let j = i + 1; j < named.length; j++) {
       const kind = clashKind(named[i].name, named[j].name);
       if (kind === null) continue;
-      out.push({
+      const clash: SiblingClash = {
         container: containerLabel(path, type),
         path,
         first: named[i].name,
         second: named[j].name,
         kind,
         shared: sharedValue(named[i], named[j], path.length === 0),
-      });
+      };
+      if (isSystemShaped(named[i]) || isSystemShaped(named[j])) {
+        SYSTEM_SHAPED_PAIRS.add(clash);
+      }
+      out.push(clash);
     }
   }
   for (const field of named) {
@@ -182,15 +207,6 @@ function sameShared(a: SiblingClash["shared"], b: SiblingClash["shared"]) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/**
- * The system fields `define*` adds at a collection's and a Single's top level
- * (`title`, `slug`). Each is added only when no declared field takes its
- * column, so one beside a declared sibling that shares no stored value with it
- * (a column-less `Title`, a `TITLE` whose column is `t_i_t_l_e`) is a pair the
- * author never wrote, and the definition stands as `define*` accepted it.
- */
-const SYSTEM_FIELD_NAMES: ReadonlySet<string> = new Set(["title", "slug"]);
-
 function isSystemFieldStandingAside(
   kind: SiblingEntityKind | undefined,
   clash: SiblingClash
@@ -199,8 +215,7 @@ function isSystemFieldStandingAside(
     (kind === "collection" || kind === "single") &&
     clash.path.length === 0 &&
     clash.shared === null &&
-    (SYSTEM_FIELD_NAMES.has(clash.first) ||
-      SYSTEM_FIELD_NAMES.has(clash.second))
+    SYSTEM_SHAPED_PAIRS.has(clash)
   );
 }
 

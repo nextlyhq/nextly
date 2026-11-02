@@ -307,6 +307,33 @@ describe("judgeSiblingFields", () => {
           .refused
       )
     ).toEqual(["the top level: title/Title"]);
+    // Only the system field `define*` adds stands aside, which has a column:
+    // two column-less fields of one system name are an authored pair.
+    for (const kind of ["collection", "single"] as const) {
+      expect(
+        names(
+          judgeSiblingFields(
+            [component("title"), component("title")],
+            null,
+            kind
+          ).refused
+        )
+      ).toEqual(["the top level: title/title"]);
+      expect(
+        names(
+          judgeSiblingFields([component("slug"), component("Slug")], null, kind)
+            .refused
+        )
+      ).toEqual(["the top level: slug/Slug"]);
+    }
+    // The added `title` (a text field) beside an authored column-less `title`.
+    expect(
+      judgeSiblingFields(
+        [text("title"), component("title")],
+        null,
+        "collection"
+      )
+    ).toEqual({ refused: [], existing: [] });
     // Written by the author, `define*` still refuses it.
     expect(configuredSiblingClashes("collection", declared)).toHaveLength(1);
   });
