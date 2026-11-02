@@ -1645,7 +1645,8 @@ function expandInstance(
   scope: ComposedScope,
   depth: number,
   presupplied?: Record<string, ResolvedBlockNode[]>,
-  owner?: string
+  owner?: string,
+  relay?: ReadonlyMap<string, string>
 ): ResolvedBlockNode[] {
   // Asked before anything else, including whether the instance is even well
   // formed. A gated node is not served, so composing it is work nobody
@@ -1694,6 +1695,7 @@ function expandInstance(
       depth,
       presupplied,
       owner,
+      relay,
     });
   } catch {
     // Everything that follows CONSUMES the definition — its nodes, their props,
@@ -1731,6 +1733,12 @@ interface InstancePlacement {
   depth: number;
   presupplied?: Record<string, ResolvedBlockNode[]>;
   owner?: string;
+  /**
+   * For a nested instance in editor mode: which of ITS exposures the host
+   * placement's component drives, by the host exposure's id. See
+   * {@link relayOf}.
+   */
+  relay?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -1746,7 +1754,7 @@ function inlinedDefinition(
   componentId: string,
   placement: InstancePlacement
 ): ResolvedBlockNode[] | null {
-  const { run, scope, depth, presupplied, owner } = placement;
+  const { run, scope, depth, presupplied, owner, relay } = placement;
   // The instance node is REPLACED, so its own slot under the cap is freed for
   // what replaces it. Credited before the clone rather than after, or a
   // definition that exactly fills the remaining room is refused for needing
@@ -1762,10 +1770,11 @@ function inlinedDefinition(
     ? suppliedSlots(instance, definition, run)
     : presupplied;
   const plans = planEdits(definition, instance, supplied, !owned);
-  // The host placement's own exposures only. A nested instance's fields are
-  // reached through the host component's exposures, so its nodes carry none.
-  if (run.exposures && owner === undefined) {
-    planExposedProps(definition, instance, plans);
+  // The host placement's own exposures, and a nested instance's only where a
+  // host exposure drives them: its fields are reached through the host
+  // component's, so its nodes carry the HOST exposure's id or none.
+  if (run.exposures && (owner === undefined || relay !== undefined)) {
+    planExposedProps(definition, instance, plans, relay);
   }
   const ctx: InlineContext = {
     run,
@@ -2427,12 +2436,16 @@ function planEdits(
 function planExposedProps(
   definition: ComponentDocument,
   instance: ResolvedBlockNode,
-  plans: Map<string, NodePlan>
+  plans: Map<string, NodePlan>,
+  /** For a nested instance: its exposure ids to the host's that drive them. */
+  relay?: ReadonlyMap<string, string>
 ): void {
   const set = effectiveOverrides(definition, instance);
   const chosen = new Map<string, { id: string; set: boolean }>();
   for (const property of usableExposures(definition.exposed)) {
     if (property.type === "visibility") continue;
+    const hostId = relay === undefined ? property.id : relay.get(property.id);
+    if (hostId === undefined) continue;
     if (property.nodeId === "" || !isUsablePropPath(property.propPath)) {
       continue;
     }
@@ -2440,13 +2453,36 @@ function planExposedProps(
     const isSet = set.has(property.id);
     const held = chosen.get(key);
     if (held !== undefined && held.set && !isSet) continue;
-    chosen.set(key, { id: property.id, set: isSet });
+    chosen.set(key, { id: hostId, set: isSet });
   }
   for (const [key, { id }] of chosen) {
     const [nodeId = "", path = ""] = key.split("\u0000");
     const plan = planFor(plans, nodeId);
     plan.exposedProps = { ...plan.exposedProps, [path]: id };
   }
+}
+
+/**
+ * A nested instance's exposures that a host exposure drives, from the map the
+ * host planned on that instance's node: a host exposure aimed at the nested
+ * placement's `overrides.<id>` sets that exposure of the nested component, so
+ * an edit to what it shows is an edit to the host exposure. `undefined` when
+ * none is driven, which leaves the nested component's nodes unmapped.
+ */
+function relayOf(
+  fed: Readonly<Record<string, string>> | undefined
+): ReadonlyMap<string, string> | undefined {
+  if (fed === undefined) return undefined;
+  const relay = new Map<string, string>();
+  for (const path of Object.keys(fed)) {
+    const [head, inner, ...rest] = path.split(".");
+    if (head !== "overrides" || inner === undefined || rest.length > 0) {
+      continue;
+    }
+    const hostId = fed[path];
+    if (typeof hostId === "string") relay.set(inner, hostId);
+  }
+  return relay.size === 0 ? undefined : relay;
 }
 
 /**
@@ -3182,7 +3218,8 @@ function cloneDefinitionNode(
       ctx.scope,
       depth,
       slots ?? {},
-      ctx.owner
+      ctx.owner,
+      relayOf(plan?.exposedProps)
     );
   }
   return [scoped];

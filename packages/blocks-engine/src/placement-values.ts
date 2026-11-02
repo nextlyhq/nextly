@@ -84,16 +84,11 @@ export function placementValueIssues(
     if (definition === undefined) return;
     const keys = boundedOwnKeys(overrides, MAX_ENVELOPE_ENTRIES);
     if (keys === null) return;
-    const kept = before.get(node.id);
+    const kept = before.get(placementKey(node.id, componentId)) ?? [];
     const exposures = exposuresById(definition);
     for (const key of keys) {
       const value = ownEntry(overrides, key);
-      if (
-        kept?.componentId === componentId &&
-        keptValue(kept.values, key, value)
-      ) {
-        continue;
-      }
+      if (keptValue(kept, key, value)) continue;
       const property = exposures.get(key);
       if (property === undefined) {
         issues.push({
@@ -189,41 +184,37 @@ export function neededFor(
   }
 }
 
-/** A placement's values as one stored form held them. */
-interface StoredPlacement {
-  readonly componentId: string;
-  readonly values: readonly Record<string, unknown>[];
-}
-
 /**
- * Every placement the stored forms hold, by node id, with each form's values.
+ * Every placement the stored forms hold, keyed by node id AND component, with
+ * each form's values.
  *
- * A placement that moved keeps its id, and so its values; one whose component
- * changed is judged afresh, since its old values were for another component.
+ * A placement that moved keeps its id, and so its values. The component is in
+ * the key because the two forms may disagree about it: a draft that already
+ * points a placement at another component keeps that component's values as
+ * its own baseline, beside the published form's for the first.
  */
 function storedPlacements(
   stored: readonly unknown[],
   limits: DocumentLimits
-): Map<string, StoredPlacement> {
-  const found = new Map<
-    string,
-    { componentId: string; values: Record<string, unknown>[] }
-  >();
+): Map<string, Record<string, unknown>[]> {
+  const found = new Map<string, Record<string, unknown>[]>();
   for (const form of stored) {
     if (!isPlainRecord(form) || !Array.isArray(form.nodes)) continue;
     forEachPlacement(form.nodes, limits.maxNodes, node => {
       const props = node.props;
-      const componentId = props.componentId as string;
+      const key = placementKey(node.id, props.componentId as string);
       const overrides = isPlainRecord(props.overrides) ? props.overrides : {};
-      const entry = found.get(node.id);
-      if (entry === undefined) {
-        found.set(node.id, { componentId, values: [overrides] });
-      } else if (entry.componentId === componentId) {
-        entry.values.push(overrides);
-      }
+      const values = found.get(key) ?? [];
+      values.push(overrides);
+      found.set(key, values);
     });
   }
   return found;
+}
+
+/** One placement of one component, as the stored baselines are keyed. */
+function placementKey(nodeId: string, componentId: string): string {
+  return `${nodeId}\u0000${componentId}`;
 }
 
 /** Whether any stored form holds this same value under this id. */

@@ -155,6 +155,30 @@ describe("placementValueIssues", () => {
     ).toHaveLength(1);
   });
 
+  it("keeps a draft's own baseline when the forms place different components under one id", () => {
+    const footer: ComponentDocument = { ...HEADER, exposed: [] };
+    const lookup = new Map<string, BlockDocument>([
+      ["header", HEADER],
+      ["footer", footer],
+    ]);
+    const onFooter = (overrides: Record<string, unknown>): BlockNode => ({
+      id: "p1",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "footer", overrides },
+    });
+    // Published places the header; the draft already moved p1 to the footer,
+    // whose field has since gone. Read published first, as a publish does.
+    const published = page(placed({ title: "Hi" }));
+    const draft = page(onFooter({ old: "Kept" }));
+    expect(
+      placementValueIssues(page(onFooter({ old: "Kept" })), lookup, [
+        published,
+        draft,
+      ])
+    ).toEqual([]);
+  });
+
   it("reaches a placement inside another block's slot", () => {
     const box: BlockNode = {
       id: "box",

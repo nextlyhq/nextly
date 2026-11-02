@@ -2036,7 +2036,7 @@ describe("a placement's own values", () => {
     ).toEqual([]);
   });
 
-  it("on a single, which it cannot read, refuses a wrong type but keeps an unknown id", async () => {
+  it("on a single, which it cannot read, keeps every value it may already hold", async () => {
     const { readStored } = storeOf({
       [COMPONENTS]: { header: { published: header } },
     });
@@ -2048,7 +2048,7 @@ describe("a placement's own values", () => {
     };
     expect(
       codes(await judge(page([valued({ subtitle: "Hi", title: 7 })]), single))
-    ).toEqual(["PLACEMENT_VALUE_WRONG_TYPE"]);
+    ).toEqual([]);
   });
 
   it("accepts a cleared field and a value of the field's type", async () => {

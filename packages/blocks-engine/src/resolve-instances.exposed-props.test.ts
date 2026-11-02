@@ -183,6 +183,41 @@ describe("the exposure map on composed nodes", () => {
     expect(nested?.exposedProps).toBe(undefined);
   });
 
+  it("maps a nested component's node to the host exposure that drives it", () => {
+    const inner = component(
+      [text("inner")],
+      [exposure("innerText", "inner", "text")]
+    );
+    // The host exposes the nested placement's own field, through its
+    // `overrides`; that is the only way a nested field is reached.
+    const outer = component(
+      [placement("nested", "inner")],
+      [exposure("outerText", "nested", "overrides.innerText")]
+    );
+    const lookup = new Map([
+      ["inner", inner],
+      ["outer", outer],
+    ]);
+    const mapped = resolveComponentInstances(
+      page([placement("p1", "outer")]),
+      lookup,
+      { exposures: true }
+    ).document;
+    expect(nodeShowing(mapped.nodes, "inner")?.exposedProps).toEqual({
+      text: "outerText",
+    });
+
+    // And the host exposure's value is what that node shows.
+    const edited = resolveComponentInstances(
+      page([placement("p1", "outer", { overrides: { outerText: "Set" } })]),
+      lookup,
+      { exposures: true }
+    ).document;
+    expect(nodeShowing(edited.nodes, "Set")?.exposedProps).toEqual({
+      text: "outerText",
+    });
+  });
+
   it("maps a placement inside a page's slot content to that placement", () => {
     const { document } = resolveComponentInstances(
       page([

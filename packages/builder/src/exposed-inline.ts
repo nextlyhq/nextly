@@ -21,12 +21,16 @@
  * @module exposed-inline
  */
 import {
+  contentPropsOf,
   findNode,
   getBlock,
   isComponentInstance,
+  nodeLocks,
+  registryBlockSource,
   type BlockDocument,
   type BlockNode,
   type ResolvedBlockNode,
+  type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
 import { inlinePropKind } from "./inline-prop-kind";
@@ -60,21 +64,27 @@ export type ComposedTextAnswer =
  *
  * Exposed plain text on an unlocked placement is editable. Anything else in a
  * component is "part of" it: text it does not expose, a placement locked in
- * Layers, and rich text, which has no inline editor for a placement yet.
+ * Layers, a prop that is not content inside an area locked to its content
+ * (the panel holds that row read-only, with the reason), and rich text, which
+ * has no inline editor for a placement yet.
  *
  * @param document - the page document, which holds the placement
  * @param composed - the editor's composition of it, with the exposure map
  * @param nodeId - the composed node's id, as the element carries it
  * @param prop - the prop the element renders
+ * @param locks - the block definitions the editor judges locks by
  */
 export function composedTextAt(
   document: BlockDocument,
   composed: BlockDocument | undefined,
   nodeId: string,
-  prop: string
+  prop: string,
+  locks: SlotDefaultSource = registryBlockSource()
 ): ComposedTextAnswer | null {
   if (composed === undefined) return null;
-  const node = findNode(composed.nodes, nodeId);
+  // Read as a composed node: the composition is the resolver's output, whose
+  // nodes carry `instanceOf` and the exposure map.
+  const node: ResolvedBlockNode | undefined = findNode(composed.nodes, nodeId);
   const placementId = node?.instanceOf;
   if (node === undefined || typeof placementId !== "string") return null;
   const placement = findNode(document.nodes, placementId);
@@ -87,6 +97,15 @@ export function composedTextAt(
   if (typeof exposureId !== "string" || isLocked(placement)) return partOf;
   const schema = getBlock(node.type)?.props?.[prop];
   if (inlinePropKind(schema) !== "plain") return partOf;
+  // The rule the store applies on the composed page: inside a `contentOnly`
+  // area only a prop declared `role: "content"` may change.
+  const held = nodeLocks(composed.nodes, locks).get(nodeId);
+  if (
+    held?.area !== undefined &&
+    !contentPropsOf(locks.get(node.type)?.props).has(prop)
+  ) {
+    return partOf;
+  }
   const shown: unknown = (node.props as Record<string, unknown> | undefined)?.[
     prop
   ];

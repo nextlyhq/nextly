@@ -528,21 +528,28 @@ function ExposedTextField({
   const [draft, setDraft] = useStoredDraft(stored);
   // A value the store would refuse is held here with the reason rather than
   // written: a link the renderer would not draw is the case a text field can
-  // produce. The draft stays, so the author can correct it.
-  const [problem, setProblem] = React.useState<string | null>(null);
+  // produce. The draft stays, so the author can correct it. The refusal is
+  // held against the stored value it was made over: once that changes (a
+  // reset, an undo, an edit on the canvas), the field shows the new value and
+  // the refusal no longer describes it.
+  const [refusal, setRefusal] = React.useState<{
+    readonly over: string;
+    readonly message: string;
+  } | null>(null);
+  const problem = refusal?.over === stored ? refusal.message : null;
   const problemId = `${id}-problem`;
 
   const send = () => {
     if (draft === stored) {
-      setProblem(null);
+      setRefusal(null);
       return;
     }
     const next = draft === "" ? { $unset: true } : draft;
     if (!exposedValueFits(row, next)) {
-      setProblem(`${row.label} ${neededFor(row)}.`);
+      setRefusal({ over: stored, message: `${row.label} ${neededFor(row)}.` });
       return;
     }
-    setProblem(null);
+    setRefusal(null);
     onSet(row.id, next);
   };
 

@@ -231,7 +231,8 @@ export function useInlineEditing(
             editor.document,
             editor.composed(),
             found.nodeId,
-            found.prop
+            found.prop,
+            editor.lockDefinitions
           )
         : null;
       if (composed?.kind === "part-of") {

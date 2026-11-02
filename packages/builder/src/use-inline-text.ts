@@ -75,7 +75,8 @@ function exposedTarget(
     editor.document,
     editor.composed(),
     nodeId,
-    prop
+    prop,
+    editor.lockDefinitions
   );
   return answer?.kind === "exposed" ? answer.target : undefined;
 }

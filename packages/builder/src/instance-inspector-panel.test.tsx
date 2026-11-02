@@ -1005,6 +1005,48 @@ describe("a link the page could not draw", () => {
   });
 });
 
+describe("a refused link once the value changes underneath it", () => {
+  it("drops the refusal when the stored value changes, as after a reset or an undo", () => {
+    const definition = header({
+      exposed: [
+        {
+          id: "href",
+          label: "Button link",
+          nodeId: "h1",
+          propPath: "href",
+          type: "link",
+        },
+      ],
+    } as Partial<ComponentDocument>);
+    const library = {
+      definitions: new Map([["header", definition]]) as ComponentLookup,
+      components: [{ id: "header", title: "Header", document: definition }],
+    };
+    const view = render(
+      <InspectorPanel
+        editor={editorFor(pageOf(instance()))}
+        componentLibrary={library}
+      />
+    );
+    const field = screen.getByRole("textbox", { name: "Button link" });
+    fireEvent.change(field, { target: { value: "javascript:alert(1)" } });
+    fireEvent.blur(field);
+    expect(screen.getByRole("alert")).toBeDefined();
+
+    view.rerender(
+      <InspectorPanel
+        editor={editorFor(pageOf(instance({ overrides: { href: "/new" } })))}
+        componentLibrary={library}
+      />
+    );
+    expect(
+      (screen.getByRole("textbox", { name: "Button link" }) as HTMLInputElement)
+        .value
+    ).toBe("/new");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
 describe("the variant a placement uses", () => {
   it("is named under the title", () => {
     const definition = header({

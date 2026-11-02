@@ -10,7 +10,7 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { canvasRoot, CANVAS_FRAME } from "./canvas/editor-driver";
+import { canvasRoot } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -131,7 +131,7 @@ async function seed(
 
 async function openBuilder(page: Page, pageId: string): Promise<void> {
   await gotoAdmin(page, `/collections/pages/${pageId}/builder?field=content`);
-  await expect(page.locator(CANVAS_FRAME).first()).toBeAttached({
+  await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
     timeout: 30_000,
   });
   await expect(await part(page, "p1", "text")).toBeVisible({ timeout: 30_000 });
@@ -178,7 +178,8 @@ async function save(page: Page, pageId: string): Promise<void> {
       ["PATCH", "PUT"].includes(response.request().method()) &&
       response.ok()
   );
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  // "Save draft" on a page never published, "Save" on one that is.
+  await page.getByRole("button", { name: /^Save( draft)?$/ }).click();
   await saved;
 }
 
@@ -187,9 +188,11 @@ async function storedPlacements(
   page: Page,
   pageId: string
 ): Promise<Record<string, { props: Record<string, unknown> }>> {
-  const read = await page.request.get(`${PAGES}/${pageId}`);
-  expect(read.ok()).toBe(true);
-  const item = ((await read.json()) as { item: Record<string, unknown> }).item;
+  // Every status: the page is a draft, which a plain read leaves out.
+  const read = await page.request.get(`${PAGES}/${pageId}?status=all`);
+  expect(read.ok(), `reading the page: ${read.status()}`).toBe(true);
+  const body = (await read.json()) as Record<string, unknown>;
+  const item = (body.item ?? body) as Record<string, unknown>;
   const content = (
     typeof item.content === "string" ? JSON.parse(item.content) : item.content
   ) as { nodes: { id: string; props: Record<string, unknown> }[] };
@@ -223,8 +226,13 @@ test.describe("a placement's exposed fields", () => {
     expect(stored.p2?.props.overrides).toBeUndefined();
 
     // The component itself is untouched.
-    const component = await page.request.get(`${COMPONENTS}/${componentId}`);
-    expect(JSON.stringify(await component.json())).toContain("Site name");
+    const component = await page.request.get(
+      `${COMPONENTS}/${componentId}?status=all`
+    );
+    expect(component.ok()).toBe(true);
+    const definition = JSON.stringify(await component.json());
+    expect(definition).toContain("Site name");
+    expect(definition).not.toContain("Acme launch");
 
     await page.reload();
     await expect(await headline(page, "p1")).toHaveText("Acme launch", {
@@ -270,12 +278,11 @@ test.describe("a placement's exposed fields", () => {
     const link = page.getByRole("textbox", { name: "Button link" });
     await link.fill("javascript:alert(1)");
     await link.press("Enter");
-    await expect(page.getByRole("alert")).toContainText(
-      "Button link needs a link"
-    );
+    const refusal = page.locator(".nx-inspector__problem");
+    await expect(refusal).toContainText("Button link needs a link");
     await link.fill("/pricing");
     await link.press("Enter");
-    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(refusal).toHaveCount(0);
 
     await page.getByRole("checkbox", { name: "Button shown" }).click();
 

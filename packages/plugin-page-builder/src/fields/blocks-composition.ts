@@ -531,11 +531,11 @@ const PLACEMENT_VALUE_CODES: Readonly<Record<PlacementValueProblem, string>> = {
  * what the inspector can write.
  *
  * A value the stored document already holds is kept, so a field removed from
- * a component does not make every page placing it unsavable; the stored forms
- * are read only once something is found. Where they cannot be read (a single,
- * a localized field), an id the component lacks may be one the stored value
- * already held, so only a wrong type is refused there: a field's type never
- * changes under its id, so no stored value can hold the wrong one.
+ * a component, or one written to under its id with another type, does not
+ * make every page placing it unsavable; the stored forms are read only once
+ * something is found. Where they cannot be read (a single, a localized
+ * field), any value found may be one the stored document already held, so
+ * none is refused, as a placement break there is not.
  */
 async function judgePlacementValues(args: {
   document: BlockDocument;
@@ -549,12 +549,13 @@ async function judgePlacementValues(args: {
     return;
   }
   const stored = await args.stored();
+  if (!stored.readable) return;
   const issues = placementValueIssues(
     document,
     components,
     stored.forms,
     limits
-  ).filter(issue => stored.readable || issue.problem === "wrong-type");
+  );
   for (const issue of issues) {
     report.add(PLACEMENT_VALUE_CODES[issue.problem], issue.message);
   }

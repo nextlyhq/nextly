@@ -145,6 +145,102 @@ describe("composedTextAt", () => {
   });
 });
 
+describe("exposed text inside an area locked to its content", () => {
+  it("edits a content prop there, and answers a design prop as part of the component", () => {
+    registerBlocks(
+      [
+        {
+          name: "acme/sealed",
+          version: 1,
+          description: "A sealed box.",
+          example: { props: {} },
+          render: () => null,
+          slots: {
+            body: {
+              defaultBlock: [{ type: "acme/heading" }],
+              lock: "contentOnly",
+            },
+          },
+        },
+        {
+          name: "acme/tagline",
+          version: 1,
+          description: "A tagline whose words are its design.",
+          example: { props: {} },
+          render: () => null,
+          props: { motto: { type: "text", inline: true } },
+        },
+      ] as never,
+      { source: "acme-sealed" }
+    );
+    const sealed: ComponentDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "s",
+          type: "acme/sealed",
+          version: 1,
+          props: {},
+          slots: {
+            body: [
+              {
+                id: "h",
+                type: "acme/heading",
+                version: 1,
+                props: { text: "Site name" },
+              },
+              {
+                id: "m",
+                type: "acme/tagline",
+                version: 1,
+                props: { motto: "Always" },
+              },
+            ],
+          },
+        },
+      ],
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "h",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "motto",
+          label: "Motto",
+          nodeId: "m",
+          propPath: "motto",
+          type: "text",
+        },
+      ],
+    };
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [{ ...placed("p1"), props: { componentId: "sealed" } }],
+    };
+    const composed = resolveComponentInstances(
+      document,
+      new Map([["sealed", sealed as BlockDocument]]),
+      { exposures: true }
+    ).document;
+    const idOf = (type: string) => {
+      const box = composed.nodes[0] as ResolvedBlockNode;
+      return box.slots?.body?.find(entry => entry.type === type)?.id ?? "";
+    };
+
+    expect(
+      composedTextAt(document, composed, idOf("acme/heading"), "text")?.kind
+    ).toBe("exposed");
+    expect(
+      composedTextAt(document, composed, idOf("acme/tagline"), "motto")
+    ).toEqual({ kind: "part-of", placementId: "p1" });
+  });
+});
+
 describe("exposedTextOp", () => {
   it("stores the typed text on that placement only, leaving the component and its other placement alone", () => {
     const { document, composed, headingOf } = setUp(placed("p1"), placed("p2"));
