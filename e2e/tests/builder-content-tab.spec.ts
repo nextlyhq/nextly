@@ -427,7 +427,8 @@ async function unresolvedLabels(page: Page): Promise<string[]> {
       const found =
         (field as Element & { ariaLabelledByElements?: Element[] | null })
           .ariaLabelledByElements ?? [];
-      if (found.length !== named.length) {
+      // An empty value names nothing, so the field has no label at all.
+      if (named.length === 0 || found.length !== named.length) {
         problems.push(`aria-labelledby "${named.join(" ")}"`);
       }
     }
