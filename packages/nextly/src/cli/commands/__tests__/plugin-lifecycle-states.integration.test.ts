@@ -339,6 +339,61 @@ describe.each(getConfiguredTestDialects())(
       await expect(boot()).resolves.toBeUndefined();
     });
 
+    it("keeps its records while an index it added to the app's table survives its DOWNs, and forgets it once that is dropped", async () => {
+      await install();
+      // An index on the app's table recorded as the plugin's, which none of
+      // its DOWNs drops.
+      await handle.adapter.executeQuery(
+        `CREATE TABLE ${q("app_posts")} (${q("id")} VARCHAR(36))`
+      );
+      await handle.adapter.executeQuery(
+        `CREATE INDEX ${q("lc_idx_on_posts")} ON ${q("app_posts")} (${q("id")})`
+      );
+      await new SchemaOwnersRepository(db(), dialect).upsert([
+        {
+          tableName: "app_posts",
+          elementKind: "index",
+          elementName: "lc_idx_on_posts",
+          ownerKind: "plugin",
+          ownerId: PLUGIN,
+          migratedBy: `plugin:${PLUGIN}`,
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active",
+        },
+      ]);
+      const pluginOwnerRows = async () =>
+        (await new SchemaOwnersRepository(db(), dialect).read()).filter(
+          row => row.ownerId === PLUGIN
+        );
+
+      await expect(uninstall(false)).rejects.toMatchObject({
+        code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+        logContext: expect.objectContaining({
+          reason: "elements-left-by-down",
+        }),
+      });
+      await endStoppedProcess();
+
+      // Its tables went; the record of the index it left did not.
+      expect(await exists("lc__notes")).toBe(false);
+      expect((await pluginOwnerRows()).map(row => row.elementName)).toContain(
+        "lc_idx_on_posts"
+      );
+
+      await handle.adapter.executeQuery(
+        dialect === "mysql"
+          ? `DROP INDEX ${q("lc_idx_on_posts")} ON ${q("app_posts")}`
+          : `DROP INDEX ${q("lc_idx_on_posts")}`
+      );
+      await uninstall(false);
+
+      expect(await pluginOwnerRows()).toEqual([]);
+      await expect(boot()).rejects.toMatchObject({
+        code: "PLUGIN_SCHEMA_UNINSTALLED",
+      });
+    });
+
     it("keeps its tables and rows on an uninstall keeping data, refuses the boot, and reinstalls over them", async () => {
       await install();
       await writeNote("kept");

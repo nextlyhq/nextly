@@ -454,6 +454,21 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
+  PLUGIN_DOWN_LEFT_ELEMENTS: {
+    cause:
+      "A plugin's DOWN migrations ran and left a column, index, foreign key or check it added to another owner's table in place, so the uninstall was not recorded.",
+    from: [
+      {
+        code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+        reason: "elements-left-by-down",
+        describe: error =>
+          refusal(error.publicMessage, {
+            nextFrom: 1,
+            why: "Its DOWN statements were to drop everything it added to other owners' tables, and one did not. Its migrations are recorded as rolled back, and its ownership records are kept so the element stays known as its own.",
+          }),
+      },
+    ],
+  },
   PLUGIN_TABLE_IDENTITY_UNREADABLE: {
     cause:
       "The database could not report the identity of a table a full uninstall drops, so the uninstall could not check its hook left it in place.",

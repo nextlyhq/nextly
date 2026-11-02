@@ -187,6 +187,145 @@ describe("findUninstallDependents", () => {
     ]);
   });
 
+  it("keeps an index and a foreign key that share a name on one table apart", async () => {
+    // SQLite gives indexes and constraints separate names, so both may be
+    // called `users_handle`. The index uses the column fx contributed; the
+    // key, declared after it, does not.
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          specs: [
+            {
+              name: "users",
+              columns: [],
+              indexes: [
+                { name: "users_handle", columns: ["fx_handle"], unique: false },
+              ],
+              foreignKeys: [
+                {
+                  name: "users_handle",
+                  columns: ["org_id"],
+                  referencesTable: "orgs",
+                  referencesColumns: ["id"],
+                },
+              ],
+            },
+          ] as unknown as ExtensionSchemaRecord["specs"],
+        }),
+      })
+    );
+    expect(found).toEqual([
+      expect.objectContaining({
+        kind: "index",
+        name: "users_handle",
+        table: "users",
+      }),
+    ]);
+  });
+
+  it("finds a foreign key on another table that references a column it contributed", async () => {
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          specs: [
+            {
+              name: "sso__links",
+              columns: [],
+              foreignKeys: [
+                {
+                  name: "fk_sso_handle",
+                  columns: ["handle"],
+                  referencesTable: "users",
+                  referencesColumns: ["fx_handle"],
+                },
+                // CONTROL: a key into the same table that references a
+                // column fx did not contribute is not its DOWN's to break.
+                {
+                  name: "fk_sso_user",
+                  columns: ["user_id"],
+                  referencesTable: "users",
+                  referencesColumns: ["id"],
+                },
+              ],
+            },
+          ] as unknown as ExtensionSchemaRecord["specs"],
+          owners: new Map([["sso__links", SSO]]),
+        }),
+      })
+    );
+    expect(found).toEqual([
+      {
+        kind: "foreign key",
+        name: "fk_sso_handle",
+        table: "sso__links",
+        owner: 'plugin "sso", referencing column "users.fx_handle"',
+      },
+    ]);
+  });
+
+  it("does not take a recorded index for described because a key on its table has its name", async () => {
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          specs: [
+            {
+              name: "users",
+              columns: [],
+              foreignKeys: [
+                {
+                  name: "users_handle",
+                  columns: ["org_id"],
+                  referencesTable: "orgs",
+                  referencesColumns: ["id"],
+                },
+              ],
+            },
+          ] as unknown as ExtensionSchemaRecord["specs"],
+        }),
+      }),
+      [
+        row({
+          tableName: "users",
+          elementKind: "index",
+          elementName: "users_handle",
+          ownerId: "audit",
+          migratedBy: "plugin:audit",
+        }),
+      ]
+    );
+    expect(found).toEqual([
+      expect.objectContaining({
+        kind: "index",
+        name: "users_handle",
+        owner: expect.stringContaining("cannot be read"),
+      }),
+    ]);
+  });
+
   it("CONTROL: never counts the plugin's own schema", async () => {
     const found = await find(
       [
@@ -236,8 +375,8 @@ describe("findUninstallDependents", () => {
 });
 
 describe("what the plugin owns", () => {
-  it("names a collection by the slug a host renamed it to", () => {
-    const own = pluginEntities({
+  it("names a collection by the slug a host renamed it to", async () => {
+    const own = await pluginEntities({
       name: "fx",
       version: "1.0.0",
       contributes: { collections: [{ slug: "notes", fields: [] }] },
@@ -274,5 +413,118 @@ describe("what the plugin owns", () => {
       recordedRowsOn: () => Promise.resolve([]),
     });
     expect(found).toEqual([]);
+  });
+
+  it("names a field group by the slug a host renamed it to, and does not count its fields", async () => {
+    const own = await pluginEntities({
+      name: "fx",
+      version: "1.0.0",
+      contributes: {
+        collections: [{ slug: "fx-notes", fields: [] }],
+        fieldGroups: [{ slug: "note-card", fields: [] }],
+      },
+      renameMap: { "note-card": "site-note-card" },
+    } as unknown as PluginDefinition);
+    expect(own.fieldGroup).toEqual(["site-note-card"]);
+
+    const found = await findUninstallDependents({
+      pluginName: "fx",
+      owned: [row({})],
+      collectionSlugs: ["fx-notes"],
+      collectionSlugForTable: table =>
+        table === "fx__notes" ? "fx-notes" : null,
+      ownEntities: own,
+      sources: sources({
+        fields: [
+          {
+            entityType: "fieldGroup",
+            entitySlug: "site-note-card",
+            fields: [
+              { name: "note", type: "relationship", relationTo: "fx-notes" },
+            ],
+          },
+          // CONTROL: the slug it was declared under is not its own once
+          // renamed, so a group stored under it counts.
+          {
+            entityType: "fieldGroup",
+            entitySlug: "note-card",
+            fields: [
+              { name: "note", type: "relationship", relationTo: "fx-notes" },
+            ],
+          },
+        ],
+      }),
+      recordedRowsOn: () => Promise.resolve([]),
+    });
+    expect(found).toEqual([
+      expect.objectContaining({
+        kind: "relationship field",
+        table: 'fieldGroup "note-card"',
+      }),
+    ]);
+  });
+
+  it("does not count a relationship field its extend added to another owner's entity", async () => {
+    const own = await pluginEntities({
+      name: "fx",
+      version: "1.0.0",
+      contributes: {
+        collections: [{ slug: "fx-notes", fields: [] }],
+        extend: [
+          {
+            target: "posts",
+            fields: [
+              {
+                name: "fxNote",
+                type: "group",
+                fields: [
+                  {
+                    name: "pick",
+                    type: "relationship",
+                    relationTo: "fx-notes",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    } as unknown as PluginDefinition);
+
+    const found = await findUninstallDependents({
+      pluginName: "fx",
+      owned: [row({})],
+      collectionSlugs: ["fx-notes"],
+      collectionSlugForTable: table =>
+        table === "fx__notes" ? "fx-notes" : null,
+      ownEntities: own,
+      sources: sources({
+        fields: [
+          {
+            entityType: "collection",
+            entitySlug: "posts",
+            fields: [
+              {
+                name: "fxNote",
+                type: "group",
+                fields: [
+                  {
+                    name: "pick",
+                    type: "relationship",
+                    relationTo: "fx-notes",
+                  },
+                ],
+              },
+              // CONTROL: the app's own field on the same entity still counts.
+              { name: "appNote", type: "relationship", relationTo: "fx-notes" },
+            ],
+          },
+        ],
+      }),
+      recordedRowsOn: () => Promise.resolve([]),
+    });
+    expect(found).toEqual([
+      expect.objectContaining({ kind: "relationship field", name: "appNote" }),
+    ]);
   });
 });

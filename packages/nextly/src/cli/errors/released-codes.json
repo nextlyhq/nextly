@@ -179,5 +179,6 @@
   "UPGRADE_EVENTS_TABLE_TAKEN": "A table of another shape already has the name `nextly upgrade` moves the migration records into.",
   "WIDGET_GENERATE_CANCELLED": "A prompt of `nextly generate:widget` was cancelled, so it wrote no widget.",
   "WORKFLOW_CANNOT_ATTACH": "A workflow in the configuration is attached to a collection or Single it cannot run on.",
-  "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS": "A full uninstall would drop schema another owner built on the plugin's."
+  "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS": "A full uninstall would drop schema another owner built on the plugin's.",
+  "PLUGIN_DOWN_LEFT_ELEMENTS": "A plugin's DOWN migrations ran and left a column, index, foreign key or check it added to another owner's table in place, so the uninstall was not recorded."
 }

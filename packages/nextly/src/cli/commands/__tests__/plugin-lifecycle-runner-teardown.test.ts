@@ -72,12 +72,14 @@ vi.mock("../../utils/registry-resolver", () => ({
 }));
 vi.mock("../../../domains/schema/ownership/uninstall-dependents", () => ({
   findUninstallDependents: () => Promise.resolve([]),
-  pluginEntities: () => ({
-    collectionSlugs: [],
-    collectionSlugForTable: () => null,
-    single: [],
-    fieldGroup: [],
-  }),
+  pluginEntities: () =>
+    Promise.resolve({
+      collectionSlugs: [],
+      collectionSlugForTable: () => null,
+      single: [],
+      fieldGroup: [],
+      extendedFields: new Map(),
+    }),
 }));
 
 vi.mock("../../utils/adapter", () => ({

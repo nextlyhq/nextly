@@ -299,9 +299,10 @@ function applyTransforms(
 
 /**
  * Target slug → field name → the plugin whose `extend` added the field: who
- * declared each field the transforms are handed, beside the entity's owner.
+ * declared each field the transforms are handed, beside the entity's owner,
+ * and which fields a full uninstall of that plugin takes with it.
  */
-function extendersBySlug(
+export function extendersBySlug(
   plugins: PluginDefinition[]
 ): Map<string, Map<string, string>> {
   const bySlug = new Map<string, Map<string, string>>();
@@ -424,13 +425,6 @@ function renameEntity<T extends Fielded>(
 }
 
 /**
- * Apply a plugin's `renameMap`: rename its contributed entity slugs and
- * rewrite its OWN internal `relationTo` to the renamed slugs (a target that is
- * not a renamed own slug is left untouched). Validates every rename key is a
- * contributed slug, else `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET`. Pure; returns
- * the plugin's declared contributes unchanged when there is no rename map.
- */
-/**
  * Rejects a plugin still contributing under the pre-rename key.
  *
  * The key was renamed rather than aliased, so a plugin compiled against the old
@@ -462,7 +456,18 @@ function assertNoLegacyContributesKey(
   });
 }
 
-function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
+/**
+ * Apply a plugin's `renameMap`: rename its contributed entity slugs and
+ * rewrite its OWN internal `relationTo` to the renamed slugs (a target that is
+ * not a renamed own slug is left untouched). Validates every rename key is a
+ * contributed slug, else `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET`. Pure; returns
+ * the plugin's declared contributes unchanged when there is no rename map.
+ * Exported so a full uninstall names the plugin's entities as the fold
+ * stored them.
+ */
+export function renamePluginContributes(
+  plugin: PluginDefinition
+): RenamedContributes {
   const contributes = plugin.contributes;
   assertNoLegacyContributesKey(plugin.name, contributes);
   const map = plugin.renameMap;

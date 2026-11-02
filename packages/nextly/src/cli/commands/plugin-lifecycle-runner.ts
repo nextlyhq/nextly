@@ -792,7 +792,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       const reader = Object.create(drizzleAdapter) as typeof drizzleAdapter;
       installRegistryResolver(reader);
       // What it owns, by the names a host's renames gave it.
-      const own = pluginEntities(definition);
+      const own = await pluginEntities(definition);
       const { compileExtensionSchema } = await import(
         "../../domains/schema/extension/publish"
       );
@@ -807,8 +807,13 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         owned,
         collectionSlugs: own.collectionSlugs,
         collectionSlugForTable: own.collectionSlugForTable,
-        // Its own Singles and field groups go with it, and so do their fields.
-        ownEntities: { single: own.single, fieldGroup: own.fieldGroup },
+        // Its own Singles and field groups go with it, and so do their
+        // fields, as do the fields its `extend` added to other entities.
+        ownEntities: {
+          single: own.single,
+          fieldGroup: own.fieldGroup,
+          extendedFields: own.extendedFields,
+        },
         sources: databaseDependentsSources(reader, () =>
           Promise.resolve(extensionSchema ?? null)
         ),
@@ -841,6 +846,41 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         drizzleAdapter.getDrizzle(),
         dialect
       ).deletePluginOwner(plugin.name);
+    },
+    // Every element the schema pipeline's own introspection reads, so an
+    // element is judged present exactly as a push would see it.
+    liveElements: async (tables: readonly string[]) => {
+      const { introspectLiveSnapshot } = await import(
+        "../../domains/schema/pipeline/diff/introspect-live"
+      );
+      const snapshot = await introspectLiveSnapshot(
+        drizzleAdapter.getDrizzle(),
+        dialect,
+        [...tables]
+      );
+      return new Map(
+        snapshot.tables.map(table => [
+          table.name,
+          [
+            ...table.columns.map(({ name }) => ({
+              kind: "column" as const,
+              name,
+            })),
+            ...(table.indexes ?? []).map(({ name }) => ({
+              kind: "index" as const,
+              name,
+            })),
+            ...(table.foreignKeys ?? []).map(({ name }) => ({
+              kind: "fk" as const,
+              name,
+            })),
+            ...(table.checks ?? []).map(({ name }) => ({
+              kind: "check" as const,
+              name,
+            })),
+          ],
+        ])
+      );
     },
     // Read through the schema pipeline's own introspection, so a column is
     // judged present exactly as a push would see it.

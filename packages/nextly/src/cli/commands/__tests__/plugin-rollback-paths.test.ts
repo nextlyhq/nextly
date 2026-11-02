@@ -672,6 +672,79 @@ describe("plugins uninstall names a column it added to another owner's table", (
   });
 });
 
+describe("plugins uninstall over a column it contributed that is already gone", () => {
+  it("is not refused over an element on that table whose owner is not configured", async () => {
+    // fx's column row on the app's table outlives the rollback that removed
+    // the column. An index there whose owner is gone cannot be described,
+    // and was counted as possibly using a column no DOWN left will drop.
+    const element = {
+      tableName: "app_notes",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active" as const,
+    };
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        ...element,
+        elementKind: "column",
+        elementName: "fx_flag",
+        ownerKind: "plugin",
+        ownerId: PLUGIN,
+        migratedBy: `plugin:${PLUGIN}`,
+      },
+      {
+        ...element,
+        elementKind: "index",
+        elementName: "gone_idx",
+        ownerKind: "plugin",
+        ownerId: "@acme/gone",
+        migratedBy: "plugin:@acme/gone",
+      },
+    ]);
+    state.migrations = [init, more];
+
+    await uninstall();
+
+    expect(tables()).not.toContain("fx__notes");
+    expect(tables()).not.toContain("fx__tags");
+  });
+
+  it("CONTROL: is refused over that element while the column is still there", async () => {
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        tableName: "app_notes",
+        elementKind: "column",
+        elementName: "fx_flag",
+        ownerKind: "plugin",
+        ownerId: PLUGIN,
+        migratedBy: `plugin:${PLUGIN}`,
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active",
+      },
+      {
+        tableName: "app_notes",
+        elementKind: "index",
+        elementName: "gone_idx",
+        ownerKind: "plugin",
+        ownerId: "@acme/gone",
+        migratedBy: "plugin:@acme/gone",
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active",
+      },
+    ]);
+    state.sqlite.exec("ALTER TABLE app_notes ADD COLUMN fx_flag TEXT");
+    state.migrations = [init, more];
+
+    await expect(uninstall()).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+      publicMessage: expect.stringContaining("gone_idx"),
+    });
+    expect(tables()).toContain("fx__notes");
+  });
+});
+
 describe("migrate:down --plugin against a real database", () => {
   it("rolls the newest module back under its own ledger key", async () => {
     state.migrations = [init, more];

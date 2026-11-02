@@ -135,6 +135,9 @@ function depsWithout(
     // Nothing other owners built on the schema, unless a test says so.
     schemaDependents: vi.fn(async () => []),
     forgetPlugin: vi.fn(async () => undefined),
+    // Nothing the plugin added to another owner's table is left, unless a
+    // test says so.
+    liveElements: vi.fn(async () => new Map()),
     // Both plugins these tests configure, recorded installed.
     readLifecycle: vi.fn(
       async () =>
@@ -304,6 +307,156 @@ describe("plugins uninstall over a DOWN that leaves a table", () => {
       logContext: { reason: "tables-left-by-down", tables: ["fx__notes"] },
     });
     expect(updates).toEqual([]);
+  });
+});
+
+describe("plugins uninstall over a DOWN that leaves what it added to another owner's table", () => {
+  const base = {
+    ownerKind: "plugin",
+    ownerId: "@acme/fx",
+    migratedBy: "plugin:@acme/fx",
+    ownerVersion: null,
+    schemaVersion: null,
+    state: "active",
+  };
+  // Its table, and an index it added to the app's table.
+  const rows = [
+    { ...base, tableName: "fx__notes", elementKind: "table", elementName: "" },
+    {
+      ...base,
+      tableName: "app_notes",
+      elementKind: "index",
+      elementName: "fx_idx",
+    },
+  ];
+  const db = {
+    select: () => ({
+      from: () => Object.assign([...rows], { where: () => [...rows] }),
+    }),
+    insert: () => ({ values: () => Promise.resolve() }),
+  };
+  const uninstallWith = (over: Partial<PluginLifecycleDeps>) =>
+    runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({ db: db as never, ...droppedByDowns(), ...over })
+    );
+
+  it("keeps its records, and is not recorded uninstalled, while the element is still there", async () => {
+    const forgetPlugin = vi.fn(async () => undefined);
+    const states: string[] = [];
+    await expect(
+      uninstallWith({
+        forgetPlugin,
+        // Read under another case than the record's, as a database that
+        // folds names returns it: still the same index.
+        liveElements: vi.fn(
+          async () =>
+            new Map([
+              ["APP_NOTES", [{ kind: "index" as const, name: "FX_IDX" }]],
+            ])
+        ),
+        recordLifecycle: vi.fn(async (_plugin, record) => {
+          states.push(record.state);
+        }),
+      })
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: {
+        reason: "elements-left-by-down",
+        elements: [{ table: "app_notes", kind: "index", name: "fx_idx" }],
+      },
+    });
+    expect(forgetPlugin).not.toHaveBeenCalled();
+    expect(states).toEqual(["uninstalling"]);
+  });
+
+  it("CONTROL: forgets it once the element is gone, or is one of another kind", async () => {
+    const forgetPlugin = vi.fn(async () => undefined);
+    const liveElements = vi.fn(
+      async () =>
+        // A column of the same name is not the index.
+        new Map([["app_notes", [{ kind: "column" as const, name: "fx_idx" }]]])
+    );
+    await uninstallWith({ forgetPlugin, liveElements });
+    expect(liveElements).toHaveBeenCalledWith(["app_notes"]);
+    expect(forgetPlugin).toHaveBeenCalled();
+  });
+});
+
+describe("plugins uninstall asks again what depends on it once the hook's boot is done", () => {
+  const dependent = {
+    kind: "relationship field",
+    name: "note",
+    table: 'collection "posts"',
+    owner: "its schema",
+  };
+  /** A hook path that boots, then hands over to the hook. */
+  const booting = (order: string[]) =>
+    vi.fn(
+      async (
+        _plugin: LifecyclePlugin,
+        _hook: "onInstall" | "onUninstall",
+        _opts: { keepData: boolean },
+        beforeHook?: () => Promise<void>
+      ) => {
+        order.push("boot");
+        await beforeHook?.();
+        order.push("onUninstall");
+      }
+    );
+
+  it("refuses before the hook and any DOWN when the boot brought a dependent in, and puts the record back", async () => {
+    const order: string[] = [];
+    // Nothing depends on it at either decision; the boot syncs a field in.
+    let reads = 0;
+    const schemaDependents = vi.fn(async () =>
+      ++reads > 2 ? [dependent] : []
+    );
+    const runDown = vi.fn(async () => 1);
+    const states: string[] = [];
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: false, consent: EVERY_DELETION },
+        deps({
+          schemaDependents,
+          runDown,
+          runLifecycleHook: booting(order),
+          recordLifecycle: vi.fn(async (_plugin, record) => {
+            states.push(record.state);
+          }),
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+      publicMessage: expect.stringContaining('"note"'),
+    });
+    expect(order).toEqual(["boot"]);
+    expect(runDown).not.toHaveBeenCalled();
+    // Found installed, and nothing has changed: recorded installed again,
+    // so the operator may keep the data instead.
+    expect(states).toEqual(["uninstalling", "installed"]);
+  });
+
+  it("CONTROL: runs on when the boot brought nothing in, and asks nothing when keeping the data", async () => {
+    const order: string[] = [];
+    const schemaDependents = vi.fn(async () => []);
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({ schemaDependents, runLifecycleHook: booting(order) })
+    );
+    expect(order).toEqual(["boot", "onUninstall"]);
+    expect(schemaDependents).toHaveBeenCalledTimes(3);
+
+    schemaDependents.mockClear();
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: true, yes: false },
+      deps({ schemaDependents, runLifecycleHook: booting([]) })
+    );
+    expect(schemaDependents).not.toHaveBeenCalled();
   });
 });
 

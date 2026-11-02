@@ -40,10 +40,11 @@ import { resolveCollectionTableName } from "../utils/resolve-table-name";
 import {
   describeOwner,
   elementsFromOwnerRows,
+  foreignKeysInto,
   type ElementOnTable,
   type ExtensionSchemaRecord,
 } from "./dependent-elements";
-import type { OwnerRecord } from "./owner-registry";
+import { ownerRecordKey, type OwnerRecord } from "./owner-registry";
 import type { UninstallDependent } from "./uninstall-plan";
 
 /** How the refusal names a kind of element. */
@@ -61,8 +62,16 @@ export interface UninstallDependentsInput {
   owned: readonly OwnerRecord[];
   /** The slugs of the plugin's own collections, whose fields go with it. */
   collectionSlugs: readonly string[];
-  /** Its own Singles and field groups, whose fields go with it too. */
-  ownEntities?: { single?: readonly string[]; fieldGroup?: readonly string[] };
+  /**
+   * Its own Singles and field groups, whose fields go with it too, and the
+   * fields its `extend` clauses added to other owners' entities (entity slug
+   * to top-level field names), which go with it as well.
+   */
+  ownEntities?: {
+    single?: readonly string[];
+    fieldGroup?: readonly string[];
+    extendedFields?: ReadonlyMap<string, ReadonlySet<string>>;
+  };
   /** The collection a table holds, so fields pointing at it are found; `null` for a plain table. */
   collectionSlugForTable: (table: string) => string | null;
   /** Fields, the compiled extension schema, and recorded element rows. */
@@ -79,48 +88,125 @@ function isThePlugin(
   return owner.kind === "plugin" && owner.id === pluginName;
 }
 
-/** The columns each compiled element on `table` uses, by element name. */
+/** A compiled element, and the columns of the table it is asked about that it uses. */
+interface CompiledUser {
+  kind: ElementOnTable["kind"];
+  name: string;
+  /** The table the element is on: the asked-about table, or one whose key points into it. */
+  table: string;
+  columns: readonly string[];
+  owner: ElementOnTable["owner"];
+}
+
+/** Who contributed an element to `table`, when the compiled schema records one. */
+function contributorOf(
+  schema: ExtensionSchemaRecord,
+  table: string,
+  kind: string,
+  name: string
+): ElementOnTable["owner"] | undefined {
+  return schema.elementOwners
+    .get(table)
+    ?.find(
+      element => element.elementKind === kind && element.elementName === name
+    )?.owner;
+}
+
+/** The indexes on `table`, an entity's and a declared table's, by their columns. */
+function indexUsers(
+  schema: ExtensionSchemaRecord,
+  table: string,
+  tableOwner: ElementOnTable["owner"]
+): CompiledUser[] {
+  const onEntity = (schema.entityIndexes.get(table) ?? []).flatMap(index =>
+    index.name === undefined
+      ? []
+      : [
+          {
+            kind: "index" as const,
+            name: index.name,
+            table,
+            columns: index.columns,
+            owner: index.contributedBy ?? tableOwner,
+          },
+        ]
+  );
+  const spec = schema.specs.find(candidate => candidate.name === table);
+  const declared = (spec?.indexes ?? []).map(index => ({
+    kind: "index" as const,
+    name: index.name,
+    table,
+    columns: index.columns,
+    owner: contributorOf(schema, table, "index", index.name) ?? tableOwner,
+  }));
+  return [...onEntity, ...declared];
+}
+
+/**
+ * The foreign keys on `table`, by their own columns, and those pointing into
+ * it, on it or on another table, by the columns they reference. Keys from
+ * other tables carry their owners as `foreignKeysInto` reads them.
+ */
+function keyUsers(
+  schema: ExtensionSchemaRecord,
+  table: string,
+  tableOwner: ElementOnTable["owner"]
+): CompiledUser[] {
+  const spec = schema.specs.find(candidate => candidate.name === table);
+  const own = (spec?.foreignKeys ?? []).map(key => ({
+    kind: "fk" as const,
+    name: key.name,
+    table,
+    columns: [
+      ...key.columns,
+      ...(key.referencesTable === table ? key.referencesColumns : []),
+    ],
+    owner: contributorOf(schema, table, "fk", key.name) ?? tableOwner,
+  }));
+  const inbound = foreignKeysInto(schema, new Set([table])).map(key => ({
+    kind: "fk" as const,
+    name: key.name,
+    table: key.table,
+    columns:
+      schema.specs
+        .find(candidate => candidate.name === key.table)
+        ?.foreignKeys?.find(candidate => candidate.name === key.name)
+        ?.referencesColumns ?? [],
+    owner: key.owner,
+  }));
+  return [...own, ...inbound];
+}
+
+/**
+ * Every compiled element that uses columns of `table`, keyed as the owner
+ * registry keys an element (`ownerRecordKey`: table, kind and name), so an
+ * index and a foreign key that share a name on one table, as SQLite allows,
+ * stay two. Listed by two sources (a contributed index the spec carries
+ * too), an element uses every column either says it does.
+ */
 function compiledColumnUsers(
   schema: ExtensionSchemaRecord | null,
   table: string
-): Map<
-  string,
-  { kind: string; columns: readonly string[]; owner: ElementOnTable["owner"] }
-> {
-  const users = new Map<
-    string,
-    { kind: string; columns: readonly string[]; owner: ElementOnTable["owner"] }
-  >();
+): Map<string, CompiledUser> {
+  const users = new Map<string, CompiledUser>();
   if (schema === null) return users;
   const tableOwner = schema.owners.get(table) ?? { kind: "app" as const };
-  const contributorOf = (kind: string, name: string) =>
-    schema.elementOwners
-      .get(table)
-      ?.find(
-        element => element.elementKind === kind && element.elementName === name
-      )?.owner;
-  for (const index of schema.entityIndexes.get(table) ?? []) {
-    if (index.name === undefined) continue;
-    users.set(index.name, {
-      kind: "index",
-      columns: index.columns,
-      owner: index.contributedBy ?? tableOwner,
+  for (const user of [
+    ...indexUsers(schema, table, tableOwner),
+    ...keyUsers(schema, table, tableOwner),
+  ]) {
+    const key = ownerRecordKey({
+      tableName: user.table,
+      elementKind: user.kind,
+      elementName: user.name,
     });
-  }
-  const spec = schema.specs.find(candidate => candidate.name === table);
-  for (const index of spec?.indexes ?? []) {
-    users.set(index.name, {
-      kind: "index",
-      columns: index.columns,
-      owner: contributorOf("index", index.name) ?? tableOwner,
-    });
-  }
-  for (const key of spec?.foreignKeys ?? []) {
-    users.set(key.name, {
-      kind: "fk",
-      columns: key.columns,
-      owner: contributorOf("fk", key.name) ?? tableOwner,
-    });
+    const known = users.get(key);
+    users.set(
+      key,
+      known === undefined
+        ? user
+        : { ...known, columns: [...known.columns, ...user.columns] }
+    );
   }
   return users;
 }
@@ -170,13 +256,22 @@ async function onItsTables(
     input.sources,
     { fieldsGoWith: input.collectionSlugs }
   );
+  const ownSingles = new Set(input.ownEntities?.single ?? []);
+  const ownGroups = new Set(input.ownEntities?.fieldGroup ?? []);
+  const extended = input.ownEntities?.extendedFields;
+  // A field its `extend` added is matched by the top-level field the clause
+  // declared: a relationship nested in a group it added is that group's.
+  const addedByIt = (field: { entitySlug: string; fieldPath: string }) =>
+    extended?.get(field.entitySlug)?.has(field.fieldPath.split(".")[0]) ===
+    true;
   for (const dependents of onTables.values()) {
-    const ownSingles = new Set(input.ownEntities?.single ?? []);
-    const ownGroups = new Set(input.ownEntities?.fieldGroup ?? []);
     const othersFields = dependents.fields.filter(
       field =>
         !(field.entityType === "single" && ownSingles.has(field.entitySlug)) &&
-        !(field.entityType === "fieldGroup" && ownGroups.has(field.entitySlug))
+        !(
+          field.entityType === "fieldGroup" && ownGroups.has(field.entitySlug)
+        ) &&
+        !addedByIt(field)
     );
     for (const field of othersFields) {
       found.add({
@@ -212,14 +307,17 @@ function compiledUsersOf(
   columnName: string,
   found: Found
 ): void {
-  for (const [name, user] of compiled) {
+  for (const user of compiled.values()) {
     if (isThePlugin(user.owner, pluginName)) continue;
     if (!user.columns.includes(columnName)) continue;
     found.add({
       kind: kindName(user.kind),
-      name,
-      table,
-      owner: `${describeOwner(user.owner)}, using column "${columnName}"`,
+      name: user.name,
+      table: user.table,
+      owner:
+        user.table === table
+          ? `${describeOwner(user.owner)}, using column "${columnName}"`
+          : `${describeOwner(user.owner)}, referencing column "${table}.${columnName}"`,
     });
   }
 }
@@ -242,7 +340,13 @@ function undescribedOn(
       element.table === table &&
       element.kind !== "column" &&
       !isThePlugin(element.owner, pluginName) &&
-      !compiled.has(element.name)
+      !compiled.has(
+        ownerRecordKey({
+          tableName: element.table,
+          elementKind: element.kind,
+          elementName: element.name,
+        })
+      )
   );
   for (const element of undescribed) {
     found.add({
@@ -315,25 +419,37 @@ export interface PluginEntities {
   /** The collection a table holds, or `null` for a table of its own schema. */
   collectionSlugForTable: (table: string) => string | null;
   single: string[];
+  /** Its field groups' slugs, after a host's renames. */
   fieldGroup: string[];
+  /** Entity slug to the top-level fields its `extend` clauses added there. */
+  extendedFields: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /**
  * The collections, Singles and field groups a plugin owns, under the names
  * it is stored by: a host's `renameMap` is applied, so a field elsewhere
- * that names a renamed collection is matched to it.
+ * that names a renamed collection is matched to it. And the fields its
+ * `extend` clauses added to other owners' entities, which leave with it.
+ *
+ * Field groups are renamed, and the extended fields read, by the schema
+ * fold's own functions, so they are named here as the fold stored them.
  */
-export function pluginEntities(
+export async function pluginEntities(
   definition: PluginDefinition | undefined
-): PluginEntities {
+): Promise<PluginEntities> {
   if (definition === undefined) {
     return {
       collectionSlugs: [],
       collectionSlugForTable: () => null,
       single: [],
       fieldGroup: [],
+      extendedFields: new Map(),
     };
   }
+  // Loaded when asked: the fold is not otherwise needed to find dependents.
+  const { extendersBySlug, renamePluginContributes } = await import(
+    "../../../plugins/schema/apply-contributions"
+  );
   const self = resolvePluginSelf(definition);
   const resolved = (declared: string): string =>
     self.collections[declared] ?? declared;
@@ -347,12 +463,19 @@ export function pluginEntities(
       resolved(collection.slug),
     ])
   );
+  const extendedFields = new Map<string, ReadonlySet<string>>(
+    [...extendersBySlug([definition])].map(([slug, fields]) => [
+      slug,
+      new Set(fields.keys()),
+    ])
+  );
   return {
     collectionSlugs: configs.map(collection => resolved(collection.slug)),
     collectionSlugForTable: table => slugByTable.get(table) ?? null,
     single: Object.values(self.singles),
-    fieldGroup: (definition.contributes?.fieldGroups ?? []).map(
+    fieldGroup: (renamePluginContributes(definition).fieldGroups ?? []).map(
       group => group.slug
     ),
+    extendedFields,
   };
 }

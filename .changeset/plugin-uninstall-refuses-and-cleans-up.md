@@ -32,12 +32,14 @@
 `nextly plugins uninstall` now refuses a full uninstall while another owner has built on
 the plugin's schema, instead of dropping it after consent. That covers a column, index,
 foreign key or check the app or another plugin added to the plugin's tables, a key or a
-relationship field pointing into them, and an index or key using a column the plugin added
-to someone else's table. Dropping these would delete data that belongs to someone else.
+relationship field pointing into them, and an index or key using or referencing a column
+the plugin added to someone else's table. Dropping these would delete data that belongs to someone else.
 The refusal names each one and its owner. Remove them in their owner's code and migrate,
 or uninstall with `--keep-data`, which drops nothing.
 
 A full uninstall now also deletes the plugin's settings (secrets included), its owner
-records and its migration history, so a later install applies every module again. The
+records and its migration history, so a later install applies every module again. It does
+so only once its DOWNs have removed everything it added to other owners' tables; if one is
+left, it keeps them and refuses, and the uninstall can be run again once it is dropped. The
 record that it was uninstalled stays, and the boot still refuses the plugin until it is
 removed from the config or installed again.
