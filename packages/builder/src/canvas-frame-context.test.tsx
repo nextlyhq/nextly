@@ -305,6 +305,47 @@ describe("a frame whose document is replaced", () => {
     expect(seen === frame.contentDocument).toBe(true);
   });
 
+  it("never answers with a document the frame dropped while it was not provided", async () => {
+    // The frame is handed in, taken away, reloads while away, and is handed
+    // back. Read in a LAYOUT effect, which runs before the provider's own
+    // effects can correct anything: whatever the committed render answers
+    // there is what every layout-timed consumer attaches to.
+    const frame = frameOf();
+    const committed: (Document | null)[] = [];
+    function Probe(): null {
+      const { document: current } = useCanvasFrame();
+      React.useLayoutEffect(() => {
+        committed.push(current);
+      });
+      return null;
+    }
+    const { rerender } = render(
+      <CanvasFrameProvider frame={frame}>
+        <Probe />
+      </CanvasFrameProvider>
+    );
+    rerender(
+      <CanvasFrameProvider frame={null}>
+        <Probe />
+      </CanvasFrameProvider>
+    );
+    const before = frame.contentDocument;
+    await act(async () => {
+      await replaceDocument(frame);
+    });
+    expect(frame.contentDocument === before).toBe(false);
+    committed.length = 0;
+
+    rerender(
+      <CanvasFrameProvider frame={frame}>
+        <Probe />
+      </CanvasFrameProvider>
+    );
+
+    expect(committed.length).toBeGreaterThan(0);
+    expect(committed[0] === frame.contentDocument).toBe(true);
+  });
+
   it("moves the editor's keys to the new document, and off the old one", async () => {
     const frame = frameOf();
     const before = frame.contentDocument;
@@ -332,6 +373,35 @@ describe("a frame whose document is replaced", () => {
     // jsdom keeps the old document dispatchable, which is what makes a
     // listener left behind on it observable here.
     pressSave(before);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("when the frame's keys start working", () => {
+  it("hears a key pressed in the same commit the frame first appears in", () => {
+    // A layout effect below the attach presses Mod+S the moment the tree is
+    // committed, before any passive effect has run. Attached in a passive
+    // effect, the frame is not listened on yet and the keystroke is lost.
+    const frame = frameOf();
+    const found = frame.contentDocument;
+    if (found === null) throw new Error("no frame document");
+    const inner: Document = found;
+    const onSave = vi.fn();
+    function PressOnCommit(): null {
+      React.useLayoutEffect(() => {
+        pressSave(inner);
+      }, []);
+      return null;
+    }
+    render(
+      <ShortcutProvider isApple={false}>
+        <CanvasFrameProvider frame={frame}>
+          <CanvasFrameShortcuts />
+          <SaveBinding onSave={onSave} />
+          <PressOnCommit />
+        </CanvasFrameProvider>
+      </ShortcutProvider>
+    );
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 });

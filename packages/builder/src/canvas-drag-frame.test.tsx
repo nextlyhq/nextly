@@ -25,7 +25,7 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -102,7 +102,10 @@ function Host({ frame }: { frame: HTMLIFrameElement }) {
   });
   editorRef = editor;
   const canvasRoot = React.useRef<HTMLElement | null>(null);
-  const frameBody = frame.contentDocument?.body ?? null;
+  // Read once: the page stays where it was mounted even if the frame later
+  // loads another document, which is what leaves a drag holding a root that
+  // is no longer the frame's.
+  const [frameBody] = React.useState(() => frame.contentDocument?.body ?? null);
   React.useEffect(() => {
     canvasRoot.current =
       frameBody?.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`) ?? null;
@@ -195,6 +198,54 @@ function press(row: HTMLElement): void {
 
 function ids(): string[] {
   return (editorRef?.document.nodes ?? []).map(n => n.id);
+}
+
+/**
+ * Make the frame's viewport scrollable as a browser's is, and hold its
+ * animation frames for the test to run one at a time.
+ *
+ * What a browser gives a standards-mode document, and what jsdom leaves
+ * undefined: the root element scrolls the viewport. Its scroll offset is made
+ * writable, since jsdom pins it at 0. The viewport is 600 pixels tall.
+ */
+function scrollableFrame(frame: HTMLIFrameElement, inner: Document) {
+  const view = frame.contentWindow;
+  if (view === null) throw new Error("no frame window");
+  const scrolling = inner.documentElement;
+  Object.defineProperty(inner, "scrollingElement", { value: scrolling });
+  let scrolled = 0;
+  Object.defineProperty(scrolling, "scrollTop", {
+    get: () => scrolled,
+    set: (value: number) => {
+      scrolled = value;
+    },
+  });
+  Object.defineProperty(view, "innerHeight", { value: 600 });
+  const frames: FrameRequestCallback[] = [];
+  vi.spyOn(view, "requestAnimationFrame").mockImplementation(callback => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.spyOn(view, "cancelAnimationFrame").mockImplementation(() => {});
+  return { frames, scrolled: () => scrolled };
+}
+
+/**
+ * Replace the frame's document and wait for its `load`, as a reload does.
+ *
+ * Taking the frame out of the page and putting it back is what makes jsdom
+ * give it a new document; the new window is given pointer capture as the
+ * first was.
+ */
+async function reloadFrame(frame: HTMLIFrameElement): Promise<void> {
+  const loaded = new Promise<void>(resolve => {
+    frame.addEventListener("load", () => resolve(), { once: true });
+  });
+  frame.remove();
+  document.body.append(frame);
+  await loaded;
+  const view = frame.contentDocument?.defaultView;
+  if (view !== null && view !== undefined) stubPointerCapture(view);
 }
 
 describe("a palette drag onto a canvas in a frame", () => {
@@ -304,37 +355,15 @@ describe("a palette drag onto a canvas in a frame", () => {
     // the frame's scrolling element can carry the page under a pointer held
     // at the frame's lower edge.
     const { frame, inner, row } = renderFramed();
-    const view = frame.contentWindow;
-    if (view === null) throw new Error("no frame window");
-    // What a browser gives a standards-mode document, and what jsdom leaves
-    // undefined: the root element scrolls the viewport. Its scroll offset is
-    // made writable, since jsdom pins it at 0.
-    const scrolling = inner.documentElement;
-    Object.defineProperty(inner, "scrollingElement", { value: scrolling });
-    let scrolled = 0;
-    Object.defineProperty(scrolling, "scrollTop", {
-      get: () => scrolled,
-      set: (value: number) => {
-        scrolled = value;
-      },
-    });
-    Object.defineProperty(view, "innerHeight", { value: 600 });
-    // The loop's callback is held rather than run by the clock, so the one
-    // frame below is the only one that runs.
-    const frames: FrameRequestCallback[] = [];
-    vi.spyOn(view, "requestAnimationFrame").mockImplementation(callback => {
-      frames.push(callback);
-      return frames.length;
-    });
-    vi.spyOn(view, "cancelAnimationFrame").mockImplementation(() => {});
+    const loop = scrollableFrame(frame, inner);
 
     press(row);
     // 590 is 54 pixels into the 64-pixel band above the frame's 600.
     fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 590 });
-    expect(frames).toHaveLength(1);
-    frames[0]?.(0);
+    expect(loop.frames).toHaveLength(1);
+    loop.frames[0]?.(0);
 
-    expect(scrolled).toBeGreaterThan(0);
+    expect(loop.scrolled()).toBeGreaterThan(0);
     fireEvent.keyDown(inner, { key: "Escape" });
   });
 });
@@ -426,5 +455,77 @@ describe("a drag over a frame painted at a quarter of its size", () => {
     fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 160 });
     fireEvent.pointerUp(inner, { pointerId: 7, clientX: 200, clientY: 160 });
     expect(ids()).toEqual(["a", INSERTED, "b"]);
+  });
+});
+
+describe("a drag while the frame reloads", () => {
+  it("is abandoned when the frame loads another document mid-gesture", async () => {
+    // Its listeners and its loop belong to the document that was replaced:
+    // the release inside the new one would never be heard.
+    const { frame, inner, row } = renderFramed();
+    // jsdom empties the replaced document, and React unmounting the page
+    // from it afterwards would find nothing to remove; the page's nodes are
+    // put back for that, after the assertions.
+    const mounted = Array.from(inner.body.childNodes);
+    press(row);
+    fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 90 });
+    expect(dragging).toBe("test/heading");
+
+    await act(async () => {
+      await reloadFrame(frame);
+    });
+    try {
+      expect(frame.contentDocument === inner).toBe(false);
+      expect(dragging).toBeNull();
+    } finally {
+      // Before the cleanup unmounts the page from the replaced document.
+      for (const node of mounted) inner.body.append(node);
+    }
+  });
+});
+
+describe("autoscroll over a frame painted at a quarter of its size", () => {
+  /*
+   * The band and the speed are about what the author sees. At a quarter size
+   * the 64-pixel band is 256 of the frame's pixels, and the 18-pixel step is
+   * 72 of them; counted in the frame's own pixels both shrink to a quarter.
+   */
+  it("scrolls from a band as deep as the author's 64 pixels", () => {
+    const { frame, inner, row } = renderFramed();
+    paintFrameAt(frame, 0.25);
+    const loop = scrollableFrame(frame, inner);
+    fireEvent.pointerDown(row, {
+      button: 0,
+      pointerId: 7,
+      clientX: 150,
+      clientY: 160,
+    });
+    // 100 of the frame's pixels above its bottom edge: 25 of the author's,
+    // inside their band and outside one counted in the frame's pixels.
+    fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 500 });
+    expect(loop.frames).toHaveLength(1);
+    loop.frames[0]?.(0);
+
+    expect(loop.scrolled()).toBeGreaterThan(0);
+    fireEvent.keyDown(inner, { key: "Escape" });
+  });
+
+  it("scrolls as fast as the author's 18 pixels a frame", () => {
+    const { frame, inner, row } = renderFramed();
+    paintFrameAt(frame, 0.25);
+    const loop = scrollableFrame(frame, inner);
+    fireEvent.pointerDown(row, {
+      button: 0,
+      pointerId: 7,
+      clientX: 150,
+      clientY: 160,
+    });
+    // At the very bottom edge, where the step is at its fastest.
+    fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 600 });
+    loop.frames[0]?.(0);
+
+    // 18 of the author's pixels are 72 of the frame's.
+    expect(loop.scrolled()).toBe(72);
+    fireEvent.keyDown(inner, { key: "Escape" });
   });
 });

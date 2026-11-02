@@ -27,7 +27,11 @@
  * @module canvas-frame-context
  */
 
-import { useShortcutManager, type ShortcutManager } from "@nextlyhq/ui";
+import {
+  useIsomorphicLayoutEffect,
+  useShortcutManager,
+  type ShortcutManager,
+} from "@nextlyhq/ui";
 import * as React from "react";
 
 /**
@@ -108,10 +112,21 @@ export function CanvasFrameProvider({
     frame.addEventListener("load", read);
     return () => frame.removeEventListener("load", read);
   }, [frame]);
-  // A frame handed in since the state was last set is read directly until the
-  // effect above catches up, so no render answers with another frame's document.
-  const doc =
-    seen.frame === frame ? seen.document : (frame?.contentDocument ?? null);
+  /*
+   * A frame handed in that the state does not hold — a new frame, the frame
+   * cleared, or one handed back after being cleared — is read FRESH, here,
+   * and the state replaced before this render commits. Kept instead, a frame
+   * handed back would answer with the document it held when it was taken
+   * away, which it may have dropped since, unwatched; clearing the frame
+   * forgets it for the same reason. React re-runs this render with the new
+   * state before committing, so no committed render answers with a stale
+   * document.
+   */
+  let doc = seen.document;
+  if (seen.frame !== frame) {
+    doc = frame?.contentDocument ?? null;
+    setSeen({ frame, document: doc });
+  }
   const value = React.useMemo<CanvasFrame | null>(
     () =>
       frame === null
@@ -242,7 +257,10 @@ function attachOnce(manager: ShortcutManager, target: Document): () => void {
 export function CanvasFrameShortcuts(): null {
   const manager = useShortcutManager();
   const { document: canvasDocument } = useCanvasFrame();
-  React.useEffect(() => {
+  // Layout timing, as the shell's own provider attaches: a passive effect
+  // listens only after paint, and a key pressed in the frame between the
+  // commit that shows it and that effect would reach no binding at all.
+  useIsomorphicLayoutEffect(() => {
     if (canvasDocument === null) return;
     if (canvasDocument === globalThis.document) return;
     return attachOnce(manager, canvasDocument);

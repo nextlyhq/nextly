@@ -54,7 +54,11 @@ import {
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
-import { autoscrollStep } from "./autoscroll";
+import {
+  AUTOSCROLL_MAX_STEP_PX,
+  AUTOSCROLL_ZONE_PX,
+  autoscrollStep,
+} from "./autoscroll";
 import {
   isOutermostForAddress,
   nodeAddressOf,
@@ -902,7 +906,17 @@ export function useCanvasDrag({
     // contains the pointer — the case autoscroll exists for is exactly the case
     // that would stop working.
     const edges = containerEdges(scroller);
-    const step = autoscrollStep(drag.clientY, edges.top, edges.bottom);
+    // The band and the speed are the author's pixels, carried into the canvas
+    // document's by the hand scale: in a frame painted at a quarter size, the
+    // 64-pixel band is 256 of the frame's pixels and the step four times as
+    // many of them, so both look the same on screen at every zoom.
+    const step = autoscrollStep(
+      drag.clientY,
+      edges.top,
+      edges.bottom,
+      AUTOSCROLL_ZONE_PX / drag.handScale,
+      AUTOSCROLL_MAX_STEP_PX / drag.handScale
+    );
     if (step !== 0) {
       const before = scroller.scrollTop;
       scroller.scrollTop = before + step;
@@ -1390,6 +1404,19 @@ export function useCanvasDrag({
     },
     [canvasRoot, cancelGesture, endGesture, trackMove]
   );
+
+  /*
+   * A drag in flight when the canvas's document is replaced — the frame
+   * loading its content, or reloading — is abandoned. Its listeners are on
+   * the document that went, so the release in the new one would never be
+   * heard, and its root and frame loop belong to a page no longer on screen.
+   */
+  const gestureDocument = React.useRef(canvasFrame.document);
+  React.useEffect(() => {
+    if (gestureDocument.current === canvasFrame.document) return;
+    gestureDocument.current = canvasFrame.document;
+    if (gesture.current !== null) reset();
+  }, [canvasFrame.document, reset]);
 
   // Every ordinary ending funnels through `reset`. This covers the one that
   // does not: a host unmounting mid-drag, which would otherwise leave a running
