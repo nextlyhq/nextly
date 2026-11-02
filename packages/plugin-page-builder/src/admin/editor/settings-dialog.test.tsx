@@ -1,0 +1,215 @@
+// @vitest-environment jsdom
+/**
+ * Settings: the page's own tab for everyone, the Site tab only for a role that
+ * may manage the site, Enter that never saves the page, a breakpoint edit
+ * that is not dropped silently, and a default Layout that says how its save
+ * went.
+ */
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { SiteSettingsRead } from "../../library-contract";
+
+let siteRead: SiteSettingsRead | undefined;
+const refetch = vi.fn();
+const writes: Array<{ path: string }> = [];
+let writeAnswer: () => Promise<unknown> = async () => ({});
+
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  usePluginRoute: () => ({
+    data: siteRead,
+    pending: false,
+    error: null,
+    refetch,
+  }),
+  writePluginRoute: async (write: { path: string }) => {
+    writes.push(write);
+    return writeAnswer();
+  },
+}));
+
+// The section's own behaviour is the builder's to test; here it only says
+// when editing starts, as the real one does.
+vi.mock("@nextlyhq/builder/shell", () => ({
+  BreakpointManager: ({
+    onEditingChange,
+  }: {
+    onEditingChange?: (editing: boolean) => void;
+  }) => (
+    <button type="button" onClick={() => onEditingChange?.(true)}>
+      Edit breakpoints
+    </button>
+  ),
+}));
+
+const { SettingsDialog } = await import("./settings-dialog");
+
+const MANAGER: SiteSettingsRead = {
+  mayManageSite: true,
+  mayChooseDefaultLayout: true,
+  defaultLayout: "main",
+  layouts: [
+    { id: "main", title: "Main" },
+    { id: "bare", title: "No header or footer" },
+  ],
+};
+
+function show(onOpenChange = vi.fn()) {
+  render(
+    <form data-testid="page-form" onSubmit={event => event.preventDefault()}>
+      <SettingsDialog
+        open
+        onOpenChange={onOpenChange}
+        returnFocus={() => null}
+        pageFields={<input aria-label="Title" defaultValue="About us" />}
+        share={{ title: "Who we are", description: "We build tools." }}
+        host="acme.com"
+        breakpoints={{
+          value: { viewport: [], container: [] },
+          onSave: vi.fn(),
+          status: "ready",
+        }}
+      />
+    </form>
+  );
+  return onOpenChange;
+}
+
+beforeEach(() => {
+  siteRead = MANAGER;
+  writes.length = 0;
+  writeAnswer = async () => ({});
+  refetch.mockClear();
+});
+afterEach(cleanup);
+
+describe("the Settings dialog", () => {
+  it("shows the page's fields and an approximate share preview", () => {
+    show();
+    expect(screen.getByRole("tab", { name: "This page" })).toBeTruthy();
+    expect(screen.getByLabelText("Title")).toBeTruthy();
+    const preview = screen.getByRole("figure", { name: "Share preview" });
+    expect(preview.textContent).toContain("acme.com");
+    expect(preview.textContent).toContain("Who we are");
+    expect(
+      screen.getByText("Approximate: your site's metadata may differ.")
+    ).toBeTruthy();
+  });
+
+  it("offers no Site tab to a role that may not manage the site", () => {
+    siteRead = { ...MANAGER, mayManageSite: false, layouts: [] };
+    show();
+    expect(screen.queryByRole("tab", { name: "Site" })).toBeNull();
+  });
+
+  it("never lets Enter in a field submit the page", () => {
+    const submitted = vi.fn();
+    show();
+    const form = screen.getByTestId("page-form");
+    form.addEventListener("submit", submitted);
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    screen.getByLabelText("Title").dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("says the Site tab applies at once", async () => {
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    expect(
+      screen.getByText("Changes here apply to the live site immediately.")
+    ).toBeTruthy();
+  });
+
+  it("asks before closing over a breakpoint edit, and keeps editing on Keep editing", async () => {
+    const onOpenChange = show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    );
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask.textContent).toContain("Discard your breakpoint changes?");
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("closes on Discard", async () => {
+    const onOpenChange = show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    );
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Discard" })
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("changes the default Layout at once, and says Saved", async () => {
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.selectOptions(
+      screen.getByLabelText("Pages without a Layout of their own use"),
+      "bare"
+    );
+    await screen.findByText("Saved");
+    expect(writes).toEqual([
+      expect.objectContaining({ path: "/layouts/bare/make-default" }),
+    ]);
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it("says Not saved with Retry when the change is refused, and Retry tries again", async () => {
+    writeAnswer = () =>
+      Promise.reject(new Error("This Layout is not published."));
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.selectOptions(
+      screen.getByLabelText("Pages without a Layout of their own use"),
+      "bare"
+    );
+    await screen.findByText("Not saved");
+    writeAnswer = async () => ({});
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Saved");
+    expect(writes).toHaveLength(2);
+  });
+
+  it("shows the default read-only, naming it, without the Layout rights", async () => {
+    siteRead = {
+      ...MANAGER,
+      mayChooseDefaultLayout: false,
+      layouts: [{ id: "main", title: "Main" }],
+    };
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    const select = screen.getByLabelText(
+      "Pages without a Layout of their own use"
+    ) as HTMLSelectElement;
+    expect(select.disabled).toBe(true);
+    await waitFor(() =>
+      expect(
+        screen.getByText(/needs the rights to update and publish Layouts/)
+      ).toBeTruthy()
+    );
+  });
+});

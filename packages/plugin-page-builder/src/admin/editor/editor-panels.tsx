@@ -69,20 +69,6 @@ import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 const AVAILABLE_PANELS = ["add", "layers", "design"] as const;
 
 /**
- * With an entry-fields panel to fill, `settings` joins them.
- *
- * Derived rather than declared twice: the shell leaves a panel outside
- * `availablePanels` off the rail, and opening one nothing renders into
- * reserves width to display nothing, which reads as a broken control. So the
- * list and the renderer move together by construction, and the rail cannot
- * disagree with the body.
- */
-const AVAILABLE_PANELS_WITH_SETTINGS: readonly [
-  ...typeof AVAILABLE_PANELS,
-  "settings",
-] = [...AVAILABLE_PANELS, "settings"] as const;
-
-/**
  * The insert panel, with this site's saved patterns.
  *
  * A component of its own so the library is read WHEN THE PANEL OPENS. The shell
@@ -346,10 +332,9 @@ export function useEditorPanels(
   return {
     entryFields,
     checklist,
-    // The rail and the body read the same value, so a Settings panel is never
-    // offered that renders nothing.
-    availablePanels:
-      entryFields === null ? AVAILABLE_PANELS : AVAILABLE_PANELS_WITH_SETTINGS,
+    // Settings is a dialog, not a panel: the entry's fields are drawn in its
+    // "This page" tab.
+    availablePanels: AVAILABLE_PANELS,
     ...library,
     ...requests,
   };
@@ -365,9 +350,7 @@ export type EditorPanels = OfferedLibrary &
   PanelRequests & {
     entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
-    availablePanels:
-      | typeof AVAILABLE_PANELS
-      | typeof AVAILABLE_PANELS_WITH_SETTINGS;
+    availablePanels: typeof AVAILABLE_PANELS;
   };
 
 /**
@@ -392,7 +375,6 @@ export function editorPanelRenderer({
   documentClasses,
   classSummaryContext,
   requestPanel,
-  entryFields,
 }: Pick<EditorMount, "editor"> &
   Pick<
     SiteStyleInputs,
@@ -407,7 +389,7 @@ export function editorPanelRenderer({
   Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
   Pick<
     EditorPanels,
-    "offered" | "offerablePatterns" | "requestPanel" | "entryFields"
+    "offered" | "offerablePatterns" | "requestPanel"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -518,17 +500,6 @@ export function editorPanelRenderer({
           }}
         />
       ),
-      /*
-              The document's title and slug, and the entry's own fields — SEO,
-              relations, whatever this collection declares — which this editor
-              covered when it took the window. Drawn by the ADMIN, not
-              reconstructed here: how a field is drawn is the entry form's
-              contract, and a second renderer would drift from it.
-
-              The same value the rail was derived from, so a panel is never
-              offered that this returns nothing for.
-            */
-      settings: () => entryFields,
     };
     return panels[panel]?.() ?? null;
   };

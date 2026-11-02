@@ -116,6 +116,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       topBarEnd,
       children,
       renderPanel,
+      renderSettings,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
@@ -126,6 +127,11 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         panel: string,
         view: { current: string | null; choose: (view: string) => void }
       ) => React.ReactNode;
+      renderSettings?: (dialog: {
+        open: boolean;
+        onOpenChange: (open: boolean) => void;
+        returnFocus: () => HTMLElement | null;
+      }) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
         {/*
@@ -133,6 +139,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          * breakpoint manager lives there, and a stub that dropped the slot
          * would leave its assertions passing on absence.
          */}
+        {/* The real shell renders the host's Settings on every pass, open
+            or not, which is where the breakpoint manager now lives. */}
+        {renderSettings?.({
+          open: false,
+          onOpenChange: () => {},
+          returnFocus: () => null,
+        })}
         {topBar}
         {topBarCenter}
         {topBarEnd}
@@ -143,7 +156,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         {children}
       </div>
     ),
-    BreakpointManager: record("breakpoints"),
+    BreakpointManager: nothing,
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
     ClassManagerPanel: record("classes"),
@@ -195,6 +208,15 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     useInlineText: () => ({ onDoubleClick: () => {} }),
   };
 });
+
+// What the Settings dialog is told about the breakpoints is what its manager
+// is: recorded from the dialog, which the shell renders on every pass.
+vi.mock("./editor/settings-dialog", () => ({
+  SettingsDialog: (props: { breakpoints: Record<string, unknown> }): null => {
+    seen.breakpoints = props.breakpoints;
+    return null;
+  },
+}));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   /*
