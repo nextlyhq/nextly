@@ -1143,6 +1143,12 @@ export function EntryForm({
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.
                   renderEntryFields={renderEntryFields}
+                  // The header's own Preview handler, on the header's own
+                  // terms, so a field offering the preview opens the same page
+                  // and only where the header would.
+                  {...(canPreview
+                    ? { openPreview: entryPreview.openPreview }
+                    : {})}
                 >
                   {/* A document view replaces the form body and nothing around
                       it: every provider above, the guard, the claim, the

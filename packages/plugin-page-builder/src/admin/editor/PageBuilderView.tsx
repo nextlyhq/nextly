@@ -22,6 +22,7 @@ import { PageBuilderCard } from "../PageBuilderCard";
 import { useRestingPageRender } from "../use-resting-page-render";
 
 import { BlocksEditor } from "./BlocksEditor";
+import { sectionFromSearch } from "./builder-address";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 
 type BoundProps = Pick<DocumentViewProps, "control" | "exit"> & {
@@ -33,6 +34,14 @@ type BoundProps = Pick<DocumentViewProps, "control" | "exit"> & {
 /** The editor, bound to the field the view opened for. */
 function BoundEditor({ control, exit, field: declaration, name }: BoundProps) {
   const { field } = useController({ name, control });
+  // The section the address names, read once as the editor opens: the editor
+  // acts on it once, and a later change to the address is the author's own
+  // navigation rather than a request to jump again.
+  const [openAt] = useState(() =>
+    typeof window === "undefined"
+      ? undefined
+      : sectionFromSearch(window.location.search)
+  );
   return (
     <BlocksEditor
       // No key from the value: the editor seeds its own history from the value
@@ -48,6 +57,7 @@ function BoundEditor({ control, exit, field: declaration, name }: BoundProps) {
       onClose={exit}
       name={name}
       control={control}
+      openAt={openAt}
     />
   );
 }

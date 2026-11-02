@@ -95,6 +95,19 @@ export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin";
 export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin";
 
 /**
+ * The surrounding document's full-page preview (@experimental).
+ *
+ * For a field that shows the page it holds — the page builder's entry view —
+ * and offers to open it whole. `open` is the editor's own Preview handler, so
+ * the field opens the page the header would, in the language being edited.
+ *
+ * `null` wherever the editor offers no Preview action: no preview configured,
+ * an entry never saved, a reader, and outside a form. A field shows no such
+ * control then, rather than one that opens nothing.
+ */
+export { useDocumentPreview, type DocumentPreview } from "@nextlyhq/admin";
+
+/**
  * How the surrounding document stands (@experimental).
  *
  * For a field that covers the editor's own chrome — the page builder takes the

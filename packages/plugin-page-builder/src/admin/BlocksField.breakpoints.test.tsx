@@ -49,6 +49,8 @@ const seen: {
 
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
+/** The device the shell restores on load, as an author left it. */
+let storedDevice: string | null = null;
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   /*
@@ -78,25 +80,44 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       topBar,
       children,
       renderPanel,
+      editingBreakpointRequest,
+      onEditingBreakpointChange,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       children?: React.ReactNode;
       renderPanel?: (panel: string) => React.ReactNode;
-    }): React.JSX.Element => (
-      <div>
-        {topBar}
-        {inspector}
-        {/*
+      editingBreakpointRequest?: { breakpoint: string | null; count: number };
+      onEditingBreakpointChange?: (breakpoint: string | null) => void;
+    }): React.JSX.Element => {
+      /*
+       * The device half of the real shell: it holds what a request asks for
+       * and reports it back, starting from the stored device. Without it the
+       * editor's choice would go nowhere, and every case below would be
+       * reading the base breakpoint whatever was chosen.
+       */
+      React.useEffect(() => {
+        onEditingBreakpointChange?.(storedDevice);
+      }, [onEditingBreakpointChange]);
+      React.useEffect(() => {
+        if (editingBreakpointRequest === undefined) return;
+        onEditingBreakpointChange?.(editingBreakpointRequest.breakpoint);
+      }, [editingBreakpointRequest, onEditingBreakpointChange]);
+      return (
+        <div>
+          {topBar}
+          {inspector}
+          {/*
           The panel region, drawn as a SIBLING of the children — which is what
           the real shell does, and the whole reason a panel cannot read what the
           children provide. A mock that dropped `renderPanel` could not see a
           panel wired wrongly, or wired not at all.
         */}
-        {renderPanel?.("layers")}
-        {children}
-      </div>
-    ),
+          {renderPanel?.("layers")}
+          {children}
+        </div>
+      );
+    },
     BreakpointManager: nothing,
     BreakpointSwitcher: record("switcher"),
     InspectorPanel: record("inspector"),
@@ -270,14 +291,14 @@ function measure(width: number | undefined): void {
 }
 
 /** What the author asks the switcher for. */
-function choose(width: number | undefined): void {
+function choose(breakpoint: string): void {
   const select = seen.switcher?.onSelect as
-    | ((width: number | undefined) => void)
+    | ((breakpoint: string) => void)
     | undefined;
   if (select === undefined)
     throw new Error("the switcher was given no handler");
   React.act(() => {
-    select(width);
+    select(breakpoint);
   });
 }
 
@@ -286,6 +307,7 @@ beforeEach(() => {
   seen.canvas = undefined;
   seen.switcher = undefined;
   clientConfig = { siteStyle: SITE };
+  storedDevice = null;
 });
 
 afterEach(() => {
@@ -357,192 +379,141 @@ describe("the container the canvas is compiled against", () => {
   });
 });
 
-describe("what one width drives", () => {
-  it("sizes the canvas to the tier the author chooses", () => {
+describe("the device being edited", () => {
+  it("lays the canvas out at the device the author chooses", () => {
     openEditor();
 
-    choose(991);
+    choose("tablet");
 
     expect(box().width).toBe(991);
+    expect(seen.switcher?.selected).toBe("tablet");
   });
 
-  it("releases the canvas back to the region at the widest tier", () => {
+  it("lays Desktop out at 1280, not at whatever the region allows", () => {
+    // The region narrows as panels open; a fixed width keeps the device's
+    // layout the same, and the zoom fits it into the room there is.
+    openEditor();
+
+    choose("tablet");
+    choose("base");
+
+    expect(box().width).toBe(1280);
+    expect(seen.switcher?.selected).toBe("base");
+  });
+
+  it("edits the device the author chose, whatever width the box measured", () => {
     /*
-     * The control on the case above: a mount that pinned a number here would
-     * satisfy it while making the widest option narrower than the space
-     * available, which is a permanent gutter around a canvas that was already
-     * the right size.
+     * The defect this replaces: the edited breakpoint was read off the width
+     * the canvas measured, so at the 1280px minimum (a region of about 912px)
+     * or with a panel open, an author on Desktop was silently styling the
+     * 991px tablet breakpoint.
      */
     openEditor();
 
-    choose(991);
-    choose(undefined);
+    choose("base");
+    measure(900);
 
-    expect(box().width).toBeUndefined();
+    expect(seen.inspector?.breakpoint).toBe("base");
   });
 
-  it("edits the tier the box was MEASURED in, not the one requested", () => {
-    /*
-     * The property this whole mount exists for. The request is a ceiling: an
-     * editor region narrower than the widest tier hands the box less, and the
-     * narrower tier is then what the browser paints.
-     *
-     * Deriving the edited tier from the request instead would tell an author at
-     * the full width that they are editing the base tier while every value they
-     * type lands in tablet — invisible, because the canvas looks correct.
-     */
+  it("edits a narrower device only once it is chosen", () => {
+    // The control on the case above: the inspector does follow a choice.
     openEditor();
 
-    choose(undefined);
+    choose("tablet");
     measure(900);
 
     expect(seen.inspector?.breakpoint).toBe("tablet");
     expect(seen.inspector?.liveBreakpoints).toContain("tablet");
   });
 
-  it("names no narrower tier before the box has been measured", () => {
-    /*
-     * The control on the case above, and an honest state rather than a default:
-     * nothing has been observed on the first render, and a panel that named a
-     * tier there would be describing a box nobody has looked at.
-     */
+  it("starts on the device the author left", () => {
+    storedDevice = "mobile";
+
     openEditor();
 
-    expect(seen.inspector?.breakpoint).toBe("base");
-    expect(seen.inspector?.liveBreakpoints).not.toContain("tablet");
-  });
-
-  it("keeps the requested and the measured width APART at the switcher", () => {
-    /*
-     * The two are different facts and the control needs both. Fed the measured
-     * width as its selection, it would unselect the option the author just
-     * clicked whenever the region could not honour it — the tier would look
-     * unchosen while the canvas was showing it. Fed only the request, its tier
-     * indicator could never report the narrow-region case, which is the one
-     * case it exists for.
-     */
-    openEditor();
-
-    choose(991);
-    measure(900);
-
-    expect(seen.switcher?.width).toBe(991);
-    expect(seen.switcher?.appliedWidth).toBe(900);
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+    expect(box().width).toBe(575);
   });
 });
 
-describe("a width the site stops offering", () => {
-  it("releases the canvas when the selected tier is deleted", () => {
+describe("a device the site stops offering", () => {
+  it("goes back to Desktop when the chosen breakpoint is removed", () => {
     /*
-     * The switcher renders nothing once a site defines no viewport tiers, and
-     * it cannot clear state it does not own. So an author who selects a tier
-     * and then deletes it is left with a canvas pinned to a bound the
-     * stylesheet no longer has, and no control on screen to release it — the
-     * only way out is to close the editor and reopen it.
-     *
-     * Driven through the CONFIG the editor reads its breakpoints from, rather
-     * than by calling the release directly, because what is under test is that
-     * the width is reconciled against the site as it now stands.
+     * Deterministic, and never a breakpoint nothing draws: an edit stored
+     * under an id the site no longer defines would never reach the page.
      */
     const view = openEditor();
-    choose(991);
-    expect(box().width).toBe(991);
+    choose("tablet");
+    expect(seen.inspector?.breakpoint).toBe("tablet");
 
-    clientConfig = {
-      siteStyle: { breakpoints: { viewport: [], container: [] } },
-    };
-    view.rerender();
-
-    expect(box().width).toBeUndefined();
-  });
-
-  it("FOLLOWS the base width when the widest bound is edited", () => {
-    /*
-     * A width identifies an option only until the site's bounds move. Editing
-     * the widest breakpoint changes the width the unconditional tier applies
-     * FROM, so the number the author's choice produced is suddenly nobody's.
-     *
-     * Reconciled by number, that reads as a deleted tier and releases the
-     * canvas — which, in a region narrower than the new bound, drops the editor
-     * straight back into the bounded tier while the option they chose still
-     * exists and still reads as selected. Every edit after that lands in a tier
-     * they did not pick.
-     *
-     * Stored as the TIER, the width simply follows.
-     */
-    const view = openEditor();
-    choose(992);
-    expect(box().width).toBe(992);
-
-    // The site's widest tier widens: base now applies from 1201 rather than 992.
     clientConfig = {
       siteStyle: {
         breakpoints: {
-          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1200 }],
+          viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
           container: [],
         },
       },
     };
     view.rerender();
 
-    expect(box().width).toBe(1201);
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(seen.switcher?.selected).toBe("base");
+    expect(box().width).toBe(1280);
   });
 
-  it("KEEPS the unconditional tier's width, which is no tier's BOUND", () => {
-    /*
-     * The width that reaches the base tier is one PAST the widest bound, so it
-     * is not among the bounded tiers — and a reconciliation that compares
-     * against those alone clears it on the very next render.
-     *
-     * Measured before this case existed: choosing the unconditional tier set
-     * the width, the effect below cleared it, and the canvas returned to
-     * filling the region. Nothing failed. The one option that reaches the tier
-     * an author most often edits responded to the press and did nothing, which
-     * is indistinguishable from the option not working at all.
-     *
-     * The rerender is what makes it a test of the RECONCILIATION rather than of
-     * the setter: the clearing happens in an effect, so a case asserting
-     * immediately after the press passes whether or not it exists.
-     */
+  it("stops simulating when the site removes its last breakpoint", () => {
     const view = openEditor();
+    choose("tablet");
 
-    choose(992);
+    clientConfig = {
+      siteStyle: { breakpoints: { viewport: [], container: [] } },
+    };
     view.rerender();
-
-    expect(box().width).toBe(992);
-  });
-
-  it("EDITS the base tier at that width, which is the point of offering it", () => {
-    /*
-     * The width surviving is necessary and not sufficient: a number that
-     * survived but resolved to a bounded tier would satisfy the case above
-     * while leaving base exactly as unreachable as it was.
-     *
-     * Measured through the box, because the canvas is scaled rather than capped
-     * — the layout width is the requested one, so what the container queries
-     * resolve against is 992 even where the region is narrower.
-     */
-    openEditor();
-
-    choose(992);
-    measure(992);
 
     expect(seen.inspector?.breakpoint).toBe("base");
+    expect(box().width).toBeUndefined();
   });
 
-  it("KEEPS a width the site still offers", () => {
-    /*
-     * The control. Without it, a version that released on every breakpoint
-     * change — or on every render — would satisfy the case above while making
-     * the switcher unusable: every selection would be undone by the next
-     * render.
-     */
+  it("follows a breakpoint whose bound is edited", () => {
+    // Stored as the breakpoint, not the width it was shown at, so moving its
+    // bound moves the canvas with it rather than losing the choice.
     const view = openEditor();
-    choose(991);
+    choose("tablet");
 
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [
+            { id: "tablet", label: "Tablet", maxWidth: 1023 },
+            { id: "mobile", label: "Mobile", maxWidth: 575 },
+          ],
+          container: [],
+        },
+      },
+    };
     view.rerender();
 
-    expect(box().width).toBe(991);
+    expect(seen.inspector?.breakpoint).toBe("tablet");
+    expect(box().width).toBe(1023);
+  });
+
+  it("keeps the base outside a breakpoint that grows past 1280", () => {
+    const view = openEditor();
+    choose("base");
+
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "laptop", label: "Laptop", maxWidth: 1439 }],
+          container: [],
+        },
+      },
+    };
+    view.rerender();
+
+    expect(box().width).toBe(1440);
+    expect(seen.inspector?.breakpoint).toBe("base");
   });
 });
 
@@ -604,80 +575,46 @@ describe("a site with nothing to simulate", () => {
   });
 });
 
-describe("going to the tier a value came from", () => {
-  it("SIZES THE CANVAS to that tier rather than storing a second answer", () => {
-    /*
-     * The whole architecture is one width with everything derived from it. A
-     * jump that wrote its own "which tier am I editing" would put the two back
-     * in the disagreement deriving them from one width exists to remove — the
-     * canvas would keep showing one tier while the inspector claimed another.
-     *
-     * Asserted on the BOX's requested width, which is the only thing a jump is
-     * allowed to change.
-     */
-    openEditor();
-
-    const jump = seen.inspector?.onJumpToBreakpoint as
+describe("going to the breakpoint a value came from", () => {
+  function jump(breakpoint: string): void {
+    const go = seen.inspector?.onJumpToBreakpoint as
       | ((breakpoint: string) => void)
       | undefined;
-    expect(jump).toBeTypeOf("function");
+    if (go === undefined) throw new Error("the inspector was given no jump");
     React.act(() => {
-      jump?.("tablet");
+      go(breakpoint);
     });
+  }
 
+  it("chooses that device, as the device buttons would", () => {
+    // A jump and a choice are the same act reached two ways, so both go
+    // through the shell's one device rather than a second answer here.
+    openEditor();
+
+    jump("tablet");
+
+    expect(seen.switcher?.selected).toBe("tablet");
+    expect(seen.inspector?.breakpoint).toBe("tablet");
     expect(box().width).toBe(991);
   });
 
-  it("SIZES the canvas for the unconditional tier too, not releases it", () => {
-    /*
-     * It used to release the canvas here, on the reasoning that no width puts
-     * the unconditional tier on screen. There is one: the width it applies
-     * FROM, one past the widest bound.
-     *
-     * Releasing sends the box back to the region — and wherever the region is
-     * narrower than the widest bound, which is the ordinary case, the tier that
-     * then applies is the one the author was jumping AWAY from. The control
-     * would look like it had worked and land on the wrong tier.
-     *
-     * A jump and a choice are the same act reached two ways, so this has to
-     * agree with what pressing the option in the switcher sets.
-     */
+  it("goes to Desktop for the base breakpoint", () => {
     openEditor();
-    const jump = seen.inspector?.onJumpToBreakpoint as
-      | ((breakpoint: string) => void)
-      | undefined;
-    React.act(() => {
-      jump?.("tablet");
-    });
-    expect(box().width).toBe(991);
+    jump("tablet");
 
-    React.act(() => {
-      jump?.("base");
-    });
+    jump("base");
 
-    expect(box().width).toBe(992);
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(box().width).toBe(1280);
   });
 
-  it("RELEASES the canvas for a tier that is genuinely unreachable", () => {
-    /*
-     * The control, and the case the old reasoning was right about. A tier the
-     * compiler emits no bound for — one the site does not define at all here —
-     * has no width that shows it, so the box goes back to the region rather
-     * than being pinned to a number nothing responds to.
-     */
+  it("edits Desktop for a breakpoint the site does not define", () => {
     openEditor();
-    const jump = seen.inspector?.onJumpToBreakpoint as
-      | ((breakpoint: string) => void)
-      | undefined;
-    React.act(() => {
-      jump?.("tablet");
-    });
-    expect(box().width).toBe(991);
+    jump("tablet");
 
-    React.act(() => {
-      jump?.("no-such-tier");
-    });
+    jump("no-such-breakpoint");
 
-    expect(box().width).toBeUndefined();
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(box().width).toBe(1280);
   });
 });
