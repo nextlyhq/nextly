@@ -30,6 +30,7 @@ import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
+import { usageCountReader } from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
   classUsageIndexCollection,
@@ -54,9 +55,10 @@ import {
   USAGE_BACKFILL_STATE_SLUG,
   usageBackfillStateCollection,
 } from "./collections/usage-backfill-state";
+import { componentFactsRoute } from "./component-facts-route";
 import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
-import { componentUsageIndex } from "./component-usage";
+import { componentUsageCount, componentUsageIndex } from "./component-usage";
 import type { CompositionSetup } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
@@ -1118,6 +1120,42 @@ export const pageBuilder = (
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
         patternCapabilityRoute(),
+        // What the component editor needs beside the component's own
+        // document: the ids its live definition uses, and the count of
+        // documents placing it, read from the usage index the installed host
+        // maintains.
+        componentFactsRoute({
+          store: componentStoreOf(opts),
+          countPlacements: ctx => async id => {
+            const index =
+              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+              COMPONENT_USAGE_INDEX_SLUG;
+            return componentUsageCount({
+              read: usageCountReader(await requireInstalled().nextly(), index),
+              componentId: id,
+              health: await usageHealthService(requireInstalled).read(
+                componentUsageIndex,
+                index
+              ),
+            });
+          },
+          // The ids a published removal retired, from the store the write
+          // hooks record them in; none where those hooks are not registered.
+          readRetired: ctx => async id => {
+            if (opts.componentReadiness === false) {
+              return { properties: [], slots: [] };
+            }
+            const store = retiredStore({
+              nextly: () => requireInstalled().nextly(),
+              collection:
+                ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+                COMPONENT_RETIRED_SLUG,
+            });
+            return (
+              (await store.of([id])).get(id) ?? { properties: [], slots: [] }
+            );
+          },
+        }),
       ],
 
       // No `publish` permission. One was declared here and nothing ever read

@@ -8,6 +8,7 @@
 import {
   blockLabelFrom,
   getBlock,
+  isComponentDocument,
   placementRefusalMessage,
   type BlockDocument,
   type DocumentKind,
@@ -15,6 +16,7 @@ import {
   type LocatedPlacementBreak,
 } from "@nextlyhq/blocks-engine";
 import {
+  type ComponentFieldsHost,
   type NoticeQueue,
   type EditorState,
   type UseInlineEditingResult,
@@ -26,6 +28,7 @@ import {
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
+  useDocumentIdentity,
   usePluginClientConfig,
 } from "@nextlyhq/plugin-sdk/admin";
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
@@ -34,6 +37,7 @@ import {
 import { toast } from "@nextlyhq/ui";
 import { useCallback, useMemo, useState } from "react";
 
+import { useComponentFacts } from "../component-facts-client";
 import {
   useComponentLibrary,
   type ComponentLibraryRead,
@@ -276,6 +280,12 @@ export function useEditorMount(
    * three places would be three requests answering one question.
    */
   const mayCreatePattern = useMayCreatePattern();
+  // Asked only of a component with a row: what its live definition holds and
+  // how many documents place it, which its own document cannot say.
+  const identity = useDocumentIdentity();
+  const componentFacts = useComponentFacts(
+    isComponentDocument(initialDocument) ? identity?.documentId : undefined
+  );
 
   return {
     initialDocument,
@@ -287,6 +297,7 @@ export function useEditorMount(
     inline,
     savePattern,
     mayCreatePattern,
+    componentFacts,
   };
 }
 
@@ -301,6 +312,8 @@ export type EditorMount = {
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
+  /** What the inspector is told about the component being edited, if any. */
+  componentFacts: ComponentFieldsHost | undefined;
 };
 
 /**

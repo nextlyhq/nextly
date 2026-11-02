@@ -57,6 +57,15 @@ import * as React from "react";
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
 import { deviceLabel } from "./breakpoint-switcher";
+import type { ComponentFieldsHost } from "./component-fields";
+import {
+  ComponentFieldsContext,
+  ComponentFieldsScope,
+  ExposedFieldsList,
+  PropExposeControl,
+  VisibilityExposeControl,
+  type ComponentFieldsBinding,
+} from "./component-fields-panel";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
@@ -259,6 +268,15 @@ export interface InspectorPanelProps {
    * provider. Omitted, the menu offers Rename and Lock alone.
    */
   verbs?: CardVerbs;
+  /**
+   * What the host knows about the component being edited, when the document
+   * is one: the ids it may never mint again, and how many pages place it.
+   * Exposing fields is offered for any component document; without this, a
+   * new field's id is kept clear of the ids this session has seen only.
+   *
+   * @experimental Settles when the component editor ships.
+   */
+  componentFields?: ComponentFieldsHost;
 }
 
 /** What the inspector needs of the host's component read. */
@@ -384,7 +402,8 @@ function surfaceFor(
   editor: EditorState,
   instance: InstanceInspection | null,
   inspection: BlockInspection | null,
-  verbs: CardVerbs | undefined
+  verbs: CardVerbs | undefined,
+  fields: ComponentFieldsBinding | undefined
 ):
   | { readonly tabless: React.JSX.Element }
   | { readonly block: BlockInspection } {
@@ -431,7 +450,17 @@ function surfaceFor(
    * second surface-meaning-two-things the layout ruling removed, wearing a
    * different shape. Tabs are withheld too: a Style tab over no selection would
    * offer an author somewhere to click that can never show anything.
+   *
+   * In a component's own view, nothing selected means the component itself is
+   * what is being looked at, so its exposed fields are listed.
    */
+  if (
+    inspection === null &&
+    editor.selectedId === null &&
+    fields !== undefined
+  ) {
+    return { tabless: <ExposedFieldsList binding={fields} editor={editor} /> };
+  }
   if (inspection === null) {
     return {
       tabless: (
@@ -444,7 +473,23 @@ function surfaceFor(
   return { block: inspection };
 }
 
+/**
+ * The inspector, inside the component's own view when the document is a
+ * component: the scope holds the removal dialog and hands every control the
+ * binding, so the panel below draws the same whichever document it edits.
+ */
 export function InspectorPanel({
+  componentFields,
+  ...panel
+}: InspectorPanelProps): React.JSX.Element {
+  return (
+    <ComponentFieldsScope editor={panel.editor} host={componentFields}>
+      <SelectionInspector {...panel} />
+    </ComponentFieldsScope>
+  );
+}
+
+function SelectionInspector({
   editor,
   canvasRoot,
   styleState,
@@ -457,7 +502,7 @@ export function InspectorPanel({
   verbs,
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
-}: InspectorPanelProps): React.JSX.Element {
+}: Omit<InspectorPanelProps, "componentFields">): React.JSX.Element {
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
   // the document and the values shown.
@@ -525,8 +570,10 @@ export function InspectorPanel({
   // The lock reason's id, which every held control points to. Made before
   // the early return, as every hook here is.
   const reasonId = React.useId();
+  // The component's own view, when the document is a component.
+  const fields = React.useContext(ComponentFieldsContext);
 
-  const surface = surfaceFor(editor, instance, inspection, verbs);
+  const surface = surfaceFor(editor, instance, inspection, verbs, fields);
   if ("tabless" in surface) return surface.tabless;
   const block = surface.block;
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
@@ -591,6 +638,7 @@ export function InspectorPanel({
             blocks={blocks}
             onScreen={tab === "content"}
             reasonId={reasonId}
+            fields={fields}
           />
         </TabsContent>
 
@@ -624,6 +672,7 @@ function ContentTab({
   blocks,
   onScreen,
   reasonId,
+  fields,
 }: {
   block: BlockInspection;
   editor: EditorState;
@@ -634,6 +683,8 @@ function ContentTab({
   reasonId: string;
   /** Whether the Content tab is the one showing. */
   onScreen: boolean;
+  /** The component's own view, when the document is a component. */
+  fields: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
   // Whether the Advanced section is open, so the panel inside it can be told
   // when it stops being on screen and settle its draft.
@@ -656,6 +707,7 @@ function ContentTab({
         onCommit={commit}
         inspectors={inspectors}
         reasonId={reasonId}
+        fields={fields}
       />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*
@@ -827,18 +879,22 @@ function ContentSurface({
   onCommit,
   inspectors,
   reasonId,
+  fields,
 }: {
   inspection: BlockInspection;
   editor: EditorState;
   onCommit: (name: string, value: unknown) => void;
   inspectors: BlockInspectorResolver | undefined;
   reasonId: string;
+  /** The component's own view, when the document is a component. */
+  fields: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
   const generated = (
     <ContentFields
       inspection={inspection}
       onCommit={onCommit}
       reasonId={reasonId}
+      fields={fields}
       writable={name =>
         propIsWritable(
           editor.document,
@@ -853,15 +909,68 @@ function ContentSurface({
     inspection.inspector === undefined
       ? undefined
       : inspectors?.(inspection.inspector);
-  if (Custom === undefined) return generated;
-  return (
-    <CustomInspectorBoundary fallback={generated}>
-      <CustomInspector
-        Inspector={Custom}
+  const visibility =
+    fields === undefined ? null : (
+      <VisibilityExposeControl
+        binding={fields}
         nodeId={inspection.nodeId}
-        editor={editor}
+        blockName={inspection.label}
       />
-    </CustomInspectorBoundary>
+    );
+  if (Custom === undefined) {
+    return (
+      <>
+        {visibility}
+        {generated}
+      </>
+    );
+  }
+  return (
+    <>
+      {visibility}
+      <CustomInspectorBoundary fallback={generated}>
+        <CustomInspector
+          Inspector={Custom}
+          nodeId={inspection.nodeId}
+          editor={editor}
+        />
+        {/*
+          A block's own inspector draws its own controls and knows nothing of
+          exposing them, so in a component's view its props are listed again
+          beneath it, each with its switch.
+        */}
+        {fields === undefined ? null : (
+          <ExposeRows inspection={inspection} fields={fields} />
+        )}
+      </CustomInspectorBoundary>
+    </>
+  );
+}
+
+/** Each prop's expose switch, for a block whose own inspector draws its controls. */
+function ExposeRows({
+  inspection,
+  fields,
+}: {
+  inspection: BlockInspection;
+  fields: ComponentFieldsBinding;
+}): React.JSX.Element {
+  return (
+    <div className="nx-inspector__fields" data-expose-rows="">
+      {inspection.props.map(prop => (
+        <div
+          key={`${inspection.nodeId}:${prop.name}:expose`}
+          className="nx-inspector__prop"
+        >
+          <p className="nx-inspector__note">{fieldLabel(prop.name)}</p>
+          <PropExposeControl
+            binding={fields}
+            nodeId={inspection.nodeId}
+            prop={prop}
+          />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -963,6 +1072,7 @@ function ContentFields({
   inspection,
   onCommit,
   reasonId,
+  fields,
   writable,
 }: {
   inspection: BlockInspection;
@@ -976,6 +1086,8 @@ function ContentFields({
    * a refusal.
    */
   writable: (name: string) => boolean;
+  /** The component's own view, when the document is a component. */
+  fields?: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
   if (inspection.props.length === 0) {
     return (
@@ -986,22 +1098,41 @@ function ContentFields({
   }
   return (
     <div className="nx-inspector__fields">
-      {inspection.props.map(prop => (
-        <HeldByLock
-          // Keyed by node AND prop: a bare prop name would let React reuse one
-          // block's field for the next block's same-named prop, so the input
-          // would keep the previous block's uncommitted text.
-          key={`${inspection.nodeId}:${prop.name}`}
-          // A held field points at the reason in the card.
-          reasonId={writable(prop.name) ? undefined : reasonId}
-        >
-          <PropField
-            prop={prop}
-            disabled={!writable(prop.name)}
-            onCommit={onCommit}
-          />
-        </HeldByLock>
-      ))}
+      {inspection.props.map(prop => {
+        const field = (
+          <HeldByLock
+            // Keyed by node AND prop: a bare prop name would let React reuse
+            // one block's field for the next block's same-named prop, so the
+            // input would keep the previous block's uncommitted text.
+            key={`${inspection.nodeId}:${prop.name}`}
+            // A held field points at the reason in the card.
+            reasonId={writable(prop.name) ? undefined : reasonId}
+          >
+            <PropField
+              prop={prop}
+              disabled={!writable(prop.name)}
+              onCommit={onCommit}
+            />
+          </HeldByLock>
+        );
+        if (fields === undefined) return field;
+        // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is
+        // still one a designer may try to expose, and the refusal that says
+        // why is the answer they need, which a disabled switch would withhold.
+        return (
+          <div
+            key={`${inspection.nodeId}:${prop.name}`}
+            className="nx-inspector__prop"
+          >
+            {field}
+            <PropExposeControl
+              binding={fields}
+              nodeId={inspection.nodeId}
+              prop={prop}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
