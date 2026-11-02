@@ -51,6 +51,8 @@ type Edit =
 
 interface Case {
   readonly type: string;
+  /** What Layers calls it, to find its row there. */
+  readonly label: string;
   readonly props: Record<string, unknown>;
   /** The block it must sit in, with that block's own props. */
   readonly parent?: { type: string; props: Record<string, unknown> };
@@ -82,24 +84,28 @@ const CONTAINED = (stored: boolean): Edit => ({
 const CASES: readonly Case[] = [
   {
     type: "core/section",
+    label: "Section",
     props: { as: "section", contained: true },
     slots: true,
     edit: CONTAINED(false),
   },
   {
     type: "core/box",
+    label: "Box",
     props: { as: "div" },
     slots: true,
     edit: CONTAINED(true),
   },
   {
     type: "core/columns",
+    label: "Columns",
     props: { as: "div" },
     slots: true,
     edit: CONTAINED(true),
   },
   {
     type: "core/column",
+    label: "Column",
     props: { as: "div" },
     slots: true,
     parent: { type: "core/columns", props: { as: "div" } },
@@ -107,21 +113,27 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/card",
+    label: "Card",
     props: { as: "div" },
     slots: true,
     edit: CONTAINED(true),
   },
   {
     type: "core/accordion",
+    label: "Accordion",
     props: { as: "div" },
     slots: true,
     edit: CONTAINED(true),
   },
   {
     type: "core/accordion-item",
+    label: "Accordion item",
     props: { title: "What is included?", open: false },
     slots: true,
-    parent: { type: "core/accordion", props: { as: "div" } },
+    parent: {
+      type: "core/accordion",
+      props: { as: "div" },
+    },
     edit: {
       kind: "type",
       label: "Title",
@@ -130,9 +142,10 @@ const CASES: readonly Case[] = [
       stored: "What ships?",
     },
   },
-  { type: "core/spacer", props: {} },
+  { type: "core/spacer", label: "Spacer", props: {} },
   {
     type: "core/heading",
+    label: "Heading",
     props: { text: "A section title", level: "h2" },
     edit: {
       kind: "type",
@@ -144,6 +157,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/text",
+    label: "Text",
     props: { text: "A paragraph of text." },
     edit: {
       kind: "type",
@@ -155,6 +169,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/rich-text",
+    label: "Rich text",
     props: { content: RICH_TEXT },
     edit: {
       kind: "richText",
@@ -165,6 +180,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/list",
+    label: "List",
     props: { kind: "unordered", items: ["First", "Second"] },
     edit: {
       kind: "type",
@@ -176,6 +192,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/image",
+    label: "Image",
     props: { src: "/example.jpg", alt: "An example image" },
     edit: {
       kind: "type",
@@ -187,6 +204,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/button",
+    label: "Button",
     props: { label: "Get started", href: "/signup" },
     edit: {
       kind: "type",
@@ -198,6 +216,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/form",
+    label: "Form",
     props: {
       method: "post",
       submitText: "Send",
@@ -213,13 +232,15 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/gallery",
+    label: "Gallery",
     props: { as: "div" },
     slots: true,
     edit: CONTAINED(true),
   },
-  { type: "core/divider", props: {} },
+  { type: "core/divider", label: "Divider", props: {} },
   {
     type: "core/quote",
+    label: "Quote",
     props: {
       text: "Simplicity is the soul of efficiency.",
       attribution: "Austin Freeman",
@@ -234,6 +255,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/embed",
+    label: "Embed",
     props: { src: "https://example.com/player", title: "A product demo" },
     edit: {
       kind: "type",
@@ -245,6 +267,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/collection-loop",
+    label: "Collection loop",
     props: { collection: "posts", limit: 3 },
     slots: true,
     edit: {
@@ -329,16 +352,31 @@ async function storedProps(
   return find(nodes) ?? {};
 }
 
-async function openAndSelect(page: Page, id: string): Promise<void> {
+async function openAndSelect(
+  page: Page,
+  id: string,
+  label: string
+): Promise<void> {
   await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
     timeout: 60_000,
   });
-  // Near the corner: a container's centre holds its empty slot.
-  await page
-    .locator(`.nx-canvas [data-nx-node="${TARGET}"]`)
-    .first()
-    .click({ position: { x: 4, y: 4 } });
+  /*
+   * Through Layers, as an author picks a block the canvas makes hard to hit:
+   * one nested in another, or one drawn as a link, which a click on the
+   * canvas would follow. The search reveals a row inside a closed branch.
+   */
+  const layers = page.getByRole("button", { name: "Layers", exact: true });
+  if ((await layers.getAttribute("aria-pressed")) !== "true") {
+    await layers.click();
+  }
+  const tree = page.getByRole("tree", { name: "Layers" });
+  await expect(tree).toBeVisible();
+  const row = tree.locator(`[data-nx-layer="${TARGET}"]`);
+  if (!(await row.isVisible())) {
+    await page.getByRole("textbox", { name: "Search layers" }).fill(label);
+  }
+  await row.click();
   await expect(page.locator("[data-block-card]")).toBeVisible();
 }
 
@@ -404,10 +442,15 @@ async function makeEdit(page: Page, edit: Edit): Promise<void> {
     return;
   }
   if (edit.kind === "richText") {
-    await field.click();
+    const passage = page
+      .locator(".nx-inspector")
+      .getByRole("textbox", { name: edit.label });
+    await passage.click();
+    // Editable once the shared editor has attached to it.
+    await expect(passage).toHaveAttribute("contenteditable", "true");
     await page.keyboard.press("End");
     await page.keyboard.type(edit.text);
-    await field.blur();
+    await passage.blur();
     return;
   }
   await field.fill(edit.value);
@@ -425,7 +468,9 @@ async function expectShown(page: Page, edit: Edit): Promise<void> {
       edit.stored ? "checked" : "unchecked"
     );
   } else if (edit.kind === "richText") {
-    await expect(field).toContainText(edit.text.trim());
+    await expect(
+      page.locator(".nx-inspector").getByRole("textbox", { name: edit.label })
+    ).toContainText(edit.text.trim());
   } else {
     await expect(field).toHaveValue(edit.value);
   }
@@ -437,7 +482,7 @@ test.describe("the Content tab over every core block", () => {
   for (const each of CASES) {
     test(`edits ${each.type}`, async ({ page, request }) => {
       const id = await createPage(request, each);
-      await openAndSelect(page, id);
+      await openAndSelect(page, id, each.label);
 
       const inspector = page.locator(".nx-inspector");
       await expect(inspector.locator("[data-unsupported]")).toHaveCount(0);
@@ -467,7 +512,7 @@ test.describe("the Content tab over every core block", () => {
       }
 
       // Opened afresh, so what shows is what was stored.
-      await openAndSelect(page, id);
+      await openAndSelect(page, id, each.label);
       await expectShown(page, edit);
     });
   }
