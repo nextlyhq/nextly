@@ -169,22 +169,41 @@ export function relationTargets(
   blocks: readonly { props?: unknown }[] = allBlocks()
 ): ReadonlySet<string> {
   const targets = new Set<string>();
-  for (const block of blocks) {
-    const props = block.props;
-    if (typeof props !== "object" || props === null) continue;
-    for (const schema of Object.values(props)) {
-      if (typeof schema !== "object" || schema === null) continue;
-      const { type, relationTo } = schema as Record<string, unknown>;
-      if (
-        type === "relation" &&
-        typeof relationTo === "string" &&
-        relationTo !== ""
-      ) {
-        targets.add(relationTo);
-      }
-    }
-  }
+  for (const block of blocks) collectTargets(block.props, targets, 0);
   return targets;
+}
+
+/**
+ * How deep a list's item schemas are followed. A list of records holding
+ * lists is as deep as the inspector draws; past that a declaration is not
+ * one an author can reach, and the walk over untrusted schemas stays bounded.
+ */
+const MAX_SCHEMA_DEPTH = 4;
+
+/**
+ * Add every relation target a record of prop schemas names, including those
+ * inside a list's `item` schema: the inspector draws a list item's fields
+ * with the same controls, so a relation there searches this route too.
+ */
+function collectTargets(
+  props: unknown,
+  targets: Set<string>,
+  depth: number
+): void {
+  if (depth > MAX_SCHEMA_DEPTH) return;
+  if (typeof props !== "object" || props === null) return;
+  for (const schema of Object.values(props)) {
+    if (typeof schema !== "object" || schema === null) continue;
+    const { type, relationTo, item } = schema as Record<string, unknown>;
+    if (
+      type === "relation" &&
+      typeof relationTo === "string" &&
+      relationTo !== ""
+    ) {
+      targets.add(relationTo);
+    }
+    if (type === "array") collectTargets(item, targets, depth + 1);
+  }
 }
 
 /** One as-user list read, as the route asks the Direct API for it. */
@@ -232,28 +251,42 @@ export async function readEntries(
   if (!reads.targets().has(request.collection)) {
     throw refusal(request.collection);
   }
-  const titleField = await titleFieldOf(request.collection, reads);
-  // A search with no title field to search has nothing to match, so it
-  // matches nothing — rather than falling back to a field the collection
-  // never said names its entries.
-  if (request.search !== undefined && titleField === undefined) {
-    return { items: [], meta: emptyMeta(request.limit) };
+  const title = await titleFieldOf(request.collection, reads);
+  const titleField = title?.name;
+  const where = whereFor(request, title);
+  // A search nothing can match — no title field to search, or a number field
+  // and words — matches nothing, rather than falling back to a field the
+  // collection never said names its entries.
+  if (where === NO_MATCH) return { items: [], meta: emptyMeta(request.limit) };
+  let page: EntriesPage;
+  try {
+    page = await reads.find({
+      collection: request.collection,
+      ...(where === undefined ? {} : { where }),
+      // The title field and nothing else. `id` is named so a collection with
+      // no title field still selects SOMETHING: an empty selection selects
+      // every field, which is the opposite of what is meant.
+      select: {
+        id: true,
+        ...(titleField === undefined ? {} : { [titleField]: true }),
+      },
+      // A resolve answers in one page whatever limit was asked, since the ids
+      // already bound it.
+      limit: request.ids?.length ?? request.limit,
+    });
+  } catch (error) {
+    // A caller who may read the entries but not their title field cannot
+    // filter on it: core refuses the filter rather than reveal the field
+    // through the rows. For this caller the search matches nothing, which is
+    // the honest answer, rather than a failure the control can only retry.
+    if (
+      request.search !== undefined &&
+      NextlyError.isCode(error, "FIELD_NOT_FILTERABLE")
+    ) {
+      return { items: [], meta: emptyMeta(request.limit) };
+    }
+    throw error;
   }
-  const where = whereFor(request, titleField);
-  const page = await reads.find({
-    collection: request.collection,
-    ...(where === undefined ? {} : { where }),
-    // The title field and nothing else. `id` is named so a collection with no
-    // title field still selects SOMETHING: an empty selection selects every
-    // field, which is the opposite of what is meant.
-    select: {
-      id: true,
-      ...(titleField === undefined ? {} : { [titleField]: true }),
-    },
-    // A resolve answers in one page whatever limit was asked, since the ids
-    // already bound it.
-    limit: request.ids?.length ?? request.limit,
-  });
   return {
     items: page.items.flatMap(row => {
       const item = itemOf(row, titleField);
@@ -287,10 +320,16 @@ function refusal(collection: string): NextlyError {
  * A declared target whose collection does not exist is refused exactly as an
  * undeclared one is, so the answer never says which of the two it was.
  */
+/** The field that names a collection's entries, and whether it holds a number. */
+interface TitleField {
+  readonly name: string;
+  readonly numeric: boolean;
+}
+
 async function titleFieldOf(
   slug: string,
   reads: EntriesReads
-): Promise<string | undefined> {
+): Promise<TitleField | undefined> {
   let record: unknown;
   try {
     record = await reads.collection(slug);
@@ -304,10 +343,28 @@ async function titleFieldOf(
     typeof admin === "object" && admin !== null
       ? (admin as { useAsTitle?: unknown }).useAsTitle
       : undefined;
-  return entryTitleField(
+  const name = entryTitleField(
     typeof nominated === "string" ? nominated : undefined,
     fieldNames(fields)
   );
+  if (name === undefined) return undefined;
+  return { name, numeric: NUMERIC_FIELD_TYPES.has(fieldType(fields, name)) };
+}
+
+/** The field types that hold a number, which a text search cannot match. */
+const NUMERIC_FIELD_TYPES: ReadonlySet<string | undefined> = new Set([
+  "number",
+]);
+
+/** A top-level field's declared type, or `undefined` when it has none. */
+function fieldType(fields: unknown, name: string): string | undefined {
+  if (!Array.isArray(fields)) return undefined;
+  for (const field of fields) {
+    if (typeof field !== "object" || field === null) continue;
+    const { name: own, type } = field as { name?: unknown; type?: unknown };
+    if (own === name) return typeof type === "string" ? type : undefined;
+  }
+  return undefined;
 }
 
 /** The names of a collection's top-level fields, from its stored declaration. */
@@ -332,17 +389,42 @@ function fieldNames(fields: unknown): string[] {
  */
 function whereFor(
   request: EntriesRequest,
-  titleField: string | undefined
-): WhereFilter | undefined {
+  title: TitleField | undefined
+): WhereFilter | typeof NO_MATCH | undefined {
   const conditions: WhereFilter[] = [];
   if (request.ids !== undefined) {
     conditions.push({ id: { in: [...request.ids] } });
   }
-  if (request.search !== undefined && titleField !== undefined) {
-    conditions.push({ [titleField]: { contains: request.search } });
+  if (request.search !== undefined) {
+    const searched = searchOn(request.search, title);
+    if (searched === NO_MATCH) return NO_MATCH;
+    conditions.push(searched);
   }
   if (conditions.length === 0) return undefined;
   return conditions.length === 1 ? conditions[0] : { and: conditions };
+}
+
+/** A search that cannot match anything, answered without a read. */
+const NO_MATCH = Symbol("no match");
+
+/**
+ * The condition one search puts on the title field.
+ *
+ * A text field is matched by `contains`. A number field is matched exactly,
+ * and only by a search that is a number: `contains` lower-cases its column,
+ * which PostgreSQL refuses for a number while MySQL and SQLite convert it, so
+ * a text match there would fail on one dialect alone.
+ */
+function searchOn(
+  search: string,
+  title: TitleField | undefined
+): WhereFilter | typeof NO_MATCH {
+  if (title === undefined) return NO_MATCH;
+  if (!title.numeric) return { [title.name]: { contains: search } };
+  const value = Number(search);
+  return search.trim() !== "" && Number.isFinite(value)
+    ? { [title.name]: { equals: value } }
+    : NO_MATCH;
 }
 
 /**

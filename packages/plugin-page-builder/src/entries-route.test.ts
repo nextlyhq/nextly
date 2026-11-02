@@ -142,6 +142,25 @@ describe("which collections a registered block names as relation targets", () =>
     ).toEqual(["people", "posts"]);
   });
 
+  it("collects a relation inside a list's item schema, which the inspector draws too", () => {
+    expect([
+      ...relationTargets([
+        {
+          props: {
+            cards: {
+              type: "array",
+              of: "object",
+              item: {
+                caption: { type: "text" },
+                post: { type: "relation", relationTo: "posts" },
+              },
+            },
+          },
+        },
+      ]),
+    ]).toEqual(["posts"]);
+  });
+
   it("ignores a prop that is not a relation, or names no usable target", () => {
     // Each of these is a declaration that must NOT open a collection: a
     // different control naming a collection, a relation naming nothing, and
@@ -393,5 +412,60 @@ describe("one read", () => {
         { ...reads({}), collection: fault }
       )
     ).rejects.toThrow("database down");
+  });
+
+  it("matches nothing, rather than failing, when the caller may not filter on the title", async () => {
+    // Core refuses a filter on a field the caller may not read, so the search
+    // matches nothing for them; a listing without a search still lists.
+    const r = reads({ rows: [{ id: "p1" }] });
+    const refused = {
+      ...r,
+      find: async (args: EntriesFindArgs) => {
+        if (args.where !== undefined) {
+          throw new NextlyError({
+            code: "FIELD_NOT_FILTERABLE",
+            publicMessage: "Not filterable.",
+          });
+        }
+        return r.find(args);
+      },
+    };
+
+    const searched = await readEntries(
+      { collection: "posts", search: "launch", limit: 10 },
+      refused
+    );
+    expect(searched.items).toEqual([]);
+    // The control: any other failure of a search still fails.
+    await expect(
+      readEntries(
+        { collection: "posts", search: "launch", limit: 10 },
+        {
+          ...r,
+          find: async () => {
+            throw new Error("database down");
+          },
+        }
+      )
+    ).rejects.toThrow("database down");
+  });
+
+  it("matches a number title exactly, and only by a search that is a number", async () => {
+    const numbered = {
+      fields: [{ name: "issue", type: "number" }],
+      admin: { useAsTitle: "issue" },
+    };
+    const r = reads({ collection: numbered, rows: [{ id: "i1", issue: 42 }] });
+
+    await readEntries({ collection: "posts", search: "42", limit: 10 }, r);
+    expect(r.finds[0]?.where).toEqual({ issue: { equals: 42 } });
+
+    // Words cannot match a number, so nothing is read.
+    const words = await readEntries(
+      { collection: "posts", search: "launch", limit: 10 },
+      r
+    );
+    expect(words.items).toEqual([]);
+    expect(r.finds).toHaveLength(1);
   });
 });
