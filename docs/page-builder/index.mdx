@@ -299,6 +299,8 @@ renders nothing. The provider answers one call, `find({ collection, limit, sort,
 with `{ items, total }`. It is also where you name the collections a loop may read:
 
 ```tsx
+import { createPublicReader } from "nextly/runtime";
+
 // The collections an editor's loop may list. Anything else reads nothing.
 const loopCollections = ["posts"] as const;
 const isLoopCollection = (
@@ -311,23 +313,31 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   field: "content",
   // ...and the rest of the options above...
   data: {
-    find: async ({ collection, limit, sort, locale }) => {
-      if (!isLoopCollection(collection)) return { items: [], total: 0 };
-      const result = await (await instance()).find({
-        collection,
-        limit,
-        sort,
-        locale,
-        // Published entries only, judged by the collection's own read rule, as an
-        // anonymous visitor would read them.
-        status: "published",
-        overrideAccess: false,
-      });
-      return { items: result.items, total: result.meta.total };
+    find: async query => {
+      if (!isLoopCollection(query.collection)) return { items: [], total: 0 };
+      // Published entries and public fields only, as an anonymous visitor reads them.
+      const { items, meta } = await createPublicReader(await instance()).find(query);
+      return { items, total: meta.total };
     },
   },
 });
 ```
+
+`createPublicReader` (from `nextly/runtime`, `@experimental`) is the read a published page
+should use. It takes a list's query as data and fixes everything that decides who sees what:
+
+- published entries only, judged by each collection's read rule as an anonymous visitor;
+- fields the public may not read never come back, and filtering or sorting on one is refused;
+- a sort key that names no field is refused, not dropped, and ties come back in id order;
+- `limit` (1 to 100), `offset` and `page` are checked, and the read answers in the route's language.
+
+A query that tries to widen the read (`status`, `overrideAccess`, `user`, a raw `where`, and
+so on) is refused by name rather than ignored. This is a contract your provider relies on,
+not a sandbox: code holding the Direct API can still read whatever it is trusted to.
+
+Filter rows are typed `{ field, op, value }`, with `op` one of `equals`, `not_equals`, `gt`,
+`gte`, `lt`, `lte`, `contains`, `in`, `not_in` and `exists`. `contains` ignores case for
+ASCII letters on every database; letters outside ASCII follow each database's own rules.
 
 <Callout type="warn">
 Field bindings inside a loop are stored but not resolved yet. Each repeated item shows
