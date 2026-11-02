@@ -302,10 +302,15 @@ test.describe("with the system in dark mode", () => {
   }) => {
     /*
      * The playground's site darkens with the system (its strategy is `media`),
-     * so with the system in dark its tokens take their dark values and the
-     * published page is dark — while the admin here is pinned to LIGHT. The
-     * canvas page has to follow the site: a light ground under dark tokens is
-     * a page no visitor loads.
+     * so with the system in dark its tokens take their dark values — while the
+     * admin here is pinned to LIGHT. The canvas page follows the site's own
+     * TOKENS: its ground is the site's background token, whose dark value the
+     * site defines, so the page and its colour scheme go dark.
+     *
+     * The published page goes dark here for a second reason the canvas
+     * cannot see: the playground's host body has its own dark colours. Its
+     * ground is therefore compared only as "dark", while the canvas's is
+     * pinned to the token's own dark value.
      */
     test.slow();
     await page.emulateMedia({ colorScheme: "dark" });
@@ -325,9 +330,9 @@ test.describe("with the system in dark mode", () => {
     ).toBe("dark");
     const ground = await toRgb(page, await groundBehind(canvas));
     expect(
-      contrastRatio(ground, [0, 0, 0]),
-      `the canvas page is dark too, not ${ground.join(",")}`
-    ).toBeLessThan(1.5);
+      ground,
+      "the canvas ground is the site's background token, at its dark value"
+    ).toEqual([11, 15, 25]);
     const pageText = await toRgb(
       page,
       await canvasText(page).evaluate(

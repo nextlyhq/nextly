@@ -1575,28 +1575,30 @@
    * What an author edits then looks nothing like what a visitor loads, which is
    * the one thing this canvas exists to show.
    *
-   * So all three are stated here, and from what the PUBLISHED page paints. The
-   * page root draws no ground of its own unless the page's styles give it one,
-   * and those land on the page root inside this element exactly as they do
-   * when published. Without them a visitor sees the browser's default canvas:
-   * `Canvas` and `CanvasText` under a light scheme. The system colours are the
-   * one place this sheet names a colour that is not an `--nx-*` token, because
-   * the value is the browser's own default rather than a choice of the admin's
-   * palette, and an admin token here is the defect: it repaints the page
-   * whenever the admin changes theme.
+   * So all three are stated here, from the SITE's own tokens: its background
+   * and text colour tokens, which the canvas root names under the site's token
+   * prefix as `--nx-canvas-site-ground` and `--nx-canvas-site-ink` (see
+   * `canvas.tsx`). Those flip by themselves when the site's dark values apply,
+   * because the token emitter switches them by the site's strategy. Without a
+   * site sheet they fall back to the browser's default canvas, `Canvas` and
+   * `CanvasText`, which is what a published page shows where nothing paints.
+   * The system colours are the one place this sheet names a colour that is not
+   * an `--nx-*` token, because the value is the browser's own default rather
+   * than a choice of the admin's palette, and an admin token here is the
+   * defect: it repaints the page whenever the admin changes theme.
    *
-   * `color-scheme` is what decides those two keywords, and it also decides how
-   * native controls and scrollbars inside the page are drawn, so it is reset to
-   * the site's light default too. The site's own dark mode is the one thing
-   * that changes it — see the rule below.
+   * `color-scheme` decides those two keywords and how native controls and
+   * scrollbars inside the page are drawn, so it is reset to light too. Only a
+   * dark GROUND among the site's dark values turns it dark — see the rules
+   * below.
    *
    * The frame only becomes visible BESIDE the page where the canvas is
    * bounded: at full width the page is the region, and there are no edges to
    * frame. A narrower tier, or zooming out, reveals it.
    */
   color-scheme: light;
-  background-color: Canvas;
-  color: CanvasText;
+  background-color: var(--nx-canvas-site-ground, Canvas);
+  color: var(--nx-canvas-site-ink, CanvasText);
   /*
    * The page's type, which the canvas would otherwise take from the admin's
    * own face: the site's body font token. Its custom property depends on the
@@ -1714,24 +1716,26 @@
 /*
  * The site's OWN dark mode, which is the one thing that darkens the page.
  *
- * A site's dark token values apply under one of two strategies, and the page
- * then expects a dark ground and dark native controls beneath them: under
+ * A site's dark token values apply under one of two strategies: under
  * `[data-nx-theme="dark"]` on an ancestor the host chooses, or with the
- * viewer's system on a site whose strategy is `media` — which the canvas
- * states on itself, since only the token set knows it. Each path is keyed on
- * that stated strategy, so a host's attribute does not darken the page of a
- * site that follows the system, whose tokens would stay light under it. The
- * admin's `.dark` class is a different switch and deliberately reaches nothing
- * here.
+ * viewer's system on a site whose strategy is `media`. The page's ground and
+ * text already follow those values through the tokens; what these rules add
+ * is the SCHEME. The canvas root states the strategy as
+ * `data-nx-site-dark-ground`, and only when the site's dark values include a
+ * dark ground — the strategy says when dark values apply, not that the page
+ * turns dark, so a site whose dark set keeps a light background keeps light
+ * native controls. Each path is keyed on that stated strategy, so a host's
+ * attribute does not darken the page of a site that follows the system.
+ * The admin's `.dark` class is a different switch and reaches nothing here.
  */
-[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-mode="attribute"] {
+[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground="attribute"] {
   color-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
 }
 
 @media (prefers-color-scheme: dark) {
-  .nx-canvas[data-nx-site-dark-mode="media"] {
+  .nx-canvas[data-nx-site-dark-ground="media"] {
     color-scheme: dark;
     --nx-builder-select: var(--nx-builder-select-on-dark);
     --nx-builder-component: var(--nx-builder-component-on-dark);

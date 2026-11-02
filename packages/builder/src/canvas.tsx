@@ -32,12 +32,16 @@
 import {
   findNode,
   PAGE_ROOT_CLASS,
+  parseColor,
   previewContainerName,
   previewStateClass,
+  relativeLuminance,
+  resolveSiteTokens,
   resolveTokenPrefix,
   statePropagatesToAncestors,
   STYLE_STATES,
   tokenCustomProperty,
+  tokenIdentity,
   walkNodes,
   type BlockDocument,
   type BreakpointSet,
@@ -162,43 +166,92 @@ export const DROP_REFUSED_ATTRIBUTE = "data-nx-drop-refused";
 export const CHROME_ATTRIBUTE = "data-nx-chrome";
 
 /**
- * The custom property the stylesheet reads the page's face from.
+ * The site tokens the canvas page is drawn from, by IDENTITY as the default
+ * token set declares them, mapped to the custom property the stylesheet reads
+ * each from, with the value it falls back to where the token is undeclared.
  *
- * Set inline on the canvas root because the property it points at depends on
+ * Set inline on the canvas root because the property each points at depends on
  * the prefix the site's tokens are emitted under, which only the site sheet
- * knows; `builder-chrome.css` falls back to the system face without it.
+ * knows. An identity rather than a display name, so a site that renamed a
+ * token still resolves: the property is built from the identity. The
+ * fallbacks are the browser's own defaults, which is what a published page
+ * shows where nothing paints.
  */
-const SITE_FONT_PROPERTY = "--nx-canvas-site-font";
+const SITE_SURFACE_TOKENS = [
+  ["--nx-canvas-site-font", "font.body", "system-ui"],
+  ["--nx-canvas-site-ground", "color.background", "Canvas"],
+  ["--nx-canvas-site-ink", "color.text", "CanvasText"],
+] as const;
+
+/** The token the page's ground is drawn from, by identity. */
+const SITE_GROUND_TOKEN = "color.background";
 
 /**
- * The identity of the site's body font token, as the default token set
- * declares it. An identity rather than a display name, so a site that renamed
- * the token still resolves: the property is built from the identity.
+ * The largest relative luminance a ground can have and still be dark: the
+ * point where white text and black text contrast with it equally.
  */
-const SITE_FONT_TOKEN = "font.body";
+const DARK_GROUND_LUMINANCE = 0.179;
+
+/** What the canvas root needs from the site sheet to draw the page as the site. */
+interface SiteSurface {
+  /** The custom properties naming the site's tokens, under its prefix. */
+  readonly style: Record<`--${string}`, string>;
+  /** How the site's dark token values are switched on. */
+  readonly darkMode: "attribute" | "media";
+  /** Whether the site's background token has a DARK value for that state. */
+  readonly darkGround: boolean;
+}
 
 /**
- * A `var()` naming the site's body font, under the prefix the site sheet emits
- * its tokens with, or undefined when the host serves no site sheet.
+ * The site's own surface tokens, as the canvas root carries them, or undefined
+ * when the host serves no site sheet.
  *
  * The prefix is the one the renderer compiles the sheet under:
  * `sharedStyleInputs` reconciles the site's own prefixes with the route
  * context's, exactly as `PageRenderer` does before emitting the sheet, and
- * `resolveTokenPrefix` gives what is actually written. So a site under
- * `--brand-`, or a route context naming the prefix for a site that states
- * none, is read under that prefix rather than as a property nothing declares.
+ * `resolveTokenPrefix` gives what is actually written. The token set is the
+ * one the sheet emits — the site's own layered over the defaults by
+ * `resolveSiteTokens` — so whether the ground has a dark value is asked of the
+ * same tokens the page draws with.
+ *
+ * The page's colour scheme is not inferred from the strategy alone. The
+ * strategy says when the site's dark VALUES apply; the scheme goes dark only
+ * where those values include a dark ground, so a site whose dark set leaves
+ * the background light keeps a light page and light native controls.
  */
-function siteFontReference(
+function siteSurface(
   render: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
   siteStyles: NonNullable<PageRendererProps["siteStyles"]>
-): string | undefined {
+): SiteSurface | undefined {
   if (typeof siteStyles !== "object") return undefined;
   const stated = sharedStyleInputs(
     render?.styleContext,
     siteStyles
   ).tokenPrefix;
   const { prefix } = resolveTokenPrefix(stated ?? undefined);
-  return `var(${tokenCustomProperty(SITE_FONT_TOKEN, prefix)}, system-ui)`;
+  const style: Record<`--${string}`, string> = {};
+  for (const [property, token, fallback] of SITE_SURFACE_TOKENS) {
+    style[property] = `var(${tokenCustomProperty(token, prefix)}, ${fallback})`;
+  }
+  const tokens = resolveSiteTokens(siteStyles.tokens);
+  const ground = tokens.tokens.find(
+    token => tokenIdentity(token) === SITE_GROUND_TOKEN
+  )?.values.dark;
+  return {
+    style,
+    darkMode: tokens.darkMode ?? "attribute",
+    darkGround: ground !== undefined && isDarkGround(ground),
+  };
+}
+
+/**
+ * Whether a token value is a dark ground. A value this engine cannot read as a
+ * colour — a reference to another property, say — is taken at its word: the
+ * site gave its ground a dark-mode value, and a dark ground is what that means.
+ */
+function isDarkGround(value: string): boolean {
+  const rgb = parseColor(value);
+  return rgb === undefined || relativeLuminance(rgb) < DARK_GROUND_LUMINANCE;
 }
 
 /** Whether an event started inside editor chrome rather than inside the page. */
@@ -2045,10 +2098,8 @@ export function Canvas({
   );
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
-  const siteFont = siteFontReference(render, siteStyles);
-  const siteFontStyle: Record<`--${string}`, string> =
-    siteFont === undefined ? {} : { [SITE_FONT_PROPERTY]: siteFont };
-  const rootStyle: React.CSSProperties = { ...boxStyle, ...siteFontStyle };
+  const surface = siteSurface(render, siteStyles);
+  const rootStyle: React.CSSProperties = { ...boxStyle, ...surface?.style };
 
   /*
    * The document and window the blocks are drawn in, for block code that
@@ -2132,19 +2183,22 @@ export function Canvas({
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
       /*
-       * How the SITE darkens, for the stylesheet.
+       * How the site's GROUND turns dark, for the stylesheet: the strategy the
+       * site's dark token values apply by, present only when those values
+       * include a dark ground.
        *
-       * The canvas draws the page in the site's colours rather than the
-       * admin's, so its own scheme turns dark only when the site's would. A
-       * site on the `media` strategy darkens with the visitor's system, and
-       * only the token set says which strategy it uses — CSS cannot read it —
-       * so the stated strategy is carried here and the sheet pairs it with
-       * the media query. Absent when the host serves no site sheet.
+       * The canvas draws the page from the site's own tokens, so its ground
+       * and text already follow the site's dark values; what this decides is
+       * the colour scheme — Canvas, CanvasText and native controls. A site on
+       * the `media` strategy darkens with the visitor's system, and only the
+       * token set says which strategy it uses — CSS cannot read it — so it is
+       * carried here and the sheet pairs it with the media query. The strategy
+       * alone says when dark values apply, not that the page is dark, so a
+       * site whose dark set keeps a light ground carries nothing. Absent too
+       * when the host serves no site sheet.
        */
-      data-nx-site-dark-mode={
-        typeof siteStyles === "object"
-          ? (siteStyles.tokens?.darkMode ?? "attribute")
-          : undefined
+      data-nx-site-dark-ground={
+        surface?.darkGround === true ? surface.darkMode : undefined
       }
       /*
        * What the pointer means, for the cursor.

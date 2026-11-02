@@ -127,9 +127,12 @@ function declared(body: string, property: string): string | undefined {
   return match?.[1]?.trim();
 }
 
-/** The site's attribute dark mode, keyed on the strategy the canvas states. */
+/**
+ * The site's attribute dark mode, keyed on the strategy the canvas states and
+ * on the site's dark values including a dark ground.
+ */
 const SITE_DARK =
-  '[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-mode="attribute"]';
+  '[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground="attribute"]';
 
 /** Every rule whose selector names `.nx-canvas`, as selector and body. */
 function canvasRules(): { selector: string; body: string }[] {
@@ -153,8 +156,17 @@ describe("the canvas surface is the site's, not the admin's", () => {
      * dark admin's light text on a white page.
      */
     const rule = canvasRule();
-    expect(declared(rule, "background-color")).toBe("Canvas");
-    expect(declared(rule, "color")).toBe("CanvasText");
+    /*
+     * From the site's own background and text tokens, which the canvas root
+     * names under the site's prefix; the browser's defaults where the host
+     * serves no site sheet.
+     */
+    expect(declared(rule, "background-color")).toBe(
+      "var(--nx-canvas-site-ground, Canvas)"
+    );
+    expect(declared(rule, "color")).toBe(
+      "var(--nx-canvas-site-ink, CanvasText)"
+    );
     expect(declared(rule, "color-scheme")).toBe("light");
   });
 
@@ -169,8 +181,10 @@ describe("the canvas surface is the site's, not the admin's", () => {
     for (const property of ["background-color", "color", "color-scheme"]) {
       const value = declared(rule, property);
       expect(value, `${property} is declared`).toBeDefined();
+      // The canvas's own site-token references are the one `--nx-` name
+      // allowed: they point at the site's tokens, never at the admin's.
       expect(
-        value?.includes("var(--nx-"),
+        /var\(--nx-(?!canvas-site-)/.test(value ?? ""),
         `${property} follows the admin's theme: ${value}`
       ).toBe(false);
     }
@@ -219,7 +233,7 @@ describe("the canvas surface is the site's, not the admin's", () => {
       expect(
         rule.selector,
         "keyed on the strategy the canvas states"
-      ).toContain('.nx-canvas[data-nx-site-dark-mode="attribute"]');
+      ).toContain('.nx-canvas[data-nx-site-dark-ground="attribute"]');
     }
     const admin = rules.filter(
       rule =>
@@ -237,14 +251,16 @@ describe("the canvas surface is the site's, not the admin's", () => {
 });
 
 describe("a site that darkens with the visitor's system", () => {
-  it("darkens the canvas page under the media query, keyed on the stated strategy", () => {
+  it("darkens the canvas page's scheme under the media query, only for a dark ground", () => {
     /*
      * The playground's own site uses the `media` strategy, so with the system
-     * in dark its tokens take their dark values on the canvas. A page left on
-     * a light ground under them is the published page nobody loads.
+     * in dark its tokens take their dark values on the canvas. The strategy
+     * says only WHEN those values apply; the scheme goes dark where they
+     * include a dark ground, so a site whose dark set keeps a light background
+     * keeps light native controls.
      */
     const block =
-      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-mode="media"\] \{([^}]*)\}/.exec(
+      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground="media"\] \{([^}]*)\}/.exec(
         CHROME
       );
     expect(block, "the media-strategy rule exists").not.toBeNull();

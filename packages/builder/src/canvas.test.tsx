@@ -3228,10 +3228,12 @@ describe("a link drawn on the canvas", () => {
 
 describe("the site's dark-mode strategy on the canvas root", () => {
   /*
-   * The stylesheet darkens the canvas page with the system only for a site on
-   * the `media` strategy, and only the token set says which strategy that is.
-   * So the root has to carry it, and carry the DEFAULT when a site states none:
-   * an absent strategy is `attribute`, which the system's scheme never reaches.
+   * The stylesheet darkens the canvas page's scheme with the system only for a
+   * site on the `media` strategy, and only the token set says which strategy
+   * that is. So the root carries it — on `data-nx-site-dark-ground`, beside
+   * the dark ground the default token set gives every site here — and carries
+   * the DEFAULT when a site states none: an absent strategy is `attribute`,
+   * which the system's scheme never reaches.
    */
   const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
   const breakpoints = { viewport: [], container: [] };
@@ -3243,7 +3245,7 @@ describe("the site's dark-mode strategy on the canvas root", () => {
     return (
       container
         .querySelector(`.${CANVAS_ROOT_CLASS}`)
-        ?.getAttribute("data-nx-site-dark-mode") ?? null
+        ?.getAttribute("data-nx-site-dark-ground") ?? null
     );
   }
 
@@ -3336,5 +3338,75 @@ describe("the site's body font on the canvas root", () => {
 
   it("states nothing when the host serves no site sheet", () => {
     expect(fontOf(false)).toBe("");
+  });
+});
+
+describe("the site's ground and text on the canvas root", () => {
+  /*
+   * The page is drawn from the site's own background and text tokens, named
+   * under the prefix the renderer emits them with, and its colour scheme goes
+   * dark only where the site's dark values include a dark ground. The
+   * strategy alone says when dark values apply, not that the page is dark.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function rootOf(siteStyles: SiteSheetInput | false): HTMLElement | null {
+    const { container } = render(
+      <Canvas document={page} siteStyles={siteStyles} />
+    );
+    return container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+  }
+
+  it("names the background and text tokens under the site's prefix", () => {
+    const root = rootOf({
+      breakpoints,
+      tokens: { tokens: [], prefix: "--brand-" },
+    });
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe(
+      "var(--brand-color-background, Canvas)"
+    );
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ink")).toBe(
+      "var(--brand-color-text, CanvasText)"
+    );
+  });
+
+  it("marks a dark ground when the site's background has a dark value", () => {
+    // The default token set gives the background a dark value of its own.
+    expect(
+      rootOf({ breakpoints })?.hasAttribute("data-nx-site-dark-ground")
+    ).toBe(true);
+  });
+
+  it("marks no dark ground when the site's dark values keep it light", () => {
+    const light = (dark?: string): SiteSheetInput => ({
+      breakpoints,
+      tokens: {
+        darkMode: "media",
+        tokens: [
+          {
+            name: "color.background",
+            kind: "color",
+            values:
+              dark === undefined
+                ? { light: "#ffffff" }
+                : { light: "#ffffff", dark },
+          },
+        ],
+      },
+    });
+    // A background with no dark value, and one whose dark value is light.
+    expect(rootOf(light())?.hasAttribute("data-nx-site-dark-ground")).toBe(
+      false
+    );
+    expect(
+      rootOf(light("#f3f4f6"))?.hasAttribute("data-nx-site-dark-ground")
+    ).toBe(false);
+  });
+
+  it("names nothing when the host serves no site sheet", () => {
+    const root = rootOf(false);
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");
+    expect(root?.hasAttribute("data-nx-site-dark-ground")).toBe(false);
   });
 });
