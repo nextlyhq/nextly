@@ -65,8 +65,7 @@ export function BuilderToolbar({
 
   // The crumb is the page's only exit, and no builder page mounts a
   // navigation guard — a click with unsaved fields would discard them
-  // silently. Blocked with a confirm while dirty, same pattern as the
-  // settings image-sizes removal.
+  // silently. Blocked with a confirm while dirty.
   const handleCrumbClick = (e: { preventDefault: () => void }) => {
     if (
       unsavedCount > 0 &&

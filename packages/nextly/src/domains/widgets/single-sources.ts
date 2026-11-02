@@ -39,6 +39,8 @@ interface RegisteredSingle {
   status?: unknown;
   /** Admin options, read for `hidden`; see `keptOffDashboard`. Stored JSON, so `unknown`. */
   admin?: unknown;
+  /** Who defines the Single, read by `keptOffDashboard` for one removed from code. */
+  source?: unknown;
 }
 
 interface SingleRegistrySurface {
@@ -97,7 +99,7 @@ export async function refreshSingleSources(): Promise<boolean> {
       !deferred.has(single.slug) &&
       statusClaimsPresent(single) &&
       // Kept off the dashboard: no source, no card, and a query naming it reads as unknown.
-      !keptOffDashboard(single)
+      !keptOffDashboard("single", single)
   );
 
   registerBuiltInSingleSources(

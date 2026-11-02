@@ -30,7 +30,6 @@ const openOrders: DashboardWidget = {
   title: "Open orders",
   archetype: "metric",
   size: SIZE,
-  serverData: true,
 };
 
 vi.mock("../../resolve-widgets", () => ({

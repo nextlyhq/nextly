@@ -344,18 +344,7 @@ describe("an item's details in the list view", () => {
 
   it("draws each thumbnail from the same choice the grid's tiles make", async () => {
     api.fetchMedia.mockResolvedValue({
-      data: [
-        item(1, {
-          thumbnailUrl: "/uploads/thumb_photo-1.jpg",
-          sizes: {
-            small: {
-              url: "/uploads/photo-1-small.jpg",
-              width: 320,
-              height: 180,
-            },
-          },
-        }),
-      ],
+      data: [item(1, { thumbnailUrl: "/uploads/thumb_photo-1.jpg" })],
       meta: { total: 1, page: 1, limit: 24, totalPages: 1 },
     });
     renderWithProviders(
@@ -368,8 +357,8 @@ describe("an item's details in the list view", () => {
     // POSITIVE CONTROL: the list did draw the thumbnail.
     expect(thumbnails.length).toBeGreaterThan(0);
     for (const thumbnail of thumbnails) {
-      // The whole-image size, not the square thumbnail cut from the middle.
-      expect(thumbnail).toHaveAttribute("src", "/uploads/photo-1-small.jpg");
+      // The light stored thumbnail, as a tile draws it, not the original.
+      expect(thumbnail).toHaveAttribute("src", "/uploads/thumb_photo-1.jpg");
     }
   });
 });

@@ -1,14 +1,18 @@
 /**
- * A Filter setting's one condition, written as a widget query's `where` and
- * read back as the row that wrote it.
+ * A Filter setting's conditions, each a chip, written as a widget query's
+ * `where` and read back as the chips that wrote it.
  */
 import { describe, expect, it } from "vitest";
 
 import {
+  chipText,
+  conditionsToWhere,
   conditionToWhere,
   conditionTypeOf,
+  filterFieldNames,
   filterOperatorsFor,
   whereToCondition,
+  whereToConditions,
 } from "../content-filter";
 
 const typeOf = (field: string) =>
@@ -113,5 +117,74 @@ describe("a Filter setting's condition", () => {
     expect(text).not.toContain("startsWith");
     expect(text).not.toContain("endsWith");
     expect(text).not.toContain("notContains");
+  });
+});
+
+describe("a Filter setting's chips", () => {
+  const draft = {
+    field: "status",
+    operator: "equals",
+    value: "draft",
+  } as const;
+  const mine = { field: "author", operator: "equals", value: "me" } as const;
+
+  it("writes one chip as the one condition a Filter always held", () => {
+    expect(conditionsToWhere([draft])).toEqual({ status: { equals: "draft" } });
+  });
+
+  it("joins two chips or more with AND, and reads them back as the same chips", () => {
+    const where = conditionsToWhere([draft, mine]);
+    expect(where).toEqual({
+      and: [{ status: { equals: "draft" } }, { author: { equals: "me" } }],
+    });
+    expect(whereToConditions(where, typeOf)).toEqual([draft, mine]);
+  });
+
+  it("keeps two chips on one field apart, which one object of fields could not hold", () => {
+    const later = {
+      field: "views",
+      operator: "greaterThan",
+      value: 5,
+    } as const;
+    const fewer = { field: "views", operator: "lessThan", value: 50 } as const;
+    expect(
+      whereToConditions(conditionsToWhere([later, fewer]), typeOf)
+    ).toEqual([later, fewer]);
+  });
+
+  it("writes nothing for a chip still being built", () => {
+    expect(conditionsToWhere([undefined])).toBeUndefined();
+    expect(
+      conditionsToWhere([{ field: "status", operator: "equals" }, mine])
+    ).toEqual({ author: { equals: "me" } });
+  });
+
+  it("reads none as no chips, and an `or` as a filter the chips cannot show", () => {
+    expect(whereToConditions("", typeOf)).toEqual([]);
+    expect(whereToConditions({}, typeOf)).toEqual([]);
+    expect(
+      whereToConditions(
+        { or: [{ status: { equals: "a" } }, { status: { equals: "b" } }] },
+        typeOf
+      )
+    ).toBeUndefined();
+  });
+
+  it("names every field of every chip, so a stale one is found whichever it is", () => {
+    expect(
+      filterFieldNames({
+        and: [{ status: { equals: "a" } }, { salary: { greater_than: 1 } }],
+      })
+    ).toEqual(["status", "salary"]);
+  });
+
+  it("says a chip in the reader's words", () => {
+    expect(
+      chipText(
+        draft,
+        () => "Status",
+        (_field, value) => (value === "draft" ? "Draft" : value)
+      )
+    ).toBe("Status is Draft");
   });
 });

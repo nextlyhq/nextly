@@ -16,6 +16,7 @@ import {
   getMySQLDrizzleKit,
   getSQLiteDrizzleKit,
   getDrizzleKitForDialect,
+  scopeMysqlIntrospection,
 } from "../drizzle-kit-lazy";
 
 // Why typed cache shape: the lazy module stashes its caches on globalThis
@@ -166,5 +167,149 @@ describe("drizzle-kit-lazy", () => {
       await getPgDrizzleKit();
       expect(g.__nextly_drizzleKitPg).toBeDefined();
     });
+  });
+});
+
+// A raw MySQL client answering one statement at a time, recording each.
+function recordingClient(answer: (sql: string) => unknown[]) {
+  const seen: string[] = [];
+  return {
+    seen,
+    client: {
+      query: <T>(sql: string): Promise<T[]> => {
+        seen.push(sql);
+        return Promise.resolve(answer(sql) as T[]);
+      },
+    },
+  };
+}
+
+describe("scopeMysqlIntrospection", () => {
+  const listing = [
+    { TABLE_NAME: "users", TABLE_TYPE: "BASE TABLE" },
+    { TABLE_NAME: "dc_posts", TABLE_TYPE: "BASE TABLE" },
+    { TABLE_NAME: "posts_view", TABLE_TYPE: "VIEW" },
+  ];
+
+  it("keeps only the given tables in the table and view listings", async () => {
+    const { client } = recordingClient(() => listing);
+    const scoped = scopeMysqlIntrospection(client, ["users"]);
+
+    expect(
+      await scoped.query("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES")
+    ).toEqual([listing[0]]);
+    expect(
+      await scoped.query(
+        "SELECT TABLE_NAME\n\t\t\tFROM information_schema.views WHERE 1"
+      )
+    ).toEqual([listing[0]]);
+  });
+
+  it("passes every other read through whole", async () => {
+    // The kit narrows these itself, to the tables the listing returned; a
+    // read that only resembles a listing must not lose rows here.
+    const { client, seen } = recordingClient(() => listing);
+    const scoped = scopeMysqlIntrospection(client, ["users"]);
+    for (const statement of [
+      "SELECT * FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS",
+      "SELECT * FROM INFORMATION_SCHEMA.STATISTICS",
+      "SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME IN ('users')",
+    ]) {
+      expect(await scoped.query(statement)).toEqual(listing);
+    }
+    expect(seen).toHaveLength(3);
+  });
+
+  it("refuses a listing row it cannot name rather than reading an empty database", async () => {
+    const { client } = recordingClient(() => [{ table_name: "users" }]);
+    const scoped = scopeMysqlIntrospection(client, ["users"]);
+    await expect(
+      scoped.query("SELECT table_name FROM INFORMATION_SCHEMA.TABLES")
+    ).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: {
+        reason: expect.stringContaining("has no TABLE_NAME"),
+      },
+    });
+  });
+});
+
+describe("MySQL pushSchema with a tables filter (real drizzle-kit)", () => {
+  // The live database: one core table and one content table. The desired
+  // schema keeps the core table and ADDS another, which is the shape that
+  // sends the kit's rename resolver looking for a pair.
+  function liveDatabase() {
+    return recordingClient(sql => {
+      if (/INFORMATION_SCHEMA\.TABLES\b/i.test(sql)) {
+        return [
+          {
+            TABLE_NAME: "users",
+            TABLE_TYPE: "BASE TABLE",
+            CREATE_TIME: "2026-01-01 00:00:00",
+          },
+          {
+            TABLE_NAME: "dc_posts",
+            TABLE_TYPE: "BASE TABLE",
+            CREATE_TIME: "2026-01-02 00:00:00",
+          },
+        ];
+      }
+      if (/INFORMATION_SCHEMA\.SCHEMATA\b/i.test(sql)) {
+        return [
+          {
+            DEFAULT_CHARACTER_SET_NAME: "utf8mb4",
+            DEFAULT_COLLATION_NAME: "utf8mb4_0900_ai_ci",
+          },
+        ];
+      }
+      return [];
+    });
+  }
+
+  async function desiredSchema() {
+    const { mysqlTable, varchar } = await import("drizzle-orm/mysql-core");
+    return {
+      users: mysqlTable("users", {
+        id: varchar("id", { length: 36 }).primaryKey(),
+      }),
+      added: mysqlTable("nextly_added_core", {
+        id: varchar("id", { length: 36 }).primaryKey(),
+      }),
+    };
+  }
+
+  // A drizzle instance as the wrapper reads one: the raw client on `$client`,
+  // answering `[rows, fields]`.
+  const asDrizzle = (client: {
+    query: (sql: string) => Promise<unknown[]>;
+  }) => ({
+    $client: {
+      query: async (sql: string) => [await client.query(sql), []],
+    },
+  });
+
+  it("crashes in the rename resolver without one (the fixture reaches the mechanism)", async () => {
+    const kit = await getMySQLDrizzleKit();
+    const { client } = liveDatabase();
+    await expect(
+      kit.pushSchema(await desiredSchema(), asDrizzle(client), "site")
+    ).rejects.toThrow(/HintsHandler/);
+  });
+
+  it("plans the added table and nothing about the content table with one", async () => {
+    const kit = await getMySQLDrizzleKit();
+    const { client } = liveDatabase();
+    const result = await kit.pushSchema(
+      await desiredSchema(),
+      asDrizzle(client),
+      "site",
+      { tables: ["users", "nextly_added_core"] }
+    );
+    expect(
+      result.sqlStatements.filter(s => s.startsWith("CREATE TABLE"))
+    ).toEqual([expect.stringContaining("`nextly_added_core`")]);
+    expect(result.sqlStatements.filter(s => s.includes("dc_posts"))).toEqual(
+      []
+    );
   });
 });

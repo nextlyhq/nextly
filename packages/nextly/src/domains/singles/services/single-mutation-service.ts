@@ -226,6 +226,7 @@ import {
   promotionIssues,
   type PromoteGateContext,
 } from "./promote-gate";
+import type { SingleMediaUsageDeps } from "./single-media-usage";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -395,6 +396,34 @@ export class SingleMutationService extends BaseService {
    */
   private get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
     return this.queryService.fieldRuleVisitor;
+  }
+
+  /**
+   * The grants a refusal over shared fields names the caller's readable
+   * fields by, from inside the write's transaction: those resolved before it
+   * opened where the promotion gate asks, and otherwise read on `tx`. A
+   * trusted write resolves none beforehand, yet a routed one still answers to
+   * the field read rules, and a read on the pool would run outside the
+   * transaction and, for a visitor's Public role, wait on the connection the
+   * transaction holds.
+   */
+  private sharedConflictGrants(
+    tx: TransactionContext,
+    options: {
+      user?: Record<string, unknown>;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    resolved: (() => Promise<CallerGrants>) | undefined
+  ): () => Promise<CallerGrants> {
+    return (
+      resolved ??
+      callerAccessGrants(
+        options.user,
+        options.authenticatedScope,
+        tx.getDrizzle(),
+        this.fieldRuleVisitor
+      )
+    );
   }
 
   // ============================================================
@@ -1316,6 +1345,64 @@ export class SingleMutationService extends BaseService {
       );
       return issues.some(issue => issue.code === "FORBIDDEN");
     });
+  }
+
+  /**
+   * Rebuild the record of which media items a Single uses, from what its
+   * tables hold, for `nextly media reindex-usage`. Returns whether the Single
+   * has a document to read: one that has never been saved has none.
+   */
+  async rebuildMediaUsage(slug: string): Promise<boolean> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger
+    );
+    if (!singleMeta) return false;
+    const row = await this.adapter.selectOne<{ id: string }>(
+      singleMeta.tableName,
+      { columns: ["id"] }
+    );
+    if (!row) return false;
+    const companion = this.translationsOf(singleMeta);
+    // Resolved here, off the transaction, and remembered for the read inside
+    // it, which may only read what is remembered.
+    if (companion) {
+      await resolveCompanionReadiness(this.adapter, {
+        companionTableName: companion.companionTableName,
+        mainTableName: singleMeta.tableName,
+        localizedColumns: companion.localizedFields.map(f => f.column),
+      });
+    }
+    // Loaded when a Single's usage is recorded, not with the service.
+    const { recordSingleMediaUsage } = await import("./single-media-usage");
+    const { lockDocument } = await import(
+      "../../media/usage/media-usage-store"
+    );
+    await this.adapter.transaction(async tx => {
+      // Locked before anything is read, so a save in flight is read as it
+      // leaves the Single (`lockDocument`).
+      await lockDocument(tx, singleMeta.tableName, String(row.id));
+      await recordSingleMediaUsage(tx, this.mediaUsageDeps(), {
+        slug,
+        rowId: row.id,
+        tableName: singleMeta.tableName,
+        fields: singleMeta.fields ?? [],
+        companion,
+      });
+    });
+    return true;
+  }
+
+  /** What recording a Single's media usage reads from this service. */
+  private mediaUsageDeps(): SingleMediaUsageDeps {
+    return {
+      adapter: this.adapter,
+      logger: this.logger,
+      fieldGroupDataService: this.fieldGroupDataService,
+      localization: this.localizationSource,
+    };
   }
 
   /**
@@ -2869,8 +2956,12 @@ export class SingleMutationService extends BaseService {
                       overrideAccess:
                         options.overrideAccess && !options.routeAuthorized,
                       authenticatedScope: options.authenticatedScope,
-                      // Resolved before the transaction opened.
-                      grants: promoteGrants,
+                      // Resolved before the transaction opened, or read on it.
+                      grants: this.sharedConflictGrants(
+                        tx,
+                        options,
+                        promoteGrants
+                      ),
                     });
                   }
                 }
@@ -3851,6 +3942,21 @@ export class SingleMutationService extends BaseService {
                 versionNo: draftVersionNo,
               });
             }
+
+            // Which media items the Single uses now, from what this save
+            // stored: its row, its translation and its field groups are all
+            // written above. A held edit's media count once it is published.
+            const { recordSingleMediaUsage } = await import(
+              "./single-media-usage"
+            );
+            await recordSingleMediaUsage(tx, this.mediaUsageDeps(), {
+              slug,
+              rowId: existingDoc.id,
+              tableName: singleMeta.tableName,
+              fields: fieldConfigs,
+              companion,
+              heldDraft: holdEdit,
+            });
 
             // component subtrees form the snapshot.
             const versionsConfig = singleMeta.versions;

@@ -47,15 +47,12 @@ interface WidgetRowsProps<Row> {
   action?: (row: Row) => WidgetRowAction | undefined;
   /** How many rows there are in all, for the footer. */
   total?: WidgetListTotal;
-  /**
-   * The full list the rows come from, for the footer's "View all". It takes the place of the
-   * widget's own `link` in the card's footer, which holds one link.
-   */
+  /** The full list the rows come from, for the footer's "View all", the footer's one link. */
   viewAllHref?: string;
   /**
-   * The most rows the widget's query asks for, its reader's "Number of items": `query?.limit`
-   * from the props a view is handed. A widget declaring `sizedQuery` is answered one row more
-   * than the card draws, a row that only says more exist; given the limit, it is never drawn.
+   * The most rows the card shows, its reader's "Number of items", from the settings a view is
+   * handed. A `load` that reads one row more than the card draws, a row that only says more
+   * exist, passes the limit so that row is never drawn.
    */
   limit?: number;
 }
@@ -142,8 +139,8 @@ function modelOf<Row>(
 }
 
 /**
- * The card's tier, density and the rows it holds, as core's list cards read them: at most the
- * query's `limit`, by the same rule.
+ * The card's tier, density and the rows it holds, as core's list cards read them: at most its
+ * `limit`, by the same rule.
  */
 function useRowsLayout(limit: number | undefined) {
   // Medium until the card has measured itself, which it does before its first paint.

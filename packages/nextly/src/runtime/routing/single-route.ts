@@ -36,7 +36,7 @@ import type { Nextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
 import { cachedFind } from "../cache/cached-find";
-import { nextlySingleTags } from "../cache/nextly-tags";
+import { nextlySingleTags, readTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
 import { deferToRequest } from "./defer-to-request";
@@ -425,7 +425,7 @@ function buildSingleRoute<TNode>(
     // serving its pre-release document until something unrelated busts a tag.
     const cacheSeconds = await releaseBoundedRevalidate(config.revalidate);
     return cachedFind(() => read(null), {
-      tags: [...nextlySingleTags(config.slug), ...(config.tags ?? [])],
+      tags: readTags(nextlySingleTags(config.slug), config.tags),
       // The locale is part of the key: one Single serves a different document
       // per language, and a key that omitted it would serve whichever language
       // warmed the cache first to everyone.

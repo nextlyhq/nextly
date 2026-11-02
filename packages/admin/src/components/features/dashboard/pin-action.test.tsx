@@ -66,7 +66,7 @@ describe("the pin a document offers", () => {
     post.mockResolvedValue({ message: "Pinned.", pinned: true });
     const { result } = renderHook(() => usePinAction(target), { wrapper });
     await waitFor(() => expect(result.current).not.toBeNull());
-    act(() => result.current!.binding.onSelect());
+    act(() => result.current!.binding.onSelect({ values: {} }));
     await waitFor(() =>
       expect(result.current?.action.label).toBe("Unpin from dashboard")
     );
@@ -87,7 +87,7 @@ describe("the pin a document offers", () => {
     await waitFor(() =>
       expect(result.current?.action.label).toBe("Unpin from dashboard")
     );
-    act(() => result.current!.binding.onSelect());
+    act(() => result.current!.binding.onSelect({ values: {} }));
     await waitFor(() =>
       expect(del).toHaveBeenCalledWith("/dashboard/pins", target)
     );
@@ -106,7 +106,7 @@ describe("the pin a document offers", () => {
     del.mockResolvedValue({ message: "Unpinned.", unpinned: true });
     const { result } = renderHook(() => usePinAction(target), { wrapper });
     await waitFor(() => expect(result.current).not.toBeNull());
-    act(() => result.current!.binding.onSelect());
+    act(() => result.current!.binding.onSelect({ values: {} }));
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     const options = toast.success.mock.calls[0]![1] as {
       action: { onClick: () => void };
@@ -128,7 +128,7 @@ describe("the pin a document offers", () => {
     );
     const { result } = renderHook(() => usePinAction(target), { wrapper });
     await waitFor(() => expect(result.current).not.toBeNull());
-    act(() => result.current!.binding.onSelect());
+    act(() => result.current!.binding.onSelect({ values: {} }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
         "You can pin at most 20 entries and Singles. Unpin one to pin another."
