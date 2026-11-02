@@ -15,7 +15,7 @@ import {
   readStoredRelations,
   relationsGoingLive,
   type StoredRelations,
-} from "../going-live-relations";
+} from "../collection-mutation-service";
 
 const HERO = {
   name: "hero",

@@ -46,7 +46,10 @@ import type {
   DeleteRowLanguages,
   RowVerdict,
 } from "./collection-mutation-service";
-import { isWriteIntegrityFailure } from "./collection-mutation-service";
+import {
+  GoingLiveRelationsBatch,
+  isWriteIntegrityFailure,
+} from "./collection-mutation-service";
 import type { CollectionQueryService } from "./collection-query-service";
 import type {
   BatchOperationResult,
@@ -56,7 +59,6 @@ import type {
   CollectionServiceResult,
   UserContext,
 } from "./collection-types";
-import { GoingLiveRelationsBatch } from "./going-live-relations";
 import type { ReadReach } from "./write-filter-match";
 
 /**
