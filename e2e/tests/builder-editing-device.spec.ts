@@ -23,7 +23,9 @@ import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
 // The homepage Single is reseeded and edited here, as the other builder files do.
-test.describe.configure({ lock: [LOCK.homepage] });
+// The site's breakpoints are stored and cleared here, so the site-style lock
+// keeps the specs reading the device buttons off them.
+test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
 const TEXT_ID = "device-text";
 const NODES = [

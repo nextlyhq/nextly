@@ -164,8 +164,14 @@ function MoreDevices({
   onSelect: (breakpoint: BreakpointId) => void;
 }): React.JSX.Element {
   const Glyph = chosen === undefined ? undefined : glyphOf(chosen);
+  /*
+   * Held here so a menu already open closes when the saved breakpoints stop
+   * being trusted: disabling the trigger alone leaves an open menu choosing
+   * against the list the switcher has just declared untrusted.
+   */
+  const [open, setOpen] = React.useState(false);
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open && ready} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         disabled={!ready}
         aria-label={
@@ -173,7 +179,13 @@ function MoreDevices({
             ? "More devices"
             : `More devices, styling ${chosen.label}, ${chosen.range}`
         }
-        title={chosen === undefined ? "More devices" : undefined}
+        // The device and its range while it is the one styled, as the buttons
+        // keep theirs: the label beside the glyph is hidden on a narrow bar.
+        title={
+          chosen === undefined
+            ? "More devices"
+            : `${chosen.label}, ${chosen.range}`
+        }
         className={cn(
           "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs disabled:opacity-40",
           chosen === undefined
@@ -197,7 +209,9 @@ function MoreDevices({
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
           value={chosen?.id ?? ""}
-          onValueChange={onSelect}
+          onValueChange={id => {
+            if (ready) onSelect(id);
+          }}
         >
           {devices.map(device => (
             <DropdownMenuRadioItem

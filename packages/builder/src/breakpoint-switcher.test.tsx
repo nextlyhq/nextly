@@ -404,3 +404,32 @@ describe("arrow keys with a menu of devices", () => {
     expect(onSelect).toHaveBeenCalledWith("laptop");
   });
 });
+
+describe("the menu's button while a device in it is styled", () => {
+  it("keeps the device and its range in its tooltip, for when its label is hidden", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone" });
+    expect(moreDevices()?.getAttribute("title")).toBe(
+      "Phone, up to 575 pixels"
+    );
+  });
+});
+
+describe("an open menu when the saved breakpoints stop being trusted", () => {
+  it("closes, so nothing in it can be chosen against an untrusted list", () => {
+    const onSelect = vi.fn();
+    const props = {
+      breakpoints: devicesFor(7),
+      selected: "base",
+      onSelect,
+    } as const;
+    const { rerender } = render(
+      <BreakpointSwitcher {...props} status="ready" />
+    );
+    openMore();
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(4);
+
+    rerender(<BreakpointSwitcher {...props} status="loading" />);
+    expect(screen.queryAllByRole("menuitemradio")).toEqual([]);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+});
