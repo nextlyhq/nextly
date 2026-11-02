@@ -29,7 +29,10 @@ import {
 import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
-import { registerClassUsageMaintenance } from "./class-usage-hook";
+import {
+  registerClassUsageMaintenance,
+  type CommittedWriteReconciler,
+} from "./class-usage-hook";
 import { ownIndexReader } from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
@@ -52,6 +55,7 @@ import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
+import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageIndex } from "./component-usage";
@@ -828,6 +832,9 @@ export const pageBuilder = (
   // `loadSiteStyle`, which reads per request.
   const configStyle = resolveSiteStyle(opts.siteStyle);
 
+  // The usage indexes' reconciler for a write made in a transaction the
+  // caller owns, which their hooks skip. Set by `init`, read per request.
+  const usage: { reconcile?: CommittedWriteReconciler } = {};
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -985,7 +992,7 @@ export const pageBuilder = (
           ),
       };
 
-      registerClassUsageMaintenance({
+      usage.reconcile = registerClassUsageMaintenance({
         ctx,
         // The RESOLVED slug, not the declared one. An integrator may
         // `.rename({ nx_pb_class_usage: "..." })`, and the schema then creates
@@ -1187,7 +1194,17 @@ export const pageBuilder = (
         patternLibraryRoute(),
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
-        patternCapabilityRoute(),
+        patternCapabilityRoute(componentStoreOf(opts)),
+        // Save a selection as a component, or convert it into one. Here
+        // rather than left to the collection API for the reason the pattern
+        // save is: the planner needs the server's block registry.
+        componentFromSelectionRoute({
+          store: componentStoreOf(opts),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+          // Read when a request arrives, after `init` has registered the
+          // usage hooks this hands back.
+          reconcile: () => usage.reconcile,
+        }),
         // The relation control's read: a collection's entries as `{ id, title }`,
         // for the collections a registered block prop names as relation targets,
         // read as the author asking.
