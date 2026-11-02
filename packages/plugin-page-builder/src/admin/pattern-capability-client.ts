@@ -73,3 +73,18 @@ export function useMayCreateComponent(): boolean {
   });
   return read.data === undefined ? true : read.data.mayCreateComponent === true;
 }
+
+/**
+ * Whether this author may replace a pattern's content from a selection.
+ * Permissive while in flight, for the reason the verbs above are.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export function useMayUpdatePattern(): boolean {
+  const read = usePluginRoute<PatternCapabilityResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: CAPABILITY_ROUTE_PATH,
+    staleTime: 0,
+  });
+  return read.data === undefined ? true : read.data.mayUpdatePattern === true;
+}

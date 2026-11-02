@@ -53,11 +53,14 @@ import {
   ArrowUp,
   Component,
   Copy,
+  CopyPlus,
   CornerLeftUp,
   Ellipsis,
   LayoutTemplate,
+  RefreshCw,
   Replace,
   Trash2,
+  Unlink,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -88,6 +91,9 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "save-as-pattern": LayoutTemplate,
   "save-as-component": Component,
   "convert-to-component": Replace,
+  "detach-component": Unlink,
+  "duplicate-component": CopyPlus,
+  "update-pattern": RefreshCw,
   delete: Trash2,
 };
 

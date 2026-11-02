@@ -405,6 +405,12 @@ export interface PatternCapabilityResponse {
    * route.
    */
   readonly mayCreateComponent?: boolean;
+  /**
+   * Whether this caller may replace a pattern's content from a selection:
+   * `update` and `publish` on the patterns collection, since the new content
+   * is published. Absent from an older server.
+   */
+  readonly mayUpdatePattern?: boolean;
 }
 
 /**
