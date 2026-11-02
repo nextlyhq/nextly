@@ -34,8 +34,11 @@ import {
   PAGE_ROOT_CLASS,
   previewContainerName,
   previewStateClass,
+  resolveTokenPrefix,
+  statedTokenPrefix,
   statePropagatesToAncestors,
   STYLE_STATES,
+  tokenCustomProperty,
   walkNodes,
   type BlockDocument,
   type BreakpointSet,
@@ -158,6 +161,40 @@ export const DROP_REFUSED_ATTRIBUTE = "data-nx-drop-refused";
  * needs no marker only because it takes no pointer events at all.
  */
 export const CHROME_ATTRIBUTE = "data-nx-chrome";
+
+/**
+ * The custom property the stylesheet reads the page's face from.
+ *
+ * Set inline on the canvas root because the property it points at depends on
+ * the prefix the site's tokens are emitted under, which only the site sheet
+ * knows; `builder-chrome.css` falls back to the system face without it.
+ */
+const SITE_FONT_PROPERTY = "--nx-canvas-site-font";
+
+/**
+ * The identity of the site's body font token, as the default token set
+ * declares it. An identity rather than a display name, so a site that renamed
+ * the token still resolves: the property is built from the identity.
+ */
+const SITE_FONT_TOKEN = "font.body";
+
+/**
+ * A `var()` naming the site's body font, under the prefix the site sheet emits
+ * its tokens with, or undefined when the host serves no site sheet.
+ *
+ * The prefix comes from the same two calls the sheet compiler makes —
+ * `statedTokenPrefix` for which of the input's two prefixes applies, and
+ * `resolveTokenPrefix` for what is actually written — so a site under
+ * `--brand-` is read as `--brand-font-body` rather than as a property nothing
+ * declares.
+ */
+function siteFontReference(
+  siteStyles: NonNullable<PageRendererProps["siteStyles"]>
+): string | undefined {
+  if (typeof siteStyles !== "object") return undefined;
+  const { prefix } = resolveTokenPrefix(statedTokenPrefix(siteStyles));
+  return `var(${tokenCustomProperty(SITE_FONT_TOKEN, prefix)}, system-ui)`;
+}
 
 /** Whether an event started inside editor chrome rather than inside the page. */
 /**
@@ -2003,6 +2040,10 @@ export function Canvas({
   );
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
+  const siteFont = siteFontReference(siteStyles);
+  const siteFontStyle: Record<`--${string}`, string> =
+    siteFont === undefined ? {} : { [SITE_FONT_PROPERTY]: siteFont };
+  const rootStyle: React.CSSProperties = { ...boxStyle, ...siteFontStyle };
 
   /*
    * The document and window the blocks are drawn in, for block code that
@@ -2078,7 +2119,7 @@ export function Canvas({
       // are positioned in this element's own content coordinates: a box inside
       // it would size the page while leaving the drop indicator and the
       // selection chrome measuring the region instead.
-      style={boxStyle}
+      style={rootStyle}
       // The id the canvas believes is current, for a caller that wants the
       // answer without walking the tree. Named apart from the per-element
       // marker deliberately: one carries an id and the other is a boolean, and

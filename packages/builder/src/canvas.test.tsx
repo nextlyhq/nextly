@@ -3264,3 +3264,46 @@ describe("the site's dark-mode strategy on the canvas root", () => {
     expect(strategyOf(false)).toBeNull();
   });
 });
+
+describe("the site's body font on the canvas root", () => {
+  /*
+   * The stylesheet sets the page in `--nx-canvas-site-font`, and the root
+   * states which token property that is. The property's name depends on the
+   * prefix the site's tokens are emitted under, so a hard-coded `--site-` left
+   * a site under another prefix in the fallback face.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function fontOf(siteStyles: SiteSheetInput | false): string {
+    const { container } = render(
+      <Canvas document={page} siteStyles={siteStyles} />
+    );
+    const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+    return root?.style.getPropertyValue("--nx-canvas-site-font") ?? "";
+  }
+
+  it("names the body font under the token set's prefix", () => {
+    expect(
+      fontOf({ breakpoints, tokens: { tokens: [], prefix: "--brand-" } })
+    ).toBe("var(--brand-font-body, system-ui)");
+  });
+
+  it("lets the sheet's own prefix win, as the sheet compiler does", () => {
+    expect(
+      fontOf({
+        breakpoints,
+        tokenPrefix: "--acme-",
+        tokens: { tokens: [], prefix: "--brand-" },
+      })
+    ).toBe("var(--acme-font-body, system-ui)");
+  });
+
+  it("uses the default prefix when the site states none", () => {
+    expect(fontOf({ breakpoints })).toBe("var(--site-font-body, system-ui)");
+  });
+
+  it("states nothing when the host serves no site sheet", () => {
+    expect(fontOf(false)).toBe("");
+  });
+});

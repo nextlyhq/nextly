@@ -127,6 +127,10 @@ function declared(body: string, property: string): string | undefined {
   return match?.[1]?.trim();
 }
 
+/** The site's attribute dark mode, keyed on the strategy the canvas states. */
+const SITE_DARK =
+  '[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-mode="attribute"]';
+
 /** Every rule whose selector names `.nx-canvas`, as selector and body. */
 function canvasRules(): { selector: string; body: string }[] {
   const rules: { selector: string; body: string }[] = [];
@@ -178,23 +182,45 @@ describe("the canvas surface is the site's, not the admin's", () => {
      * in the admin's Geist — a face the published page never uses.
      */
     const family = declared(canvasRule(), "font-family");
-    expect(family).toBe("var(--site-font-body, system-ui), sans-serif");
+    /*
+     * Through the property the canvas root sets inline, because the token's
+     * own name depends on the site's prefix: naming `--site-font-body` here
+     * left a site under another prefix in the fallback face.
+     */
+    expect(family).toBe("var(--nx-canvas-site-font, system-ui), sans-serif");
+    expect(family?.includes("--site-"), "a hard-coded token prefix").toBe(
+      false
+    );
     expect(family?.includes("--font-sans"), "the admin's own face").toBe(false);
   });
 
   it("is darkened by the site's own dark mode and by nothing of the admin's", () => {
-    expect(
-      declared(ruleFor('[data-nx-theme="dark"] .nx-canvas'), "color-scheme")
-    ).toBe("dark");
+    expect(declared(ruleFor(SITE_DARK), "color-scheme")).toBe("dark");
     /*
      * Positive control first: the scan below reads real rules, so a pattern
      * that matched nothing would make the absence assertion meaningless.
      */
     const rules = canvasRules();
     expect(
-      rules.some(rule => rule.selector === '[data-nx-theme="dark"] .nx-canvas'),
+      rules.some(rule => rule.selector === SITE_DARK),
       "the rule scan finds the site's dark-mode rule"
     ).toBe(true);
+    /*
+     * The host's attribute darkens only a site whose strategy IS the
+     * attribute. A site that follows the system keeps light token values
+     * under it, so an unqualified rule would draw dark ground under light
+     * tokens.
+     */
+    const byAttribute = rules.filter(rule =>
+      rule.selector.includes('[data-nx-theme="dark"]')
+    );
+    expect(byAttribute.length, "the scan finds the attribute rules").toBe(1);
+    for (const rule of byAttribute) {
+      expect(
+        rule.selector,
+        "keyed on the strategy the canvas states"
+      ).toContain('.nx-canvas[data-nx-site-dark-mode="attribute"]');
+    }
     const admin = rules.filter(
       rule =>
         /\.dark\b/.test(rule.selector) &&
@@ -231,24 +257,47 @@ describe("a site that darkens with the visitor's system", () => {
 });
 
 describe("the editor's chrome on the canvas keeps the admin's theme", () => {
-  it("hands chrome back the admin's text colour and scheme, weighing nothing", () => {
+  /** A selector with its line breaks and inner padding collapsed. */
+  const flat = (selector: string): string =>
+    selector.replace(/\s+/g, " ").replace(/\(\s/g, "(").replace(/\s\)/g, ")");
+
+  /** The one rule whose flattened selector is `selector`. */
+  function chromeRule(selector: string): string {
+    const found = canvasRules().filter(
+      rule => flat(rule.selector) === selector
+    );
+    expect(found.length, `exactly one rule for \`${selector}\``).toBe(1);
+    return found[0]?.body ?? "";
+  }
+
+  /*
+   * EVERY piece of chrome the editor draws inside the page, in one list: the
+   * controls marked as chrome, and the spacing overlay and drop line, which
+   * take no pointer events and so carry no chrome marker. The overlay's value
+   * chips are text, and without this they were set in the site's face.
+   */
+  const MEMBERS = "[data-nx-chrome], .nx-spacing-overlay, .nx-drop-indicator";
+  const LIGHT = `:where(.nx-canvas :is(${MEMBERS}))`;
+  const DARK = `:where(.dark .nx-canvas :is(${MEMBERS}))`;
+
+  it("hands chrome back the admin's text colour, scheme and face, weighing nothing", () => {
     /*
-     * The canvas now states the site's scheme and text colour, and both
-     * inherit into chrome drawn on the page. Inside `:where()` so a chrome rule
-     * that states its own colour still wins.
+     * The canvas now states the site's scheme, text colour and face, and all
+     * three inherit into chrome drawn on the page. Inside `:where()` so a
+     * chrome rule that states its own colour still wins.
      */
-    const light = ruleFor(":where(.nx-canvas [data-nx-chrome])");
+    const light = chromeRule(LIGHT);
     expect(declared(light, "color-scheme")).toBe("light");
     expect(declared(light, "color")).toBe("var(--nx-builder-text)");
     expect(declared(light, "font-family")).toBe(
       "var(--font-sans, system-ui, sans-serif)"
     );
-    const dark = ruleFor(":where(.dark .nx-canvas [data-nx-chrome])");
-    expect(declared(dark, "color-scheme")).toBe("dark");
+    expect(declared(chromeRule(DARK), "color-scheme")).toBe("dark");
+    const order = canvasRules().map(rule => flat(rule.selector));
     expect(
-      CHROME.indexOf(":where(.dark .nx-canvas [data-nx-chrome])"),
+      order.indexOf(DARK),
       "equal weight, so the dark rule has to come second"
-    ).toBeGreaterThan(CHROME.indexOf(":where(.nx-canvas [data-nx-chrome])"));
+    ).toBeGreaterThan(order.indexOf(LIGHT));
   });
 });
 
@@ -342,7 +391,7 @@ describe("the editing colours drawn on the page", () => {
     expect(declared(canvas, "--nx-builder-component")).toBe(
       "var(--nx-builder-component-on-light)"
     );
-    const siteDark = ruleFor('[data-nx-theme="dark"] .nx-canvas');
+    const siteDark = ruleFor(SITE_DARK);
     expect(declared(siteDark, "--nx-builder-select")).toBe(
       "var(--nx-builder-select-on-dark)"
     );

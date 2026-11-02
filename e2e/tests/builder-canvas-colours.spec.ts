@@ -281,6 +281,16 @@ for (const theme of ["dark", "light"] as const) {
           .evaluate(element => getComputedStyle(element).fontFamily),
         "the toolbar is set in the admin's face"
       ).toContain("Geist");
+      // So do the spacing overlay's value chips, which are chrome without the
+      // chrome marker: they take no pointer events.
+      const chip = page
+        .locator(".nx-canvas .nx-spacing-overlay__value")
+        .first();
+      await expect(chip).toBeVisible();
+      expect(
+        await chip.evaluate(element => getComputedStyle(element).fontFamily),
+        "the spacing values are set in the admin's face"
+      ).toContain("Geist");
     });
   });
 }

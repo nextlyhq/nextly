@@ -1557,13 +1557,15 @@
   color: CanvasText;
   /*
    * The page's type, which the canvas would otherwise take from the admin's
-   * own face. The site's body font token is the font the site declares, and
-   * `--site-` is the prefix tokens are emitted under unless the site names
-   * another; a site without the token, or under another prefix, falls back to
-   * the system face its default token states. The published page takes its
-   * face from the host application around it, which the canvas cannot read.
+   * own face: the site's body font token. Its custom property depends on the
+   * prefix the site's tokens are emitted under, which only the site sheet
+   * knows, so the canvas root states the reference inline as
+   * `--nx-canvas-site-font` (see `canvas.tsx`). Without a site sheet it falls
+   * back to the system face the default token states. The published page takes
+   * its face from the host application around it, which the canvas cannot
+   * read.
    */
-  font-family: var(--site-font-body, system-ui), sans-serif;
+  font-family: var(--nx-canvas-site-font, system-ui), sans-serif;
   /*
    * The editing marks drawn on the page take the hue for the page's ground, not
    * for the admin's theme: they sit on the site's colours, and the dark theme's
@@ -1674,10 +1676,13 @@
  * then expects a dark ground and dark native controls beneath them: under
  * `[data-nx-theme="dark"]` on an ancestor the host chooses, or with the
  * viewer's system on a site whose strategy is `media` — which the canvas
- * states on itself, since only the token set knows it. The admin's `.dark`
- * class is a different switch and deliberately reaches nothing here.
+ * states on itself, since only the token set knows it. Each path is keyed on
+ * that stated strategy, so a host's attribute does not darken the page of a
+ * site that follows the system, whose tokens would stay light under it. The
+ * admin's `.dark` class is a different switch and deliberately reaches nothing
+ * here.
  */
-[data-nx-theme="dark"] .nx-canvas {
+[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-mode="attribute"] {
   color-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
@@ -1701,18 +1706,29 @@
  * tokens are custom properties inherited from the admin's own root, so they
  * need no help; these inherited values are what has to be handed back.
  *
+ * ONE list of what the editor draws inside the page. `[data-nx-chrome]` marks
+ * the controls whose clicks must not reach the page; the spacing overlay and
+ * the drop line are chrome too but take no pointer events, so they are named
+ * here rather than given that marker, which would change what a click does.
+ *
  * Inside `:where()` so they weigh nothing: a chrome rule that states its own
  * colour, such as the refusal notice's destructive foreground, still wins, and
  * only what would otherwise be inherited from the page is replaced. The dark
  * rule comes second and has equal weight, so order decides it.
  */
-:where(.nx-canvas [data-nx-chrome]) {
+:where(
+  .nx-canvas :is([data-nx-chrome], .nx-spacing-overlay, .nx-drop-indicator)
+) {
   color-scheme: light;
   color: var(--nx-builder-text);
   font-family: var(--font-sans, system-ui, sans-serif);
 }
 
-:where(.dark .nx-canvas [data-nx-chrome]) {
+:where(
+  .dark
+    .nx-canvas
+    :is([data-nx-chrome], .nx-spacing-overlay, .nx-drop-indicator)
+) {
   color-scheme: dark;
 }
 
