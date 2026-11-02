@@ -90,7 +90,10 @@ import {
   previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
-import { fieldsBesidePanel } from "./EntryFieldsPanel";
+import {
+  fieldsBesidePanel,
+  type EntryFieldsPresentation,
+} from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import {
@@ -675,13 +678,14 @@ export function EntryForm({
    * whose read-only answer it shares with every other field.
    */
   const renderEntryFields = useCallback(
-    (excludePath: string) =>
+    (excludePath: string, presentation?: EntryFieldsPresentation) =>
       fieldsBesidePanel(allFields, excludePath, {
         disabled: savePending,
         readOnly: lock.readOnly,
         mode,
         values: conditionValues,
         hasPublicAddress,
+        ...(presentation === undefined ? {} : { presentation }),
       }),
     [
       allFields,

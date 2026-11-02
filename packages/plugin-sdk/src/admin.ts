@@ -747,6 +747,18 @@ export { readPluginRoute } from "@nextlyhq/admin";
  * learn rather than two.
  */
 export { usePluginRouteMutation } from "@nextlyhq/admin";
+
+/**
+ * @experimental Write to a route this plugin contributed once, outside React.
+ *
+ * The write half of `readPluginRoute`. Where `usePluginRouteMutation` reports
+ * a failure on `error` at the next render, this REJECTS with the admin's
+ * parsed error, so a caller that must hand a refusal's reasons back at the
+ * moment it awaits can. Same session handling and CSRF token as the hook; not
+ * cached, and it invalidates nothing. Experimental while its first caller
+ * settles; the intent is to keep its name and options stable.
+ */
+export { writePluginRoute } from "@nextlyhq/admin";
 /**
  * `PluginRouteInvalidation` is what a write names as gone stale. A plugin
  * serving both mounts has to say which one an entry belongs to, so the type has

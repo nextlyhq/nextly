@@ -20,6 +20,7 @@ import {
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { storeSiteBreakpoints } from "./support/site-breakpoints";
 import { test } from "./support/test";
 
 // The homepage Single is reseeded and edited here, as the other builder files do.
@@ -247,25 +248,16 @@ test.describe("the zoom", () => {
 test.describe("the device buttons", () => {
   test.describe.configure({ timeout: 120_000 });
 
-  const SITE_STYLE = "/admin/api/singles/site-style";
-
   test("a site with two breakpoints shows two buttons and no menu", async ({
     page,
   }) => {
     // Stored breakpoints replace the site's set whole, so this site has
     // Desktop and one more. Cleared afterwards: the e2e site stores none, and
     // its devices come from the app's code.
-    const stored = await page.request.patch(SITE_STYLE, {
-      data: {
-        breakpoints: {
-          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1024 }],
-          container: [],
-        },
-      },
+    await storeSiteBreakpoints(page.request, {
+      viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1024 }],
+      container: [],
     });
-    expect(stored.ok(), `storing two breakpoints: ${stored.status()}`).toBe(
-      true
-    );
     try {
       await page.setViewportSize({ width: 1440, height: 900 });
       await openEditorWith(page, NODES, TEXT_ID);
@@ -277,33 +269,20 @@ test.describe("the device buttons", () => {
         page.getByRole("button", { name: /^More devices/ })
       ).toHaveCount(0);
     } finally {
-      const cleared = await page.request.patch(SITE_STYLE, {
-        data: { breakpoints: null },
-      });
-      expect(
-        cleared.ok(),
-        `clearing the breakpoints: ${cleared.status()}`
-      ).toBe(true);
+      await storeSiteBreakpoints(page.request, null);
     }
   });
   test("a site with four breakpoints puts the narrowest in a menu, and styles it from there", async ({
     page,
   }) => {
-    const stored = await page.request.patch(SITE_STYLE, {
-      data: {
-        breakpoints: {
-          viewport: [
-            { id: "phone", label: "Phone", maxWidth: 480 },
-            { id: "mobile", label: "Mobile", maxWidth: 767 },
-            { id: "tablet", label: "Tablet", maxWidth: 1024 },
-          ],
-          container: [],
-        },
-      },
+    await storeSiteBreakpoints(page.request, {
+      viewport: [
+        { id: "phone", label: "Phone", maxWidth: 480 },
+        { id: "mobile", label: "Mobile", maxWidth: 767 },
+        { id: "tablet", label: "Tablet", maxWidth: 1024 },
+      ],
+      container: [],
     });
-    expect(stored.ok(), `storing four breakpoints: ${stored.status()}`).toBe(
-      true
-    );
     try {
       await page.setViewportSize({ width: 1440, height: 900 });
       await openEditorWith(page, NODES, TEXT_ID);
@@ -323,13 +302,7 @@ test.describe("the device buttons", () => {
         devices(page).getByRole("radio", { checked: true })
       ).toHaveCount(0);
     } finally {
-      const cleared = await page.request.patch(SITE_STYLE, {
-        data: { breakpoints: null },
-      });
-      expect(
-        cleared.ok(),
-        `clearing the breakpoints: ${cleared.status()}`
-      ).toBe(true);
+      await storeSiteBreakpoints(page.request, null);
     }
   });
 });

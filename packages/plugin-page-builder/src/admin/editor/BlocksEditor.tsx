@@ -12,10 +12,13 @@
  */
 import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
 import {
+  prepareDocumentForRead,
+  registeredBlocks,
+} from "@nextlyhq/blocks-react";
+import {
   BlockContextMenu,
   BlockKeyboardActions,
   BlockToolbar,
-  BreakpointManager,
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
@@ -63,6 +66,12 @@ import {
 } from "./editor-panels";
 import { HistoryButtons } from "./history-buttons";
 import { PreviewButton } from "./preview-button";
+import { SettingsDialog } from "./settings-dialog";
+import {
+  sharePreview,
+  type SharePreview,
+  type ShareSeoFields,
+} from "./share-preview";
 import {
   ConnectStyleHistoryContext,
   RemountOnStyleReplay,
@@ -219,7 +228,6 @@ function editorTopBar(view: EditorView): {
   const {
     documentDirty,
     canvasRender,
-    saveBreakpoints,
     siteStylePending,
     siteStyleError,
     editedBreakpoint,
@@ -236,25 +244,6 @@ function editorTopBar(view: EditorView): {
     ),
     topBarCenter: (
       <>
-        {/*
-         * Gated on the SAME read the canvas and the cascade are gated on.
-         * Until the stored style has answered, `canvasSiteStyle` is the
-         * host's config defaults — so the dialog would open on a set the
-         * site never chose, and saving from that draft would overwrite the
-         * site's real breakpoints with defaults the author never saw.
-         *
-         * `!== null`, not `!== undefined`: `useSiteStyle` types `error` as
-         * `Error | null` and normalises success to `null`, so the
-         * `undefined` comparison is true on success too — the same mistake
-         * that once withheld the provenance trace unconditionally.
-         */}
-        <RemountOnStyleReplay>
-          <BreakpointManager
-            value={canvasRender.styleContext.breakpoints}
-            onSave={saveBreakpoints}
-            status={siteStyleStatus(siteStylePending, siteStyleError)}
-          />
-        </RemountOnStyleReplay>
         {/*
          * Beside the manager, and gated on the same read for the same
          * reason it is: until the stored style has answered, the set in
@@ -621,18 +610,89 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
   );
 }
 
-/**
- * The document's title as the author has it right now, for the top bar: the
- * form's `title` value while it is text, and nothing otherwise.
- */
-function usePageTitle<TFieldValues extends FieldValues>(
+/** What the editor reads of the page's own fields as the author has them now. */
+interface PageFacts {
+  /** The form's `title` while it is text, for the top bar and the preview. */
+  title: string | undefined;
+  /** The SEO plugin's fields, where the document has them. */
+  seo: ShareSeoFields | undefined;
+}
+
+function usePageFacts<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>
-): string | undefined {
-  const title: unknown = useWatch({
+): PageFacts {
+  const [title, seo]: unknown[] = useWatch({
     control,
-    name: "title" as Path<TFieldValues>,
+    name: ["title", "seo"] as Path<TFieldValues>[],
   });
-  return typeof title === "string" ? title : undefined;
+  return {
+    title: typeof title === "string" ? title : undefined,
+    seo: seo !== null && typeof seo === "object" ? seo : undefined,
+  };
+}
+
+/**
+ * How a shared link to the page would look, from the page as the published
+ * route reads it: prepared with the canvas's own inputs (the same resolver,
+ * limits and component definitions), so a component's heading speaks for the
+ * page as it does once published.
+ */
+function pagePreview(view: EditorView, page: PageFacts): SharePreview {
+  const { editor, canvasRender } = view;
+  const resolver = registeredBlocks();
+  const prepared = prepareDocumentForRead(editor.document, {
+    resolver,
+    styleContext: canvasRender.styleContext,
+    definitions: canvasRender.definitions,
+    ...(canvasRender.limits === undefined
+      ? {}
+      : { limits: canvasRender.limits }),
+  });
+  return sharePreview({
+    seo: page.seo,
+    document: prepared,
+    pageTitle: page.title ?? "",
+    definitions: type => resolver.get(type),
+  });
+}
+
+/**
+ * Settings, as the shell's rail opens it: the entry's own fields and a share
+ * preview built from the page as it is now, and the site's breakpoints, read
+ * from the same answer the canvas and the device buttons are.
+ */
+function editorSettings(
+  view: EditorView,
+  page: PageFacts
+): NonNullable<React.ComponentProps<typeof BuilderShell>["renderSettings"]> {
+  const {
+    entryFields,
+    canvasRender,
+    saveBreakpoints,
+    siteStylePending,
+    siteStyleError,
+  } = view;
+  // Remounted when a style change is undone or redone, as every surface
+  // showing the site's style is, so its breakpoints show the set replayed.
+  return dialog => (
+    <RemountOnStyleReplay>
+      <SettingsDialog
+        {...dialog}
+        pageFields={entryFields}
+        // Built only while the dialog is drawn, from the page on screen.
+        share={
+          // Prepared only while Settings is open: the shell asks for the
+          // dialog on every pass, open or not.
+          dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
+        }
+        breakpoints={{
+          value: canvasRender.styleContext.breakpoints,
+          onSave: saveBreakpoints,
+          status: siteStyleStatus(siteStylePending, siteStyleError),
+        }}
+      />
+    </RemountOnStyleReplay>
+  );
 }
 
 /**
@@ -726,7 +786,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     savePoint,
   });
 
-  const pageTitle = usePageTitle(control);
+  const page = usePageFacts(control);
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
@@ -792,7 +852,8 @@ function EditorBody<TFieldValues extends FieldValues>({
         {...editorTopBar(view)}
         // The document's title, read-only, as the author has it in the form
         // right now. Nothing for a document with no title field.
-        title={pageTitle}
+        title={page.title}
+        renderSettings={editorSettings(view, page)}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears
