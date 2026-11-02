@@ -30,6 +30,7 @@ import {
 } from "../../storage/storage";
 import type { IStorageAdapter } from "../../storage/types";
 import { createContext } from "../context";
+import { environmentFilesRead } from "../environment";
 import { exitWithError, printCliError, type CliError } from "../errors";
 import {
   mediaApplyOutsideProject,
@@ -297,12 +298,12 @@ function sayRemoval(
  * config, such as a local-disk plugin given a relative path, resolves that
  * path when the config loads, against the process's directory.
  *
- * The database settings were read before --cwd: from `.env` where the CLI
- * was run, from the shell or from a parent process, and may be another
- * project's, against which a file in use in this project's storage would
- * read as left behind. So from another directory --apply is refused, and a
- * listing warns when that directory has its own `.env`; the project's own
- * `.env` sets what nothing has set yet.
+ * The database settings were read before --cwd: from the environment files
+ * where the CLI was run, from the shell or from a parent process, and may be
+ * another project's, against which a file in use in this project's storage
+ * would read as left behind. So from another directory --apply is refused,
+ * and a listing warns naming each environment file the run read there; the
+ * project's own `.env` sets what nothing has set yet.
  */
 function enterProject(cwd: string, apply: boolean, logger: Logger): void {
   const ranIn = process.cwd();
@@ -311,10 +312,12 @@ function enterProject(cwd: string, apply: boolean, logger: Logger): void {
     // the shell or from a parent process, none of which a `.env` loaded now
     // replaces: nothing ties them to this project, so nothing is removed.
     if (apply) throw mediaApplyOutsideProject(cwd);
-    const loaded = path.join(ranIn, ".env");
-    if (existsSync(loaded)) {
+    // Every file the run read, as the entry point's environment step recorded
+    // it, not a guess at which of them exist.
+    const loaded = environmentFilesRead();
+    if (loaded.length > 0) {
       logger.warn(
-        `The environment was read from ${loaded}, not from ${cwd}, so the database it names may be another project's.`
+        `The environment was read from ${loaded.join(", ")}, not from ${cwd}, so the database it names may be another project's.`
       );
     }
     const projectEnv = path.join(cwd, ".env");

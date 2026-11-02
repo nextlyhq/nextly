@@ -174,6 +174,9 @@ export async function createCliAdapter(
   options: CreateCliAdapterOptions = {}
 ): Promise<CLIDatabaseAdapter> {
   const { logger } = options;
+  // A command may connect without the settings check first, as
+  // `plugins install` does; it names its mode here instead (once a run).
+  announceMode();
 
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL;
   let dialect = options.dialect;

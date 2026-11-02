@@ -226,6 +226,29 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     expect(cli.databaseUrl).toBeUndefined();
     expect(cli.printed).toEqual(["Mode: development (DATABASE_URL not set)"]);
   });
+
+  // `nextly plugins install`, a step of the build script, connects without
+  // the settings check first; it names its mode all the same.
+  it("prints the mode line for a command that connects without checking first", () => {
+    const script = `
+      const { loadCliEnvironment, setModeLineWriter } = await import(${JSON.stringify(ENVIRONMENT)});
+      const { createCliAdapter } = await import(${JSON.stringify(ADAPTER)});
+      loadCliEnvironment(["node", "nextly", "plugins", "install", "x", "--mode", "production"]);
+      const printed = [];
+      setModeLineWriter(line => printed.push(line));
+      // No URL anywhere, so it refuses before connecting.
+      await createCliAdapter({}).catch(() => {});
+      process.stdout.write(JSON.stringify(printed));
+    `;
+    const out = execFileSync(
+      process.execPath,
+      ["--import", TSX, "--input-type=module", "--eval", script],
+      { cwd: project({}), env: childEnv(undefined), encoding: "utf8" }
+    );
+    expect(JSON.parse(out)).toEqual([
+      "Mode: production (DATABASE_URL not set)",
+    ]);
+  });
 });
 
 describe("the --mode option and the mode line, through the program", () => {

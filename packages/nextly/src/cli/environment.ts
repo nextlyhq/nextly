@@ -41,12 +41,6 @@ interface CliEnvironment {
   values: ReadonlyArray<Readonly<Record<string, string | undefined>>>;
 }
 
-// `@next/env` is a bundled CommonJS file whose exports Node's ESM loader cannot
-// name, so it is loaded through `require`, typed from its own declarations.
-const { loadEnvConfig } = createRequire(import.meta.url)(
-  "@next/env"
-) as typeof NextEnv;
-
 let current: CliEnvironment | undefined;
 let writeModeLine: ((line: string) => void) | undefined;
 let modeLinePrinted = false;
@@ -99,6 +93,14 @@ export function loadCliEnvironment(
   // for the run, as `next build` and `next dev` do for theirs.
   Object.assign(process.env, { NODE_ENV: mode });
   const preset = new Set(Object.keys(process.env));
+  // `@next/env` is a bundled CommonJS file whose exports Node's ESM loader
+  // cannot name, so it is loaded through `require`, typed from its own
+  // declarations. Loaded here, not when this module is imported: the app's dev
+  // boot imports the database check that prints the mode line, and never
+  // reads environment files through the CLI.
+  const { loadEnvConfig } = createRequire(import.meta.url)(
+    "@next/env"
+  ) as typeof NextEnv;
   // The loader announces each file it reads; the CLI prints its own mode line
   // instead, so only a file it could not read is reported.
   const { loadedEnvFiles } = loadEnvConfig(folder, mode === "development", {
@@ -128,6 +130,17 @@ function sourceOf(environment: CliEnvironment, name: string): string {
     values => values[name] !== undefined
   );
   return index === -1 ? "not set" : `from ${environment.files[index]}`;
+}
+
+/**
+ * The environment files this run read, as absolute paths, highest precedence
+ * first; none when no environment was loaded, as in a test that calls a
+ * command directly.
+ */
+export function environmentFilesRead(): string[] {
+  if (!current) return [];
+  const { folder, files } = current;
+  return files.map(file => resolve(folder, file));
 }
 
 /**
