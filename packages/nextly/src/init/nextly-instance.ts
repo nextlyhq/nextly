@@ -66,6 +66,7 @@ import type {
   FindFormBySlugArgs,
   FindFormsArgs,
   FindSingleArgs,
+  FoundSingle,
   FindSinglesArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
@@ -316,9 +317,14 @@ export interface Nextly {
    * });
    * ```
    */
-  findSingle: <TSlug extends SingleSlug>(
-    args: FindSingleArgs<TSlug>
-  ) => Promise<RowFromSingleSlug<TSlug>>;
+  findSingle: <
+    TSlug extends SingleSlug,
+    TCreate extends boolean | undefined = undefined,
+  >(
+    // `createIfMissing: false` reads without creating, and only then does
+    // the answer include `null`; see `FoundSingle`.
+    args: FindSingleArgs<TSlug> & { createIfMissing?: TCreate }
+  ) => Promise<FoundSingle<TSlug, TCreate>>;
 
   /**
    * Update a Single document.
