@@ -165,7 +165,9 @@ export function useVariablesTransfer({
         "No file was written, because this site has no variables to write.",
         detail
       );
-    } else if (detail.length > 0) {
+    } else {
+      // Always a status, so an earlier refusal never stays on screen beside
+      // a file that was saved.
       setReport({
         tone: "done",
         headline: `Saved ${written.map(file => file.filename).join(" and ")}.`,
@@ -305,10 +307,18 @@ function ImportPreview({
                   return (
                     <li key={conflict.identity}>
                       <span className="nx-vars-import__name">{name}</span>
-                      <span className="nx-vars-import__values">
-                        {conflict.mine.values.light} →{" "}
-                        {conflict.imported.values.light}
-                      </span>
+                      {/* Every field that differs, so a conflict over a
+                          dark value or a name says which and how. */}
+                      <dl className="nx-vars-import__fields">
+                        {conflict.fields.map(field => (
+                          <div key={field.field}>
+                            <dt>{field.field}</dt>
+                            <dd className="nx-vars-import__values">
+                              {`${field.mine} → ${field.imported}`}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
                       <div
                         className="nx-vars__seg"
                         role="radiogroup"
@@ -333,6 +343,18 @@ function ImportPreview({
                     </li>
                   );
                 })}
+              </ul>
+            </section>
+          )}
+          {plan.labelClashes.length === 0 ? null : (
+            <section className="nx-vars-import__section">
+              <h3>Names used twice</h3>
+              <ul className="nx-vars-import__skipped">
+                {plan.labelClashes.map(name => (
+                  <li key={name}>
+                    {`Two variables would be called "${name}". Keep this site's version of one, or rename one before importing.`}
+                  </li>
+                ))}
               </ul>
             </section>
           )}

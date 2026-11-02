@@ -3029,6 +3029,26 @@
   gap: 2px 0.5rem;
 }
 
+.nx-vars-import__fields {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+
+.nx-vars-import__fields > div {
+  display: flex;
+  gap: 0.375rem;
+  font-size: var(--text-xs);
+}
+
+.nx-vars-import__fields dt {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-vars-import__fields dd {
+  margin: 0;
+}
+
 .nx-vars-import__values {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;

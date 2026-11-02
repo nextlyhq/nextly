@@ -47,6 +47,8 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
+import { labelClashes } from "./tokens-studio";
+
 /** What an import did, or why it could not begin. */
 export type ImportResult =
   | {
@@ -142,6 +144,15 @@ export interface ImportConflict {
   readonly identity: string;
   readonly mine: SiteToken;
   readonly imported: SiteToken;
+  /** Each field the two state differently, in words, for the preview. */
+  readonly fields: readonly ConflictField[];
+}
+
+/** One field a conflict differs in: the site's value and the file's. */
+export interface ConflictField {
+  readonly field: string;
+  readonly mine: string;
+  readonly imported: string;
 }
 
 /** What an import WOULD do, shown to the author before anything changes. */
@@ -158,6 +169,11 @@ export type ImportPlan =
       readonly unchanged: readonly SiteToken[];
       /** Tokens whose values clash, each settled by the author: keep or use. */
       readonly conflicts: readonly ImportConflict[];
+      /**
+       * Names the import would give to more than one variable. Applying such
+       * an import is refused, so the preview says which before it is tried.
+       */
+      readonly labelClashes: readonly string[];
       /** What the files held that this site cannot, in the engine's words. */
       readonly skipped: readonly string[];
       /** Every token read, in file order, for {@link applyImport}. */
@@ -222,8 +238,32 @@ export function planImport(
   return {
     ok: true,
     skipped,
-    ...sortAgainst(withStoredIds(read.tokens, into), into),
+    ...planned(withStoredIds(read.tokens, into), into),
   };
+}
+
+/**
+ * The file's tokens sorted against the site, with the names the import would
+ * give to more than one variable if every conflict took the file's side.
+ */
+function planned(
+  incoming: readonly SiteToken[],
+  into: SiteTokenSet
+): ReturnType<typeof sortAgainst> & { labelClashes: string[] } {
+  return {
+    ...sortAgainst(incoming, into),
+    labelClashes: newLabelClashes(into, mergeById(into, incoming).tokens),
+  };
+}
+
+/**
+ * Names shown for more than one variable once an import is merged, other than
+ * those the site already shared before it: a name a site already uses twice
+ * is not the import's doing.
+ */
+function newLabelClashes(before: SiteTokenSet, after: SiteTokenSet): string[] {
+  const had = new Set(labelClashes(before).map(name => name.toLowerCase()));
+  return labelClashes(after).filter(name => !had.has(name.toLowerCase()));
 }
 
 /** Which reader the chosen files call for. */
@@ -268,10 +308,14 @@ function sortAgainst(
   for (const imported of incoming) {
     const identity = tokenIdentity(imported);
     const held = mine.get(identity);
-    if (held === undefined) added.push(imported);
-    else if (clashes(held, imported))
-      conflicts.push({ identity, mine: held, imported });
-    else if (fillsIn(held, imported)) changed.push(imported);
+    if (held === undefined) {
+      added.push(imported);
+      continue;
+    }
+    const fields = conflictFields(held, imported);
+    if (fields.length > 0) {
+      conflicts.push({ identity, mine: held, imported, fields });
+    } else if (fillsIn(held, imported)) changed.push(imported);
     else unchanged.push(imported);
   }
   return { added, changed, unchanged, conflicts, incoming };
@@ -308,15 +352,31 @@ function differs(
   return mine !== undefined && theirs !== undefined && mine !== theirs;
 }
 
-function clashes(mine: SiteToken, imported: SiteToken): boolean {
-  return (
-    mine.kind !== imported.kind ||
-    mine.name !== imported.name ||
-    mine.values.light !== imported.values.light ||
-    differs(mine.values.dark, imported.values.dark) ||
-    differs(mine.label, imported.label) ||
-    differs(mine.description, imported.description)
-  );
+/**
+ * Each field the site's variable and the file's state differently. Kind, code
+ * name and light value always count; dark value, name and description count
+ * only where both state one, since one side leaving a field unset is the file
+ * filling it in rather than contradicting it.
+ */
+function conflictFields(mine: SiteToken, imported: SiteToken): ConflictField[] {
+  const fields: ConflictField[] = [];
+  const note = (field: string, a: string | undefined, b: string | undefined) =>
+    fields.push({ field, mine: a ?? "none", imported: b ?? "none" });
+  if (mine.kind !== imported.kind) note("Kind", mine.kind, imported.kind);
+  if (mine.name !== imported.name) note("Code name", mine.name, imported.name);
+  if (mine.values.light !== imported.values.light) {
+    note("Light", mine.values.light, imported.values.light);
+  }
+  if (differs(mine.values.dark, imported.values.dark)) {
+    note("Dark", mine.values.dark, imported.values.dark);
+  }
+  if (differs(mine.label, imported.label)) {
+    note("Name", mine.label, imported.label);
+  }
+  if (differs(mine.description, imported.description)) {
+    note("Description", mine.description, imported.description);
+  }
+  return fields;
 }
 
 /** Whether the file states something the site's token leaves unset. */
@@ -356,6 +416,20 @@ export function applyImport(
     };
   }
   const merged = mergeById(into, taken);
+  // Refused rather than saved: two variables under one name cannot be told
+  // apart in the panel, and the site's own edits are held to the same rule.
+  const clashing = newLabelClashes(into, merged.tokens);
+  if (clashing.length > 0) {
+    return {
+      ok: false,
+      error: `This import would give two variables the same name: ${clashing
+        .map(name => `"${name}"`)
+        .join(
+          ", "
+        )}. Keep this site's version of one of them, or rename one first.`,
+      skipped: plan.skipped,
+    };
+  }
   return {
     ok: true,
     tokens: merged.tokens,

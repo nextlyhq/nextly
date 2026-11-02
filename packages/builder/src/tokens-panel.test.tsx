@@ -549,3 +549,106 @@ describe("reset compares the whole variable", () => {
     }
   });
 });
+
+/** Choose one file in the panel's hidden input, as the system chooser would. */
+async function chooseFile(name: string, contents: string): Promise<void> {
+  const file = new File([contents], name, { type: "application/json" });
+  Object.defineProperty(file, "text", {
+    value: () => Promise.resolve(contents),
+  });
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText("Choose variable files to import"), {
+      target: { files: [file] },
+    });
+  });
+}
+
+/** A DTCG file holding these tokens, as this system writes one. */
+function fileOf(tokens: SiteTokenSet["tokens"]): string {
+  return JSON.stringify({
+    color: Object.fromEntries(
+      tokens.map(token => [
+        token.name.split(".")[1],
+        {
+          $type: "color",
+          $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+          $extensions: {
+            "com.nextlyhq.nextly": {
+              css: token.values,
+              kind: token.kind,
+              ...(token.label === undefined ? {} : { label: token.label }),
+            },
+          },
+        },
+      ])
+    ),
+  });
+}
+
+describe("the import preview", () => {
+  it("shows each field a conflict differs in", async () => {
+    render(<Hosted tokens={SITE} />);
+    await chooseFile(
+      "brand.tokens.json",
+      fileOf([
+        {
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#1d2b6b", dark: "#222222" },
+        },
+      ])
+    );
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    expect(within(preview).getByText("Dark")).toBeDefined();
+    expect(within(preview).getByText("#8fa7ff → #222222")).toBeDefined();
+    expect(within(preview).queryByText("#1d2b6b → #1d2b6b")).toBeNull();
+  });
+
+  it("names a variable name the import would give twice", async () => {
+    render(<Hosted tokens={SITE} />);
+    await chooseFile(
+      "ink.tokens.json",
+      fileOf([
+        {
+          name: "color.ink",
+          label: "Brand",
+          kind: "color",
+          values: { light: "#000000" },
+        },
+      ])
+    );
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    expect(
+      within(preview).getByText(/Two variables would be called "Brand"/)
+    ).toBeDefined();
+  });
+});
+
+describe("a clean export after a refusal", () => {
+  it("replaces the refusal with what was saved", async () => {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: () => "blob:variables",
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: () => undefined,
+    });
+    render(<Hosted tokens={SITE} />);
+    await chooseFile("broken.json", "{");
+    expect(screen.getByRole("alert").textContent).toMatch(/not valid JSON/);
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Import or export" }),
+      { key: "Enter" }
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Export CSS" })
+    );
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByRole("status").textContent).toMatch(/Saved/);
+  });
+});

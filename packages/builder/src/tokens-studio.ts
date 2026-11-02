@@ -674,12 +674,37 @@ export function variableLabelIssue(
   if (problem !== undefined) return problem;
   const clash = (tokens?.tokens ?? []).find(
     (token, index) =>
-      index !== at &&
-      tokenDisplayLabel(token).toLowerCase() === trimmed.toLowerCase()
+      index !== at && labelKey(token) === labelKey({ label: trimmed, name: "" })
   );
   return clash === undefined
     ? undefined
     : `Another variable is already called "${tokenDisplayLabel(clash)}".`;
+}
+
+/**
+ * What two variables' names are compared by: the name shown, ignoring case,
+ * since "Brand" and "brand" cannot be told apart in a list.
+ */
+function labelKey(token: { name: string; label?: string }): string {
+  return tokenDisplayLabel(token).toLowerCase();
+}
+
+/**
+ * The names shown for more than one variable in a set, once each.
+ *
+ * The same rule {@link variableLabelIssue} holds one edit to, asked of a whole
+ * set, as an import produces one.
+ */
+export function labelClashes(tokens: SiteTokenSet): string[] {
+  const seen = new Map<string, string>();
+  const clashes = new Set<string>();
+  for (const token of tokens.tokens) {
+    const key = labelKey(token);
+    const first = seen.get(key);
+    if (first === undefined) seen.set(key, tokenDisplayLabel(token));
+    else clashes.add(first);
+  }
+  return [...clashes];
 }
 
 /**

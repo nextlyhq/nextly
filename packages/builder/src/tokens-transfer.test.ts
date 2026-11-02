@@ -1683,3 +1683,67 @@ describe("an import from Figma, which carries no identity", () => {
     ]);
   });
 });
+
+describe("what a conflict differs in", () => {
+  it("names each field that differs, not only the light values", () => {
+    const mine: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#ffffff", dark: "#111111" },
+        },
+      ],
+    };
+    const file = exportDtcg({
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#ffffff", dark: "#222222" },
+          description: "Body text",
+        },
+      ],
+    }).text;
+    const plan = planImport([{ name: "ink.tokens.json", text: file }], {
+      tokens: [{ ...mine.tokens[0]!, description: "Text" }],
+    });
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.conflicts[0]?.fields).toEqual([
+      { field: "Dark", mine: "#111111", imported: "#222222" },
+      { field: "Description", mine: "Text", imported: "Body text" },
+    ]);
+  });
+});
+
+describe("an import that would give two variables one name", () => {
+  const site: SiteTokenSet = {
+    tokens: [
+      {
+        name: "color.ink",
+        label: "Brand",
+        kind: "color",
+        values: { light: "#111111" },
+      },
+    ],
+  };
+  const file = exportDtcg({
+    tokens: [
+      { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+    ],
+  }).text;
+
+  it("says so in the preview", () => {
+    const plan = planImport([{ name: "brand.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.labelClashes).toEqual(["Brand"]);
+  });
+
+  it("is refused rather than saved", () => {
+    const plan = planImport([{ name: "brand.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, site, new Map());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/"Brand"/);
+  });
+});
