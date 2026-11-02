@@ -9,15 +9,46 @@
  * undoing without the commit would rewind the change before them and leave the
  * words in place.
  *
+ * What the commit came to decides the rest:
+ * - **Refused or unavailable**: the passage stays open because its words exist
+ *   nowhere else, so nothing is taken from the history underneath it.
+ * - **Written**: the words are now the newest step. Undo takes them back. Redo
+ *   has nothing left to repeat, because a new step ends the branch it would
+ *   have replayed, as in every editor once the author types.
+ *
  * @module admin/editor/history-buttons
  */
 import type { InlineEditOutcome } from "@nextlyhq/builder/shell";
 import { detectApplePlatform } from "@nextlyhq/ui";
 import { Redo2, Undo2 } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 
 const BUTTON_CLASS =
   "focus-visible:ring-ring rounded-md p-1.5 focus-visible:ring-2 focus-visible:outline-none disabled:opacity-40";
+
+/** Whether the commit left the passage open, so the history must not move. */
+function heldOpen(outcome: InlineEditOutcome): boolean {
+  return outcome.status === "refused" || outcome.status === "unavailable";
+}
+
+/**
+ * The shortcut each tooltip names, once the platform is known.
+ *
+ * Resolved after mounting: `detectApplePlatform` reads `navigator`, which a
+ * server render does not have, so naming the keys during render would emit
+ * Ctrl on the server and ⌘ in a Mac's first render, and React would find a
+ * tooltip it did not produce. Until then the tooltip names the action alone.
+ */
+function useShortcutLabels(): { undo: string; redo: string } | null {
+  const [apple, setApple] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    setApple(detectApplePlatform());
+  }, []);
+  if (apple === null) return null;
+  return apple
+    ? { undo: "⌘Z", redo: "⇧⌘Z" }
+    : { undo: "Ctrl+Z", redo: "Ctrl+Y" };
+}
 
 export function HistoryButtons({
   editor,
@@ -29,23 +60,33 @@ export function HistoryButtons({
     undo: () => void;
     redo: () => void;
   };
-  inline: { commit: () => InlineEditOutcome };
+  inline: {
+    commit: () => InlineEditOutcome;
+    editing: unknown;
+    editingRich: unknown;
+  };
 }): React.JSX.Element {
-  // Read at render, in the browser: the buttons are drawn only inside the
-  // editor, which mounts on the client.
-  const apple = detectApplePlatform();
-  const step = (take: () => void) => () => {
-    inline.commit();
-    take();
+  const keys = useShortcutLabels();
+  // An open inline edit is a step the history does not hold yet: Undo takes
+  // it back once committed, so it is offered even on a fresh document.
+  const editingInline = inline.editing !== null || inline.editingRich !== null;
+  const undo = () => {
+    if (heldOpen(inline.commit())) return;
+    editor.undo();
+  };
+  const redo = () => {
+    const outcome = inline.commit();
+    if (heldOpen(outcome) || outcome.status === "written") return;
+    editor.redo();
   };
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       <button
         type="button"
         aria-label="Undo"
-        title={`Undo (${apple ? "⌘Z" : "Ctrl+Z"})`}
-        disabled={!editor.canUndo}
-        onClick={step(editor.undo)}
+        title={keys === null ? "Undo" : `Undo (${keys.undo})`}
+        disabled={!editor.canUndo && !editingInline}
+        onClick={undo}
         className={BUTTON_CLASS}
       >
         <Undo2 className="size-4" aria-hidden="true" />
@@ -53,9 +94,9 @@ export function HistoryButtons({
       <button
         type="button"
         aria-label="Redo"
-        title={`Redo (${apple ? "⇧⌘Z" : "Ctrl+Y"})`}
+        title={keys === null ? "Redo" : `Redo (${keys.redo})`}
         disabled={!editor.canRedo}
-        onClick={step(editor.redo)}
+        onClick={redo}
         className={BUTTON_CLASS}
       >
         <Redo2 className="size-4" aria-hidden="true" />

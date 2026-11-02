@@ -9,9 +9,11 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 let preview: { open: () => void } | null = null;
+let actions: { saveState: { kind: string } } | null = null;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentPreview: () => preview,
+  useDocumentActions: () => actions,
 }));
 
 const { PreviewButton } = await import("./preview-button");
@@ -19,6 +21,7 @@ const { PreviewButton } = await import("./preview-button");
 afterEach(() => {
   cleanup();
   preview = null;
+  actions = null;
 });
 
 describe("PreviewButton", () => {
@@ -36,5 +39,22 @@ describe("PreviewButton", () => {
     preview = null;
     const { container } = render(<PreviewButton />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it("is unavailable while the document is being saved, as the admin's own Preview is", () => {
+    // A preview minted mid-save could show the revision before it.
+    preview = { open: vi.fn() };
+    actions = { saveState: { kind: "saving" } };
+    render(<PreviewButton />);
+    const button = screen.getByRole("button", { name: "Preview" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("is available once the save has finished", () => {
+    preview = { open: vi.fn() };
+    actions = { saveState: { kind: "unsaved" } };
+    render(<PreviewButton />);
+    const button = screen.getByRole("button", { name: "Preview" });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
   });
 });

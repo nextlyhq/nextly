@@ -33,6 +33,7 @@ import {
   browserStore,
   fitsFullShell,
   isLeftPanel,
+  LEFT_PANELS,
   CANVAS_GUTTER,
   MIN_CANVAS_PANEL_WIDTH,
   MIN_SHELL_WIDTH,
@@ -993,6 +994,36 @@ function SidePanelToggles({
 }
 
 /**
+ * The left panel to show when the author asks for the left side back: the one
+ * they had open, else the first the host offers, in the rail's order.
+ */
+function panelToShow(
+  remembered: LeftPanel | null,
+  isAvailable: (panel: LeftPanel) => boolean
+): LeftPanel | null {
+  if (remembered !== null && isAvailable(remembered)) return remembered;
+  return LEFT_PANELS.find(isAvailable) ?? remembered;
+}
+
+/**
+ * Move focus out of the sides about to be hidden, onto the canvas.
+ *
+ * A hidden side unmounts the element holding focus, which leaves it on the
+ * page body. With two editors on a page, neither claims a key pressed there,
+ * so the same shortcut could not bring the sides back.
+ */
+function keepFocusInShell(
+  regions: Record<Region, HTMLElement | null>,
+  hiding: readonly Region[]
+): void {
+  const focused = document.activeElement;
+  if (!hiding.some(region => regions[region]?.contains(focused) === true)) {
+    return;
+  }
+  (regions.canvas ?? regions.header)?.focus();
+}
+
+/**
  * Which sides of the editor show, and the actions that change them: the
  * rail, the top bar's two buttons and mod+backslash.
  *
@@ -1004,7 +1035,8 @@ function useSidePanels(
   update: (change: (current: ShellPreferences) => ShellPreferences) => void,
   isAvailable: (panel: LeftPanel) => boolean,
   active: boolean,
-  claims: () => boolean
+  claims: () => boolean,
+  regionRefs: React.RefObject<Record<Region, HTMLElement | null>>
 ): {
   openPanel: LeftPanel | null;
   inspectorShown: boolean;
@@ -1033,38 +1065,42 @@ function useSidePanels(
     );
   /*
    * The top bar's left-panel button. Showing it with no panel chosen opens
-   * Add, the first panel an author needs, where the host offers it.
+   * the first panel the host offers, Add where it offers that.
    */
   const leftShown = openPanel !== null;
-  const toggleLeft = () =>
-    update(current => {
-      if (leftShown) return { ...current, leftPanelHidden: true };
-      const chosen =
-        current.leftPanel !== null && isAvailable(current.leftPanel)
-          ? current.leftPanel
-          : isAvailable("add")
-            ? "add"
-            : current.leftPanel;
-      return { ...current, leftPanel: chosen, leftPanelHidden: false };
-    });
-  const toggleInspector = () =>
+  const toggleLeft = () => {
+    if (leftShown) keepFocusInShell(regionRefs.current, ["panel"]);
+    update(current =>
+      leftShown
+        ? { ...current, leftPanelHidden: true }
+        : {
+            ...current,
+            leftPanel: panelToShow(current.leftPanel, isAvailable),
+            leftPanelHidden: false,
+          }
+    );
+  };
+  const toggleInspector = () => {
+    if (inspectorShown) keepFocusInShell(regionRefs.current, ["inspector"]);
     update(current => ({
       ...current,
       inspectorHidden: !current.inspectorHidden,
     }));
+  };
   /*
    * mod+backslash: hide both sides when either is showing, so one press
    * always gives the canvas the whole width; show both when neither is.
    */
   const toggleSides = () => {
     const anyShown = leftShown || inspectorShown;
+    if (anyShown) keepFocusInShell(regionRefs.current, ["panel", "inspector"]);
     update(current => ({
       ...current,
       leftPanelHidden: anyShown,
       inspectorHidden: anyShown,
-      ...(!anyShown && current.leftPanel === null && isAvailable("add")
-        ? { leftPanel: "add" as const }
-        : {}),
+      ...(anyShown
+        ? {}
+        : { leftPanel: panelToShow(current.leftPanel, isAvailable) }),
     }));
   };
   const toggleSidesRef = React.useRef(toggleSides);
@@ -1218,7 +1254,14 @@ function ShellRegions({
     selectPanel,
     toggleLeft,
     toggleInspector,
-  } = useSidePanels(preferences, update, isAvailable, active, claimsKeys);
+  } = useSidePanels(
+    preferences,
+    update,
+    isAvailable,
+    active,
+    claimsKeys,
+    regionRefs
+  );
   const mountedTopology = panelTopology(openPanel, inspectorShown);
 
   const panelView: PanelView = {

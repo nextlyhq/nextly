@@ -2157,6 +2157,66 @@ describe("hiding the side panels", () => {
     expect(screen.queryByText("inspector body")).toBeNull();
   });
 
+  it("opens the first panel the host offers when it offers no Add", () => {
+    // Shown with none chosen, the left side has to open something the rail
+    // offers, or the button would stay unpressed and nothing would open.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: null })
+        )}
+        availablePanels={["layers"]}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+    fireEvent.click(toggle(/^Left panel$/));
+    expect(screen.getByText("layers panel")).toBeTruthy();
+    expect(toggle(/^Left panel$/).getAttribute("aria-pressed")).toBe("true");
+
+    // mod+\ brings both sides back to the same panel.
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.queryByText("layers panel")).toBeNull();
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.getByText("layers panel")).toBeTruthy();
+  });
+
+  it("keeps mod+\\ working from inside a side it hides, with two editors on the page", () => {
+    // Hiding the side that holds focus would drop focus to the page body,
+    // where neither of two editors claims the key, so the second press
+    // could not bring the sides back.
+    stubContainerFits(true);
+    const shell = (label: string) => (
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "add" })
+        )}
+        availablePanels={["add"]}
+        renderPanel={() => <p>{label} add panel</p>}
+        inspector={<button type="button">{label} inspector control</button>}
+      />
+    );
+    render(shell("first"));
+    render(shell("second"));
+    screen.getByRole("button", { name: "first inspector control" }).focus();
+
+    fireEvent.keyDown(document.activeElement ?? document, {
+      key: "\\",
+      ctrlKey: true,
+    });
+    expect(screen.queryByText("first inspector control")).toBeNull();
+    expect(screen.getByText("second inspector control")).toBeTruthy();
+
+    fireEvent.keyDown(document.activeElement ?? document, {
+      key: "\\",
+      ctrlKey: true,
+    });
+    expect(screen.getByText("first inspector control")).toBeTruthy();
+    expect(screen.getByText("first add panel")).toBeTruthy();
+  });
+
   it("leaves mod+\\ to a text field inside the editor", () => {
     // Inside the shell, so the focus check passes and only the typing rule
     // can keep the key: a backslash typed into a field is text.
