@@ -263,24 +263,71 @@ function isDarkGround(value: string): boolean {
   return luminance !== undefined && luminance < DARK_GROUND_LUMINANCE;
 }
 
-/** `oklch(L …)`, its lightness as a number or a percentage. */
-const OKLCH = /^oklch\(\s*([\d.]+)(%?)/i;
-/** `hsl(H S% L%)` or `hsla(H, S%, L%, A)`, hue optionally in degrees. */
-const HSL = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%/i;
+/**
+ * One numeric colour component, with its percentage sign if it has one: an
+ * optional sign, a decimal, an optional exponent, an optional `%`.
+ *
+ * The SAME grammar as the engine's `NUMERIC_COMPONENT` in `contrast.ts`, which
+ * reads `rgb()` and does not export it; mirrored here for the two syntaxes the
+ * engine does not read, so a component is a number in all of them alike.
+ * Matched whole rather than parsed with `parseFloat`, which reads a prefix and
+ * stops — `5e-1` would read as 5 and `12abc` as 12.
+ */
+const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%?)$/;
 
-/** The alpha after a `/` that closes a colour function: `… / 0.5)`, `… / 50%)`. */
-const SLASH_ALPHA = /\/\s*([\d.]+)(%?)\s*\)\s*$/;
-/** The fourth, comma-separated component of a legacy `hsla(h, s%, l%, a)`. */
-const COMMA_ALPHA = /^hsla?\([^,)]*,[^,)]*,[^,)]*,\s*([\d.]+)(%?)\s*\)\s*$/i;
+/** A component as a number, and whether it was a percentage. */
+function numericOf(
+  part: string | undefined
+): { value: number; percent: boolean } | undefined {
+  if (part === undefined) return undefined;
+  const match = NUMERIC_COMPONENT.exec(part);
+  if (match === null) return undefined;
+  const value = Number.parseFloat(part);
+  return Number.isFinite(value)
+    ? { value, percent: match[1] === "%" }
+    : undefined;
+}
+
+/** A component as a 0–1 fraction: a percentage of 100, or a number of `scale`. */
+function fractionOf(
+  part: string | undefined,
+  scale: number
+): number | undefined {
+  const parsed = numericOf(part);
+  if (parsed === undefined) return undefined;
+  const fraction = parsed.value / (parsed.percent ? 100 : scale);
+  // Clamped, as CSS Color 4 clamps alpha, lightness and saturation.
+  return Math.min(1, Math.max(0, fraction));
+}
 
 /**
- * The alpha a colour function states, 1 when it states none. Read for the
- * syntaxes `groundLuminance` reads itself; the engine's parser reports its own.
+ * An `oklch()` or `hsl()`/`hsla()` call, split into its colour components and
+ * its alpha: after a `/` in the modern syntax, the fourth comma-separated
+ * component in the legacy one. `undefined` for anything else, or a call whose
+ * shape is neither.
  */
-function functionAlpha(text: string): number {
-  const stated = SLASH_ALPHA.exec(text) ?? COMMA_ALPHA.exec(text);
-  if (stated === null) return 1;
-  return Number(stated[1]) / (stated[2] === "%" ? 100 : 1);
+function colourFunction(
+  text: string
+):
+  | { name: "oklch" | "hsl"; components: string[]; alpha: string | undefined }
+  | undefined {
+  const call = /^(oklch|hsla?)\(([^()]*)\)$/i.exec(text);
+  if (call === null) return undefined;
+  const name = (call[1] ?? "").toLowerCase() === "oklch" ? "oklch" : "hsl";
+  const body = call[2] ?? "";
+  const slash = body.split("/");
+  if (slash.length > 2) return undefined;
+  const channels = (slash[0] ?? "").trim();
+  if (body.includes(",")) {
+    // The legacy, comma-separated form takes no slash.
+    if (slash.length > 1 || name === "oklch") return undefined;
+    const parts = channels.split(",").map(part => part.trim());
+    if (parts.length !== 3 && parts.length !== 4) return undefined;
+    return { name, components: parts.slice(0, 3), alpha: parts[3] };
+  }
+  const parts = channels.split(/\s+/).filter(part => part !== "");
+  if (parts.length !== 3) return undefined;
+  return { name, components: parts, alpha: slash[1]?.trim() };
 }
 
 /**
@@ -292,27 +339,38 @@ function functionAlpha(text: string): number {
  *
  * A TRANSLUCENT colour has no lightness of its own: what a visitor sees is the
  * surface behind it, which the canvas cannot see either. So any alpha below 1,
- * in any of these syntaxes, is `undefined` — `#0000` is not a dark ground.
+ * in any of these syntaxes, is `undefined` — `#0000` is not a dark ground — and
+ * so is an alpha this cannot read.
  */
 function groundLuminance(text: string): number | undefined {
   const rgb = parseColor(text);
   if (rgb !== undefined) {
     return rgb.a < 1 ? undefined : relativeLuminance(rgb);
   }
-  if (functionAlpha(text) < 1) return undefined;
-  const oklch = OKLCH.exec(text);
-  if (oklch) {
-    const lightness = Number(oklch[1]) / (oklch[2] === "%" ? 100 : 1);
-    return Math.min(1, Math.max(0, lightness)) ** 3;
+  const call = colourFunction(text);
+  if (call === undefined) return undefined;
+  const alpha = call.alpha === undefined ? 1 : fractionOf(call.alpha, 1);
+  if (alpha === undefined || alpha < 1) return undefined;
+  const [first, second, third] = call.components;
+  if (call.name === "oklch") {
+    // L is a number in 0–1, or a percentage.
+    const lightness = fractionOf(first, 1);
+    return lightness === undefined ? undefined : lightness ** 3;
   }
-  const hsl = HSL.exec(text);
-  if (hsl) {
-    const [hue, saturation, lightness] = [hsl[1], hsl[2], hsl[3]].map(Number);
-    return relativeLuminance(
-      hslToRgb(hue ?? 0, (saturation ?? 0) / 100, (lightness ?? 0) / 100)
-    );
+  // Hue as a number, in degrees if it says so; saturation and lightness as
+  // percentages, or the bare numbers CSS Color 4 also accepts for them.
+  const hue = numericOf(first?.replace(/deg$/i, ""));
+  const saturation = fractionOf(second, 100);
+  const lightness = fractionOf(third, 100);
+  if (
+    hue === undefined ||
+    hue.percent ||
+    saturation === undefined ||
+    lightness === undefined
+  ) {
+    return undefined;
   }
-  return undefined;
+  return relativeLuminance(hslToRgb(hue.value, saturation, lightness));
 }
 
 /** An HSL colour as 0–255 channels, by the CSS Color 4 conversion. */
@@ -2347,15 +2405,6 @@ export function Canvas({
       onPointerDown={pointerDown}
     >
       {page}
-      {/*
-       * The selection halo, anchored to the primary selection by CSS (see
-       * `.nx-selection-halo`). A layer of the canvas's own, so the selected
-       * block keeps every style the page gives it. After the page, because an
-       * anchor has to be laid out before what is positioned on it.
-       */}
-      {selectedId === null ? null : (
-        <div className="nx-selection-halo" aria-hidden="true" />
-      )}
       {overlay}
       {refusalDrawn === null ? null : (
         <DropRefusalNotice

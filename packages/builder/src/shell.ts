@@ -283,6 +283,13 @@ export type { BlockToolbarProps } from "./block-toolbar";
 export { SpacingOverlay } from "./spacing-overlay";
 export type { SpacingOverlayProps } from "./spacing-overlay";
 /*
+ * The white halo inside every selected block's ring, measured and drawn in the
+ * canvas's own layer so the page's elements are never restyled. A host renders
+ * it in the canvas's `overlay`, beside the spacing overlay. `@experimental`
+ * until the editor's selection chrome settles.
+ */
+export { SelectionHalos } from "./selection-halos";
+/*
  * The notice a host renders above the canvas while a locked area holds what
  * its lock doesn't allow: it shows the repair's steps and applies them, once
  * confirmed, as one edit. `@experimental` until the editor's lock surfaces

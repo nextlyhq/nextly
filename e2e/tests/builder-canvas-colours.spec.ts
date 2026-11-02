@@ -400,27 +400,59 @@ test.describe("selecting a block", () => {
       before
     );
 
-    // The halo sits on the selected block, inset by the same amount on every
-    // side: just inside the ring.
+    // The halo is measured onto the selected block: its box is the block's,
+    // and the band is drawn just inside that edge, as the ring is.
     const halo = page.locator(".nx-canvas .nx-selection-halo");
-    await expect(halo).toBeVisible();
+    await expect(halo).toHaveCount(1);
     const block = await card.boundingBox();
     const band = await halo.boundingBox();
     expect(block && band, "both boxes are measurable").toBeTruthy();
     if (block && band) {
-      const left = band.x - block.x;
-      const top = band.y - block.y;
-      const right = block.x + block.width - (band.x + band.width);
-      const bottom = block.y + block.height - (band.y + band.height);
-      for (const [side, gap] of [
-        ["left", left],
-        ["top", top],
-        ["right", right],
-        ["bottom", bottom],
-      ] as const) {
-        expect(gap, `the halo's ${side} inset`).toBeGreaterThan(0);
-        expect(gap, `the halo's ${side} inset`).toBeLessThan(3);
+      for (const key of ["x", "y", "width", "height"] as const) {
+        expect(
+          Math.abs(band[key] - block[key]),
+          `the halo's ${key} matches the block's`
+        ).toBeLessThan(1);
       }
     }
+  });
+  test("leaves an anchor the page gives the block, and what it anchors, in place", async ({
+    page,
+  }) => {
+    /*
+     * The halo is measured and drawn by the editor, so nothing about it is
+     * written onto the page's elements. An `anchor-name` on the selected block
+     * once was, which renamed the PAGE's own anchor in the editor alone and
+     * moved whatever the page positioned against it.
+     */
+    test.slow();
+    await openBuilder(page, "light");
+    // The page's own anchor on the card, at a host stylesheet's weight, and the
+    // title positioned against it.
+    await page.addStyleTag({
+      content: [
+        ".nx-pb-page p { anchor-name: --page-card; }",
+        ".nx-pb-page h1 { position: absolute; position-anchor: --page-card;",
+        "  top: anchor(bottom); left: anchor(left); }",
+      ].join("\n"),
+    });
+    const card = page.locator('.nx-canvas [data-nx-node="card"]').first();
+    const title = page.locator('.nx-canvas [data-nx-node="title"]').first();
+    const anchorOf = () =>
+      card.evaluate(element => getComputedStyle(element).anchorName);
+    expect(await anchorOf(), "the fixture anchors the card").toBe(
+      "--page-card"
+    );
+    const before = await title.boundingBox();
+
+    await card.click();
+    await expect(card).toHaveAttribute("data-nx-selected", "primary");
+    expect(await anchorOf(), "selecting the card keeps its anchor").toBe(
+      "--page-card"
+    );
+    expect(
+      await title.boundingBox(),
+      "what the page anchors to the card stays where it was"
+    ).toEqual(before);
   });
 });

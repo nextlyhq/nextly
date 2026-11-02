@@ -488,18 +488,6 @@ describe("the selected block is marked on its own element", () => {
     expect(marked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("b");
   });
 
-  it("draws the selection halo as its own layer, only while a block is selected", () => {
-    // A layer of the canvas's own rather than a shadow on the block, so the
-    // block keeps whatever shadow the page gives it.
-    expect(
-      renderCanvas("b").container.querySelectorAll(".nx-selection-halo").length
-    ).toBe(1);
-    cleanup();
-    expect(
-      renderCanvas(null).container.querySelectorAll(".nx-selection-halo").length
-    ).toBe(0);
-  });
-
   it("marks nothing when the selection is empty", () => {
     const { container } = renderCanvas(null);
 
@@ -3470,6 +3458,11 @@ describe("the site's ground and text on the canvas root", () => {
       "oklch(14.5% 0 0 / 50%)",
       "hsl(222 47% 11% / 0.4)",
       "hsla(222, 47%, 11%, 0.4)",
+      // Signed and exponent alphas, which CSS reads as numbers like any other.
+      "oklch(0.145 0 0 / +0.5)",
+      "oklch(0.145 0 0 / 5e-1)",
+      "hsl(222 47% 11% / -0.5)",
+      "hsla(222, 47%, 11%, 5e-1)",
     ]) {
       expect(marked(dark), dark).toBe(false);
     }
@@ -3480,6 +3473,11 @@ describe("the site's ground and text on the canvas root", () => {
       "oklch(0.145 0 0 / 1)",
       "hsl(222 47% 11% / 100%)",
       "hsla(222, 47%, 11%, 1)",
+      // The same grammar for every component, and an alpha above 1 clamps.
+      "oklch(1.45e-1 0 0 / 1e0)",
+      "oklch(0.145 0 0 / +2)",
+      "hsl(222 47% 1.1e1%)",
+      "hsl(222 47 11)",
     ]) {
       expect(marked(dark), dark).toBe(true);
     }

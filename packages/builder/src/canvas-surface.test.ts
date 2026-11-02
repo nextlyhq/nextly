@@ -402,42 +402,55 @@ describe("the editing colours drawn on the page", () => {
 
   it("halo the selection ring and the drop line in a mode-invariant white", () => {
     /*
-     * The ring is an outline, and the halo is a separate layer anchored to
-     * the selected block — never the block's own `box-shadow`, which a page
-     * may give it and which selecting it used to replace.
+     * The ring is an outline, and the halo is measured and drawn in the
+     * editor's own layer — nothing on the page's elements. A `box-shadow`
+     * replaced a shadow the page gave the block, and an `anchor-name` an
+     * anchor it gave it, so neither may appear on a selection rule.
      */
-    for (const selector of [
-      ".nx-canvas [data-nx-selected]",
-      '.nx-canvas [data-nx-selected=""]',
-      '.nx-canvas [data-nx-selected="primary"]',
-    ]) {
-      const bodies = rulesUnder(selector);
-      for (const body of bodies) {
+    const selectionRules = canvasRules().filter(rule =>
+      rule.selector.includes("[data-nx-selected")
+    );
+    expect(
+      selectionRules.length,
+      "the scan finds the selection rules"
+    ).toBeGreaterThan(1);
+    for (const rule of selectionRules) {
+      for (const property of ["box-shadow", "anchor-name"]) {
         expect(
-          declared(body, "box-shadow"),
-          `${selector} consumes the block's own shadow`
+          declared(rule.body, property),
+          `${rule.selector} writes ${property} onto the page's element`
         ).toBeUndefined();
       }
     }
+    const layer = ruleFor(".nx-selection-halos");
+    expect(declared(layer, "position")).toBe("absolute");
+    expect(declared(layer, "pointer-events")).toBe("none");
+    /*
+     * On the editor's own element: the ring redrawn as the element carries
+     * it, with the white band as an inset shadow beneath, so the two stay
+     * adjacent at any zoom. Read off the halo's rule, never a page element's.
+     */
+    const halo = ruleFor(".nx-selection-halo");
+    expect(declared(halo, "outline")).toBe(
+      "1px solid var(--nx-builder-select)"
+    );
+    expect(declared(halo, "outline-offset")).toBe("-2px");
+    expect(declared(halo, "box-shadow")).toBe(
+      "inset 0 0 0 2px var(--nx-builder-halo)"
+    );
+    // The primary's ring and halo are the full width, as on the element.
+    const primary = ruleFor(".nx-selection-halo[data-primary]");
+    expect(declared(primary, "outline-width")).toBe("2px");
+    expect(declared(primary, "box-shadow")).toBe(
+      "inset 0 0 0 4px var(--nx-builder-halo)"
+    );
     expect(
-      declared(
-        ruleFor('.nx-canvas [data-nx-selected="primary"]'),
-        "anchor-name"
-      )
-    ).toBe("--nx-selected");
-    const halo =
-      /@supports \(anchor-name: --nx-selected\) \{\s*\.nx-selection-halo \{([^}]*)\}/.exec(
-        CHROME
-      );
-    expect(
-      halo,
-      "the halo is drawn where anchors are supported"
-    ).not.toBeNull();
-    const body = halo?.[1] ?? "";
-    expect(declared(body, "position-anchor")).toBe("--nx-selected");
-    expect(declared(body, "border")).toBe("2px solid var(--nx-builder-halo)");
-    // Inside the ring, which covers the outer 2px: the same geometry as before.
-    expect(declared(body, "margin")).toBe("2px");
+      declared(ruleFor(".nx-selection-halo[data-component]"), "outline-color")
+    ).toBe("var(--nx-builder-component)");
+    // The element's ring is unchanged: what the halo redraws.
+    expect(declared(ruleFor(".nx-canvas [data-nx-selected]"), "outline")).toBe(
+      "2px solid var(--nx-builder-select)"
+    );
     expect(declared(ruleFor(".nx-drop-indicator"), "box-shadow")).toBe(
       "0 0 0 1px var(--nx-builder-halo)"
     );

@@ -26,6 +26,7 @@ import {
   RepairNotice,
   OnboardingChecklist,
   SelectionBreadcrumb,
+  SelectionHalos,
   SpacingOverlay,
   type OpenPassages,
 } from "@nextlyhq/builder/shell";
@@ -555,6 +556,12 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // coordinates and the canvas root is what establishes them.
             overlay={
               <>
+                {/*
+                  The white band inside every selected block's ring. Measured
+                  rather than styled onto the block, so the page's elements keep
+                  exactly the styles the page gives them.
+                */}
+                <SelectionHalos />
                 <DropIndicator target={drag.target} />
                 {/*
                   Suppressed for the duration of a drag. The bar would otherwise

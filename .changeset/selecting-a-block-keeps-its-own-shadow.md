@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-Selecting a block in the page builder no longer hides a shadow the page gives that block: the selection ring stays an outline, and its white halo is drawn as a layer of the editor's own rather than as a shadow on the block. The canvas also no longer treats a translucent dark background colour as a dark page.
+Selecting a block in the page builder no longer changes how the page draws that block: the selection ring stays an outline, and its white halo is measured and drawn by the editor in its own layer, for every selected block and every copy a block repeats, rather than set on the block as a shadow or an anchor. A shadow or anchor the page gives the block survives selection. The canvas also no longer treats a translucent dark background colour as a dark page, whatever number syntax its alpha is written in.

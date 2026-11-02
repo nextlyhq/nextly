@@ -551,9 +551,9 @@
  * a white mark on a white one. A white band directly inside the blue is the
  * halo — on a white ground the blue carries it, on a blue or a photograph the
  * white does, and on a dark section both do. It is `.nx-selection-halo` below,
- * a layer of the canvas's own, and NOT a shadow on the block: the block's
- * `box-shadow` belongs to the page, and a selection that replaced it drew a
- * page the visitor never sees.
+ * measured and drawn in the canvas's own layer, and NOTHING on the block: the
+ * block's `box-shadow`, `anchor-name` and the rest belong to the page, and a
+ * selection that replaced one drew a page the visitor never sees.
  */
 .nx-canvas [data-nx-selected] {
   outline: 2px solid var(--nx-builder-select);
@@ -561,48 +561,53 @@
 }
 
 /*
- * The primary selection names itself as an anchor for the halo. An anchor name
- * changes nothing about how the block itself is drawn.
+ * The halos' layer: a full-bleed sheet over the canvas root's content box, so
+ * the rectangles `SelectionHalos` measures in canvas content coordinates land
+ * on the blocks they were measured from. Never a pointer target, so a press
+ * travels through to the block underneath.
  */
-.nx-canvas [data-nx-selected="primary"] {
-  anchor-name: --nx-selected;
+.nx-selection-halos {
+  position: absolute;
+  inset: 0;
+  /* Under the drop indicator and the toolbar, beside the spacing bands. */
+  z-index: 1;
+  pointer-events: none;
 }
 
 /*
- * The halo: a 2px white band just inside the ring, on the primary selection.
+ * One halo: a white band directly inside the ring, which covers the outer 2px
+ * of the element, so ring and halo keep the inset geometry — never clipped at
+ * the page edge, never merging with a neighbour's.
  *
- * Positioned on the selected block through CSS anchor positioning, so the
- * canvas draws it without measuring and the block is left exactly as the page
- * styles it — its own shadow, background and pseudo-elements untouched. The
- * margin keeps the band inside the 2px the ring covers, so ring and halo keep
- * the inset geometry: never clipped at the page edge, never merging with a
- * neighbour's.
+ * On the element's own measured rectangle, and drawn with the RING as well:
+ * the same outline the selected element carries, and the white band as an
+ * inset shadow beneath it — on this editor-owned element, never the page's.
+ * One element drawing both is what keeps them adjacent at every zoom: a band
+ * placed on its own lands a fractional distance in and snaps apart from the
+ * ring, leaving a sliver of the page between them, and a layer drawn over the
+ * page covers the element's own ring wherever the two overlap. The element's
+ * ring is still there beneath, for every place this layer is not drawn.
  *
- * Above the block's content rather than beneath it, which a separate layer
- * has to be; the band is the 2px beside the ring, which the ring's own width
- * already sits over. Where anchor positioning is unsupported the halo is not
- * drawn and the blue ring stands alone.
+ * Above the block's content rather than beneath it, which a separate layer has
+ * to be; the band is the 2px beside the ring, which the ring's own width
+ * already sits over.
  */
 .nx-selection-halo {
-  display: none;
+  position: absolute;
+  outline: 1px solid var(--nx-builder-select);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
 }
 
-@supports (anchor-name: --nx-selected) {
-  .nx-selection-halo {
-    display: block;
-    position: absolute;
-    position-anchor: --nx-selected;
-    top: anchor(top);
-    right: anchor(right);
-    bottom: anchor(bottom);
-    left: anchor(left);
-    margin: 2px;
-    border: 2px solid var(--nx-builder-halo);
-    /* Under the drop indicator and the toolbar, beside the spacing bands. */
-    z-index: 1;
-    /* Never a pointer target: it sits over the block it marks. */
-    pointer-events: none;
-  }
+/* The primary's ring is the full 2px, and its halo matches it. */
+.nx-selection-halo[data-primary] {
+  outline-width: 2px;
+  box-shadow: inset 0 0 0 4px var(--nx-builder-halo);
+}
+
+/* A component placement's ring is the component colour, as on the element. */
+.nx-selection-halo[data-component] {
+  outline-color: var(--nx-builder-component);
 }
 
 /*
