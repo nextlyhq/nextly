@@ -49,6 +49,7 @@ afterEach(async () => {
   current = undefined;
   seen.length = 0;
   judgedIds.length = 0;
+  judgedLocales.length = 0;
 });
 
 /** What the probe validator read through its write, in the order it read. */
@@ -56,6 +57,9 @@ const seen: PluginStoredValue[] = [];
 
 /** The entry id each probe validation was told it is judging. */
 const judgedIds: (string | undefined)[] = [];
+
+/** The language each probe validation was told its write is in. */
+const judgedLocales: (string | undefined)[] = [];
 
 /** A json-backed type whose validator reads the entry a value names. */
 const probe = {
@@ -67,6 +71,7 @@ const probe = {
     args: {
       write?: {
         id?: string;
+        locale?: string;
         readStored(target: {
           collection: string;
           id: string;
@@ -77,6 +82,7 @@ const probe = {
     }
   ) {
     judgedIds.push(args.write?.id);
+    judgedLocales.push(args.write?.locale);
     const peek = (value as { peek?: unknown } | null)?.peek;
     if (typeof peek === "string" && args.write !== undefined) {
       seen.push(
@@ -584,6 +590,25 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
           form: "published",
         })
       ).toEqual({ kind: "value", value: { said: "row" } });
+    });
+
+    it("tells a Single's validators the language the save is in", async () => {
+      const t = await bootLanguages(dialect);
+      await t.nextly.updateSingle({
+        slug: "site",
+        locale: "de",
+        data: { body: { said: "de" } },
+        overrideAccess: true,
+      } as never);
+      await t.nextly.updateSingle({
+        slug: "site",
+        locale: "en",
+        data: { body: { said: "en" } },
+        overrideAccess: true,
+      } as never);
+
+      // The default language is said as none.
+      expect(judgedLocales).toEqual(["de", undefined]);
     });
 
     it("reads a Single's stored value", async () => {

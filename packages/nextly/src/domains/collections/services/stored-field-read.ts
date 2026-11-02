@@ -362,11 +362,12 @@ async function languageValue(
       ? await resolveCompanionSchemaReadiness(adapter, companion)
       : cachedCompanionReadiness(adapter, companion.companionTableName);
   if (readiness !== "ready") {
-    throw refused(
-      target,
-      "",
-      "is kept per language, and that store is not ready"
-    );
+    throw NextlyError.serviceUnavailable({
+      // Not a refusal of the caller's request: the language store is still
+      // being set up, so a reader can tell "cannot read yet" from an error.
+      publicMessage: "This language's content can't be read yet.",
+      logMessage: `"${"single" in target ? target.single : target.collection}.${target.field}" is kept per language, and that store is not ready.`,
+    });
   }
   // Only the field asked for, of the one row for this entry and language: a
   // translation row can hold every other large value of the page, and a save

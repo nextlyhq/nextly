@@ -2101,7 +2101,9 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames,
         enforceLocalizedRequired,
         entryId: String(documentId),
-        writeLocale,
+        // The language the save is in, also where only embedded field-group
+        // content is kept per language; the default comes back out as none.
+        writeLocale: snapshotLocale,
         user: options.user,
         reader: {
           user: options.user,

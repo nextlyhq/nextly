@@ -570,6 +570,53 @@ describe("the write a plugin field type is validated for", () => {
     return { write, scopedTo };
   }
 
+  it("reads in the write's language when a validator's read names none", async () => {
+    // A cycle or a lock held only in the language being saved is judged in
+    // that language, whichever validator asks.
+    const reached: unknown[] = [];
+    registerDocument(async (_value, args) => {
+      await args.write?.readStored({
+        collection: "components",
+        id: "c1",
+        field: "content",
+        form: "published",
+      });
+      await args.write?.readStored({
+        collection: "components",
+        id: "c1",
+        field: "content",
+        form: "published",
+        locale: "fr",
+      });
+      return true;
+    });
+    const { write } = writeContext();
+    const judged = (locale: string) =>
+      validateEntryData(
+        { body: { nodes: [] } },
+        [{ name: "body", type: "document" }],
+        {
+          mode: "update",
+          write: {
+            ...write,
+            defaultLocale: "en",
+            locale,
+            readStored: async (_type, target) => {
+              reached.push((target as { locale?: string }).locale);
+              return { kind: "absent" };
+            },
+          },
+        }
+      );
+
+    await judged("de");
+    await judged("en");
+
+    // Unnamed reads the write's language; a named one is kept; the default
+    // language stays unnamed, which reads the default.
+    expect(reached).toEqual(["de", "fr", undefined, "fr"]);
+  });
+
   it("hands the validator the write's language, and none for the default language however it is spelled", async () => {
     const seen: (string | undefined)[] = [];
     registerDocument(async (_value, args) => {
