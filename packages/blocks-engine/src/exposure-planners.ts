@@ -47,6 +47,7 @@ import {
   MAX_ENVELOPE_ENTRIES,
   type DocumentLimits,
 } from "./limits";
+import { surveyDocument } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import type { RetiredExposures } from "./retired-exposures";
 import { RICH_TEXT_PROP_TYPE } from "./rich-text";
@@ -139,7 +140,9 @@ export type ExposureEditProblem =
   /** The label is blank. */
   | "invalid-label"
   /** The edited envelope would fail the definition's own save. */
-  | "invalid-exposure";
+  | "invalid-exposure"
+  /** The edited definition would be past the host's size, depth or node caps. */
+  | "exceeds-limits";
 
 /**
  * One variant a removal took a value from.
@@ -326,9 +329,7 @@ export function planRetargetExposure(
   const fresh = mintId(current.label, takenIds(exposed, sources.retired));
   exposed[at] = { id: fresh, label: current.label, ...pointed };
   draft.exposed = exposed;
-  const pruned = pruneVariants(draft, id);
-  const retired = { properties: [id], slots: [] };
-  return finished(draft, fresh, retired, pruned, limits);
+  return retiring(draft, fresh, id, limits);
 }
 
 /**
@@ -350,8 +351,7 @@ export function planRemoveExposure(
   if (at === undefined) return { problem: "unknown-exposure" };
 
   draft.exposed = (draft.exposed ?? []).filter((_, i) => i !== at);
-  const pruned = pruneVariants(draft, id);
-  return finished(draft, id, { properties: [id], slots: [] }, pruned, limits);
+  return retiring(draft, id, id, limits);
 }
 
 /**
@@ -634,6 +634,30 @@ function pruneVariants(
   return pruned;
 }
 
+/**
+ * Finish an edit that took the field `gone` off a row: retire it and prune it
+ * from the variants, unless another row still drives it.
+ *
+ * Stored or imported data can hold one id on two rows, which the envelope check
+ * refuses only while both remain. Retiring an id a remaining row still drives
+ * would strip every placement's value for that live field, so it is kept, with
+ * its variant values.
+ */
+function retiring(
+  draft: ComponentDocument,
+  id: string,
+  gone: string,
+  limits: DocumentLimits
+): ExposureEditResult {
+  const stillUsed = (draft.exposed ?? []).some(
+    entry => isPlainRecord(entry) && entry.id === gone
+  );
+  if (stillUsed) return finished(draft, id, NOTHING_RETIRED, [], limits);
+  const pruned = pruneVariants(draft, gone);
+  const retired = { properties: [gone], slots: [] };
+  return finished(draft, id, retired, pruned, limits);
+}
+
 /** The edit, or the envelope errors that would refuse its save. */
 function finished(
   document: ComponentDocument,
@@ -642,6 +666,12 @@ function finished(
   prunedVariants: PrunedVariant[],
   limits: DocumentLimits
 ): ExposureEditResult {
+  // Whether it still fits, through the survey the save's own gate uses: an
+  // exposure or a longer label only ever makes the definition bigger.
+  const survey = surveyDocument(document, limits);
+  if (survey.tooLarge || survey.tooDeep || survey.tooManyNodes) {
+    return { problem: "exceeds-limits" };
+  }
   // Under the host's limits, as its save judges the definition.
   const issues = componentEnvelopeIssues(document, limits);
   if (issues.some(isErrorIssue)) {

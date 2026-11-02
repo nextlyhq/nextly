@@ -588,6 +588,73 @@ describe("a malformed stored exposure is refused, not thrown on", () => {
   });
 });
 
+describe("an id two stored rows share", () => {
+  // Imported data can carry a duplicate id. Removing one row must not retire
+  // an id the other still drives, or every placement value under it is lost.
+  const doubled = () =>
+    component({
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "c1",
+          propPath: "title",
+          type: "text",
+        },
+        {
+          id: "title",
+          label: "Blurb",
+          nodeId: "c1",
+          propPath: "blurb",
+          type: "text",
+        },
+        {
+          id: "link",
+          label: "Link",
+          nodeId: "c1",
+          propPath: "href",
+          type: "link",
+        },
+      ],
+    });
+
+  it("is not retired, nor pruned, by removing one of the rows", () => {
+    const edit = edited(planRemoveExposure(doubled(), "title"));
+
+    expect(edit.retired.properties).toEqual([]);
+    expect(edit.document.variants?.bold.overrides.title).toBe("Hi");
+  });
+
+  it("is not retired by re-typing one of the rows", () => {
+    const edit = edited(
+      planRetargetExposure(
+        doubled(),
+        "title",
+        { nodeId: "c1", propPath: "body" },
+        sources()
+      )
+    );
+
+    expect(edit.retired.properties).toEqual([]);
+    expect(edit.document.variants?.bold.overrides.title).toBe("Hi");
+  });
+});
+
+describe("an edit that would not fit", () => {
+  it("is refused when it takes the definition past the byte cap", () => {
+    const doc = component();
+    const size = JSON.stringify(doc).length;
+
+    expect(
+      planRenameExposure(doc, "title", "x".repeat(200), {
+        maxDepth: 64,
+        maxNodes: 5_000,
+        maxBytes: size + 50,
+      })
+    ).toEqual({ problem: "exceeds-limits" });
+  });
+});
+
 describe("a planner refuses what is not a component", () => {
   it("refuses a pattern", () => {
     const pattern = { ...component(), kind: "pattern" } as never;
