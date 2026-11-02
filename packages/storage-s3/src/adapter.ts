@@ -132,8 +132,8 @@ export class S3StorageAdapter implements IStorageAdapter {
    * config file is evaluated, so a throw would stop every command —
    * including the schema-only ones that never touch storage. Both the checks
    * and the client construction move to the first storage operation
-   * ({@link ensureClient}), which refuses with the same messages a missing
-   * bucket or region has always produced.
+   * ({@link ensureClient} and {@link ensureConfigured}), which refuse with
+   * the same messages a missing bucket or region has always produced.
    *
    * @param config - S3 storage configuration
    */
@@ -156,6 +156,21 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * Validate that bucket and region are present.
+   *
+   * @throws Error if bucket is not provided
+   * @throws Error if region is not provided
+   */
+  private ensureConfigured(): void {
+    if (!this.config.bucket) {
+      throw new Error("@nextly/storage-s3: bucket is required");
+    }
+    if (!this.config.region) {
+      throw new Error("@nextly/storage-s3: region is required");
+    }
+  }
+
+  /**
    * Validate the stored configuration and build the SDK client, at the
    * first use that needs them.
    *
@@ -171,12 +186,7 @@ export class S3StorageAdapter implements IStorageAdapter {
   private ensureClient(): S3Client {
     if (this.client) return this.client;
 
-    if (!this.config.bucket) {
-      throw new Error("@nextly/storage-s3: bucket is required");
-    }
-    if (!this.config.region) {
-      throw new Error("@nextly/storage-s3: region is required");
-    }
+    this.ensureConfigured();
 
     // Build credentials
     const credentials = this.buildCredentials();
@@ -411,8 +421,10 @@ export class S3StorageAdapter implements IStorageAdapter {
 
   getPublicUrl(filePath: string): string {
     // A URL is derived from the bucket and region, so a missing one is
-    // refused here exactly as an upload or read would refuse.
-    this.ensureClient();
+    // refused here exactly as an upload or read would refuse. A check-only
+    // helper is used so forming a URL does not needlessly build the full
+    // S3 client.
+    this.ensureConfigured();
 
     // Use custom CDN/public URL if configured
     if (this.resolvedConfig.publicUrl) {

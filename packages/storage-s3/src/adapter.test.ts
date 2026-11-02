@@ -418,4 +418,24 @@ describe("S3StorageAdapter — configuration is checked at first use", () => {
     );
     expect((outcome as Error).message).toContain("bucket is required");
   });
+
+  it("refuses getPublicUrl when configuration is absent", () => {
+    const adapter = new S3StorageAdapter({
+      bucket: process.env.S3_BUCKET!,
+      region: process.env.AWS_REGION!,
+      collections: { media: true },
+    });
+    expect(() => adapter.getPublicUrl("f.woff2")).toThrow("bucket is required");
+  });
+
+  it("forms a public URL without instantiating the S3 client", () => {
+    const adapter = new S3StorageAdapter({
+      bucket: "test-bucket",
+      region: "us-east-1",
+      collections: { media: true },
+    });
+    const url = adapter.getPublicUrl("f.woff2");
+    expect(url).toBe("https://test-bucket.s3.us-east-1.amazonaws.com/f.woff2");
+    expect((adapter as unknown as { client: unknown }).client).toBeNull();
+  });
 });
