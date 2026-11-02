@@ -1802,3 +1802,52 @@ describe("a file naming one variable twice", () => {
     expect(plan.skipped.join(" ")).toMatch(/color\.ink/);
   });
 });
+
+describe("what an import applies", () => {
+  const site: SiteTokenSet = {
+    tokens: [
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      { name: "color.paper", kind: "color", values: { light: "#ffffff" } },
+    ],
+  };
+
+  it("applies and counts only what changes the site", () => {
+    const file = exportDtcg({
+      tokens: [
+        site.tokens[0]!,
+        { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+      ],
+    }).text;
+    const plan = planImport([{ name: "f.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, site, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.imported).toBe(1);
+  });
+
+  it("changes nothing, and says so, when nothing differs or every conflict is kept", () => {
+    const same = exportDtcg(site).text;
+    const plan = planImport([{ name: "same.tokens.json", text: same }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, site, new Map());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/nothing was changed/);
+
+    const differs = exportDtcg({
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#222222" } },
+      ],
+    }).text;
+    const conflict = planImport(
+      [{ name: "d.tokens.json", text: differs }],
+      site
+    );
+    if (!conflict.ok) throw new Error(conflict.error);
+    const kept = applyImport(
+      conflict,
+      site,
+      new Map([[conflict.conflicts[0]!.identity, "keep"]])
+    );
+    expect(kept.ok).toBe(false);
+  });
+});

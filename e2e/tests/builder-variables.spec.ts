@@ -3,6 +3,8 @@
  * a dark value, it is in the panel after a reload, and the compiled sheet
  * applies its dark value when the device prefers dark — and only then.
  */
+import { readFileSync } from "node:fs";
+
 import { expect, type Page } from "@playwright/test";
 
 import { openEditorWith } from "./canvas/editor-driver";
@@ -241,4 +243,32 @@ test("the nearest marker decides which mode a scoped sheet applies", async ({
   expect(await modeOf("dark-nearer")).toEqual({ dark: true, light: false });
   expect(await modeOf("light-nearer")).toEqual({ dark: false, light: true });
   expect(await modeOf("self-dark")).toEqual({ dark: true, light: false });
+});
+
+/** The editor's own stylesheet, where the canvas scheme rules live. */
+const BUILDER_CHROME = readFileSync(
+  new URL(
+    "../../packages/builder/src/styles/builder-chrome.css",
+    import.meta.url
+  ),
+  "utf8"
+);
+
+test("the canvas scheme follows the nearest theme marker", async ({ page }) => {
+  // On a light device, so only the markers decide.
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.setContent(`
+    <div data-nx-theme="light"><div data-nx-theme="dark"><div id="dark-nearer" class="nx-canvas" data-nx-site-dark-ground></div></div></div>
+    <div data-nx-theme="dark"><div data-nx-theme="light"><div id="light-nearer" class="nx-canvas" data-nx-site-dark-ground></div></div></div>
+  `);
+  await page.addStyleTag({ content: BUILDER_CHROME });
+  const schemeOf = (id: string) =>
+    page.evaluate(
+      target =>
+        getComputedStyle(document.getElementById(target) as Element)
+          .colorScheme,
+      id
+    );
+  expect(await schemeOf("dark-nearer")).toBe("dark");
+  expect(await schemeOf("light-nearer")).toBe("light");
 });

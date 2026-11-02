@@ -142,6 +142,17 @@ describe("the For Figma export, one file per mode", () => {
     expect(made.issues.map(i => i.message).join(" ")).toMatch(/font\.brand/);
   });
 
+  it("leaves out a variable whose name cannot be written, as the DTCG export does", () => {
+    const made = tokensToFigma(
+      {
+        tokens: [{ name: "bad}", kind: "color", values: { light: "#000000" } }],
+      },
+      "light"
+    );
+    expect(made.document).toEqual({});
+    expect(made.issues.map(i => i.message).join(" ")).toMatch(/bad\}/);
+  });
+
   it("leaves out what Figma cannot hold, from both files, and says so", () => {
     const light = tokensToFigma(SET, "light");
     expect(paths(light.document)).not.toContain("shadow.card");
@@ -244,6 +255,17 @@ describe("an import of Figma's own export", () => {
     });
     expect(issues.map(i => i.message).join(" ")).toMatch(
       /Contrast\.tokens\.json.*light or dark/
+    );
+  });
+
+  it("reports a file whose name says both light and dark, rather than dropping the other", () => {
+    const { tokens, issues } = modeFilesToTokens([
+      { name: "light-dark.tokens.json", document: read("Light") },
+      { name: "contrast.tokens.json", document: read("Dark") },
+    ]);
+    expect(tokens).toEqual([]);
+    expect(issues.map(i => i.message).join(" ")).toMatch(
+      /light-dark\.tokens\.json.*both/
     );
   });
 
