@@ -35,6 +35,7 @@ import {
   cachedFind,
   createContentRoute,
   createPublicContentRoute,
+  createPublicReader,
   createPublicSingleRoute,
   createSingleRoute,
   entryIdTag,
@@ -68,10 +69,12 @@ import {
   EMPTY_DEFINITIONS,
   type ComponentSource,
 } from "./component-source";
-import { createStandaloneContext } from "./context";
+import { createDefaultDataProvider, createStandaloneContext } from "./context";
 import type {
   BlockHostPolicy,
   BlocksDataProvider,
+  BlocksDataProviderFactory,
+  BlocksPublicReader,
   PageContext,
   QueryBudget,
   ResolvedMedia,
@@ -287,8 +290,23 @@ export interface BlocksPageConfig
   resolveMedia?: (id: string) => Promise<ResolvedMedia | null>;
   /** Resolve an entry reference to a path, instead of reading its slug. */
   resolveEntryPath?: (collection: string, id: string) => Promise<string | null>;
-  /** Data access for dynamic blocks. */
-  data?: BlocksDataProvider;
+  /**
+   * How a page's lists read, as a function from the route's public reader to
+   * a data provider.
+   *
+   * The reader is bound per render to the route's language and reads as an
+   * anonymous visitor: published entries and public fields only, whatever the
+   * provider asks. Absent, lists read through it directly
+   * (`createDefaultDataProvider`). A provider object is refused when the route
+   * is built, since one holding its own reader would decide who sees what by
+   * itself.
+   *
+   * @example
+   * ```ts
+   * data: reader => createDefaultDataProvider(reader, { collections: ["posts"] }),
+   * ```
+   */
+  data?: BlocksDataProviderFactory;
   /**
    * How many reads one page render may perform, shared by the whole page.
    *
@@ -392,6 +410,48 @@ function emitPath(slug: string): string | null {
  */
 function readerFor(config: BlocksPageConfig): NextlyContentReader {
   return config.nextly ?? requireNextly();
+}
+
+/**
+ * The public reader a page's lists read through, for one render.
+ *
+ * Each read is cached like the page around it, keyed by the route's cache
+ * scope and the whole read, and tagged with its collection so a write there
+ * refreshes the page. The read is the same for every visitor (anonymous,
+ * published), so one entry serves them all. A change to an access rule is
+ * not a write and refreshes nothing until the entry revalidates.
+ */
+function publicReaderFor(
+  config: BlocksPageConfig,
+  locale: string | undefined
+): BlocksPublicReader {
+  const nextly = readerFor(config);
+  return createPublicReader(
+    {
+      find: async args =>
+        await cachedFind(async () => await nextly.find(args), {
+          tags: nextlyTags(args.collection),
+          keyParts: [
+            "nextly-public-list",
+            config.cacheScope ?? "",
+            JSON.stringify(args),
+          ],
+          revalidate: await releaseBoundedRevalidate(undefined),
+        }),
+    },
+    locale === undefined ? {} : { locale }
+  );
+}
+
+/** The route's data provider for one render: the caller's, or the default. */
+function dataFor(
+  factory: BlocksDataProviderFactory | undefined,
+  config: BlocksPageConfig,
+  locale: string | undefined
+): BlocksDataProvider {
+  return (factory ?? createDefaultDataProvider)(
+    publicReaderFor(config, locale)
+  );
 }
 
 /** An empty page, for a field that exists and holds no document yet. */
@@ -1402,6 +1462,13 @@ function blocksRouteConfig(
     resolveEntryPath: _resolveEntryPath,
     ...routeConfig
   } = config;
+  if (data !== undefined && typeof data !== "function") {
+    throw new Error(
+      "createBlocksPage: `data` takes a function from the route's public reader " +
+        "to a provider, such as `reader => createDefaultDataProvider(reader)`, " +
+        "not a provider: a page's lists read only through that reader."
+    );
+  }
 
   return {
     ...routeConfig,
@@ -1501,7 +1568,7 @@ function blocksRouteConfig(
         // localized pages that need it.
         locale: context.locale,
         isWorkingDraft: entry[WORKING_DRAFT_KEY] === true,
-        data,
+        data: dataFor(data, config, context.locale),
         // Fresh for THIS render. `core/collection-loop` claims from it before
         // each read, and an absent budget reads as unlimited — the loop's own
         // check is `ctx.queries?.take() === false` — so a routed page without

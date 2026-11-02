@@ -404,6 +404,9 @@ describe("the root entry", () => {
       "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
       "createBlockResolver",
+      // The provider a route reads its lists through when given none, public
+      // so a route's own `data` can narrow it rather than rewrite it.
+      "createDefaultDataProvider",
       "createStandaloneContext",
       "defineBlock",
       "emptyDataProvider",
