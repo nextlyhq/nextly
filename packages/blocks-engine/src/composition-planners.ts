@@ -2781,6 +2781,39 @@ export function planDetach(
   nesting: NestingSource,
   limits: DocumentLimits = DEFAULT_LIMITS
 ): PlanResult<never> {
+  const detached = detachedPage(
+    document,
+    instanceId,
+    definitions,
+    nesting,
+    limits
+  );
+  return detached.problem === undefined ? detached.plan : detached;
+}
+
+/** A detach plan, with the page applying it produces. */
+export interface DetachedPage {
+  readonly plan: CompositionPlan<never>;
+  /** The page with the plan's ops applied, under the limits it was judged by. */
+  readonly document: BlockDocument;
+  readonly problem?: undefined;
+}
+
+/**
+ * {@link planDetach}, keeping the page its limit check already applied.
+ *
+ * The check applies the whole op group to learn whether the page stays within
+ * its limits, and that apply measures the page once per op. A caller that
+ * applies the plan next takes this page instead of paying for the same apply
+ * a second time; it is the document `applyOps` returns for the plan's ops.
+ */
+export function detachedPage(
+  document: BlockDocument,
+  instanceId: string,
+  definitions: DefinitionsById,
+  nesting: NestingSource,
+  limits: DocumentLimits
+): DetachedPage | PlanRefusal {
   // Everything `applyOp` asks before it looks at an op, asked exactly as the
   // other planners ask it: the envelope, then the whole forest, because a
   // malformed node the author never touched refuses the first op of a group.
@@ -2848,13 +2881,14 @@ export function planDetach(
   // The byte cap, asked of the apply because the apply is the only thing that
   // can answer it: a definition larger than the instance it replaces can push a
   // page over a ceiling it was inside. Run on a copy, since `applyOps` is pure.
+  let detached: BlockDocument;
   try {
-    applyOps(document, ops, limits);
+    detached = applyOps(document, ops, limits).document;
   } catch {
     return { problem: "exceeds-limits" };
   }
 
-  return { pageOps: ops, warnings: [] };
+  return { plan: { pageOps: ops, warnings: [] }, document: detached };
 }
 
 /**

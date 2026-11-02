@@ -17,7 +17,7 @@
  *
  * @module component-inline
  */
-import { planDetach, type PlanProblem } from "./composition-planners";
+import { detachedPage, type PlanProblem } from "./composition-planners";
 import { isComponentDocument, type BlockDocument } from "./document";
 import {
   DEFAULT_LIMITS,
@@ -26,7 +26,7 @@ import {
 } from "./limits";
 import { lockRefusal } from "./lock-breaks";
 import type { NestingSource } from "./nesting";
-import { applyOps } from "./ops";
+import { documentRefusal, forestRefusal } from "./ops";
 import { isPlainRecord } from "./plain-record";
 import {
   componentPlacementsIn,
@@ -119,6 +119,9 @@ export type ReferenceAnswer = "yes" | "no" | "unknown";
  * places, not only this one: a placement's override is read against its own
  * definition to know whether it installs this component.
  *
+ * A document the op layer would not edit, by its envelope or its forest, is
+ * refused as `"unusable-document"` before anything is read from it.
+ *
  * `blocks` gives each block's slots, for the locks they declare. A copy
  * standing in a locked slot changes what that slot holds once converted, and
  * the detach planner, which judges one copy at a time, does not read slot
@@ -144,6 +147,9 @@ export function inlineComponentInstances(
   blocks: SlotDefaultSource,
   limits: DocumentLimits = DEFAULT_LIMITS
 ): InlineResult {
+  // A document the op layer would not edit cannot be converted, and one it
+  // would not read may hold copies the walk below cannot see.
+  if (!editable(document)) return { problem: "unusable-document" };
   const inlined = everyCopyInlined(
     document,
     componentId,
@@ -175,7 +181,8 @@ export function inlineComponentInstances(
 
 /**
  * Whether `document` still references `componentId`, through a stored copy or
- * through one of its own variants.
+ * through one of its own variants. A value the op layer would not edit, by its
+ * envelope or its forest, answers `"unknown"`.
  *
  * @param document - the host as stored, unvalidated
  * @param componentId - the component asked about
@@ -188,9 +195,10 @@ export function stillReferences(
   componentId: string,
   maxNodes: number = DEFAULT_LIMITS.maxNodes
 ): ReferenceAnswer {
-  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
-    return "unknown";
-  }
+  // The whole envelope, as the op layer judges it: a value whose format or
+  // kind this version does not know may reference the component in a way
+  // the survey below cannot read, so it is not one to answer "no" for.
+  if (!editable(document)) return "unknown";
   const reach = componentReferencesIn(document, maxNodes);
   if (!reach.complete) return "unknown";
   return reach.ids.includes(componentId) ? "yes" : "no";
@@ -234,16 +242,13 @@ function oneCopyInlined(
   nesting: NestingSource,
   limits: DocumentLimits
 ): InlineResult {
-  const plan = planDetach(document, copyId, definitions, nesting, limits);
-  if (plan.problem !== undefined) {
-    return { problem: plan.problem, nodeId: copyId };
+  // The page the planner already applied for its limit check, rather than a
+  // second apply of the same ops, which measures the whole page once per op.
+  const detached = detachedPage(document, copyId, definitions, nesting, limits);
+  if (detached.problem !== undefined) {
+    return { problem: detached.problem, nodeId: copyId };
   }
-  let after: BlockDocument;
-  try {
-    after = applyOps(document, plan.pageOps, limits).document;
-  } catch {
-    return { problem: "unusable-document", nodeId: copyId };
-  }
+  const after = detached.document;
   const lost = lostExposure(document, after);
   if (lost !== undefined) return { problem: lost, nodeId: copyId };
   return { document: after, converted: 1 };
@@ -375,6 +380,16 @@ function nodeIds(document: BlockDocument): Set<string> {
     ids.add(node.id);
   });
   return ids;
+}
+
+/**
+ * Whether the op layer would edit `document`: its envelope, and every entry of
+ * its forest. The same two checks the detach planner asks first.
+ */
+function editable(document: unknown): boolean {
+  if (documentRefusal(document) !== undefined) return false;
+  const nodes = isPlainRecord(document) ? document.nodes : undefined;
+  return forestRefusal(nodes) === undefined;
 }
 
 function nodeIdOf(node: unknown): string | undefined {

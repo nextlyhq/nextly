@@ -5,7 +5,7 @@
  * caller converts many hosts and must be able to refuse the whole delete
  * before writing any of them.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inlineComponentInstances, stillReferences } from "./component-inline";
 import { planDetach } from "./composition-planners";
@@ -21,6 +21,23 @@ import {
 } from "./registry";
 import type { DefinitionsById } from "./resolve-instances";
 import { walkNodes } from "./tree";
+
+/**
+ * Every `applyOps` call made in this file, counted. Each apply measures the
+ * whole page once per op, so the number of applies is what a conversion
+ * costs on a large page. The calls go through unchanged.
+ */
+const applies = vi.hoisted(() => ({ count: 0 }));
+vi.mock("./ops", async importOriginal => {
+  const actual = await importOriginal<typeof import("./ops")>();
+  return {
+    ...actual,
+    applyOps: (...args: Parameters<typeof actual.applyOps>) => {
+      applies.count += 1;
+      return actual.applyOps(...args);
+    },
+  };
+});
 
 const node = (id: string, extra: Partial<BlockNode> = {}): BlockNode => ({
   id,
@@ -550,6 +567,88 @@ describe("a copy standing in a locked slot", () => {
     );
 
     expect(result.converted).toBe(1);
+  });
+});
+
+/**
+ * Values the op layer will not edit, each holding no copy of the component:
+ * a reader that let one through would find nothing and answer as though the
+ * document were known not to use it.
+ */
+const MALFORMED: readonly (readonly [string, () => unknown])[] = [
+  ["no format version", () => ({ kind: "page", nodes: [node("n1")] })],
+  [
+    "a format this version does not know",
+    () => ({ formatVersion: 2, kind: "page", nodes: [node("n1")] }),
+  ],
+  ["no kind", () => ({ formatVersion: 1, nodes: [node("n1")] })],
+  [
+    "a kind this version does not know",
+    () => ({ formatVersion: 1, kind: "widget", nodes: [node("n1")] }),
+  ],
+  [
+    "an envelope value JSON cannot write",
+    () => ({ ...page([node("n1")]), settings: { size: 1n } }),
+  ],
+  [
+    "a computed envelope field",
+    () =>
+      Object.defineProperty({ formatVersion: 1, nodes: [node("n1")] }, "kind", {
+        enumerable: true,
+        get: () => "page",
+      }),
+  ],
+  ["a forest entry that is not a node", () => page([null as never])],
+];
+
+describe("a document the op layer would not edit", () => {
+  it.each(MALFORMED)("is refused with %s", (_name, make) => {
+    const result = inlineComponentInstances(
+      make() as BlockDocument,
+      "card",
+      defs({ card }),
+      anyParent,
+      noBlocks
+    );
+
+    expect(result).toEqual({ problem: "unusable-document" });
+  });
+
+  it.each(MALFORMED)("answers unknown with %s", (_name, make) => {
+    expect(stillReferences(make(), "card")).toBe("unknown");
+  });
+
+  it("answers no for the same document well formed", () => {
+    // The control: what each case above breaks is the only thing wrong.
+    const doc = page([node("n1")]);
+
+    expect(stillReferences(doc, "card")).toBe("no");
+    expect(inlineCard(doc, defs({ card })).result).toEqual({
+      document: doc,
+      converted: 0,
+    });
+  });
+});
+
+describe("what converting many copies costs", () => {
+  it("applies the ops no more often than detaching each copy does", () => {
+    // Each apply measures the whole page, so an extra apply per copy is an
+    // extra pass over the page per copy. The planner applies its ops to judge
+    // the limits, and the page that produces is the one the conversion keeps.
+    const copies = 6;
+    const doc = page(
+      Array.from({ length: copies }, (_, i) => instance(`i${i}`, "card"))
+    );
+    applies.count = 0;
+    planDetach(doc, "i0", defs({ card }), anyParent);
+    const perCopy = applies.count;
+
+    applies.count = 0;
+    const { result } = inlineCard(doc, defs({ card }));
+
+    expect(perCopy).toBeGreaterThan(0);
+    expect(result.converted).toBe(copies);
+    expect(applies.count).toBe(perCopy * copies);
   });
 });
 
