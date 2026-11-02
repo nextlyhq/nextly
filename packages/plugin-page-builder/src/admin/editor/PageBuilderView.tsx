@@ -27,7 +27,7 @@ import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 
 type BoundProps = Pick<DocumentViewProps, "control" | "exit"> & {
   field: NonNullable<DocumentViewProps["field"]>;
-  /** The field's name in the document form, which is what binds to it. */
+  /** The field's path in the document form, which is what binds to it. */
   name: string;
 };
 
@@ -114,6 +114,7 @@ export function PageBuilderView({
   control,
   exit,
   field,
+  fieldPath,
   readOnly,
 }: DocumentViewProps): React.JSX.Element | null {
   // The admin names the field for a view offered on a field type, and asks the
@@ -122,7 +123,12 @@ export function PageBuilderView({
   // only arranges the form, and the admin reads through it to the fields
   // inside — but the declaration type allows a nameless field, so the name is
   // settled here once rather than assumed below.
-  const name = field?.name;
+  //
+  // Bound by the field's path in the form (`hero.body` inside a named group),
+  // which the declaration's own name does not carry: bound by `body`, the
+  // editor would read and write a top-level field of that name, or none. An
+  // admin that passes no path names a top-level field, whose path is its name.
+  const name = field === undefined ? undefined : (fieldPath ?? field.name);
   const surface = useSettledSurface(readOnly);
   if (field === undefined || name === undefined || surface === null) {
     return null;

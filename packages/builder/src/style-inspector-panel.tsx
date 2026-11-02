@@ -78,6 +78,7 @@ import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
+import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import {
   designIsWritable,
@@ -1935,8 +1936,12 @@ const COMMITS_FOR = "data-nx-commits-for";
  */
 type PickerClose = "committed" | "superseded";
 
-/** The attributes marking a control as writing `fieldId`'s value itself. */
-function commitsFor(fieldId: string): Record<string, string> {
+/**
+ * The attributes marking a control as writing `fieldId`'s value itself.
+ *
+ * Exported with {@link supersedes} so the pair can be checked together.
+ */
+export function commitsFor(fieldId: string): Record<string, string> {
   return { [COMMITS_FOR]: fieldId };
 }
 
@@ -1946,9 +1951,15 @@ function commitsFor(fieldId: string): Record<string, string> {
  * Asked of the ancestor chain rather than of the target alone: the press lands
  * on whatever the control renders inside its button, and a control that puts a
  * span or an icon in there would otherwise stop making the promise.
+ *
+ * The target is classified by `dom-kind` rather than by `instanceof Element`,
+ * which answers only for elements this window built.
  */
-function supersedes(target: EventTarget | null, fieldId: string): boolean {
-  if (!(target instanceof Element)) return false;
+export function supersedes(
+  target: EventTarget | null,
+  fieldId: string
+): boolean {
+  if (!isElement(target)) return false;
   return (
     target.closest(`[${COMMITS_FOR}]`)?.getAttribute(COMMITS_FOR) === fieldId
   );

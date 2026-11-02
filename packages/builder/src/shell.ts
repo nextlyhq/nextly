@@ -23,6 +23,11 @@
 
 export { BuilderShell } from "./builder-shell";
 export type { BuilderShellProps } from "./builder-shell";
+/**
+ * The shell's preferences kept per signed-in user, for a host that knows who
+ * is signed in: pass it as `store`. @experimental
+ */
+export { userPreferenceStore } from "./shell-state";
 
 /**
  * The compiled cascade behind the page, for chrome that names where a value
@@ -353,6 +358,12 @@ export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
  */
 export { useInlineEditing } from "./use-inline-editing";
 export type { UseInlineEditingResult } from "./use-inline-editing";
+/**
+ * What a host says when a double-click lands on text a component does not
+ * expose: the hook selects the placement and hands the host its id, and the
+ * host reads the placement with `inspectInstance` against its own library.
+ */
+export { inspectInstance, partOfComponentSentence } from "./instance-inspector";
 /**
  * What finishing an inline edit did.
  *

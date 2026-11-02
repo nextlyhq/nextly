@@ -215,12 +215,12 @@ import {
 import {
   assertReadOffset,
   isPlainObject,
-  orderBySortKeys,
   parseSortKeys,
   refuseFilterProblems,
   unknownFieldProblem,
 } from "../query/filter-shape";
 import { groupKeyDeclarationProblem } from "../query/group-key-declaration";
+import { orderBySortKeys } from "../query/sort-order";
 import {
   timeseriesBoundOperand,
   timeseriesBucketExpression,

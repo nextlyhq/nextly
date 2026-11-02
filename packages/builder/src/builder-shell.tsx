@@ -1,21 +1,16 @@
 "use client";
 
 import {
-  Label,
   PortalProvider,
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
   ShortcutProvider,
-  Switch,
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
   useShortcuts,
 } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, PanelLeft, PanelRight } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -27,6 +22,7 @@ import {
 import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
+import { isHTMLElement } from "./dom-kind";
 import { EditorRail, panelLabel } from "./editor-rail";
 import { HelpDialog } from "./help-dialog";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
@@ -38,12 +34,14 @@ import {
   browserStore,
   fitsFullShell,
   isLeftPanel,
+  LEFT_PANELS,
   CANVAS_GUTTER,
   MIN_CANVAS_PANEL_WIDTH,
   MIN_SHELL_WIDTH,
   PANEL_BOUNDS,
   panelAfterRailClick,
   readPreferences,
+  SHELL_PREFERENCES_KEY,
   topologyKey,
   writePreferences,
   type LeftPanel,
@@ -79,8 +77,12 @@ import {
  * A shell of this size is unusable by keyboard without region navigation: an
  * author who tabs out of the inspector should not traverse every control in the
  * canvas to reach the rail. F6 is the platform convention for exactly this.
+ *
+ * The top bar comes first: it holds the editor's own controls (exit, undo and
+ * redo, the devices, the zoom, the side toggles), and it is where a reader's
+ * eye starts.
  */
-const REGIONS = ["rail", "panel", "canvas", "inspector"] as const;
+const REGIONS = ["header", "rail", "panel", "canvas", "inspector"] as const;
 type Region = (typeof REGIONS)[number];
 
 /**
@@ -224,8 +226,21 @@ export interface BuilderShellProps {
   children?: React.ReactNode;
   /** The inspector's contents. */
   inspector?: React.ReactNode;
-  /** Rendered into the top bar, between the page menu and the actions. */
+  /**
+   * The document's title, shown read-only at the start of the top bar and cut
+   * short with its full text in a tooltip when the bar is narrow.
+   */
+  title?: string;
+  /** The top bar's start column, after the exit button and the title. */
   topBar?: React.ReactNode;
+  /**
+   * The top bar's centre column, before the zoom: the device buttons. Centred
+   * between two equal side columns, so it stays in the middle of the editor
+   * whatever the sides hold.
+   */
+  topBarCenter?: React.ReactNode;
+  /** The top bar's end column, before the side-panel buttons: the actions. */
+  topBarEnd?: React.ReactNode;
   /** The ancestor breadcrumb, along the bottom bar. */
   breadcrumb?: React.ReactNode;
   /**
@@ -274,8 +289,6 @@ export interface BuilderShellProps {
   store?: PreferenceStore;
   className?: string;
 }
-
-const STORAGE_KEY = "nextly.builder.shell";
 
 /**
  * Whether the shell's own CONTAINER can carry the full layout, as it changes.
@@ -495,20 +508,27 @@ function sameZoom(a: CanvasZoom, b: CanvasZoom): boolean {
   return a.kind === "fixed" && b.kind === "fixed" ? a.scale === b.scale : true;
 }
 
+/**
+ * The preferences compared by value. Listed once, so a field added to
+ * `ShellPreferences` is compared by adding it here; one left out reads as
+ * "unchanged" and is dropped on load. `zoom` and `layouts` are compared below.
+ */
+const SCALAR_PREFERENCES = [
+  "leftPanel",
+  "leftPanelView",
+  "leftPanelHidden",
+  "inspectorHidden",
+  "leftPinned",
+  "showEmptyElements",
+  "editingBreakpoint",
+] as const satisfies readonly (keyof ShellPreferences)[];
+
 function shallowEqualPreferences(
   a: ShellPreferences,
   b: ShellPreferences
 ): boolean {
-  if (
-    a.leftPanel !== b.leftPanel ||
-    a.leftPanelView !== b.leftPanelView ||
-    a.leftPinned !== b.leftPinned ||
-    a.showEmptyElements !== b.showEmptyElements ||
-    a.editingBreakpoint !== b.editingBreakpoint ||
-    !sameZoom(a.zoom, b.zoom)
-  ) {
-    return false;
-  }
+  if (SCALAR_PREFERENCES.some(key => a[key] !== b[key])) return false;
+  if (!sameZoom(a.zoom, b.zoom)) return false;
   if (a.layouts === b.layouts) return true;
   const topologies = Object.keys(a.layouts);
   if (topologies.length !== Object.keys(b.layouts).length) return false;
@@ -640,12 +660,44 @@ function shellClaimsRegionCycling(
   root: HTMLElement | null,
   shellCount: number
 ): boolean {
+  // The host document's own reading, deliberately not the focused node inside
+  // a frame: focus inside a same-origin iframe reads here as the iframe, which
+  // the shell contains, while the node inside it belongs to another document
+  // that no element here contains.
   const active = document.activeElement;
   if (root?.contains(active)) return true;
   // `null` as well as `body`: a document that has never been clicked reports
   // no active element at all in some engines, which is the same "nowhere".
   const nowhere = active === null || active === document.body;
   return nowhere && shellCount === 1;
+}
+
+/**
+ * mod+backslash, hiding or showing both sides of the editor.
+ *
+ * Read through a ref so the binding runs the current toggle, which closes over
+ * this render's panels. Never while typing (a backslash is text there), and
+ * only for the shell the author is in, by the same check F6 uses.
+ */
+function useSidesShortcut(
+  toggle: React.RefObject<() => void>,
+  enabled: boolean,
+  claims: () => boolean
+): void {
+  const latest = React.useRef({ enabled, claims });
+  latest.current = { enabled, claims };
+  useShortcuts(
+    [
+      {
+        keys: "mod+\\",
+        description: "Hide or show the side panels",
+        whenTyping: false,
+        when: () => latest.current.enabled && latest.current.claims(),
+        run: () => toggle.current(),
+      },
+    ],
+    { name: "Builder side panels" }
+  );
 }
 
 /**
@@ -726,6 +778,7 @@ function focusNextRegion(map: Record<Region, HTMLElement | null> | null): void {
   const present = REGIONS.filter(region => map[region] !== null);
   if (present.length === 0) return;
 
+  // The host's own reading, for the reason `shellClaimsRegionCycling` gives.
   const active = document.activeElement;
   const currentIndex = present.findIndex(region =>
     map[region]?.contains(active)
@@ -735,6 +788,343 @@ function focusNextRegion(map: Record<Region, HTMLElement | null> | null): void {
   // recognises.
   const next = present[(currentIndex + 1) % present.length];
   if (next !== undefined) map[next]?.focus();
+}
+
+/**
+ * The panel set about to be rendered, named the same way a persisted layout
+ * is keyed. Derived from what is shown because that is what decides the set;
+ * the persisted key is derived from the layout's own ids, and the two meet at
+ * `topologyKey` rather than being two spellings of one arrangement.
+ */
+function panelTopology(
+  openPanel: LeftPanel | null,
+  inspectorShown: boolean
+): string {
+  return topologyKey([
+    ...(openPanel === null ? [] : ["panel"]),
+    "canvas",
+    ...(inspectorShown ? ["inspector"] : []),
+  ]);
+}
+
+/**
+ * Help's open state, and the control focus returns to when it closes.
+ *
+ * Help closes when the editor gives way to the narrow-window notice. The
+ * regions stay mounted there, hidden and inert, and a modal left open would
+ * keep its focus trap and its hold on the keyboard over a notice whose Exit
+ * button it would then keep out of reach. Closed rather than hidden, so
+ * widening the window again does not bring back a dialog nobody reopened.
+ */
+function useHelpDialog(active: boolean): {
+  helpOpen: boolean;
+  setHelpOpen: (open: boolean) => void;
+  helpOpener: React.RefObject<HTMLElement | null>;
+} {
+  const [helpOpen, setHelpOpen] = React.useState(false);
+  const helpOpener = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    if (!active) setHelpOpen(false);
+  }, [active]);
+  return { helpOpen, setHelpOpen, helpOpener };
+}
+
+/**
+ * The editor's top bar: three columns, the outer two equal, so the centre one
+ * (the devices and the zoom) stays in the middle of the editor whatever the
+ * sides hold. The shell draws its own controls here (exit, the zoom, the side
+ * toggles) around what the host puts in each column.
+ */
+function ShellTopBar({
+  headerRef,
+  onExit,
+  title,
+  topBar,
+  topBarCenter,
+  topBarEnd,
+  zoom,
+  appliedScale,
+  onZoomPick,
+  leftShown,
+  inspectorShown,
+  onLeft,
+  onInspector,
+}: Pick<
+  BuilderShellProps,
+  "onExit" | "title" | "topBar" | "topBarCenter" | "topBarEnd"
+> & {
+  headerRef: (element: HTMLElement | null) => void;
+  zoom: CanvasZoom;
+  appliedScale: number;
+  onZoomPick: ((next: CanvasZoom) => void) | undefined;
+  leftShown: boolean;
+  inspectorShown: boolean;
+  /** Absent when the host offers no left panel, so there is nothing to show. */
+  onLeft: (() => void) | undefined;
+  onInspector: () => void;
+}): React.JSX.Element {
+  return (
+    <header
+      ref={headerRef}
+      // Focusable by F6, not by Tab: Tab reaches the controls inside it.
+      tabIndex={-1}
+      // Three columns, the outer two equal, so the centre column (the
+      // devices and the zoom) sits in the middle of the editor whatever the
+      // sides hold. A container, so controls inside can give way by width.
+      className="border-[color:var(--nx-builder-border)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
+      aria-label="Editor actions"
+    >
+      <div data-topbar="start" className="flex min-w-0 items-center gap-2">
+        {/*
+         * Rendered only when there is somewhere to go. A button carrying no
+         * handler still looks operable — it takes focus, it depresses — and
+         * teaches the author that leaving does nothing, which is worse than
+         * offering no exit at all.
+         */}
+        {onExit ? (
+          <button
+            type="button"
+            onClick={onExit}
+            data-builder-animates
+            /*
+             * The NAME stays "Exit editor" while the label becomes a glyph.
+             * This is the only route back to the document — `ChromeSuppression`
+             * withholds the navigation rail from a surface that cannot be left,
+             * on the grounds that an author with unsaved work and no way out is
+             * the worst state the editor can reach — so it keeps a real
+             * accessible name and a tooltip rather than relying on the arrow
+             * being self-evident.
+             *
+             * An arrow rather than a cross: this returns to the document that
+             * opened the editor, and a cross reads as discarding rather than
+             * as going back.
+             */
+            aria-label="Exit editor"
+            title="Exit editor"
+            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border p-1.5 focus-visible:ring-2 focus-visible:outline-none"
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+          </button>
+        ) : null}
+        {title !== undefined && title !== "" ? (
+          <span
+            title={title}
+            className="min-w-0 shrink truncate text-sm font-medium"
+          >
+            {title}
+          </span>
+        ) : null}
+        {topBar}
+      </div>
+      <div data-topbar="centre" className="flex items-center gap-2">
+        {topBarCenter}
+        {/*
+          Rendered by the shell, not handed to the host as a slot, because the
+          shell owns preferences and this control edits one. A host drawing its
+          own would hold the value in a second place, and the two would correct
+          each other on every open.
+
+          Only where the host has WIRED it, though. The canvas belongs to the
+          host, so without `onZoomChange` there is nothing to apply a choice to:
+          the control would store a preference, report a percentage the canvas
+          does not honour, and read 100% whatever was picked. A shell that
+          predates this — the README example and the playground harness among
+          them — should gain no control rather than a dead one.
+        */}
+        <CanvasZoomControl
+          zoom={zoom}
+          appliedScale={appliedScale}
+          onChange={onZoomPick}
+        />
+      </div>
+      <div
+        data-topbar="end"
+        className="flex min-w-0 items-center justify-end gap-2"
+      >
+        {topBarEnd}
+        <SidePanelToggles
+          leftShown={leftShown}
+          inspectorShown={inspectorShown}
+          onLeft={onLeft}
+          onInspector={onInspector}
+        />
+      </div>
+    </header>
+  );
+}
+
+/**
+ * The top bar's buttons that show or hide each side of the editor, so the
+ * canvas can take the room. Pressed means shown; each keeps its panel's name,
+ * and the pressed state says which way it is. The left one is drawn only when
+ * the host offers a left panel, since with none it could show nothing.
+ */
+function SidePanelToggles({
+  leftShown,
+  inspectorShown,
+  onLeft,
+  onInspector,
+}: {
+  leftShown: boolean;
+  inspectorShown: boolean;
+  onLeft: (() => void) | undefined;
+  onInspector: () => void;
+}): React.JSX.Element {
+  const toggle = (
+    label: string,
+    shown: boolean,
+    onClick: () => void,
+    Icon: typeof PanelLeft
+  ) => (
+    <button
+      type="button"
+      aria-pressed={shown}
+      aria-label={label}
+      title={`${shown ? "Hide" : "Show"} the ${label.toLowerCase()}`}
+      onClick={onClick}
+      className={cn(
+        "focus-visible:ring-ring rounded-md p-1.5 focus-visible:ring-2 focus-visible:outline-none",
+        shown
+          ? "text-[color:var(--nx-builder-text)]"
+          : "text-[color:var(--nx-builder-text-muted)]"
+      )}
+    >
+      <Icon className="size-4" aria-hidden="true" />
+    </button>
+  );
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      {onLeft === undefined
+        ? null
+        : toggle("Left panel", leftShown, onLeft, PanelLeft)}
+      {toggle("Inspector", inspectorShown, onInspector, PanelRight)}
+    </div>
+  );
+}
+
+/**
+ * The left panel to show when the author asks for the left side back: the one
+ * they had open, else the first the host offers, in the rail's order.
+ */
+function panelToShow(
+  remembered: LeftPanel | null,
+  isAvailable: (panel: LeftPanel) => boolean
+): LeftPanel | null {
+  if (remembered !== null && isAvailable(remembered)) return remembered;
+  return LEFT_PANELS.find(isAvailable) ?? remembered;
+}
+
+/**
+ * Move focus out of the sides about to be hidden, onto the canvas.
+ *
+ * A hidden side unmounts the element holding focus, which leaves it on the
+ * page body. With two editors on a page, neither claims a key pressed there,
+ * so the same shortcut could not bring the sides back.
+ */
+function keepFocusInShell(
+  regions: Record<Region, HTMLElement | null>,
+  hiding: readonly Region[]
+): void {
+  // The host's own reading, for the reason `shellClaimsRegionCycling` gives.
+  const focused = document.activeElement;
+  if (!hiding.some(region => regions[region]?.contains(focused) === true)) {
+    return;
+  }
+  (regions.canvas ?? regions.header)?.focus();
+}
+
+/**
+ * Which sides of the editor show, and the actions that change them: the
+ * rail, the top bar's two buttons and mod+backslash.
+ *
+ * `isAvailable` is the shell's one answer to "can the host fill this panel",
+ * so the panel shown here and the item the rail draws cannot disagree.
+ */
+function useSidePanels(
+  preferences: ShellPreferences,
+  update: (change: (current: ShellPreferences) => ShellPreferences) => void,
+  isAvailable: (panel: LeftPanel) => boolean,
+  active: boolean,
+  claims: () => boolean,
+  regionRefs: React.RefObject<Record<Region, HTMLElement | null>>
+): {
+  openPanel: LeftPanel | null;
+  inspectorShown: boolean;
+  leftShown: boolean;
+  selectPanel: (panel: LeftPanel) => void;
+  /** Absent when the host offers no left panel: there is nothing to show. */
+  toggleLeft: (() => void) | undefined;
+  toggleInspector: () => void;
+} {
+  const restored = preferences.leftPanel;
+  // A hidden left side shows no panel, but keeps which one was open.
+  const openPanel =
+    !preferences.leftPanelHidden && restored !== null && isAvailable(restored)
+      ? restored
+      : null;
+  const inspectorShown = !preferences.inspectorHidden;
+  // From the rail. While the left side is hidden, choosing a panel shows it
+  // rather than toggling: the author asked to see that panel.
+  const selectPanel = (panel: LeftPanel) =>
+    update(current =>
+      current.leftPanelHidden
+        ? { ...current, leftPanel: panel, leftPanelHidden: false }
+        : {
+            ...current,
+            leftPanel: panelAfterRailClick(current.leftPanel, panel),
+          }
+    );
+  /*
+   * The top bar's left-panel button. Showing it with no panel chosen opens
+   * the first panel the host offers, Add where it offers that.
+   */
+  const leftShown = openPanel !== null;
+  const toggleLeft = () => {
+    if (leftShown) keepFocusInShell(regionRefs.current, ["panel"]);
+    update(current =>
+      leftShown
+        ? { ...current, leftPanelHidden: true }
+        : {
+            ...current,
+            leftPanel: panelToShow(current.leftPanel, isAvailable),
+            leftPanelHidden: false,
+          }
+    );
+  };
+  const toggleInspector = () => {
+    if (inspectorShown) keepFocusInShell(regionRefs.current, ["inspector"]);
+    update(current => ({
+      ...current,
+      inspectorHidden: !current.inspectorHidden,
+    }));
+  };
+  /*
+   * mod+backslash: hide both sides when either is showing, so one press
+   * always gives the canvas the whole width; show both when neither is.
+   */
+  const toggleSides = () => {
+    const anyShown = leftShown || inspectorShown;
+    if (anyShown) keepFocusInShell(regionRefs.current, ["panel", "inspector"]);
+    update(current => ({
+      ...current,
+      leftPanelHidden: anyShown,
+      inspectorHidden: anyShown,
+      ...(anyShown
+        ? {}
+        : { leftPanel: panelToShow(current.leftPanel, isAvailable) }),
+    }));
+  };
+  const toggleSidesRef = React.useRef(toggleSides);
+  toggleSidesRef.current = toggleSides;
+  useSidesShortcut(toggleSidesRef, active, claims);
+  return {
+    openPanel,
+    inspectorShown,
+    leftShown,
+    selectPanel,
+    toggleLeft: LEFT_PANELS.some(isAvailable) ? toggleLeft : undefined,
+    toggleInspector,
+  };
 }
 
 /**
@@ -765,9 +1155,11 @@ function useSeparatorRegionEscape(
       // Only from a separator. Everywhere else the manager is the right owner,
       // and intercepting here would take the key from a host binding that has
       // every right to it.
+      // By node kind rather than `instanceof HTMLElement`, which answers only
+      // for elements this window built.
       const target = event.target;
       if (
-        !(target instanceof HTMLElement) ||
+        !isHTMLElement(target) ||
         target.getAttribute("role") !== "separator"
       ) {
         return;
@@ -787,7 +1179,10 @@ function ShellRegions({
   availablePanels,
   children,
   inspector,
+  title,
   topBar,
+  topBarCenter,
+  topBarEnd,
   breadcrumb,
   checklist,
   onExit,
@@ -826,6 +1221,7 @@ function ShellRegions({
   loadCount: number;
 }) {
   const regionRefs = React.useRef<Record<Region, HTMLElement | null>>({
+    header: null,
     rail: null,
     panel: null,
     canvas: null,
@@ -839,10 +1235,6 @@ function ShellRegions({
   useZoomShortcuts(onZoomPick, active, claimsKeys);
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
-  // Pairs the header's visibility-toggle label with its switch. Generated
-  // rather than a literal so two shells mounted on one page — unlikely, but
-  // nothing here forbids it — cannot collide on the same id.
-  const emptyElementsToggleId = React.useId();
 
   /**
    * Whether the host can fill a panel. One predicate, so the rail's items and
@@ -868,40 +1260,28 @@ function ShellRegions({
    * Treated as closed instead, which is the same answer the shell gives for a
    * panel name it no longer recognises.
    */
-  const restored = preferences.leftPanel;
-  const openPanel =
-    restored !== null && isAvailable(restored) ? restored : null;
-  // The panel set about to be rendered, named the same way a persisted layout
-  // is keyed. Derived from `openPanel` because that is what decides the set;
-  // the persisted key is derived from the layout's own ids, and the two meet at
-  // `topologyKey` rather than being two spellings of one arrangement.
-  const mountedTopology = topologyKey(
-    openPanel === null
-      ? ["canvas", "inspector"]
-      : ["panel", "canvas", "inspector"]
+  const {
+    openPanel,
+    inspectorShown,
+    leftShown,
+    selectPanel,
+    toggleLeft,
+    toggleInspector,
+  } = useSidePanels(
+    preferences,
+    update,
+    isAvailable,
+    active,
+    claimsKeys,
+    regionRefs
   );
+  const mountedTopology = panelTopology(openPanel, inspectorShown);
 
-  const selectPanel = (panel: LeftPanel) =>
-    update(current => ({
-      ...current,
-      leftPanel: panelAfterRailClick(current.leftPanel, panel),
-    }));
   const panelView: PanelView = {
     current: preferences.leftPanelView,
     choose: view => update(current => ({ ...current, leftPanelView: view })),
   };
-  const [helpOpen, setHelpOpen] = React.useState(false);
-  const helpOpener = React.useRef<HTMLElement | null>(null);
-  /*
-   * Help closes when the editor gives way to the narrow-window notice. The
-   * regions stay mounted there, hidden and inert, and a modal left open would
-   * keep its focus trap and its hold on the keyboard over a notice whose Exit
-   * button it would then keep out of reach. Closed rather than hidden, so
-   * widening the window again does not bring back a dialog nobody reopened.
-   */
-  React.useEffect(() => {
-    if (!active) setHelpOpen(false);
-  }, [active]);
+  const { helpOpen, setHelpOpen, helpOpener } = useHelpDialog(active);
 
   return (
     <div
@@ -920,116 +1300,23 @@ function ShellRegions({
         ? {}
         : { [EMPTY_ELEMENTS_ATTRIBUTE]: "hidden" })}
     >
-      <header
-        className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
-        aria-label="Editor actions"
-      >
-        {/*
-         * Rendered only when there is somewhere to go. A button carrying no
-         * handler still looks operable — it takes focus, it depresses — and
-         * teaches the author that leaving does nothing, which is worse than
-         * offering no exit at all.
-         */}
-        {onExit ? (
-          <button
-            type="button"
-            onClick={onExit}
-            data-builder-animates
-            /*
-             * The NAME stays "Exit editor" while the label becomes a glyph.
-             * This is the only route back to the document — `ChromeSuppression`
-             * withholds the navigation rail from a surface that cannot be left,
-             * on the grounds that an author with unsaved work and no way out is
-             * the worst state the editor can reach — so it keeps a real
-             * accessible name and a tooltip rather than relying on the arrow
-             * being self-evident.
-             *
-             * An arrow rather than a cross: this returns to the document that
-             * opened the editor, and a cross reads as discarding rather than
-             * as going back.
-             */
-            aria-label="Exit editor"
-            title="Exit editor"
-            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border p-1.5 focus-visible:ring-2 focus-visible:outline-none"
-          >
-            <ArrowLeft className="size-4" aria-hidden="true" />
-          </button>
-        ) : null}
-        <div className="flex min-w-0 flex-1 items-center gap-2">{topBar}</div>
-        {/*
-         * The only reachable control for `showEmptyElements` — before this it
-         * changed only by an author editing storage by hand. Lives on the
-         * shell's own chrome rather than inside a switched panel, because it
-         * has to stay visible whichever panel is open or closed, and because
-         * it is this component's own state rather than a slot a host fills.
-         *
-         * A labelled switch rather than an icon: the control governs a
-         * VISIBILITY affordance, and one an author cannot read at a glance
-         * would repeat the exact failure this feature exists to fix.
-         */}
-        <Tooltip>
-          <Label
-            htmlFor={emptyElementsToggleId}
-            className="text-[color:var(--nx-builder-text-muted)] shrink-0"
-          >
-            Show empty containers
-            {/*
-             * The SWITCH is the trigger, not the label around it.
-             *
-             * A label is not focusable, so a tooltip anchored to it is a
-             * pointer-only affordance — and this control is reached by keyboard
-             * like any other. Anchored here, hovering and focusing both reveal
-             * it, and Radix points the control's `aria-describedby` at the
-             * content while it is open.
-             */}
-            <TooltipTrigger asChild>
-              <Switch
-                id={emptyElementsToggleId}
-                checked={preferences.showEmptyElements}
-                onCheckedChange={checked =>
-                  update(current => ({
-                    ...current,
-                    showEmptyElements: checked,
-                  }))
-                }
-              />
-            </TooltipTrigger>
-          </Label>
-          {/*
-           * What the label cannot say in the width a toolbar has.
-           *
-           * "Show empty containers" names the action and not the subject: a
-           * container an author has just added holds nothing, so it renders at
-           * zero height and is invisible on the canvas — which reads as the
-           * block never having been added. The word for that state is what the
-           * control is missing, so the description gives the CONSEQUENCE of
-           * each position rather than restating the label.
-           */}
-          <TooltipContent side="bottom">
-            A container holding no blocks has no height of its own, so it cannot
-            be seen or selected on the canvas. Showing them draws a placeholder
-            in its place.
-          </TooltipContent>
-        </Tooltip>
-        {/*
-          Rendered by the shell, not handed to the host as a slot, because the
-          shell owns preferences and this control edits one. A host drawing its
-          own would hold the value in a second place, and the two would correct
-          each other on every open.
-
-          Only where the host has WIRED it, though. The canvas belongs to the
-          host, so without `onZoomChange` there is nothing to apply a choice to:
-          the control would store a preference, report a percentage the canvas
-          does not honour, and read 100% whatever was picked. A shell that
-          predates this — the README example and the playground harness among
-          them — should gain no control rather than a dead one.
-        */}
-        <CanvasZoomControl
-          zoom={preferences.zoom}
-          appliedScale={appliedScale}
-          onChange={onZoomPick}
-        />
-      </header>
+      <ShellTopBar
+        headerRef={element => {
+          regionRefs.current.header = element;
+        }}
+        onExit={onExit}
+        title={title}
+        topBar={topBar}
+        topBarCenter={topBarCenter}
+        topBarEnd={topBarEnd}
+        zoom={preferences.zoom}
+        appliedScale={appliedScale}
+        onZoomPick={onZoomPick}
+        leftShown={leftShown}
+        inspectorShown={inspectorShown}
+        onLeft={toggleLeft}
+        onInspector={toggleInspector}
+      />
 
       <div className="flex min-h-0 flex-1">
         <EditorRail
@@ -1201,25 +1488,29 @@ function ShellRegions({
             </div>
           </ResizablePanel>
 
-          <ResizableHandle withGrip aria-label="Canvas and inspector" />
+          {inspectorShown ? (
+            <>
+              <ResizableHandle withGrip aria-label="Canvas and inspector" />
 
-          <ResizablePanel
-            id="inspector"
-            minSize={PANEL_BOUNDS.inspector.min}
-            maxSize={PANEL_BOUNDS.inspector.max}
-            defaultSize={PANEL_BOUNDS.inspector.initial}
-          >
-            <aside
-              ref={element => {
-                regionRefs.current.inspector = element;
-              }}
-              tabIndex={-1}
-              aria-label="Inspector"
-              className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
-            >
-              {inspector}
-            </aside>
-          </ResizablePanel>
+              <ResizablePanel
+                id="inspector"
+                minSize={PANEL_BOUNDS.inspector.min}
+                maxSize={PANEL_BOUNDS.inspector.max}
+                defaultSize={PANEL_BOUNDS.inspector.initial}
+              >
+                <aside
+                  ref={element => {
+                    regionRefs.current.inspector = element;
+                  }}
+                  tabIndex={-1}
+                  aria-label="Inspector"
+                  className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
+                >
+                  {inspector}
+                </aside>
+              </ResizablePanel>
+            </>
+          ) : null}
         </ResizablePanelGroup>
       </div>
 
@@ -1265,7 +1556,7 @@ export function BuilderShell({
   // swaps stores — signing into a second workspace, promoting a memory store to
   // a persisted one — went on reading and writing the store it had replaced.
   const fallbackStore = React.useRef<PreferenceStore | null>(null);
-  fallbackStore.current ??= browserStore(STORAGE_KEY);
+  fallbackStore.current ??= browserStore(SHELL_PREFERENCES_KEY);
   const resolvedStore = store ?? fallbackStore.current;
   const [preferences, update, loadCount, loadedFromCurrentStore] =
     usePreferences(resolvedStore);
@@ -1333,6 +1624,7 @@ export function BuilderShell({
     update(current => ({
       ...current,
       leftPanel: panel,
+      leftPanelHidden: false,
       leftPanelView: view ?? current.leftPanelView,
     }));
   }, [openPanelRequest, update, loadedFromCurrentStore]);

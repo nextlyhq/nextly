@@ -37,6 +37,8 @@ const locale = vi.hoisted(() => ({
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useDocumentPreview: () => preview.current,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentLocale: () => locale.current,
 }));
 
