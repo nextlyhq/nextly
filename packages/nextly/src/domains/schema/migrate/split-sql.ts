@@ -170,8 +170,20 @@ export function leadingWords(
  * statement's tokens: one unit, never a keyword. `name` is a quoted name's
  * text, upper-cased; a string or a body has none.
  */
-interface QuotedToken {
+export interface QuotedToken {
   name: string | undefined;
+}
+
+/**
+ * A statement's tokens as the server reads them (`serverTokens`), as a list,
+ * for a reader that needs to look ahead or back. The one tokenizer: a reader
+ * of a statement's shape reads through this rather than a second one.
+ */
+export function statementTokens(
+  statement: string,
+  dialect: SupportedDialect | undefined
+): Array<string | QuotedToken> {
+  return [...serverTokens(statement, dialect)];
 }
 
 /**

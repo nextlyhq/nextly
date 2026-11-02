@@ -38,7 +38,11 @@ import { marksNoTransaction } from "../../../../domains/schema/migrate/split-sql
 import { withMigrateLock } from "../../../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { createLogger } from "../../../utils/logger";
-import { migrateCore, parseSqlSections } from "../../migrate";
+import {
+  migrateCore,
+  parseSqlSections,
+  refuseUnresolvedAppAttempts,
+} from "../../migrate";
 import { downDatabaseDeps, migrateDownCore } from "../../migrate-down";
 
 const [dialect, url, migrationsDir, command, when, watched, lease] =
@@ -186,6 +190,16 @@ try {
           transaction: !marksNoTransaction(content),
         });
       },
+      // As the command supplies it.
+      refuseUnresolvedAttempts: () =>
+        refuseUnresolvedAppAttempts({
+          adapter: raw as never,
+          db: raw.getDrizzle(),
+          dialect,
+          migrationsDir,
+          logger,
+          command: "nextly migrate:down",
+        }),
       withLock: (lockAdapter, d, fn, opts) =>
         withMigrateLock(lockAdapter, d, fn, {
           ...opts,

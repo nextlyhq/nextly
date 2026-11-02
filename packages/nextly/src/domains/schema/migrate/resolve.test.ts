@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import { getCoreSchema } from "../../../schemas";
+import { migrationStanding } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
@@ -601,6 +602,78 @@ describe("resolveMigration", () => {
       const row = await repo.findById(id);
       expect(row?.status).toBe("rolled_back");
       expect(row?.endedAt).not.toBeNull();
+    });
+
+    it.each(["in_progress", "failed"] as const)(
+      "clears a down section's attempt that %s, leaving the migration applied and resolved",
+      async status => {
+        // A stopped DOWN is a `file_rollback` row. Read from the `file_apply`
+        // rows alone, it is never found, and the refusal it causes can never
+        // be cleared; flipped to rolled_back it retires nothing, so the
+        // migration stays applied.
+        const { repo, base } = makeDeps(testDb);
+        const file = "001_add_posts.sql";
+        await repo.insertEvent({
+          eventType: "file_apply",
+          status: "applied",
+          source: "cli-migrate",
+          filename: file,
+          startedAt: new Date(1),
+        });
+        const down = await repo.insertEvent({
+          eventType: "file_rollback",
+          status,
+          source: "cli-migrate",
+          filename: file,
+          startedAt: new Date(2),
+        });
+        const r = await resolveMigration({
+          mode: "failed-cleanup",
+          filename: file,
+          ...base,
+        });
+        expect(r).toEqual({ kind: "failed-cleanup", updatedIds: [down] });
+        const rows = [
+          ...(await repo.findFileApplies(file)),
+          ...(await repo.findFileRollbacks(file)),
+        ];
+        expect(migrationStanding(rows)).toMatchObject({
+          state: "applied",
+          unresolvedAttempt: undefined,
+        });
+        expect(
+          await resolveMigration({
+            mode: "failed-cleanup",
+            filename: file,
+            ...base,
+          })
+        ).toMatchObject({ kind: "noop" });
+      }
+    );
+
+    it("leaves a plugin module's down-section rows to its history's rule", async () => {
+      const { repo, base } = makeDeps(testDb);
+      const file = "plugin:@acme/fx/001_init";
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: file,
+        startedAt: new Date(1),
+      });
+      const down = await repo.insertEvent({
+        eventType: "file_rollback",
+        status: "failed",
+        source: "cli-migrate",
+        filename: file,
+        startedAt: new Date(2),
+      });
+      await expect(
+        resolveMigration({ mode: "failed-cleanup", filename: file, ...base })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      });
+      expect((await repo.findById(down))?.status).toBe("failed");
     });
 
     it("is idempotent when already rolled_back", async () => {

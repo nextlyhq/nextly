@@ -880,6 +880,58 @@ export async function introspectIndexTables(
 }
 
 /**
+ * The live spelling of each base table whose name matches one of
+ * `tableNames` without regard to case, for a reader that has names as a
+ * statement wrote them: a MySQL server with case-sensitive table names, or a
+ * quoted mixed-case PostgreSQL name, would otherwise read an existing table
+ * as absent. On PostgreSQL only the relation an unqualified name reaches
+ * counts, as every read here is scoped. A name with no table is left out.
+ */
+export async function introspectTableNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: readonly string[]
+): Promise<string[]> {
+  if (tableNames.length === 0) return [];
+  const namesIn = sql.join(
+    tableNames.map(name => sql`${name.toLowerCase()}`),
+    sql`, `
+  );
+  let rows: unknown[];
+  if (dialect === "postgresql") {
+    // Ordinary and partitioned tables: the relations a CREATE TABLE makes.
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT t.relname AS name FROM pg_class t
+          WHERE t.relkind IN ('r', 'p')
+            AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+            AND lower(t.relname) IN (${namesIn})`
+    )) as { rows: unknown[] };
+    rows = result.rows;
+  } else if (dialect === "mysql") {
+    rows = mysqlResultRows<unknown>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT TABLE_NAME AS name FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_TYPE = 'BASE TABLE'
+              AND lower(TABLE_NAME) IN (${namesIn})`
+      )
+    );
+  } else {
+    const sqliteRows: unknown = await Promise.resolve(
+      (db as { all(query: unknown): unknown }).all(
+        sql`SELECT name FROM sqlite_master
+            WHERE type = 'table' AND lower(name) IN (${namesIn})`
+      )
+    );
+    rows = Array.isArray(sqliteRows) ? sqliteRows : [];
+  }
+  return rows.flatMap(row => {
+    const { name } = (row ?? {}) as Record<string, unknown>;
+    return typeof name === "string" ? [name] : [];
+  });
+}
+
+/**
  * Every descendant of each named PostgreSQL table, for the drop guard: the
  * tables inheriting from it and its partitions, at any depth, from the
  * catalog's inheritance records (`pg_inherits`), which hold both. Keyed by
