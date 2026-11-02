@@ -74,3 +74,56 @@ npx nextly migrate
 ```
 
 In development you can use `npx nextly db:sync` instead.
+
+## Draw pages inside their Layout
+
+<Callout type="info">
+  The `layouts` route option and `pageBuilderLayouts()` are **experimental**:
+  their names and shape may change before they are marked stable.
+</Callout>
+
+Your site's page route draws the header and footer only when you turn Layouts on for
+it. Pass the plugin's provider as the `layouts` option of `createBlocksPage` (or
+`createPublicBlocksPage`):
+
+```tsx title="app/(frontend)/[...slug]/page.tsx"
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderLayouts } from "@nextlyhq/plugin-page-builder";
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  layouts: pageBuilderLayouts(),
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+Each page is then served in three parts: the header, the page, then the footer. The
+header is wrapped in a `<header>` element and the footer in a `<footer>` element,
+each with a `data-nextly-region` attribute naming its area, so you can style or test
+them. Without the option, the route serves the page exactly as before.
+
+- **Which Layout:** the one the page names while it is published, otherwise the
+  site's default, or none when the page has **No header or footer** switched on.
+- **No JavaScript added:** the header and footer are drawn on the server, like the
+  rest of the page.
+- **Titles stay the page's own:** a heading in your header never becomes a page's
+  title or description.
+- **Updates reach only the pages they affect:** publishing a Layout, or a component
+  one uses, refreshes the pages drawn inside it. Changing the default refreshes the
+  pages that use the default, including pages whose own Layout is not published.
+- **No usable default:** pages that use the default are drawn without a header or
+  footer, and the server logs a warning. The plugin's background job repairs the
+  default, and those pages pick it up within a minute.
+
+A preview shows the page's own draft choice of Layout. A route that serves drafts
+outright (`draft: true`) also shows the Layout's and its components' drafts; a
+preview link shows their published versions.
+
+If your site renamed the Layouts collection or the `page-builder-settings` Single,
+pass the new names, or the route reads the old ones:
+`pageBuilderLayouts({ layoutsCollection: "frames", settingsSingle: "site-settings" })`.
+For a route that reads through its own Nextly instance, pass that reader as
+`nextly`. The option is not offered on a Single's route.

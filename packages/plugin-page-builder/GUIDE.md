@@ -404,6 +404,33 @@ during `next build`, which means your build environment needs one.
 
 The posture is the factory you call. There is no option to flip.
 
+### 7.8 Draw pages inside their Layout
+
+**Experimental:** the `layouts` option and `pageBuilderLayouts()` may change
+before they are marked stable.
+
+A Layout names the header and footer components that wrap a page (see
+`docs/page-builder/layouts.mdx`). The route draws them only when you turn the
+option on, with the provider this plugin exports:
+
+```tsx
+import { pageBuilderLayouts } from "@nextlyhq/plugin-page-builder";
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  /* the same options as above, plus: */
+  layouts: pageBuilderLayouts(),
+});
+```
+
+Each page is then served as its header, the page, then its footer: the Layout the
+page names while that is published, otherwise the site's default Layout, or nothing
+when the page has **No header or footer** switched on. The header and footer are
+drawn on the server like the rest of the page, so they add no JavaScript, and the
+page's title and description still come from the page alone.
+
+Publishing a Layout, or a component one uses, refreshes only the pages drawn inside
+it, and changing the default refreshes only the pages that use the default.
+
 ---
 
 ## Troubleshooting
