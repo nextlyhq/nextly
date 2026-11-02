@@ -761,6 +761,9 @@ export type {
   SiteTokenSet,
   TokenMode,
 } from "./style/site-tokens";
+// A colour written as a value rather than through a variable, which the
+// inspector marks as not adapted to dark mode.
+export { isRawColour } from "./style/raw-colour";
 // Interop and judgement, both pure: the format other design-token tools read,
 // and the contrast a person needs while a colour picker is open.
 export {

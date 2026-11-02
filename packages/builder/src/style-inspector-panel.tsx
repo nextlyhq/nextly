@@ -31,6 +31,7 @@
 
 import {
   findNode,
+  isRawColour,
   isTokenRef,
   trimCssWhitespace,
   walkNodes,
@@ -3166,6 +3167,7 @@ function ColourField({
         )}
       </div>
       <ContrastNote id={noteId} contrast={contrast} />
+      <RawColourNote stored={stored} />
     </>
   );
 }
@@ -3419,6 +3421,26 @@ function TokenName({
  * and compiling, and the author may have a reason. The same position
  * Gutenberg's contrast checker takes.
  */
+/**
+ * The note beside a colour written as a value rather than through a variable.
+ *
+ * Such a colour keeps its one value when the visitor's device prefers dark,
+ * where a variable carries both. Read from what is stored, so a picker gesture
+ * still in progress does not make it flicker.
+ */
+function RawColourNote({
+  stored,
+}: {
+  stored: StyleValue | undefined;
+}): React.JSX.Element | null {
+  if (!isRawColour(stored)) return null;
+  return (
+    <p className="nx-inspector__note">
+      Not adapted to dark mode. Choose a variable to follow light and dark.
+    </p>
+  );
+}
+
 function ContrastNote({
   id,
   contrast,
