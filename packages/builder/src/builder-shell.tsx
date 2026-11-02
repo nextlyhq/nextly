@@ -74,8 +74,12 @@ import {
  * A shell of this size is unusable by keyboard without region navigation: an
  * author who tabs out of the inspector should not traverse every control in the
  * canvas to reach the rail. F6 is the platform convention for exactly this.
+ *
+ * The top bar comes first: it holds the editor's own controls (exit, undo and
+ * redo, the devices, the zoom, the side toggles), and it is where a reader's
+ * eye starts.
  */
-const REGIONS = ["rail", "panel", "canvas", "inspector"] as const;
+const REGIONS = ["header", "rail", "panel", "canvas", "inspector"] as const;
 type Region = (typeof REGIONS)[number];
 
 /**
@@ -990,6 +994,7 @@ function ShellRegions({
   loadCount: number;
 }) {
   const regionRefs = React.useRef<Record<Region, HTMLElement | null>>({
+    header: null,
     rail: null,
     panel: null,
     canvas: null,
@@ -1081,6 +1086,11 @@ function ShellRegions({
         : { [EMPTY_ELEMENTS_ATTRIBUTE]: "hidden" })}
     >
       <header
+        ref={element => {
+          regionRefs.current.header = element;
+        }}
+        // Focusable by F6, not by Tab: Tab reaches the controls inside it.
+        tabIndex={-1}
         className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
         aria-label="Editor actions"
       >

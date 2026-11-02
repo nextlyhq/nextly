@@ -1112,6 +1112,30 @@ describe("F6 region cycling", () => {
   });
 });
 
+describe("F6 and the top bar", () => {
+  it("reaches the top bar, as the first area after the inspector", () => {
+    // The top bar holds the editor's own controls (exit, undo, devices,
+    // zoom, the side toggles): a keyboard author must be able to land there
+    // without tabbing through the whole canvas.
+    renderShell({ inspector: <p>inspector body</p> });
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    inspector.focus();
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    const header = document.querySelector(
+      'header[aria-label="Editor actions"]'
+    );
+    expect(header).not.toBeNull();
+    expect(document.activeElement).toBe(header);
+
+    fireEvent.keyDown(document, { key: "F6" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+});
+
 describe("which shell F6 belongs to", () => {
   /**
    * The binding is registered on the document, so every mounted shell sees
@@ -1150,17 +1174,18 @@ describe("which shell F6 belongs to", () => {
 
     fireEvent.keyDown(document, { key: "F6" });
 
+    // Entering from nowhere lands on the first area, the top bar.
     expect(document.activeElement).toBe(
-      screen.getByRole("navigation", { name: "Editor panels" })
+      document.querySelector('header[aria-label="Editor actions"]')
     );
   });
 
-  it("answers from the chrome header, which is in no region", () => {
-    // The header holds the exit button and whatever the host puts in the top
-    // bar — the breakpoint switcher, here — and it is a SIBLING of the region
-    // container rather than inside one. Asking the regions who owns the key
-    // therefore rejected the shell from its own chrome, so F6 did nothing
-    // while focus sat on a control that is plainly inside the editor.
+  it("answers from a control in the top bar, and moves on to the rail", () => {
+    // The top bar holds the exit button and whatever the host puts there
+    // (the device buttons, here). It is the first area F6 cycles through, so
+    // from a control inside it the next press reaches the rail. It once sat
+    // outside every area, and F6 then did nothing from a control plainly
+    // inside the editor.
     renderShell({
       renderPanel: panel => <p>{panel} panel</p>,
       topBar: <button type="button">Desktop</button>,
@@ -1210,8 +1235,9 @@ describe("which shell F6 belongs to", () => {
 
     fireEvent.keyDown(document, { key: "F6" });
 
+    // Entering from nowhere lands on the first area, the top bar.
     expect(document.activeElement).toBe(
-      screen.getByRole("navigation", { name: "Editor panels" })
+      document.querySelector('header[aria-label="Editor actions"]')
     );
   });
 
@@ -1254,7 +1280,13 @@ describe("which shell F6 belongs to", () => {
     (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.keyDown(document, { key: "F6" });
 
-    expect(document.activeElement).toBe(rails[0]);
+    // Entering from nowhere lands on the first area, the top bar, of the one
+    // usable shell (the other's header is behind its notice).
+    const usableHeader = rails[0]
+      ?.closest(".nx-builder-chrome")
+      ?.querySelector('header[aria-label="Editor actions"]');
+    expect(usableHeader).toBeTruthy();
+    expect(document.activeElement).toBe(usableHeader);
   });
 
   it("declines that entry when a second shell makes it ambiguous", () => {
