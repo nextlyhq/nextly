@@ -197,7 +197,7 @@ export async function componentFromSelection(
   ctx: ComponentFromSelectionContext,
   setup: ComponentFromSelectionSetup = {}
 ): Promise<Response> {
-  requirePluginStore(setup);
+  requirePluginStore(ctx, setup);
   const by = await requireComponentPublisher(ctx, setup);
   const body = await readBody(req);
   const apply: ComponentApplyMode = body.apply ?? "library";
@@ -403,12 +403,30 @@ async function convertStored(
 }
 
 /**
+ * Whether the configured store is a collection of the host's own: one named,
+ * and not this plugin's own components under the name the host resolved.
+ */
+export function isHostStore(
+  ctx: {
+    readonly self: { readonly collections: Record<string, string | undefined> };
+  },
+  store: Pick<ComponentStore, "collection"> | undefined
+): boolean {
+  const named = store?.collection;
+  if (named === undefined) return false;
+  return named !== (ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG);
+}
+
+/**
  * Refuse a host whose components live in a collection of its own: that store
  * promises only the document field, not the title, slug and publish workflow
  * a new component is created with here.
  */
-function requirePluginStore(setup: ComponentFromSelectionSetup): void {
-  if (setup.store?.collection === undefined) return;
+function requirePluginStore(
+  ctx: Pick<ComponentFromSelectionContext, "self">,
+  setup: ComponentFromSelectionSetup
+): void {
+  if (!isHostStore(ctx, setup.store)) return;
   throw new NextlyError({
     code: "BUSINESS_RULE_VIOLATION",
     publicMessage:

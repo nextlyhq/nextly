@@ -36,6 +36,7 @@
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { isHostStore } from "./component-from-selection-route";
 import {
   CAPABILITY_ROUTE_PATH,
   type PatternCapabilityResponse,
@@ -101,7 +102,7 @@ export async function mayCreateComponent(
   store: Pick<ComponentStore, "collection"> = {}
 ): Promise<boolean> {
   // A host's own store is not one this plugin makes components in.
-  if (ctx.caller === null || store.collection !== undefined) return false;
+  if (ctx.caller === null || isHostStore(ctx, store)) return false;
   const slug = ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
   return (
     (await ctx.caller.can("create", slug)) &&

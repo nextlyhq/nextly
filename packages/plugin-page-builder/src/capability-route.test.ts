@@ -150,6 +150,16 @@ describe("whether the caller may make a component", () => {
     expect(await mayCreateComponent(createOnly)).toBe(false);
   });
 
+  it("says yes where the store named is the plugin's own components", async () => {
+    const both = grants({
+      "create-site_components": true,
+      "publish-site_components": true,
+    });
+    expect(
+      await mayCreateComponent(both, { collection: "site_components" })
+    ).toBe(true);
+  });
+
   it("says no where the host keeps components in a store of its own", async () => {
     const configured = grants({
       "create-blocks_lib": true,

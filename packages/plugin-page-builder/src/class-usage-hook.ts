@@ -171,10 +171,19 @@ export function registerClassUsageMaintenance(args: {
     args.ctx.hooks.on(phase, "*", forgetHandler);
   }
   return async target => {
-    const work = await maintenanceOf(args, target, {});
-    if (work === null) return;
-    const report = await reconcileWrittenDocument(work);
-    if (report.failures.length > 0) reportFailures(args.ctx.logger, report);
+    // Logged, never raised: the write has committed, and failing here would
+    // report it as not made.
+    try {
+      const work = await maintenanceOf(args, target, {});
+      if (work === null) return;
+      const report = await reconcileWrittenDocument(work);
+      if (report.failures.length > 0) reportFailures(args.ctx.logger, report);
+    } catch (error) {
+      args.ctx.logger?.error?.(
+        "[page-builder] usage indexes could not be brought up to date after a committed write; a rebuild repairs them",
+        { collection: target.slug, documentId: target.documentId, error }
+      );
+    }
   };
 }
 

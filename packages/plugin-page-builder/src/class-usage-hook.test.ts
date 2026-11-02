@@ -99,7 +99,7 @@ function harness(
     delete: vi.fn(async () => ({})),
   };
 
-  registerClassUsageMaintenance({
+  const reconcile = registerClassUsageMaintenance({
     ctx,
     indexCollection: INDEX,
     componentIndexCollection: COMPONENT_INDEX,
@@ -131,7 +131,7 @@ function harness(
       ...over,
     });
 
-  return { registered, fire, fireDelete, api, errors };
+  return { registered, fire, fireDelete, api, errors, reconcile };
 }
 
 describe("what maintenance is registered on", () => {
@@ -527,5 +527,26 @@ describe("a Single, which a wildcard registration also receives", () => {
     await fire({ collection: "my:pages" });
 
     expect(api.create).toHaveBeenCalled();
+  });
+});
+
+describe("reconciling a write made in a caller-owned transaction", () => {
+  it("brings the indexes up to date for the document named", async () => {
+    const { api, reconcile } = harness();
+
+    await reconcile({ slug: "pages", documentId: "p1", nextly: api as never });
+
+    expect(api.findByID).toHaveBeenCalled();
+  });
+
+  it("logs a failure and never raises it, since the write has committed", async () => {
+    const { api, errors, reconcile } = harness({
+      getCollection: () => Promise.reject(new Error("registry unavailable")),
+    });
+
+    await expect(
+      reconcile({ slug: "pages", documentId: "p1", nextly: api as never })
+    ).resolves.toBeUndefined();
+    expect(errors).toHaveLength(1);
   });
 });

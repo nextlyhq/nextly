@@ -389,6 +389,26 @@ describe("who may run it", () => {
     expect(createEntry).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts the plugin's own components named explicitly as the store", async () => {
+    const { ctx, createEntry } = contextOver();
+
+    await componentFromSelection(
+      request({
+        action: "save-as",
+        document: threeBlocks,
+        selectedIds: ["a"],
+        fields,
+      }),
+      ctx,
+      {
+        reads: readsOver(null),
+        store: { collection: "components", field: "content" },
+      }
+    );
+
+    expect(createEntry).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a host that keeps components in a store of its own", async () => {
     const { ctx, createEntry } = contextOver();
 
