@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-Duplicating a group or a repeater in the Schema Builder now gives the copy and every field inside it, at any depth, ids of their own. Before, the fields inside the copy kept the originals' ids. Because the Builder edits, deletes and adds by id, renaming or deleting a field inside the copy also renamed or deleted the original's field, and Save wrote both, so the original's existing entries stopped reading that field's values. Adding a field inside an inner container of the copy added it to the original too. The copy is now a field of its own all the way down.
+Duplicating a group or a repeater in the Schema Builder now gives the copy and every field inside it, at any depth, ids of their own. Before, the fields inside the copy kept the originals' ids. Because the Builder edits, deletes and adds by id, renaming or deleting a field inside the copy also renamed or deleted the original's field, and Save then saved the original with that change, so its existing entries stopped reading that field's values. Adding a field inside an inner container of the copy added it to the original too. The copy is now a field of its own all the way down.

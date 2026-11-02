@@ -355,6 +355,30 @@ describe("a duplicated container", () => {
     expect(copy.name).toBe("details_2");
   });
 
+  it("keeps every id unique when the same container is duplicated twice, and the copy again", () => {
+    const { builder, result, copy } = duplicateDetails();
+    result.current.handleDuplicateField("field_details");
+    result.current.handleDuplicateField(copy.id);
+    const ids = idsOf(builder.fields);
+    // Four containers of four fields each.
+    expect(ids).toHaveLength(16);
+    expect(new Set(ids).size).toBe(16);
+  });
+
+  it("gives a container duplicated inside a group new ids all the way down", () => {
+    const builder = makeRealBuilder(TREE());
+    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+    result.current.handleDuplicateField("field_links");
+    const details = builder.fields[0];
+    expect(details.fields!.map(f => f.name)).toEqual([
+      "subtitle",
+      "links",
+      "links_2",
+    ]);
+    const ids = idsOf(builder.fields);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it("deletes a field inside the copy and nothing in the original", () => {
     const { builder, result, copy } = duplicateDetails();
     builder.api.handleFieldDelete(copy.fields![0].id);

@@ -31,17 +31,37 @@ const GROUP = f("details", {
   type: "group",
   fields: [
     f("subtitle"),
-    f("links", { type: "repeater", fields: [f("url"), f("label")] }),
+    f("links", {
+      type: "repeater",
+      admin: { width: "100%" },
+      fields: [
+        f("url"),
+        f("label"),
+        f("extra", {
+          type: "group",
+          fields: [f("note", { pluginOptions: { a: 1 } })],
+        }),
+      ],
+    }),
   ],
 });
+
+/** Every object reachable from a value, depth first. */
+function objectsOf(value: unknown, into: object[] = []): object[] {
+  if (value === null || typeof value !== "object") return into;
+  into.push(value);
+  Object.values(value).forEach(v => objectsOf(v, into));
+  return into;
+}
 
 describe("copyWithNewIds", () => {
   it("gives the copy and every field inside it, at any depth, a new id", () => {
     const copy = copyWithNewIds(GROUP);
     const all = [...idsOf([GROUP]), ...idsOf([copy])];
-    // Five fields each side, and no id shared between or within them.
-    expect(all).toHaveLength(10);
-    expect(new Set(all).size).toBe(10);
+    // Seven fields each side, three levels deep, and no id shared between or
+    // within them.
+    expect(all).toHaveLength(14);
+    expect(new Set(all).size).toBe(14);
   });
 
   it("copies everything but the ids as it was", () => {
@@ -54,11 +74,19 @@ describe("copyWithNewIds", () => {
     expect(JSON.stringify(GROUP)).toBe(before);
   });
 
-  it("shares no object with the original, so editing one never edits the other", () => {
-    const copy = copyWithNewIds(GROUP);
-    expect(copy.fields).not.toBe(GROUP.fields);
-    expect(copy.fields![1].fields).not.toBe(GROUP.fields![1].fields);
-    expect(copy.validation).not.toBe(GROUP.validation);
+  it("shares no object with the original, at any depth, so editing one never edits the other", () => {
+    const originals = new Set(objectsOf(GROUP));
+    const shared = objectsOf(copyWithNewIds(GROUP)).filter(o =>
+      originals.has(o)
+    );
+    expect(shared).toEqual([]);
+  });
+
+  it("gives a second copy of the same field ids of its own too", () => {
+    const ids = [GROUP, copyWithNewIds(GROUP), copyWithNewIds(GROUP)].flatMap(
+      g => idsOf([g])
+    );
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("keeps a plugin option under any name, __proto__ included", () => {
