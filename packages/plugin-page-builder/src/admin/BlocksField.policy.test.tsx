@@ -78,6 +78,8 @@ let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
     isPending: false,
     error: null,
   };
+/** What reached the plugin's routes, in order. */
+const routeWrites: unknown[] = [];
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   /*
@@ -247,7 +249,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // merge of stored over defaults is `site-style-client`'s own question and has
   // its own coverage. Standing a real query client up here would put a second
   // subject in every assertion below.
-  useSingleDocument: () => siteStyleRead,
+  useSingleDocument: () => ({ ...siteStyleRead, refetch: async () => ({}) }),
+  // The site's breakpoints are written through Settings' route.
+  writePluginRoute: async (write: unknown) => {
+    routeWrites.push(write);
+    return {};
+  },
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -763,12 +770,26 @@ describe("what the breakpoint manager is told", () => {
       next: unknown
     ) => Promise<string | undefined>;
 
+    routeWrites.length = 0;
     await expect(
       onSave({
         viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
         container: [],
       })
     ).resolves.toBeUndefined();
+    // Through Settings' route, the one write the site style lets change them.
+    expect(routeWrites).toEqual([
+      {
+        plugin: "@nextlyhq/plugin-page-builder",
+        path: "/site/breakpoints",
+        body: {
+          breakpoints: {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          },
+        },
+      },
+    ]);
   });
 
   it("is given the SAME breakpoints the canvas renders against", () => {

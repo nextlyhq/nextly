@@ -203,6 +203,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useWidgetClock (value)",
   "validationIssues (value)",
   "withOptionIds (value)",
+  "writePluginRoute (value)",
 ]
 `;
 

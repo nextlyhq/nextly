@@ -355,7 +355,10 @@ export type {
 // The WRITE half of the same seam. A plugin could read its own route and not
 // write to it, so a feature that saves something had to hand-roll the session
 // and the error envelope after all.
-export { usePluginRouteMutation } from "@admin/hooks/queries/usePluginRouteMutation";
+export {
+  usePluginRouteMutation,
+  writePluginRoute,
+} from "@admin/hooks/queries/usePluginRouteMutation";
 export type {
   PluginRouteMethod,
   PluginRouteWrite,

@@ -18,8 +18,8 @@
  *
  * @module @nextlyhq/plugin-page-builder/site-style-storage
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
+import { NextlyError } from "nextly/errors";
 
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import {
