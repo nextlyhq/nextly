@@ -547,8 +547,9 @@ interface PluginStoredFieldTarget {
    */
   readonly form: "published" | "draft";
   /**
-   * The language to read, for a field stored per language. Absent: the app's
-   * default language. A language that stores no value for the field reads as
+   * The language to read, for a field stored per language. Absent: the
+   * language the write is judged in (`PluginFieldWrite.locale`), which is the
+   * app's default language for a write in it. A language that stores no value for the field reads as
    * absent, never as another language's value. A field not stored per
    * language has one value, which every language reads.
    */

@@ -12,9 +12,10 @@ import {
   registerBlocks,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import type {
-  PluginFieldWrite,
-  PluginStoredValueTarget,
+import {
+  NextlyError,
+  type PluginFieldWrite,
+  type PluginStoredValueTarget,
 } from "@nextlyhq/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -168,6 +169,8 @@ function storeOf(rows: Record<string, Record<string, Stored>>) {
     const value =
       target.form === "draft" ? (row.draft ?? row.published) : row.published;
     if (value === "unreadable") throw new Error("this row could not be read");
+    // A language whose store is not ready yet answers "unavailable".
+    if (value === "not-ready") throw NextlyError.serviceUnavailable();
     return { kind: "value", value };
   };
   return { readStored, asked };
@@ -863,12 +866,12 @@ describe("a page judged as a reader receives it", () => {
     });
 
     it("refuses as for a page never stored when the stored page cannot be read, as a localized field's cannot", async () => {
-      // A localized field's stored value is refused to this reader, so there
-      // is no stored value to keep: the page is measured against the starting
+      // A localized field whose language store is not ready yet has no
+      // stored value to keep: the page is measured against the starting
       // blocks alone, so the lock refuses rather than lets the value through.
       const { readStored } = storeOf({
         [COMPONENTS]: { sealed: { published: toned() } },
-        pages: { p1: { published: "unreadable" } },
+        pages: { p1: { published: "not-ready" } },
       });
       expect(
         codes(
