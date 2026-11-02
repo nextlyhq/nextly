@@ -44,11 +44,24 @@ export function showsAnotherLanguage(
 }
 
 /**
+ * Whether a form path runs through a repeater's row. A row is addressed by its
+ * position (`sections.0.body`), and a position names a different row once the
+ * rows are reordered, so an address carrying one could open the wrong row's
+ * field. Only a repeater's rows are numbered; a group step is always a name.
+ */
+function insideRepeater(path: string): boolean {
+  return path.split(".").some(step => /^\d+$/.test(step));
+}
+
+/**
  * The builder's address for `fieldName` on the document the form holds.
+ *
+ * `fieldName` is the field's form path: `layout` at the top level,
+ * `hero.body` inside a named group, which the view reaches by the same path.
  *
  * Withheld, with the sentence the card shows, where there is no address to
  * open: outside a document, on an entry that has never been saved, and for a
- * field inside a group or a repeater, which the view does not reach.
+ * field inside a repeater, which the view does not reach.
  */
 export function builderAddress(
   identity: DocumentIdentity | null,
@@ -61,10 +74,10 @@ export function builderAddress(
   if (identity === null) {
     return { unavailable: "The Page Builder opens from a saved page." };
   }
-  if (fieldName.includes(".")) {
+  if (insideRepeater(fieldName)) {
     return {
       unavailable:
-        "The Page Builder opens for a top-level field only. Move this field to the top level to edit it visually.",
+        "The Page Builder doesn't open for a field inside a repeater. Move this field out of the repeater to edit it visually.",
     };
   }
   const query = `?field=${encodeURIComponent(fieldName)}`;

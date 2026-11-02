@@ -206,6 +206,14 @@ export interface ShellPreferences {
   leftPanelView: string | null;
   leftPinned: boolean;
   /**
+   * Whether the author has hidden a side of the editor to give the canvas the
+   * room. Kept apart from which left panel is open, so hiding the left side
+   * and showing it again comes back to the same panel. The top bar's panel
+   * buttons and mod+backslash set them.
+   */
+  leftPanelHidden: boolean;
+  inspectorHidden: boolean;
+  /**
    * How large the canvas draws the page, as the author last left it.
    *
    * Chrome rather than document state, like everything else here: it describes
@@ -325,6 +333,8 @@ export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
   leftPanelView: null,
   leftPinned: true,
+  leftPanelHidden: false,
+  inspectorHidden: false,
   zoom: FIT_ZOOM,
   editingBreakpoint: null,
   layouts: {},
@@ -443,6 +453,10 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
       typeof record.leftPinned === "boolean"
         ? record.leftPinned
         : DEFAULT_PREFERENCES.leftPinned,
+    // Shown unless a stored true says otherwise, which covers every
+    // preference written before a side could be hidden.
+    leftPanelHidden: record.leftPanelHidden === true,
+    inspectorHidden: record.inspectorHidden === true,
     // Fit when the stored value is not a zoom, which includes every preference
     // written before there was one. `readZoom` refuses a scale outside the
     // bounds rather than painting the canvas somewhere the control cannot be
@@ -454,10 +468,10 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
         ? record.editingBreakpoint
         : DEFAULT_PREFERENCES.editingBreakpoint,
     layouts: readLayouts(record.layouts),
-    showEmptyElements:
-      typeof record.showEmptyElements === "boolean"
-        ? record.showEmptyElements
-        : DEFAULT_PREFERENCES.showEmptyElements,
+    // Always shown. The editor no longer offers to hide empty containers, so a
+    // stored false, written while it did, is read as shown: otherwise an author
+    // who once hid them would have no way to bring them back.
+    showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
   };
 }
 

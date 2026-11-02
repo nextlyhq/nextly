@@ -475,11 +475,10 @@ describe("a routed document view", () => {
     ).toBe(VIEW);
   });
 
-  it("answers not found for a field-type view on a collection without the field", () => {
+  it("opens a field-type view on a collection whose field of its type sits in a named group", () => {
     registerDocumentViews([
       { fieldType: "blocks", path: "builder", component: VIEW },
     ]);
-    // Only nested inside a group, which does not count.
     collectionSchema = {
       ...collectionSchema,
       fields: [
@@ -487,6 +486,35 @@ describe("a routed document view", () => {
         {
           name: "extra",
           type: "group",
+          fields: [{ name: "body", type: "blocks" }],
+        },
+      ],
+    };
+
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    expect(screen.getByText("default entry form")).toBeInTheDocument();
+    expect(
+      (entryFormProps?.documentView as { component: string } | undefined)
+        ?.component
+    ).toBe(VIEW);
+  });
+
+  it("answers not found for a field-type view on a collection without the field", () => {
+    registerDocumentViews([
+      { fieldType: "blocks", path: "builder", component: VIEW },
+    ]);
+    // Only inside a repeater's rows, which a view does not reach: a row is
+    // addressed by its position, which names another row after a reorder.
+    collectionSchema = {
+      ...collectionSchema,
+      fields: [
+        { name: "title", type: "text" },
+        {
+          name: "extra",
+          type: "repeater",
           fields: [{ name: "body", type: "blocks" }],
         },
       ],

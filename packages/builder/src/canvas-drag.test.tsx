@@ -36,7 +36,7 @@ import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { Canvas, CANVAS_ROOT_CLASS } from "./canvas";
 import { DropIndicator, useCanvasDrag } from "./canvas-drag";
 import { useEditorState, type EditorState } from "./editor-state";
-import { registrySlotSource } from "./inserter";
+import { registrySlotSource, type SlotSource } from "./inserter";
 
 afterEach(() => {
   cleanup();
@@ -114,12 +114,14 @@ const PERMISSIVE: NestingSource = {
 function Host({
   document,
   nesting = PERMISSIVE,
+  slots = registrySlotSource(),
   definitions,
   limits,
   onRefused,
 }: {
   document: BlockDocument;
   nesting?: NestingSource;
+  slots?: SlotSource;
   definitions?: ComponentLookup;
   limits?: DocumentLimits;
   onRefused?: (refusal: { sentence: string }) => void;
@@ -135,7 +137,7 @@ function Host({
   editorRef = editor;
   const drag = useCanvasDrag({
     editor,
-    slots: registrySlotSource(),
+    slots,
     nesting,
     ...(definitions === undefined ? {} : { definitions }),
   });
@@ -522,6 +524,75 @@ describe("useCanvasDrag", () => {
     moveTo(root2, 200, 190);
     release(root2, 200, 190);
     expect(editorRef?.document.nodes.map(n => n.id)).toEqual(["b", "i1"]);
+  });
+
+  it("reads a block's child regions from the slot source the caller supplies", () => {
+    // The caller's source says the Box declares no slots, though the registry
+    // says it does. Aimed at the middle of the Box, the heading lands beside
+    // it at the top level rather than inside it: the regions are the caller's.
+    // The control below drops the same way with the registry as the source,
+    // and the heading lands inside, so the Box's region is reachable.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const page = () =>
+      documentOf([node("a", "test/heading"), node("box", "test/box")]);
+    const dropOnBox = (slots: SlotSource): BlockDocument | undefined => {
+      const result = render(<Host document={page()} slots={slots} />);
+      layout(result.container, { a: 100, box: 100 });
+      const root = rootOf(result.container);
+      press(root, blockElement(result.container, "a"), 200, 50);
+      moveTo(root, 200, 150);
+      release(root, 200, 150);
+      const after = editorRef?.document;
+      result.unmount();
+      return after;
+    };
+
+    const noSlots = dropOnBox({ slotsOf: () => undefined });
+    expect(noSlots?.nodes.map(n => n.id)).toEqual(["box", "a"]);
+    expect(noSlots?.nodes[0]?.slots).toBeUndefined();
+
+    const registry = dropOnBox(registrySlotSource());
+    expect(registry?.nodes.map(n => n.id)).toEqual(["box"]);
+    expect(registry?.nodes[0]?.slots?.children?.map(n => n.id)).toEqual(["a"]);
+  });
+
+  it("judges a region once for the gesture, however often the pointer moves in it", () => {
+    // Every move resolves the drop again, and the region's answer cannot
+    // change mid-drag. Counted through the nesting source every verdict
+    // reads; the first move into the Box's region is the control that the
+    // count moves at all.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    let asked = 0;
+    const nesting: NestingSource = {
+      parentsOf: () => {
+        asked += 1;
+        return undefined;
+      },
+      slotAllowOf: () => {
+        asked += 1;
+        return undefined;
+      },
+    };
+    const { container } = render(
+      <Host
+        document={documentOf([
+          node("a", "test/heading"),
+          node("box", "test/box"),
+        ])}
+        nesting={nesting}
+      />
+    );
+    layout(container, { a: 100, box: 100 });
+    const root = rootOf(container);
+    press(root, blockElement(container, "a"), 200, 50);
+    moveTo(root, 200, 150);
+    expect(indicator(container)).not.toBeNull();
+    const once = asked;
+    expect(once).toBeGreaterThan(0);
+
+    moveTo(root, 210, 160);
+    moveTo(root, 220, 170);
+    expect(asked).toBe(once);
   });
 
   it("hands a move to the editor, which refuses one the page has no room for and says why", () => {

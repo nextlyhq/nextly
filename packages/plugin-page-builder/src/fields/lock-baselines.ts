@@ -19,7 +19,12 @@ import {
   type DocumentLimits,
   type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
-import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PluginFieldWrite,
+  type PluginStoredValue,
+  type PluginStoredValueTarget,
+} from "@nextlyhq/plugin-sdk";
 
 import {
   composeWithReads,
@@ -31,11 +36,11 @@ import { isForest } from "./blocks-document";
 
 /**
  * The field's stored forms, the live one and the draft an editor's preview
- * reads, as the write reads them.
+ * reads, as the write reads them, in the language the write is judged in.
  *
- * Empty for a create, for a single, which has no entry id to read by, and
- * where a form cannot be read: each then measures the document against its
- * starting blocks alone, which refuses more and never less.
+ * Empty for a create, for a language that stores no value yet, and where a
+ * form cannot be read: each then measures the document against its starting
+ * blocks alone, which refuses more and never less.
  */
 export async function storedFormsOf(
   write: PluginFieldWrite | undefined,
@@ -54,10 +59,11 @@ export async function storedFormsOf(
  * The stored forms, and whether they could be read at all.
  *
  * Two different empties. A create has nothing stored, so every placement break
- * in it is the write's own; a single, or a field whose read is refused (a
- * localized one), has a stored value this cannot see, so a break in it may be
- * one the page already held. The placement rule refuses the first and only
- * warns about the second.
+ * in it is the write's own; a field whose stored value cannot be read (a
+ * localized one whose language store is not ready) may already hold a break,
+ * so a break in it may be one the page already held. The placement rule
+ * refuses the first and only warns about the second. A single and a localized
+ * field are read like any other, in the language the write is judged in.
  */
 export async function readStoredForms(
   write: PluginFieldWrite | undefined,
@@ -69,32 +75,72 @@ export async function readStoredForms(
    */
   changed: readonly boolean[] = [false, true],
   /**
-   * Whether the field is localized. Its stored value is refused to this
-   * reader by design, so it is unreadable without asking; any other failure
-   * to read is an error and propagates rather than passing a write.
+   * Whether the field is localized. Its stored value is read in the write's
+   * language, and the read answers "unavailable" while that language's store
+   * is not ready: that answer makes it unreadable rather than failing the
+   * write.
+   * Any other failure to read is an error and propagates rather than passing
+   * a write.
    */
   localized = false
 ): Promise<{ forms: BlockDocument[]; readable: boolean }> {
-  if (write === undefined) return { forms: [], readable: true };
-  if (write.kind !== "collection" || localized) {
-    return { forms: [], readable: false };
+  const document = storedDocumentOf(write);
+  if (write === undefined || document === undefined) {
+    return { forms: [], readable: true };
   }
-  const id = write.id;
-  if (id === undefined) return { forms: [], readable: true };
   const forms: BlockDocument[] = [];
   for (const draft of changed) {
-    const form = draft ? "draft" : "published";
-    const read = await write.readStored({
-      collection: write.slug,
-      id,
-      field,
-      form,
-    });
+    const read = await readOneForm(
+      write,
+      { ...document, field, form: draft ? "draft" : "published" },
+      localized
+    );
+    if (read === UNREADABLE) return { forms: [], readable: false };
     if (read.kind === "value" && isForest(read.value)) {
       forms.push(read.value as BlockDocument);
     }
   }
   return { forms, readable: true };
+}
+
+/** A stored form that cannot be read yet: its language store is not ready. */
+const UNREADABLE = Symbol("unreadable");
+
+/**
+ * One stored form, read in the write's language; {@link UNREADABLE} only for
+ * a translated field whose language store is not ready yet. Any other failure
+ * is an error, and passing it off as unreadable would wave a write through.
+ */
+async function readOneForm(
+  write: PluginFieldWrite,
+  target: PluginStoredValueTarget,
+  localized: boolean
+): Promise<PluginStoredValue | typeof UNREADABLE> {
+  try {
+    return await write.readStored(
+      write.locale === undefined ? target : { ...target, locale: write.locale }
+    );
+  } catch (error) {
+    if (localized && NextlyError.isCode(error, "SERVICE_UNAVAILABLE")) {
+      return UNREADABLE;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Which stored document the write is to: a single by its slug, or a
+ * collection's entry by its id; `undefined` for a create, which stores nothing
+ * yet to read.
+ */
+function storedDocumentOf(
+  write: PluginFieldWrite | undefined
+): { single: string } | { collection: string; id: string } | undefined {
+  if (write === undefined) return undefined;
+  if (write.kind === "single") return { single: write.slug };
+  return write.id === undefined
+    ? undefined
+    : { collection: write.slug, id: write.id };
 }
 
 /**

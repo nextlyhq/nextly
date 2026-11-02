@@ -281,7 +281,9 @@ export function DocumentViewBody({
     control: form.control,
     readOnly: lock.readOnly,
     exit,
-    ...(editing.kind === "field" ? { field: editing.declaration } : {}),
+    ...(editing.kind === "field"
+      ? { field: editing.declaration, fieldPath: editing.name }
+      : {}),
   };
 
   return (

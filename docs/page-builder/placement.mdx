@@ -31,6 +31,13 @@ Where a page's saved value cannot be read back to compare against (a single, or 
 translated per language), a break is kept with a warning and written to the server log
 rather than refused.
 
+The editor offers to repair such a page. A **Repair this page** notice lists each block
+that breaks the rule and where it will go: just after the nearest container that allows
+it, with its settings and everything inside it. Nothing changes until you choose
+**Repair**, no block is removed, and one undo takes the whole repair back. Locked areas
+are repaired first. A block with nowhere on the page it may go stays where it is, and
+the notice says so.
+
 ## Declare what your block is
 
 A block from a plugin can say what it is as HTML through an optional `contentModel`. It
@@ -41,7 +48,7 @@ the page builder is stable.
 ```tsx
 import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 
-export const promo = defineBlock({
+export const promo = defineBlock<{ href?: string }>({
   name: "acme/promo",
   version: 1,
   description: "A promotion panel that can link somewhere as a whole.",

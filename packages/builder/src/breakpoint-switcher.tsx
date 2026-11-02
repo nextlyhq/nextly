@@ -103,6 +103,18 @@ function deviceOptions(breakpoints: BreakpointSet | undefined): DeviceOption[] {
   ];
 }
 
+/**
+ * What the switcher calls the device for this tier, or `undefined` for a tier
+ * it does not offer (a container tier). Read from the switcher's own list, so
+ * a surface naming the device being edited says what the switcher says.
+ */
+export function deviceLabel(
+  breakpoints: BreakpointSet | undefined,
+  id: BreakpointId
+): string | undefined {
+  return deviceOptions(breakpoints).find(option => option.id === id)?.label;
+}
+
 export function BreakpointSwitcher({
   breakpoints,
   selected,
@@ -182,9 +194,14 @@ export function BreakpointSwitcher({
           >
             <Glyph className="size-3.5" aria-hidden="true" />
             {/* The chosen device's name and the width it is previewed at; the
-                others are told apart by their glyph, name and tooltip. */}
+                others are told apart by their glyph, name and tooltip. The
+                first thing the top bar gives up when it is narrow: the glyph,
+                the accessible name and the tooltip still say which it is. */}
             {isSelected ? (
-              <span aria-hidden="true" className="tabular-nums">
+              <span
+                aria-hidden="true"
+                className="tabular-nums @max-[1400px]/topbar:hidden"
+              >
                 {option.preview === undefined
                   ? option.label
                   : `${option.label} · ${option.preview}px`}

@@ -5,8 +5,10 @@
  *
  * `empty-container-appender.test.tsx` (in the builder package) asserts the
  * component's own behaviour given `hidden`. What is only true HERE is the
- * WIRING: that this field folds the author's "Show empty containers"
- * preference into that prop at all. The component was mounted with no
+ * WIRING: that this field folds the shell's `showEmptyElements` report into
+ * that prop at all. The shell reports it as always shown now that the top
+ * bar has no control to hide empty containers; the report, and this wiring,
+ * stay until the preference itself is removed. The component was mounted with no
  * awareness of the preference — it reads only `hidden` and the document — so
  * without this wiring the dashed placeholder box collapses to zero height
  * when the preference is off (that CSS rule already matches the preference)
@@ -194,6 +196,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
   useDocumentActions: () => null,
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
   useDocumentStatus: () => null,
   // Nothing stored, read successfully — so `siteStylePending` and
   // `siteStyleError` both resolve to their "ready" values on the first

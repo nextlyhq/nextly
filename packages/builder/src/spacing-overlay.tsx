@@ -87,7 +87,7 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
-import { designLockOf, lockViewOf } from "./inspector";
+import { designIsWritable, lockViewOf } from "./inspector";
 import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
@@ -595,14 +595,15 @@ export function SpacingOverlay({
    */
   const singular = editor.selection.ids.length <= 1;
   /*
-   * No handles either for a block inside an area locked to its content: they
-   * write its spacing, which the lock fixes. Asked of the rule the inspector
-   * holds its Style tab read-only by, so the panel and the canvas agree. The
-   * bands stay, for the reason above.
+   * No handles either for a block whose design is held — its own Layers lock,
+   * or an area locked to its content: they write its spacing, which either
+   * lock fixes. Asked of the rule the inspector holds its Style tab read-only
+   * by, so the panel and the canvas agree. The bands stay, for the reason
+   * above.
    */
   const designHeld =
     selectedId !== null &&
-    designLockOf(document, selectedId, lockViewOf(editor)) !== undefined;
+    !designIsWritable(document, selectedId, lockViewOf(editor));
 
   /*
    * Measured before the browser paints, so the bands never appear over the

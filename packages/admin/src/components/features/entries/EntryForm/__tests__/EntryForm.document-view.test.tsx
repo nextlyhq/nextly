@@ -919,6 +919,36 @@ describe("a field-type view on a document with two fields of its type", () => {
     expect(received).toHaveBeenLastCalledWith(
       expect.objectContaining({
         field: expect.objectContaining({ name: "layout", type: "blocks" }),
+        fieldPath: "layout",
+      })
+    );
+  });
+
+  it("hands a field inside a named group its path from the document's root", () => {
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=hero.body"
+    );
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "hero",
+            type: "group",
+            fields: [{ name: "body", type: "blocks" }],
+          },
+        ],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    // The declaration keeps its own name; the path is how the form reaches it.
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        field: expect.objectContaining({ name: "body", type: "blocks" }),
+        fieldPath: "hero.body",
       })
     );
   });

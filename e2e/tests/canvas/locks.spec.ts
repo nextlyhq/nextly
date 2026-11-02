@@ -67,7 +67,7 @@ test.describe("the editor inside locked areas", () => {
     await open(page);
     expect(await tree(page)).toEqual(PLACED);
     await expect(
-      page.getByRole("region", { name: "Locked areas" })
+      page.getByRole("region", { name: "Repair this page" })
     ).toHaveCount(0);
   });
 
@@ -176,18 +176,25 @@ test.describe("the editor inside locked areas", () => {
     await expect(page.getByText(SEALED_DESIGN)).toBeVisible();
     await expect(page.getByLabel("Text", { exact: true })).toBeEnabled();
     await expect(page.getByLabel("Level", { exact: true })).toBeDisabled();
-    await expect(page.getByLabel("Lock this block")).toBeDisabled();
+    // The block's own lock is held with its design: the card's menu shows
+    // Lock disabled, with the reason.
+    await page.getByRole("button", { name: "Actions for Heading" }).click();
+    await expect(page.getByRole("menuitem", { name: /^Lock/ })).toBeDisabled();
+    await page.keyboard.press("Escape");
     // Content still saves through the store.
     const text = page.getByLabel("Text", { exact: true });
     await text.fill("Spring sale");
     await text.blur();
     await expect.poll(() => undoDepth(page)).toBe(1);
 
-    // The Style tab is shown, every control in it held.
+    // The Style tab is shown, every control that edits held. A section's
+    // toggle and the state switcher only choose what is shown.
     await page.getByRole("tab", { name: "Style" }).click();
     const controls = page
       .getByRole("tabpanel")
-      .locator("input, button, select, textarea");
+      .locator(
+        'input, button:not([aria-expanded]):not([role="radio"]), select, textarea'
+      );
     expect(await controls.count()).toBeGreaterThan(0);
     for (const control of await controls.all()) {
       await expect(control).toBeDisabled();
@@ -221,7 +228,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
   }) => {
     await open(page, "broken");
     expect(await tree(page)).toEqual(BROKEN);
-    const notice = page.getByRole("region", { name: "Locked areas" });
+    const notice = page.getByRole("region", { name: "Repair this page" });
     await notice.getByRole("button", { name: "Review the repair" }).click();
 
     await expect(notice.getByRole("listitem")).toHaveText([
@@ -239,7 +246,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
     page,
   }) => {
     await open(page, "broken");
-    const notice = page.getByRole("region", { name: "Locked areas" });
+    const notice = page.getByRole("region", { name: "Repair this page" });
     await notice.getByRole("button", { name: "Review the repair" }).click();
     await notice.getByRole("button", { name: "Repair" }).click();
 
@@ -257,7 +264,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
       ]);
     expect(await undoDepth(page)).toBe(1);
     await expect(
-      page.getByRole("region", { name: "Locked areas" })
+      page.getByRole("region", { name: "Repair this page" })
     ).toHaveCount(0);
 
     // One undo takes the whole repair back, and the notice with it.
@@ -267,7 +274,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
     await page.keyboard.press("Control+z");
     await expect.poll(() => tree(page)).toEqual(BROKEN);
     await expect(
-      page.getByRole("region", { name: "Locked areas" })
+      page.getByRole("region", { name: "Repair this page" })
     ).toBeVisible();
   });
 });

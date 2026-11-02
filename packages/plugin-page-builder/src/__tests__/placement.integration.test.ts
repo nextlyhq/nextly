@@ -332,35 +332,51 @@ describe.each(getConfiguredTestDialects())(
       ).resolves.toBeDefined();
     });
 
-    it("keeps a break it cannot judge against a stored value it cannot read, and logs it", async () => {
+    it("refuses a new break in a translated field, judged against the stored translation", async () => {
       const t = await boot({ translated: true });
       ruleOn();
-      // A localized field's stored value is refused to the reader, so a break
-      // it holds may be one the page always held.
+      // The localized field's stored value is read in the language written,
+      // so a break the stored page never held is the write's own.
       const created = await t.nextly.create({
         collection: "articles",
         data: { title: "Hello", content: pageOf([note("first")]) },
         overrideAccess: true,
       });
       const box = { ...brokenBox(), slots: { children: [cta("cta")] } };
+
+      const issues = issuesOf(
+        await refusalOf(
+          t.nextly.update({
+            collection: "articles",
+            id: String(created.item.id),
+            data: { content: pageOf([box]) },
+            overrideAccess: true,
+          })
+        )
+      );
+      expect(issues.map(issue => issue.code)).toEqual(["content-model"]);
+    });
+
+    it("keeps a break the stored translation already holds, so an unrelated edit saves", async () => {
+      const t = await boot({ translated: true });
+      // Stored before the rule applied, as a page written earlier was.
+      ruleOff();
+      const created = await t.nextly.create({
+        collection: "articles",
+        data: { title: "Hello", content: pageOf([brokenBox()]) },
+        overrideAccess: true,
+      });
+      ruleOn();
+
       const saved = await t.nextly.update({
         collection: "articles",
         id: String(created.item.id),
-        data: { content: pageOf([box]) },
+        data: { content: pageOf([brokenBox(), note("added")]) },
         overrideAccess: true,
       });
-      expect(saved.item).toBeDefined();
-      expect(warnings.some(line => line.includes("block placement"))).toBe(
-        true
-      );
-      // Names the entry, so an operator can find the page to repair.
-      expect(warned).toContainEqual(
-        expect.objectContaining({
-          kind: "collection",
-          slug: "articles",
-          id: String(created.item.id),
-        })
-      );
+      const content = (saved.item as { content?: { nodes?: BlockNode[] } })
+        .content;
+      expect(content?.nodes?.map(n => n.id)).toEqual(["box", "added"]);
     });
   }
 );

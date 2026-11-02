@@ -1592,6 +1592,11 @@ export class SingleMutationService extends BaseService {
     enforceLocalizedRequired: boolean;
     /** The Single's stored document id, which a read rule is handed. */
     entryId: string;
+    /**
+     * The language the save is in, where the Single is kept per language;
+     * validators reading what it already stores read this language's value.
+     */
+    writeLocale: string | undefined;
     user: UpdateSingleOptions["user"];
     /** Who the refusal is told to, with the scope a key arrived with. */
     reader: IssueReader;
@@ -1619,6 +1624,9 @@ export class SingleMutationService extends BaseService {
         write: entryWriteContext({
           kind: "single",
           slug,
+          ...(args.writeLocale === undefined
+            ? {}
+            : { locale: args.writeLocale }),
           connection: {
             db: this.adapter,
             executor: undefined,
@@ -2093,6 +2101,9 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames,
         enforceLocalizedRequired,
         entryId: String(documentId),
+        // The language the save is in, also where only embedded field-group
+        // content is kept per language; the default comes back out as none.
+        writeLocale: snapshotLocale,
         user: options.user,
         reader: {
           user: options.user,
