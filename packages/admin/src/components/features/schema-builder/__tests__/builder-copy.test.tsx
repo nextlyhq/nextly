@@ -61,7 +61,7 @@ import { BuilderSettingsModal } from "../BuilderSettingsModal";
 import { BuilderToolbar } from "../BuilderToolbar";
 import type { BuilderConfig, BuilderKind } from "../builder-config";
 import { FieldEditorSheet } from "../FieldEditorSheet";
-import { FieldPickerModal } from "../FieldPickerModal";
+import { BuilderFieldPicker } from "../BuilderFieldPicker";
 import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 import type { BuilderField, SchemaChangeConfirmation } from "../types";
 
@@ -471,11 +471,14 @@ const SURFACES: readonly Surface[] = [
   {
     name: "field picker",
     ui: (
-      <FieldPickerModal
-        open
-        excludedTypes={[]}
+      <BuilderFieldPicker
+        config={configFor("collection")}
+        fields={[]}
+        position={{}}
+        entitySlug="posts"
         onCancel={() => {}}
-        onSelect={() => {}}
+        onFieldsChange={() => {}}
+        onAdded={() => {}}
       />
     ),
   },
