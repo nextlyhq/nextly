@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "../support/visible";
 
 /**
  * The builder's harness routes do not exist in the build a visitor gets.

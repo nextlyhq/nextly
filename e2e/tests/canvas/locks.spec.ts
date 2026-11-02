@@ -1,4 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+
+import { includingHidden, test } from "../support/test";
 
 import {
   announcer,
@@ -194,7 +196,7 @@ test.describe("the editor inside locked areas", () => {
     await clickBlock(page, "lk-free-heading");
     await page.getByRole("tab", { name: "Content" }).click();
     await expect(page.getByLabel("Level", { exact: true })).toBeEnabled();
-    await expect(page.getByText(SEALED_DESIGN)).toHaveCount(0);
+    await expect(includingHidden(page).getByText(SEALED_DESIGN)).toHaveCount(0);
   });
 });
 
