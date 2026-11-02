@@ -12238,6 +12238,74 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * A delete of one entry asked before any hook runs: the caller's grant
+   * first, before anything about the entry's languages is read; then each
+   * language the entry holds, with each filter answered matched in its
+   * language and kept for the row lock. The refusal, or the languages asked
+   * and the filters to match again.
+   */
+  private async deleteAskedInEachLanguage(args: {
+    entry: Omit<
+      Parameters<CollectionMutationService["languagesToDelete"]>[0],
+      "tx"
+    >;
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+    params: FilteredWriteCheck["params"];
+    appliesFilter: boolean;
+  }): Promise<
+    | { refusal: CollectionServiceResult }
+    | { languages: string[]; filters: FilteredWriteCheck[] }
+  > {
+    const withoutGrant = await this.deleteGrantRefusal(args.params);
+    if (withoutGrant) return { refusal: withoutGrant };
+    // The companion is read for the entry's languages, so it is ready first.
+    await this.warmLocalizedReadiness(args.entry.collectionName);
+    const languages = await this.languagesToDelete(args.entry);
+    if (languages === undefined) {
+      return {
+        refusal: this.languagesUnknownRefusal(args.entry.collectionName),
+      };
+    }
+    const filters: FilteredWriteCheck[] = [];
+    const denied = await this.deleteRefusalInEachLanguage(filters, {
+      schema: args.schema,
+      params: args.params,
+      appliesFilter: args.appliesFilter,
+      languages,
+    });
+    return denied ? { refusal: denied } : { languages, filters };
+  }
+
+  /**
+   * The refusal of a delete whose entry's languages, read again on `tx` as
+   * its row is locked, are not those its rule was asked in, or `null`. Any
+   * change is a conflict: a language gained was not asked about, and one lost
+   * changes what every language was told, so the answers asked are not the
+   * delete's. Languages that cannot be read refuse it too.
+   */
+  private async deleteLanguagesChangedUnderLock(
+    tx: TransactionContext,
+    entry: Omit<
+      Parameters<CollectionMutationService["languagesToDelete"]>[0],
+      "tx"
+    >,
+    asked: readonly string[]
+  ): Promise<CollectionServiceResult | null> {
+    const locked = await this.languagesToDelete({ ...entry, tx });
+    if (locked === undefined) {
+      return this.languagesUnknownRefusal(entry.collectionName);
+    }
+    const unasked = unaskedLanguages(asked, locked);
+    const lost = unaskedLanguages(locked, asked);
+    if (unasked.length === 0 && lost.length === 0) return null;
+    return errorToServiceResult(
+      languagesChangedConflict([...unasked, ...lost]),
+      { defaultMessage: "Failed to delete entry" },
+      this.dialect
+    );
+  }
+
+  /**
    * The refusal of a delete whose entry's languages cannot be read yet: the
    * companion is not resolved, so which languages the delete removes, and so
    * which rules it owes, is not known.
@@ -13466,24 +13534,14 @@ export class CollectionMutationService extends BaseService {
           collection.fields ||
           []) as FieldConfig[],
       };
-      // A caller without the delete grant is refused before anything about
-      // the entry's languages is read.
-      const withoutGrant = await this.deleteGrantRefusal(accessParams);
-      if (withoutGrant) return withoutGrant;
-      // The companion is read for the entry's languages, so it is ready first.
-      await this.warmLocalizedReadiness(params.collectionName);
-      const askedLanguages = await this.languagesToDelete(deleteLanguages);
-      if (askedLanguages === undefined) {
-        return this.languagesUnknownRefusal(params.collectionName);
-      }
-      const deleteFilters: FilteredWriteCheck[] = [];
-      const denied = await this.deleteRefusalInEachLanguage(deleteFilters, {
+      const asked = await this.deleteAskedInEachLanguage({
+        entry: deleteLanguages,
         schema,
         params: accessParams,
         appliesFilter: params.appliesFilter !== false,
-        languages: askedLanguages,
       });
-      if (denied) return denied;
+      if ("refusal" in asked) return asked.refusal;
+      const { languages: askedLanguages, filters: deleteFilters } = asked;
       const { storedHooks, tableName, sharedContext, requestFacts } =
         this.operationSetup(collection, params);
 
@@ -13616,31 +13674,12 @@ export class CollectionMutationService extends BaseService {
           .where(eq(schema.id, params.entryId))
           .limit(1);
         if (!currentRow) return; // a concurrent delete won the race.
-        // A language the entry gained since it was judged was not asked
-        // about, so the delete is refused as a conflict rather than remove it.
-        const lockedLanguages = await this.languagesToDelete({
-          ...deleteLanguages,
+        refusedUnderLock = await this.deleteLanguagesChangedUnderLock(
           tx,
-        });
-        if (lockedLanguages === undefined) {
-          refusedUnderLock = this.languagesUnknownRefusal(
-            params.collectionName
-          );
-          return;
-        }
-        // Any change to the languages since they were asked is a conflict:
-        // one gained was not asked about, and one lost changes what every
-        // language was told, so the answers asked are not the delete's.
-        const unasked = unaskedLanguages(askedLanguages, lockedLanguages);
-        const lost = unaskedLanguages(lockedLanguages, askedLanguages);
-        if (unasked.length > 0 || lost.length > 0) {
-          refusedUnderLock = errorToServiceResult(
-            languagesChangedConflict([...unasked, ...lost]),
-            { defaultMessage: "Failed to delete entry" },
-            this.dialect
-          );
-          return;
-        }
+          deleteLanguages,
+          askedLanguages
+        );
+        if (refusedUnderLock) return;
         refusedUnderLock = await this.refusalOutsideWriteFilters(
           tx,
           schema,
