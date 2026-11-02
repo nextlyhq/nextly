@@ -497,6 +497,24 @@ describe("detach, duplicate and update a pattern", () => {
     });
   });
 
+  it("dims Duplicate for a locked placement, whose re-point is an edit", () => {
+    const locked = node("p", "nextly/component-instance", {
+      props: { componentId: "card" },
+      locked: true,
+    });
+    const actions = toolbarActions(
+      documentOf([locked]),
+      "p",
+      ["p"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    );
+
+    expect(actionOf(actions, "duplicate-component").enabled).toBe(false);
+  });
+
   it("offers Update a pattern for a savable run, dimmed without the grant", () => {
     const document = documentOf([node("a"), node("b")]);
     const allowed = toolbarActions(

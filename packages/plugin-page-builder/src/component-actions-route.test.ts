@@ -292,6 +292,49 @@ describe("detaching a placement", () => {
     expect(journal).toEqual([]);
   });
 
+  it("reads the definitions in the language the editor shows", async () => {
+    const { ctx } = contextOver();
+    const asked: unknown[] = [];
+    const reads: ComponentActionReads = {
+      ...readsOver({ published: { card: card(CARD) } }),
+      shown: (id, _ctx, locale) => {
+        asked.push(locale);
+        return Promise.resolve(id === "card" ? card(CARD) : null);
+      },
+    };
+
+    await detachPlacement(
+      request({ document: doc, instanceId: "p", locale: "fr" }),
+      ctx,
+      { reads }
+    );
+
+    expect(asked).toContain("fr");
+  });
+
+  it("reads and writes a stored page in the language named", async () => {
+    const { ctx, services } = contextOver();
+    const reads = readsOver({
+      stored: doc,
+      shown: { card: card(CARD) },
+      published: { card: card(CARD) },
+    });
+
+    await detachPlacement(
+      request({
+        apply: "stored",
+        page: { collection: "pages", id: "page-1", locale: "fr" },
+        instanceId: "p",
+      }),
+      ctx,
+      { reads }
+    );
+
+    expect(services.updateEntry.mock.calls[0]?.[3]).toMatchObject({
+      locale: "fr",
+    });
+  });
+
   it("refuses a block that is not a placement", async () => {
     const { ctx } = contextOver();
     const error = await thrownBy(
@@ -447,6 +490,27 @@ describe("duplicating a component", () => {
     );
     expect(error.statusCode).toBe(422);
     expect(journal).toEqual([]);
+  });
+
+  it("answers 404 for a source the caller may not read", async () => {
+    const { ctx, journal } = contextOver({ params: { id: "card" } });
+    const error = await thrownBy(
+      duplicateComponent(request({}), ctx, { reads: readsOver({}) })
+    );
+    expect(error.statusCode).toBe(404);
+    expect(journal).toEqual([]);
+  });
+
+  it("still answers success when the origin cannot be recorded", async () => {
+    const { ctx } = contextOver({ params: { id: "card" } });
+    const response = await duplicateComponent(request({}), ctx, {
+      reads: readsOver({ published: { card: card(CARD) } }),
+      origins: () => ({
+        record: () => Promise.reject(new Error("bookkeeping unavailable")),
+        sourceOf: () => Promise.resolve(null),
+      }),
+    });
+    expect(response.status).toBe(201);
   });
 
   it("refuses a placement of a different component", async () => {

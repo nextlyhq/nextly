@@ -28,7 +28,7 @@ export type CompositionRouteContext = Pick<
   PluginRouteContext,
   "self" | "user" | "caller" | "authenticatedScope"
 > &
-  Partial<Pick<PluginRouteContext, "params">> & {
+  Partial<Pick<PluginRouteContext, "params" | "logger">> & {
     services: {
       collections: Pick<
         PluginRouteContext["services"]["collections"],

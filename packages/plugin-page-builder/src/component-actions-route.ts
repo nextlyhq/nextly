@@ -91,6 +91,8 @@ const PlacementBody = z.union([
     apply: z.literal("library").optional(),
     document: z.unknown(),
     instanceId: z.string().min(1),
+    // The language the editor shows components in, for a translated field.
+    locale: z.string().min(1).optional(),
   }),
   z.strictObject({
     apply: z.literal("stored"),
@@ -98,6 +100,7 @@ const PlacementBody = z.union([
       collection: z.string().min(1),
       id: z.string().min(1),
       field: z.string().min(1).optional(),
+      locale: z.string().min(1).optional(),
     }),
     instanceId: z.string().min(1),
   }),
@@ -124,13 +127,21 @@ const UpdatePatternBody = z.strictObject({
 export interface ComponentActionReads {
   /** A stored page's blocks document, read as the caller, or `null`. */
   page(
-    address: { collection: string; id: string; field: string },
+    address: StoredAt,
     ctx: CompositionRouteContext
   ): Promise<BlockDocument | null>;
   /** A component as the canvas shows it to this caller: its draft overlaid. */
-  shown(id: string, ctx: CompositionRouteContext): Promise<ReadComponent>;
-  /** A component as pages draw it: its published definition. */
-  published(id: string): Promise<ReadComponent>;
+  shown(
+    id: string,
+    ctx: CompositionRouteContext,
+    locale: string | undefined
+  ): Promise<ReadComponent>;
+  /** A component as pages draw it, published, as this caller may read it. */
+  published(
+    id: string,
+    ctx: CompositionRouteContext,
+    locale: string | undefined
+  ): Promise<ReadComponent>;
   /** A pattern's row as the caller may read it, or `null`. */
   pattern(id: string, ctx: CompositionRouteContext): Promise<unknown>;
 }
@@ -148,12 +159,22 @@ export interface ComponentActionsSetup extends CompositionRouteSetup {
   readonly origins?: () => OriginStore | undefined;
 }
 
+/** A stored page's address, with its field defaulted. */
+interface StoredAt {
+  readonly collection: string;
+  readonly id: string;
+  readonly field: string;
+  readonly locale?: string;
+}
+
 /** A placement resolved against the page that holds it. */
 interface PlacementIn {
   readonly document: BlockDocument;
   readonly instanceId: string;
   /** The stored page, when the server applies the ops itself. */
-  readonly stored?: { collection: string; id: string; field: string };
+  readonly stored?: StoredAt;
+  /** The language components are read in, when the field is translated. */
+  readonly locale?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +194,7 @@ export async function detachPlacement(
   const componentId = placedComponentId(at);
   const limits = setup.limits?.() ?? undefined;
 
-  const shown = await readShownLibrary(at.document, reads, ctx, limits);
+  const shown = await readShownLibrary(at, reads, ctx, limits);
   const plan = planDetach(
     at.document,
     at.instanceId,
@@ -183,7 +204,7 @@ export async function detachPlacement(
   );
   if (plan.problem !== undefined) throw planRefusal(plan, "detach");
 
-  const live = await reads.published(componentId);
+  const live = await reads.published(componentId, ctx, at.locale);
   const drawn = shown.titles.get(componentId);
   const result = (dryRun: boolean): DetachResult => ({
     dryRun,
@@ -221,7 +242,7 @@ export async function detachPlacement(
  * component's title for the answer.
  */
 async function readShownLibrary(
-  document: BlockDocument,
+  at: PlacementIn,
   reads: ComponentActionReads,
   ctx: CompositionRouteContext,
   limits: DocumentLimits | undefined
@@ -231,14 +252,14 @@ async function readShownLibrary(
 }> {
   const titles = new Map<string, string>();
   const source: ComponentSource = async id => {
-    const read = await reads.shown(id, ctx);
+    const read = await reads.shown(id, ctx, at.locale);
     if (read === null) return { kind: "absent" };
     titles.set(id, read.title);
     return { kind: "document", document: read.document };
   };
   const library = heldLibrary();
   await composeWithReads({
-    host: document,
+    host: at.document,
     library,
     read: documentReader(source, true),
     limits: limits ?? DEFAULT_LIMITS,
@@ -266,7 +287,7 @@ export async function duplicateComponent(
   const body = await readBodyWith(req, DuplicateBody, "duplicate");
   const reads = setup.reads ?? directReads(setup, ctx);
   const sourceId = ctx.params?.id ?? "";
-  const source = await reads.published(sourceId);
+  const source = await reads.published(sourceId, ctx, undefined);
   if (source === null) {
     throw NextlyError.notFound({
       logContext: { reason: "duplicate-source-missing" },
@@ -334,7 +355,7 @@ export async function duplicateComponent(
         )
       : await duplicateStored(ctx, store.collection, data, at, repoint, limits);
 
-  await setup.origins?.()?.record(id, sourceId);
+  await recordOrigin(ctx, setup, id, sourceId);
   await reconcileAfterCommit(setup, [
     { slug: store.collection, documentId: id },
     ...(at?.stored === undefined
@@ -346,6 +367,27 @@ export async function duplicateComponent(
     result(id, false),
     { status: 201 }
   );
+}
+
+/**
+ * Record where the copy came from. Logged, never raised: the copy has been
+ * made, and failing here would report it as not made and invite a retry
+ * that makes a second.
+ */
+async function recordOrigin(
+  ctx: CompositionRouteContext,
+  setup: ComponentActionsSetup,
+  copyId: string,
+  sourceId: string
+): Promise<void> {
+  try {
+    await setup.origins?.()?.record(copyId, sourceId);
+  } catch (error) {
+    ctx.logger?.warn(
+      "[page-builder] a duplicated component's origin could not be recorded",
+      { copyId, sourceId, error }
+    );
+  }
 }
 
 /** A stored duplicate's create and the page's re-point, in one transaction. */
@@ -377,7 +419,7 @@ async function duplicateStored(
       stored.collection,
       stored.id,
       { [stored.field]: converted },
-      asCaller(ctx)
+      asCaller(ctx, stored.locale)
     );
     return id;
   });
@@ -460,12 +502,17 @@ async function placementIn(
   body: z.infer<typeof PlacementBody>
 ): Promise<PlacementIn> {
   if (body.apply !== "stored") {
-    return { document: documentOf(body.document), instanceId: body.instanceId };
+    return {
+      document: documentOf(body.document),
+      instanceId: body.instanceId,
+      ...(body.locale === undefined ? {} : { locale: body.locale }),
+    };
   }
-  const stored = {
+  const stored: StoredAt = {
     collection: body.page.collection,
     id: body.page.id,
     field: body.page.field ?? DEFAULT_PAGE_FIELD,
+    ...(body.page.locale === undefined ? {} : { locale: body.page.locale }),
   };
   if (!(await ctx.caller?.can("update", stored.collection))) {
     throw NextlyError.forbidden({
@@ -482,6 +529,7 @@ async function placementIn(
     document: documentOf(document),
     instanceId: body.instanceId,
     stored,
+    ...(stored.locale === undefined ? {} : { locale: stored.locale }),
   };
 }
 
@@ -517,7 +565,7 @@ async function writeStoredPage(
     stored.collection,
     stored.id,
     { [stored.field]: next },
-    asCaller(ctx)
+    asCaller(ctx, stored.locale)
   );
 }
 
@@ -557,6 +605,7 @@ function directReads(
             collection: address.collection,
             id: address.id,
             ...(await readingAsUser(caller)),
+            ...(address.locale === undefined ? {} : { locale: address.locale }),
             status: "all",
             draft: true,
             depth: 0,
@@ -564,26 +613,30 @@ function directReads(
         ),
         address.field
       ),
-    shown: async (id, caller) =>
+    shown: async (id, caller, locale) =>
       component(
         await readOrNull(async () =>
           requireNextly().findByID({
             collection: store.collection,
             id,
             ...(await readingAsUser(caller)),
+            ...(locale === undefined ? {} : { locale }),
             status: "all",
             draft: true,
             depth: 0,
           })
         )
       ),
-    published: async id =>
+    // As the caller, in public states only: a source the caller may not
+    // read is not one it may copy.
+    published: async (id, caller, locale) =>
       component(
-        await readOrNull(() =>
+        await readOrNull(async () =>
           requireNextly().findByID({
             collection: store.collection,
             id,
-            overrideAccess: true,
+            ...(await readingAsUser(caller)),
+            ...(locale === undefined ? {} : { locale }),
             depth: 0,
           })
         )

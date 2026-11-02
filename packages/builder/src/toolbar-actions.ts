@@ -274,10 +274,29 @@ function placementActions(
     enabled: true,
     inMenu: true,
   };
+  if (!offer.mayCreate) {
+    actions.push({
+      ...duplicate,
+      enabled: false,
+      reason: MAKE_COMPONENT_GRANT_REFUSAL,
+    });
+    return actions;
+  }
+  // The re-point is an edit of the placement, so a lock on it, or on the slot
+  // it sits in, refuses Duplicate as it would any edit.
+  const held = lockBlockingDelete(document, only);
   actions.push(
-    offer.mayCreate
-      ? duplicate
-      : { ...duplicate, enabled: false, reason: MAKE_COMPONENT_GRANT_REFUSAL }
+    held === undefined
+      ? heldByLock(duplicate, ask, [
+          {
+            kind: "update",
+            id: only,
+            patch: {
+              props: { ...node.props, componentId: PLANNED_COMPONENT_ID },
+            },
+          },
+        ])
+      : { ...duplicate, enabled: false, reason: lockedBy(held, only) }
   );
   return actions;
 }

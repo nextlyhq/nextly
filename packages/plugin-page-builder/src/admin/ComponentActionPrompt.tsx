@@ -28,6 +28,7 @@ import {
   useModalKeyboardHold,
   type EditorState,
 } from "@nextlyhq/builder/shell";
+import { useDocumentLocale } from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
   AlertDescription,
@@ -78,7 +79,7 @@ export interface ComponentActionPromptProps {
 }
 
 /** How long a duplicate waits for the canvas to hold the copy. */
-const DEFINITION_WAIT_MS = 4000;
+const DEFINITION_WAIT_MS = 8000;
 
 /** The form for the verb asked for, or nothing while none is. */
 export function ComponentActionPrompt(
@@ -236,6 +237,7 @@ function DetachForm({
   placed: Placed;
 }): React.JSX.Element {
   const detach = useDetach();
+  const locale = useDocumentLocale()?.code ?? undefined;
   const [plan, setPlan] = React.useState<DetachResult | null | undefined>();
   const send = detach.send;
   React.useEffect(() => {
@@ -243,6 +245,7 @@ function DetachForm({
     void send({
       document: request.document,
       instanceId: placed.instanceId,
+      ...(locale === undefined ? {} : { locale }),
       dryRun: true,
     }).then(answer => {
       if (live) setPlan(answer ?? null);
@@ -250,7 +253,7 @@ function DetachForm({
     return () => {
       live = false;
     };
-  }, [send, request.document, placed.instanceId]);
+  }, [send, request.document, placed.instanceId, locale]);
 
   const name = plan?.component.title || "this component";
   const confirm = () => {
@@ -333,28 +336,31 @@ function DuplicateForm({
     ops: readonly BuilderOp[];
   } | null>(null);
 
-  // The re-point, applied once the canvas holds the copy, or after a bounded
-  // wait, so the placement never flashes as missing.
+  // The re-point, applied once the canvas holds the copy and never before, so
+  // the placement is never left drawing a definition the editor lacks.
   const definitions = library.definitions;
   const { applyAll } = editor;
   React.useEffect(() => {
     if (pending === null) return;
-    const apply = () => {
-      if (applyAll(pending.ops) === null) {
-        toast.error(
-          "The copy was created, but this placement could not be pointed at it. It is in your library, unused."
-        );
-      } else {
-        toast.success("Component duplicated");
-      }
+    const unused = (why: string) => {
+      toast.error(
+        `The copy was created, but ${why}. It is in your library, unused, and this placement is unchanged.`
+      );
       onClose();
     };
-    if (definitions.has(pending.id)) {
-      apply();
+    if (!definitions.has(pending.id)) {
+      const timer = window.setTimeout(
+        () => unused("this editor could not load it"),
+        DEFINITION_WAIT_MS
+      );
+      return () => window.clearTimeout(timer);
+    }
+    if (applyAll(pending.ops) === null) {
+      unused("this placement could not be pointed at it");
       return;
     }
-    const timer = window.setTimeout(apply, DEFINITION_WAIT_MS);
-    return () => window.clearTimeout(timer);
+    toast.success("Component duplicated");
+    onClose();
   }, [pending, definitions, applyAll, onClose]);
 
   const submit = async () => {
@@ -462,7 +468,14 @@ function UpdatePatternForm({
       setFailed(true);
       return;
     }
-    if (answer.pageOps.length > 0) editor.applyAll(answer.pageOps);
+    if (answer.pageOps.length > 0 && editor.applyAll(answer.pageOps) === null) {
+      // The pattern is updated; only this page's record of it is stale.
+      toast.warning(
+        `Updated ${pattern.title}, but this page could not record it, so the blocks may show as changed from it.`
+      );
+      onClose();
+      return;
+    }
     toast.success(`Updated ${pattern.title}`);
     onClose();
   };

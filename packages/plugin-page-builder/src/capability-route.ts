@@ -112,8 +112,8 @@ export async function mayCreateComponent(
 
 /**
  * Whether this caller may replace a pattern's content from a selection:
- * `update` and `publish` on the collection the host resolved, the grants the
- * update-pattern route asks for.
+ * `read` (to choose the pattern and for the route's own read of it),
+ * `update` and `publish` on the collection the host resolved.
  */
 export async function mayUpdatePattern(
   ctx: CapabilityRouteContext
@@ -121,6 +121,7 @@ export async function mayUpdatePattern(
   if (ctx.caller === null) return false;
   const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
   return (
+    (await ctx.caller.can("read", slug)) &&
     (await ctx.caller.can("update", slug)) &&
     (await ctx.caller.can("publish", slug))
   );

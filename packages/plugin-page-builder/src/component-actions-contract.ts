@@ -35,6 +35,8 @@ export type PlacementAt =
       readonly apply?: "library";
       readonly document: BlockDocument;
       readonly instanceId: string;
+      /** The language the editor shows components in, when translated. */
+      readonly locale?: string;
     }
   | {
       readonly apply: "stored";

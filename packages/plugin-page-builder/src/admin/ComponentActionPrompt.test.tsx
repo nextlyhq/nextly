@@ -195,6 +195,35 @@ describe("duplicating from the editor", () => {
   });
 });
 
+describe("a copy the editor cannot load", () => {
+  it("leaves the placement unchanged when the copy never reaches the canvas", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      routes.duplicate.mockResolvedValue({
+        dryRun: false,
+        component: { id: "copy", title: "Card copy" },
+        source: { id: "card" },
+        definition: { formatVersion: 1, kind: "component", nodes: [] },
+        pageOps: [{ kind: "update", id: "p", patch: {} }],
+        by: { kind: "user", userId: "u1" },
+      });
+      const { applyAll, onClose } = mount("duplicate");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(applyAll).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("updating a pattern from the editor", () => {
   it("is held until a pattern is chosen, and says earlier inserts keep their copies", () => {
     mount("update-pattern");

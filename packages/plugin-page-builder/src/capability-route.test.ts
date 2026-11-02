@@ -188,14 +188,24 @@ describe("whether the caller may update a pattern from a selection", () => {
     };
   }
 
-  it("asks for update AND publish on the patterns the host resolved", async () => {
+  it("asks for read, update AND publish on the patterns the host resolved", async () => {
+    expect(
+      await mayUpdatePattern(grants({ "update-site_patterns": true }))
+    ).toBe(false);
+    // Without read, the author could choose no pattern to update.
     expect(
       await mayUpdatePattern(
         grants({ "update-site_patterns": true, "publish-site_patterns": true })
       )
-    ).toBe(true);
-    expect(
-      await mayUpdatePattern(grants({ "update-site_patterns": true }))
     ).toBe(false);
+    expect(
+      await mayUpdatePattern(
+        grants({
+          "read-site_patterns": true,
+          "update-site_patterns": true,
+          "publish-site_patterns": true,
+        })
+      )
+    ).toBe(true);
   });
 });
