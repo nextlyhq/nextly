@@ -2491,28 +2491,24 @@ export class CollectionBulkService extends BaseService {
     },
     state: LegacyBatchState
   ): Promise<void> {
-    // Where the batch publishes, its documents' components and relationships
-    // are read once for them all, on its transaction. A document is read
-    // again once the batch has written it, as a batch may name it twice.
-    const goingLiveBatch = new GoingLiveRelationsBatch(
-      entries.map(entry => entry.id)
-    );
+    // Where an entry publishes, its components and relationships are read
+    // for it alone once its row is locked (`storedRelationsOf`): another
+    // writer may change a later entry's before the batch reaches it.
     await runLegacyBatch(
       tx,
       entries,
       { ...options, collectionName: params.collectionName },
       state,
       async entry => {
-        const updateResult = await this.mutationService
-          .updateSingleEntryInTransaction(
+        const updateResult =
+          await this.mutationService.updateSingleEntryInTransaction(
             tx,
-            { ...params, transitionAuth, goingLiveBatch },
+            { ...params, transitionAuth },
             entry.id,
             entry.data,
             options.skipHooks,
             options.rowVerdicts?.get(entry) ?? options.rowGate
-          )
-          .finally(() => goingLiveBatch.written(entry.id));
+          );
         return updateResult.success && updateResult.data
           ? {
               ok: true,

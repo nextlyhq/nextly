@@ -187,6 +187,13 @@ export interface PopulateComponentDataManyParams {
   executor?: unknown;
 }
 
+/** One deserialized instance of a dynamic zone, with the kind it is. */
+interface ZoneInstance {
+  data: Record<string, unknown>;
+  fields: FieldConfig[];
+  slug: string;
+}
+
 /**
  * How a batch populate reads each of its component fields: the expansion
  * depth, the language, who related rows are read for, whether a failed read
@@ -1162,51 +1169,96 @@ export class FieldGroupQueryService extends BaseService {
       }
     }
 
+    // Deserialized first, then overlaid kind by kind, then expanded: the
+    // overlay mutates each instance in place, and expansion may return a new
+    // object.
+    const deserialized = await this.deserializeZoneInstances(
+      groupedByParent,
+      read
+    );
+    await this.overlayZoneByKind(deserialized, read);
+
     const result = new Map<string, unknown>();
+    for (const [parentId, instances] of deserialized) {
+      const expandedItems: Record<string, unknown>[] = [];
+      for (const { data, fields, slug } of instances) {
+        expandedItems.push(
+          await this.expandComponentRelationships(
+            data,
+            slug,
+            fields,
+            read.depth,
+            read.currentDepth + 1,
+            read.access
+          )
+        );
+      }
+      result.set(parentId, expandedItems);
+    }
+
+    return result;
+  }
+
+  /** A zone's instances per parent, deserialized in their stored order. */
+  private async deserializeZoneInstances(
+    groupedByParent: Map<
+      string,
+      { row: ComponentRow; fields: FieldConfig[]; slug: string }[]
+    >,
+    read: Pick<BatchPopulateRead, "executor">
+  ): Promise<Map<string, ZoneInstance[]>> {
+    const deserialized = new Map<string, ZoneInstance[]>();
     for (const [parentId, items] of groupedByParent) {
       items.sort(
         (a, b) =>
           (a.row[STORAGE_FORMAT.columns.order] ?? 0) -
           (b.row[STORAGE_FORMAT.columns.order] ?? 0)
       );
-
-      const expandedItems: Record<string, unknown>[] = [];
+      const instances: ZoneInstance[] = [];
       for (const { row, fields, slug } of items) {
-        let data = this.deserializeComponentRow(
-          row,
+        instances.push({
+          data: this.deserializeComponentRow(
+            row,
+            fields,
+            true,
+            await this.passwordReach(fields, read.executor)
+          ),
           fields,
-          true,
-          await this.passwordReach(fields, read.executor)
-        );
-        // i18n: overlay the instance's translatable fields from its component companion
-        // before relationship expansion (registry-cached meta lookup).
-        const itemMeta = await this.registryService.getComponent(
           slug,
-          read.executor
-        );
-        await this.overlayLocalizedComponent(
-          itemMeta,
-          [data],
-          read.locale,
-          read.fallbackLocale,
-          read.executor,
-          read.strict
-        );
-        data = await this.expandComponentRelationships(
-          data,
-          slug,
-          fields,
-          read.depth,
-          read.currentDepth + 1,
-          read.access
-        );
-        expandedItems.push(data);
+        });
       }
-
-      result.set(parentId, expandedItems);
+      deserialized.set(parentId, instances);
     }
+    return deserialized;
+  }
 
-    return result;
+  /**
+   * i18n: overlay a zone's translatable fields from each kind's companion in
+   * one read for every instance of that kind across the batch, not one read
+   * per instance. Each instance is mutated in place.
+   */
+  private async overlayZoneByKind(
+    instancesByParent: Map<string, ZoneInstance[]>,
+    read: BatchPopulateRead
+  ): Promise<void> {
+    const bySlug = new Map<string, Record<string, unknown>[]>();
+    for (const instances of instancesByParent.values()) {
+      for (const { data, slug } of instances) {
+        const ofSlug = bySlug.get(slug);
+        if (ofSlug) ofSlug.push(data);
+        else bySlug.set(slug, [data]);
+      }
+    }
+    for (const [slug, dataArray] of bySlug) {
+      await this.overlayLocalizedComponent(
+        await this.registryService.getComponent(slug, read.executor),
+        dataArray,
+        read.locale,
+        read.fallbackLocale,
+        read.executor,
+        read.strict
+      );
+    }
   }
 
   private async getExistingInstances(

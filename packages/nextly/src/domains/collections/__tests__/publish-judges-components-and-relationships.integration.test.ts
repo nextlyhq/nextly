@@ -35,10 +35,14 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
 import { FieldGroupDataService } from "../../field-groups/services/field-group-data-service";
+import { FieldGroupQueryService } from "../../field-groups/services/field-group-query-service";
 import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
-import { CollectionRelationshipService } from "../services/collection-relationship-service";
+import {
+  CollectionRelationshipService,
+  junctionLinkColumns,
+} from "../services/collection-relationship-service";
 import type { CollectionRegistryService } from "../services/collection-registry-service";
 
 type Doc = Record<string, unknown>;
@@ -115,6 +119,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         fields: [text({ name: "body" })],
       }),
+      // A second translated kind, for a zone that mixes kinds.
+      defineFieldGroup({
+        slug: "quote",
+        localized: true,
+        fields: [text({ name: "body" })],
+      }),
+      // Used by one collection only, whose table a test removes.
+      defineFieldGroup({ slug: "banner", fields: [text({ name: "body" })] }),
     ],
     collections: [
       // No drafts: what goes live is the stored row.
@@ -213,6 +225,47 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           }),
         ],
       }),
+      // No translated field of its own: only its note is kept per language.
+      // With drafts, so a publish promotes a pending change in the language
+      // it names.
+      defineCollection({
+        slug: "noted",
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "hero", component: "hero" }),
+          fieldGroup({ name: "note", component: "note" }),
+        ],
+      }),
+      // A zone of translated kinds.
+      defineCollection({
+        slug: "zoned",
+        status: true,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({
+            name: "blocks",
+            components: ["note", "quote"],
+            repeatable: true,
+          }),
+        ],
+      }),
+      // A pending change saved before a required component was added.
+      defineCollection({
+        slug: "evolving",
+        status: true,
+        versions: { drafts: true },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: "bannered",
+        status: true,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "banner", component: "banner" }),
+        ],
+      }),
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
@@ -281,6 +334,23 @@ async function makeRequired(
           : field
       ),
     },
+    { source: "code" }
+  );
+}
+
+/** Add a field to a stored collection, as a later schema change. */
+async function addField(
+  t: TestNextly,
+  slug: string,
+  field: ReturnType<typeof fieldGroup>
+): Promise<void> {
+  const registry = t.getService(
+    "collectionRegistryService"
+  ) as CollectionRegistryService;
+  const stored = await registry.getCollection(slug);
+  await registry.updateCollection(
+    slug,
+    { fields: [...stored.fields, field] as typeof stored.fields },
     { source: "code" }
   );
 }
@@ -570,8 +640,76 @@ describe.each(getConfiguredTestDialects())(
         title: "aside",
         status: "draft",
       });
+      // Each holds the one tag its required relationship needs.
+      for (const name of ["raceA", "raceB"]) {
+        ids[name] = await created(t, "stories", {
+          title: name,
+          status: "draft",
+          tags: [tag],
+        });
+      }
+      // Live with no hero, and a pending change to the translated note.
+      for (const name of ["notedGerman", "notedEnglish"]) {
+        ids[name] = await created(t, "noted", {
+          title: name,
+          status: "published",
+          note: { body: "translated" },
+        });
+        expect(
+          (
+            await entriesOf(t).updateEntry(
+              {
+                collectionName: "noted",
+                entryId: ids[name],
+                overrideAccess: true,
+              },
+              { note: { body: "changed" } }
+            )
+          ).success
+        ).toBe(true);
+      }
+      for (const name of ["zonedA", "zonedB"]) {
+        ids[name] = await created(t, "zoned", {
+          title: name,
+          status: "draft",
+          blocks: [
+            { [currentFieldGroupTypeKey]: "note", body: `${name} 1` },
+            { [currentFieldGroupTypeKey]: "quote", body: `${name} 2` },
+            { [currentFieldGroupTypeKey]: "note", body: `${name} 3` },
+            { [currentFieldGroupTypeKey]: "quote", body: `${name} 4` },
+            { [currentFieldGroupTypeKey]: "note", body: `${name} 5` },
+          ],
+        });
+      }
+      // Live, with a pending change saved before `extra` existed.
+      ids.evolving = await created(t, "evolving", {
+        title: "evolving",
+        status: "published",
+      });
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "evolving",
+              entryId: ids.evolving,
+              overrideAccess: true,
+            },
+            { title: "evolved" }
+          )
+        ).success
+      ).toBe(true);
+      ids.bannered = await created(t, "bannered", {
+        title: "bannered",
+        status: "draft",
+      });
 
       await makeRequired(t, "pages", ["hero", "cards", "zone"]);
+      await makeRequired(t, "noted", ["hero"]);
+      await addField(
+        t,
+        "evolving",
+        fieldGroup({ name: "extra", component: "card", required: true })
+      );
       await makeRequired(t, "manuals", ["hero"]);
       await makeRequired(t, "drafted", ["hero"]);
       await makeRequired(t, "guides", ["hero"]);
@@ -700,25 +838,7 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
-    it("reads a batch's components and relationships once, whatever its size", async () => {
-      const batchReads = async (
-        collection: string,
-        names: readonly string[]
-      ): Promise<number> => {
-        const reads = countRelationReads();
-        try {
-          await entriesOf(t).updateEntries(
-            { collectionName: collection, overrideAccess: true },
-            names.map(name => ({
-              id: ids[name],
-              data: { status: "published" },
-            }))
-          );
-          return reads.count();
-        } finally {
-          reads.restore();
-        }
-      };
+    it("reads a bulk publish's components and relationships once, whatever its size, and a batch's per entry under its lock", async () => {
       const bulkReads = async (
         collection: string,
         names: readonly string[]
@@ -736,32 +856,61 @@ describe.each(getConfiguredTestDialects())(
           reads.restore();
         }
       };
+      /** The ids each read in a batch publish's transaction names. */
+      const batchReadIds = async (
+        collection: string,
+        names: readonly string[]
+      ): Promise<string[][]> => {
+        const components = vi.spyOn(
+          FieldGroupDataService.prototype,
+          "populateComponentDataMany"
+        );
+        const links = vi.spyOn(
+          CollectionRelationshipService.prototype,
+          "fetchManyToManyTargetIdsOf"
+        );
+        try {
+          await entriesOf(t).updateEntries(
+            { collectionName: collection, overrideAccess: true },
+            names.map(name => ({
+              id: ids[name],
+              data: { status: "published" },
+            }))
+          );
+          return [
+            ...components.mock.calls.map(([read]) =>
+              read.entries.map(entry => String(entry.id))
+            ),
+            ...links.mock.calls.map(([, entryIds]) => [...entryIds]),
+          ];
+        } finally {
+          components.mockRestore();
+          links.mockRestore();
+        }
+      };
 
       // Every document is refused, so each batch can be asked again.
-      const pagesTwo = await batchReads("pages", ["count0", "count1"]);
-      expect(pagesTwo).toBeGreaterThan(0);
-      expect(
-        await batchReads("pages", ["count0", "count1", "count2", "count3"])
-      ).toBe(pagesTwo);
-      const storiesTwo = await batchReads("stories", [
-        "storyCount0",
-        "storyCount1",
-      ]);
-      expect(storiesTwo).toBeGreaterThan(0);
-      expect(
-        await batchReads("stories", [
-          "storyCount0",
-          "storyCount1",
-          "storyCount2",
-          "storyCount3",
-        ])
-      ).toBe(storiesTwo);
-
       const bulkTwo = await bulkReads("pages", ["count0", "count1"]);
       expect(bulkTwo).toBeGreaterThan(0);
       expect(
         await bulkReads("pages", ["count0", "count1", "count2", "count3"])
       ).toBe(bulkTwo);
+
+      // A batch on one transaction reads each entry's alone, once it holds
+      // that entry's lock: every entry is read, and no read names another.
+      for (const [collection, names] of [
+        ["pages", ["count0", "count1", "count2", "count3"]],
+        [
+          "stories",
+          ["storyCount0", "storyCount1", "storyCount2", "storyCount3"],
+        ],
+      ] as const) {
+        const reads = await batchReadIds(collection, names);
+        expect(reads.every(read => read.length === 1)).toBe(true);
+        expect(new Set(reads.flat())).toEqual(
+          new Set(names.map(name => ids[name]))
+        );
+      }
     });
 
     it("keeps a required component enforced on a collection without languages, whatever language a publish names", async () => {
@@ -827,6 +976,190 @@ describe.each(getConfiguredTestDialects())(
         });
         expect(row?.status).toBe("draft");
       }
+    });
+
+    // MySQL is left out: under its REPEATABLE READ a transaction's plain reads
+    // see the snapshot its first read took, so a row read after its lock can
+    // still be older than the lock there, whichever order the batch reads in.
+    it.skipIf(dialect === "mysql")(
+      "judges each document of a batch publish on what is stored once the batch has locked it",
+      async () => {
+        const relationships = t.getService(
+          "relationshipService"
+        ) as unknown as CollectionRelationshipService;
+        const junction = relationships.getJunctionTableName(
+          "stories",
+          "tags",
+          TAGS_FIELD as Parameters<
+            CollectionRelationshipService["getJunctionTableName"]
+          >[2]
+        );
+        const { sourceColumn } = junctionLinkColumns("stories", "tags");
+        // The other writer, which takes `raceB`'s tag away once the batch has
+        // locked `raceA` and read its relations, and before it reaches
+        // `raceB`. Begun here, before the batch opens its transaction, so its
+        // statement runs outside that transaction: on PostgreSQL on a
+        // connection of its own, committed at once, while the batch holds
+        // `raceA`'s lock only. SQLite has one connection and one writer, so
+        // there the statement lands between the batch's two rows on that
+        // connection, which proves the order the batch reads in: what a
+        // document is judged on is read after the batch reaches it.
+        let letWriterRun = (): void => undefined;
+        const writerMayRun = new Promise<void>(resolve => {
+          letWriterRun = resolve;
+        });
+        const writer = (async () => {
+          await writerMayRun;
+          await t.adapter.executeQuery(
+            `DELETE FROM ${junction} WHERE ${sourceColumn} = '${ids.raceB}'`
+          );
+        })();
+        const read =
+          CollectionRelationshipService.prototype.fetchManyToManyTargetIdsOf;
+        let interleaved = false;
+        const spy = vi
+          .spyOn(
+            CollectionRelationshipService.prototype,
+            "fetchManyToManyTargetIdsOf"
+          )
+          .mockImplementation(async function (
+            this: CollectionRelationshipService,
+            ...args: Parameters<typeof read>
+          ) {
+            const targets = await read.apply(this, args);
+            if (!interleaved && args[1].includes(ids.raceA)) {
+              interleaved = true;
+              letWriterRun();
+              await writer;
+            }
+            return targets;
+          });
+        try {
+          const batch = await entriesOf(t).updateEntries(
+            { collectionName: "stories", overrideAccess: true },
+            [ids.raceA, ids.raceB].map(id => ({
+              id,
+              data: { status: "published" },
+            }))
+          );
+          expect(interleaved).toBe(true);
+          expect(batch).toMatchObject({ successful: 1, failed: 1 });
+        } finally {
+          spy.mockRestore();
+          letWriterRun();
+          await writer;
+        }
+        for (const [name, status] of [
+          ["raceA", "published"],
+          ["raceB", "draft"],
+        ] as const) {
+          const row = await t.adapter.selectOne<{ status?: string }>(
+            "dc_stories",
+            { where: { and: [{ column: "id", op: "=", value: ids[name] }] } }
+          );
+          expect(row?.status).toBe(status);
+        }
+      }
+    );
+
+    it("lets a pending change go live outside the default language where only a component is translated", async () => {
+      const german = await publish(t, "noted", ids.notedGerman, {}, "de");
+      expect(german.success, JSON.stringify(german)).toBe(true);
+
+      const english = await publish(t, "noted", ids.notedEnglish, {}, "en");
+      expect(english.success).toBe(false);
+      expect(refusedPaths(english)).toContain("hero");
+    });
+
+    it("refuses promoting a pending change saved before a required component was added", async () => {
+      const result = await publish(t, "evolving", ids.evolving);
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("extra");
+    });
+
+    it("reads a zone's translations once for each kind, not once for each instance", async () => {
+      const overlays = vi.spyOn(
+        FieldGroupQueryService.prototype as unknown as {
+          overlayLocalizedComponent(
+            meta: { slug: string; localized?: boolean },
+            rows: Record<string, unknown>[]
+          ): Promise<void>;
+        },
+        "overlayLocalizedComponent"
+      );
+      try {
+        const fieldGroups = t.getService(
+          "fieldGroupDataService"
+        ) as FieldGroupDataService;
+        const read = await fieldGroups.populateComponentDataMany({
+          entries: [{ id: ids.zonedA }, { id: ids.zonedB }],
+          parentTable: "dc_zoned",
+          fields: [
+            fieldGroup({
+              name: "blocks",
+              components: ["note", "quote"],
+              repeatable: true,
+            }),
+          ] as never,
+          depth: 0,
+          strict: true,
+          locale: "en",
+          fallbackLocale: false,
+        });
+
+        // Every instance carries its translation, in its stored order.
+        expect(
+          read.map(entry => (entry.blocks as Doc[]).map(block => block.body))
+        ).toEqual(
+          ["zonedA", "zonedB"].map(name =>
+            [1, 2, 3, 4, 5].map(at => `${name} ${at}`)
+          )
+        );
+        // One translations read per kind, for every instance of it at once.
+        const translated = overlays.mock.calls.filter(
+          ([meta, rows]) => meta.localized === true && rows.length > 0
+        );
+        expect(translated.map(([meta]) => meta.slug).sort()).toEqual([
+          "note",
+          "quote",
+        ]);
+        expect(translated.map(([, rows]) => rows.length).sort()).toEqual([
+          4, 6,
+        ]);
+      } finally {
+        overlays.mockRestore();
+      }
+    });
+
+    it("reads a component table not yet created as empty when a release's readiness is judged", async () => {
+      const registry = t.getService("fieldGroupRegistryService") as {
+        getComponent(slug: string): Promise<{ tableName: string }>;
+      };
+      const { tableName } = await registry.getComponent("banner");
+      await t.adapter.executeQuery(`DROP TABLE ${tableName}`);
+      const author = await seedPlainAuthor(t);
+      for (const action of ["read", "update", "publish", "unpublish"]) {
+        await grantTo(t, author, action, ["bannered"]);
+      }
+      const release = await t.nextly.releases.create({ title: "Banner" });
+      await t.nextly.releases.addMember({
+        releaseId: release.id,
+        scopeKind: "collection",
+        scopeSlug: "bannered",
+        entryId: ids.bannered,
+        locale: null,
+        action: "publish",
+        userId: author,
+      });
+
+      // Judged on the pool, writing nothing: the optional banner, whose table
+      // does not exist yet, reads as absent rather than failing the check.
+      const readiness = await t.nextly.releases.readiness({
+        releaseId: release.id,
+      });
+
+      expect(readiness.hard).toEqual([]);
     });
 
     // Last: it removes the note group's translations table.

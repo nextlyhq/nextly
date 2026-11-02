@@ -86,9 +86,10 @@ field. Fix the field, then publish. The custom `validate` functions of top-level
 component and many-to-many fields run too. Rules on the fields inside a
 component are not checked again at publish.
 
-On a localized collection, a required component is enforced for the default
-language only, as a translated field's `required` is, so one finished language
-can go live while another is still incomplete.
+On a localized collection, and on one whose components hold translated values,
+a required component is enforced for the default language only, as a
+translated field's `required` is, so one finished language can go live while
+another is still incomplete.
 
 Sending `published` again to a document that is already live, with no pending
 draft, is not checked again.
