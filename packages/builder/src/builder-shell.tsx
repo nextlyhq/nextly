@@ -15,17 +15,7 @@ import {
   useShortcuts,
 } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
-import {
-  ArrowLeft,
-  Blocks,
-  Braces,
-  FileText,
-  Layers,
-  Palette,
-  Plus,
-  Settings,
-  Type,
-} from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -37,6 +27,8 @@ import {
 import type { CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
+import { EditorRail, panelLabel } from "./editor-rail";
+import { HelpDialog } from "./help-dialog";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
   BUILDER_CHROME_CLASS,
@@ -45,13 +37,12 @@ import {
   EMPTY_ELEMENTS_ATTRIBUTE,
   browserStore,
   fitsFullShell,
+  isLeftPanel,
   CANVAS_GUTTER,
-  LEFT_PANELS,
   MIN_CANVAS_PANEL_WIDTH,
   MIN_SHELL_WIDTH,
   PANEL_BOUNDS,
   panelAfterRailClick,
-  RAIL_WIDTH,
   readPreferences,
   topologyKey,
   writePreferences,
@@ -82,21 +73,6 @@ import {
  * @module builder-shell
  */
 
-/** Icons for the rail, one per panel. Kept beside the labels they belong to. */
-const PANEL_CHROME: Record<
-  LeftPanel,
-  { label: string; Icon: React.ComponentType<{ className?: string }> }
-> = {
-  insert: { label: "Insert", Icon: Plus },
-  layers: { label: "Layers", Icon: Layers },
-  components: { label: "Components", Icon: Blocks },
-  tokens: { label: "Tokens", Icon: Palette },
-  classes: { label: "Classes", Icon: Braces },
-  fonts: { label: "Fonts", Icon: Type },
-  pages: { label: "Pages", Icon: FileText },
-  settings: { label: "Settings", Icon: Settings },
-};
-
 /**
  * The regions F6 cycles between, in the order a sighted user reads them.
  *
@@ -107,9 +83,21 @@ const PANEL_CHROME: Record<
 const REGIONS = ["rail", "panel", "canvas", "inspector"] as const;
 type Region = (typeof REGIONS)[number];
 
+/**
+ * Which part of a panel is showing, for a panel with parts — the Design
+ * panel's tabs. The shell keeps it with the other preferences, so the tab an
+ * author left open is the one they come back to; what the names mean is the
+ * host's business.
+ */
+export interface PanelView {
+  /** The part last chosen, or null for the panel's own default. */
+  current: string | null;
+  choose: (view: string) => void;
+}
+
 export interface BuilderShellProps {
   /** Rendered inside the switched left panel. Keyed by the panel that is open. */
-  renderPanel?: (panel: LeftPanel) => React.ReactNode;
+  renderPanel?: (panel: LeftPanel, view: PanelView) => React.ReactNode;
   /**
    * The host's notice queue, when the host raises notices of its own.
    *
@@ -124,15 +112,12 @@ export interface BuilderShellProps {
   /**
    * Which panels the host can actually fill.
    *
-   * The rail always shows every panel, because the set is the editor's shape
-   * and hiding the unbuilt ones would make the chrome change under an author
-   * as features land. What it must not do is OPEN one nothing renders into: that
-   * reserves a panel and shrinks the canvas to display nothing, which reads as a
-   * broken control rather than an absent feature.
-   *
-   * So a panel outside this list is drawn disabled and labelled as coming soon.
-   * Omit the prop entirely and every panel is treated as available, which keeps
-   * a host that fills all of them from having to enumerate them.
+   * The rail offers only these. A panel outside the list has no item at all
+   * rather than a disabled one: an item that does nothing teaches an author
+   * that the rail is unreliable, and opening a panel nothing renders into would
+   * reserve room and shrink the canvas to display nothing. Omit the prop
+   * entirely and every panel is treated as available, which keeps a host that
+   * fills all of them from having to enumerate them.
    *
    * Derived from what the host can render rather than declared twice: pass the
    * same set `renderPanel` returns content for, and the rail cannot disagree with
@@ -157,14 +142,20 @@ export interface BuilderShellProps {
    * count of how many times the thing behind it happened.
    *
    * The panel travels WITH the count rather than in a second prop. One caller
-   * asking for insert and another for tokens are the same request with a
-   * different subject, and two props would be two answers to one question —
-   * free to disagree about which panel a given count refers to.
+   * asking for Add and another for Design's variables are the same request
+   * with a different subject, and two props would be two answers to one
+   * question — free to disagree about which panel a given count refers to.
+   * The view travels with them for the same reason; absent, the panel opens
+   * on whichever part the author last chose.
    *
    * Left `undefined` this does nothing, which is what every host that has no
    * such control gets by default.
    */
-  openPanelRequest?: { readonly panel: LeftPanel; readonly count: number };
+  openPanelRequest?: {
+    readonly panel: LeftPanel;
+    readonly view?: string;
+    readonly count: number;
+  };
   /**
    * Reports `showEmptyElements` to a host that needs to know whether the
    * canvas's empty-container chrome should be showing right now.
@@ -486,6 +477,7 @@ function shallowEqualPreferences(
 ): boolean {
   if (
     a.leftPanel !== b.leftPanel ||
+    a.leftPanelView !== b.leftPanelView ||
     a.leftPinned !== b.leftPinned ||
     a.showEmptyElements !== b.showEmptyElements ||
     !sameZoom(a.zoom, b.zoom)
@@ -823,19 +815,25 @@ function ShellRegions({
   const emptyElementsToggleId = React.useId();
 
   /**
-   * Whether the host can fill a panel. One predicate, so the rail's disabled
-   * state and the panel the layout reserves cannot answer differently.
+   * Whether the host can fill a panel. One predicate, so the rail's items and
+   * the panel the layout reserves cannot answer differently.
+   *
+   * A name this shell does not know is never available, whatever the host
+   * offers: a request from untyped code can still name a panel that was
+   * renamed, and there is no chrome to draw it with.
    */
   const isAvailable = (panel: LeftPanel) =>
-    availablePanels === undefined || availablePanels.includes(panel);
+    isLeftPanel(panel) &&
+    (availablePanels === undefined || availablePanels.includes(panel));
 
   /**
    * The open panel, NORMALISED against what the host can fill.
    *
    * Preferences outlive the code that wrote them, and availability can change
    * between mounts — a store restoring `layers` while the host now offers only
-   * `insert` would reserve a left panel whose content renders nothing. Disabling
-   * the rail button does not help: nobody clicked it, the selection was restored.
+   * `add` would reserve a left panel whose content renders nothing. Leaving the
+   * item off the rail does not help: nobody clicked it, the selection was
+   * restored.
    *
    * Treated as closed instead, which is the same answer the shell gives for a
    * panel name it no longer recognises.
@@ -858,6 +856,22 @@ function ShellRegions({
       ...current,
       leftPanel: panelAfterRailClick(current.leftPanel, panel),
     }));
+  const panelView: PanelView = {
+    current: preferences.leftPanelView,
+    choose: view => update(current => ({ ...current, leftPanelView: view })),
+  };
+  const [helpOpen, setHelpOpen] = React.useState(false);
+  const helpOpener = React.useRef<HTMLElement | null>(null);
+  /*
+   * Help closes when the editor gives way to the narrow-window notice. The
+   * regions stay mounted there, hidden and inert, and a modal left open would
+   * keep its focus trap and its hold on the keyboard over a notice whose Exit
+   * button it would then keep out of reach. Closed rather than hidden, so
+   * widening the window again does not bring back a dialog nobody reopened.
+   */
+  React.useEffect(() => {
+    if (!active) setHelpOpen(false);
+  }, [active]);
 
   return (
     <div
@@ -988,54 +1002,23 @@ function ShellRegions({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <nav
-          ref={element => {
+        <EditorRail
+          railRef={element => {
             regionRefs.current.rail = element;
           }}
-          tabIndex={-1}
-          aria-label="Editor panels"
-          style={{ width: RAIL_WIDTH }}
-          className="border-[color:var(--nx-builder-border)] flex shrink-0 flex-col items-center gap-1 border-r py-2"
-        >
-          {LEFT_PANELS.map(panel => {
-            const { label, Icon } = PANEL_CHROME[panel];
-            const isOpen = openPanel === panel;
-            // A panel the host cannot fill is shown and DISABLED rather than
-            // hidden, so the rail describes the editor's full shape while never
-            // opening an empty region. Clicking one previously reserved a panel
-            // and shrank the canvas to show nothing.
-            const ready = isAvailable(panel);
-            return (
-              <Tooltip key={panel}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    data-builder-animates
-                    data-panel={panel}
-                    disabled={!ready}
-                    aria-pressed={ready ? isOpen : undefined}
-                    aria-label={ready ? label : `${label} — coming soon`}
-                    onClick={() => selectPanel(panel)}
-                    className={cn(
-                      "focus-visible:ring-ring flex size-8 items-center justify-center rounded-md focus-visible:ring-2 focus-visible:outline-none",
-                      isOpen && ready
-                        ? "bg-[color:var(--nx-builder-accent)] text-[color:var(--nx-builder-accent-text)]"
-                        : "text-[color:var(--nx-builder-text-muted)]",
-                      // Dimmed rather than removed: the control stays legible as
-                      // a place the editor will grow into.
-                      !ready && "cursor-not-allowed opacity-40"
-                    )}
-                  >
-                    <Icon className="size-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="right">
-                  {ready ? label : `${label} — coming soon`}
-                </TooltipContent>
-              </Tooltip>
-            );
-          })}
-        </nav>
+          openPanel={openPanel}
+          isAvailable={isAvailable}
+          onSelect={selectPanel}
+          onHelp={button => {
+            helpOpener.current = button;
+            setHelpOpen(true);
+          }}
+        />
+        <HelpDialog
+          open={helpOpen}
+          onOpenChange={setHelpOpen}
+          returnFocus={() => helpOpener.current}
+        />
 
         <ResizablePanelGroup
           // Remounted when a store is LOADED, which is the only way the library
@@ -1093,7 +1076,7 @@ function ShellRegions({
                     regionRefs.current.panel = element;
                   }}
                   tabIndex={-1}
-                  aria-label={PANEL_CHROME[openPanel].label}
+                  aria-label={panelLabel(openPanel)}
                   className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
                 >
                   {/* Keyed by the panel, because the prop's contract says the
@@ -1106,7 +1089,7 @@ function ShellRegions({
                       a new one: its state, its effects and any uncontrolled
                       input values follow the author into a different tool. */}
                   <React.Fragment key={openPanel}>
-                    {renderPanel?.(openPanel)}
+                    {renderPanel?.(openPanel, panelView)}
                   </React.Fragment>
                 </section>
               </ResizablePanel>
@@ -1265,7 +1248,7 @@ export function BuilderShell({
    * to the session the author pressed the control in, so re-applying it to the
    * store that replaced it would open a panel nobody asked this store for.
    *
-   * FORCES `leftPanel` to `"insert"` rather than routing through
+   * FORCES `leftPanel` to the requested panel rather than routing through
    * `panelAfterRailClick`: that helper TOGGLES, and toggling is exactly wrong
    * for a control whose contract is "show the panel this fills" — never
    * "close it if it happens to already be open", which is what a second rail
@@ -1314,8 +1297,12 @@ export function BuilderShell({
     if (!loadedFromCurrentStore) return;
     if (handledPanelRequest.current === openPanelRequest.count) return;
     handledPanelRequest.current = openPanelRequest.count;
-    const panel = openPanelRequest.panel;
-    update(current => ({ ...current, leftPanel: panel }));
+    const { panel, view } = openPanelRequest;
+    update(current => ({
+      ...current,
+      leftPanel: panel,
+      leftPanelView: view ?? current.leftPanelView,
+    }));
   }, [openPanelRequest, update, loadedFromCurrentStore]);
 
   /*
@@ -1412,10 +1399,10 @@ export function BuilderShell({
 
   return (
     <ShortcutProvider>
-      {/* Provided here rather than required of the host: the rail's icon-only
-          buttons are unreadable without their tooltips, so a shell that renders
-          them depends on this and should not make it someone else's setup step.
-          Radix nests providers safely — a host with its own keeps its delay. */}
+      {/* Provided here rather than required of the host: the shell's own
+          controls carry tooltips, so a shell that renders them depends on this
+          and should not make it someone else's setup step. Radix nests
+          providers safely — a host with its own keeps its delay. */}
       <TooltipProvider delayDuration={300}>
         {/*
          * THE measured element, and the only one.

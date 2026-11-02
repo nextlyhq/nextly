@@ -132,7 +132,10 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
     // The inserter is a different tree from the canvas — a list of options with
     // its own roles — and a scan of the closed editor never reaches it.
     await openEditor(page);
-    await page.getByRole("button", { name: "Insert" }).click();
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Add", exact: true })
+      .click();
     await expect(page.getByRole("option").first()).toBeVisible({
       timeout: 15_000,
     });

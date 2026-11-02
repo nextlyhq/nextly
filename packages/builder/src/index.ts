@@ -125,7 +125,7 @@ export {
  *
  * A type costs nothing at runtime, so it can be described from here.
  */
-export type { BuilderShellProps } from "./builder-shell";
+export type { BuilderShellProps, PanelView } from "./builder-shell";
 
 /**
  * @experimental The shell's own decisions: which panels the rail offers, the
