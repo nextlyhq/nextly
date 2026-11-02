@@ -3917,6 +3917,8 @@ export class CollectionMutationService extends BaseService {
       );
       if (advisoryDraft) {
         promotesDraft = true;
+        // Completed ahead of the write's lock, as the draft itself is read;
+        // the write completes and judges it again once it holds the lock.
         promoted = await this.withEveryRelationKey(
           args,
           this.promotedDocumentOf(
@@ -3926,7 +3928,8 @@ export class CollectionMutationService extends BaseService {
               args.fields as unknown as FieldConfig[],
               args.promoteRestoreCtx
             ).payload
-          )
+          ),
+          undefined
         );
         const issues = await this.promotedDraftIssues(args, promoted);
         if (issues.length > 0) return issues;
@@ -3985,8 +3988,9 @@ export class CollectionMutationService extends BaseService {
    * field its change does not name; judged in update mode, an absent key is
    * not judged, so a field since made required would go live unchecked. Each
    * absent one takes its stored value, `null` or `[]` where nothing is
-   * stored, read only when one is absent and in the batch's one read where
-   * the document publishes with others.
+   * stored, read only when one is absent: on `tx` under the row lock, else on
+   * the pool, in the batch's one read where the document publishes with
+   * others. Returns `promoted` itself when no key is absent.
    */
   private async withEveryRelationKey(
     args: Pick<
@@ -4000,7 +4004,8 @@ export class CollectionMutationService extends BaseService {
       | "relationsBatch"
       | "reads"
     >,
-    promoted: Record<string, unknown>
+    promoted: Record<string, unknown>,
+    tx: TransactionContext | undefined
   ): Promise<Record<string, unknown>> {
     const relationFields = [
       ...args.fields.filter(field =>
@@ -4016,8 +4021,7 @@ export class CollectionMutationService extends BaseService {
       collectionName: args.collectionName,
       fields: args.fields,
       language: args.locale,
-      // Judged ahead of the write's lock, as the draft itself is read.
-      tx: undefined,
+      tx,
       relations: {
         tableName: args.tableName,
         manyToManyFields: args.manyToManyFields,
@@ -4034,6 +4038,43 @@ export class CollectionMutationService extends BaseService {
         stored.components[field.name] ?? stored.manyToMany[field.name] ?? null;
     }
     return complete;
+  }
+
+  /**
+   * Refuse, under the row lock, a promotion whose document no longer passes
+   * once the relations its pending change does not name are read on `tx`. A
+   * promotion leaves what is stored for such a field, and the judgement
+   * before the lock read it on the pool, so another writer may have removed
+   * a required one since. Nothing is read where the change names them all.
+   * The refusal is kept in `refused` and thrown, rolling the write back: the
+   * adapter wraps what leaves the transaction, so the caller answers from
+   * `refused`.
+   */
+  private async refuseLockedPromotionRelations(
+    tx: TransactionContext,
+    args: Pick<
+      GoingLiveArgs,
+      | "collectionName"
+      | "entryId"
+      | "tableName"
+      | "locale"
+      | "fields"
+      | "manyToManyFields"
+      | "user"
+      | "reader"
+    >,
+    promoted: Record<string, unknown>,
+    refused: { refusal?: NextlyError }
+  ): Promise<void> {
+    const completed = await this.withEveryRelationKey(args, promoted, tx);
+    if (completed === promoted) return;
+    const issues = await this.promotedDocumentIssues(
+      { ...args, tx },
+      completed
+    );
+    if (issues.length === 0) return;
+    refused.refusal = NextlyError.validation({ errors: issues });
+    throw refused.refusal;
   }
 
   /**
@@ -4269,12 +4310,34 @@ export class CollectionMutationService extends BaseService {
     args: GoingLiveArgs,
     merged: Record<string, unknown>
   ): Promise<ValidationIssue[]> {
-    // Judged as ASSEMBLED, with nothing removed. A field this publisher may
-    // not write is not a schema violation: the gate that judges permission
-    // refuses a promotion that changes one, under the row lock where it can
-    // compare against what is live. Filtering here would validate a document
-    // that is never written either way, and report a denied required field as
-    // missing rather than as forbidden.
+    return this.promotedDocumentIssues(
+      { ...args, companion: args.reads?.companion, tx: undefined },
+      merged
+    );
+  }
+
+  /**
+   * The violations of a promoted document, judged on `tx` where the judgement
+   * runs under the row lock, else on the pool.
+   *
+   * Judged as ASSEMBLED, with nothing removed. A field this publisher may not
+   * write is not a schema violation: the gate that judges permission refuses a
+   * promotion that changes one, under the row lock where it can compare
+   * against what is live. Filtering here would validate a document that is
+   * never written either way, and report a denied required field as missing
+   * rather than as forbidden.
+   */
+  private async promotedDocumentIssues(
+    args: Pick<
+      GoingLiveArgs,
+      "collectionName" | "entryId" | "locale" | "fields" | "user" | "reader"
+    > & {
+      /** The companion already resolved for a batch; read when absent. */
+      companion?: CompanionSchema | null;
+      tx: TransactionContext | undefined;
+    },
+    merged: Record<string, unknown>
+  ): Promise<ValidationIssue[]> {
     return this.entryIssues({
       data: merged,
       fields: args.fields,
@@ -4287,13 +4350,14 @@ export class CollectionMutationService extends BaseService {
         await this.localizedRequiredContext(
           args.collectionName,
           args.locale,
-          undefined,
-          args.reads?.companion
+          args.tx?.getDrizzle(),
+          args.companion
         ),
         args.fields,
-        await this.reachesLocalizedFieldGroup(args.fields)
+        await this.reachesLocalizedFieldGroup(args.fields, args.tx)
       ),
       id: args.entryId,
+      ...(args.tx === undefined ? {} : { tx: args.tx }),
     });
   }
 
@@ -9894,6 +9958,10 @@ export class CollectionMutationService extends BaseService {
     let outOfDateShared:
       | { fields: string[]; live: Record<string, unknown> }
       | undefined;
+    // A promotion refused under the row lock, for what its stored relations
+    // hold once locked; read after the transaction, as the adapter wraps
+    // what is thrown out of it.
+    const lockedPromotion: { refusal?: NextlyError } = {};
     // Which languages a wildcard sweep actually moved, and what each moved FROM.
     // Captured at the write because it is unrecoverable afterwards, and read at
     // the event step so each real transition is reported once.
@@ -11278,6 +11346,24 @@ export class CollectionMutationService extends BaseService {
                 locale: draftLocaleKey ?? params.locale ?? null,
                 componentSchemas: splitComponentSchemas,
               });
+              // A relation the pending change does not name was judged at its
+              // stored value before the lock; judged again under it, as
+              // another writer may have removed it since.
+              await this.refuseLockedPromotionRelations(
+                tx,
+                {
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  locale: params.locale,
+                  fields,
+                  manyToManyFields,
+                  user: params.user,
+                  reader: params,
+                },
+                promotedDocument,
+                lockedPromotion
+              );
               const draftParts = this.shapeWriteParts(
                 promotedDocument,
                 fields,
@@ -12638,6 +12724,13 @@ export class CollectionMutationService extends BaseService {
       // wraps the thrown sentinel in a DatabaseError before it reaches here.
       if (transitionDeniedResult) {
         return transitionDeniedResult;
+      }
+      if (lockedPromotion.refusal) {
+        return errorToServiceResult(
+          lockedPromotion.refusal,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        );
       }
       if (outOfDateShared) {
         return errorToServiceResult(

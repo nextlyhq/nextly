@@ -251,6 +251,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           }),
         ],
       }),
+      // A pending change saved before a required component was added, whose
+      // stored value another writer then removes.
+      defineCollection({
+        slug: "growing",
+        status: true,
+        versions: { drafts: true },
+        fields: [text({ name: "title" })],
+      }),
       // A pending change saved before a required component was added.
       defineCollection({
         slug: "evolving",
@@ -698,6 +706,24 @@ describe.each(getConfiguredTestDialects())(
           )
         ).success
       ).toBe(true);
+      // Live, with a pending change saved before `extra` existed; `extra` is
+      // then stored on the live entry, so the change goes live with it.
+      ids.growing = await created(t, "growing", {
+        title: "growing",
+        status: "published",
+      });
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "growing",
+              entryId: ids.growing,
+              overrideAccess: true,
+            },
+            { title: "grown" }
+          )
+        ).success
+      ).toBe(true);
       ids.bannered = await created(t, "bannered", {
         title: "bannered",
         status: "draft",
@@ -710,6 +736,20 @@ describe.each(getConfiguredTestDialects())(
         "evolving",
         fieldGroup({ name: "extra", component: "card", required: true })
       );
+      await addField(
+        t,
+        "growing",
+        fieldGroup({ name: "extra", component: "card", required: true })
+      );
+      await (
+        t.getService("fieldGroupDataService") as FieldGroupDataService
+      ).saveComponentData({
+        parentId: ids.growing,
+        parentTable: "dc_growing",
+        access: { overrideAccess: true },
+        fields: [fieldGroup({ name: "extra", component: "card" })] as never,
+        data: { extra: card("stored") },
+      });
       await makeRequired(t, "manuals", ["hero"]);
       await makeRequired(t, "drafted", ["hero"]);
       await makeRequired(t, "guides", ["hero"]);
@@ -1076,6 +1116,65 @@ describe.each(getConfiguredTestDialects())(
 
       expect(result.success).toBe(false);
       expect(refusedPaths(result)).toContain("extra");
+    });
+
+    it("refuses a promotion whose stored required component is removed before the publish locks the entry", async () => {
+      const registry = t.getService("fieldGroupRegistryService") as {
+        getComponent(slug: string): Promise<{ tableName: string }>;
+      };
+      const { tableName } = await registry.getComponent("card");
+      // The other writer, which removes the entry's stored `extra` once the
+      // publish has judged the pending change with it, before locking the
+      // entry. Begun here, outside any transaction: on PostgreSQL a commit on
+      // a connection of its own; on SQLite, whose one writer the publish
+      // does not hold yet, a statement between that judgement and the lock,
+      // which proves the publish reads `extra` again once it holds the lock.
+      let letWriterRun = (): void => undefined;
+      const writerMayRun = new Promise<void>(resolve => {
+        letWriterRun = resolve;
+      });
+      const writer = (async () => {
+        await writerMayRun;
+        await t.adapter.executeQuery(
+          `DELETE FROM ${tableName} WHERE _parent_id = '${ids.growing}' AND _parent_field = 'extra'`
+        );
+      })();
+      const read = FieldGroupDataService.prototype.populateComponentDataMany;
+      let interleaved = false;
+      const spy = vi
+        .spyOn(FieldGroupDataService.prototype, "populateComponentDataMany")
+        .mockImplementation(async function (
+          this: FieldGroupDataService,
+          ...args: Parameters<typeof read>
+        ) {
+          const populated = await read.apply(this, args);
+          if (
+            !interleaved &&
+            args[0].entries.some(entry => entry.id === ids.growing)
+          ) {
+            interleaved = true;
+            letWriterRun();
+            await writer;
+          }
+          return populated;
+        });
+      let result: Result;
+      try {
+        result = await publish(t, "growing", ids.growing);
+        expect(interleaved).toBe(true);
+      } finally {
+        spy.mockRestore();
+        letWriterRun();
+        await writer;
+      }
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("extra");
+      // Nothing was promoted: the live entry keeps its title.
+      const row = await t.adapter.selectOne<{ title?: string }>("dc_growing", {
+        where: { and: [{ column: "id", op: "=", value: ids.growing }] },
+      });
+      expect(row?.title).toBe("growing");
     });
 
     it("reads a zone's translations once for each kind, not once for each instance", async () => {
