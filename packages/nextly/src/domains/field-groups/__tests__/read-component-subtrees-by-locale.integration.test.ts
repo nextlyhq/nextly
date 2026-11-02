@@ -17,6 +17,7 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  json,
   text,
 } from "../../../config";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -67,7 +68,8 @@ async function boot(dialect: TestDialect): Promise<string> {
       }),
       defineFieldGroup({
         slug: "subtreecard",
-        fields: [text({ name: "label" })],
+        // A stored JSON value: a driver may hand it back already parsed.
+        fields: [text({ name: "label" }), json({ name: "meta" })],
       }),
     ],
     collections: [pages],
@@ -81,7 +83,10 @@ async function boot(dialect: TestDialect): Promise<string> {
     {
       title: "Hello",
       hero: { heading: "Hello hero", tone: "warm" },
-      cards: [{ label: "One" }, { label: "Two" }],
+      cards: [
+        { label: "One", meta: { flags: ["a"] } },
+        { label: "Two", meta: { flags: ["b"] } },
+      ],
     }
   );
   expect(created.success, JSON.stringify(created)).toBe(true);
@@ -171,6 +176,28 @@ describe.each(getConfiguredTestDialects())(
         for (const locale of locales) {
           expect(together.get(locale)).toEqual(alone.get(locale));
         }
+      });
+    });
+
+    it("gives each language its own copy of a stored JSON value", async () => {
+      const id = await boot(dialect);
+      await current!.adapter.transaction(async tx => {
+        const together = await readComponentSubtreesByLocale({
+          fieldGroupDataService: current!.getService("fieldGroupDataService"),
+          tx,
+          entryId: id,
+          parentTable: `dc_${PAGES}`,
+          fieldConfigs: pages.fields as FieldConfig[],
+          reason: "test-component-read",
+          locales: ["en", "es"],
+        });
+        const flagsOf = (locale: string) =>
+          (together.get(locale)?.cards as { meta?: { flags?: string[] } }[])[0]
+            ?.meta?.flags;
+        expect(flagsOf("en")).toEqual(["a"]);
+        // A change to one language's copy, as an event's assembly may make.
+        flagsOf("es")?.push("changed");
+        expect(flagsOf("en")).toEqual(["a"]);
       });
     });
 

@@ -871,7 +871,12 @@ export class FieldGroupQueryService extends BaseService {
     const byLanguage = languages.map(language => ({
       ...language,
       dataArray: [
-        this.deserializeComponentRow(rows[0], componentFields, false, reach),
+        this.deserializeComponentRow(
+          ownCopy(rows[0], languages.length),
+          componentFields,
+          false,
+          reach
+        ),
       ],
     }));
     // i18n: overlay translatable fields from the companion for each requested locale.
@@ -926,7 +931,12 @@ export class FieldGroupQueryService extends BaseService {
     const byLanguage = languages.map(language => ({
       ...language,
       dataArray: rows.map(row =>
-        this.deserializeComponentRow(row, componentFields, false, reach)
+        this.deserializeComponentRow(
+          ownCopy(row, languages.length),
+          componentFields,
+          false,
+          reach
+        )
       ),
     }));
 
@@ -1009,7 +1019,14 @@ export class FieldGroupQueryService extends BaseService {
       const reach = await this.passwordReach(fields, executor);
       const byLanguage = languages.map(language => ({
         ...language,
-        dataArray: [this.deserializeComponentRow(row, fields, true, reach)],
+        dataArray: [
+          this.deserializeComponentRow(
+            ownCopy(row, languages.length),
+            fields,
+            true,
+            reach
+          ),
+        ],
       }));
       // i18n: overlay translatable fields from the row's component companion. getComponent
       // is registry-cached, so the per-row meta lookup is cheap; dynamic-zone instances
@@ -1546,4 +1563,15 @@ export class FieldGroupQueryService extends BaseService {
       )
     );
   }
+}
+
+/**
+ * The row a language's copy is built from: its own deep copy when several
+ * languages are read from one row, so a driver's already-parsed JSON value is
+ * never one object shared by every language's copy, where a change made to
+ * one language's copy would reach the others. One language reads the row as
+ * it is, as a one-language read always has.
+ */
+function ownCopy<Row>(row: Row, languages: number): Row {
+  return languages > 1 ? structuredClone(row) : row;
 }
