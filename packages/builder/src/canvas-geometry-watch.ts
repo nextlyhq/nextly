@@ -39,7 +39,7 @@
 
 import { nodeElements } from "./canvas";
 import { isElement } from "./dom-kind";
-import { canvasRootFrom } from "./geometry-dom";
+import { overlaySpaceOf } from "./geometry-dom";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
@@ -67,8 +67,12 @@ export function watchCanvasFor(
   moved: () => void
 ): (() => void) | undefined {
   const element = ownLayer();
+  // The root the layer is drawn over: its ancestor when the canvas shares the
+  // layer's document, the root in the frame the layer is drawn over otherwise.
   const root =
-    element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
+    element === null
+      ? null
+      : (overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.root ?? null);
   if (root === null) return undefined;
   const geometry = watchCanvasGeometry(root, moved);
   const styles = watchCanvasStyleMutations(root, ownLayer, moved);

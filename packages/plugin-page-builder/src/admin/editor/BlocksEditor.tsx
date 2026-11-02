@@ -19,7 +19,11 @@ import {
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
+  CanvasFrame,
+  CanvasFrameProvider,
+  CanvasMarks,
   DropIndicator,
+  DropRefusal,
   EditorCommandPalette,
   EmptyContainerAppenders,
   InspectorPanel,
@@ -87,7 +91,7 @@ import {
 type EditorView = EditorMount &
   SiteStyleInputs &
   CanvasInputs &
-  EditorPanels & { documentDirty: boolean };
+  EditorPanels & { documentDirty: boolean; pageTitle: string | undefined };
 
 /**
  * Whether the empty-container appender should be suppressed right now.
@@ -369,7 +373,6 @@ function editorInspector(
     canvasRender,
     chooseDevice,
     editedBreakpoint,
-    canvasPreviewContainer,
     liveBreakpoints,
     canvasSiteStyle,
     siteStylePending,
@@ -426,7 +429,6 @@ function editorInspector(
       // to a width and back.
       onJumpToBreakpoint={chooseDevice}
       breakpoint={editedBreakpoint}
-      previewContainer={canvasPreviewContainer}
       liveBreakpoints={liveBreakpoints}
       tokens={offerableTokens(
         canvasSiteStyle,
@@ -447,12 +449,13 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     inline,
     zoom,
     setAppliedScale,
+    frameWidth,
+    pageTitle,
     canvasRoot,
     setCanvasElement,
     shownStyleState,
     canvasSiteStyle,
     canvasRender,
-    canvasPreview,
     drag,
     dragging,
     spacingScrub,
@@ -510,52 +513,23 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               lays out exactly as it did.
             */
         <BlockContextMenu editor={editor}>
-          <Canvas
+          {/*
+            The page is drawn in a frame of its own at the device's width and
+            height, so its media queries, `vw` and `vh` answer for the device
+            and nothing of the admin's theme reaches it. The editor's chrome
+            is the frame's overlay, drawn in this document over the frame.
+          */}
+          <CanvasFrame
+            width={frameWidth}
             zoom={zoom}
-            /*
-                  On the CANVAS, not inside `preview`. The scale is reported
-                  whether or not a viewport is being previewed, and an extra key
-                  on that inferred object is accepted and ignored rather than
-                  refused — so the reporter simply never ran.
-                */
             onScale={setAppliedScale}
-            document={editor.document}
-            rootRef={canvasRoot}
-            onRoot={setCanvasElement}
-            forcedState={shownStyleState}
-            siteStyles={siteSheet(canvasSiteStyle)}
-            selectedId={editor.selectedId}
-            selectedIds={editor.selection.ids}
-            onSelect={editor.select}
-            // The style context and the host policy, derived above so both are
-            // one object with one identity rather than rebuilt per render.
-            render={canvasRender}
-            // The box the tiers are compiled against, the width it is asked
-            // to take, and the reporter that closes the loop: the request is
-            // a ceiling, and everything downstream is derived from what the
-            // box actually got rather than from what it was offered.
-            preview={canvasPreview}
-            dragHandlers={drag.handlers}
-            // The same object those handlers came from, forwarded whole.
-            // The canvas draws what the pointer currently means — which
-            // block is in flight, which container is receiving it, and why
-            // a region will not take it — and decides none of it.
-            //
-            // Whole rather than picked apart for the reason the handlers
-            // are: a set spread across several props can be partially
-            // wired, and a canvas told about a refusal but not about the
-            // block in flight explains a refusal while dimming nothing.
-            drag={drag}
-            // The pointer route into typing a block's text. Its keyboard
-            // counterpart is the Enter binding above, registered in the same
-            // place so a surface cannot gain one without the other.
-            onDoubleClick={inline.onDoubleClick}
-            // Both pieces of chrome go through the canvas rather than beside it,
-            // because both are positioned in the canvas's own content
-            // coordinates and the canvas root is what establishes them.
+            title={pageTitle}
+            showEmptyElements={showEmptyElements}
             overlay={
               <>
+                <CanvasMarks />
                 <DropIndicator target={drag.target} />
+                <DropRefusal drag={drag} document={editor.document} />
                 {/*
                   Suppressed for the duration of a drag. The bar would otherwise
                   sit over the canvas the author is aiming at, naming a block
@@ -572,27 +546,17 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   hidden={dragging}
                   /*
                    * The tier a spacing handle writes to, and what the canvas
-                   * compiled this page under. Not optional in practice: the
-                   * overlay falls back to the base breakpoint of the resting
-                   * state, so without this a handle on a narrow canvas would
-                   * preview nothing and commit at the wrong tier — the same
-                   * inputs the inspector beside it is already given, read
-                   * from the ONE context that compiled the sheet rather than
-                   * derived a second time.
+                   * compiled this page under, read from the ONE context that
+                   * compiled the sheet rather than derived a second time.
                    */
                   scrub={spacingScrub}
                 />
                 {/*
                   Suppressed during a drag for the same reason the toolbar and
-                  the bands are: the document is mid-change, so a control
-                  offering to fill a container names a shape that is about to
-                  be different.
-                  ALSO suppressed while the author has turned empty-container
-                  chrome off: the dashed placeholder box collapses to zero
-                  height under the same preference (`builder-chrome.css`'s
-                  `[data-nx-slots]:empty` rule already matches it), and a "+"
-                  left floating over nothing after that would make the
-                  preference lie about what a visitor sees.
+                  the bands are, and while the author has turned empty-container
+                  chrome off: the placeholder box collapses to zero height under
+                  the same preference, and a "+" left floating over nothing
+                  would make the preference lie about what a visitor sees.
                 */}
                 <EmptyContainerAppenders
                   document={editor.document}
@@ -613,7 +577,32 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                 />
               </>
             }
-          />
+          >
+            <Canvas
+              document={editor.document}
+              rootRef={canvasRoot}
+              onRoot={setCanvasElement}
+              forcedState={shownStyleState}
+              siteStyles={siteSheet(canvasSiteStyle)}
+              selectedId={editor.selectedId}
+              selectedIds={editor.selection.ids}
+              onSelect={editor.select}
+              // The style context and the host policy, derived above so both
+              // are one object with one identity rather than rebuilt per
+              // render.
+              render={canvasRender}
+              dragHandlers={drag.handlers}
+              // The same object those handlers came from, forwarded whole.
+              // The canvas draws what the pointer currently means — which
+              // block is in flight, which container is receiving it — and
+              // decides none of it.
+              drag={drag}
+              // The pointer route into typing a block's text. Its keyboard
+              // counterpart is the Enter binding, registered in the same
+              // place so a surface cannot gain one without the other.
+              onDoubleClick={inline.onDoubleClick}
+            />
+          </CanvasFrame>
         </BlockContextMenu>
       )}
     </>
@@ -667,7 +656,15 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
     <SiteStyleHistoryContext.Provider value={style.history}>
       <StyleRevisionContext.Provider value={style.replay}>
         <ConnectStyleHistoryContext.Provider value={style.connect}>
-          <EditorBody {...props} />
+          {/*
+            The canvas's frame, provided above the whole editor: the canvas
+            registers it here, and the inspector, the toolbar, inline editing
+            and the keys outside the canvas all ask it which document and
+            window the page is drawn in.
+          */}
+          <CanvasFrameProvider>
+            <EditorBody {...props} />
+          </CanvasFrameProvider>
         </ConnectStyleHistoryContext.Provider>
       </StyleRevisionContext.Provider>
     </SiteStyleHistoryContext.Provider>
@@ -725,17 +722,18 @@ function EditorBody<TFieldValues extends FieldValues>({
     savePoint,
   });
 
-  const pageTitle = usePageTitle(control);
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
 
+  const pageTitle = usePageTitle(control);
   const view: EditorView = {
     ...mount,
     ...style,
     ...canvas,
     ...panels,
     documentDirty,
+    pageTitle,
   };
   useOpenAtSection({
     sectionId: openAt,

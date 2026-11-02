@@ -64,11 +64,13 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
+import { createPortal } from "react-dom";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
+import { useCanvasFrame } from "./canvas-frame-context";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
-import { canvasPointerPoints, canvasRootFrom } from "./geometry-dom";
+import { canvasPointerPoints, overlaySpaceOf } from "./geometry-dom";
 import type { SideOrientation } from "./side-orientation";
 import type {
   EdgeLengths,
@@ -175,7 +177,7 @@ export interface SpacingHandlesProps {
 }
 
 /** How thick a handle's hit area is, in canvas pixels. */
-const HANDLE_PX = 9;
+const HANDLE_SCREEN_PX = 9;
 
 /** A gesture in flight. */
 interface Gesture {
@@ -286,8 +288,16 @@ function sameEdge(
  * thickness INTO the band — never out of it, so the control stays over the
  * space it edits.
  */
-function handleRect(band: SpacingBand, outward: boolean, nudged = false): Rect {
+function handleRect(
+  band: SpacingBand,
+  outward: boolean,
+  nudged = false,
+  scale = 1
+): Rect {
   const { rect, side } = band;
+  // In the band's units: the layer over a frame is scaled with the page, and
+  // the strip keeps its own thickness on screen.
+  const thickness = HANDLE_SCREEN_PX / scale;
   const far = side === "bottom" || side === "right";
   /*
    * The edge that MOVES when the value grows, which is where the control
@@ -296,23 +306,23 @@ function handleRect(band: SpacingBand, outward: boolean, nudged = false): Rect {
    * are measured. See `spacingBandDrawnOutward` and `spacing-response.ts`.
    */
   const atMax = far === outward;
-  const half = HANDLE_PX / 2;
+  const half = thickness / 2;
   // Into the band, which is the direction away from its moving edge.
-  const shift = nudged ? (atMax ? -HANDLE_PX : HANDLE_PX) : 0;
+  const shift = nudged ? (atMax ? -thickness : thickness) : 0;
   if (side === "top" || side === "bottom") {
     const edge = atMax ? rect.y + rect.height : rect.y;
     return {
       x: rect.x,
       y: edge - half + shift,
       width: rect.width,
-      height: HANDLE_PX,
+      height: thickness,
     };
   }
   const edge = atMax ? rect.x + rect.width : rect.x;
   return {
     x: edge - half + shift,
     y: rect.y,
-    width: HANDLE_PX,
+    width: thickness,
     height: rect.height,
   };
 }
@@ -430,6 +440,14 @@ export function SpacingHandles({
     scale: string;
   }>({ styles: undefined, nodeId: "", tier: "", scale: "" });
   const [preview, setPreview] = React.useState<string | null>(null);
+  /*
+   * Over a frame the handles are drawn in the editor's document, scaled with
+   * the page, while the preview has to reach the page in the frame's.
+   */
+  const canvas = useCanvasFrame();
+  const handleScale = canvas.frame === null ? 1 : canvas.scale;
+  const previewHost =
+    canvas.frame === null ? null : (canvas.document?.head ?? null);
   /**
    * The band a gesture is holding, kept alive for the gesture's lifetime.
    *
@@ -893,9 +911,18 @@ export function SpacingHandles({
        * The canvas root, so pointer travel can be expressed in the SAME space
        * the bands were measured in.
        */
-      const root = canvasRootFrom(host, CANVAS_ROOT_CLASS);
+      const space = overlaySpaceOf(host, CANVAS_ROOT_CLASS);
+      const root = space?.root ?? null;
+      /*
+       * A pointer on a handle drawn over a frame is reported in the EDITOR's
+       * client coordinates, and the root's rectangles are read in the frame's:
+       * carried across first, through the one mapping every gesture uses.
+       */
+      const inCanvas = (x: number, y: number): { x: number; y: number } =>
+        space === null ? { x, y } : space.pointInCanvas({ x, y });
+      const pressed = inCanvas(originX, originY);
       const origin =
-        root === null ? null : canvasPointerPoints(originX, originY, root);
+        root === null ? null : canvasPointerPoints(pressed.x, pressed.y, root);
 
       /**
        * How far the pointer has moved, in both spaces, because the two answer
@@ -929,7 +956,8 @@ export function SpacingHandles({
           dy: moved.clientY - originY,
         };
         if (root === null || origin === null) return { hand, canvas: hand };
-        const now = canvasPointerPoints(moved.clientX, moved.clientY, root);
+        const at = inCanvas(moved.clientX, moved.clientY);
+        const now = canvasPointerPoints(at.x, at.y, root);
         return {
           hand,
           canvas: {
@@ -1208,7 +1236,8 @@ export function SpacingHandles({
           outward,
           drawn
             .slice(index + 1)
-            .some(later => sameEdge(band, later, drawnEdgeOf))
+            .some(later => sameEdge(band, later, drawnEdgeOf)),
+          handleScale
         );
         return (
           <div
@@ -1285,7 +1314,11 @@ export function SpacingHandles({
           />
         );
       })}
-      {preview === null ? null : <style>{preview}</style>}
+      {preview === null ? null : previewHost === null ? (
+        <style>{preview}</style>
+      ) : (
+        createPortal(<style>{preview}</style>, previewHost)
+      )}
       {region}
     </>
   );

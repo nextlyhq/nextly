@@ -42,6 +42,8 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useCanvasFrame } from "./canvas-frame-context";
+import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import {
   composedTextAt,
@@ -138,7 +140,9 @@ export function editableFrom(target: EventTarget | null): {
   prop: string;
   nodeId: string;
 } | null {
-  if (!(target instanceof Element)) return null;
+  // By node kind: a double-click inside a canvas in a frame targets an
+  // element that frame's window built.
+  if (!isElement(target)) return null;
   const element = target.closest<HTMLElement>("[data-nx-prop]");
   if (element === null) return null;
   const prop = element.getAttribute("data-nx-prop");
@@ -211,6 +215,12 @@ function selectAll(element: HTMLElement): void {
  */
 export function useInlineText(editor: EditorState): UseInlineTextResult {
   const [editing, setEditing] = useState<InlineTextEditing | null>(null);
+  /*
+   * The document the canvas is drawn in, which a keyboard caller's edit is
+   * found in: the frame's when the canvas is in one. The editor's own
+   * document holds no block there.
+   */
+  const { document: canvasDocument } = useCanvasFrame();
   /** The element handed over for the duration, so the exit can find it again. */
   const elementRef = useRef<HTMLElement | null>(null);
 
@@ -312,9 +322,9 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     if (editing === null) return;
     const element =
       elementRef.current ??
-      (globalThis.document === undefined
+      (canvasDocument === null
         ? null
-        : editableElement(globalThis.document, editing));
+        : editableElement(canvasDocument, editing));
     if (element === null) {
       // Nothing on screen carries this value. The node may have been removed
       // between the request and this effect; dropping the edit is the honest
@@ -367,7 +377,7 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
       element.removeEventListener("click", swallow);
       element.removeEventListener("dblclick", swallow);
     };
-  }, [editing, cancel, commit]);
+  }, [editing, cancel, commit, canvasDocument]);
 
   return { editing, begin, commit, cancel, onDoubleClick };
 }

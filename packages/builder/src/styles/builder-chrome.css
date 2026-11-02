@@ -161,9 +161,10 @@
  *
  * Each hue is stated once per GROUND it is drawn on, and a theme only picks
  * between the two. The admin's theme picks for chrome on admin surfaces; the
- * canvas picks by the page's own scheme instead, because its marks are drawn
- * on the site's colours — see `.nx-canvas`. Declared on the canvas as well as
- * the chrome, because the canvas is also mounted on its own, without the shell.
+ * layer over the canvas picks by the page's own scheme instead, because its
+ * marks are drawn on the site's colours — see `.nx-canvas-layer`. Declared on
+ * the layer as well as the chrome, because the canvas frame is also mounted on
+ * its own, without the shell.
  *
  * Written as values rather than references, deliberately. The blue is the
  * design system's blue 600 and 400, but that scale is declared `@theme inline`,
@@ -174,7 +175,7 @@
  */
 .nx-builder-tokens,
 .nx-builder-chrome,
-.nx-canvas {
+.nx-canvas-layer {
   --nx-builder-select-on-light: #2563eb; /* design-lint-ok: blue 600; no runtime variable */
   --nx-builder-select-on-dark: #60a5fa; /* design-lint-ok: blue 400; no runtime variable */
   --nx-builder-component-on-light: #7a00df; /* design-lint-ok: component purple; no admin token */
@@ -532,158 +533,6 @@
 
 .nx-insert-panel .nx-block-icon {
   flex: none;
-}
-
-/*
- * The selected block.
- *
- * `outline` rather than `border`, because an outline is drawn outside the box
- * model and changes no geometry — a border would move the block by its own
- * width the moment it was selected, so choosing a block would reflow the page
- * around it and the author would be editing a layout the visitor never sees.
- *
- * A NEGATIVE offset draws the ring just inside the element's edge. Outside it,
- * a block flush against the canvas edge has its indicator clipped, and adjacent
- * blocks' rings overlap into what reads as one thick line between them.
- *
- * TWO tones, because the ring is drawn on the site's content and no single
- * colour reads on all of it: the select blue disappears on a blue section, and
- * a white mark on a white one. An inset white band directly inside the blue is
- * the halo — on a white ground the blue carries it, on a blue or a photograph
- * the white does, and on a dark section both do. The band is an inset shadow
- * the 2px outline covers half of, so it changes no geometry either.
- *
- * A block whose own styles set a `box-shadow` keeps it — an author's rule
- * outweighs this one — and then shows the blue ring alone.
- */
-.nx-canvas [data-nx-selected] {
-  outline: 2px solid var(--nx-builder-select);
-  outline-offset: -2px;
-  box-shadow: inset 0 0 0 4px var(--nx-builder-halo);
-}
-
-/*
- * The rest of a multi-block selection.
- *
- * Thinner rather than a different colour. Colour would have to mean something,
- * and there is no second meaning here — every one of these blocks is selected
- * and an action applies to all of them. What the author needs to see is which
- * one the inspector is describing, and weight says that without implying two
- * kinds of selected.
- *
- * With one block selected this rule matches nothing: a lone selection is always
- * the primary, so nothing changes for the case the editor spends most of its
- * time in.
- */
-.nx-canvas [data-nx-selected=""] {
-  outline-width: 1px;
-  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
-}
-
-/*
- * A component placement, selected: the same ring in the component colour.
- *
- * The marker sits only on the elements a component's DEFINITION owns, and the
- * outermost of them is what a placement selects — so this colours the
- * placement and never the page-owned content passed into its slots, which is
- * selected, and outlined, as the page's own.
- */
-.nx-canvas [data-nx-selected][data-nx-instance] {
-  outline-color: var(--nx-builder-component);
-}
-
-/*
- * A block that draws nothing still has to be selectable and visible when it is.
- * `core/spacer` is deliberate empty space and `core/divider` is a single rule,
- * so an outline is the only thing distinguishing "selected" from "not there" —
- * which is why the ring is drawn inside rather than around, and why nothing
- * here depends on the block having any content of its own.
- */
-.nx-canvas [data-nx-selected]:empty {
-  min-height: 2px;
-}
-
-/*
- * An empty CONTAINER, which is a different thing from a block that draws
- * nothing.
- *
- * `core/spacer` and `core/divider` are deliberately empty and are handled by
- * the rule above: they get enough height to be selectable and nothing else.
- * A container is empty only until an author fills it, and with no children it
- * has no height at all — so it is invisible AND unclickable, and the canvas
- * hit-test never sees the element it would have resolved to. This is what
- * gives it an area.
- *
- * Matched on the marker rather than on a list of block names, so a container
- * a plugin contributes behaves the same as a built-in one.
- *
- * ABSOLUTE units, deliberately. The canvas root sets `container-type:
- * inline-size` whenever the site emits a viewport tier, so it can be
- * materially narrower than the region around it — a percentage here would
- * measure a different box at every breakpoint tier. 2.75rem is 44px at the
- * default root size, the smallest comfortable pointer target.
- *
- * The `:not([data-nx-empty-elements="hidden"])` guard is what makes this
- * rule optional. The shell stamps that attribute on `.nx-builder-chrome` when
- * an author asks to see the page as a visitor will, and leaves it off
- * otherwise — so the condition rides the SELECTOR rather than a value inside
- * the declaration block, and showing the box (the default) is the absence of
- * an attribute rather than a rule that has to negate one.
- *
- * `display: block` on top of whatever the author chose, and only while empty.
- * `min-height` does not apply to a non-replaced INLINE box, so a container
- * authored as `inline` (or `inline-block`/`inline-flex`/`inline-grid`) kept a
- * target sized by inherited line-height instead of this rule's 44px — 23px in
- * one measurement, smaller wherever the site's line-height is tighter, never
- * the deliberate minimum this rule promises everywhere else. Measured in a
- * real browser rather than assumed: a `::before` carrying the `min-height`
- * instead of the container measured no better, because a non-replaced
- * inline box's own fragment does not grow to fit a taller inline-level
- * child — `elementFromPoint` swept across the extra height that child
- * reserves in the surrounding line resolved to an ANCESTOR, never to the
- * container, at every point past the line-height sliver. `block`, never
- * `inline-block`: an EMPTY container has no children to lay out, so forcing
- * `block` on one already `block`, `flex` or `grid` changes nothing
- * observable (confirmed byte-identical box before and after, all three).
- * `inline-block` does not have that property — it also switches the
- * INLINE-direction sizing to shrink-to-content, which in the same
- * measurement collapsed an already-working `block`-authored empty container
- * from full width down to a few pixels.
- *
- * No important flag on `display`, checked rather than assumed. The compiled
- * per-node rule that carries an author's `display` repeats the page-scoping
- * class — `.nx-pb-page.nx-pb-page .nx-pb-<hash>`, three classes, specificity
- * `(0,3,0)`. This selector is five: two classes (`.nx-builder-chrome`,
- * `.nx-canvas`), the attribute selector inside `:not()`, `[data-nx-slots]`
- * and `:empty` — `(0,5,0)`, which already outranks it. Verified with no
- * important flag anywhere on the declaration: an author-chosen `inline`
- * still computed to `block` at 44px, hit-testable across the full box. Left
- * that way — that flag is worth reaching for only where ordinary specificity
- * cannot do the job, and measured here, it can.
- *
- * The trade-off this accepts, rather than hides, is a FLOW change, not a
- * visibility one. Every empty container already diverges from its published
- * appearance — that is the entire feature this rule belongs to: a `block`
- * one gains a 44px dashed box the visitor never sees. Forcing `display` on
- * an `inline` one is the same act, not a new category of one, but it moves
- * something a border and a background do not: an inline box sits IN a line;
- * a block one breaks it. This is the one place the canvas deliberately lays
- * an empty container out differently from how the page will. Bounded twice —
- * gone the instant a child is added, since this rule stops matching `:empty`
- * then; and absent entirely once the author asks to see the page as a
- * visitor will, since the guard above already suppresses this whole rule,
- * `display` included. A follow-up that draws a real positioned element over
- * each empty container, rather than styling the container itself, closes
- * this case by construction instead of by trade-off.
- */
-.nx-builder-chrome:not([data-nx-empty-elements="hidden"])
-  .nx-canvas
-  [data-nx-slots]:empty {
-  display: block;
-  min-height: 2.75rem;
-  border: 1px dashed var(--nx-border);
-  border-radius: var(--radius-sm);
-  background: var(--nx-muted);
 }
 
 /*
@@ -1552,226 +1401,153 @@
 }
 
 /*
- * The canvas root is the positioning context for editor chrome drawn over the
- * page.
+ * The canvas's frame, centred in the region the shell gives it.
  *
- * The drop indicator is placed in the canvas's own CONTENT coordinates — the
- * same space its blocks were measured in — and an absolutely positioned child
- * resolves against the nearest positioned ancestor's padding box, scroll
- * included. So this one declaration is what makes a measured coordinate and a
- * drawn one the same number, and without it the indicator resolves against
- * whatever ancestor happens to be positioned and lands somewhere unrelated.
+ * The page is drawn in an iframe laid out at the previewed device's size and
+ * painted at the zoom by a transform; the box around it takes the PAINTED
+ * size, so the region scrolls exactly as far as the frame reaches. The stage
+ * fills the region and grows with a frame zoomed past it, and the frame's own
+ * auto margins centre it while it is smaller and resolve to nothing once it is
+ * larger, so an enlarged page scrolls from its left edge with nothing clipped.
  */
-.nx-canvas {
+.nx-canvas-stage {
+  display: flex;
+  min-width: 100%;
+  min-height: 100%;
+  width: max-content;
+}
+
+/*
+ * A SHEET on the editor's surface: an outline rather than a border, so the
+ * edge takes no room from the painted box the frame is fitted into, and the
+ * shadow as the secondary cue.
+ */
+.nx-canvas-frame {
   position: relative;
+  flex: none;
+  margin: auto;
+  outline: 1px solid var(--nx-builder-border);
+  box-shadow: var(--shadow-md);
+}
+
+/*
+ * The frame itself. No border, so its content starts at its edge; chrome is
+ * still placed through the frame's measured inset, so a border added here
+ * would move the page and its chrome together.
+ *
+ * `color-scheme: normal` rather than inheriting the admin's. A frame's
+ * `prefers-color-scheme` follows the scheme of the iframe ELEMENT, so an
+ * inherited dark scheme would turn a site that darkens with the system dark
+ * on the canvas whenever the ADMIN was dark. `normal` leaves it to the
+ * system, as a visitor's browser does.
+ */
+.nx-canvas-frame__page {
+  display: block;
+  border: 0;
+  transform-origin: 0 0;
+  color-scheme: normal;
+}
+
+/*
+ * The layer the editor's chrome is drawn in, over the frame's viewport and
+ * clipped to it. Its content box is laid over the canvas root and moved with
+ * the frame's scroll, from `canvas-frame.tsx`.
+ *
+ * No pointer events of its own, so a press over the page reaches the page;
+ * chrome that takes presses claims them back below.
+ */
+.nx-canvas-layer {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
   /*
-   * The page's own surface, in the SITE's colours rather than the admin's.
-   *
-   * Everything this element does not state it inherits from the editor around
-   * it: the frame's grey, the admin's text colour and the admin's
-   * `color-scheme`. A block declares no background or text colour of its own,
-   * so whatever the canvas inherits shows through the document itself — in the
-   * admin's dark theme, a white site was drawn solid black with light text.
-   * What an author edits then looks nothing like what a visitor loads, which is
-   * the one thing this canvas exists to show.
-   *
-   * So all three are stated here, from the SITE's own tokens: its background
-   * and text colour tokens, which the canvas root names under the site's token
-   * prefix as `--nx-canvas-site-ground` and `--nx-canvas-site-ink` (see
-   * `canvas.tsx`). Those flip by themselves when the site's dark values apply,
-   * because the token emitter switches them by the site's strategy. Without a
-   * site sheet they fall back to the browser's default canvas, `Canvas` and
-   * `CanvasText`, which is what a published page shows where nothing paints.
-   * The system colours are the one place this sheet names a colour that is not
-   * an `--nx-*` token, because the value is the browser's own default rather
-   * than a choice of the admin's palette, and an admin token here is the
-   * defect: it repaints the page whenever the admin changes theme.
-   *
-   * `color-scheme` decides those two keywords and how native controls and
-   * scrollbars inside the page are drawn, so it is reset to light too. Only a
-   * dark GROUND among the site's dark values turns it dark — see the rules
-   * below.
-   *
-   * The frame only becomes visible BESIDE the page where the canvas is
-   * bounded: at full width the page is the region, and there are no edges to
-   * frame. A narrower tier, or zooming out, reveals it.
-   */
-  color-scheme: light;
-  background-color: var(--nx-canvas-site-ground, Canvas);
-  color: var(--nx-canvas-site-ink, CanvasText);
-  /*
-   * The page's type, which the canvas would otherwise take from the admin's
-   * own face: the site's body font token. Its custom property depends on the
-   * prefix the site's tokens are emitted under, which only the site sheet
-   * knows, so the canvas root states the reference inline as
-   * `--nx-canvas-site-font` (see `canvas.tsx`). Without a site sheet it falls
-   * back to the system face the default token states. The published page takes
-   * its face from the host application around it, which the canvas cannot
-   * read.
-   */
-  font-family: var(--nx-canvas-site-font, system-ui), sans-serif;
-  /*
-   * The editing marks drawn on the page take the hue for the page's ground, not
-   * for the admin's theme: they sit on the site's colours, and the dark theme's
-   * lighter blue is 2.5:1 on a white page where the deeper one is 5.2:1.
+   * The editing marks take the hue for the PAGE's ground, not for the admin's
+   * theme: they are drawn on the site's colours, and the dark theme's lighter
+   * blue is 2.5:1 on a white page where the deeper one is 5.2:1. The frame
+   * states the page's scheme here, read from the canvas root inside it.
    */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
-  /*
-   * A SHEET, not a region that happens to be a different colour.
-   *
-   * The surface alone separates the page from the frame only where the two
-   * tones differ enough to read, and they deliberately do not: the frame is one
-   * step off the background so it recedes. A border states the page's edge at
-   * any tone, in either mode — `--nx-builder-border` is 0.92 against a 0.99
-   * page in light and 0.26 against a 0.00 page in dark, so the edge survives
-   * the palette inverting while the two surfaces swap which of them is lighter.
-   *
-   * The shadow is the secondary cue and is allowed to be nearly invisible in
-   * dark, where a cast shadow has almost nothing to darken. Carrying the
-   * separation on the BORDER rather than the shadow is what keeps both modes
-   * equally legible instead of tuning one and checking the other.
-   *
-   * No radius, deliberately. The drop indicator and the selection chrome are
-   * positioned in this element's own content coordinates and are not clipped by
-   * it; rounding the corners without clipping leaves a block's own background
-   * squaring them off, and clipping to fix that would cut the drag chrome the
-   * canvas exists to draw.
-   *
-   * Stated on the PAGE rather than on the region around it, so the page is a
-   * self-contained sheet: several of them side by side — one per breakpoint —
-   * would each carry their own edge with nothing about this rule to revisit.
-   *
-   * An OUTLINE rather than a border, and that is a correctness requirement
-   * rather than a preference. This element carries three things at once: the
-   * width a tier is previewed at, `container-type: inline-size`, and this edge.
-   * Container queries resolve against the CONTENT box, and the shell resets its
-   * whole subtree to `box-sizing: border-box` — so a border here is subtracted
-   * from the width the page is being previewed at. Two pixels is enough to
-   * decide a tier: a 992px request lays out 990px of content, the widest
-   * `max-width: 991px` rule stays active, and the unconditional tier becomes
-   * unreachable from the switcher. The `ResizeObserver` reads `contentRect` and
-   * reports the same narrowed width, so the tier readout agrees with the wrong
-   * answer. An outline is painted outside the border box and takes part in no
-   * layout, so the page keeps exactly the width it was asked for. It has room
-   * to paint because the region around it is padded.
-   */
-  outline: 1px solid var(--nx-builder-border);
-  box-shadow: var(--shadow-md);
-  /*
-   * Fills the region rather than stopping at its content.
-   *
-   * Without this the canvas is exactly as tall as the blocks in it, so the area
-   * an author can aim at ENDS at the last block — and the position past it, the
-   * end of the page, has no pixels to point at. A pointer there is outside the
-   * canvas entirely, which correctly resolves to no drop target at all, so
-   * dragging a block to the end of a page is impossible however good the rules
-   * above it are. Measured on a three-block page: content 50px, region 700px.
-   *
-   * `min-height` rather than `height` so a page taller than the region still
-   * scrolls instead of being clipped to it.
-   *
-   * Needs no compensation for a scaled canvas. The canvas shrinks with `zoom`,
-   * which participates in layout, so a percentage here resolves against the
-   * region as it always did and the scaled box still fills it — measured at
-   * 400px painted into a 400px region. A paint-time transform would not: the
-   * root would be exactly as tall as the region and paint shorter than it.
-   */
-  min-height: 100%;
-
-  /*
-   * A press on a block is a grab, not a text selection.
-   *
-   * Blocks are made of text, so a press that lands on a word and then moves is
-   * ambiguous: the drag engine reads it as the start of a gesture while the
-   * browser reads it as the start of a selection. The browser wins, because
-   * selection begins on the first move and the engine does not call itself
-   * dragging until the pointer has travelled its activation distance — so the
-   * author gets highlighted words and a block that never moves. Whether it
-   * happens at all depends on where the text falls, which is why it reproduced
-   * on CI's font metrics and not on the author's.
-   *
-   * Declared here rather than as a `preventDefault` on the press, which would
-   * also suppress focus and the click that selects a block, and would have to
-   * decide what a press means before the travel that answers it.
-   */
-  user-select: none;
-  -webkit-user-select: none;
 }
 
-/*
- * Text being EDITED is text again.
- *
- * The rule above is about pressing on a block to move it. Once a block's text
- * is editable, selecting inside it is the whole point — a caret has to be
- * placeable and a word has to be selectable — so the editable subtree opts back
- * in rather than inheriting the canvas's answer.
- */
-.nx-canvas [contenteditable="true"],
-.nx-canvas [contenteditable="true"] * {
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-/*
- * The site's OWN dark mode, which is the one thing that darkens the page.
- *
- * A site's dark token values apply under one of two strategies: under
- * `[data-nx-theme="dark"]` on an ancestor the host chooses, or with the
- * viewer's system on a site whose strategy is `media`. The page's ground and
- * text already follow those values through the tokens; what these rules add
- * is the SCHEME. The canvas root states the strategy as
- * `data-nx-site-dark-ground`, and only when the site's dark values include a
- * dark ground — the strategy says when dark values apply, not that the page
- * turns dark, so a site whose dark set keeps a light background keeps light
- * native controls. Each path is keyed on that stated strategy, so a host's
- * attribute does not darken the page of a site that follows the system.
- * The admin's `.dark` class is a different switch and reaches nothing here.
- */
-[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground="attribute"] {
-  color-scheme: dark;
+.nx-canvas-layer[data-nx-page-scheme="dark"] {
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
 }
 
-@media (prefers-color-scheme: dark) {
-  .nx-canvas[data-nx-site-dark-ground="media"] {
-    color-scheme: dark;
-    --nx-builder-select: var(--nx-builder-select-on-dark);
-    --nx-builder-component: var(--nx-builder-component-on-dark);
-  }
+.nx-canvas-layer__content {
+  position: absolute;
+  left: 0;
+  top: 0;
 }
 
 /*
- * The editor's chrome drawn ON the page keeps the ADMIN's theme.
- *
- * The rules above reset the canvas to the site's scheme, text colour and
- * face, and all three inherit — so a toolbar or a notice drawn inside the page
- * would take the site's light scheme for its native controls, and its text the
- * page's colour and font, on an admin-coloured surface. The admin's `--nx-*`
- * tokens are custom properties inherited from the admin's own root, so they
- * need no help; these inherited values are what has to be handed back.
- *
- * ONE list of what the editor draws inside the page. `[data-nx-chrome]` marks
- * the controls whose clicks must not reach the page; the spacing overlay and
- * the drop line are chrome too but take no pointer events, so they are named
- * here rather than given that marker, which would change what a click does.
- *
- * In the BASE layer, so it yields to everything the chrome states for itself:
- * any unlayered rule, such as the refusal notice's destructive foreground, and
- * any utility class, wins whatever its weight, and only what would otherwise
- * be inherited from the page is replaced. The scheme is the admin's token
- * rather than a light rule and a `.dark` twin, so the theme decides it in the
- * one place the other builder tokens are picked.
+ * Chrome that takes presses claims them back. Weighted as one class and
+ * stated before the chrome's own rules, so a piece of chrome that declares
+ * `pointer-events: none` for itself — a notice, the appenders' container —
+ * keeps it.
  */
-@layer base {
-  .nx-canvas [data-nx-chrome],
-  .nx-canvas .nx-spacing-overlay,
-  .nx-canvas .nx-drop-indicator {
-    color-scheme: var(--nx-builder-scheme);
-    color: var(--nx-builder-text);
-    font-family: var(--font-sans, system-ui, sans-serif);
-  }
+:where(.nx-canvas-layer) [data-nx-chrome] {
+  pointer-events: auto;
+}
+
+/*
+ * The marks drawn over blocks: the selection, and during a drag the container
+ * a drop would land in or the one refusing it.
+ *
+ * Boxes in the editor's layer rather than outlines on the page's elements, so
+ * the site's CSS can never restyle or hide them and they keep their width at
+ * any zoom.
+ *
+ * The selection is drawn just INSIDE the block's edge, so a block flush with
+ * the page's edge keeps its ring and two adjacent blocks' rings do not merge
+ * into one thick line. TWO tones, because the ring is drawn on the site's
+ * content and no single colour reads on all of it: the select blue disappears
+ * on a blue section and a white mark on a white one, so an inset white band
+ * directly inside the blue is the halo, which the outline covers half of.
+ *
+ * The rest of a multi-block selection is thinner: weight says which block the
+ * inspector describes without implying two kinds of selected. A component
+ * placement takes the component colour.
+ *
+ * The drop container is DASHED and OUTSIDE, where the selection is solid and
+ * inside, so the two are told apart by shape as well as by moment.
+ */
+.nx-canvas-marks {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.nx-canvas-mark {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.nx-canvas-mark[data-mark="selected"] {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px var(--nx-builder-halo);
+}
+
+.nx-canvas-mark[data-mark="selected"][data-secondary] {
+  outline-width: 1px;
+  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
+}
+
+.nx-canvas-mark[data-mark="selected"][data-component] {
+  outline-color: var(--nx-builder-component);
+}
+
+.nx-canvas-mark[data-mark="drop-parent"] {
+  outline: 2px dashed var(--nx-builder-select);
+  outline-offset: 2px;
+}
+
+.nx-canvas-mark[data-mark="drop-refused"] {
+  outline: 2px solid var(--nx-destructive);
+  outline-offset: 2px;
 }
 
 /*
@@ -1844,142 +1620,6 @@
 .nx-drop-indicator[data-axis="x"]::before {
   top: -4px;
   left: -3px;
-}
-
-/*
- * A block on the canvas says it can be picked up.
- *
- * Blocks here have no drag handle: the whole element is the grab surface. That
- * is a deliberate choice and it carries an obligation — with no handle to point
- * at, the cursor is the ONLY thing that says the element can be moved, so its
- * absence leaves the gesture undiscoverable rather than merely unadorned. The
- * palette tile has said this since it shipped; the canvas is the half that
- * never did.
- */
-.nx-canvas [data-nx-node] {
-  cursor: grab;
-}
-
-/*
- * A locked block does not offer the grab.
- *
- * The drag engine returns before creating a gesture for one, so advertising it
- * as movable promises something that can never happen and leaves an author
- * pressing repeatedly at a block that will not move. Since the whole element is
- * the grab surface here, the cursor is the only place that promise is made.
- *
- * Withdrawn by SPECIFICITY rather than by excluding it from the rule above: a
- * negation there would have to name every reason a block might not be
- * draggable, and each new reason would edit a selector that means "a block"
- * into one that means "a block, except". Two rules keep the general statement
- * general and let the exception say what it is.
- */
-.nx-canvas [data-nx-node][data-nx-locked] {
-  cursor: default;
-}
-
-/*
- * Text being edited shows a caret, not a grab.
- *
- * Inline editing turns the node's own element into editable content and stops
- * the pointer events a drag would start from, so the gesture the grab cursor
- * advertises is unavailable at exactly the moment the element most needs to
- * advertise a different one: where the caret will land, and what a press-drag
- * will select.
- *
- * Both spellings, because the attribute and the property are set by different
- * layers — the builder marks the element it is editing, the browser reflects
- * the editable state — and a rule keyed on only one of them is right until
- * whichever it did not name changes.
- */
-.nx-canvas [data-nx-node][data-nx-editing],
-.nx-canvas [data-nx-node][contenteditable="true"],
-.nx-canvas [data-nx-node][contenteditable="plaintext-only"] {
-  cursor: text;
-}
-
-/*
- * Held, and refused.
- *
- * Both are reachable because this drag is built on POINTER events with pointer
- * capture rather than on the HTML5 drag-and-drop API, where the cursor is taken
- * over by the drop effect for the duration of the gesture and neither of these
- * can be shown.
- *
- * On the ROOT rather than per block: pointer capture means the events keep
- * arriving at the canvas however far the hand travels, so a cursor set on
- * whatever happens to be underneath would flicker as the pointer crossed gaps.
- */
-.nx-canvas[data-nx-dragging] {
-  cursor: grabbing;
-}
-
-.nx-canvas[data-nx-dragging="refused"] {
-  cursor: no-drop;
-}
-
-/*
- * The drag state has to WIN over the block's own cursor, not merely be
- * inherited past it.
- *
- * `cursor` inherits, but a descendant that declares its own value is not
- * inheriting anything — and every block declares `grab` above. Setting the drag
- * state only on the root therefore changes the cursor over the gaps between
- * blocks and leaves it reading `grab` over the blocks themselves, which is
- * where the pointer spends a drag. These two selectors are the ones that
- * actually reach it.
- *
- * The locked rule above is deliberately NOT re-stated here: once a drag is in
- * flight the subject is the block being carried, and the cursor describes the
- * gesture rather than whatever it happens to be passing over.
- */
-.nx-canvas[data-nx-dragging] [data-nx-node] {
-  cursor: grabbing;
-}
-
-.nx-canvas[data-nx-dragging="refused"] [data-nx-node] {
-  cursor: no-drop;
-}
-
-/*
- * What is being held, dimmed where it sits.
- *
- * The block STAYS in place rather than being replaced by a preview that follows
- * the pointer. On a canvas the block is the rendered artefact at its real size,
- * so a simplified preview would show strictly less than is already on screen —
- * the opposite of a list, where a row is a summary and the preview is the only
- * thing carrying what is in flight.
- */
-.nx-canvas [data-nx-drag-source] {
-  opacity: var(--nx-builder-drag-source-opacity);
-}
-
-/*
- * WHICH container, which the line cannot say.
- *
- * The line answers "between which two siblings"; this answers "inside which
- * container", and the two come apart exactly where the line alone is ambiguous:
- * the coordinate at the bottom edge of one container is also the top edge of
- * the next, and only this separates them.
- *
- * DASHED and OUTSIDE, where the selection is solid and inset. They are both
- * outlines in the same colour and they mean different things, so the shape has
- * to carry the difference — a second solid outline would read as a second
- * selection.
- *
- * An outline rather than a border, for the reason `.nx-canvas` documents: a
- * container may carry `container-type: inline-size`, and a border is subtracted
- * from the content box its queries resolve against, so a highlight drawn with
- * one would change the layout it is describing.
- */
-.nx-canvas [data-nx-drop-parent] {
-  outline: 2px dashed var(--nx-builder-select);
-  outline-offset: 2px;
-}
-
-.nx-canvas [data-nx-drop-refused] {
-  outline: 2px solid var(--nx-destructive);
-  outline-offset: 2px;
 }
 
 /*
@@ -2531,6 +2171,9 @@
    * pseudo-element, which takes the positioned-descendants layer and would
    * otherwise be painted over this in-flow text whatever the source order says.
    */
+  /* Over a frame the layer is scaled with the page; the number keeps its own
+     size. */
+  scale: calc(1 / var(--nx-spacing-scale, 1));
   position: relative;
   padding: 0 3px;
   border-radius: 2px;
@@ -3337,37 +2980,6 @@ fieldset.nx-inspector__fields {
   padding: 0.5rem;
   border: 1px solid var(--nx-destructive);
   border-radius: 0.375rem;
-}
-
-/*
- * Text being edited keeps the platform's own long-press callout.
- *
- * The context menu's trigger wraps the canvas, and Radix sets
- * `-webkit-touch-callout: none` on it so a long press opens the block menu
- * rather than the browser's. That property INHERITS, so it reaches the
- * `contenteditable` inside a block as well — and the canvas withholds the
- * press there, so a long press on text would open neither menu: the platform's
- * spelling, selection and clipboard callout suppressed, and nothing put in its
- * place. Restored on the editable subtree only, so the block menu keeps the
- * whole of the canvas that is not text.
- *
- * `[contenteditable="false"]` is excluded for the reason the canvas excludes
- * it: it marks a region deliberately made uneditable inside an editable one,
- * which is a block again rather than text.
- */
-.nx-canvas [contenteditable] {
-  -webkit-touch-callout: default;
-}
-
-/*
- * ...except a region the editor has deliberately made uneditable inside an
- * editable one. That is a block again rather than text, so the block menu is
- * the right menu there and the suppression stands. Written as its own rule
- * rather than as a `:not()` on the one above: two plain selectors say the same
- * thing, and the negated form was complex enough to be flagged.
- */
-.nx-canvas [contenteditable="false"] {
-  -webkit-touch-callout: none;
 }
 
 /*

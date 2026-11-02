@@ -20,6 +20,7 @@ import {
   type EditorState,
   type UseInlineEditingResult,
   CANVAS_ROOT_CLASS,
+  useCanvasFrame,
   inspectInstance,
   partOfComponentSentence,
   useEditorState,
@@ -150,18 +151,24 @@ export function useSavePatternVerb(
    * detached node does nothing and leaves the author on the body, at the top of
    * the page — so the fallback is the editor itself.
    *
-   * The canvas REGION rather than the canvas root: the root is a plain div with
-   * no tabindex, so focusing it does nothing, while the region the shell wraps
-   * it in is `tabIndex={0}` because a keyboard author has to be able to scroll
-   * the page. Found by walking up from the root rather than by its label, which
-   * is display copy.
+   * A canvas in a frame is found through the frame: its root is in the
+   * frame's document, where the editor's own holds no canvas, and the frame
+   * element is what takes focus into the page.
+   *
+   * A canvas sharing the editor's document is found by its REGION rather than
+   * its root: the root is a plain div with no tabindex, so focusing it does
+   * nothing, while the region the shell wraps it in is `tabIndex={0}` because
+   * a keyboard author has to be able to scroll the page. Found by walking up
+   * from the root rather than by its label, which is display copy.
    */
+  const { frame } = useCanvasFrame();
   const returnFocusTo = useCallback((): HTMLElement | null => {
     if (openedFrom?.isConnected === true) return openedFrom;
+    if (frame !== null) return frame;
     const root = window.document.querySelector(`.${CANVAS_ROOT_CLASS}`);
     const region = root?.closest<HTMLElement>("[tabindex]") ?? null;
     return region;
-  }, [openedFrom]);
+  }, [openedFrom, frame]);
 
   return { document, returnFocusTo, open, close };
 }

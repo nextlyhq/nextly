@@ -52,6 +52,7 @@ import {
   type PlacementSources,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
@@ -60,6 +61,7 @@ import {
   autoscrollStep,
 } from "./autoscroll";
 import {
+  CANVAS_ROOT_CLASS,
   isOutermostForAddress,
   nodeAddressOf,
   nodeIdFromEvent,
@@ -91,6 +93,7 @@ import {
   containerEdges,
   framePaintedScale,
   hostPointInFrame,
+  overlaySpaceOf,
   type CanvasPointerPoints,
 } from "./geometry-dom";
 import { placementTypesOf, type SlotSource } from "./inserter";
@@ -1415,8 +1418,19 @@ export function useCanvasDrag({
   React.useEffect(() => {
     if (gestureDocument.current === canvasFrame.document) return;
     gestureDocument.current = canvasFrame.document;
-    if (gesture.current !== null) reset();
-  }, [canvasFrame.document, reset]);
+    const drag = gesture.current;
+    if (drag === null) return;
+    /*
+     * A palette drag the reload cancelled still ends in a release, and if the
+     * pointer has come back to the row it started on, that press and release
+     * are one click — which the row inserts on. Suppressed exactly as Escape
+     * suppresses it, so a drag that visibly ended adds nothing.
+     */
+    if (drag.active && drag.subject.kind === "insert") {
+      swallowClickAfterRelease(drag.owner);
+    }
+    reset();
+  }, [canvasFrame.document, reset, swallowClickAfterRelease]);
 
   // Every ordinary ending funnels through `reset`. This covers the one that
   // does not: a host unmounting mid-drag, which would otherwise leave a running
@@ -1497,9 +1511,17 @@ export interface DropIndicatorProps {
 /**
  * The line showing where a dropped block will go.
  *
- * Positioned absolutely in the canvas's content coordinates, which is what the
- * rectangles were measured in — so it needs the canvas root to be a positioned
- * ancestor, and `builder-chrome.css` makes it one.
+ * The target is in the canvas root's content coordinates, which is what the
+ * rectangles were measured in. Where the line is drawn in those coordinates
+ * depends on where it is drawn: inside the root over a canvas sharing the
+ * editor's document, or in the layer over the canvas's frame, where they are
+ * scaled to the frame's zoom while the line keeps its own thickness. Asked of
+ * the line's own element, through `overlaySpaceOf`, the one mapping every
+ * piece of chrome uses.
+ *
+ * Written to the element's style before paint rather than rendered: the
+ * mapping needs the element in the document, and a render to apply it would
+ * draw the line at the unmapped position for a frame on every pointer move.
  *
  * `aria-hidden`, and deliberately: the equivalent keyboard move announces its
  * own outcome through the editor's one live region, and a second element
@@ -1509,29 +1531,38 @@ export interface DropIndicatorProps {
 export function DropIndicator({
   target,
 }: DropIndicatorProps): React.JSX.Element | null {
-  if (target === null) return null;
+  const line = React.useRef<HTMLDivElement | null>(null);
+  // A zoom, or the frame's page arriving, moves the line on screen while the
+  // target stays where it was.
+  const canvasFrame = useCanvasFrame();
+  useIsomorphicLayoutEffect(() => {
+    const element = line.current;
+    if (element === null || target === null) return;
+    // The line is drawn ACROSS the axis children are separated along: a
+    // region stacking its children downward gets a horizontal rule, a row
+    // gets a vertical one.
+    const span = target.to - target.from;
+    const rect: Rect =
+      target.axis === "y"
+        ? { x: target.from, y: target.line, width: span, height: 0 }
+        : { x: target.line, y: target.from, width: 0, height: span };
+    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    const at = space === null ? rect : space.place(rect);
+    element.style.left = `${String(at.x)}px`;
+    element.style.top = `${String(at.y)}px`;
+    // The other dimension is the stylesheet's, so a line that changes axis
+    // does not keep the length it had along the old one.
+    element.style.width = target.axis === "y" ? `${String(at.width)}px` : "";
+    element.style.height = target.axis === "x" ? `${String(at.height)}px` : "";
+  }, [target, canvasFrame]);
 
-  // The line is drawn ACROSS the axis children are separated along: a region
-  // stacking its children downward gets a horizontal rule, a row gets a
-  // vertical one.
-  const style: React.CSSProperties =
-    target.axis === "y"
-      ? {
-          left: target.from,
-          top: target.line,
-          width: target.to - target.from,
-        }
-      : {
-          left: target.line,
-          top: target.from,
-          height: target.to - target.from,
-        };
+  if (target === null) return null;
 
   return (
     <div
+      ref={line}
       className="nx-drop-indicator"
       data-axis={target.axis}
-      style={style}
       aria-hidden="true"
     />
   );

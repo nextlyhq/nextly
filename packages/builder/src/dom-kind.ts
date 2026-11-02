@@ -66,7 +66,7 @@ export function isInput(value: unknown): value is HTMLInputElement {
 }
 
 /** Whether a value is an `<iframe>`, from any realm. */
-function isIFrame(value: unknown): value is HTMLIFrameElement {
+export function isIFrame(value: unknown): value is HTMLIFrameElement {
   return isHTMLElement(value) && value.localName === "iframe";
 }
 

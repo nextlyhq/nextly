@@ -19,7 +19,7 @@ import {
   useNoticeQueue,
   type NoticeQueue,
 } from "./builder-notices";
-import { CanvasFrameShortcuts } from "./canvas-frame-context";
+import { CanvasFrameShortcuts, useCanvasFrame } from "./canvas-frame-context";
 import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
@@ -1188,6 +1188,78 @@ function useSeparatorRegionEscape(
   );
 }
 
+/**
+ * The canvas's region: a named `section`, never `<main>`.
+ *
+ * HTML allows one non-hidden `main` per document, and every mount this shell
+ * has is inside a host that already owns it — the admin's dashboard layout
+ * renders one, and the editor is embedded in it. A second gives assistive
+ * technology two competing primary landmarks and makes every strict `main`
+ * locator ambiguous. A `section` carrying an accessible name is still exposed
+ * as a landmark, as a `region`.
+ *
+ * The ref and `tabIndex` belong to this element deliberately: F6 region
+ * cycling focuses it, and dropping either would lose the canvas as a cycle
+ * target — which reads as a focus bug rather than a markup change.
+ */
+function CanvasRegion({
+  regionRef,
+  children,
+}: {
+  regionRef: (element: HTMLElement | null) => void;
+  children?: React.ReactNode;
+}): React.JSX.Element {
+  // The frame the canvas is drawn in, which focus arriving on the region is
+  // handed on to.
+  const canvasFrame = useCanvasFrame();
+  return (
+    <section
+      ref={regionRef}
+      /*
+       * `0`, not `-1`, for a canvas in this document. This region
+       * SCROLLS, and nothing inside it is focusable — blocks are
+       * selected by pointer, not by tab — so at `-1` a keyboard user
+       * could not scroll the canvas at all.
+       *
+       * A canvas in a frame is its own tab stop, and its page
+       * scrolls inside it, so the region steps aside: `-1` keeps it
+       * focusable for F6, and focus arriving on it goes on into the
+       * frame. Kept as a stop as well it would be a trap — Shift+Tab
+       * out of the frame would land here and be sent back in.
+       */
+      tabIndex={canvasFrame.frame === null ? 0 : -1}
+      onFocus={event => {
+        if (event.target !== event.currentTarget) return;
+        canvasFrame.frame?.focus();
+      }}
+      aria-label="Canvas"
+      /*
+       * Padded, so the page floats inside the region rather than
+       * meeting its edges. The frame is then visible on every side at
+       * every width — without it the page fills the region whenever
+       * it is not scaled down, and the edge this gap exists to show
+       * has nowhere to appear.
+       *
+       * Safe against the fit: the canvas frame observes this element's
+       * CONTENT box, so padding narrows the room the page is fitted into
+       * and the scale follows it. A padding the measurement
+       * could not see would size the page to the region and paint it
+       * over the gap.
+       *
+       * Taken from the constant the panel's own minimum is derived
+       * from, rather than written as a utility class. The gap is
+       * spent out of this panel, so a class here and a number there
+       * would let the two drift and put the floor back inside the
+       * editing surface.
+       */
+      style={{ padding: CANVAS_GUTTER }}
+      className="h-full overflow-auto"
+    >
+      {children}
+    </section>
+  );
+}
+
 function ShellRegions({
   appliedScale = 1,
   onZoomPick,
@@ -1437,62 +1509,15 @@ function ShellRegions({
           ) : null}
 
           <ResizablePanel id="canvas" minSize={MIN_CANVAS_PANEL_WIDTH}>
-            {/*
-             * A named `section`, never `<main>`.
-             *
-             * HTML allows one non-hidden `main` per document, and every mount this
-             * shell has is inside a host that already owns it — the admin's
-             * dashboard layout renders one, and the editor is embedded in it. A
-             * second gives assistive technology two competing primary landmarks and
-             * makes every strict `main` locator ambiguous.
-             *
-             * Nothing is lost: a `section` carrying an accessible name is still
-             * exposed as a landmark, as a `region`. For an editor embedded in a page
-             * whose primary content is the surrounding form, `region` is the more
-             * accurate description of what this is.
-             *
-             * The ref and `tabIndex` move with the element deliberately. F6 region
-             * cycling focuses this node, and dropping either would lose the canvas as
-             * a cycle target — which reads as a focus bug rather than a markup change.
-             */}
+            {/* The canvas's region: see `CanvasRegion`. */}
             <div className="relative h-full">
-              <section
-                ref={element => {
+              <CanvasRegion
+                regionRef={element => {
                   regionRefs.current.canvas = element;
                 }}
-                /*
-                 * `0`, not `-1`. This region SCROLLS, and nothing inside it is
-                 * focusable — blocks are selected by pointer, not by tab — so
-                 * at `-1` a keyboard user could not scroll the canvas at all.
-                 * Programmatically focusable was enough for F6 region cycling
-                 * and not enough to read the page.
-                 */
-                tabIndex={0}
-                aria-label="Canvas"
-                /*
-                 * Padded, so the page floats inside the region rather than
-                 * meeting its edges. The frame is then visible on every side at
-                 * every width — without it the page fills the region whenever
-                 * it is not scaled down, and the edge this gap exists to show
-                 * has nowhere to appear.
-                 *
-                 * Safe against the fit: `canvasScale` observes this element's
-                 * CONTENT box, so padding narrows the width the page is fitted
-                 * into and the scale follows it. A padding the measurement
-                 * could not see would size the page to the region and paint it
-                 * over the gap.
-                 *
-                 * Taken from the constant the panel's own minimum is derived
-                 * from, rather than written as a utility class. The gap is
-                 * spent out of this panel, so a class here and a number there
-                 * would let the two drift and put the floor back inside the
-                 * editing surface.
-                 */
-                style={{ padding: CANVAS_GUTTER }}
-                className="h-full overflow-auto"
               >
                 {children}
-              </section>
+              </CanvasRegion>
               {checklist === undefined ? null : (
                 // The positioner takes no pointer events, so it cannot swallow
                 // a click aimed at the page underneath it; the card itself

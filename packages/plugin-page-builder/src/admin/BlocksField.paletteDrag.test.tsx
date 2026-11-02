@@ -212,16 +212,27 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     InspectorPanel: record("inspector"),
     Canvas: (props: Record<string, unknown>): React.JSX.Element => {
       seen.canvas = props;
-      /*
-       * The overlay is RENDERED, not dropped. The toolbar and the spacing
-       * bands are passed to the canvas as overlay content, so a recorder that
-       * returned a bare div would leave them unmounted — and every assertion
-       * about whether they are hidden would be an assertion about `undefined`.
-       */
-      return (
-        <div data-recorder="canvas">{props.overlay as React.ReactNode}</div>
-      );
+      return <div data-recorder="canvas" />;
     },
+    /*
+     * The frame's overlay is RENDERED, not dropped. The toolbar and the
+     * spacing bands are the frame's overlay content, so a recorder that
+     * dropped it would leave them unmounted — and every assertion about
+     * whether they are hidden would be an assertion about `undefined`. The
+     * canvas is passed through, as jsdom never loads a page into a frame.
+     */
+    CanvasFrame: ({
+      children,
+      overlay,
+    }: {
+      children?: React.ReactNode;
+      overlay?: React.ReactNode;
+    }): React.JSX.Element => (
+      <>
+        {children}
+        {overlay}
+      </>
+    ),
     // Passed through AND recorded: the canvas renders inside it, and what the
     // host hands it decides how a keyboard move is judged.
     BlockKeyboardActions: ({

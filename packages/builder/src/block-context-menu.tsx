@@ -123,6 +123,8 @@ import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
+import { useCanvasFrame } from "./canvas-frame-context";
+import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import {
   useBlockActionsContext,
@@ -201,19 +203,42 @@ export function BlockContextMenu({
    * update here would rerender the canvas on every contact.
    */
   const pressedTarget = React.useRef<string | null>(null);
+  const canvas = useCanvasFrame();
   const noteTarget = React.useCallback(
-    (event: React.SyntheticEvent<HTMLDivElement>) => {
+    (event: React.MouseEvent<HTMLDivElement>) => {
       /*
        * This wrapper's OWN canvas, which is the outermost one beneath it. A
        * canvas nested inside a block of that canvas is deeper, so it is not
        * what `querySelector` returns — and a block belonging to it is refused
        * here rather than answered for by this menu.
+       *
+       * A canvas in a frame is not beneath the wrapper in the DOM, only in
+       * the component tree, which is how its events reach this handler; it
+       * is the outermost canvas in the frame's document.
        */
-      const root = event.currentTarget.querySelector(`.${CANVAS_ROOT_CLASS}`);
+      const root =
+        event.currentTarget.querySelector(`.${CANVAS_ROOT_CLASS}`) ??
+        (canvas.frame === null
+          ? null
+          : (canvas.document?.querySelector(`.${CANVAS_ROOT_CLASS}`) ?? null));
       pressedTarget.current =
         root === null ? null : contextMenuTargetOf(event.target, root);
+      /*
+       * The menu opens where the press was, read from this event's client
+       * coordinates. A press inside the frame reports them in the FRAME's
+       * viewport while the menu is drawn in the editor's, so they are carried
+       * across here, before the trigger's own handler reads them.
+       */
+      if (
+        canvas.frame !== null &&
+        isElement(event.target) &&
+        event.target.ownerDocument !== event.currentTarget.ownerDocument
+      ) {
+        const at = canvas.toHost({ x: event.clientX, y: event.clientY });
+        Object.assign(event, { clientX: at.x, clientY: at.y });
+      }
     },
-    []
+    [canvas]
   );
   const opened = React.useCallback(
     (open: boolean) => {
