@@ -36,6 +36,8 @@ import {
   entryAllowedAt,
   filterEntries,
   groupByCategory,
+  insertionCandidates,
+  insertionFor,
   insertionPointFor,
   nodeForEntry,
   patternEntriesFrom,
@@ -591,6 +593,123 @@ describe("entryAllowedAt and allowedEntries", () => {
 function slotsFor(map: Record<string, readonly string[]>): SlotSource {
   return { slotsOf: type => map[type] };
 }
+
+describe("insertionCandidates and insertionFor", () => {
+  const text = (id: string) => ({
+    id,
+    type: "acme/text",
+    version: 1,
+    props: {},
+  });
+  const nested = () =>
+    documentOf([
+      {
+        id: "wrap",
+        type: "acme/columns",
+        version: 1,
+        props: {},
+        slots: { children: [text("inner")] },
+      },
+      text("after"),
+    ]);
+
+  it("is the end of the page when nothing, or nothing still there, is selected", () => {
+    const document = documentOf([text("a")]);
+    for (const selected of [null, "gone"]) {
+      expect(insertionCandidates(document, selected)).toEqual([
+        { kind: "document-end", at: { index: 1 }, target: { kind: "root" } },
+      ]);
+    }
+  });
+
+  it("goes after the selection, then after each block it sits in", () => {
+    expect(insertionCandidates(nested(), "inner")).toEqual([
+      {
+        kind: "after-selection",
+        at: { parentId: "wrap", slot: "children", index: 1 },
+        target: { kind: "slot", parentType: "acme/columns", slot: "children" },
+        afterId: "inner",
+      },
+      {
+        kind: "after-ancestor",
+        at: { index: 1 },
+        target: { kind: "root" },
+        afterId: "wrap",
+      },
+    ]);
+  });
+
+  it("puts a block after a selected container, never inside it", () => {
+    const document = documentOf([
+      {
+        id: "box",
+        type: "acme/columns",
+        version: 1,
+        props: {},
+        slots: { children: [] },
+      },
+    ]);
+    // An empty container too: adding inside is the container's own "+".
+    expect(insertionCandidates(document, "box")[0]).toMatchObject({
+      kind: "after-selection",
+      at: { index: 1 },
+      afterId: "box",
+    });
+  });
+
+  it("goes inside a container only when asked to, at the end of its region", () => {
+    expect(insertionCandidates(nested(), "inner", { inside: "wrap" })).toEqual([
+      {
+        kind: "inside",
+        at: { parentId: "wrap", slot: "children", index: 1 },
+        target: {
+          kind: "slot",
+          parentType: "acme/columns",
+          slot: "children",
+        },
+        insideId: "wrap",
+      },
+    ]);
+  });
+
+  it("adds five blocks in a row as five siblings, in order", () => {
+    let document = documentOf([text("a")]);
+    let selected = "a";
+    for (const id of ["b", "c", "d", "e", "f"]) {
+      const [place] = insertionCandidates(document, selected);
+      if (place === undefined) throw new Error("no place to insert");
+      document = applyOp(document, {
+        kind: "insert",
+        at: place.at,
+        node: text(id),
+      } as BuilderOp).document;
+      selected = id;
+    }
+    expect(document.nodes.map(node => node.id)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+    ]);
+  });
+
+  it("takes the first place that accepts the block, climbing out of a region that refuses it", () => {
+    // The columns' region refuses it; the page beside them accepts it.
+    const taken = insertionFor(insertionCandidates(nested(), "inner"), place =>
+      place.target.kind === "root" ? "ok" : undefined
+    );
+    expect(taken?.candidate).toMatchObject({
+      kind: "after-ancestor",
+      afterId: "wrap",
+    });
+    // And none at all when nothing accepts it: the panel says why.
+    expect(
+      insertionFor(insertionCandidates(nested(), "inner"), () => undefined)
+    ).toBeUndefined();
+  });
+});
 
 describe("insertionPointFor", () => {
   it("appends at the end of the document when nothing is selected", () => {
