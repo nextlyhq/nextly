@@ -74,13 +74,26 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BuilderShell: ({
       renderPanel,
       availablePanels,
+      openPanelRequest,
     }: {
-      renderPanel?: (panel: string) => React.ReactNode;
+      renderPanel?: (
+        panel: string,
+        view: { current: string | null; choose: (view: string) => void }
+      ) => React.ReactNode;
       availablePanels?: readonly string[];
+      openPanelRequest?: { panel: string; view?: string; count: number };
     }): React.JSX.Element => (
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
-        <div data-testid="panel">{renderPanel?.("fonts")}</div>
+        {/* The panel and part the editor last asked the shell to open. */}
+        <div data-testid="request">
+          {openPanelRequest === undefined
+            ? ""
+            : `${openPanelRequest.panel}:${openPanelRequest.view ?? ""}`}
+        </div>
+        <div data-testid="panel">
+          {renderPanel?.("design", { current: "fonts", choose: () => {} })}
+        </div>
       </div>
     ),
     BlockKeyboardActions: passthrough,
@@ -218,17 +231,16 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the fonts panel reaching an author", () => {
-  it("offers the fonts rail slot at all", () => {
-    // The slot was reserved and dark for the whole of Phase 4: `PANEL_CHROME`
-    // named it, `LEFT_PANELS` listed it, and nothing rendered into it, so the
-    // shell drew it disabled as "coming soon".
+  it("offers the Design panel, whose Fonts tab this is, at all", () => {
+    // The slot was reserved and dark for the whole of Phase 4: the shell named
+    // it, and nothing rendered into it, so authors never reached it.
     storedRead = {
       data: { fonts: [], tokens: { tokens: [] } },
       isPending: false,
       error: null,
     };
     openEditor();
-    expect(screen.getByTestId("rail").textContent).toContain("fonts");
+    expect(screen.getByTestId("rail").textContent).toContain("design");
   });
 
   it("hands it the site's faces and tokens, not an empty list", () => {
@@ -257,6 +269,32 @@ describe("the fonts panel reaching an author", () => {
     // ...and so did the token, which is the half that needs BOTH props: the
     // report is a join, so passing faces alone would draw a silent all-clear.
     expect(panel.textContent).toContain("Ghost");
+  });
+
+  it("sends an author from a typeface the site lacks to Design's Variables tab", () => {
+    // The fix is to edit the variable, and the fonts are a tab of the same
+    // panel: a request naming only the panel would reopen Design on the tab
+    // the author is already on, which is Fonts, and the button would do
+    // nothing visible.
+    storedRead = {
+      data: {
+        fonts: [],
+        tokens: {
+          tokens: [
+            {
+              name: "brand.body",
+              kind: "fontFamily",
+              values: { light: "Ghost, serif" },
+            },
+          ],
+        },
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+    fireEvent.click(screen.getByRole("button", { name: "Edit in Variables" }));
+    expect(screen.getByTestId("request").textContent).toBe("design:variables");
   });
 
   it("draws a read still in flight as loading rather than as a site with no fonts", () => {

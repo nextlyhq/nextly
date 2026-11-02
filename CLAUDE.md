@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (3b6006ecbf626f1b). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (bcc8a83411172ffb). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -299,8 +299,8 @@ pnpm worktree remove <branch>
 ```
 
 Stopping the test containers is safe and cheap — `docker start` by name brings
-them back with their data, which is why the start commands in the
-`running-builds-and-tests` skill are `start` rather than `compose up`.
+them back (empty: run `pnpm worktree provision`), which is why the start
+commands in the `running-builds-and-tests` skill are `start`, not `compose up`.
 
 ## A whole-file write is a delete plus a create
 
