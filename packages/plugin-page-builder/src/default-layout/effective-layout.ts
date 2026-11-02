@@ -39,8 +39,8 @@ export interface EffectiveLayoutDeps {
  * A page's stored `layout` may arrive populated, so it is read as an id. A
  * `no-default` answer means no regions, with the reason.
  *
- * @experimental The page route does not draw Layouts yet, and nothing in this
- * package calls this; it may change when the renderer that uses it lands.
+ * @experimental May still change before Layouts are marked stable. The page
+ * route answers the same question itself, with the same engine rule.
  */
 export async function effectiveLayoutFor(
   // The stored page as read: `layout` an id or a populated row.

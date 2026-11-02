@@ -58,7 +58,7 @@ import type {
   SingleRouteConfig,
 } from "nextly/runtime";
 import type { ReactElement, ReactNode } from "react";
-import { createElement, Suspense } from "react";
+import { createElement, Fragment, Suspense } from "react";
 
 import { url } from "./blocks/props";
 import {
@@ -76,7 +76,17 @@ import type {
   QueryBudget,
   ResolvedMedia,
 } from "./context";
-import { PageRenderer } from "./page-renderer";
+import {
+  cappedLifetime,
+  checkedLayoutsProvider,
+  DEFAULT_LAYOUTS_COLLECTION,
+  regionDocument,
+  regionsFor,
+  type BlocksLayoutsProvider,
+  type LayoutRegion,
+  type LayoutRowReader,
+} from "./next-layouts";
+import { pageCompileContext, PageRenderer } from "./page-renderer";
 import { prepareDocumentForRead } from "./prepare-document";
 import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
@@ -344,7 +354,50 @@ export interface BlocksPageConfig
     context: RenderContext,
     derived: DerivedPageSeo
   ) => Metadata | Promise<Metadata>;
+  /**
+   * Draw each page inside its Layout: the header region, the page, then the
+   * footer region. OFF unless given, and a route without it renders exactly
+   * what it did before.
+   *
+   * A PROVIDER, for the reason `siteStyles` takes one: the site's default
+   * Layout is stored, so it is read per render, and the read has to state the
+   * Singles it depends on so a change to the default reaches the cached pages
+   * that use it. The page-builder plugin supplies one:
+   *
+   * ```ts
+   * import { pageBuilderLayouts } from "@nextlyhq/plugin-page-builder";
+   *
+   * createBlocksPage({ collections: ["pages"], field: "content", layouts: pageBuilderLayouts() });
+   * ```
+   *
+   * Which Layout a page gets is the engine's `resolvePageLayout`: no regions
+   * when the page switches them off, else the Layout it names while that is
+   * published, else the site's default while that is published, else none
+   * (logged, and the page still renders). Each region is the component the
+   * Layout names for that area, drawn read-only through the same composition
+   * path as a component placed on the page, sharing the page's query budget,
+   * locale and posture.
+   *
+   * What a page's cache entry carries is what that page read: the id of the
+   * Layout it asked for (even one the read did not find, so a page falling
+   * back from an unpublished Layout refreshes when it publishes), the ids of
+   * the components its regions draw, and — only on pages that depend on the
+   * default — the provider's Singles and the default Layout's id. Never the
+   * whole Layouts collection, so publishing one Layout rebuilds only the pages
+   * drawn inside it.
+   *
+   * Metadata never reads the regions: a header's `<h1>` does not become the
+   * page's title.
+   *
+   * Not offered on a Single's route, which has no Layout of its own to name.
+   *
+   * @experimental New public surface: its name and shape may change before it
+   * is marked stable.
+   */
+  layouts?: BlocksLayoutsProvider;
 }
+
+export type { BlocksLayoutsProvider } from "./next-layouts";
 
 /**
  * Percent-encode a slug path, keeping its `/` separators.
@@ -821,7 +874,77 @@ function componentSource(
   }
   const collection = config.componentCollection ?? COMPONENT_TAG_COLLECTION;
   const field = config.componentField ?? COMPONENT_DOCUMENT_FIELD;
-  const status = config.status ?? (config.draft === true ? "all" : "published");
+  const status = embeddedStatus(config);
+  const overlayDrafts = overlaysDrafts(config);
+
+  return async (ids: readonly string[]) => {
+    // Dropped before anything is built from them, not repaired. `entryIdTag`
+    // refuses a blank segment by THROWING — correctly, because a bare
+    // `nextly:components:id:` tag would over-invalidate — and a stored
+    // `componentId` of `"   "` is a nonempty string that `componentIdsIn`
+    // reports as a reference. Left in, one malformed instance takes the whole
+    // page down before a block boundary exists to contain it; left out, it is
+    // an id nobody supplied a definition for, which is exactly what it is.
+    const wanted = usableIds(ids);
+    if (wanted.length === 0) return EMPTY_DEFINITIONS;
+
+    const found = new Map<string, BlockDocument>();
+    if (overlayDrafts) {
+      return await readDraftDefinitions(wanted, {
+        reader,
+        collection,
+        field,
+        locale,
+        budget,
+      });
+    }
+    for (const chunk of chunked(wanted, COMPONENT_BATCH_SIZE)) {
+      // One claim per QUERY. A page embedding twenty components spends one
+      // read because that is what it costs; charging per definition would
+      // refuse a page for an allowance it never spent, and charging nothing
+      // would leave the read on this path that grows with the page unbounded.
+      if (!budget.take()) break;
+      const page = await readRowsChunk(chunk, {
+        reader,
+        collection,
+        status,
+        locale,
+        cacheScope: config.cacheScope,
+        keyName: "nextly-components",
+      });
+      for (const [id, document] of definitionsById(page.items, field)) {
+        found.set(id, document);
+      }
+    }
+    return found;
+  };
+}
+
+/** Distinct ids with something in them; see `componentSource` for why. */
+function usableIds(ids: readonly string[]): string[] {
+  return [...new Set(ids)].filter(id => id.trim().length > 0);
+}
+
+/**
+ * The lifecycle scope a route reads what its page EMBEDS at: the components it
+ * places and the Layout it is drawn inside. The entry read's own scope, not a
+ * second opinion.
+ */
+function embeddedStatus(
+  config: BlocksPageConfig
+): "published" | "draft" | "all" {
+  return config.status ?? (config.draft === true ? "all" : "published");
+}
+
+/**
+ * Whether this route may surface PENDING edits of what its page embeds.
+ *
+ * One answer for components and Layouts alike, so a preview never draws a
+ * draft header around a page whose draft components it refused, or the
+ * reverse.
+ */
+function overlaysDrafts(config: BlocksPageConfig): boolean {
+  const status = embeddedStatus(config);
   // Whether this route may surface a component's PENDING edits.
   //
   // Both halves are load-bearing, and both are about what this read can
@@ -841,47 +964,65 @@ function componentSource(
   // by declining the per-id route rather than by re-deciding that rule here —
   // `status: "all"` is the only scope that excludes nothing and can therefore
   // be served by an unfiltered read.
-  const overlayDrafts = config.draft === true && status === "all";
+  return config.draft === true && status === "all";
+}
 
-  return async (ids: readonly string[]) => {
-    // Dropped before anything is built from them, not repaired. `entryIdTag`
-    // refuses a blank segment by THROWING — correctly, because a bare
-    // `nextly:components:id:` tag would over-invalidate — and a stored
-    // `componentId` of `"   "` is a nonempty string that `componentIdsIn`
-    // reports as a reference. Left in, one malformed instance takes the whole
-    // page down before a block boundary exists to contain it; left out, it is
-    // an id nobody supplied a definition for, which is exactly what it is.
-    const wanted = [...new Set(ids)].filter(id => id.trim().length > 0);
-    if (wanted.length === 0) return EMPTY_DEFINITIONS;
-
-    const found = new Map<string, BlockDocument>();
+/**
+ * The route's Layout read: the rows for some ids, at the posture the route
+ * reads what its page embeds, tagged per id and never with the collection.
+ *
+ * The component read's machinery, not a copy of it: the same batched, cached,
+ * release-bounded read on a published route, and the same uncached per-id
+ * draft read on a route that overlays drafts. Only `id` and `areas` are
+ * selected, which is all a region needs.
+ */
+function layoutRowReader(
+  config: BlocksPageConfig,
+  provider: BlocksLayoutsProvider,
+  reader: NextlyContentReader,
+  budget: QueryBudget,
+  locale: string | undefined
+): LayoutRowReader {
+  const collection = provider.collection ?? DEFAULT_LAYOUTS_COLLECTION;
+  const status = embeddedStatus(config);
+  const overlayDrafts = overlaysDrafts(config);
+  return async (ids, options) => {
+    const wanted = usableIds(ids);
+    if (wanted.length === 0) return [];
     if (overlayDrafts) {
-      return await readDraftDefinitions(wanted, {
+      return await readDraftRows(wanted, {
         reader,
         collection,
-        field,
         locale,
         budget,
+        // Depth zero, as on the published read below.
+        depth: 0,
       });
     }
-    for (const chunk of chunked(wanted, COMPONENT_BATCH_SIZE)) {
-      // One claim per QUERY. A page embedding twenty components spends one
-      // read because that is what it costs; charging per definition would
-      // refuse a page for an allowance it never spent, and charging nothing
-      // would leave the read on this path that grows with the page unbounded.
-      if (!budget.take()) break;
-      const page = await readComponentChunk(chunk, {
-        reader,
-        collection,
-        status,
-        locale,
-        cacheScope: config.cacheScope,
-      });
-      for (const [id, document] of definitionsById(page.items, field)) {
-        found.set(id, document);
-      }
-    }
-    return found;
+    if (!budget.take()) return [];
+    const found = await readRowsChunk(wanted, {
+      reader,
+      collection,
+      status,
+      locale,
+      cacheScope: config.cacheScope,
+      // A capped read is its own entry, so the cap reaches only the pages
+      // whose answer it gives.
+      keyName:
+        options?.maxLifetime === undefined
+          ? "nextly-layouts"
+          : `nextly-layouts:${String(options.maxLifetime)}`,
+      select: { id: true, areas: true },
+      // Depth zero: a region needs only the component ids `areas` stores, and
+      // the components are read once more, at the route's posture, by the
+      // component read. A populated read would load them, and whatever they
+      // relate to, for nothing.
+      depth: 0,
+      ...(options?.maxLifetime === undefined
+        ? {}
+        : { maxLifetime: options.maxLifetime }),
+    });
+    return found.items;
   };
 }
 
@@ -958,14 +1099,39 @@ async function readDraftDefinitions(
     locale: string | undefined;
     budget: QueryBudget;
   }
-): Promise<Map<string, BlockDocument>> {
-  const { reader, collection, field, locale, budget } = args;
-  const found = new Map<string, BlockDocument>();
+): Promise<DefinitionsById> {
+  const { field, ...rest } = args;
+  // Through the SAME reader the batched path uses, so a row is judged readable
+  // by one rule. A second unwrapping here is how the two paths would come to
+  // disagree about which stored value counts as a definition.
+  return definitionsById(await readDraftRows(wanted, rest), field);
+}
+
+/**
+ * The working-draft rows for `wanted`, one uncached query per id.
+ *
+ * The per-id half of {@link readDraftDefinitions}, kept apart so the Layout
+ * read on a draft route takes the same path, at the same price and with the
+ * same identity channels cleared, as the component read beside it.
+ */
+async function readDraftRows(
+  wanted: readonly string[],
+  args: {
+    reader: NextlyContentReader;
+    collection: string;
+    locale: string | undefined;
+    budget: QueryBudget;
+    /** Relationship depth, for a read that needs only the ids it stores. */
+    depth?: number;
+  }
+): Promise<Record<string, unknown>[]> {
+  const { reader, collection, locale, budget, depth } = args;
+  const rows: Record<string, unknown>[] = [];
   for (const id of wanted) {
     // One claim per QUERY, exactly as the batched path charges. Here that is
-    // one per component, which is the honest price of this read rather than a
-    // penalty: a page whose components outrun the allowance stops fetching and
-    // the remainder resolve as missing, with a marker, instead of the route
+    // one per row, which is the honest price of this read rather than a
+    // penalty: a page whose reads outrun the allowance stops fetching and the
+    // remainder resolve as missing, with a marker, instead of the route
     // issuing unbounded reads.
     if (!budget.take()) break;
     const row = await reader.findByID({
@@ -977,20 +1143,22 @@ async function readDraftDefinitions(
       user: undefined,
       req: undefined,
       ...(locale ? { locale } : {}),
+      ...(depth === undefined ? {} : { depth }),
     });
-    if (row === null || row === undefined) continue;
-    // Through the SAME reader the batched path uses, so a row is judged
-    // readable by one rule. A second unwrapping here is how the two paths would
-    // come to disagree about which stored value counts as a definition.
-    for (const [foundId, document] of definitionsById([row], field)) {
-      found.set(foundId, document);
-    }
+    if (row !== null && row !== undefined) rows.push(row);
   }
-  return found;
+  return rows;
 }
 
-/** One batched, tagged, posture-carrying read of at most a full chunk. */
-async function readComponentChunk(
+/**
+ * One batched, tagged, posture-carrying read of at most a full chunk.
+ *
+ * Shared by the component read and the Layout read, which ask the same
+ * question of different collections: these ids, at the route's posture, tagged
+ * per id. `keyName` keeps their cache entries apart, and `select` narrows a
+ * read that needs only some columns.
+ */
+async function readRowsChunk(
   wanted: readonly string[],
   args: {
     reader: NextlyContentReader;
@@ -998,9 +1166,25 @@ async function readComponentChunk(
     status: "published" | "draft" | "all";
     locale: string | undefined;
     cacheScope: string | undefined;
+    keyName: string;
+    select?: Record<string, boolean>;
+    /** A cap, in seconds, on top of the release bound. */
+    maxLifetime?: number;
+    /** Relationship depth, for a read that needs only the ids it stores. */
+    depth?: number;
   }
 ): Promise<{ items: Record<string, unknown>[] }> {
-  const { reader, collection, status, locale, cacheScope } = args;
+  const {
+    reader,
+    collection,
+    status,
+    locale,
+    cacheScope,
+    keyName,
+    select,
+    maxLifetime,
+    depth,
+  } = args;
   // How long this read may live, bounded by the next scheduled release —
   // asked for the reason `release-cache-window` states about the two callers
   // it already had: a release member names a scope, and a bound applied to
@@ -1012,7 +1196,9 @@ async function readComponentChunk(
   // release instant the page read around it refreshes while this one stays a
   // cache hit — and the page keeps drawing the pre-release component until
   // some unrelated write happens to bust its id tag.
-  const revalidate = await releaseBoundedRevalidate(undefined);
+  const release = await releaseBoundedRevalidate(undefined);
+  const revalidate =
+    maxLifetime === undefined ? release : cappedLifetime(release, maxLifetime);
   return await cachedFind(
     async () =>
       await reader.find({
@@ -1025,11 +1211,13 @@ async function readComponentChunk(
         user: undefined,
         req: undefined,
         ...(locale ? { locale } : {}),
+        ...(select === undefined ? {} : { select }),
+        ...(depth === undefined ? {} : { depth }),
       }),
     {
       tags: wanted.map(id => entryIdTag(collection, id)),
       keyParts: [
-        "nextly-components",
+        keyName,
         collection,
         status,
         locale ?? "",
@@ -1400,8 +1588,13 @@ function blocksRouteConfig(
     mediaCollection: _mediaCollection,
     resolveMedia: _resolveMedia,
     resolveEntryPath: _resolveEntryPath,
+    layouts: _layouts,
     ...routeConfig
   } = config;
+  // Checked when the route is built, not when the first page is requested: a
+  // provider of the wrong shape would otherwise surface as stale regions on a
+  // cached page, long after the deploy that introduced it.
+  const layoutsProvider = checkedLayoutsProvider(config.layouts);
 
   return {
     ...routeConfig,
@@ -1550,30 +1743,221 @@ function blocksRouteConfig(
         effectiveLimits(config)
       );
 
-      return createElement(PageRenderer, {
-        document,
+      // What every document drawn on this page shares: the context (so the
+      // regions spend the page's ONE budget and read in its locale), the
+      // blocks, the caps and the host's posture.
+      const shared: SharedRendererProps = {
         context: pageContext,
         blocks,
-        styles: resolved,
-        // Spread conditionally, matching `hostPolicy` below: a page holding no
-        // instance resolves to an empty map, and handing `PageRenderer` an
-        // empty map rather than nothing states that definitions WERE fetched
-        // and none was found — which is the honest answer for a page that
-        // references none, and the wrong one for a caller that never asked.
-        ...(definitions.size === 0 ? {} : { definitions }),
         styleContext,
         blockFallback,
         limits,
-        ...(siteStyles === undefined ? {} : { siteStyles }),
         // Spread conditionally: `PageRenderer` distinguishes an absent policy
         // from one present and undefined, and passing the second would state a
         // posture the site never chose.
         ...(config.hostPolicy === undefined
           ? {}
           : { hostPolicy: config.hostPolicy }),
-      });
+      };
+      const pageProps: PageRendererElementProps = {
+        ...shared,
+        document,
+        styles: resolved,
+        // Spread conditionally: a page holding no instance resolves to an
+        // empty map, and handing `PageRenderer` an empty map rather than
+        // nothing states that definitions WERE fetched and none was found —
+        // which is the honest answer for a page that references none, and the
+        // wrong one for a caller that never asked.
+        ...(definitions.size === 0 ? {} : { definitions }),
+      };
+
+      const regions =
+        layoutsProvider === undefined
+          ? []
+          : await regionsFor({
+              provider: layoutsProvider,
+              entry,
+              readRows: layoutRowReader(
+                config,
+                layoutsProvider,
+                readerFor(config),
+                budget,
+                context.locale
+              ),
+              budget,
+              cacheScope: config.cacheScope,
+            });
+      if (regions.length === 0) {
+        return createElement(PageRenderer, {
+          ...pageProps,
+          ...(siteStyles === undefined ? {} : { siteStyles }),
+        });
+      }
+      // The regions' components through the page's own source, so they are
+      // read at the page's posture and locale, tagged by id, and charged to the
+      // same budget.
+      const regionDefinitions = await definitionsFor(
+        regionDocument(regions),
+        componentSource(config, readerFor(config), budget, context.locale),
+        effectiveLimits(config)
+      );
+      return createElement(
+        Fragment,
+        null,
+        ...drawWithRegions({
+          regions,
+          page: pageProps,
+          shared,
+          siteStyles,
+          definitions: regionDefinitions,
+        })
+      );
     },
   };
+}
+
+/** The renderer props every document drawn on one page shares. */
+type SharedRendererProps = Pick<
+  Parameters<typeof PageRenderer>[0],
+  | "context"
+  | "blocks"
+  | "styleContext"
+  | "blockFallback"
+  | "limits"
+  | "hostPolicy"
+>;
+
+/** The page's own renderer props, less the site sheet decision. */
+type PageRendererElementProps = Omit<
+  Parameters<typeof PageRenderer>[0],
+  "siteStyles"
+>;
+
+/**
+ * The header region, the page, then the footer region, as sibling elements.
+ *
+ * Each region is wrapped in its landmark, `<header>` or `<footer>`, carrying
+ * `data-nextly-region` naming its area. A landmark rather than a plain `div`
+ * because that is what a header and a footer ARE to a screen reader moving by
+ * region, and the Layout is the only place that knows which is which; the
+ * attribute is the stable hook for a host's own CSS or a test, independent of
+ * the markup a component draws inside. Neither wrapper adds a style: the
+ * region's own page root carries every rule the component compiled to.
+ *
+ * The site sheet is emitted ONCE, by whichever document is drawn first. Every
+ * document's own rules are anchored at one specificity and settled by source
+ * order, so the site sheet (block defaults, named classes) has to come before
+ * all of them: emitted by the page with a header above it, the block defaults
+ * would land AFTER the header's own rules and beat them. The other documents
+ * are rendered with `siteStyles={false}` and the page compile context that
+ * sheet implies, so their own rules compile exactly as they would beside it.
+ *
+ * A region's styles reach the page the way a placed component's do: a
+ * composed document never matches a stored stylesheet, so its sheet is
+ * compiled during the render from the route's compile context.
+ */
+function drawWithRegions(args: {
+  regions: readonly LayoutRegion[];
+  page: PageRendererElementProps;
+  shared: SharedRendererProps;
+  siteStyles: SiteSheetInput | undefined;
+  definitions: DefinitionsById;
+}): ReactElement[] {
+  const { regions, page, shared, siteStyles, definitions } = args;
+  const header = regions.find(region => region.area === "header");
+  const footer = regions.find(region => region.area === "footer");
+  // In the order they are drawn: header, page, footer.
+  const parts: (LayoutRegion | "page")[] = [
+    ...(header === undefined ? [] : [header]),
+    "page" as const,
+    ...(footer === undefined ? [] : [footer]),
+  ];
+
+  // No breakpoints means no site sheet to place and no compile for a region,
+  // so every document keeps what it would have had alone.
+  const emitting: SheetProps = siteStyles === undefined ? {} : { siteStyles };
+  const inheriting: SheetProps =
+    siteStyles === undefined
+      ? {}
+      : {
+          siteStyles: false,
+          ...optionalStyleContext(
+            pageCompileContext(shared.styleContext, siteStyles)
+          ),
+        };
+  return parts.map((part, index) => {
+    const base = index === 0 ? emitting : inheriting;
+    if (part === "page") {
+      // The page keeps the scope its stored sheet was compiled under, so a
+      // stored artifact still matches; one compiled unscoped gets a scope of
+      // its own here, and is recompiled for it.
+      const pageScope =
+        typeof page.styles?.scope === "string"
+          ? page.styles.scope
+          : PART_SCOPE_PAGE;
+      return createElement(PageRenderer, {
+        ...page,
+        ...scopedSheet(base, shared.styleContext, pageScope),
+        key: "page",
+      });
+    }
+    return createElement(
+      part.area,
+      { key: part.area, "data-nextly-region": part.area },
+      createElement(PageRenderer, {
+        ...shared,
+        ...scopedSheet(base, shared.styleContext, partScope(part.area)),
+        document: regionDocument([part]),
+        ...(definitions.size === 0 ? {} : { definitions }),
+      })
+    );
+  });
+}
+
+/**
+ * The scope each document drawn on one page compiles under: one per part.
+ *
+ * Node ids are unique within a document, not across documents, so the page and
+ * a region can hold the same id and with it the same generated class; and a
+ * page-level rule is anchored at every page root. Unscoped, one document's
+ * sheet would restyle the other. A distinct scope per part is the compiler's
+ * own mechanism for this (`StyleCompileContext.scope`): every selector it
+ * writes is constrained to the root carrying that class, and the renderer puts
+ * the class on the root it mounts.
+ */
+const PART_SCOPE_PAGE = "nx-pb-part-page";
+
+function partScope(area: LayoutRegion["area"]): string {
+  return `nx-pb-part-${area}`;
+}
+
+/**
+ * `sheet` with `scope` set on its compile context, falling back to the
+ * route's own context for the document that emits the site sheet. A document
+ * with no compile context at all compiles nothing, so there is nothing to
+ * scope.
+ */
+function scopedSheet(
+  sheet: SheetProps,
+  routeContext: StyleCompileContext | undefined,
+  scope: string
+): SheetProps {
+  const context = sheet.styleContext ?? routeContext;
+  return context === undefined
+    ? sheet
+    : { ...sheet, styleContext: { ...context, scope } };
+}
+
+/** How one document on the page treats the site sheet. */
+type SheetProps = Pick<
+  Parameters<typeof PageRenderer>[0],
+  "siteStyles" | "styleContext"
+>;
+
+function optionalStyleContext(
+  context: StyleCompileContext | undefined
+): SheetProps {
+  return context === undefined ? {} : { styleContext: context };
 }
 
 /**
@@ -1607,6 +1991,9 @@ export interface BlocksSinglePageConfig
     | "status"
     | "draft"
     | "buildMetadata"
+    // A Single is not a page drawn inside a Layout: it has no Layout field of
+    // its own to name one, and its route is not where the site's pages live.
+    | "layouts"
   > {
   /** Which Single to serve, by its slug. */
   slug: string;
@@ -1715,8 +2102,11 @@ function blocksSingleConfig(
     revalidate: _revalidate,
     draft: _draft,
     trustedCollections: _trustedCollections,
+    // Withheld even from a JavaScript caller who passes it anyway, which the
+    // type above refuses: a Single route draws no regions.
+    layouts: _layouts,
     ...blocksOptions
-  } = config;
+  } = config as BlocksSinglePageConfig & { layouts?: unknown };
 
   const routeConfig = blocksRouteConfig(
     {
