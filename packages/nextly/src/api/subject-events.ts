@@ -37,7 +37,6 @@ import { getService } from "../di";
 import { container } from "../di/container";
 import { fieldTrustOf } from "../domains/collections/services/collection-query-service";
 import { mayReadDeletedDocument } from "../domains/content-events/deleted-document-access";
-import { nameTakeoverHolders } from "../domains/content-events/named-takeovers";
 import type { ContentEventSubject } from "../domains/content-events/record";
 import {
   assertPageSize,
@@ -211,6 +210,12 @@ export async function readSubjectEvents(
           page
         )
       : { items: page.items, nextBefore: page.nextBefore };
+  // Loaded when history is read, not with this route module: boot loads the
+  // route, and naming a holder reads the users table through the version
+  // author reader, which nothing else at boot needs.
+  const { nameTakeoverHolders } = await import(
+    "../domains/content-events/named-takeovers"
+  );
   return {
     // A takeover keeps its displaced holder by id; they are named here, as
     // they are now, so a deleted account is never named from the record.
