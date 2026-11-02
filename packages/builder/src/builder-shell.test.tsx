@@ -1886,3 +1886,174 @@ describe("where the notice region sits", () => {
     ).not.toBeNull();
   });
 });
+
+describe("the device being edited", () => {
+  /** A shell whose host asks for devices and records what the shell reports. */
+  function deviceShell(store = memoryStore()) {
+    stubContainerFits(true);
+    const devices: Array<string | null> = [];
+    const zooms: unknown[] = [];
+    const shell = (
+      request?: { breakpoint: string | null; count: number },
+      extra: Partial<Parameters<typeof BuilderShell>[0]> = {}
+    ) => (
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        onZoomChange={zoom => zooms.push(zoom)}
+        onEditingBreakpointChange={device => devices.push(device)}
+        {...(request === undefined
+          ? {}
+          : { editingBreakpointRequest: request })}
+        {...extra}
+      />
+    );
+    const view = render(shell());
+    return { store, devices, zooms, view, shell };
+  }
+
+  it("starts on the base breakpoint, and reports it", () => {
+    const { devices } = deviceShell();
+    expect(devices.at(-1)).toBeNull();
+  });
+
+  it("holds the device a host asks for, and reports it", () => {
+    const { devices, view, shell, store } = deviceShell();
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    expect(devices.at(-1)).toBe("tablet");
+    expect(JSON.parse(store.value ?? "{}").editingBreakpoint).toBe("tablet");
+  });
+
+  it("restores the device the author left, before any request", () => {
+    const { devices } = deviceShell(
+      memoryStore(
+        JSON.stringify({ ...DEFAULT_PREFERENCES, editingBreakpoint: "mobile" })
+      )
+    );
+    expect(devices.at(-1)).toBe("mobile");
+  });
+
+  it("keeps the device when a panel opens or closes", () => {
+    // The defect this guards: the device was read off the canvas's measured
+    // width, so opening a panel narrowed the canvas and moved every edit to a
+    // narrower breakpoint without the author choosing one.
+    const { devices, view, shell } = deviceShell();
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const layers = rail.querySelector<HTMLButtonElement>(
+      '[data-panel="layers"]'
+    );
+    if (layers === null) throw new Error("no Layers item on the rail");
+    fireEvent.click(layers);
+    fireEvent.click(layers);
+    expect(new Set(devices.slice(devices.indexOf("tablet")))).toEqual(
+      new Set(["tablet"])
+    );
+  });
+
+  it("goes back to fitting the canvas when the device changes", () => {
+    const { zooms, view, shell } = deviceShell(
+      memoryStore(JSON.stringify({ ...DEFAULT_PREFERENCES, zoom: 1.5 }))
+    );
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    expect(zooms.at(-1)).toEqual({ kind: "fit" });
+  });
+
+  it("keeps a chosen zoom when the same device is asked for again", () => {
+    // Choosing the device already being edited is not a change of device, and
+    // throwing away the author's zoom for it would be a surprise.
+    const { zooms, view, shell } = deviceShell(
+      memoryStore(
+        JSON.stringify({
+          ...DEFAULT_PREFERENCES,
+          zoom: 1.5,
+          editingBreakpoint: "tablet",
+        })
+      )
+    );
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1.5 });
+  });
+});
+
+describe("zooming from the keyboard", () => {
+  function zoomShell(stored: Record<string, unknown> = {}) {
+    stubContainerFits(true);
+    const zooms: unknown[] = [];
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, ...stored })
+        )}
+        onZoomChange={zoom => zooms.push(zoom)}
+      />
+    );
+    return zooms;
+  }
+
+  it("shows the page at actual size on mod+0", () => {
+    const zooms = zoomShell();
+    fireEvent.keyDown(document, { key: "0", ctrlKey: true, metaKey: false });
+    fireEvent.keyDown(document, { key: "0", metaKey: true, ctrlKey: false });
+    expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1 });
+  });
+
+  it("fits the canvas on Shift+1, whichever character the layout gives", () => {
+    // On a US layout Shift+1 arrives as "!"; on layouts where the digit needs
+    // Shift, it arrives as "1" with Shift held. Both mean the same press.
+    const us = zoomShell({ zoom: 1.5 });
+    fireEvent.keyDown(document, { key: "!", shiftKey: true });
+    expect(us.at(-1)).toEqual({ kind: "fit" });
+    cleanup();
+    const azerty = zoomShell({ zoom: 1.5 });
+    fireEvent.keyDown(document, { key: "1", shiftKey: true });
+    expect(azerty.at(-1)).toEqual({ kind: "fit" });
+  });
+
+  it("zooms only the shell that holds focus when two are mounted", () => {
+    // Two shells share one shortcut manager. The zoom keys must answer for
+    // the shell the author is in, as F6 does, not for whichever registered
+    // last.
+    stubContainerFits(true);
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        onZoomChange={zoom => first.push(zoom)}
+      />
+    );
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        onZoomChange={zoom => second.push(zoom)}
+      />
+    );
+    const [firstRail] = screen.getAllByRole("navigation", {
+      name: "Editor panels",
+    });
+    firstRail?.focus();
+    fireEvent.keyDown(document.activeElement ?? document, {
+      key: "0",
+      ctrlKey: true,
+    });
+    expect(first.at(-1)).toEqual({ kind: "fixed", scale: 1 });
+    expect(second.at(-1)).toEqual({ kind: "fit" });
+  });
+
+  it("leaves Shift+1 to a text field, where it types a character", () => {
+    // On a layout where the digit needs Shift, Shift+1 is how "1" is typed.
+    const zooms = zoomShell({ zoom: 1.5 });
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+    field.focus();
+    fireEvent.keyDown(field, { key: "1", shiftKey: true });
+    fireEvent.keyDown(field, { key: "!", shiftKey: true });
+    expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1.5 });
+    field.remove();
+  });
+});

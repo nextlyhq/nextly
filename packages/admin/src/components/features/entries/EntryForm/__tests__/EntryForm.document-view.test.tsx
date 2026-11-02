@@ -19,7 +19,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { useFormContext } from "react-hook-form";
+import { useFormContext, useFormState } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -670,6 +670,48 @@ describe("EntryForm with a document view", () => {
       })
     );
     expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the view the stored value as the field's saved copy after the view runs a save", async () => {
+    // The page builder holds edits inside locked areas against the field's
+    // saved copy, read as the form's default value. A save the server
+    // rewrites must move that copy to what was STORED, not what was sent, or
+    // the editor judges the next edit against a page that no longer exists.
+    const STORED_VIEW = "@acme/pb/admin#Stored";
+    function StoredView(): ReactElement {
+      const { run } = useHostedDocumentActions();
+      const { control, register } = useFormContext();
+      const { defaultValues } = useFormState({ control, name: "title" });
+      return (
+        <>
+          <input aria-label="Page heading" {...register("title")} />
+          <output aria-label="Saved copy">
+            {String(defaultValues?.title)}
+          </output>
+          <button type="button" onClick={() => void run("save")}>
+            Save from the view
+          </button>
+        </>
+      );
+    }
+    registerComponent(STORED_VIEW, StoredView);
+    update.mockResolvedValue({
+      item: { id: "e1", title: "Hello world, as stored" },
+    });
+    const user = userEvent.setup();
+    renderView({ documentView: { component: STORED_VIEW, onExit } });
+    expect(screen.getByLabelText("Saved copy").textContent).toBe("Hello");
+
+    await user.type(screen.getByLabelText("Page heading"), " world");
+    await user.click(
+      screen.getByRole("button", { name: "Save from the view" })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Saved copy").textContent).toBe(
+        "Hello world, as stored"
+      )
+    );
   });
 
   it("keeps the ordinary editor when no view is routed", () => {

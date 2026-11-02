@@ -123,6 +123,8 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
+    composed: () => undefined,
   } as unknown as EditorState & { applyAll: ReturnType<typeof vi.fn> };
 }
 

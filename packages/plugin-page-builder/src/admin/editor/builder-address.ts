@@ -29,6 +29,21 @@ const DEFAULT_LANGUAGE_NOTE =
   "Opens the default language, the one the Page Builder edits.";
 
 /**
+ * Whether the edit screen shows a language other than the default, the one the
+ * Page Builder edits.
+ *
+ * One answer for the two things that follow from it: the way in says where it
+ * leads, and the entry screen offers no way into a single section, since that
+ * language's document is not the one the builder opens and its sections need
+ * not be the same.
+ */
+export function showsAnotherLanguage(
+  locale?: Pick<DocumentLocale, "documentLocalized" | "isDefaultLocale"> | null
+): boolean {
+  return locale?.documentLocalized === true && !locale.isDefaultLocale;
+}
+
+/**
  * The builder's address for `fieldName` on the document the form holds.
  *
  * Withheld, with the sentence the card shows, where there is no address to
@@ -40,10 +55,9 @@ export function builderAddress(
   fieldName: string,
   locale?: Pick<DocumentLocale, "documentLocalized" | "isDefaultLocale"> | null
 ): BuilderAddress {
-  const elsewhere =
-    locale?.documentLocalized === true && !locale.isDefaultLocale
-      ? { note: DEFAULT_LANGUAGE_NOTE }
-      : {};
+  const elsewhere = showsAnotherLanguage(locale)
+    ? { note: DEFAULT_LANGUAGE_NOTE }
+    : {};
   if (identity === null) {
     return { unavailable: "The Page Builder opens from a saved page." };
   }
@@ -69,4 +83,37 @@ export function builderAddress(
     href: `/admin/collections/${slug}/${id}/${BUILDER_VIEW_PATH}${query}`,
     ...elsewhere,
   };
+}
+
+/**
+ * The query key naming the section the builder opens at.
+ *
+ * The admin keeps the same key in its list of a view's own address keys, so
+ * moving between the edit form and the builder at a section stays on the one
+ * document rather than counting as leaving it.
+ */
+const SECTION_PARAM = "section";
+
+/**
+ * The builder's address `href`, opened at the section `sectionId`.
+ *
+ * Built on the address `builderAddress` gave rather than beside it, so the
+ * field, the document and the language it names are the ones the plain way in
+ * names. A section already named is replaced: an address names one place.
+ */
+export function sectionAddress(href: string, sectionId: string): string {
+  const [path = "", query = ""] = href.split("?", 2);
+  const params = new URLSearchParams(query);
+  params.set(SECTION_PARAM, sectionId);
+  return `${path}?${params.toString()}`;
+}
+
+/**
+ * The section an address's query names, or `undefined` where it names none.
+ *
+ * An empty value names none: there is no block with an empty id to open at.
+ */
+export function sectionFromSearch(search: string): string | undefined {
+  const value = new URLSearchParams(search).get(SECTION_PARAM);
+  return value === null || value === "" ? undefined : value;
 }

@@ -110,8 +110,13 @@ export function authoredName(node: BlockNode): string | undefined {
  *
  * An instance name wins, because it is the only part an author wrote.
  */
-export function layerLabel(node: BlockNode): string {
-  return authoredName(node) ?? blockLabel(node.type);
+export function layerLabel(
+  node: BlockNode,
+  lookup?: Parameters<typeof blockLabel>[1]
+): string {
+  // Forwarded as given, so an absent lookup keeps `blockLabel`'s own default
+  // rather than a second statement of it here.
+  return authoredName(node) ?? blockLabel(node.type, lookup);
 }
 
 /** The document as a tree of rows. */
