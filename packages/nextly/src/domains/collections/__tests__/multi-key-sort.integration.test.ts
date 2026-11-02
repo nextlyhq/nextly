@@ -10,7 +10,13 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { defineCollection, number, text } from "../../../config";
+import {
+  defineCollection,
+  group,
+  number,
+  password,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -21,6 +27,7 @@ const SLUG = "mks_items";
 const LOCALIZED = "mks_titles";
 const RULED = "mks_ruled";
 const HOOKED = "mks_hooked";
+const SECRETS = "mks_secrets";
 
 /** Every read hook call on the hooked collection, by phase. */
 const hookCalls: string[] = [];
@@ -75,6 +82,15 @@ describe.each(getConfiguredTestDialects())(
             slug: LOCALIZED,
             localized: true,
             fields: [text({ name: "title", localized: true })],
+          }),
+          defineCollection({
+            slug: SECRETS,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title" }),
+              password({ name: "pin" }),
+              group({ name: "account", fields: [password({ name: "code" })] }),
+            ],
           }),
           defineCollection({
             slug: HOOKED,
@@ -348,6 +364,31 @@ describe.each(getConfiguredTestDialects())(
       expect(refusal).toContain("sort.constructor");
       expect(refusal).toContain("sort.toString");
       expect(refusal).not.toContain("sort.grp");
+    });
+
+    it("refuses an untrusted filter or sort on a password, or a group holding one", async () => {
+      const refused = (args: Record<string, unknown>) =>
+        t.nextly
+          .find({ collection: SECRETS, overrideAccess: false, ...args })
+          .then(
+            () => "read",
+            (error: unknown) => JSON.stringify(error)
+          );
+      expect(await refused({ where: { pin: { exists: true } } })).toContain(
+        "where.pin"
+      );
+      expect(
+        await refused({ where: { account: { contains: "$2" } } })
+      ).toContain("where.account");
+      expect(await refused({ sort: ["-pin"] })).toContain("sort.pin");
+      // The control: the same visitor may filter and sort on a plain field,
+      // and trusted server code may still filter on the password.
+      expect(
+        await refused({ where: { title: { exists: true } }, sort: ["title"] })
+      ).toBe("read");
+      await expect(
+        t.nextly.find({ collection: SECRETS, where: { pin: { exists: true } } })
+      ).resolves.toBeDefined();
     });
 
     it("refuses an offset given together with a page", async () => {

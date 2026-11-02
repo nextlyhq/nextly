@@ -78,7 +78,6 @@ describe("toPublicFind", () => {
 
   it.each([
     [{ select: "title" }, "select"],
-    [{ populate: "author" }, "populate"],
     [{ filters: { field: "title" } }, "filters"],
     [
       { filters: [{ field: "title", op: "equals", value: { $ne: 1 } }] },
@@ -112,6 +111,7 @@ describe("toPublicFind", () => {
     "depth",
     "context",
     "showHiddenFields",
+    "populate",
   ])("refuses a query that sets %s, by name", key => {
     const query = {
       collection: "posts",
@@ -205,15 +205,47 @@ describe("toPublicFind", () => {
     ).toContain("public-read-locale-mismatch");
   });
 
-  it("selects the id with the fields asked for, and populates one level", () => {
+  it("selects the id with the fields asked for, and reads nothing related", () => {
     const args = toPublicFind({
       collection: "posts",
-      select: ["title"],
-      populate: ["author"],
+      select: ["title", "author"],
     });
     expect(args.select).toEqual({ id: true, title: true, author: true });
-    expect(args.depth).toBe(1);
+    expect(args.depth).toBe(0);
     expect(toPublicFind({ collection: "posts" }).depth).toBe(0);
+  });
+
+  it("refuses an empty in list, and keeps an empty not_in", () => {
+    expect(
+      refusal(() =>
+        toPublicFind({
+          collection: "posts",
+          filters: [{ field: "tag", op: "in", value: [] }],
+        })
+      )
+    ).toContain("public-read-value-invalid");
+    expect(
+      toPublicFind({
+        collection: "posts",
+        filters: [{ field: "tag", op: "not_in", value: [] }],
+      }).where
+    ).toEqual({ and: [{ tag: { not_in: [] } }] });
+  });
+
+  it("refuses a page and limit whose start is past any safe offset", () => {
+    expect(
+      refusal(() =>
+        toPublicFind({
+          collection: "posts",
+          page: Number.MAX_SAFE_INTEGER,
+          limit: 100,
+        })
+      )
+    ).toContain("public-read-offset-invalid");
+    // The control: a large page that still starts at a safe offset.
+    expect(
+      toPublicFind({ collection: "posts", page: 1_000_000, limit: 100 }).offset
+    ).toBe(99_999_900);
   });
 });
 
@@ -266,6 +298,23 @@ describe("createPublicReader", () => {
       })
     );
   });
+
+  it.each(["sort", "page", "offset", "limit", "select", "populate"])(
+    "refuses a count that sets %s, before reading",
+    async key => {
+      const find = vi.fn(async () => ({ items: [], meta: { total: 0 } }));
+      const reader = createPublicReader({ find } as unknown as Parameters<
+        typeof createPublicReader
+      >[0]);
+      await expect(
+        reader.count({
+          collection: "posts",
+          [key]: key === "sort" ? ["title"] : 1,
+        } as unknown as Parameters<typeof reader.count>[0])
+      ).rejects.toThrow(new RegExp(`"${key}"`));
+      expect(find).not.toHaveBeenCalled();
+    }
+  );
 
   it("reads detached from the request it runs in, so no caller's key judges it", async () => {
     const seen: unknown[] = [];
