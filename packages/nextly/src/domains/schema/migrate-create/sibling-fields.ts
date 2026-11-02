@@ -28,6 +28,8 @@ type Entities = ReadonlyArray<{
   slug: string;
   tableName: string;
   fields: readonly unknown[];
+  /** `code` for an entity configuration declares, through `define*`. */
+  settings?: { source: string };
 }>;
 
 /** The merged entities, by kind, as both commands hold them. */
@@ -79,7 +81,11 @@ export function judgeMigrationSiblingFields(
       const judged = judgeSiblingFields(
         declared.fields,
         previous === undefined ? declared.fields : previous,
-        kind
+        // Configuration's entities are `define*` output; the Builder's come from its manifest.
+        {
+          definedInCode:
+            declared.settings?.source === "code" ? kind : undefined,
+        }
       );
       for (const clash of judged.refused) refused.push({ entity, clash });
       for (const clash of judged.existing) existing.push({ entity, clash });
