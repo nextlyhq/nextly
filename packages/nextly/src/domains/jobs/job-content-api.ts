@@ -157,6 +157,8 @@ type ForwardedOption =
   | "limit"
   | "page"
   | "offset"
+  // Can only make a read refuse more, never widen it.
+  | "unknownSort"
   | "pagination"
   | "select"
   | "populate"

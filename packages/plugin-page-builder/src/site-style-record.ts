@@ -32,6 +32,7 @@ import {
   isUsableNamedClass,
   newStyleIssueBudget,
   resolveSiteTokens,
+  tokenLabelIssue,
   usableNamedClasses,
   validateFontFace,
   validateStyleValues,
@@ -121,6 +122,44 @@ const optionalRecord = (
   value === undefined || isPlainRecord(value);
 
 /**
+ * Whether an entry has the shape of a stored token, before any rule about its
+ * values is asked. The type guard is what lets the whitelist below read each
+ * field without a cast.
+ */
+function isStoredTokenShape(entry: unknown): entry is {
+  id?: string;
+  name: string;
+  label?: string;
+  kind: string;
+  values: { light: string; dark?: string };
+  description?: string;
+  extensions?: Readonly<Record<string, unknown>>;
+  unreadExtension?: Readonly<Record<string, unknown>>;
+} {
+  return (
+    isPlainRecord(entry) &&
+    typeof entry.name === "string" &&
+    typeof entry.kind === "string" &&
+    (TOKEN_KINDS as readonly string[]).includes(entry.kind) &&
+    isPlainRecord(entry.values) &&
+    typeof entry.values.light === "string" &&
+    optionalString(entry.values.dark) &&
+    optionalString(entry.description) &&
+    // Shape only. Whether the id can become a custom property is the
+    // emitter's question and it already asks it, holding an id to the same
+    // grammar as a name because it reaches CSS by the same route. What has
+    // to happen HERE is that a non-string is refused rather than skipped:
+    // this identity is what a document's `$token` resolves through, so
+    // letting an unusable one fall out of the object would lose it on a save
+    // the author is told succeeded.
+    optionalString(entry.id) &&
+    optionalString(entry.label) &&
+    optionalRecord(entry.extensions) &&
+    optionalRecord(entry.unreadExtension)
+  );
+}
+
+/**
  * The stored token set, checked with the engine's own rules.
  *
  * Shape first, because `emitTokenBlocks` walks entries it assumes are
@@ -145,28 +184,19 @@ export function checkStoredTokens(
   const issues: string[] = [];
   const tokens: SiteToken[] = [];
   raw.tokens.forEach((entry: unknown, index) => {
-    if (
-      !isPlainRecord(entry) ||
-      typeof entry.name !== "string" ||
-      typeof entry.kind !== "string" ||
-      !(TOKEN_KINDS as readonly string[]).includes(entry.kind) ||
-      !isPlainRecord(entry.values) ||
-      typeof entry.values.light !== "string" ||
-      !optionalString(entry.values.dark) ||
-      !optionalString(entry.description) ||
-      // Shape only. Whether the id can become a custom property is the
-      // emitter's question and it already asks it, holding an id to the same
-      // grammar as a name because it reaches CSS by the same route. What has
-      // to happen HERE is that a non-string is refused rather than skipped:
-      // this identity is what a document's `$token` resolves through, so
-      // letting an unusable one fall out of the object would lose it on a save
-      // the author is told succeeded.
-      !optionalString(entry.id) ||
-      !optionalRecord(entry.extensions) ||
-      !optionalRecord(entry.unreadExtension)
-    ) {
+    if (!isStoredTokenShape(entry)) {
       issues.push(
         `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string, and extensions must be an object.`
+      );
+      return;
+    }
+    // A label is display text, judged by the engine's one rule for it. Refused
+    // rather than dropped, because the author is present to fix it and a save
+    // that quietly lost the name they typed would report success.
+    const labelIssue = tokenLabelIssue(entry.label);
+    if (labelIssue !== undefined) {
+      issues.push(
+        `tokens[${index}] has a label that cannot be used. ${labelIssue}`
       );
       return;
     }
@@ -176,6 +206,7 @@ export function checkStoredTokens(
       // every rename into a silent break of every reference.
       ...(entry.id === undefined ? {} : { id: entry.id }),
       name: entry.name,
+      ...(entry.label === undefined ? {} : { label: entry.label }),
       kind: entry.kind as TokenKind,
       values: {
         light: entry.values.light,

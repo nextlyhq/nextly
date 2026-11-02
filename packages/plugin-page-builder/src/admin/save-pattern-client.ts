@@ -107,7 +107,10 @@ const UNEXPLAINED = "The pattern could not be saved. Try again.";
  * the server sent any. A plugin assembling that itself would show "Validation
  * failed.", which is true and silent about which field.
  */
-function refusalMessage(error: Error): string {
+export function refusalMessage(
+  error: Error,
+  unexplained: string = UNEXPLAINED
+): string {
   for (const issue of validationIssues(error)) {
     // Narrowed inside the loop rather than found and re-tested: the guard is
     // what turns the wire's `string | undefined` into a cause, and re-asking it
@@ -116,7 +119,7 @@ function refusalMessage(error: Error): string {
       return compositionRefusalReason({ problem: issue.code });
     }
   }
-  return apiErrorMessage(error, UNEXPLAINED);
+  return apiErrorMessage(error, unexplained);
 }
 
 /** Write to this plugin's save-as-pattern route. */

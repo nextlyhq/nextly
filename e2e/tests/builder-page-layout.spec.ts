@@ -163,10 +163,15 @@ async function openBuilder(page: Page, pageId: string): Promise<void> {
   });
 }
 
+/** Open the editor's Settings dialog, whose "This page" tab holds the picker. */
 async function openSettings(page: Page): Promise<void> {
-  const toggle = page.getByRole("button", { name: "Settings", exact: true });
-  if ((await toggle.getAttribute("aria-pressed")) !== "true")
-    await toggle.click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  if (await dialog.isVisible()) return;
+  await page
+    .getByRole("navigation", { name: "Editor panels" })
+    .getByRole("button", { name: "Settings" })
+    .click();
+  await expect(dialog).toBeVisible();
 }
 
 async function region(page: Page, area: "header" | "footer") {

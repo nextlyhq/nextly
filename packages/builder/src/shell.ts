@@ -238,6 +238,7 @@ export type {
   BlockActions,
   BlockKeyboardActionsOptions,
   BlockKeyboardActionsResult,
+  ComponentVerbsHost,
 } from "./keyboard-actions";
 
 /**
@@ -544,3 +545,10 @@ export type {
   FontTokenRow,
   StackReading,
 } from "./font-library";
+
+/**
+ * Which values each placement of a new component may change: the picker the
+ * host's "Save as component" and "Convert to component" forms draw.
+ */
+export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
+export type { ExposurePickerProps } from "./exposure-picker";

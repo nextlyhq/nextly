@@ -761,6 +761,11 @@ export {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   MAX_TOKEN_PREFIX_LENGTH,
+  // A variable's plain name: the optional label, its check, and the label
+  // derived from the code name when none is stored.
+  MAX_TOKEN_LABEL_LENGTH,
+  tokenDisplayLabel,
+  tokenLabelIssue,
   // Both halves of token identity, public for the same reason the types are:
   // an editor that offers rename has to pin the identity the way this package
   // pins it, and one that cannot reach these has no way to do that except to
@@ -779,12 +784,29 @@ export type {
   SiteTokenSet,
   TokenMode,
 } from "./style/site-tokens";
+// Light and dark across files: the DTCG theme (resolver) file, and one file
+// per mode as Figma imports and exports variables.
+export {
+  RESOLVER_VERSION,
+  modeFilesToTokens,
+  resolverToTokens,
+  tokensToFigma,
+  tokensToResolver,
+} from "./style/dtcg-modes";
+export type { ModeFile } from "./style/dtcg-modes";
+// Whether two tokens say the same thing: one answer for a stored override and
+// for an editor's Reset.
+export { sameJsonValue, sameSiteToken } from "./style/same-token";
+// A colour written as a value rather than through a variable, which the
+// inspector marks as not adapted to dark mode.
+export { isRawColour } from "./style/raw-colour";
 // Interop and judgement, both pure: the format other design-token tools read,
 // and the contrast a person needs while a colour picker is open.
 export {
   NEXTLY_EXTENSION,
   dtcgToTokens,
   isKind,
+  resolveAliases,
   tokensToDtcg,
   familyPartKind,
   readFamilyList,

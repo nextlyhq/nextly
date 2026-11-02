@@ -178,8 +178,11 @@ export const BUTTON_BASE_STYLES = {
 export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
   name: "core/button",
   version: 1,
-  description:
-    "A call to action. Renders a link when it has a destination and a button when it does not, so it is operable either way.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A call to action. Renders a
+  // link when it has a destination and a button when it does not, so it is
+  // operable either way.
+  description: "A link that looks like a button.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.

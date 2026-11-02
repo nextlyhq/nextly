@@ -273,7 +273,7 @@ describe("the sentence the panel draws", () => {
   it("says the check ran even when nothing needs attention", () => {
     const rows = rowsFor(["serif"]);
     expect(tokenSummary(rows, rowsNeedingAttention(rows))).toBe(
-      "1 typeface token, none asking first for a typeface this site provides no file for."
+      "1 typeface variable, none asking first for a typeface this site provides no file for."
     );
   });
 

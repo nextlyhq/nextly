@@ -38,6 +38,7 @@ import {
 import { z } from "nextly/zod";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
+import { MANAGE_SITE_PERMISSION } from "../site-settings";
 
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
 import {
@@ -51,9 +52,6 @@ import {
 
 /** Where the route answers, under the plugin's namespace. */
 const MAKE_DEFAULT_ROUTE_PATH = "/layouts/:id/make-default";
-
-/** The permission the route declares; the plugin declares it too. */
-const MANAGE_SITE_PERMISSION = "manage-page-builder-site";
 
 /**
  * The request body. `dryRun` answers what would change and writes nothing, so

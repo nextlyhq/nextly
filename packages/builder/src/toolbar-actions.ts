@@ -37,11 +37,15 @@
 
 import {
   findNode,
+  isComponentInstance,
   lockedWithin,
+  planConvertToComponent,
+  planDetach,
   registryNestingSource,
   saveAsPatternRefusal,
   type BlockDocument,
   type BlockNode,
+  type DefinitionsById,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 
@@ -102,6 +106,11 @@ export type ToolbarActionId =
   | "move-down"
   | "duplicate"
   | "save-as-pattern"
+  | "save-as-component"
+  | "convert-to-component"
+  | "detach-component"
+  | "duplicate-component"
+  | "update-pattern"
   | "delete";
 
 /** One button's worth of decision. */
@@ -126,6 +135,233 @@ export interface ToolbarAction {
    * remedy is one field away.
    */
   readonly reason?: string;
+  /**
+   * Offered from a menu rather than as a button of its own: the block
+   * toolbar keeps these behind its "More" button, and the context menu groups
+   * them, so the bar stays one short row however many verbs the host adds.
+   */
+  readonly inMenu?: true;
+}
+
+/**
+ * What the host offers for making components from a selection.
+ *
+ * Absent where the host has no component library to write to, and then
+ * neither verb is offered at all.
+ */
+export interface ComponentVerbsOffer {
+  /**
+   * Whether the author may create and publish components, which both verbs
+   * need: the component is created published. `false` dims both, with
+   * {@link MAKE_COMPONENT_GRANT_REFUSAL}.
+   */
+  readonly mayCreate: boolean;
+  /**
+   * The component definitions the canvas draws, which a detach inlines.
+   * Absent, Detach is not offered.
+   */
+  readonly definitions?: DefinitionsById;
+  /**
+   * Whether the author may update and publish patterns. Absent, "Update
+   * pattern" is not offered; `false` dims it with the reason.
+   */
+  readonly mayUpdatePattern?: boolean;
+}
+
+/** What an author without the grant to update a pattern is told. */
+const UPDATE_PATTERN_GRANT_REFUSAL =
+  "You do not have permission to update and publish patterns.";
+
+/** What an author without the grant to make a component is told. */
+const MAKE_COMPONENT_GRANT_REFUSAL =
+  "You do not have permission to create and publish components.";
+
+/** The id a convert is planned under before the component exists. */
+const PLANNED_COMPONENT_ID = "planned-component";
+
+/**
+ * "Save as component" and "Convert to component", each enabled or dimmed with
+ * the reason, both asked of the planners rather than restated. Save shares
+ * the pattern save's selection rules; convert is planned in full, and the
+ * ops it would apply are put to the editor's lock question, since a slot's
+ * lock can refuse the placement that replaces the run.
+ */
+function componentActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  if (offer === undefined) return [];
+  const save: ToolbarAction = {
+    id: "save-as-component",
+    label: "Save as component",
+    enabled: true,
+    inMenu: true,
+  };
+  const convert: ToolbarAction = {
+    id: "convert-to-component",
+    label: "Convert to component",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayCreate) {
+    const reason = MAKE_COMPONENT_GRANT_REFUSAL;
+    return [
+      { ...save, enabled: false, reason },
+      { ...convert, enabled: false, reason },
+    ];
+  }
+  const saving = saveAsPatternRefusal(document, ids, nesting);
+  const converting = planConvertToComponent(
+    document,
+    ids,
+    { collection: "", fields: {} },
+    PLANNED_COMPONENT_ID,
+    {},
+    nesting
+  );
+  return [
+    saving === undefined
+      ? save
+      : { ...save, enabled: false, reason: compositionRefusalReason(saving) },
+    converting.problem === undefined
+      ? heldByLock(convert, ask, converting.pageOps)
+      : {
+          ...convert,
+          enabled: false,
+          reason: compositionRefusalReason(converting),
+        },
+  ];
+}
+
+/**
+ * "Detach" and "Duplicate component" for one selected placement, and nothing
+ * for any other selection, so a menu over a heading does not grow verbs that
+ * could never apply to it. Detach is planned in full against the definitions
+ * the canvas draws, and its ops are put to the editor's lock question.
+ */
+function placementActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  const only = ids.length === 1 ? ids[0] : undefined;
+  if (offer === undefined || only === undefined) return [];
+  const node = findNode(document.nodes, only);
+  if (node === undefined || !isComponentInstance(node)) return [];
+  const actions: ToolbarAction[] = [];
+  if (offer.definitions !== undefined) {
+    const detach: ToolbarAction = {
+      id: "detach-component",
+      label: "Detach from component",
+      enabled: true,
+      inMenu: true,
+    };
+    const plan = planDetach(document, only, offer.definitions, nesting);
+    actions.push(
+      plan.problem === undefined
+        ? heldByLock(detach, ask, plan.pageOps)
+        : { ...detach, enabled: false, reason: compositionRefusalReason(plan) }
+    );
+  }
+  const duplicate: ToolbarAction = {
+    id: "duplicate-component",
+    label: "Duplicate component",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayCreate) {
+    actions.push({
+      ...duplicate,
+      enabled: false,
+      reason: MAKE_COMPONENT_GRANT_REFUSAL,
+    });
+    return actions;
+  }
+  // The copy is made from the component as this author may read it; one the
+  // canvas could not load for them is not one they can copy.
+  const source = (node.props as { componentId?: unknown }).componentId;
+  if (
+    offer.definitions !== undefined &&
+    (typeof source !== "string" || !offer.definitions.has(source))
+  ) {
+    actions.push({
+      ...duplicate,
+      enabled: false,
+      reason: "This component is not available to copy.",
+    });
+    return actions;
+  }
+  // The re-point is an edit of the placement, so a lock on it, or on the slot
+  // it sits in, refuses Duplicate as it would any edit.
+  const held = lockBlockingDelete(document, only);
+  actions.push(
+    held === undefined
+      ? heldByLock(duplicate, ask, [
+          {
+            kind: "update",
+            id: only,
+            patch: {
+              props: { ...node.props, componentId: PLANNED_COMPONENT_ID },
+            },
+          },
+        ])
+      : { ...duplicate, enabled: false, reason: lockedBy(held, only) }
+  );
+  return actions;
+}
+
+/**
+ * "Update pattern" for a selection that could be saved as one, where the host
+ * offers it: the selection replaces a pattern's content.
+ */
+function updatePatternAction(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined
+): ToolbarAction[] {
+  if (offer?.mayUpdatePattern === undefined) return [];
+  const action: ToolbarAction = {
+    id: "update-pattern",
+    label: "Update a pattern",
+    enabled: true,
+    inMenu: true,
+  };
+  if (!offer.mayUpdatePattern) {
+    return [
+      { ...action, enabled: false, reason: UPDATE_PATTERN_GRANT_REFUSAL },
+    ];
+  }
+  const refusal = saveAsPatternRefusal(document, ids, nesting);
+  return [
+    refusal === undefined
+      ? action
+      : {
+          ...action,
+          enabled: false,
+          reason: compositionRefusalReason(refusal),
+        },
+  ];
+}
+
+/** Every verb of the menu's component group, in the order it lists them. */
+function compositionActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  offer: ComponentVerbsOffer | undefined,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  return [
+    ...componentActions(document, ids, nesting, offer, ask),
+    ...placementActions(document, ids, nesting, offer, ask),
+    ...updatePatternAction(document, ids, nesting, offer),
+  ];
 }
 
 /**
@@ -354,7 +590,8 @@ function manyBlockActions(
   ids: readonly string[],
   nesting: NestingSource,
   mayCreate: boolean,
-  ask?: LockQuestion
+  ask?: LockQuestion,
+  components?: ComponentVerbsOffer
 ): ToolbarAction[] {
   const many = oneAtATime(ids.length);
   const deleteLock = ids
@@ -378,6 +615,7 @@ function manyBlockActions(
       opsOf(selectionDuplication(document, ids))
     ),
     saveAction(document, ids, nesting, mayCreate),
+    ...compositionActions(document, ids, nesting, components, ask),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: true },
@@ -444,7 +682,12 @@ export function toolbarActions(
    * with the lock's reason before it is pressed. Optional for a caller that
    * holds no editor; the editor's apply refuses the same ops regardless.
    */
-  lockRefusalFor?: LockQuestion
+  lockRefusalFor?: LockQuestion,
+  /**
+   * What the host offers for making components, or nothing where it has no
+   * component library: then neither verb appears.
+   */
+  components?: ComponentVerbsOffer
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -459,7 +702,8 @@ export function toolbarActions(
       ids,
       rules,
       mayCreatePattern,
-      lockRefusalFor
+      lockRefusalFor,
+      components
     );
 
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -504,6 +748,7 @@ export function toolbarActions(
         : [{ kind: "insert", node: duplication.node, at: duplication.at }]
     ),
     saveAction(document, ids, rules, mayCreatePattern),
+    ...compositionActions(document, ids, rules, components, lockRefusalFor),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: deletion !== null },
