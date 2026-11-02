@@ -123,7 +123,8 @@ describe.each(getConfiguredTestDialects())(
     it("says what the publish does to each language, and the publish does it", async () => {
       const entries = await boot(dialect);
       const id = await liveEntry(entries, { title: "Hello" });
-      // English's pending change, and German saved but never published.
+      // English's pending change, and German's first text, held as a
+      // pending change too: the entry is live.
       await save(entries, id, "en", { title: "Hello again" });
       await save(entries, id, "de", { title: "Hallo" });
       const every = { collectionName: ARTICLES, entryId: id };
@@ -137,7 +138,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         languages: [
           { locale: "en", outcome: "goes-live-with-pending-change" },
-          { locale: "de", outcome: "goes-live" },
+          { locale: "de", outcome: "goes-live-with-pending-change" },
           { locale: "fr", outcome: "shows-fallback", fallback: "en" },
         ],
         blockers: [],

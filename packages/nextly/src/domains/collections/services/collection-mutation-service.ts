@@ -9065,6 +9065,12 @@ export class CollectionMutationService extends BaseService {
       fields: args.fields,
       user: args.caller.user,
       tx,
+      // Every language's translations read once for the whole judgement.
+      reads: await this.everyLanguageReadsOnTx(
+        tx,
+        args.collectionName,
+        args.entryId
+      ),
     });
     return promotions;
   }
@@ -10225,6 +10231,55 @@ export class CollectionMutationService extends BaseService {
           translations.set(locale, byEntry);
         }
         return (await byEntry).get(entryId) ?? {};
+      },
+    };
+  }
+
+  /**
+   * The reads a judgement of what goes live makes for ONE entry, on the
+   * transaction that holds its lock: the companion resolved once, its
+   * language statuses read once, and every configured language's
+   * translations read in one statement the first time any language is asked
+   * for, so a publish of every language validates each language it puts live
+   * without a read per language. A language the app no longer configures is
+   * read alone, when asked.
+   */
+  private async everyLanguageReadsOnTx(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string
+  ): Promise<GoingLiveReads> {
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      tx.getDrizzle()
+    );
+    const configured = this.localization?.locales.map(l => l.code) ?? [];
+    let statuses: Promise<Map<string, string | null> | null> | undefined;
+    let everyLanguage:
+      | Promise<Map<string, Map<string, Record<string, unknown>>>>
+      | undefined;
+    return {
+      companion,
+      languageStatuses: () => {
+        statuses ??= this.storedLanguageStatuses(collectionName, entryId, tx);
+        return statuses;
+      },
+      translations: async (id, locale) => {
+        if (companion === null) return {};
+        const read = configured.includes(locale)
+          ? (everyLanguage ??= this.companionValuesByLanguageOf(
+              tx.getDrizzle(),
+              companion,
+              [entryId],
+              configured
+            ))
+          : this.companionValuesByLanguageOf(
+              tx.getDrizzle(),
+              companion,
+              [entryId],
+              [locale]
+            );
+        return (await read).get(locale)?.get(id) ?? {};
       },
     };
   }
