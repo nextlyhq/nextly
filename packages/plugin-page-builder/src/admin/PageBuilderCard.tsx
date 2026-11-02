@@ -429,7 +429,9 @@ function PreviewBar({
   const preview = useDocumentPreview();
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5">
-      <span className="min-w-0 flex-1 text-sm text-muted-foreground">
+      {/* Takes the line's room down to its own width, after which the
+          actions wrap below it rather than squeezing it to a word a line. */}
+      <span className="min-w-0 flex-1 basis-40 text-sm text-muted-foreground">
         Live preview · {count} {count === 1 ? "section" : "sections"}
       </span>
       {preview === null ? null : (
@@ -521,10 +523,13 @@ export function PageBuilderCard({
   const { hrefFor, inPicture } = sectionLinks(sections, canEdit, href);
 
   return (
-    <div className="flex flex-col gap-4" data-slot="page-entry-view">
+    // `min-w-0` because the form lays fields out as grid items, whose default
+    // minimum is their content's: without it the view grows to the widest
+    // thing inside it and runs off a phone's screen instead of wrapping.
+    <div className="flex min-w-0 flex-col gap-4" data-slot="page-entry-view">
       <div
         data-slot="page-entry-preview"
-        className="overflow-hidden rounded-lg border border-border bg-card"
+        className="min-w-0 overflow-hidden rounded-lg border border-border bg-card"
       >
         <Preview
           document={document}

@@ -138,6 +138,32 @@ interface Box {
   height: number;
 }
 
+/**
+ * The least height a section's link takes, in px. A thin section — a divider
+ * is a few pixels tall once scaled — would otherwise be a target nobody can hit
+ * by pointer or touch; WCAG 2.5.8 asks for 24 by 24.
+ */
+const MIN_TARGET = 24;
+
+/**
+ * Where a section's link goes: over the section, grown to the least target
+ * height about its own middle. Unmeasured, it takes no room rather than
+ * covering the page.
+ */
+function linkBox(box: Box | undefined): CSSProperties {
+  if (box === undefined) return { top: 0, left: 0, width: 0, height: 0 };
+  if (box.height >= MIN_TARGET) return box;
+  return {
+    ...box,
+    top: box.top - (MIN_TARGET - box.height) / 2,
+    height: MIN_TARGET,
+    // Above its neighbours, whose links it now overlaps: drawn later, they
+    // would otherwise cover most of it again. They lose a few pixels of a
+    // target many times larger.
+    zIndex: 1,
+  };
+}
+
 /** How much of the page is shown before the frame scrolls, by default. */
 const DEFAULT_MAX_HEIGHT = 640;
 
@@ -356,8 +382,7 @@ function SectionLinks({
           aria-label={section.name}
           data-slot="page-miniature-section"
           className="absolute block rounded-sm outline-none ring-inset ring-primary/60 hover:ring-2 focus-visible:ring-2 focus-visible:ring-ring"
-          // Unmeasured, it takes no room rather than covering the page.
-          style={boxes[section.id] ?? { top: 0, left: 0, width: 0, height: 0 }}
+          style={linkBox(boxes[section.id])}
           {...navigateWithin(section.href, onNavigate)}
         />
       ))}

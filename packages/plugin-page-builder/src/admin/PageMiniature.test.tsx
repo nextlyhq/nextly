@@ -463,6 +463,31 @@ describe("PageMiniature's sections", () => {
     expect(second.style.height).toBe("200px");
   });
 
+  it("gives a thin section a target at least 24 px tall, centred on it", () => {
+    // A divider is a few pixels tall once scaled. A link that size cannot be
+    // hit reliably by pointer or touch (WCAG 2.5.8 asks for 24 by 24).
+    restore = stubLayout({
+      frameWidth: 640,
+      pageHeight: 1000,
+      boxes: { a: { top: 0, height: 300 }, b: { top: 300, height: 4 } },
+    });
+    render(
+      <PageMiniature
+        document={twoSections}
+        siteStyles={undefined}
+        render={RENDER}
+        sections={sections}
+        onNavigate={() => {}}
+      />
+    );
+
+    const thin = screen.getByRole("link", { name: /Section 2/ });
+    expect(thin.style.height).toBe("24px");
+    expect(thin.style.top).toBe("290px");
+    // Above the neighbours it now overlaps, or their links cover it again.
+    expect(thin.style.zIndex).toBe("1");
+  });
+
   it("opens a section within the admin on a plain click, and on Space", () => {
     const onNavigate = vi.fn();
     render(
