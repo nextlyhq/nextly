@@ -944,6 +944,9 @@ function makeFakeAdapter() {
     dialect: "postgresql" as const,
     getDrizzle: vi.fn().mockReturnValue({}),
     update: vi.fn().mockResolvedValue(undefined),
+    // Asked before the apply, for the index names a change takes and for the companion. No
+    // table here, so neither reads the stubbed Drizzle handle.
+    tableExists: vi.fn().mockResolvedValue(false),
   };
 }
 

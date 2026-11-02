@@ -69,7 +69,12 @@ export function generateMysqlSQL(op: Operation): string {
         q
       );
     case "add_index":
-      return createIndexSql(op.tableName, op.index, "mysql", q);
+      // The keyed columns' types travel with the op, so a TEXT column is keyed
+      // by prefix here as it is in a new table's CREATE; MySQL refuses a TEXT
+      // key without a length.
+      return createIndexSql(op.tableName, op.index, "mysql", q, {
+        columnTypes: new Map(Object.entries(op.columnTypes ?? {})),
+      });
     case "drop_index":
       return generateDropIndex(op);
     case "change_foreign_key_action":

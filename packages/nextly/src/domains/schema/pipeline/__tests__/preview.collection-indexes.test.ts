@@ -89,6 +89,8 @@ describe("previewDesiredSchema: a collection's declared indexes", () => {
           columns: ["country", "city"],
           unique: true,
         },
+        // The keyed columns' types on SQLite, carried for the dialects that key a column by type.
+        columnTypes: { country: "text", city: "text" },
       },
     ]);
   });

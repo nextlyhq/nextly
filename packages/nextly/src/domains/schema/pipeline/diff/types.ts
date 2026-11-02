@@ -349,6 +349,13 @@ export interface AddIndexOp {
   type: "add_index";
   tableName: string;
   index: IndexSpec;
+  /**
+   * The rendered types of the columns the index keys, from the table it is added to. MySQL
+   * refuses to key a TEXT/BLOB column without a length, and an op standing alone carries no
+   * table, so without these such an index is rendered without its prefix and refused. Absent
+   * where the planner had no columns in hand.
+   */
+  columnTypes?: Readonly<Record<string, string>>;
 }
 
 export interface DropIndexOp {

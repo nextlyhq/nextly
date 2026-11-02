@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { splitSqlStatements } from "../../../../../cli/commands/migrate";
+import { diffSnapshots } from "../../diff/diff";
 import { generateMysqlSQL } from "../mysql";
 import { generatePgSQL } from "../postgres";
 import { generateSqliteSQL } from "../sqlite";
@@ -88,6 +89,50 @@ describe("mysql index SQL", () => {
     );
     expect(generateMysqlSQL(dropPlain)).toContain(
       "DROP INDEX `idx_dc_x_views` ON `dc_x`"
+    );
+  });
+
+  /**
+   * An index added to a table that already exists, as the diff plans it. MySQL refuses to key a
+   * TEXT column without a length, so the diff's own op must carry what renders it by prefix, as a
+   * new table's indexes are rendered.
+   */
+  function addedIndexSql(
+    columnType: string,
+    unique: boolean
+  ): string | undefined {
+    const table = (indexes: unknown[]) => ({
+      name: "dc_x",
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false },
+        { name: "note", type: columnType, nullable: true },
+      ],
+      indexes,
+    });
+    const index = { name: "idx_dc_x_note", columns: ["note"], unique };
+    const op = diffSnapshots(
+      { tables: [table([])] } as never,
+      { tables: [table([index])] } as never
+    ).find(planned => planned.type === "add_index");
+    return op === undefined ? undefined : generateMysqlSQL(op);
+  }
+
+  it("keys a TEXT column by prefix when the diff adds an index to an existing table", () => {
+    expect(addedIndexSql("text", false)).toBe(
+      "CREATE INDEX `idx_dc_x_note` ON `dc_x` (`note`(191))"
+    );
+    expect(addedIndexSql("longtext", false)).toBe(
+      "CREATE INDEX `idx_dc_x_note` ON `dc_x` (`note`(191))"
+    );
+  });
+
+  it("keys a bounded column whole, and a unique TEXT key whole, so the server refuses it", () => {
+    expect(addedIndexSql("varchar(255)", false)).toBe(
+      "CREATE INDEX `idx_dc_x_note` ON `dc_x` (`note`)"
+    );
+    // A prefix would make two values differing past it duplicates, a uniqueness nobody declared.
+    expect(addedIndexSql("text", true)).toBe(
+      "CREATE UNIQUE INDEX `idx_dc_x_note` ON `dc_x` (`note`)"
     );
   });
 });

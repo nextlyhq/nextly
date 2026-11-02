@@ -27,7 +27,8 @@ const SRC_ROOT = resolve(__dirname, "../../../../..");
 const PRODUCTION_CALLERS = [
   "src/domains/schema/pipeline/index.ts",
   "src/init/reload-config.ts",
-  "src/dispatcher/handlers/collection-dispatcher.ts",
+  // The collection dialog's and the Builder save's apply, which the dispatcher calls.
+  "src/domains/schema/services/collection-schema-apply.ts",
 ];
 
 describe("F4 production wiring", () => {
