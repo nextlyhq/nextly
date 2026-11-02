@@ -61,8 +61,8 @@ export interface EntryFieldsPanelProps {
   presentation?: EntryFieldsPresentation;
   /**
    * Where the document is read, as a `{field}` template ("/{slug}"), to show
-   * the full address under the slug in a dialog. Absent, the slug alone is the
-   * path.
+   * the full address under the slug in a dialog. Absent, no address is shown:
+   * one built without it could name the wrong page.
    */
   urlTemplate?: string;
 }
@@ -215,13 +215,11 @@ function relabelled(
   );
 }
 
-/** A `{field}` template filled from the form's values, or the slug alone. */
+/** A `{field}` template filled from the form's values. */
 function addressPath(
-  template: string | undefined,
-  values: Record<string, unknown>,
-  slug: string
+  template: string,
+  values: Record<string, unknown>
 ): string {
-  if (template === undefined) return `/${slug}`;
   return template.replace(/\{([^}]+)\}/g, (_match, name: string) => {
     const value = values[name];
     return typeof value === "string" || typeof value === "number"
@@ -236,7 +234,7 @@ function AddressLine({
   urlTemplate,
 }: {
   slugName: string;
-  urlTemplate: string | undefined;
+  urlTemplate: string;
 }): React.JSX.Element | null {
   const values = useWatch() as Record<string, unknown>;
   const slug = values[slugName];
@@ -245,7 +243,7 @@ function AddressLine({
   return (
     <p className="mt-1.5 truncate text-xs text-muted-foreground">
       {origin}
-      {addressPath(urlTemplate, values, slug)}
+      {addressPath(urlTemplate, values)}
     </p>
   );
 }
@@ -279,7 +277,10 @@ function FlatEntryFields({
             readOnly={readOnly}
             mode={mode}
           />
-          {page.some(field => field.name === slugField) ? (
+          {/* Only where the collection says where it is read: a code-first
+              address the admin cannot see would be guessed wrong here. */}
+          {urlTemplate !== undefined &&
+          page.some(field => field.name === slugField) ? (
             <AddressLine slugName={slugField} urlTemplate={urlTemplate} />
           ) : null}
           {/* Warned about only where the address is already live. */}

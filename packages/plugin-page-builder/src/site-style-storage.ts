@@ -239,7 +239,11 @@ export interface SiteStyleReader {
 export async function loadSiteStyle(args: {
   nextly: SiteStyleReader;
   defaults?: SiteStyleData;
+  /** The Single's RESOLVED slug, where a host renamed it. */
+  slug?: string;
 }): Promise<SiteStyleData> {
-  const doc = await args.nextly.findSingle({ slug: SITE_STYLE_SLUG });
+  const doc = await args.nextly.findSingle({
+    slug: args.slug ?? SITE_STYLE_SLUG,
+  });
   return resolveSiteStyle(args.defaults, readSiteStyleRecord(doc));
 }

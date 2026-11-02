@@ -227,6 +227,8 @@ export async function readSiteSettings(
   // the site permission admits their write, so it admits seeing them.
   const { breakpoints } = await loadSiteStyle({
     nextly,
+    // The Single the route writes, renamed or not.
+    slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
     ...(defaults === undefined ? {} : { defaults }),
   });
   return {

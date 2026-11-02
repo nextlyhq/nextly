@@ -13,6 +13,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { cloneElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SiteSettingsRead } from "../../library-contract";
@@ -53,6 +54,7 @@ vi.mock("@nextlyhq/builder/shell", () => ({
       <button type="button" onClick={() => onSavingChange?.(true)}>
         Start saving
       </button>
+      <input aria-label="Breakpoint name" defaultValue="Tablet" />
     </>
   ),
 }));
@@ -119,18 +121,36 @@ describe("the Settings dialog", () => {
     expect(screen.queryByRole("tab", { name: "Site" })).toBeNull();
   });
 
-  it("never lets Enter in a field submit the page", () => {
-    const submitted = vi.fn();
+  it("never lets Enter in a Site field submit the page, but lets an IME accept", async () => {
     show();
-    const form = screen.getByTestId("page-form");
-    form.addEventListener("submit", submitted);
-    const event = new KeyboardEvent("keydown", {
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    const input = screen.getByLabelText("Breakpoint name");
+    const enter = new KeyboardEvent("keydown", {
       key: "Enter",
       bubbles: true,
       cancelable: true,
     });
-    screen.getByLabelText("Title").dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
+    input.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    const composing = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+    });
+    input.dispatchEvent(composing);
+    expect(composing.defaultPrevented).toBe(false);
+  });
+
+  it("leaves Enter in the page's own fields to them", () => {
+    show();
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    screen.getByLabelText("Title").dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(false);
   });
 
   it("says the Site tab applies at once", async () => {
@@ -285,5 +305,40 @@ describe("the Settings dialog", () => {
     await userEvent.selectOptions(select, "bare");
     await screen.findByText("Saved");
     expect(select.value).toBe("bare");
+  });
+
+  it("goes back to This page when the Site tab goes away", async () => {
+    siteRead = undefined;
+    siteError = new Error("Network down");
+    const dialog = (
+      <SettingsDialog
+        open
+        onOpenChange={vi.fn()}
+        returnFocus={() => null}
+        pageFields={<input aria-label="Title" />}
+        share={{ title: "Who we are" }}
+        host="acme.com"
+        breakpoints={{
+          value: { viewport: [], container: [] },
+          onSave: vi.fn(),
+          status: "ready",
+        }}
+      />
+    );
+    const { rerender } = render(dialog);
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    // The retry answers: not this caller's to manage.
+    siteRead = { ...MANAGER, mayManageSite: false, layouts: [] };
+    siteError = null;
+    // A fresh element, so the dialog renders again with the new answer.
+    rerender(cloneElement(dialog));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("tab", { name: "This page" })
+          .getAttribute("aria-selected")
+      ).toBe("true")
+    );
+    expect(screen.queryByRole("tab", { name: "Site" })).toBeNull();
   });
 });

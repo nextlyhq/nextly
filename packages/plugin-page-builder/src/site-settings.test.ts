@@ -225,9 +225,7 @@ function siteData(
     finds,
     nextly: {
       findSingle: async (args: { slug: string }) =>
-        args.slug === SITE_STYLE_SLUG
-          ? { breakpoints: SET }
-          : { defaultLayout },
+        args.slug === "site_style" ? { breakpoints: SET } : { defaultLayout },
       find: async (args: Record<string, unknown>) => {
         finds.push(args);
         const where = args.where as { id?: { in?: string[] } } | undefined;

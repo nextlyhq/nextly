@@ -366,6 +366,19 @@ describe("the panel a takeover surface offers back", () => {
     expect(screen.getByText(/\/pages\/about-us$/)).toBeTruthy();
   });
 
+  it("shows no address it would have to guess, without the collection's template", () => {
+    function Host(): React.JSX.Element {
+      const form = useForm({ defaultValues: { slug: "about-us" } });
+      return (
+        <FormProvider {...form}>
+          {fieldsBesidePanel(minimal, "body", { presentation: "dialog" })}
+        </FormProvider>
+      );
+    }
+    render(<Host />);
+    expect(screen.queryByText(/about-us$/)).toBeNull();
+  });
+
   it("warns about the address in a dialog only where it is already live", () => {
     function Host({ live }: { live: boolean }): React.JSX.Element {
       const form = useForm({ defaultValues: { slug: "about-us" } });

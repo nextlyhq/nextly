@@ -48,6 +48,7 @@ import {
 } from "@nextlyhq/ui";
 import { AlertCircle, Check, Loader2, TriangleAlert } from "lucide-react";
 import {
+  useEffect,
   useId,
   useState,
   type ComponentProps,
@@ -90,13 +91,9 @@ export interface SettingsDialogProps extends DialogState {
  */
 function keepEnterFromThePage(event: KeyboardEvent<HTMLElement>): void {
   if (event.key !== "Enter") return;
-  const target = event.target;
-  if (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLSelectElement
-  ) {
-    event.preventDefault();
-  }
+  // An IME uses Enter to accept a candidate; that is not a submission.
+  if (event.nativeEvent.isComposing) return;
+  if (event.target instanceof HTMLInputElement) event.preventDefault();
 }
 
 export function SettingsDialog({
@@ -114,10 +111,15 @@ export function SettingsDialog({
     staleTime: 0,
     enabled: open,
   });
-  const leave = useLeaveGuard(onOpenChange);
+  const leave = useLeaveGuard(onOpenChange, open);
   // The Site tab is offered to a manager, and also when the read failed: a
   // failure must not look like a missing permission.
   const siteTab = site.data?.mayManageSite === true || site.error !== null;
+  // A tab that went away (a retry that answered "not yours") is not left on
+  // screen as a blank dialog.
+  useEffect(() => {
+    if (!siteTab) leave.leaveSite();
+  }, [siteTab, leave]);
 
   return (
     <>
@@ -129,7 +131,6 @@ export function SettingsDialog({
       >
         <DialogContent
           className="flex max-h-[85vh] max-w-[680px] flex-col gap-0 p-0"
-          onKeyDown={keepEnterFromThePage}
           onCloseAutoFocus={event => {
             const target = returnFocus();
             if (target === null) return;
@@ -162,6 +163,9 @@ export function SettingsDialog({
               <TabsContent
                 value="site"
                 className="min-h-0 flex-1 overflow-y-auto px-6 pb-6"
+                // The Site tab's own fields (the breakpoints). This page's are
+                // the entry's, which keep Enter from the page themselves.
+                onKeyDown={keepEnterFromThePage}
               >
                 <SiteTab
                   site={site}
@@ -215,11 +219,19 @@ type Leave = { kind: "close" } | { kind: "tab"; to: string };
  * away. While a save of them is in flight, neither happens: the write must
  * answer on screen, and a "discard" could not stop it reaching the site.
  */
-function useLeaveGuard(onOpenChange: (open: boolean) => void) {
+function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
   const [tab, setTab] = useState("page");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<Leave | null>(null);
+  // Closed from outside (the editor giving way to its narrow-window notice),
+  // the editor's draft went with the dialog, so nothing is left to guard.
+  useEffect(() => {
+    if (open) return;
+    setEditing(false);
+    setSaving(false);
+    setPending(null);
+  }, [open]);
   const go = (leave: Leave): void => {
     if (leave.kind === "close") onOpenChange(false);
     else setTab(leave.to);
@@ -239,6 +251,9 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void) {
       go(leave);
     },
     keepEditing: (): void => setPending(null),
+    leaveSite: (): void => {
+      if (tab === "site") setTab("page");
+    },
     discard: (): void => {
       setEditing(false);
       if (pending !== null) go(pending);
