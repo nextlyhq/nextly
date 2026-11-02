@@ -16,19 +16,26 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/design-panel
  */
 import type { PanelView } from "@nextlyhq/builder";
+import { EDITOR_WORDS } from "@nextlyhq/builder/shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { RemountOnStyleReplay } from "./site-style-history";
 
-/** The panel's tabs, in the order the rail's Design item shows them. */
-const DESIGN_VIEWS = [
-  { value: "variables", label: "Variables" },
+/**
+ * The panel's tabs, in the order the rail's Design item shows them, named
+ * with the editor's words.
+ */
+const DESIGN_VIEWS: ReadonlyArray<{
+  readonly value: "variables" | "classes" | "fonts";
+  readonly label: string;
+}> = [
+  { value: "variables", label: EDITOR_WORDS.variables },
   // Stored as "classes", the value it has always had, so a remembered tab
   // still opens; only the words changed.
-  { value: "classes", label: "Shared styles" },
-  { value: "fonts", label: "Fonts" },
-] as const;
+  { value: "classes", label: EDITOR_WORDS.sharedStyles },
+  { value: "fonts", label: EDITOR_WORDS.fonts },
+];
 
 export type DesignView = (typeof DESIGN_VIEWS)[number]["value"];
 

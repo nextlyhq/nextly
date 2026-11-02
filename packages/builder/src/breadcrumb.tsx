@@ -25,8 +25,9 @@
  * @module breadcrumb
  */
 
+import { detectApplePlatform } from "@nextlyhq/ui";
 import { ChevronRight } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
@@ -40,9 +41,14 @@ export interface SelectionBreadcrumbProps {
   /**
    * The keys the host has bound, so the hint offers only what works:
    * `editText` when Enter begins editing a block's text on the canvas,
+   * `goUp` when Escape selects the block holding the selection, and
    * `commandPalette` when the command palette opens with the modifier and K.
    */
-  hints?: { readonly editText?: boolean; readonly commandPalette?: boolean };
+  hints?: {
+    readonly editText?: boolean;
+    readonly goUp?: boolean;
+    readonly commandPalette?: boolean;
+  };
 }
 
 /** One crumb: a block, or the page itself at the trail's root. */
@@ -64,19 +70,33 @@ export function SelectionBreadcrumb({
    * as the current position: the bar always says where the author is.
    */
   const path = pathTo(editor.document, editor.selectedId);
+  // Keys in two namespaces: a block's id is any unique string, "page"
+  // among them, so the root crumb cannot share their key space.
   const crumbs: Crumb[] = [
     {
-      key: "page",
+      key: "root:page",
       label: EDITOR_WORDS.page,
       select: () => editor.select(null),
     },
     ...path.map(node => ({
-      key: node.id,
+      key: `block:${node.id}`,
       label: node.label,
       select: () => editor.select(node.id),
     })),
   ];
   const selected = path.length > 0 ? editor.selectedId : null;
+
+  /*
+   * Which keyboard is in front of the author, resolved AFTER mounting, as
+   * the Layers legend does: a server render has no `navigator` and would
+   * spell the palette's key differently from the browser's first render.
+   * Until it is known, the hint names no platform key.
+   */
+  const [apple, setApple] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    setApple(detectApplePlatform());
+  }, []);
+  const hint = hintFor(editor, selected, hints, apple);
 
   return (
     <div className="nx-bottom-bar">
@@ -106,20 +126,22 @@ export function SelectionBreadcrumb({
           </li>
         ))}
       </ol>
-      <p className="nx-bottom-bar__hint">{hintFor(editor, selected, hints)}</p>
+      {hint === "" ? null : <p className="nx-bottom-bar__hint">{hint}</p>}
     </div>
   );
 }
 
 /**
  * The bar's hint, from the keys that work right now: Enter where the host
- * edits text and the selected block has some, Escape to go up a level from
- * any selection, and the command palette where the host has one.
+ * edits text and the selected block has some, Escape where the host binds it
+ * to go up, and the command palette where the host has one and the platform
+ * is known. Empty when nothing applies.
  */
 function hintFor(
   editor: EditorState,
   selected: string | null,
-  hints: NonNullable<SelectionBreadcrumbProps["hints"]>
+  hints: NonNullable<SelectionBreadcrumbProps["hints"]>,
+  apple: boolean | null
 ): string {
   const parts: string[] = [];
   if (selected === null) {
@@ -131,9 +153,12 @@ function hintFor(
     ) {
       parts.push("Enter to edit text");
     }
-    parts.push("Esc to go up");
+    if (hints.goUp === true) parts.push("Esc to go up");
   }
-  const palette = hints.commandPalette === true ? keyHint("mod+k") : null;
+  const palette =
+    hints.commandPalette === true && apple !== null
+      ? keyHint("mod+k", apple)
+      : null;
   if (palette !== null) parts.push(`${palette} for anything`);
   return parts.join(" · ");
 }

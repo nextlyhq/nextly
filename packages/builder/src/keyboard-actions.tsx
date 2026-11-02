@@ -795,10 +795,9 @@ export function useBlockKeyboardActions({
    */
   const selectParent = React.useCallback(() => {
     const editorNow = latest.current;
-    const path = pathTo(editorNow.document, editorNow.selectedId);
-    const parent = path[path.length - 2];
+    const parent = parentOf(editorNow.document, editorNow.selectedId);
     if (parent === undefined) return;
-    editorNow.select(parent.id);
+    editorNow.select(parent);
   }, []);
 
   const bindings = React.useMemo(
@@ -999,10 +998,11 @@ export function useBlockKeyboardActions({
           );
           if (outcome !== "deselect") return;
           if (editorNow.selectedId === null) return;
-          // Up a level: the block holding the selection, as the bottom bar's
-          // trail shows it, or nothing once the selection is at the top.
-          const trail = pathTo(editorNow.document, editorNow.selectedId);
-          editorNow.select(trail.at(-2)?.id ?? null);
+          // Up a level: the block holding the selection, the same answer
+          // "Select parent" gives, or nothing once the selection is at the top.
+          editorNow.select(
+            parentOf(editorNow.document, editorNow.selectedId) ?? null
+          );
         },
       },
     ],
@@ -1190,6 +1190,19 @@ export function useBlockKeyboardActions({
     selectionActions,
     depthMoves,
   };
+}
+
+/**
+ * The block holding `id`, read from the same trail the breadcrumb draws, or
+ * nothing for a top-level block or a selection the document no longer holds.
+ * "Select parent" and Escape both ask this, so they cannot name two parents.
+ */
+function parentOf(
+  document: EditorState["document"],
+  id: string | null
+): string | undefined {
+  const path = pathTo(document, id);
+  return path[path.length - 2]?.id;
 }
 
 /**

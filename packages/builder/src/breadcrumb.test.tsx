@@ -11,7 +11,8 @@
  * @module breadcrumb.test
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
 import {
@@ -194,7 +195,9 @@ describe("SelectionBreadcrumb", () => {
     // offered only where the host edits text and the block has some, and the
     // command palette only where the host has one.
     register();
-    render(<Host hints={{ editText: true, commandPalette: true }} />);
+    render(
+      <Host hints={{ editText: true, goUp: true, commandPalette: true }} />
+    );
     expect(hint()).toMatch(/^Click a block to select it · .+K for anything$/);
 
     React.act(() => {
@@ -211,12 +214,64 @@ describe("SelectionBreadcrumb", () => {
     expect(hint()).toMatch(/^Esc to go up · .+K for anything$/);
   });
 
-  it("offers neither Enter nor the palette where the host has neither", () => {
+  it("offers no key the host has not bound", () => {
+    // A bar mounted without the editor's keyboard actions promises nothing:
+    // not Enter, not Escape, not the palette.
     register();
     render(<Host />);
     React.act(() => {
       editorRef?.select("leaf");
     });
-    expect(hint()).toBe("Esc to go up");
+    expect(hint()).toBeNull();
+
+    React.act(() => {
+      editorRef?.select(null);
+    });
+    expect(hint()).toBe("Click a block to select it");
+  });
+
+  it("names no platform key in a server render, where the platform is unknown", () => {
+    // The server cannot tell a Mac from anything else, so a key spelled
+    // there would differ from the browser's first render and be thrown away.
+    // The palette's key arrives once the browser has said which it is.
+    register();
+    const editor = {
+      document: documentOf(),
+      selectedId: null,
+      select: () => {},
+    } as unknown as EditorState;
+    const markup = renderToStaticMarkup(
+      <SelectionBreadcrumb editor={editor} hints={{ commandPalette: true }} />
+    );
+    expect(markup).toContain("Click a block to select it");
+    expect(markup).not.toContain("for anything");
+  });
+
+  it("keeps the page crumb apart from a block whose id is page", () => {
+    // Block ids are any unique string, "page" among them, so the root crumb
+    // cannot share their key space.
+    register();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    function PageIdHost(): React.JSX.Element {
+      const editor = useEditorState({
+        initialDocument: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [node("page", "core/heading", { props: { text: "Hi" } })],
+        } as BlockDocument,
+      });
+      editorRef = editor;
+      return <SelectionBreadcrumb editor={editor} />;
+    }
+    render(<PageIdHost />);
+    React.act(() => {
+      editorRef?.select("page");
+    });
+
+    expect(crumbs()).toEqual(["Page", "Heading"]);
+    expect(
+      errors.mock.calls.some(call => String(call[0]).includes("same key"))
+    ).toBe(false);
+    errors.mockRestore();
   });
 });
