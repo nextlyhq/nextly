@@ -2012,6 +2012,39 @@ describe("zooming from the keyboard", () => {
     expect(azerty.at(-1)).toEqual({ kind: "fit" });
   });
 
+  it("zooms only the shell that holds focus when two are mounted", () => {
+    // Two shells share one shortcut manager. The zoom keys must answer for
+    // the shell the author is in, as F6 does, not for whichever registered
+    // last.
+    stubContainerFits(true);
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        onZoomChange={zoom => first.push(zoom)}
+      />
+    );
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        onZoomChange={zoom => second.push(zoom)}
+      />
+    );
+    const [firstRail] = screen.getAllByRole("navigation", {
+      name: "Editor panels",
+    });
+    firstRail?.focus();
+    fireEvent.keyDown(document.activeElement ?? document, {
+      key: "0",
+      ctrlKey: true,
+    });
+    expect(first.at(-1)).toEqual({ kind: "fixed", scale: 1 });
+    expect(second.at(-1)).toEqual({ kind: "fit" });
+  });
+
   it("leaves Shift+1 to a text field, where it types a character", () => {
     // On a layout where the digit needs Shift, Shift+1 is how "1" is typed.
     const zooms = zoomShell({ zoom: 1.5 });

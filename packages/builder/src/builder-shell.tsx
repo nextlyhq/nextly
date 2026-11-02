@@ -659,7 +659,7 @@ function useRegionCycling(
   regionRefs: React.RefObject<Record<Region, HTMLElement | null>>,
   rootRef: React.RefObject<HTMLElement | null>,
   enabled: boolean
-): void {
+): () => boolean {
   const shellCount = useActiveShellCount(enabled);
   // Read through a ref so the binding's `when` sees the CURRENT answer. The
   // manager checks it at press time, and a value captured when the binding was
@@ -704,6 +704,10 @@ function useRegionCycling(
     ],
     { name: "Builder shell" }
   );
+  // The same question for every key this shell answers on behalf of the
+  // whole editor: whether the author is in THIS shell, so a second shell
+  // sharing the shortcut manager does not take the keystroke.
+  return () => shellClaimsRegionCycling(rootRef.current, shellCount());
 }
 
 /**
@@ -831,8 +835,8 @@ function ShellRegions({
   // element, which is what decides whether the author is inside this editor at
   // all — the chrome header sits outside every region but inside this.
   const chromeRef = React.useRef<HTMLDivElement | null>(null);
-  useRegionCycling(regionRefs, chromeRef, active);
-  useZoomShortcuts(onZoomPick, active);
+  const claimsKeys = useRegionCycling(regionRefs, chromeRef, active);
+  useZoomShortcuts(onZoomPick, active, claimsKeys);
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
   // Pairs the header's visibility-toggle label with its switch. Generated

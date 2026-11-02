@@ -237,16 +237,21 @@ const ACTUAL_SIZE: CanvasZoom = { kind: "fixed", scale: 1 };
  * Nothing is bound where the host wired no zoom, for the reason the control
  * draws nothing there: a key that changes a number nothing applies is a dead
  * control. `active` is read at press time, so a shell hidden behind its
- * narrow-window notice lets the keys through to whatever else binds them.
+ * narrow-window notice lets the keys through to whatever else binds them,
+ * and so is `claims`: where two shells share the shortcut manager, only the
+ * one the author is in answers.
  */
 export function useZoomShortcuts(
   onChange: ((zoom: CanvasZoom) => void) | undefined,
-  active: boolean
+  active: boolean,
+  claims: () => boolean = () => true
 ): void {
-  const latest = useRef({ onChange, active });
-  latest.current = { onChange, active };
+  const latest = useRef({ onChange, active, claims });
+  latest.current = { onChange, active, claims };
   const when = (): boolean =>
-    latest.current.active && latest.current.onChange !== undefined;
+    latest.current.active &&
+    latest.current.onChange !== undefined &&
+    latest.current.claims();
   const fit = (): void => latest.current.onChange?.(FIT_ZOOM);
   useShortcuts(
     onChange === undefined

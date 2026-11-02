@@ -208,8 +208,9 @@ test.describe("the zoom", () => {
     const trigger = zoomTrigger(page);
     await expect(trigger).toHaveText(/^Fit · \d+%$/);
 
-    // Pressed with nothing focused that types, as an author would on the canvas.
-    await page.locator("body").click({ position: { x: 1, y: 1 } });
+    // Pressed from inside the editor, on a block, as an author would: the
+    // keys answer for the editor that holds focus.
+    await clickBlock(page, TEXT_ID);
     // The key the PAGE reads as mod: the suite's browser profile reports a
     // Windows user agent, where mod is Control, whatever machine runs it.
     const apple = await page.evaluate(() =>
