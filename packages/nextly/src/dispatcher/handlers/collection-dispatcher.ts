@@ -73,6 +73,7 @@ import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { NextlyError } from "../../errors";
 import {
   applyPluginAdminViews,
@@ -150,7 +151,6 @@ import {
   requireSnapshotBody,
   readComparisonParams,
 } from "./versions-methods";
-import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 
 type CollectionsHandlerType = CollectionsHandler;
 

@@ -14,6 +14,7 @@ import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
+import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
@@ -31,7 +32,6 @@ import {
   syncSingles,
   syncUserFields,
 } from "./dev-build";
-import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 
 /** Debounce delay in milliseconds */
 const DEBOUNCE_DELAY_MS = 500;

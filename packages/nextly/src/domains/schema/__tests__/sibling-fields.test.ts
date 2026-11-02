@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   configuredSiblingClashes,
+  judgeSiblingFields,
   newSiblingClashes,
   type SiblingClash,
   siblingClashes,
@@ -234,6 +235,80 @@ describe("newSiblingClashes", () => {
       ["title", "TITLE"],
       ["Title", "TITLE"],
     ]);
+  });
+});
+
+describe("judgeSiblingFields", () => {
+  const names = (list: SiblingClash[]) =>
+    list.map(c => `${c.container}: ${c.first}/${c.second}`);
+
+  it("keeps a held pair only as often as it was held", () => {
+    const judged = judgeSiblingFields(
+      [group("seo", [text("title"), text("title"), text("title")])],
+      [group("seo", [text("title"), text("title")])]
+    );
+    expect(names(judged.existing)).toEqual(["group 'seo': title/title"]);
+    expect(names(judged.refused)).toEqual([
+      "group 'seo': title/title",
+      "group 'seo': title/title",
+    ]);
+  });
+
+  it("finds a held pair new once a type change makes both fields one column", () => {
+    const before = [component("fooBar"), text("foo_bar")];
+    const after = [text("fooBar"), text("foo_bar")];
+    expect(siblingClashes(before)[0].shared).toBeNull();
+    expect(names(judgeSiblingFields(after, before).refused)).toEqual([
+      "the top level: fooBar/foo_bar",
+    ]);
+    // The other way round the two stop sharing a column: still the pair held.
+    expect(judgeSiblingFields(before, after)).toEqual({
+      refused: [],
+      existing: siblingClashes(before),
+    });
+  });
+
+  // `define*` adds `title` and `slug` to a collection's or a Single's top level
+  // only when no declared field takes their column, so one beside a sibling it
+  // shares no stored value with is not a pair the author wrote.
+  it("leaves a system field standing aside for a sibling that shares no value with it", () => {
+    const declared = [text("title"), text("slug"), component("Title")];
+    const spelled = [
+      text("title"),
+      text("TITLE"),
+      component("Slug"),
+      text("slug"),
+    ];
+    for (const kind of ["collection", "single"] as const) {
+      expect(judgeSiblingFields(declared, null, kind)).toEqual({
+        refused: [],
+        existing: [],
+      });
+      expect(judgeSiblingFields(spelled, null, kind).refused).toEqual([]);
+    }
+    // A field group has no system fields, and without a kind nothing stands aside.
+    expect(
+      names(judgeSiblingFields(declared, null, "fieldGroup").refused)
+    ).toEqual(["the top level: title/Title"]);
+    expect(judgeSiblingFields(declared, null).refused).toHaveLength(1);
+    // Only at the top level, and only while no stored value is shared.
+    expect(
+      names(
+        judgeSiblingFields(
+          [group("seo", [text("title"), component("Title")])],
+          null,
+          "collection"
+        ).refused
+      )
+    ).toEqual(["group 'seo': title/Title"]);
+    expect(
+      names(
+        judgeSiblingFields([text("title"), text("Title")], null, "collection")
+          .refused
+      )
+    ).toEqual(["the top level: title/Title"]);
+    // Written by the author, `define*` still refuses it.
+    expect(configuredSiblingClashes("collection", declared)).toHaveLength(1);
   });
 });
 

@@ -48,7 +48,6 @@ import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
-import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type { ForeignKeySpec } from "../../schema/pipeline/diff/types";
 import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
@@ -66,6 +65,7 @@ import {
   getColumnDescriptor,
 } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
@@ -750,7 +750,7 @@ export class DynamicCollectionService extends BaseService {
    *
    * The create and the update of every road share this point (the Builder, the root-exported
    * service and a plugin's `ctx.services`), so the sibling rule is asked here, before anything is
-   * written: the whole list as sent, against the one stored (`null` for a new collection), so only
+   * written: the fields as sent, against the one stored (`null` for a new collection), so only
    * a pair of sibling fields the save creates is refused and one the collection already holds
    * keeps working.
    */
@@ -760,11 +760,13 @@ export class DynamicCollectionService extends BaseService {
     tableName: string,
     stored: readonly FieldDefinition[] | null
   ): FieldDefinition[] {
-    assertNoNewSiblingClashes({ kind: "collection", slug }, fields, stored);
-    const userDefinedFields = namesKeptFromStored(
-      fields.filter(f => !RESERVED_FIELD_NAMES.includes(f.name.toLowerCase())),
-      stored ?? []
+    const declared = fields.filter(
+      f => !RESERVED_FIELD_NAMES.includes(f.name.toLowerCase())
     );
+    // Judged under the names as sent, so a refusal names what the caller wrote; reserved names are
+    // dropped first because they are never stored, so they make no pair with anything.
+    assertNoNewSiblingClashes({ kind: "collection", slug }, declared, stored);
+    const userDefinedFields = namesKeptFromStored(declared, stored ?? []);
     this.validationService.validateFieldNames(userDefinedFields);
     this.validationService.validateJunctionOwnership(userDefinedFields, field =>
       this.schemaService.junctionTableNameFor(tableName, field)

@@ -76,10 +76,10 @@ import {
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
-import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 /**
  * 🔴 The schema generators, the runtime-schema builder and the companion reconcile are loaded on

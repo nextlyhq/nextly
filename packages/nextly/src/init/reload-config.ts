@@ -89,6 +89,10 @@ import type {
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
+import {
+  refusedConfiguredSiblingFields,
+  siblingClashMessage,
+} from "../domains/schema/sibling-fields";
 import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
 import type { IdentifierCaseRules } from "../domains/schema/utils/resolve-catalog-name";
 import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
@@ -136,10 +140,6 @@ import type { SingleHooks } from "../singles/config/types";
 import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
 import { rewrittenSlugs, unwrittenSlugs } from "./sync-outcome";
-import {
-  refusedConfiguredSiblingFields,
-  siblingClashMessage,
-} from "../domains/schema/sibling-fields";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
 // tests inject a lighter-weight resolver to avoid pulling DI internals.

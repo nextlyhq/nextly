@@ -24,6 +24,7 @@ import { getRBACService } from "../auth/code-access";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../domains/schema/sibling-fields";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { getFilterRegistry, FilterSeams } from "../filters";
@@ -43,7 +44,6 @@ import {
 } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
-import { assertNoNewSiblingClashes } from "../domains/schema/sibling-fields";
 
 /**
  * @experimental D63 `admin.nav` filter seam. Lets plugins transform the

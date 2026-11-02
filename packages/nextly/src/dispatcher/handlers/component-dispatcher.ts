@@ -45,6 +45,7 @@ import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -74,7 +75,6 @@ import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
 import { assertSchemaVersionMatch } from "./schema-version-guard";
-import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 
 interface ComponentsServices {
   registry: FieldGroupRegistryService;

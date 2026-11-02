@@ -60,6 +60,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import {
   deleteEntityRegistryRow,
   mediaUsageTablePresent,
@@ -71,7 +72,6 @@ import {
 import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import { resolveSingleTableName } from "./resolve-single-table-name";
-import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 // ============================================================
 // Types

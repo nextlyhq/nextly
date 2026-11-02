@@ -53,6 +53,7 @@ import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import {
   resolveSingleTableName,
   singleTableFamiliesCollide,
@@ -134,7 +135,6 @@ import {
   respondVersionPage,
   readComparisonParams,
 } from "./versions-methods";
-import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 
 // ============================================================
 // Default field helpers

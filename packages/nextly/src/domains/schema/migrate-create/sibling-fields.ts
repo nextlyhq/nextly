@@ -78,7 +78,8 @@ export function judgeMigrationSiblingFields(
       // Held without its fields: every pair is taken as it is.
       const judged = judgeSiblingFields(
         declared.fields,
-        previous === undefined ? declared.fields : previous
+        previous === undefined ? declared.fields : previous,
+        kind
       );
       for (const clash of judged.refused) refused.push({ entity, clash });
       for (const clash of judged.existing) existing.push({ entity, clash });

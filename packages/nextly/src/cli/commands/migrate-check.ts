@@ -63,8 +63,6 @@ import {
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
-import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
-import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -82,6 +80,7 @@ import {
 } from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
+import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
@@ -93,6 +92,7 @@ import type {
   NextlySchemaSnapshot,
   Operation,
 } from "../../domains/schema/pipeline/diff/types";
+import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {

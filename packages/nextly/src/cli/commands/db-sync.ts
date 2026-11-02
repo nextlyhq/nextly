@@ -76,6 +76,7 @@ import {
   ACCEPT_DATA_LOSS_HELP,
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
@@ -110,7 +111,6 @@ import {
 } from "./dev-build";
 import { ensureCoreTables } from "./dev-server";
 import { createDebouncedSync } from "./dev-watcher";
-import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 
 // ============================================================================
 // Types

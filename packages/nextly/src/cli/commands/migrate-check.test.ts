@@ -24,6 +24,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { settingsOf } from "../../domains/schema/migrate-create/entity-settings";
+import type { MinimalConfigField } from "../../domains/schema/migrate-create/generate";
 import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 
@@ -535,6 +537,103 @@ describe("runChecks (F11 PR 4)", () => {
       );
       expect(logger.error).not.toHaveBeenCalledWith(
         expect.stringContaining("SCHEMA_DRIFT")
+      );
+    });
+  });
+
+  describe("sibling fields, by the one sibling rule", () => {
+    const text = (name: string): MinimalConfigField => ({ name, type: "text" });
+    const seo = (names: string[]): MinimalConfigField => ({
+      name: "seo",
+      type: "group",
+      fields: names.map(text),
+    });
+    const postsWith = (fields: MinimalConfigField[]) => ({
+      slug: "posts",
+      tableName: "dc_posts",
+      fields,
+    });
+
+    /** The latest snapshot, recording `posts` with `fields` as declared. */
+    async function seedRecording(fields: MinimalConfigField[]): Promise<void> {
+      const sqlContent = "-- placeholder";
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        sqlContent,
+        "utf-8"
+      );
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        "20260101_120000_001_initial",
+        POSTS_DESIRED,
+        sqlContent,
+        undefined,
+        {
+          collections: {
+            posts: {
+              source: "code",
+              settings: settingsOf({ slug: "posts", fields }, "code"),
+            },
+          },
+          singles: {},
+          fieldGroups: {},
+        }
+      );
+    }
+
+    const check = async (fields: MinimalConfigField[]) => {
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: POSTS_DESIRED,
+        entities: {
+          collections: [postsWith(fields)],
+          singles: [],
+          components: [],
+        },
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+      return logger;
+    };
+
+    it("fails a new pair, naming the entity, the container and both fields", async () => {
+      await seedRecording([text("title"), seo(["fooBar"])]);
+
+      const logger = await check([text("title"), seo(["fooBar", "foo_bar"])]);
+
+      const message =
+        "Collection 'posts': fields 'fooBar' and 'foo_bar' in group 'seo' would both become the column 'foo_bar'. Rename one of them.";
+      expect(logger.error).toHaveBeenCalledWith(message);
+      // It ends in the error shape, naming the pair again, as the address refusal ends.
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining(`fields: ${message}`)
+      );
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(CONFIG_INVALID)")
+      );
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.success).not.toHaveBeenCalled();
+    });
+
+    it("passes a pair the latest snapshot records, warning exactly once per pair", async () => {
+      const fields = [
+        text("fooBar"),
+        text("foo_bar"),
+        seo(["headline", "headline"]),
+      ];
+      await seedRecording(fields);
+
+      const logger = await check(fields);
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn.mock.calls.map(([line]) => line)).toEqual([
+        "Collection 'posts': fields 'fooBar' and 'foo_bar' at the top level already share the column 'foo_bar'. They keep working; rename one of them so each keeps its own value.",
+        "Collection 'posts': fields 'headline' and 'headline' in group 'seo' already share the key 'headline'. They keep working; rename one of them so each keeps its own value.",
+      ]);
+      expect(logger.success).toHaveBeenCalledWith(
+        expect.stringContaining("migrate:check OK")
       );
     });
   });

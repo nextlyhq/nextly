@@ -177,24 +177,73 @@ function pairKey(clash: SiblingClash): string {
   return JSON.stringify([clash.path, names]);
 }
 
+/** Whether two stored values are the same one: the same column, or the same key. */
+function sameShared(a: SiblingClash["shared"], b: SiblingClash["shared"]) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * The system fields `define*` adds at a collection's and a Single's top level
+ * (`title`, `slug`). Each is added only when no declared field takes its
+ * column, so one beside a declared sibling that shares no stored value with it
+ * (a column-less `Title`, a `TITLE` whose column is `t_i_t_l_e`) is a pair the
+ * author never wrote, and the definition stands as `define*` accepted it.
+ */
+const SYSTEM_FIELD_NAMES: ReadonlySet<string> = new Set(["title", "slug"]);
+
+function isSystemFieldStandingAside(
+  kind: SiblingEntityKind | undefined,
+  clash: SiblingClash
+): boolean {
+  return (
+    (kind === "collection" || kind === "single") &&
+    clash.path.length === 0 &&
+    clash.shared === null &&
+    (SYSTEM_FIELD_NAMES.has(clash.first) ||
+      SYSTEM_FIELD_NAMES.has(clash.second))
+  );
+}
+
 /**
  * Judges the pairs of `next` against the definition the entity last had:
  * `refused`, the pairs `previous` does not hold in the same container, which a
  * change creates whether a field was added, renamed, moved or copied into one;
  * `existing`, the pairs it already held. `previous` is `null` for an entity the
  * change creates, so every pair in it is new.
+ *
+ * A held pair stays existing only as often as `previous` held it (a third copy
+ * of a name already held twice makes new pairs) and only while it shares no
+ * stored value it did not share before: a pair whose type change makes both
+ * fields one column is new, since that column is what the database refuses.
+ * With `kind`, a system field standing aside for a sibling is not judged.
  */
 export function judgeSiblingFields(
   next: unknown,
-  previous: unknown
+  previous: unknown,
+  kind?: SiblingEntityKind
 ): { refused: SiblingClash[]; existing: SiblingClash[] } {
-  const clashes = siblingClashes(next);
+  const clashes = siblingClashes(next).filter(
+    clash => !isSystemFieldStandingAside(kind, clash)
+  );
   if (previous === null) return { refused: clashes, existing: [] };
-  const held = new Set(siblingClashes(previous).map(pairKey));
+  const held = new Map<string, SiblingClash[]>();
+  for (const clash of siblingClashes(previous)) {
+    const key = pairKey(clash);
+    held.set(key, [...(held.get(key) ?? []), clash]);
+  }
   const refused: SiblingClash[] = [];
   const existing: SiblingClash[] = [];
   for (const clash of clashes) {
-    (held.has(pairKey(clash)) ? existing : refused).push(clash);
+    const candidates = held.get(pairKey(clash)) ?? [];
+    const match = candidates.findIndex(
+      before => clash.shared === null || sameShared(before.shared, clash.shared)
+    );
+    if (match === -1) {
+      refused.push(clash);
+      continue;
+    }
+    candidates.splice(match, 1);
+    existing.push(clash);
   }
   return { refused, existing };
 }
@@ -202,9 +251,10 @@ export function judgeSiblingFields(
 /** The pairs a change creates: {@link judgeSiblingFields}'s `refused`. */
 export function newSiblingClashes(
   next: unknown,
-  previous: unknown
+  previous: unknown,
+  kind?: SiblingEntityKind
 ): SiblingClash[] {
-  return judgeSiblingFields(next, previous).refused;
+  return judgeSiblingFields(next, previous, kind).refused;
 }
 
 /**
@@ -323,7 +373,7 @@ export function assertNoNewSiblingClashes(
   next: unknown,
   previous: unknown
 ): void {
-  const clashes = newSiblingClashes(next, previous);
+  const clashes = newSiblingClashes(next, previous, entity.kind);
   if (clashes.length > 0) throw siblingClashesError(entity, clashes);
 }
 
@@ -381,7 +431,8 @@ export async function refusedConfiguredSiblingFields(
       const row = bySlug.get(entry.slug);
       const clashes = newSiblingClashes(
         entry.fields ?? [],
-        row?.fields ?? null
+        row?.fields ?? null,
+        kind
       );
       if (clashes.length === 0) continue;
       if (row === undefined) {

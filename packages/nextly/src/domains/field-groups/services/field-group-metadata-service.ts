@@ -49,11 +49,11 @@ import {
 import type { Logger } from "../../../shared/types";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
 import { recordStrandedTransition } from "./record-stranded-transition";
-import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 /**
  * 🔴 The schema service and the table provisioning are loaded on demand, NOT at the top of this
