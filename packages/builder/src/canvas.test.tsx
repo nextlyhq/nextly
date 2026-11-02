@@ -3323,6 +3323,32 @@ describe("the nearest theme marker above the canvas", () => {
     );
   });
 
+  it("states the marker in the commit that mounts the canvas, before paint", () => {
+    // A parent's layout effect runs after its children's in the same commit
+    // and before any passive effect, so it sees what the first paint shows.
+    const marker = document.createElement("div");
+    marker.setAttribute("data-nx-theme", "dark");
+    document.body.append(marker);
+    const mount = document.createElement("div");
+    marker.append(mount);
+    let atCommit: string | null | undefined;
+    function Probe(): React.JSX.Element {
+      const holder = React.useRef<HTMLDivElement>(null);
+      React.useLayoutEffect(() => {
+        atCommit = holder.current
+          ?.querySelector(`.${CANVAS_ROOT_CLASS}`)
+          ?.getAttribute("data-nx-site-theme");
+      }, []);
+      return (
+        <div ref={holder}>
+          <Canvas document={page} siteStyles={{ breakpoints }} />
+        </div>
+      );
+    }
+    render(<Probe />, { container: mount });
+    expect(atCommit).toBe("dark");
+  });
+
   it("states nothing when no marker is above it, so the device decides", async () => {
     const { root } = mountUnder([]);
     await waitFor(() => expect(root()).not.toBeNull());

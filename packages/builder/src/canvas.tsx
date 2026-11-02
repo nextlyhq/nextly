@@ -2192,7 +2192,7 @@ export function Canvas({
   );
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
-  const theme = useNearestThemeMarker(root);
+  useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
   const rootStyle: React.CSSProperties = { ...boxStyle, ...surface?.style };
 
@@ -2287,12 +2287,10 @@ export function Canvas({
        */
       data-nx-site-dark-ground={surface?.darkGround === true ? "" : undefined}
       /*
-       * The mode the nearest theme marker above the canvas names, which is
-       * the one its token values resolve to; absent with no marker, where the
-       * device decides. The scheme rules key on this rather than on ancestor
-       * selectors, which cannot tell which marker is nearest.
+       * `data-nx-site-theme`, the mode the nearest theme marker above names,
+       * is written onto this element by `useNearestThemeMarker` before paint,
+       * not rendered here: see that hook.
        */
-      data-nx-site-theme={theme ?? undefined}
       /*
        * What the pointer means, for the cursor.
        *
