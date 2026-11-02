@@ -60,4 +60,21 @@ describe("copyWithNewIds", () => {
     expect(copy.fields![1].fields).not.toBe(GROUP.fields![1].fields);
     expect(copy.validation).not.toBe(GROUP.validation);
   });
+
+  it("keeps a plugin option under any name, __proto__ included", () => {
+    // The loader defines plugin options rather than assigning them, so a stored
+    // option named __proto__ is an own key; a copy must keep it as one.
+    const options = {};
+    Object.defineProperty(options, "__proto__", {
+      value: "kept",
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    const copy = copyWithNewIds(f("rating", { pluginOptions: options }));
+    expect(Object.hasOwn(copy.pluginOptions ?? {}, "__proto__")).toBe(true);
+    expect(
+      Object.getOwnPropertyDescriptor(copy.pluginOptions, "__proto__")?.value
+    ).toBe("kept");
+  });
 });
