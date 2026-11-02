@@ -203,25 +203,25 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
     // The canvas's scheme follows the NEAREST marker, as its token values do,
     // through three alternations: light > dark > light above the canvas, then
     // with the nearest flipped to dark.
+    const canvas = page.locator(".nx-canvas");
     const canvasMode = () =>
-      page.evaluate(property => {
-        const canvas = document.querySelector(".nx-canvas") as HTMLElement;
-        const style = getComputedStyle(canvas);
+      canvas.evaluate((element, property) => {
+        const style = getComputedStyle(element);
         return {
           scheme: style.colorScheme,
           value: style.getPropertyValue(property).trim(),
         };
       }, PROPERTY);
     const markAbove = (modes: readonly string[]) =>
-      page.evaluate(chain => {
-        const canvas = document.querySelector(".nx-canvas") as HTMLElement;
+      canvas.evaluate((element, chain) => {
         const holders = [
-          document.documentElement,
-          document.body,
-          canvas.parentElement as HTMLElement,
+          element.ownerDocument.documentElement,
+          element.ownerDocument.body,
+          element.parentElement,
         ];
         holders.forEach((holder, at) => {
           const mode = chain[at];
+          if (holder === null) return;
           if (mode === undefined) holder.removeAttribute("data-nx-theme");
           else holder.setAttribute("data-nx-theme", mode);
         });
@@ -258,20 +258,17 @@ test("the nearest marker decides which mode a scoped sheet applies", async ({
   page,
 }) => {
   await page.setContent(`
-    <div data-nx-theme="light"><div data-nx-theme="dark"><div id="dark-nearer" class="scope"></div></div></div>
-    <div data-nx-theme="dark"><div data-nx-theme="light"><div id="light-nearer" class="scope"></div></div></div>
-    <div data-nx-theme="light"><div id="self-dark" class="scope" data-nx-theme="dark"></div></div>
+    <div data-nx-theme="light"><div data-nx-theme="dark"><div data-testid="dark-nearer" class="scope"></div></div></div>
+    <div data-nx-theme="dark"><div data-nx-theme="light"><div data-testid="light-nearer" class="scope"></div></div></div>
+    <div data-nx-theme="light"><div data-testid="self-dark" class="scope" data-nx-theme="dark"></div></div>
   `);
   const modeOf = (id: string) =>
-    page.evaluate(
-      ([target, dark, light]) => {
-        const element = document.getElementById(target ?? "");
-        return {
-          dark: element?.matches(dark ?? "") ?? false,
-          light: element?.matches(light ?? "") ?? false,
-        };
-      },
-      [id, SCOPED_DARK, SCOPED_LIGHT]
+    page.getByTestId(id).evaluate(
+      (element, [dark, light]) => ({
+        dark: element.matches(dark ?? ""),
+        light: element.matches(light ?? ""),
+      }),
+      [SCOPED_DARK, SCOPED_LIGHT]
     );
   expect(await modeOf("dark-nearer")).toEqual({ dark: true, light: false });
   expect(await modeOf("light-nearer")).toEqual({ dark: false, light: true });
