@@ -20,6 +20,10 @@ import {
 const SLUG = "mks_items";
 const LOCALIZED = "mks_titles";
 const RULED = "mks_ruled";
+const HOOKED = "mks_hooked";
+
+/** Every read hook call on the hooked collection, by phase. */
+const hookCalls: string[] = [];
 
 interface Row {
   id: string;
@@ -71,6 +75,23 @@ describe.each(getConfiguredTestDialects())(
             slug: LOCALIZED,
             localized: true,
             fields: [text({ name: "title", localized: true })],
+          }),
+          defineCollection({
+            slug: HOOKED,
+            fields: [number({ name: "grp" })],
+            hooks: {
+              beforeOperation: [
+                ({ operation, args }) => {
+                  if (operation === "read") hookCalls.push("beforeOperation");
+                  return args;
+                },
+              ],
+              beforeRead: [
+                () => {
+                  hookCalls.push("beforeRead");
+                },
+              ],
+            },
           }),
           defineCollection({
             slug: RULED,
@@ -290,6 +311,43 @@ describe.each(getConfiguredTestDialects())(
       await expect(
         t.nextly.find({ collection: SLUG, sort: ["grp", "nope"] })
       ).resolves.toBeDefined();
+    });
+
+    it("refuses an unknown sort key before any read hook runs", async () => {
+      // The control: a read the hooks do see.
+      hookCalls.length = 0;
+      await t.nextly.find({
+        collection: HOOKED,
+        sort: ["grp"],
+        unknownSort: "refuse",
+      });
+      expect(hookCalls.length).toBeGreaterThan(0);
+      hookCalls.length = 0;
+      await expect(
+        t.nextly.find({
+          collection: HOOKED,
+          sort: ["grp", "nope"],
+          unknownSort: "refuse",
+        })
+      ).rejects.toThrow();
+      expect(hookCalls).toEqual([]);
+    });
+
+    it("names a key every object inherits as unknown, not as a column", async () => {
+      const refusal = await t.nextly
+        .find({
+          collection: SLUG,
+          sort: ["constructor", "-toString", "grp"],
+          unknownSort: "refuse",
+        })
+        .then(
+          () => "read",
+          (error: unknown) => JSON.stringify(error)
+        );
+      expect(refusal).toContain("FIELD_NOT_SORTABLE");
+      expect(refusal).toContain("sort.constructor");
+      expect(refusal).toContain("sort.toString");
+      expect(refusal).not.toContain("sort.grp");
     });
 
     it("refuses an offset given together with a page", async () => {
