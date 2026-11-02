@@ -10,13 +10,19 @@
  * the host's: the field is placed with `insertField` at the position the
  * picker was opened for, and the page saves it with every other edit.
  */
-import { describeFieldTypes } from "nextly/field-catalog";
+import {
+  describeFieldTypes,
+  MOST_USED_FIELD_TYPES,
+} from "nextly/field-catalog";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { JSX } from "react";
 import { useMemo } from "react";
 
+import {
+  FieldPicker,
+  type FieldPickerChoice,
+} from "@admin/components/field-ui";
 import { toast } from "@admin/components/ui";
-import { FieldPicker, type FieldPickerChoice } from "@admin/components/field-ui";
 import { useFieldGroups } from "@admin/hooks/queries";
 import { findFieldById, toSnakeName } from "@admin/lib/builder";
 import { distinguishEntities } from "@admin/lib/builder/distinguishing-label";
@@ -26,7 +32,6 @@ import {
   type FieldInsertPosition,
 } from "@admin/lib/builder/insert-field";
 import { UI_SCHEMA_FIELD_TYPES } from "@admin/lib/builder/ui-schema-mode";
-import { MOST_USED_FIELD_TYPES } from "nextly/field-catalog";
 
 import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
 import { FIELD_TYPES_CATALOG } from "./field-picker-modal/field-types-catalog";
@@ -100,7 +105,8 @@ export function BuilderFieldPicker({
         (fieldGroupData?.items ?? [])
           // A field group embedding itself would never finish rendering.
           .filter(
-            group => !(config.kind === "field-group" && group.slug === entitySlug)
+            group =>
+              !(config.kind === "field-group" && group.slug === entitySlug)
           )
           .map(group => ({
             kind: "field-group" as const,
@@ -120,7 +126,7 @@ export function BuilderFieldPicker({
       id: newFieldId(),
       name: choice.name,
       label: choice.label,
-      type: choice.type as BuilderField["type"],
+      type: choice.type,
       validation: {},
       ...(choice.fieldGroup ? { component: choice.fieldGroup } : {}),
     };
@@ -146,10 +152,10 @@ export function BuilderFieldPicker({
         types: BUILDER_TYPES,
         exclude: pickerExcludedTypes(config, position.parentFieldId),
         mostUsed: MOST_USED_FIELD_TYPES,
-        deriveName: label => {
-          const derived = toSnakeName(label);
-          return derived ? nextDuplicateName(derived, siblingNames) : "";
-        },
+        // A label with nothing the name rule keeps (a label in another
+        // script, say) still gets a name, "field", which the editor can change.
+        deriveName: label =>
+          nextDuplicateName(toSnakeName(label) || "field", siblingNames),
         fieldGroups: FIELD_GROUP_TYPE
           ? {
               type: FIELD_GROUP_TYPE,

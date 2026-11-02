@@ -280,9 +280,7 @@ expectTypeOf<adminEntry.FieldTypeDescription<"rating">>().toEqualTypeOf<{
 // One description function, generic over the surface's own type union.
 expectTypeOf(adminEntry.describeFieldTypes<"rating">)
   .parameter(0)
-  .toEqualTypeOf<
-    readonly FieldTypeCatalogEntry<"rating">[]
-  >();
+  .toEqualTypeOf<readonly FieldTypeCatalogEntry<"rating">[]>();
 expectTypeOf(adminEntry.describeFieldTypes<"rating">).returns.toEqualTypeOf<
   adminEntry.FieldTypeDescription<"rating">[]
 >();

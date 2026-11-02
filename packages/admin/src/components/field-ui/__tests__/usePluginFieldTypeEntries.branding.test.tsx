@@ -37,6 +37,7 @@ const WORKSPACE: Partial<AdminBranding> = {
   plugins: [
     {
       name: "ratings",
+      collections: [],
       fieldTypes: [
         {
           type: "rating",

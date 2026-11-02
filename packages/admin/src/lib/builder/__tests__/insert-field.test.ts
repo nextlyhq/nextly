@@ -5,12 +5,16 @@ import { describe, expect, it } from "vitest";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
+import { addFieldToArray, addFieldToGroup } from "../field-transformers";
 import { insertField } from "../insert-field";
 
-const f = (
-  id: string,
-  over: Partial<BuilderField> = {}
-): BuilderField => ({ id, name: id, label: id, type: "text", ...over });
+const f = (id: string, over: Partial<BuilderField> = {}): BuilderField => ({
+  id,
+  name: id,
+  label: id,
+  type: "text",
+  ...over,
+});
 
 const NEW = f("new");
 
@@ -39,52 +43,97 @@ describe("insertField", () => {
     [
       "top level, no anchor: last",
       {},
-      ["title", { details: ["subtitle", { links: ["url", "label"] }] }, "body", "new"],
+      [
+        "title",
+        { details: ["subtitle", { links: ["url", "label"] }] },
+        "body",
+        "new",
+      ],
     ],
     [
       "top level, before a top-level field",
       { beforeFieldId: "body" },
-      ["title", { details: ["subtitle", { links: ["url", "label"] }] }, "new", "body"],
+      [
+        "title",
+        { details: ["subtitle", { links: ["url", "label"] }] },
+        "new",
+        "body",
+      ],
     ],
     [
       "top level, first",
       { beforeFieldId: "title" },
-      ["new", "title", { details: ["subtitle", { links: ["url", "label"] }] }, "body"],
+      [
+        "new",
+        "title",
+        { details: ["subtitle", { links: ["url", "label"] }] },
+        "body",
+      ],
     ],
     [
       "top level, anchor missing: last",
       { beforeFieldId: "gone" },
-      ["title", { details: ["subtitle", { links: ["url", "label"] }] }, "body", "new"],
+      [
+        "title",
+        { details: ["subtitle", { links: ["url", "label"] }] },
+        "body",
+        "new",
+      ],
     ],
     [
       "top level, anchor nested elsewhere: last at the top, not beside it",
       { beforeFieldId: "url" },
-      ["title", { details: ["subtitle", { links: ["url", "label"] }] }, "body", "new"],
+      [
+        "title",
+        { details: ["subtitle", { links: ["url", "label"] }] },
+        "body",
+        "new",
+      ],
     ],
     [
       "a group, no anchor: last in it",
       { parentFieldId: "details" },
-      ["title", { details: ["subtitle", { links: ["url", "label"] }, "new"] }, "body"],
+      [
+        "title",
+        { details: ["subtitle", { links: ["url", "label"] }, "new"] },
+        "body",
+      ],
     ],
     [
       "a group, before its child",
       { parentFieldId: "details", beforeFieldId: "links" },
-      ["title", { details: ["subtitle", "new", { links: ["url", "label"] }] }, "body"],
+      [
+        "title",
+        { details: ["subtitle", "new", { links: ["url", "label"] }] },
+        "body",
+      ],
     ],
     [
       "a repeater two levels down, before its child",
       { parentFieldId: "links", beforeFieldId: "label" },
-      ["title", { details: ["subtitle", { links: ["url", "new", "label"] }] }, "body"],
+      [
+        "title",
+        { details: ["subtitle", { links: ["url", "new", "label"] }] },
+        "body",
+      ],
     ],
     [
       "a repeater two levels down, no anchor",
       { parentFieldId: "links" },
-      ["title", { details: ["subtitle", { links: ["url", "label", "new"] }] }, "body"],
+      [
+        "title",
+        { details: ["subtitle", { links: ["url", "label", "new"] }] },
+        "body",
+      ],
     ],
     [
       "a container, anchor at the top level instead: last in the container",
       { parentFieldId: "details", beforeFieldId: "body" },
-      ["title", { details: ["subtitle", { links: ["url", "label"] }, "new"] }, "body"],
+      [
+        "title",
+        { details: ["subtitle", { links: ["url", "label"] }, "new"] },
+        "body",
+      ],
     ],
   ])("%s", (_name, position, expected) => {
     expect(shape(insertField(TREE, NEW, position))).toEqual(expected);
@@ -116,5 +165,28 @@ describe("insertField", () => {
       fields = insertField(fields, f(id), { beforeFieldId: "b" }) ?? fields;
     }
     expect(shape(fields)).toEqual(["a", "one", "two", "three", "b"]);
+  });
+});
+
+// The older helpers the Builder's duplicate and drag paths call place a field
+// by the same rule, each into the one container type its name says.
+describe("addFieldToArray and addFieldToGroup", () => {
+  it("adds at the end of a repeater at any depth, and only a repeater", () => {
+    expect(shape(addFieldToArray(TREE, "links", NEW))).toEqual([
+      "title",
+      { details: ["subtitle", { links: ["url", "label", "new"] }] },
+      "body",
+    ]);
+    expect(addFieldToArray(TREE, "details", NEW)).toBe(TREE);
+  });
+
+  it("adds at the end of a group, and only a group", () => {
+    expect(shape(addFieldToGroup(TREE, "details", NEW))).toEqual([
+      "title",
+      { details: ["subtitle", { links: ["url", "label"] }, "new"] },
+      "body",
+    ]);
+    expect(addFieldToGroup(TREE, "links", NEW)).toBe(TREE);
+    expect(addFieldToGroup(TREE, "gone", NEW)).toBe(TREE);
   });
 });

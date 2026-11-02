@@ -16,7 +16,6 @@
  * offers, the surface whose plugin types join them, what it excludes, its
  * most-used types, how a label becomes a name, and its field groups.
  */
-import type { FieldSurface, FieldTypeDescription } from "nextly/field-catalog";
 import {
   Button,
   Dialog,
@@ -28,8 +27,9 @@ import {
   Input,
   Label,
 } from "@nextlyhq/ui";
+import type { FieldSurface, FieldTypeDescription } from "nextly/field-catalog";
 import type React from "react";
-import { useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Type } from "@admin/components/icons";
@@ -105,6 +105,23 @@ type Step =
 const iconMap = Icons as unknown as Record<string, React.ElementType>;
 
 /**
+ * The active row of a list driven from a search box: clamped to the list as it
+ * changes (plugin rows can arrive after it opens), and scrolled into view so a
+ * row reached by the arrows is never off-screen.
+ */
+function useActiveRow(count: number, optionId: (index: number) => string) {
+  const [active, setActive] = useState(0);
+  const clamped = Math.max(0, Math.min(active, count - 1));
+  useEffect(() => {
+    // jsdom has no layout, so it has no scrollIntoView either.
+    document.getElementById(optionId(clamped))?.scrollIntoView?.({
+      block: "nearest",
+    });
+  }, [clamped, optionId]);
+  return [clamped, setActive] as const;
+}
+
+/**
  * The arrow and Enter keys of a search box that drives a list: arrows move the
  * active row, clamped to the list, and Enter picks it.
  */
@@ -141,11 +158,14 @@ export function FieldPicker({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            {placement ?? "Search for a field type, then give the field a label."}
+            {placement ??
+              "Search for a field type, then give the field a label."}
           </DialogDescription>
         </DialogHeader>
         {/* Mounted with the dialog, so every opening starts on a fresh search. */}
-        {open && <PickerBody config={config} onCancel={onCancel} onAdd={onAdd} />}
+        {open && (
+          <PickerBody config={config} onCancel={onCancel} onAdd={onAdd} />
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -196,7 +216,13 @@ function PickerBody({
       type={step.type}
       fieldGroup={step.fieldGroup}
       deriveName={config.deriveName}
-      onBack={back}
+      onBack={() =>
+        setStep(
+          step.fieldGroup
+            ? { kind: "field-group", type: step.type }
+            : { kind: "type" }
+        )
+      }
       onAdd={(label, name, addAnother) => {
         onAdd(
           {
@@ -242,8 +268,11 @@ function TypeStep({
   );
   // The rows in the order the arrows walk them, grouped or not.
   const rows = results ?? groups.flatMap(group => group.types);
-  const [active, setActive] = useState(0);
-  const optionId = (index: number) => `${listId}-option-${index}`;
+  const optionId = useCallback(
+    (index: number) => `${listId}-option-${index}`,
+    [listId]
+  );
+  const [active, setActive] = useActiveRow(rows.length, optionId);
 
   const renderOption = (type: FieldTypeDescription<string>) => {
     const index = rows.indexOf(type);
@@ -259,8 +288,12 @@ function TypeStep({
         onMouseEnter={() => setActive(index)}
         onClick={() => onPick(type)}
         className={cn(
-          "flex cursor-pointer items-center gap-3 rounded-md border border-border p-2",
-          index === active ? "bg-accent" : "bg-background"
+          "flex cursor-pointer items-center gap-3 rounded-md border p-2",
+          // The ring is the active row's marker, in both colour schemes; the
+          // background alone is too close to its neighbours to see.
+          index === active
+            ? "border-primary bg-accent ring-2 ring-ring"
+            : "border-border bg-background"
         )}
       >
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/50">
@@ -347,12 +380,15 @@ function FieldGroupStep({
 }) {
   const listId = useId();
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
   const q = query.trim().toLowerCase();
   const matches = options.filter(option =>
     option.text.toLowerCase().includes(q)
   );
-  const optionId = (index: number) => `${listId}-option-${index}`;
+  const optionId = useCallback(
+    (index: number) => `${listId}-option-${index}`,
+    [listId]
+  );
+  const [active, setActive] = useActiveRow(matches.length, optionId);
   const message = loading
     ? "Loading field groups…"
     : options.length === 0
@@ -399,8 +435,10 @@ function FieldGroupStep({
             onMouseEnter={() => setActive(index)}
             onClick={() => onPick(option)}
             className={cn(
-              "cursor-pointer rounded-md border border-border p-2 text-sm",
-              index === active ? "bg-accent" : "bg-background"
+              "cursor-pointer rounded-md border p-2 text-sm",
+              index === active
+                ? "border-primary bg-accent ring-2 ring-ring"
+                : "border-border bg-background"
             )}
           >
             {option.text}

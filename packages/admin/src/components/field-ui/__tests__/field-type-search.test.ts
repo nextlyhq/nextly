@@ -71,6 +71,25 @@ describe("searchFieldTypes", () => {
     ]);
   });
 
+  it("ranks a name that starts with the query above one that contains it, whatever the input order", () => {
+    const reversed = [
+      ...CATALOG.filter(t => t.type === "textarea"),
+      ...CATALOG.filter(t => t.type === "text"),
+    ];
+    expect(typesOf(searchFieldTypes(reversed, "text"))).toEqual([
+      "text",
+      "textarea",
+    ]);
+  });
+
+  it("finds a type by words that are only in its description", () => {
+    // Neither word is in a name or synonym, and the phrase is not in the
+    // description as written ("Single-line input").
+    expect(typesOf(searchFieldTypes(CATALOG, "single input"))).toEqual([
+      "text",
+    ]);
+  });
+
   it("finds a type when every word of the query matches somewhere", () => {
     expect(typesOf(searchFieldTypes(CATALOG, "link entries"))).toEqual([
       "relationship",
@@ -121,6 +140,15 @@ describe("offeredFieldTypes", () => {
     ]);
     expect(typesOf(offered)).toEqual(typesOf(builtIns));
     expect(offered.find(t => t.type === "text")?.label).toBe("Text");
+  });
+
+  it("never lets a plugin take a built-in id from another surface or a field group spelling", () => {
+    const offered = offeredFieldTypes(builtIns, [
+      pluginRow("phone"),
+      pluginRow("fieldGroup"),
+      pluginRow("rating"),
+    ]);
+    expect(typesOf(offered)).toEqual([...typesOf(builtIns)!, "rating"]);
   });
 
   it("drops excluded types, built-in or plugin", () => {

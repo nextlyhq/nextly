@@ -10,10 +10,14 @@ import type {
   FieldTypeDescription,
 } from "nextly/field-catalog";
 import {
+  BLOCK_FIELD_TYPE_CATALOG,
   describeFieldTypes,
   FIELD_TYPE_CATALOG,
   FIELD_TYPE_CATEGORY_ORDER,
+  FORM_FIELD_TYPE_CATALOG,
+  USER_FIELD_TYPE_CATALOG,
 } from "nextly/field-catalog";
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 /** A heading in the picker and the types under it. */
 export interface FieldTypeGroup {
@@ -21,10 +25,24 @@ export interface FieldTypeGroup {
   types: readonly FieldTypeDescription<string>[];
 }
 
-/** Every built-in type id, offered here or not: a plugin type never takes one. */
+/**
+ * Every built-in type id on any surface, offered here or not: a plugin type
+ * never takes one. Read from the surface catalogs themselves, so a surface-only
+ * type (a form's `phone`, say) counts the moment a catalog lists it.
+ */
 const BUILT_IN_TYPE_IDS: ReadonlySet<string> = new Set(
-  FIELD_TYPE_CATALOG.map(entry => entry.type)
+  [
+    FIELD_TYPE_CATALOG,
+    USER_FIELD_TYPE_CATALOG,
+    FORM_FIELD_TYPE_CATALOG,
+    BLOCK_FIELD_TYPE_CATALOG,
+  ].flatMap(catalog => catalog.map(entry => entry.type))
 );
+
+/** Whether a type id belongs to a built-in, field groups' every spelling included. */
+function isBuiltInTypeId(type: string): boolean {
+  return BUILT_IN_TYPE_IDS.has(type) || isFieldGroupFieldType(type);
+}
 
 /**
  * The types a surface offers: its built-ins, then the plugin rows declared for
@@ -41,7 +59,7 @@ export function offeredFieldTypes(
   const builtInIds = new Set(builtIns.map(type => type.type));
   const plugins = describeFieldTypes(
     pluginRows.filter(
-      row => !BUILT_IN_TYPE_IDS.has(row.type) && !builtInIds.has(row.type)
+      row => !isBuiltInTypeId(row.type) && !builtInIds.has(row.type)
     )
   );
   return [...builtIns, ...plugins].filter(type => !excluded.has(type.type));
@@ -86,8 +104,13 @@ export function searchFieldTypes(
   return types
     .map((type, index) => ({ type, index, rank: matchRank(type, q) }))
     .filter(
-      (hit): hit is { type: FieldTypeDescription<string>; index: number; rank: number } =>
-        hit.rank !== null
+      (
+        hit
+      ): hit is {
+        type: FieldTypeDescription<string>;
+        index: number;
+        rank: number;
+      } => hit.rank !== null
     )
     .sort((a, b) => a.rank - b.rank || a.index - b.index)
     .map(hit => hit.type);

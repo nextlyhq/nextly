@@ -33,7 +33,6 @@ type Props = {
   /** The kind of entity being built; the empty state names it. */
   kind: BuilderKind;
   fields: readonly BuilderField[];
-  /** Called when the user wants to insert a new field. index = position. */
   /** Opens the picker for a new field at `position` (the end of the list when empty). */
   onAddAt: (position: FieldInsertPosition) => void;
   onEditField: (id: string) => void;
@@ -43,7 +42,7 @@ type Props = {
   onReorder: (orderedIds: readonly string[]) => void;
   /**
    * PR I: called when the user clicks "+ Add field inside <parent>" in
-   * a nested area. The page opens FieldPickerModal scoped to parentId.
+   * a nested area. The page opens the field picker inside parentId.
    */
   onAddInsideParent: (parentId: string) => void;
   /** Lock all editing affordances for code-first / locked collections. */
@@ -139,9 +138,7 @@ export function BuilderFieldList({
           // top header's button was removed since this one is now the
           // single, prominent affordance.
           <div className="border border-dashed border-border rounded-md p-6 text-center mt-2">
-            <Button onClick={() => onAddAt({})}>
-              + Add field
-            </Button>
+            <Button onClick={() => onAddAt({})}>+ Add field</Button>
           </div>
         )}
       </div>

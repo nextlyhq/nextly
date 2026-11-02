@@ -12,7 +12,10 @@ import type { BuilderConfig } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 import type { BuilderField, BuilderFieldsApi } from "../types";
 
+import { UI_SCHEMA_FIELD_TYPES } from "@admin/lib/builder/ui-schema-mode";
 import type { ApiFieldGroup } from "@admin/types/entities";
+
+import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 
 let fieldGroups: ApiFieldGroup[] = [];
 vi.mock("@admin/hooks/queries", async importOriginal => ({
@@ -28,7 +31,10 @@ vi.mock("@admin/components/ui", async importOriginal => {
   const actual = await importOriginal<typeof import("@admin/components/ui")>();
   return {
     ...actual,
-    toast: { ...actual.toast, error: (...args: unknown[]) => toastError(...args) },
+    toast: {
+      ...actual.toast,
+      error: (...args: unknown[]) => toastError(...args),
+    },
   };
 });
 
@@ -268,23 +274,45 @@ describe("BuilderOverlays", () => {
     expect(screen.getByRole("option", { name: /^Text/ })).toBeInTheDocument();
   });
 
-  it("never offers a type the Builder cannot store", () => {
-    // The catalog's blocks-prop-only and surface-only types are not
-    // ui-schema types, so the Builder's picker never lists them.
+  it("offers exactly the catalog's types a ui-schema can store", () => {
+    // Today every catalog type is storable, so the Builder's ui-schema filter
+    // removes nothing; this pins that, so a catalog type added without
+    // ui-schema support fails here and its place in the Builder is decided.
+    const storableToday = new Set<string>(UI_SCHEMA_FIELD_TYPES);
+    expect(
+      FIELD_TYPES_CATALOG.map(e => e.type).filter(t => !storableToday.has(t))
+    ).toEqual([]);
     renderOverlays({ kind: "picker", position: {} });
     const offered = screen
       .getAllByRole("option")
       .map(o => o.getAttribute("data-type"));
-    expect(offered).not.toContain("blocks");
+    const storable = new Set<string>(UI_SCHEMA_FIELD_TYPES);
+    expect([...offered].sort()).toEqual(
+      FIELD_TYPES_CATALOG.map(e => e.type)
+        .filter(type => storable.has(type))
+        .sort()
+    );
+    // Surface-only types are in no Builder catalog row at all.
     expect(offered).not.toContain("url");
+  });
+
+  it("gives a label with nothing the name rule keeps a name it can save", async () => {
+    const user = userEvent.setup();
+    const { builder } = renderOverlays({ kind: "picker", position: {} });
+
+    await user.click(screen.getByRole("option", { name: /^Text/ }));
+    await user.type(screen.getByRole("textbox", { name: "Label" }), "标题");
+    await user.click(screen.getByRole("button", { name: "Add field" }));
+
+    expect(setFieldsArg(builder).at(-1)).toMatchObject({
+      label: "标题",
+      name: "field",
+    });
   });
 
   it("chooses a field group by its address and stores the choice", async () => {
     const user = userEvent.setup();
-    fieldGroups = [
-      fieldGroup("seo", "SEO"),
-      fieldGroup("seo_v2", "SEO"),
-    ];
+    fieldGroups = [fieldGroup("seo", "SEO"), fieldGroup("seo_v2", "SEO")];
     const { builder } = renderOverlays({ kind: "picker", position: {} });
 
     await user.click(screen.getByRole("option", { name: /Field group/ }));

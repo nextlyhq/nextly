@@ -828,9 +828,8 @@ export const MOST_USED_FIELD_TYPES: readonly FieldType[] = [
  * because that row is published in the shape plugins already consume and a
  * new member would change it for every one of them.
  */
-export interface FieldTypeDescription<
-  T extends string = FieldType,
-> extends FieldTypeCatalogEntry<T> {
+export interface FieldTypeDescription<T extends string = FieldType>
+  extends FieldTypeCatalogEntry<T> {
   /**
    * Words that find this type besides its name, description and category:
    * the type id first (the name developers use), then the names earlier

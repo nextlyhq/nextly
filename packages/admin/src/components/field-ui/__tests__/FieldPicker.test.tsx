@@ -55,7 +55,8 @@ function renderPicker(over: Partial<FieldPickerProps> = {}) {
   return { user, onAdd, onCancel };
 }
 
-const search = () => screen.getByRole("combobox", { name: "Search field types" });
+const search = () =>
+  screen.getByRole("combobox", { name: "Search field types" });
 const optionNames = (root: HTMLElement = document.body) =>
   within(root)
     .queryAllByRole("option")
@@ -124,8 +125,9 @@ describe("FieldPicker", () => {
     expect(activeType()).toBe("text");
     await user.keyboard("{ArrowDown}{Enter}");
     expect(screen.getByRole("textbox", { name: "Label" })).toHaveFocus();
-    expect(screen.getByText("Rich text", { selector: "[data-picked]" }))
-      .toBeInTheDocument();
+    expect(
+      screen.getByText("Rich text", { selector: "[data-picked]" })
+    ).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
@@ -144,7 +146,10 @@ describe("FieldPicker", () => {
     // Only a label is asked for, and nothing is added without one.
     expect(add).toBeDisabled();
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
-    await user.type(screen.getByRole("textbox", { name: "Label" }), "Sub Title");
+    await user.type(
+      screen.getByRole("textbox", { name: "Label" }),
+      "Sub Title"
+    );
     expect(screen.getByText("sub_title")).toBeInTheDocument();
     await user.click(add);
     expect(onAdd).toHaveBeenCalledTimes(1);
@@ -157,7 +162,10 @@ describe("FieldPicker", () => {
   it("Enter in the label adds the field", async () => {
     const { user, onAdd } = renderPicker();
     await user.click(screen.getByRole("option", { name: /^Text/ }));
-    await user.type(screen.getByRole("textbox", { name: "Label" }), "Title{Enter}");
+    await user.type(
+      screen.getByRole("textbox", { name: "Label" }),
+      "Title{Enter}"
+    );
     expect(onAdd).toHaveBeenCalledWith(
       { type: "text", label: "Title", name: "title" },
       { addAnother: false }
@@ -176,7 +184,12 @@ describe("FieldPicker", () => {
   it("Add and add another keeps the position moving", async () => {
     // A host as the Builder is one: it inserts each new field at the position
     // the picker was opened for, and keeps the picker open for the next.
-    const first: BuilderField = { id: "a", name: "a", label: "A", type: "text" };
+    const first: BuilderField = {
+      id: "a",
+      name: "a",
+      label: "A",
+      type: "text",
+    };
     const last: BuilderField = { id: "b", name: "b", label: "B", type: "text" };
     let fields: BuilderField[] = [first, last];
     function Host() {
@@ -241,9 +254,7 @@ describe("FieldPicker", () => {
       name: "Search field groups",
     });
     expect(chooser).toHaveFocus();
-    expect(
-      screen.getAllByRole("option").map(o => o.textContent)
-    ).toEqual([
+    expect(screen.getAllByRole("option").map(o => o.textContent)).toEqual([
       "SEO (Field group, slug: seo)",
       "SEO (Field group, slug: seo_v2)",
     ]);
@@ -259,6 +270,26 @@ describe("FieldPicker", () => {
       { type: "component", label: "SEO", name: "seo", fieldGroup: "seo_v2" },
       { addAnother: false }
     );
+  });
+
+  it("Back from the label returns to the field group chooser", async () => {
+    const { user } = renderPicker({
+      config: {
+        ...CONFIG,
+        fieldGroups: {
+          type: "component",
+          options: [
+            { slug: "seo", label: "SEO", text: "SEO (Field group, slug: seo)" },
+          ],
+        },
+      },
+    });
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(
+      screen.getByRole("combobox", { name: "Search field groups" })
+    ).toHaveFocus();
   });
 
   it("says so when there is no field group to choose", async () => {
@@ -279,6 +310,7 @@ describe("FieldPicker", () => {
     plugins = [
       {
         name: "ratings",
+        collections: [],
         fieldTypes: [
           {
             type: "rating",
@@ -321,8 +353,14 @@ describe("FieldPicker", () => {
     plugins = [
       {
         name: "ratings",
+        collections: [],
         fieldTypes: [
-          { type: "rating", component: "r", storage: "number", label: "Rating" },
+          {
+            type: "rating",
+            component: "r",
+            storage: "number",
+            label: "Rating",
+          },
         ],
       },
     ];
