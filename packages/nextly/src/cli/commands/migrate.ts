@@ -1779,6 +1779,7 @@ export async function refuseUnresolvedAppAttempts(args: {
       upSql: m.upSql,
       downSql: m.downSql,
       transaction: m.transaction,
+      checksum: m.checksum,
       // A file moving fields out of translation says exactly how to tell
       // whether it landed.
       ...(m.localization?.kind === "shared"

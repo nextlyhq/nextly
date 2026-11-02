@@ -148,6 +148,62 @@ describe.each(LOCK_DIALECTS)(
       120_000
     );
 
+    it.runIf(dialect === "postgresql")(
+      "judges an index a failed CREATE INDEX CONCURRENTLY left invalid as not done, to create or to drop",
+      async () => {
+        const dupes = `${P}_dupes`;
+        const create = `CREATE UNIQUE INDEX CONCURRENTLY ${P}_dupes_uq ON ${dupes} (n)`;
+        const drop = `DROP INDEX CONCURRENTLY ${P}_dupes_uq`;
+        await adapter.executeQuery(`CREATE TABLE ${dupes} (n integer)`);
+        await adapter.executeQuery(`INSERT INTO ${dupes} (n) VALUES (1), (1)`);
+        // Fails on the duplicates, and leaves the index in the catalog, invalid.
+        await expect(adapter.executeQuery(create)).rejects.toThrow();
+        const verdicts = async (statements: string[]) =>
+          judgeStatements(
+            statements,
+            dialect,
+            await readLiveSchema(adapter.getDrizzle(), dialect, statements)
+          ).map(s => s.verdict);
+        // An invalid index is neither the created index nor gone.
+        expect(await verdicts([create])).toEqual(["not_done"]);
+        expect(await verdicts([drop])).toEqual(["not_done"]);
+        await adapter.executeQuery(drop);
+        expect(await verdicts([create])).toEqual(["not_done"]);
+        expect(await verdicts([drop])).toEqual(["done"]);
+      },
+      120_000
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "judges a constraint added NOT VALID as not the validated constraint a plain ADD makes",
+      async () => {
+        const checked = `${P}_checked`;
+        const validating = `ALTER TABLE ${checked} ADD CONSTRAINT ${P}_pos CHECK (n > 0)`;
+        const notValid = `${validating} NOT VALID`;
+        const validate = `ALTER TABLE ${checked} VALIDATE CONSTRAINT ${P}_pos`;
+        await adapter.executeQuery(`CREATE TABLE ${checked} (n integer)`);
+        await adapter.executeQuery(`INSERT INTO ${checked} (n) VALUES (-1)`);
+        await adapter.executeQuery(notValid);
+        const verdict = async (statement: string) =>
+          judgeStatements(
+            [statement],
+            dialect,
+            await readLiveSchema(adapter.getDrizzle(), dialect, [statement])
+          ).map(s =>
+            s.reason === undefined ? s.verdict : `${s.verdict}:${s.reason}`
+          );
+        // Present but not validated: a plain ADD did not run; NOT VALID did.
+        expect(await verdict(validating)).toEqual(["not_done"]);
+        expect(await verdict(notValid)).toEqual(["done"]);
+        // A VALIDATE step is never read as done.
+        expect(await verdict(validate)).toEqual(["unknown:unread"]);
+        await adapter.executeQuery(`DELETE FROM ${checked}`);
+        await adapter.executeQuery(validate);
+        expect(await verdict(validating)).toEqual(["done"]);
+      },
+      120_000
+    );
+
     it("judges a statement list against the database as it stands", async () => {
       const live = await readLiveSchema(
         adapter.getDrizzle(),

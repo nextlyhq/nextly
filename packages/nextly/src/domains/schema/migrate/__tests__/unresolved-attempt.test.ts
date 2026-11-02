@@ -18,6 +18,10 @@ import type {
   SchemaEventStatus,
   SchemaEventType,
 } from "../../../../schemas/schema-events/types";
+import {
+  NO_TRANSACTION_ROLLBACK_NOTE,
+  PARTIAL_ROLLBACK_NOTE,
+} from "../../../../cli/commands/plugin-module-rollback";
 import { partiallyAppliedAdvice } from "../migration-transaction";
 import type { LiveSchema } from "../statement-judgement";
 import {
@@ -29,12 +33,16 @@ const FILE = "20261030_000001_add_posts.sql";
 const UP = "CREATE TABLE posts (id integer);\nCREATE TABLE tags (id integer);";
 const DOWN = "DROP TABLE tags;\nDROP TABLE posts;";
 
+/** The checksum of the file as every attempt below ran it, unless one says otherwise. */
+const SUM = "a".repeat(64);
+
 let clock = 1_000;
 function row(
   eventType: SchemaEventType,
   status: SchemaEventStatus,
   filename = FILE,
-  supersededEventIds: string[] | null = null
+  supersededEventIds: string[] | null = null,
+  extra: { sha256?: string | null; note?: string | null } = {}
 ) {
   clock += 1_000;
   return {
@@ -43,7 +51,21 @@ function row(
     filename,
     startedAt: new Date(clock),
     supersededEventIds,
+    sha256: SUM,
+    note: null as string | null,
+    ...extra,
   };
+}
+
+/**
+ * The note a failed down section's row carries, as `recordRollbackFailed`
+ * writes it: a prefix where it may have stopped part-way.
+ */
+function downFailedNote(dialect: SupportedDialect, marked: boolean) {
+  if (marked) return `${NO_TRANSACTION_ROLLBACK_NOTE} migrate:down failed: x`;
+  if (dialect === "mysql")
+    return `${PARTIAL_ROLLBACK_NOTE} migrate:down failed: x`;
+  return "migrate:down failed: x";
 }
 
 /** The database after the UP's first statement: `posts` is there, `tags` is not. */
@@ -52,10 +74,17 @@ const live: LiveSchema = {
   hasColumn: () => false,
   hasIndex: () => false,
   hasConstraint: () => false,
+  usable: () => true,
 };
 
 function file(marked: boolean, filename = FILE): AttemptedFile {
-  return { filename, upSql: UP, downSql: DOWN, transaction: !marked };
+  return {
+    filename,
+    upSql: UP,
+    downSql: DOWN,
+    transaction: !marked,
+    checksum: SUM,
+  };
 }
 
 async function refusal(
@@ -81,7 +110,7 @@ async function refusal(
 /** Each ledger history, and the section its unresolved attempt is at, if it has one. */
 const HISTORIES: Array<{
   name: string;
-  rows: () => ReturnType<typeof row>[];
+  rows: (downNote: string) => ReturnType<typeof row>[];
   unresolved: "up" | "down" | undefined;
 }> = [
   { name: "no rows", rows: () => [], unresolved: undefined },
@@ -115,7 +144,10 @@ const HISTORIES: Array<{
   },
   {
     name: "a down section that failed",
-    rows: () => [row("file_apply", "applied"), row("file_rollback", "failed")],
+    rows: downNote => [
+      row("file_apply", "applied"),
+      row("file_rollback", "failed", FILE, null, { note: downNote }),
+    ],
     unresolved: "down",
   },
   {
@@ -155,9 +187,18 @@ const CASES = (["postgresql", "sqlite", "mysql"] as const).flatMap(dialect =>
 describe("refuseUnresolvedAttempts", () => {
   it.each(CASES)(
     "on $dialect, marked $marked, after $name",
-    async ({ dialect, marked, rows, unresolved }) => {
-      const error = await refusal(dialect, [file(marked)], rows());
-      const partial = dialect === "mysql" || marked;
+    async ({ dialect, marked, name, rows, unresolved }) => {
+      const error = await refusal(
+        dialect,
+        [file(marked)],
+        rows(downFailedNote(dialect, marked))
+      );
+      // A down section's start is recorded only where it may stop part-way,
+      // so one with no outcome is refused on every dialect.
+      const partial =
+        dialect === "mysql" ||
+        marked ||
+        name === "a down section with no outcome";
       if (unresolved === undefined || !partial) {
         expect(error).toBeUndefined();
         return;
@@ -239,6 +280,71 @@ describe("refuseUnresolvedAttempts", () => {
       );
     }
   );
+
+  it.each([
+    ["a changed checksum", "b".repeat(64)],
+    ["no checksum", null],
+  ] as const)(
+    "refuses, from the ledger, an UP attempt whose recorded text differs from the file (%s), judging nothing",
+    async (_name, sha256) => {
+      // The file reads as run in a transaction today, but the attempt ran an
+      // earlier text, which may have been marked to run outside one.
+      const error = await refusal(
+        "postgresql",
+        [file(false)],
+        [row("file_apply", "failed", FILE, null, { sha256 })]
+      );
+      expect(error?.logContext?.attempts).toEqual([
+        { filename: FILE, direction: "up", changed: true, statements: [] },
+      ]);
+      expect(error?.publicMessage).toContain(
+        `${FILE} has changed since that attempt ran`
+      );
+    }
+  );
+
+  it("judges a file whose recorded text matches by today's marker, as before", async () => {
+    // Run in a transaction on PostgreSQL, as the file still reads: it left
+    // nothing, so it runs again rather than being refused.
+    expect(
+      await refusal("postgresql", [file(false)], [row("file_apply", "failed")])
+    ).toBeUndefined();
+  });
+
+  it("reads a failed down section's mode from its note, never from the file", async () => {
+    const down = (note: string) => [
+      row("file_apply", "applied"),
+      row("file_rollback", "failed", FILE, null, { note }),
+    ];
+    // Unmarked today, but the note says the DOWN ran outside a transaction.
+    expect(
+      (
+        await refusal(
+          "postgresql",
+          [file(false)],
+          down(`${NO_TRANSACTION_ROLLBACK_NOTE} migrate:down failed: x`)
+        )
+      )?.code
+    ).toBe("NEXTLY_MIGRATION_PARTIALLY_APPLIED");
+    // Marked today, but the note says it ran in a transaction, undone whole.
+    expect(
+      await refusal("sqlite", [file(true)], down("migrate:down failed: x"))
+    ).toBeUndefined();
+  });
+
+  it("judges a down section against the text recorded applied, and nothing once the file changed", async () => {
+    const error = await refusal(
+      "mysql",
+      [file(false)],
+      [
+        row("file_apply", "applied", FILE, null, { sha256: "c".repeat(64) }),
+        row("file_rollback", "in_progress", FILE, null, { sha256: null }),
+      ]
+    );
+    expect(error?.logContext?.attempts).toEqual([
+      { filename: FILE, direction: "down", changed: true, statements: [] },
+    ]);
+  });
 
   it("names a down section's attempt whose file this build lacks", async () => {
     const gone = "20261030_000009_gone.sql";

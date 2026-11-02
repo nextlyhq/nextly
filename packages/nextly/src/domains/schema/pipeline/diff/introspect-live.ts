@@ -934,7 +934,9 @@ export async function introspectTableNames(
 /**
  * The name of every constraint the catalog holds on each of `tableNames`
  * (their live spellings, as `introspectTableNames` returns them), keyed by the
- * lower-cased table name, each name lower-cased. Read from the catalog's own
+ * lower-cased table name, each name lower-cased, with whether the database
+ * has validated it: false for a PostgreSQL constraint added `NOT VALID` and
+ * not validated since, true everywhere else. Read from the catalog's own
  * constraint table rather than inferred from indexes, foreign keys and checks,
  * which leave out a primary key and an exclusion constraint, and keep a MySQL
  * foreign key's backing index after the key is dropped: PostgreSQL's
@@ -946,8 +948,8 @@ export async function introspectConstraintNames(
   db: unknown,
   dialect: SupportedDialect,
   tableNames: readonly string[]
-): Promise<Map<string, Set<string>>> {
-  const found = new Map<string, Set<string>>();
+): Promise<Map<string, Map<string, boolean>>> {
+  const found = new Map<string, Map<string, boolean>>();
   if (tableNames.length === 0 || dialect === "sqlite") return found;
   const namesIn = sql.join(
     tableNames.map(name => sql`${name}`),
@@ -956,7 +958,8 @@ export async function introspectConstraintNames(
   let rows: unknown[];
   if (dialect === "postgresql") {
     const result = (await (db as PgMysqlExecute).execute(
-      sql`SELECT t.relname AS "table", c.conname AS name
+      sql`SELECT t.relname AS "table", c.conname AS name,
+                 c.convalidated AS validated
           FROM pg_constraint c
           JOIN pg_class t ON t.oid = c.conrelid
           WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
@@ -974,12 +977,45 @@ export async function introspectConstraintNames(
     );
   }
   for (const row of rows) {
-    const { table, name } = (row ?? {}) as Record<string, unknown>;
+    const { table, name, validated } = (row ?? {}) as Record<string, unknown>;
     if (typeof table !== "string" || typeof name !== "string") continue;
     const key = table.toLowerCase();
-    const names = found.get(key) ?? new Set<string>();
-    names.add(name.toLowerCase());
+    const names = found.get(key) ?? new Map<string, boolean>();
+    names.set(name.toLowerCase(), validated !== false);
     found.set(key, names);
+  }
+  return found;
+}
+
+/**
+ * The lower-cased names of the PostgreSQL indexes on `tableNames` (their live
+ * spellings) the database cannot use: not valid or not ready, which is what a
+ * `CREATE INDEX CONCURRENTLY` that failed or was interrupted leaves in the
+ * catalog. MySQL and SQLite have no such state, so nothing is read there.
+ */
+export async function introspectUnusableIndexes(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: readonly string[]
+): Promise<Set<string>> {
+  const found = new Set<string>();
+  if (tableNames.length === 0 || dialect !== "postgresql") return found;
+  const namesIn = sql.join(
+    tableNames.map(name => sql`${name}`),
+    sql`, `
+  );
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT i.relname AS name
+        FROM pg_index ix
+        JOIN pg_class i ON i.oid = ix.indexrelid
+        JOIN pg_class t ON t.oid = ix.indrelid
+        WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+          AND t.relname IN (${namesIn})
+          AND NOT (ix.indisvalid AND ix.indisready)`
+  )) as { rows: unknown[] };
+  for (const row of result.rows) {
+    const { name } = (row ?? {}) as Record<string, unknown>;
+    if (typeof name === "string") found.add(name.toLowerCase());
   }
   return found;
 }

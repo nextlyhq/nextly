@@ -847,6 +847,8 @@ export async function migrateDownCore(
         lockOptions
       );
     }
+    // A dry run reports the same refusal, as it does with targets.
+    if (deps.options.dryRun) await reportUnresolvedRefusal(deps);
     deps.logger.info("Nothing to roll back.");
     return { rolledBack: [] };
   }
@@ -858,12 +860,7 @@ export async function migrateDownCore(
   // the operator can read the DOWN SQL before deciding to give it.
   if (deps.options.dryRun) {
     // The refusal a real run makes under the lock, reported as the others are.
-    const unresolved = await refusalOfUnresolvedAttempts(deps);
-    if (unresolved !== undefined) {
-      deps.logger.info(
-        `✖ a real run would be refused: ${describeError(unresolved, { context: false })}`
-      );
-    }
+    await reportUnresolvedRefusal(deps);
     deps.logger.info(`Would roll back ${planned.length} migration(s):`);
     for (const p of planned) {
       deps.logger.info(`  • ${p.filename}`);
@@ -927,6 +924,20 @@ export async function migrateDownCore(
   );
 
   return { rolledBack };
+}
+
+/** A dry run's line for the unresolved-attempt refusal a real run would make. */
+async function reportUnresolvedRefusal(
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "options" | "refuseUnresolvedAttempts" | "logger"
+  >
+): Promise<void> {
+  const unresolved = await refusalOfUnresolvedAttempts(deps);
+  if (unresolved === undefined) return;
+  deps.logger.info(
+    `✖ a real run would be refused: ${describeError(unresolved, { context: false })}`
+  );
 }
 
 /**

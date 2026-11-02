@@ -26,6 +26,8 @@ interface Facts {
   columns?: string[];
   indexes?: string[];
   constraints?: string[];
+  /** Present objects the database cannot use, each `table.name`. */
+  unusable?: string[];
 }
 
 /** A live schema answering exactly from `facts`, with no case folding. */
@@ -42,6 +44,12 @@ function fakeLive(facts: Facts): LiveSchema {
         ? indexes.some(entry => entry.endsWith(`.${name}`))
         : indexes.includes(`${table}.${name}`),
     hasConstraint: (table, name) => constraints.has(`${table}.${name}`),
+    usable: object =>
+      !(facts.unusable ?? []).some(entry =>
+        object.table === undefined
+          ? entry.endsWith(`.${object.name}`)
+          : entry === `${object.table}.${object.name}`
+      ),
   };
 }
 
@@ -337,16 +345,16 @@ const CASES: Case[] = [
     name: "CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] n ON [ONLY] t; a nameless one is unread",
     dialect: "postgresql",
     statements: [
+      "CREATE INDEX ON t (c)",
       "CREATE UNIQUE INDEX CONCURRENTLY a ON ONLY t (c)",
       "CREATE INDEX IF NOT EXISTS b ON t (c)",
-      "CREATE INDEX ON t (c)",
       "CREATE INDEX z ON t (c)",
     ],
     live: { tables: ["t"], indexes: ["t.a", "t.b"] },
     expected: [
-      done(1, "CREATE UNIQUE INDEX CONCURRENTLY a ON ONLY t"),
-      unknown(2, "CREATE INDEX IF NOT EXISTS b ON t", "conditional"),
-      unknown(3, "CREATE INDEX ON t", "unread"),
+      unknown(1, "CREATE INDEX ON t", "unread"),
+      done(2, "CREATE UNIQUE INDEX CONCURRENTLY a ON ONLY t"),
+      unknown(3, "CREATE INDEX IF NOT EXISTS b ON t", "conditional"),
       notDone(4, "CREATE INDEX z ON t"),
     ],
   },
@@ -594,6 +602,93 @@ const CASES: Case[] = [
     statements: ["ALTER TABLE t DROP CONSTRAINT c"],
     live: { tables: ["t"] },
     expected: [unknown(1, "ALTER TABLE t DROP CONSTRAINT c", "unread")],
+  },
+  // An object present but unusable: a failed CREATE INDEX CONCURRENTLY's
+  // index, a constraint not validated.
+  {
+    name: "an index left invalid is neither the index a CREATE made nor gone",
+    dialect: "postgresql",
+    statements: ["CREATE INDEX CONCURRENTLY i ON t (c)", "DROP INDEX i"],
+    live: { tables: ["t"], indexes: ["t.i"], unusable: ["t.i"] },
+    expected: [
+      unknown(1, "CREATE INDEX CONCURRENTLY i ON t", "undone"),
+      notDone(2, "DROP INDEX i"),
+    ],
+  },
+  {
+    name: "a CREATE INDEX over an invalid index of its name is not done",
+    dialect: "postgresql",
+    statements: ["CREATE UNIQUE INDEX CONCURRENTLY i ON t (c)"],
+    live: { tables: ["t"], indexes: ["t.i"], unusable: ["t.i"] },
+    expected: [notDone(1, "CREATE UNIQUE INDEX CONCURRENTLY i ON t")],
+  },
+  {
+    name: "a validating ADD CONSTRAINT over an unvalidated constraint is not done; NOT VALID is done; VALIDATE is unread",
+    dialect: "postgresql",
+    statements: [
+      "ALTER TABLE t ADD CONSTRAINT a CHECK (n > 0)",
+      "ALTER TABLE t ADD CONSTRAINT b CHECK (n > 0) NOT VALID",
+      "ALTER TABLE x VALIDATE CONSTRAINT c",
+    ],
+    live: {
+      tables: ["t", "x"],
+      constraints: ["t.a", "t.b", "x.c"],
+      unusable: ["t.a", "t.b", "x.c"],
+    },
+    expected: [
+      notDone(1, "ALTER TABLE t ADD CONSTRAINT a CHECK"),
+      done(2, "ALTER TABLE t ADD CONSTRAINT b CHECK"),
+      unknown(3, "ALTER TABLE x VALIDATE CONSTRAINT c", "unread"),
+    ],
+  },
+  // A later statement whose reach is not read: every earlier claim is unknown.
+  {
+    name: "an index a later ALTER INDEX renames is undone, not read as never made",
+    dialect: "postgresql",
+    statements: ["CREATE INDEX i ON t (c)", "ALTER INDEX i RENAME TO j"],
+    live: { tables: ["t"], indexes: ["t.j"] },
+    expected: [
+      unknown(1, "CREATE INDEX i ON t", "undone"),
+      unknown(2, "ALTER INDEX i RENAME TO j", "unread"),
+    ],
+  },
+  {
+    name: "a later DO block undoes every earlier claim; a later setting or row write does not",
+    dialect: "postgresql",
+    statements: [
+      "CREATE TABLE a (id int)",
+      "SET LOCAL lock_timeout = '5s'",
+      "INSERT INTO a (id) VALUES (1)",
+      "CREATE TABLE b (id int)",
+      "DO $$ BEGIN EXECUTE 'DROP TABLE a'; END $$",
+      "CREATE TABLE c (id int)",
+    ],
+    live: { tables: ["b", "c"] },
+    expected: [
+      unknown(1, "CREATE TABLE a", "undone"),
+      unknown(2, "SET LOCAL lock_timeout =", "unread"),
+      unknown(3, "INSERT INTO a", "rows"),
+      unknown(4, "CREATE TABLE b", "undone"),
+      unknown(5, "DO", "rows"),
+      done(6, "CREATE TABLE c"),
+    ],
+  },
+  {
+    name: "a setting after a statement leaves it judged",
+    dialect: "sqlite",
+    statements: ["CREATE TABLE a (id int)", "PRAGMA foreign_keys=ON"],
+    live: { tables: ["a"] },
+    expected: [
+      done(1, "CREATE TABLE a"),
+      unknown(2, "PRAGMA foreign_keys=ON", "unread"),
+    ],
+  },
+  {
+    name: "a PostgreSQL U& name, which this reading does not decode, is unread",
+    dialect: "postgresql",
+    statements: ['CREATE TABLE U&"d\\0061t" (id int)'],
+    live: { tables: ["dat"] },
+    expected: [unknown(1, 'CREATE TABLE U&"d\\0061t"', "unread")],
   },
   // A later statement read as rows or unread that still names its table.
   {

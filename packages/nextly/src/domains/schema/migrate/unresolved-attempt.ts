@@ -14,13 +14,18 @@
  *
  * Whether an attempt is unresolved is the ledger's one rule
  * (`migrationStanding`), read over both the file's attempts and its down
- * section's. Whether it may have stopped part-way is the one predicate the
- * attempt was recorded by (`failedAttemptMayBePartial`): a file run in a
- * transaction on PostgreSQL or SQLite left nothing when it stopped, so it is
- * run again from its start, and is not refused here.
+ * section's. Whether it may have stopped part-way is read from what the
+ * ledger recorded of the attempt (`attemptMayBePartial`), never from the
+ * file as edited since: a file that ran in a transaction on PostgreSQL or
+ * SQLite left nothing when it stopped, so it is run again from its start,
+ * and is not refused here.
  *
  * @module domains/schema/migrate/unresolved-attempt
  */
+import {
+  NO_TRANSACTION_ROLLBACK_NOTE,
+  PARTIAL_ROLLBACK_NOTE,
+} from "../../../cli/commands/plugin-module-rollback";
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors";
 import { isPluginLedgerRow } from "../events/ledger-scope";
@@ -45,6 +50,8 @@ export interface AttemptedFile {
   downSql: string;
   /** False for a file marked to run outside a transaction. */
   transaction: boolean;
+  /** SHA-256 of the file's whole text, as a run records it on its attempt. */
+  checksum: string;
   /**
    * How to recover this file's UP, where the file knows better than the
    * general advice: the one question that tells whether it landed, and the
@@ -55,7 +62,13 @@ export interface AttemptedFile {
 
 type AttemptRow = Pick<
   SchemaEventRow,
-  "eventType" | "status" | "startedAt" | "filename" | "supersededEventIds"
+  | "eventType"
+  | "status"
+  | "startedAt"
+  | "filename"
+  | "supersededEventIds"
+  | "sha256"
+  | "note"
 >;
 
 export interface RefuseUnresolvedAttemptsArgs {
@@ -76,10 +89,60 @@ interface Refused {
   advice: string | undefined;
   direction: "up" | "down";
   failed: boolean;
+  /**
+   * What can be said of the statements: `judged` from the live database;
+   * `missing`, the build lacks the file; `changed`, the file is not the text
+   * the attempt ran, so today's statements are not the ones to judge.
+   */
+  basis: "judged" | "missing" | "changed";
+  /** Where a judged attempt ran: outside a transaction, or on MySQL. */
   outsideTransaction: boolean;
-  /** This build's folder lacks the file, so nothing of it can be judged. */
-  missing: boolean;
   statements: JudgedStatement[];
+}
+
+/**
+ * Whether an unresolved attempt may have stopped part-way, from what the
+ * ledger recorded of it rather than from the file as it is now, which may
+ * have been edited since (its no-transaction marker removed, say).
+ *
+ * - An UP's attempt records the checksum of the file's whole text, its marker
+ *   line included. Where it matches the file today, the file ran as it reads
+ *   now, and the one predicate the attempt was recorded by decides
+ *   (`failedAttemptMayBePartial`). Where it differs or is missing, how the
+ *   attempt ran cannot be shown, so it is taken as possibly partial.
+ * - A down section's attempt is recorded before its first statement only
+ *   where it may stop part-way, so one with no outcome may have; a failed one
+ *   says in its note when it ran outside a transaction or on MySQL.
+ */
+function attemptMayBePartial(
+  attempt: AttemptRow,
+  file: AttemptedFile,
+  dialect: SupportedDialect
+): boolean {
+  if (attempt.eventType === "file_rollback") {
+    if (dialect === "mysql" || attempt.status === "in_progress") return true;
+    const note = attempt.note ?? "";
+    return (
+      note.startsWith(PARTIAL_ROLLBACK_NOTE) ||
+      note.startsWith(NO_TRANSACTION_ROLLBACK_NOTE)
+    );
+  }
+  if (attempt.sha256 !== file.checksum) return true;
+  return failedAttemptMayBePartial(file, dialect);
+}
+
+/**
+ * Whether the file today is the text the attempt ran: an UP's attempt records
+ * its checksum; a down section's ran the file as recorded applied.
+ */
+function sameTextAsAttempt(
+  attempt: AttemptRow,
+  outcome: AttemptRow | undefined,
+  file: AttemptedFile
+): boolean {
+  const recorded =
+    attempt.eventType === "file_rollback" ? outcome?.sha256 : attempt.sha256;
+  return recorded === file.checksum;
 }
 
 /**
@@ -105,24 +168,30 @@ export async function refuseUnresolvedAttempts(
   const refused: Refused[] = [];
   const inFolder = new Set(args.files.map(file => file.filename));
   for (const file of args.files) {
-    const attempt = migrationStanding(
-      byFilename.get(file.filename) ?? []
-    ).unresolvedAttempt;
+    const standing = migrationStanding(byFilename.get(file.filename) ?? []);
+    const attempt = standing.unresolvedAttempt;
     if (attempt === undefined) continue;
-    if (!failedAttemptMayBePartial(file, args.dialect)) continue;
+    if (!attemptMayBePartial(attempt, file, args.dialect)) continue;
     const direction = attempt.eventType === "file_rollback" ? "down" : "up";
+    const refusal = {
+      filename: file.filename,
+      advice: file.advice,
+      direction,
+      failed: attempt.status === "failed",
+      outsideTransaction: !file.transaction,
+    } as const;
+    if (!sameTextAsAttempt(attempt, standing.outcome, file)) {
+      refused.push({ ...refusal, basis: "changed", statements: [] });
+      continue;
+    }
     const statements = splitSqlStatements(
       direction === "up" ? file.upSql : file.downSql,
       args.dialect,
       file
     );
     refused.push({
-      filename: file.filename,
-      advice: file.advice,
-      direction,
-      failed: attempt.status === "failed",
-      outsideTransaction: !file.transaction,
-      missing: false,
+      ...refusal,
+      basis: "judged",
       statements: judgeStatements(
         statements,
         args.dialect,
@@ -140,7 +209,7 @@ export async function refuseUnresolvedAttempts(
       direction: attempt.eventType === "file_rollback" ? "down" : "up",
       failed: attempt.status === "failed",
       outsideTransaction: false,
-      missing: true,
+      basis: "missing",
       statements: [],
     });
   }
@@ -189,7 +258,7 @@ function unresolvedAttemptError(
       attempts: refused.map(r => ({
         filename: r.filename,
         direction: r.direction,
-        ...(r.missing ? { missing: true } : {}),
+        ...(r.basis === "judged" ? {} : { [r.basis]: true }),
         statements: r.statements.map(s => ({
           number: s.number,
           verdict: s.verdict,
@@ -209,8 +278,11 @@ function attemptSentence(r: Refused): string {
   const ended = r.failed
     ? "failed"
     : "recorded no outcome (the process running it stopped, or is still running)";
-  if (r.missing) {
+  if (r.basis === "missing") {
     return `The attempt at ${r.filename}'s ${sectionOf(r)} ${ended}, and this build lacks ${r.filename}, so it cannot tell how that attempt ran or judge its statements: the database may hold part of it.`;
+  }
+  if (r.basis === "changed") {
+    return `The attempt at ${r.filename}'s ${sectionOf(r)} ${ended}, and ${r.filename} has changed since that attempt ran, so this build cannot tell how it ran or judge the statements it ran: the database may hold part of it.`;
   }
   const where = r.outsideTransaction
     ? "outside a transaction, as the file is marked to run"
@@ -249,7 +321,7 @@ function adviceFor(r: Refused): string {
   const f = r.filename;
   // Recording a file applied or rolled back reads the file; clearing an
   // attempt does not.
-  if (r.missing) {
+  if (r.basis === "missing") {
     return `Run the build that has ${f}, or restore it here, to finish or record it; if you reverse what of it ran, record that with \`nextly migrate:resolve --failed-cleanup ${f}\`.`;
   }
   if (r.direction === "up") return r.advice ?? partiallyAppliedAdvice(f);

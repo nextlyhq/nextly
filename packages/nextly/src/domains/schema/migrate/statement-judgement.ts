@@ -34,6 +34,7 @@ import type { SupportedDialect } from "../../../database/schema-registry";
 import {
   introspectConstraintNames,
   introspectIndexTables,
+  introspectUnusableIndexes,
   introspectLiveSnapshot,
   introspectTableNames,
 } from "../pipeline/diff/introspect-live";
@@ -68,8 +69,18 @@ export interface LiveSchema {
   hasColumn(table: string, column: string): boolean;
   /** `table` absent: the index by name anywhere (PG/SQLite DROP INDEX names only the index). */
   hasIndex(name: string, table?: string): boolean;
-  /** A named FK, CHECK or UNIQUE constraint on the table (a UNIQUE constraint is also an index on PG/MySQL; count indexes too). */
+  /** A named constraint on the table, of any kind, as the catalog records it. */
   hasConstraint(table: string, name: string): boolean;
+  /**
+   * Whether an index or constraint that is present can be used: false for a
+   * PostgreSQL index left invalid or not ready, and for a PostgreSQL
+   * constraint not validated. True wherever the database has no such state.
+   */
+  usable(object: {
+    kind: "index" | "constraint";
+    name: string;
+    table?: string;
+  }): boolean;
 }
 
 /** An object a statement leaves present or absent. Names are lower-cased. */
@@ -82,6 +93,14 @@ type LiveObject =
 interface Claim {
   object: LiveObject;
   present: boolean;
+  /**
+   * The statement makes the object usable, not only present: an index it
+   * builds, a constraint it adds and validates. Such a claim holds only for
+   * an object the database can use (`LiveSchema.usable`); an index a failed
+   * `CREATE INDEX CONCURRENTLY` left behind, or a constraint not validated,
+   * is present but not what the statement made.
+   */
+  usable?: boolean;
 }
 
 /**
@@ -89,17 +108,40 @@ interface Claim {
  * read as rows or unread may still name the table it changes (`touches`): a
  * `CREATE TABLE ... AS`, or an `ALTER TABLE` with a clause this reading does
  * not model. Whatever it does there, an earlier statement's claim on that
- * table can no longer be read from the database (`judgeStatements`).
+ * table can no longer be read from the database (`judgeStatements`). One
+ * whose reach is not read at all (`anything`: a procedural block, an
+ * `ALTER INDEX`, a view or function, a name this reading cannot decode) may
+ * have changed any object, so no earlier claim can be read after it.
  */
 type Reading =
   | { kind: "schema"; claims: Claim[]; conditional: boolean }
-  | { kind: "rows"; touches?: string }
-  | { kind: "unread"; touches?: string };
+  | { kind: "rows"; touches?: string; anything?: true }
+  | { kind: "unread"; touches?: string; anything?: true };
 
 type Token = string | QuotedToken;
 
 const ROWS: Reading = { kind: "rows" };
-const UNREAD: Reading = { kind: "unread" };
+/** A statement not read, whose reach is not known either. */
+const UNREAD: Reading = { kind: "unread", anything: true };
+/** A session setting or savepoint: unread, and changing no object. */
+const SETTING: Reading = { kind: "unread" };
+
+/**
+ * First words of a statement that changes only the session, a savepoint or
+ * the planner's statistics: it can neither make nor undo an earlier
+ * statement's object.
+ */
+const SETTING_WORDS = new Set([
+  "SET",
+  "RESET",
+  "PRAGMA",
+  "SAVEPOINT",
+  "RELEASE",
+  "ANALYZE",
+]);
+
+/** Row statements that run code, which may change any object. */
+const CODE_WORDS = new Set(["DO", "CALL"]);
 
 /**
  * The first words of a statement that reads or writes rows. `SELECT` covers
@@ -202,13 +244,24 @@ class Cursor {
     if (typeof token === "string") {
       if (!BARE_NAME.test(token)) return undefined;
       name = token.toLowerCase();
-    } else if (token !== undefined && token.name !== undefined) {
+    } else if (
+      token !== undefined &&
+      token.name !== undefined &&
+      token.escaped !== true
+    ) {
       name = token.name.toLowerCase();
     }
     if (name === undefined) return undefined;
     this.at += 1;
     if (this.isWord(".")) return undefined;
     return name;
+  }
+
+  /** The tokens from here to the end, consumed. */
+  rest(): Token[] {
+    const tokens = this.tokens.slice(this.at);
+    this.at = this.tokens.length;
+    return tokens;
   }
 
   /** The tokens from here to the end, split at commas outside parentheses. */
@@ -247,7 +300,10 @@ function readStatement(statement: string, dialect: SupportedDialect): Reading {
   const cursor = new Cursor(tokens);
   const first = cursor.peek();
   if (typeof first !== "string") return UNREAD;
+  if (CODE_WORDS.has(first)) return { kind: "rows", anything: true };
   if (ROW_WORDS.has(first)) return ROWS;
+  if (SETTING_WORDS.has(first)) return SETTING;
+  if (first === "ROLLBACK" && cursor.isWord("TO", 1)) return SETTING;
   if (cursor.accept("CREATE", "TABLE")) return readCreateTable(cursor);
   if (
     cursor.accept("CREATE", "UNIQUE", "INDEX") ||
@@ -314,7 +370,13 @@ function readCreateIndex(
   if (dialect === "postgresql") cursor.accept("ONLY");
   const on = cursor.name();
   if (on === undefined) return undefined;
-  return [{ object: { kind: "index", name, table: on }, present: true }];
+  return [
+    {
+      object: { kind: "index", name, table: on },
+      present: true,
+      usable: true,
+    },
+  ];
 }
 
 /** `DROP TABLE [IF EXISTS] a[, b...] [CASCADE|RESTRICT]`: each absent. */
@@ -462,7 +524,18 @@ function readAddClause(
     if (!["UNIQUE", "FOREIGN", "CHECK"].some(kind => clause.isWord(kind))) {
       return undefined;
     }
-    return [{ object: { kind: "constraint", table: on, name }, present: true }];
+    // PostgreSQL's `NOT VALID` adds the constraint without checking the rows
+    // already there; without it, the constraint the statement makes is a
+    // validated one.
+    const tokens = clause.rest();
+    const notValid = tokens.at(-2) === "NOT" && tokens.at(-1) === "VALID";
+    return [
+      {
+        object: { kind: "constraint", table: on, name },
+        present: true,
+        usable: !notValid,
+      },
+    ];
   }
   if (dialect === "mysql") {
     const unique = clause.accept("UNIQUE");
@@ -613,6 +686,24 @@ function liveHas(live: LiveSchema, object: LiveObject): boolean {
   }
 }
 
+/**
+ * Whether the live schema shows a claim. A claim of absence holds only when
+ * the object is gone, so an unusable object still counts as there; a claim
+ * that the statement made a usable object holds only when it is usable.
+ */
+function claimHolds(live: LiveSchema, claim: Claim): boolean {
+  const has = liveHas(live, claim.object);
+  if (!claim.present) return !has;
+  if (!has || claim.usable !== true) return has;
+  const { object } = claim;
+  return object.kind === "index" || object.kind === "constraint"
+    ? live.usable(object)
+    : true;
+}
+
+/** The key of a later statement that may have changed any object. */
+const ANYTHING = "anything";
+
 /** One statement's verdict, given the keys later statements change. */
 function verdictOf(
   reading: Reading,
@@ -625,7 +716,10 @@ function verdictOf(
   });
   if (reading.kind === "rows") return unknown("rows");
   if (reading.kind === "unread") return unknown("unread");
-  if (reading.claims.some(c => dependencies(c).some(k => laterWrites.has(k)))) {
+  if (
+    laterWrites.has(ANYTHING) ||
+    reading.claims.some(c => dependencies(c).some(k => laterWrites.has(k)))
+  ) {
     return unknown("undone");
   }
   if (live === undefined) return unknown("unread");
@@ -634,8 +728,8 @@ function verdictOf(
     return part !== undefined && !live.hasTable(part);
   });
   if (tableMissing) return unknown("no_table");
-  const holding = reading.claims.filter(
-    claim => liveHas(live, claim.object) === claim.present
+  const holding = reading.claims.filter(claim =>
+    claimHolds(live, claim)
   ).length;
   if (holding === reading.claims.length) {
     return reading.conditional ? unknown("conditional") : { verdict: "done" };
@@ -708,6 +802,8 @@ export function judgeStatements(
     const reading = readings[i];
     if (reading.kind === "schema") {
       after = new Set([...after, ...reading.claims.map(c => keyOf(c.object))]);
+    } else if (reading.anything === true) {
+      after = new Set([...after, ANYTHING]);
     } else if (reading.touches !== undefined) {
       after = new Set([...after, keyOf(table(reading.touches))]);
     }
@@ -779,9 +875,18 @@ export async function readLiveSchema(
   const columns = new Set<string>();
   const indexes = new Set<string>();
   const indexesAnywhere = new Set<string>(indexTables.keys());
+  const unusableIndexes = await introspectUnusableIndexes(
+    db,
+    dialect,
+    liveTables
+  );
   const constraints = new Set<string>();
+  const unvalidated = new Set<string>();
   for (const [on, names] of constraintNames) {
-    for (const name of names) constraints.add(within(on, name));
+    for (const [name, validated] of names) {
+      constraints.add(within(on, name));
+      if (!validated) unvalidated.add(within(on, name));
+    }
   }
   for (const spec of snapshot.tables) {
     for (const column of spec.columns)
@@ -803,5 +908,9 @@ export async function readLiveSchema(
         ? indexesAnywhere.has(name.toLowerCase())
         : indexes.has(within(on, name)),
     hasConstraint: (on, name) => constraints.has(within(on, name)),
+    usable: object =>
+      object.kind === "index"
+        ? !unusableIndexes.has(object.name.toLowerCase())
+        : !unvalidated.has(within(object.table ?? "", object.name)),
   };
 }

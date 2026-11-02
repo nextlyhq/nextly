@@ -172,6 +172,11 @@ export function leadingWords(
  */
 export interface QuotedToken {
   name: string | undefined;
+  /**
+   * PostgreSQL's `U&"..."`, whose escapes the scan does not decode: `name` is
+   * then the text as written, not the name the server reads.
+   */
+  escaped?: boolean;
 }
 
 /**
@@ -214,7 +219,10 @@ function* serverTokens(
         }
         break;
       case "quoted-name":
-        yield { name: segment.content.toUpperCase() };
+        yield {
+          name: segment.content.toUpperCase(),
+          ...(segment.unicodeEscaped ? { escaped: true } : {}),
+        };
         break;
       default:
         yield { name: undefined };
