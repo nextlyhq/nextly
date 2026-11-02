@@ -59,6 +59,9 @@ import {
 /** How many hosts one count reads before calling its answer a floor. */
 export const MOST_HOSTS_READ = 500;
 
+/** How many hosts are read at once. */
+const HOSTS_READ_AT_ONCE = 8;
+
 /** What counting needs, injected so a test can supply each part. */
 export interface VariantUseSources {
   /** Whether the caller may read the component. */
@@ -102,20 +105,24 @@ export async function countVariantUse(
   // A document is counted once however many of its fields hold the variant.
   const documents = new Set<string>();
   let placements = 0;
-  for (const host of hosts.slice(0, MOST_HOSTS_READ)) {
-    if (host.localized) {
-      complete = false;
-      continue;
+  const readable = hosts.slice(0, MOST_HOSTS_READ).filter(host => {
+    if (host.localized) complete = false;
+    return !host.localized;
+  });
+  // A few hosts at a time, each with both its forms at once: the dialog waits
+  // on this, and one host after another is a round trip per form per host.
+  for (let at = 0; at < readable.length; at += HOSTS_READ_AT_ONCE) {
+    const batch = readable.slice(at, at + HOSTS_READ_AT_ONCE);
+    const found = await Promise.all(
+      batch.map(host => placementsIn(host, componentId, variantId, sources))
+    );
+    for (const [i, answer] of found.entries()) {
+      if (answer === null || !answer.complete) complete = false;
+      if (answer === null || answer.ids.size === 0) continue;
+      const host = batch[i];
+      placements += answer.ids.size;
+      documents.add(`${host.slug}\u0000${host.id}`);
     }
-    const found = await placementsIn(host, componentId, variantId, sources);
-    if (found === null) {
-      complete = false;
-      continue;
-    }
-    if (found.complete === false) complete = false;
-    if (found.ids.size === 0) continue;
-    placements += found.ids.size;
-    documents.add(`${host.slug}\u0000${host.id}`);
   }
   return { placements, documents: documents.size, complete };
 }
@@ -130,15 +137,19 @@ async function placementsIn(
   variantId: string,
   sources: VariantUseSources
 ): Promise<{ ids: Set<string>; complete: boolean } | null> {
+  let forms: unknown[];
+  try {
+    forms = await Promise.all(
+      (["published", "draft"] as const).map(form =>
+        sources.readForm(host, form)
+      )
+    );
+  } catch {
+    return null;
+  }
   const ids = new Set<string>();
   let complete = true;
-  for (const form of ["published", "draft"] as const) {
-    let value: unknown;
-    try {
-      value = await sources.readForm(host, form);
-    } catch {
-      return null;
-    }
+  for (const value of forms) {
     if (value === undefined) continue;
     const walked = choosing(value, componentId, variantId, sources.limits);
     if (!walked.complete) complete = false;

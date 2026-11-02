@@ -175,6 +175,37 @@ describe("editing a component's variants", () => {
     ]);
   });
 
+  it("says what a refused value needs, and applies nothing", () => {
+    const { context, ops } = recording({
+      ...card({ a: { label: "A", overrides: {} } }),
+      exposed: [
+        {
+          id: "href",
+          label: "Link",
+          nodeId: "heading",
+          propPath: "href",
+          type: "link",
+        },
+      ],
+    });
+
+    const outcome = setVariantValue(context, "a", "href", "javascript:x");
+    expect(outcome.applied).toBe(false);
+    expect(outcome.applied ? "" : outcome.reason).toMatch(
+      /^Not saved: this field needs a link/
+    );
+    expect(ops).toEqual([]);
+  });
+
+  it("has no default for a stored field without a path", () => {
+    const component = card();
+    const broken = {
+      ...component.exposed![0]!,
+      propPath: undefined,
+    } as unknown as NonNullable<ComponentDocument["exposed"]>[number];
+    expect(defaultValueOf(component, broken)).toBeUndefined();
+  });
+
   it("names a new variant past the ones there are", () => {
     expect(nextVariantName(card())).toBe("Variant 1");
     expect(

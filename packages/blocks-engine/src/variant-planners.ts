@@ -33,6 +33,7 @@ import { editableComponent, editVerdict } from "./component-edit";
 import type {
   BlockDocument,
   ComponentDocument,
+  ExposedProperty,
   OverrideValue,
   Variant,
 } from "./document";
@@ -41,6 +42,7 @@ import {
   MAX_ENVELOPE_ENTRIES,
   type DocumentLimits,
 } from "./limits";
+import { exposedValueFits, neededFor } from "./placement-values";
 import { isPlainRecord } from "./plain-record";
 import { boundedOwnKeys, ownEntry } from "./safe-record";
 import type { ValidationIssue } from "./validation";
@@ -58,6 +60,8 @@ export type VariantEditProblem =
   | "unknown-variant"
   /** The component exposes no field with that id. */
   | "unknown-exposure"
+  /** The value is not one the field takes; `needs` says what it takes. */
+  | "invalid-value"
   /** The label is blank. */
   | "invalid-label"
   /** Another variant already has the label, ignoring case and spaces. */
@@ -90,6 +94,8 @@ export interface VariantEditRefusal {
   readonly problem: VariantEditProblem;
   /** For `"label-taken"`: the label of the variant that already has it. */
   readonly clash?: string;
+  /** For `"invalid-value"`: what the field takes, as in "needs text". */
+  readonly needs?: string;
   /** The envelope errors, for `"invalid-variant"`. */
   readonly issues?: readonly ValidationIssue[];
 }
@@ -137,8 +143,9 @@ export interface VariantOption {
 /**
  * The variants a component offers, in their stored order, read defensively.
  *
- * An entry that is not a record is left out: the envelope check names it on
- * save, and a picker cannot offer it as anything. A stored label that is blank
+ * An entry that is not a record, or is filed under the empty key, is left
+ * out: the envelope check names the first on save, and a picker cannot offer
+ * either as anything a placement keeps. A stored label that is blank
  * reads as the key, so every option has words.
  *
  * @experimental Settles when the component editor that uses it ships.
@@ -152,7 +159,9 @@ export function variantOptions(
   const options: VariantOption[] = [];
   for (const id of boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES) ?? []) {
     const variant: unknown = ownEntry(variants, id);
-    if (!isPlainRecord(variant)) continue;
+    // An empty key is left out too: a placement storing it reads as having
+    // chosen no variant, so offering it would offer a choice that never holds.
+    if (id === "" || !isPlainRecord(variant)) continue;
     const label = cleanLabel(variant.label) ?? id;
     const values = isPlainRecord(variant.overrides) ? variant.overrides : {};
     const keys = boundedOwnKeys(values, MAX_ENVELOPE_ENTRIES);
@@ -258,7 +267,13 @@ export function planSetVariantValue(
   if ("problem" in draft) return draft;
   const variant = variantAt(draft, id);
   if (variant === undefined) return { problem: "unknown-variant" };
-  if (!exposes(draft, exposureId)) return { problem: "unknown-exposure" };
+  const field = exposure(draft, exposureId);
+  if (field === undefined) return { problem: "unknown-exposure" };
+  // Held to what a placement may set for the field, so a variant never
+  // presets a value the placement inspector or a page write would refuse.
+  if (!exposedValueFits(field, value)) {
+    return { problem: "invalid-value", needs: neededFor(field) };
+  }
 
   const overrides = { ...readOverrides(variant), [exposureId]: value };
   draft.variants = { ...draft.variants, [id]: { ...variant, overrides } };
@@ -321,11 +336,19 @@ function readOverrides(variant: Variant): Record<string, OverrideValue> {
   return isPlainRecord(overrides) ? overrides : {};
 }
 
-/** Whether the component exposes a field with this id. */
-function exposes(definition: ComponentDocument, exposureId: string): boolean {
+/** The field the component exposes under this id, when it is readable. */
+function exposure(
+  definition: ComponentDocument,
+  exposureId: string
+): ExposedProperty | undefined {
   const exposed: unknown = definition.exposed;
-  if (!Array.isArray(exposed)) return false;
-  return exposed.some(entry => isPlainRecord(entry) && entry.id === exposureId);
+  if (!Array.isArray(exposed)) return undefined;
+  const found: unknown = exposed.find(
+    entry => isPlainRecord(entry) && entry.id === exposureId
+  );
+  return isPlainRecord(found) && typeof found.type === "string"
+    ? (found as unknown as ExposedProperty)
+    : undefined;
 }
 
 /** A label trimmed, or `undefined` when nothing is left. */

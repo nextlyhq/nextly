@@ -352,8 +352,9 @@ test.describe("a component's variants", () => {
       .getByRole("button", { name: "Clear the removed variant" })
       .click();
     await expect(notice).toHaveCount(0);
-    await expect(page.getByRole("combobox", { name: "Variant" })).toHaveText(
-      "Default"
+    // The component has no variants left, so there is nothing to pick.
+    await expect(page.getByRole("combobox", { name: "Variant" })).toHaveCount(
+      0
     );
     await save(page, pageId);
     const stored = await storedPlacements(page, pageId);

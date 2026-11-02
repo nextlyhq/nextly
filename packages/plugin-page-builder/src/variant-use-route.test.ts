@@ -162,4 +162,31 @@ describe("counting a variant's placements", () => {
       )
     ).toEqual({ placements: 0, documents: 0, complete: true });
   });
+
+  it("reads several hosts at once, within a bound, not one after another", async () => {
+    const hosts = Array.from({ length: 40 }, (_, i) =>
+      host("pages", `p${String(i)}`)
+    );
+    let inFlight = 0;
+    let most = 0;
+    const base = sources(new Map(), hosts);
+    const counting: VariantUseSources = {
+      ...base,
+      readForm: async () => {
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        inFlight -= 1;
+        return doc(placement("x", "card", "featured"));
+      },
+    };
+
+    expect(await countVariantUse("card", "featured", counting)).toEqual({
+      placements: 40,
+      documents: 40,
+      complete: true,
+    });
+    expect(most).toBeGreaterThan(2);
+    expect(most).toBeLessThanOrEqual(16);
+  });
 });

@@ -56,9 +56,11 @@ function nameOf(variant: unknown): string | undefined {
 /**
  * One issue per variant whose name an earlier variant already has.
  *
- * An `error` for a clash the save creates, and a `warning` for one any stored
- * form of the definition already holds under the same name. Without stored
- * forms (a create, or a value judged on its own) every clash is new.
+ * An `error` for a clash the save creates, and a `warning` for a variant that
+ * already shared that name in a stored form of the definition. Judged per
+ * variant, not per name, so a stored clash grandfathers only the variants
+ * that were part of it: a third variant given the same name is new. Without
+ * stored forms (a create, or a value judged on its own) every clash is new.
  */
 export function variantLabelIssues(
   variants: unknown,
@@ -66,27 +68,39 @@ export function variantLabelIssues(
 ): ValidationIssue[] {
   const shared = sharedNames(variants);
   if (shared.size === 0) return [];
-  const old = new Set<string>();
-  for (const form of stored ?? []) {
-    if (!isPlainRecord(form)) continue;
-    for (const name of sharedNames(form.variants).keys()) old.add(name);
-  }
+  const old = storedClashes(stored);
 
   const issues: ValidationIssue[] = [];
   const record = variants as Record<string, { label: string }>;
   for (const [name, keys] of shared) {
     const first = ownEntry(record, keys[0])?.label.trim() ?? name;
-    const kept = old.has(name);
     for (const key of keys.slice(1)) {
       const label = ownEntry(record, key)?.label.trim() ?? name;
       issues.push({
         path: pointer(pointer("/variants", key), "label"),
         code: "variant-label-clash",
-        severity: kept ? "warning" : "error",
+        severity: old.has(clashKey(name, key)) ? "warning" : "error",
         message: `Variant "${label}" has the same name as variant "${first}". Variant names must differ, ignoring case and spaces.`,
         suggestion: "Rename one of them.",
       });
     }
   }
   return issues;
+}
+
+/** Every variant that shared its name with another in a stored form. */
+function storedClashes(stored: readonly unknown[] | undefined): Set<string> {
+  const old = new Set<string>();
+  for (const form of stored ?? []) {
+    if (!isPlainRecord(form)) continue;
+    for (const [name, keys] of sharedNames(form.variants)) {
+      for (const key of keys) old.add(clashKey(name, key));
+    }
+  }
+  return old;
+}
+
+/** One variant under one name, as stored clashes are keyed. */
+function clashKey(name: string, key: string): string {
+  return `${name}\u0000${key}`;
 }

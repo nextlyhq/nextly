@@ -154,6 +154,19 @@ describe("adding a variant", () => {
   });
 });
 
+describe("the variants a picker offers", () => {
+  it("leaves out one filed under the empty key, which no placement keeps", () => {
+    expect(
+      variantOptions(
+        card({
+          "": { label: "Ghost", overrides: {} },
+          a: { label: "A", overrides: {} },
+        })
+      ).map(option => option.id)
+    ).toEqual(["a"]);
+  });
+});
+
 describe("renaming a variant", () => {
   it("keeps its key, so a placement that chose it still draws it", () => {
     const before = card({
@@ -255,6 +268,35 @@ describe("a variant's values", () => {
     expect(set.warnings).toEqual([]);
   });
 
+  it("refuse a value the field does not take, saying what it needs", () => {
+    const withLink: ComponentDocument = {
+      ...card({ a: { label: "A", overrides: {} } }),
+      exposed: [
+        ...(card().exposed ?? []),
+        {
+          id: "href",
+          label: "Link",
+          nodeId: "heading",
+          propPath: "href",
+          type: "link",
+        },
+      ],
+    };
+
+    expect(
+      planSetVariantValue(withLink, "a", "href", "javascript:alert(1)")
+    ).toMatchObject({
+      problem: "invalid-value",
+      needs: expect.stringContaining("link") as unknown,
+    });
+    expect(planSetVariantValue(withLink, "a", "tone", "neon")).toMatchObject({
+      problem: "invalid-value",
+    });
+    expect(
+      "problem" in planSetVariantValue(withLink, "a", "href", "/pricing")
+    ).toBe(false);
+  });
+
   it("refuse a field the component does not expose", () => {
     const result = planSetVariantValue(
       card({ a: { label: "A", overrides: {} } }),
@@ -326,6 +368,22 @@ describe("variant names on save", () => {
     ).toEqual([
       ["/variants/b/label", "warning"],
       ["/variants/d/label", "error"],
+    ]);
+  });
+
+  it("refuse a variant newly given a name a stored pair already shares", () => {
+    const next = card({
+      ...clashing.variants,
+      c: { label: "FEATURED", overrides: { title: "c" } },
+    });
+
+    expect(
+      validate(next, { ...context, stored: [clashing] })
+        .filter(issue => issue.code === "variant-label-clash")
+        .map(issue => [issue.path, issue.severity])
+    ).toEqual([
+      ["/variants/b/label", "warning"],
+      ["/variants/c/label", "error"],
     ]);
   });
 

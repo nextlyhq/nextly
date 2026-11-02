@@ -87,8 +87,14 @@ export type VariantEditOutcome =
   | { readonly applied: false; readonly reason: string };
 
 /** The sentence for each refusal, said where the edit was made. */
-function problemSentence(problem: VariantEditProblem, clash?: string): string {
+function problemSentence(
+  problem: VariantEditProblem,
+  clash?: string,
+  needs?: string
+): string {
   switch (problem) {
+    case "invalid-value":
+      return `Not saved: this field ${needs ?? "needs a different value"}.`;
     case "invalid-label":
       return "A variant needs a name.";
     case "label-taken":
@@ -116,7 +122,7 @@ function applied(
   if ("problem" in result) {
     return {
       applied: false,
-      reason: problemSentence(result.problem, result.clash),
+      reason: problemSentence(result.problem, result.clash, result.needs),
     };
   }
   const op = envelopeOpFor(context.component, result.document);
@@ -223,8 +229,12 @@ export function defaultValueOf(
   const node = findNode(component.nodes, field.nodeId);
   if (node === undefined) return undefined;
   if (field.type === "visibility") return true;
+  // A stored or imported field may lack its path; it then has no default to
+  // show rather than one read from nowhere.
+  const path: unknown = field.propPath;
+  if (typeof path !== "string") return undefined;
   let current: unknown = node.props;
-  for (const segment of field.propPath.split(".")) {
+  for (const segment of path.split(".")) {
     if (!isPlainRecord(current) || !Object.hasOwn(current, segment)) {
       return undefined;
     }
