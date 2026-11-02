@@ -980,6 +980,8 @@ export {
   type AppliedOp,
   type AppliedOps,
   type BuilderOp,
+  type EnvelopeField,
+  type EnvelopePatch,
   type NodePatch,
   type OpPosition,
   type SlotAddress,

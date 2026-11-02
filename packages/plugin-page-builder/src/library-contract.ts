@@ -393,3 +393,46 @@ export interface PatternCapabilityResponse {
    */
   readonly mayCreate: boolean;
 }
+
+/**
+ * Where the component editor asks what it needs to know about the component it
+ * edits that the component's own document does not hold.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export const COMPONENT_FACTS_ROUTE_PATH = "/component-facts";
+
+/** The query parameter naming the component, by id. */
+export const COMPONENT_FACTS_ID_PARAM = "id";
+
+/** The facts route's path for one component, as the client requests it. */
+export function componentFactsPath(id: string): string {
+  const query = new URLSearchParams({ [COMPONENT_FACTS_ID_PARAM]: id });
+  return `${COMPONENT_FACTS_ROUTE_PATH}?${query.toString()}`;
+}
+
+/**
+ * What the component editor is told about the component it edits.
+ *
+ * NOT A SECURITY BOUNDARY: the save judges every write on its own. This keeps
+ * a draft from minting an id the live definition still uses, and tells the
+ * author how far a change reaches.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export interface ComponentFactsResponse {
+  /**
+   * The field and slot ids the component's LIVE definition holds. A draft
+   * that dropped one still has placements holding values under it, so a new
+   * field must never be minted under any of these.
+   */
+  readonly live: {
+    readonly properties: readonly string[];
+    readonly slots: readonly string[];
+  };
+  /**
+   * How many documents place the component, from the usage index; `complete`
+   * false makes the number a floor. `null` when the index could not answer.
+   */
+  readonly reach: { readonly count: number; readonly complete: boolean } | null;
+}

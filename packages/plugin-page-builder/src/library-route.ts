@@ -319,6 +319,38 @@ export const DEFAULT_COMPONENT_STORE: ComponentStore = {
   field: COMPONENT_DOCUMENT_FIELD,
 };
 
+/** Who a gated route's caller is, as the dispatcher resolved it. */
+type CallerIdentity = NonNullable<
+  Awaited<ReturnType<NonNullable<PluginRouteContext["caller"]>["identity"]>>
+>;
+
+/**
+ * The Direct API options that read AS THE CALLER, for every read of a
+ * component this plugin makes on a caller's behalf. Why each part is needed:
+ * see {@link directComponentReads}.
+ *
+ * Asked lazily: the caller resolves its own identity once per request, and a
+ * route with nothing to read never asks. A public route has no caller; these
+ * routes are gated, so the anonymous branch is the honest answer for a
+ * context nothing authenticated.
+ */
+export async function asTheCaller(
+  ctx: Pick<PluginRouteContext, "caller">
+): Promise<{
+  overrideAccess: false;
+  user: CallerIdentity["user"] | undefined;
+  actor?: NonNullable<CallerIdentity["authenticatedScope"]>;
+}> {
+  const identity = await ctx.caller?.identity();
+  return {
+    overrideAccess: false as const,
+    user: identity?.user,
+    ...(identity?.authenticatedScope === undefined
+      ? {}
+      : { actor: identity.authenticatedScope }),
+  };
+}
+
 /**
  * The component reads the route binds: the Direct API, AS THE USER.
  *
@@ -368,20 +400,7 @@ function directComponentReads(
   locale?: string
 ): ComponentReads {
   const inLocale = locale === undefined ? {} : { locale };
-  // Resolved once for both reads, and lazily: the caller resolves its own
-  // identity once per request, and a route with nothing to read never asks.
-  // A public route has no caller; this one is gated, so the anonymous branch
-  // is the honest answer for a context nothing authenticated.
-  const asUser = async () => {
-    const identity = await ctx.caller?.identity();
-    return {
-      overrideAccess: false as const,
-      user: identity?.user,
-      ...(identity?.authenticatedScope === undefined
-        ? {}
-        : { actor: identity.authenticatedScope }),
-    };
-  };
+  const asUser = () => asTheCaller(ctx);
   return {
     list: async (slug, at) => {
       const result = await requireNextly().find({
@@ -1064,17 +1083,9 @@ export function componentLibraryRoute(
   return {
     method: "GET",
     path: COMPONENT_LIBRARY_ROUTE_PATH,
-    // The scope helper for the plugin's OWN collection, which follows the
-    // host's rename; the configured slug LITERALLY for a store the plugin was
-    // told about, because that is what the handler reads. Through the helper a
-    // configured slug that collides with a contributed name resolves to the
-    // renamed collection, so the gate and the read name two different
-    // collections — and a caller holding read on the one being read is
-    // refused while one holding read on the other is let in.
-    requiredPermission: ({ collection }) =>
-      store.collection === undefined
-        ? collection(COMPONENTS_SLUG, "read")
-        : readPermissionFor(store.collection),
+    // Gated on the store the handler reads, and no other: a caller holding
+    // read on a differently named collection must not be let in.
+    requiredPermission: componentReadPermission(store),
     handler: async (req: Request, ctx: PluginRouteContext) =>
       Response.json(
         await readComponentLibrary({
@@ -1084,6 +1095,23 @@ export function componentLibraryRoute(
         })
       ),
   };
+}
+
+/**
+ * The permission reading a component store needs, for every route that reads
+ * one: the plugin's OWN collection through the scope helper, which follows
+ * the host's rename; a configured store's slug LITERALLY, because that is what
+ * the handler reads. Through the helper a configured slug that collides with a
+ * contributed name resolves to the renamed collection, so the gate and the
+ * read would name two different collections.
+ */
+export function componentReadPermission(
+  store: ComponentStore
+): (scope: PluginRoutePermissionScope) => string {
+  return ({ collection }) =>
+    store.collection === undefined
+      ? collection(COMPONENTS_SLUG, "read")
+      : readPermissionFor(store.collection);
 }
 
 /**

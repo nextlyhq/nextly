@@ -264,6 +264,7 @@ function editorInspector(view: EditorView): React.JSX.Element {
     canvasSiteStyle,
     siteStylePending,
     siteStyleError,
+    componentFacts,
   } = view;
   return (
     <InspectorPanel
@@ -318,6 +319,9 @@ function editorInspector(view: EditorView): React.JSX.Element {
         siteStylePending,
         siteStyleError
       )}
+      // In a component's own view: the ids its live definition holds, which a
+      // new field must never reuse, and how far a removal reaches.
+      componentFields={componentFacts}
     />
   );
 }
