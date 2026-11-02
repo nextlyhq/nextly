@@ -794,7 +794,7 @@ function parseCollectionEntryPublishAllRoute(
     routeParams.entryId = subId;
     return {
       service: "collections",
-      operation: "read",
+      operation: "single",
       method: "previewPublishAllLocales",
       routeParams,
     };

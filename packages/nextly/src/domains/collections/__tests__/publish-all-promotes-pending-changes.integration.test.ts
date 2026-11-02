@@ -375,9 +375,9 @@ describe.each(getConfiguredTestDialects())(
       );
       const before = await eventIds();
       const inProcess: unknown[] = [];
-      current!.events.on("document.published", payload =>
-        inProcess.push(payload)
-      );
+      current!.events.on("document.published", payload => {
+        inProcess.push(payload);
+      });
 
       const all = await entries.publishAllLocales({
         collectionName: POSTS,

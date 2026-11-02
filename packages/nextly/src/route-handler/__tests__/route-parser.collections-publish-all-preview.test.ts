@@ -17,7 +17,7 @@ describe("collection publish-all preview route", () => {
   it("parses GET as the preview of the publish, a read of the entry", () => {
     expect(parseRestRoute(PATH, "GET")).toMatchObject({
       service: "collections",
-      operation: "read",
+      operation: "single",
       method: "previewPublishAllLocales",
       routeParams: { collectionName: "posts", entryId: "p1" },
     });

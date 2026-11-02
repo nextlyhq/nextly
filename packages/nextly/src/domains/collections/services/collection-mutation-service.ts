@@ -3953,6 +3953,7 @@ export class CollectionMutationService extends BaseService {
       | "manyToManyFields"
       | "splitComponentSchemas"
       | "reads"
+      | "reader"
     > & { tx?: TransactionContext },
     snapshot: unknown,
     restoreCtx: RestoreSchemaContext
@@ -7466,8 +7467,10 @@ export class CollectionMutationService extends BaseService {
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
   ) {
+    // An answer that ends the change before its transaction opens.
+    const answered = (answer: CollectionServiceResult) => ({ answer });
     const toUpdate = await this.entryToUpdate({ ...params, gate: null });
-    if (toUpdate.answer) return { answer: toUpdate.answer };
+    if (toUpdate.answer) return answered(toUpdate.answer);
     const { accessUser, schema, existingEntry } = toUpdate;
 
     // The draft/published lifecycle flag on the collection config, NOT the
@@ -7491,7 +7494,7 @@ export class CollectionMutationService extends BaseService {
           accessUser
         )
       : null;
-    if (grantRefused) return { answer: grantRefused };
+    if (grantRefused) return answered(grantRefused);
     const companion = await this.fileManager.loadCompanionSchema(
       params.collectionName
     );
@@ -7517,8 +7520,8 @@ export class CollectionMutationService extends BaseService {
       !companionReady &&
       otherLanguages
     ) {
-      return {
-        answer: errorToServiceResult(
+      return answered(
+        errorToServiceResult(
           NextlyError.conflict({
             reason: "state",
             message: companionNotReadyMessage("collection"),
@@ -7530,8 +7533,8 @@ export class CollectionMutationService extends BaseService {
           }),
           { defaultMessage: "Failed to publish all languages" },
           this.dialect
-        ),
-      };
+        )
+      );
     }
 
     if (!hasMainStatus && !companionPublishable) {
@@ -7549,15 +7552,13 @@ export class CollectionMutationService extends BaseService {
         routeAuthorized: false,
         authenticatedScope: params.authenticatedScope,
       });
-      if (updateDenied) return { answer: updateDenied };
-      return {
-        answer: {
-          success: true,
-          statusCode: 200,
-          message: direction.nothingToDoMessage,
-          data: { id: params.entryId },
-        },
-      };
+      if (updateDenied) return answered(updateDenied);
+      return answered({
+        success: true,
+        statusCode: 200,
+        message: direction.nothingToDoMessage,
+        data: { id: params.entryId },
+      });
     }
 
     // This method exists to publish every locale, so it is unconditionally a
@@ -7609,7 +7610,7 @@ export class CollectionMutationService extends BaseService {
         ...promotes,
         ask: lifecycleDenied,
       });
-    if (deniedBeforePublish) return { answer: deniedBeforePublish };
+    if (deniedBeforePublish) return answered(deniedBeforePublish);
 
     // Readiness for this collection AND for every field-group type it can hold, resolved on the
     // pool before the transaction opens. The snapshot built inside it reads all of them, and
