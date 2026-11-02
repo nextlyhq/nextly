@@ -159,7 +159,8 @@ export function blocksFieldType(
       return readStoredForms(
         args.write,
         args.path,
-        formsChangedBy(typeof status === "string" ? status : undefined)
+        formsChangedBy(typeof status === "string" ? status : undefined),
+        (args.field as { localized?: unknown }).localized === true
       ).then(stored => {
         const again = stored.forms.length === 0 ? issues : judge(stored.forms);
         // A stored value this cannot read may already hold every placement

@@ -202,9 +202,11 @@ function judge(
     onLockedExposures?: (found: LockedExposures) => void;
     onHostsStillBroken?: (found: StillBrokenHosts) => void;
     composesDocuments?: boolean;
+    localized?: boolean;
   } = {}
 ) {
-  const { status, limits, composesDocuments, ...callbacks } = options;
+  const { status, limits, composesDocuments, localized, ...callbacks } =
+    options;
   return compositionIssues(
     value,
     {
@@ -214,6 +216,9 @@ function judge(
         ...(status === undefined ? {} : { status }),
       },
       ...(w === undefined ? {} : { write: w }),
+      ...(localized === undefined
+        ? {}
+        : { field: { name: FIELD, type: "blocks", localized } }),
     },
     {
       store: STORE,
@@ -858,8 +863,8 @@ describe("a page judged as a reader receives it", () => {
     });
 
     it("refuses as for a page never stored when the stored page cannot be read, as a localized field's cannot", async () => {
-      // A read that is refused, as core refuses a localized field, leaves no
-      // stored value to keep: the page is measured against the starting
+      // A localized field's stored value is refused to this reader, so there
+      // is no stored value to keep: the page is measured against the starting
       // blocks alone, so the lock refuses rather than lets the value through.
       const { readStored } = storeOf({
         [COMPONENTS]: { sealed: { published: toned() } },
@@ -869,10 +874,21 @@ describe("a page judged as a reader receives it", () => {
         codes(
           await judge(
             placed({ tone: "loud" }),
-            write(readStored, "pages", "p1")
+            write(readStored, "pages", "p1"),
+            { localized: true }
           )
         )
       ).toEqual(["locked-slot-content-only"]);
+    });
+
+    it("lets an unexpected failure to read the stored page propagate, rather than pass the write", async () => {
+      const { readStored } = storeOf({
+        [COMPONENTS]: { sealed: { published: toned() } },
+        pages: { p1: { published: "unreadable" } },
+      });
+      await expect(
+        judge(placed({ tone: "loud" }), write(readStored, "pages", "p1"))
+      ).rejects.toThrow();
     });
 
     it("keeps what the component itself holds, on a page placing it for the first time", async () => {
