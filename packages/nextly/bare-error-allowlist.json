@@ -27,7 +27,7 @@
   "src/domains/collections/services/collection-relationship-service.ts": 1,
   "src/domains/dynamic-collections/services/dynamic-collection-registry-service.ts": 2,
   "src/domains/dynamic-collections/services/dynamic-collection-service.ts": 1,
-  "src/domains/dynamic-collections/services/dynamic-collection-validation-service.ts": 14,
+  "src/domains/dynamic-collections/services/dynamic-collection-validation-service.ts": 13,
   "src/domains/email/services/email-provider-registry.ts": 1,
   "src/domains/email/services/email-provider-service.ts": 1,
   "src/domains/email/services/email-template-service.ts": 1,
