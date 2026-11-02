@@ -7324,9 +7324,9 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Move every language of an entry to `direction`'s status at once (i18n
-   * M7, spec §10): the main `status` and — when the collection has per-locale
-   * status (M6) — every companion row's `_status`, in a single transaction.
+   * Move every language of an entry to `direction`'s status at once: the
+   * main `status` and — when the collection has per-locale status — every
+   * companion row's `_status`, in a single transaction.
    * For a non-localized / no-status collection it is a plain move of the
    * single row.
    *
@@ -8817,8 +8817,8 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Publish ALL languages of an entry at once (i18n M7, spec §10), each
-   * language's pending change with it. The result reports what the publish
+   * Publish ALL languages of an entry at once, each language's pending
+   * change with it. The result reports what the publish
    * did to each configured language (`languages`).
    *
    * The route, the dispatcher and the admin hooks that call this keep working
@@ -9342,8 +9342,8 @@ export class CollectionMutationService extends BaseService {
       args.columns,
       this.whereEq("id", args.entryId)
     );
-    // i18n M5: the translatable values go to the companion row for the
-    // write's language, in the same transaction. Only the provided localized
+    // The translatable values go to the companion row for the write's
+    // language, in the same transaction. Only the provided localized
     // columns are touched.
     if (args.translation) {
       await upsertCompanionRow(
