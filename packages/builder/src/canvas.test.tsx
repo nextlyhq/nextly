@@ -3518,6 +3518,60 @@ describe("the site's ground and text on the canvas root", () => {
     expect(marked("hsl(0 0% 98%)")).toBe(false);
   });
 
+  it("marks no dark ground for a translucent dark value", () => {
+    /*
+     * A colour with alpha below 1 has no lightness of its own: what shows is
+     * the surface behind it, which the canvas cannot see. So it is unknown,
+     * not dark, in every syntax the ground is read in.
+     */
+    const marked = (dark: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-dark-ground");
+    for (const dark of [
+      "#0000",
+      "#00000080",
+      "rgba(0, 0, 0, 0)",
+      "rgb(0 0 0 / 50%)",
+      "oklch(0.145 0 0 / 0.5)",
+      "oklch(14.5% 0 0 / 50%)",
+      "hsl(222 47% 11% / 0.4)",
+      "hsla(222, 47%, 11%, 0.4)",
+      // Signed and exponent alphas, which CSS reads as numbers like any other.
+      "oklch(0.145 0 0 / +0.5)",
+      "oklch(0.145 0 0 / 5e-1)",
+      "hsl(222 47% 11% / -0.5)",
+      "hsla(222, 47%, 11%, 5e-1)",
+    ]) {
+      expect(marked(dark), dark).toBe(false);
+    }
+    // Fully opaque, in the same syntaxes, is still judged by its lightness.
+    for (const dark of [
+      "#000f",
+      "rgba(0, 0, 0, 1)",
+      "oklch(0.145 0 0 / 1)",
+      "hsl(222 47% 11% / 100%)",
+      "hsla(222, 47%, 11%, 1)",
+      // The same grammar for every component, and an alpha above 1 clamps.
+      "oklch(1.45e-1 0 0 / 1e0)",
+      "oklch(0.145 0 0 / +2)",
+      "hsl(222 47% 1.1e1%)",
+      "hsl(222 47 11)",
+    ]) {
+      expect(marked(dark), dark).toBe(true);
+    }
+  });
+
   it("marks no dark ground when it cannot read the dark value", () => {
     // A valid colour this engine does not parse says nothing about luminance,
     // so the canvas keeps the page's light default rather than guessing dark.
@@ -3543,6 +3597,35 @@ describe("the site's ground and text on the canvas root", () => {
         false
       );
     }
+  });
+
+  it("marks the ground opaque only when every value of it is", () => {
+    /*
+     * The page root repeats an opaque ground so a blend inside the isolated
+     * page mixes with it; a translucent one repeated would be composited
+     * twice. So the canvas states which it has, from the same token set.
+     */
+    const opaque = (light: string, dark?: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: dark === undefined ? { light } : { light, dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-ground-opaque");
+    expect(opaque("#ffffff", "#0b0f19")).toBe(true);
+    expect(opaque("white")).toBe(true);
+    expect(opaque("oklch(0.98 0 0)", "hsl(222 47% 11% / 1)")).toBe(true);
+    expect(opaque("rgb(0 0 0 / 50%)")).toBe(false);
+    expect(opaque("#ffffff", "#0b0f1980")).toBe(false);
+    expect(opaque("transparent")).toBe(false);
+    // A value this cannot read is not called opaque.
+    expect(opaque("var(--elsewhere)")).toBe(false);
   });
 
   it("names nothing when the host serves no site sheet", () => {
