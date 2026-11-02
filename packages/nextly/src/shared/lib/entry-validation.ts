@@ -175,15 +175,27 @@ function fieldWriteFor(
   write: EntryWriteContext,
   type: string
 ): PluginFieldWrite {
+  // The default language is said as no language, however the caller spelled
+  // it, so validators judge it the same on every path.
+  const locale =
+    write.locale === undefined || write.locale === write.defaultLocale
+      ? undefined
+      : write.locale;
   return {
     kind: write.kind,
     slug: write.slug,
     ...(write.id === undefined ? {} : { id: write.id }),
-    ...(write.locale === undefined || write.locale === write.defaultLocale
-      ? {}
-      : { locale: write.locale }),
+    ...(locale === undefined ? {} : { locale }),
     inTransaction: write.inTransaction,
-    readStored: target => write.readStored(type, target),
+    // A read that names no language reads the one the write is judged in, so
+    // every stored value a validator compares with is the same language's.
+    readStored: target =>
+      write.readStored(
+        type,
+        target.locale === undefined && locale !== undefined
+          ? { ...target, locale }
+          : target
+      ),
   };
 }
 
