@@ -131,6 +131,14 @@ export function deviceLabel(
 /** How many devices are buttons, the base counting as one. */
 const BUTTON_COUNT = 3;
 
+/**
+ * The house focus ring, off the button by a gap of the bar's surface, so it
+ * shows on the chosen device's filled button as well as on the others. Without
+ * it the buttons fell back to the browser's own outline.
+ */
+const FOCUS_RING =
+  "focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
+
 /** What a device's label reads: its name and the width it is previewed at. */
 function shownLabel(option: DeviceOption): string {
   return option.preview === undefined
@@ -219,6 +227,7 @@ function MoreDevices({
         title={trigger.title}
         className={cn(
           "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs disabled:opacity-40",
+          FOCUS_RING,
           trigger.tone
         )}
       >
@@ -324,6 +333,7 @@ export function BreakpointSwitcher({
               onClick={() => onSelect(option.id)}
               className={cn(
                 "inline-flex items-center gap-1 rounded px-2 py-1 text-xs",
+                FOCUS_RING,
                 isSelected
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground"

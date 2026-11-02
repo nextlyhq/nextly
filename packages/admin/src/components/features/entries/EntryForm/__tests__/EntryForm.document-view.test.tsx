@@ -86,7 +86,10 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   }),
 }));
 
-import { useHostedDocumentActions } from "../DocumentActionsContext";
+import {
+  useHostedDocumentActions,
+  useHostedRecoveryPoint,
+} from "../DocumentActionsContext";
 import { EntryForm } from "../EntryForm";
 import { useDocumentStatus } from "../EntryFormContext";
 import {
@@ -636,6 +639,25 @@ describe("EntryForm with a document view", () => {
       documentView: { component: STATUS_VIEW, onExit },
     });
     expect(screen.getByTestId("status")).toHaveTextContent("published");
+  });
+
+  it("hands the view the document's recovery point, so its save state reads it as the header's does", () => {
+    // Edits held only in a recovery point are not stored, and a view that
+    // draws the save state without the header must know they are there.
+    const RECOVERY_VIEW = "@acme/pb/admin#Recovery";
+    const offeredAt = new Date("2026-11-02T18:00:00Z");
+    function RecoveryView(): ReactElement {
+      const point = useHostedRecoveryPoint();
+      return <p>{point.pendingOfferAt?.toISOString() ?? "none"}</p>;
+    }
+    registerComponent(RECOVERY_VIEW, RecoveryView);
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: offeredAt, snapshot: { title: "Recovered" } },
+    };
+    renderView({ documentView: { component: RECOVERY_VIEW, onExit } });
+
+    expect(screen.getByText(offeredAt.toISOString())).toBeInTheDocument();
   });
 
   it("lets the view run the document's save, with no header drawn, and hear how it went", async () => {
