@@ -47,6 +47,7 @@ import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
 import {
@@ -564,7 +565,12 @@ export class DynamicCollectionService extends BaseService {
       throw new Error(`Collection "${normalizedName}" already exists`);
     }
 
-    const userDefinedFields = this.userFieldsOf(data.fields, tableName);
+    const userDefinedFields = this.userFieldsOf(
+      normalizedName,
+      data.fields,
+      tableName,
+      null
+    );
 
     const id = this.generateId();
 
@@ -738,15 +744,23 @@ export class DynamicCollectionService extends BaseService {
    * that differs from a stored one only in case keeps the stored name, so a
    * field saved lowercased before names kept their case keeps its column and
    * values (`namesKeptFromStored`).
+   *
+   * The create and the update of every road share this point (the Builder, the root-exported
+   * service and a plugin's `ctx.services`), so the sibling rule is asked here, before anything is
+   * written: the whole list as sent, against the one stored (`null` for a new collection), so only
+   * a pair of sibling fields the save creates is refused and one the collection already holds
+   * keeps working.
    */
   private userFieldsOf(
+    slug: string,
     fields: FieldDefinition[],
     tableName: string,
-    stored: readonly FieldDefinition[] = []
+    stored: readonly FieldDefinition[] | null
   ): FieldDefinition[] {
+    assertNoNewSiblingClashes({ kind: "collection", slug }, fields, stored);
     const userDefinedFields = namesKeptFromStored(
       fields.filter(f => !RESERVED_FIELD_NAMES.includes(f.name.toLowerCase())),
-      stored
+      stored ?? []
     );
     this.validationService.validateFieldNames(userDefinedFields);
     this.validationService.validateJunctionOwnership(userDefinedFields, field =>
@@ -1511,6 +1525,7 @@ export class DynamicCollectionService extends BaseService {
 
     if (updates.fields !== undefined) {
       const userDefinedFields = this.userFieldsOf(
+        collectionName,
         updates.fields,
         collection.tableName,
         collection.fields || []

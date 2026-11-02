@@ -316,6 +316,7 @@ import { languageChangeContentCache } from "./registrations/language-change-cont
 // Looking a service up needs only the container, so it lives apart from
 // this file and its every registration.
 import { getService } from "./service-access";
+import { assertConfiguredSiblingFields } from "../domains/schema/sibling-fields";
 
 // ============================================================
 // Configuration Interface
@@ -1754,6 +1755,13 @@ async function reconcileBuilderTargets<T>(
   await assertConfiguredAddresses(transformedConfig, builderEntities, table =>
     adapter.tableExists(table)
   );
+  // Their sibling fields, by the one sibling rule and as early: a pair an entity's registry row
+  // does not hold is new and refused; one it holds keeps working.
+  await assertConfiguredSiblingFields(
+    transformedConfig,
+    builderEntities,
+    table => adapter.tableExists(table)
+  );
 
   // A plugin's settings permission has to be one it owns, which is the
   // collector's answer for the config's entities and the seeder's for the
@@ -1794,6 +1802,18 @@ async function reconcileBuilderTargets<T>(
     singles: entities.singles,
     fieldGroups: entities.components,
   });
+  // A field extended onto a Builder entity joins that entity's fields, so a pair it would make
+  // with one already there is judged against the entity's registry row, before anything below
+  // writes.
+  await assertConfiguredSiblingFields(
+    {
+      collections: entities.collections,
+      singles: entities.singles,
+      fieldGroups: entities.components,
+    },
+    builderEntities,
+    table => adapter.tableExists(table)
+  );
 
   // Only touch the DB for entities whose merged field set actually differs
   // from what's persisted — keeps an unchanged/plugin-free boot write-free and

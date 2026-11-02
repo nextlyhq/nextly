@@ -134,6 +134,7 @@ import {
   respondVersionPage,
   readComparisonParams,
 } from "./versions-methods";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 
 // ============================================================
 // Default field helpers
@@ -1091,6 +1092,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields);
+      // A pair of sibling fields this save would create is refused before anything is planned;
+      // one the entity already holds keeps working (judged against the stored fields).
+      assertNoNewSiblingClashes(
+        { kind: "single", slug },
+        fields,
+        single.fields ?? []
+      );
 
       const currentFields = (single.fields ??
         []) as unknown as FieldDefinition[];
@@ -1182,6 +1190,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields);
+      // A pair of sibling fields this save would create is refused before any statement or archive
+      // write; one the entity already holds keeps working. Asked here because this road reaches its
+      // DDL through no shared service that could ask it.
+      assertNoNewSiblingClashes(
+        { kind: "single", slug },
+        fields,
+        single.fields ?? []
+      );
 
       // i18n: prefer the request's localized flag over the persisted one (which may be stale on a
       // simultaneous toggle+field-change save); fall back to the registry value.

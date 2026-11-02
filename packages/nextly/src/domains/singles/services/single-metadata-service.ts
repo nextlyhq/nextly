@@ -79,6 +79,7 @@ import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 /**
  * 🔴 The schema generators, the runtime-schema builder and the companion reconcile are loaded on
@@ -388,6 +389,12 @@ export class SingleMetadataService {
     // the process restarts, even though the registry insert afterwards correctly rejects the
     // duplicate. The insert is what makes the row safe; it is not what makes the process safe.
     await this.assertCreateStillPossible(input);
+    // A new Single holds no pair of sibling fields yet, so every pair it is created with is new.
+    assertNoNewSiblingClashes(
+      { kind: "single", slug: input.slug },
+      input.fields ?? [],
+      null
+    );
 
     // 1. PLAN, before anything is persisted or executed. The generator is a validator as well as a
     // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
@@ -694,6 +701,15 @@ export class SingleMetadataService {
       "../../../api/fields-payload"
     );
     assertValidPluginFieldOptions(args.fields ?? []);
+    // Judged against the fields as stored now, so only a pair of sibling fields this save creates
+    // is refused, and one the Single already holds keeps working.
+    if (args.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "single", slug: current.slug },
+        args.fields,
+        current.fields ?? []
+      );
+    }
 
     // The `was*` flags describe the state being transitioned FROM, so they follow the refreshed
     // record. The `is*`/`has*` flags describe what the request asked for — but only where it

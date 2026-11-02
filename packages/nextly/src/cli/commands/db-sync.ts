@@ -110,6 +110,7 @@ import {
 } from "./dev-build";
 import { ensureCoreTables } from "./dev-server";
 import { createDebouncedSync } from "./dev-watcher";
+import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 
 // ============================================================================
 // Types
@@ -330,10 +331,17 @@ export async function runDbSync(
         await runWithFieldTypes(configResult.fieldTypes, async () => {
           // The configuration's new addresses, judged by the one address rule as a start judges
           // them, before this sync reads or writes any schema.
+          // Its sibling fields too: a pair the registry row does not hold is new and refused.
           const liveAdapter = adapter as unknown as DrizzleAdapter;
+          const registered = await loadBuilderEntities(liveAdapter);
           await assertConfiguredAddresses(
             configResult.config,
-            await loadBuilderEntities(liveAdapter),
+            registered,
+            table => liveAdapter.tableExists(table)
+          );
+          await assertConfiguredSiblingFields(
+            configResult.config,
+            registered,
             table => liveAdapter.tableExists(table)
           );
 

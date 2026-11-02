@@ -43,6 +43,7 @@ import {
 } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
+import { assertNoNewSiblingClashes } from "../domains/schema/sibling-fields";
 
 /**
  * @experimental D63 `admin.nav` filter seam. Lets plugins transform the
@@ -245,6 +246,14 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Same rules as the ui-schema.json mirror (see api/fields-payload).
   assertValidFieldsPayload(validated.fields, { kind: "collection" });
+  // A new collection holds no pair of sibling fields yet, so every pair it is created with is
+  // new. Asked here because this route writes the registry row itself, through the create the
+  // code-first sync also uses after the start has judged it.
+  assertNoNewSiblingClashes(
+    { kind: "collection", slug: validated.slug },
+    validated.fields,
+    null
+  );
 
   const tableName = validated.slug
     .toLowerCase()

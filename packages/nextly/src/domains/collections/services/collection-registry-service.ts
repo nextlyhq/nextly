@@ -50,6 +50,7 @@ import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import type { CollectionDbOptions } from "./collection-db-options";
 import { resolveDescription } from "./collection-sync-service";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 /** Options for updating a collection. */
 export interface UpdateCollectionOptions {
@@ -391,6 +392,16 @@ export class CollectionRegistryService extends BaseRegistryService<
     this.logger.debug("Updating collection", { slug });
 
     const existing = await this.getCollection(slug);
+    // Every road that rewrites a collection's registry row reaches this write, the schema
+    // endpoint's among them, so the sibling rule is asked here too, before the row changes: only a
+    // pair of sibling fields this update creates is refused, and one already held keeps working.
+    if (data.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "collection", slug },
+        data.fields,
+        existing.fields ?? []
+      );
+    }
 
     const targetSlug = data.slug ?? slug;
     await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {

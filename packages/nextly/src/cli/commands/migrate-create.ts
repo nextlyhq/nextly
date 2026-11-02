@@ -125,6 +125,7 @@ import {
 import { bundleAndRequire } from "../utils/config-bundler";
 import { loadConfig } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
+import { assertMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 
 // ============================================================================
 // Types
@@ -436,6 +437,8 @@ export async function runMigrateCreate(
   const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
   // A new address is judged by the one address rule before anything is written.
   assertMigrationAddresses(merged, latest, logger);
+  // And each new pair of sibling fields, against the fields the latest snapshot records.
+  assertMigrationSiblingFields(merged, latest, logger);
   // The rows as the previous snapshot recorded each Builder entity, for a
   // migration that writes a row for its settings alone to write back on the
   // way down. A snapshot with no settings record has none to offer.

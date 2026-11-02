@@ -146,6 +146,7 @@ import {
   requireSnapshotBody,
   readComparisonParams,
 } from "./versions-methods";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 
 type CollectionsHandlerType = CollectionsHandler;
 
@@ -618,6 +619,13 @@ const COLLECTIONS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { kind: "collection" });
+      // A pair of sibling fields this save would create is refused before anything is planned;
+      // one the entity already holds keeps working (judged against the stored fields).
+      assertNoNewSiblingClashes(
+        { kind: "collection", slug: p.collectionName },
+        fields,
+        collection.fields ?? []
+      );
       // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
       // which has tableName, fields: FieldConfig[], and schemaVersion: number.
       // FieldConfig is structurally compatible with FieldDefinition; cast
@@ -752,6 +760,14 @@ const COLLECTIONS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { kind: "collection" });
+      // A pair of sibling fields this save would create is refused before any statement or archive
+      // write; one the entity already holds keeps working. Asked here because this road reaches its
+      // DDL through no shared service that could ask it.
+      assertNoNewSiblingClashes(
+        { kind: "collection", slug: p.collectionName },
+        fields,
+        collection.fields ?? []
+      );
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version

@@ -132,6 +132,8 @@ import {
 } from "../utils/migration-discovery";
 
 import { parseSqlSections } from "./migrate";
+import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
+import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 
 // ============================================================================
 // Types
@@ -464,6 +466,16 @@ export async function runChecks(args: {
   const refused = reportMigrationAddresses(args.entities, latest, logger);
   if (refused.length > 0) {
     return exitWithError(logger, addressRefusalsError(refused));
+  }
+  // Sibling fields, by the one sibling rule: a new pair fails the check; one an entity already
+  // holds (the latest snapshot records it) keeps working and is warned about once.
+  const refusedSiblings = reportMigrationSiblingFields(
+    args.entities,
+    latest,
+    logger
+  );
+  if (refusedSiblings.length > 0) {
+    return exitWithError(logger, siblingClashesErrorFor(refusedSiblings));
   }
 
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);

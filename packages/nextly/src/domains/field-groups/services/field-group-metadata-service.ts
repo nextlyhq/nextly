@@ -53,6 +53,7 @@ import { withSchemaChangeExcluded } from "../../schema/services/schema-change-ex
 import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
 import { recordStrandedTransition } from "./record-stranded-transition";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 /**
  * 🔴 The schema service and the table provisioning are loaded on demand, NOT at the top of this
@@ -209,6 +210,12 @@ export class FieldGroupMetadataService {
       "../../../api/fields-payload"
     );
     assertValidPluginFieldOptions(input.fields);
+    // A new field group holds no pair of sibling fields yet, so every pair it is created with is new.
+    assertNoNewSiblingClashes(
+      { kind: "fieldGroup", slug: input.slug },
+      input.fields,
+      null
+    );
     // A translated field marked unique needs an index this server may not be able to key. Refused
     // here, before the main table: the companion is provisioned after it, and a failure there is
     // recorded rather than raised. With no adapter, nothing is applied at all.
@@ -375,6 +382,13 @@ export class FieldGroupMetadataService {
         "../../../api/fields-payload"
       );
       assertValidPluginFieldOptions(input.fields);
+      // Judged against the fields as stored now, so only a pair of sibling fields this save
+      // creates is refused, and one the field group already holds keeps working.
+      assertNoNewSiblingClashes(
+        { kind: "fieldGroup", slug: input.slug },
+        input.fields,
+        existing.fields ?? []
+      );
     }
 
     const localized = requestedLocalized ?? wasLocalized;
