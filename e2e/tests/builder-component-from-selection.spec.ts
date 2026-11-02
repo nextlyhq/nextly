@@ -10,7 +10,12 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { block, canvasRoot, clickBlock } from "./canvas/editor-driver";
+import {
+  block,
+  canvasRoot,
+  clickBlock,
+  pressSave,
+} from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -91,7 +96,7 @@ async function save(page: Page, pageId: string): Promise<void> {
       ["PATCH", "PUT"].includes(response.request().method()) &&
       response.ok()
   );
-  await page.getByRole("button", { name: /^Save( draft)?$/ }).click();
+  await pressSave(page);
   await saved;
 }
 
