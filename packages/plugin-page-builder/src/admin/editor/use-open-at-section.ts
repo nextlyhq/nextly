@@ -85,18 +85,69 @@ export function useOpenAtSection({
   useEffect(() => {
     const id = pending.current;
     if (canvas === null || typeof id !== "string") return;
-    if (revealNode(canvas, id)) {
+    const stops: (() => void)[] = [];
+    const stop = (): void => {
+      for (const each of stops.splice(0)) each();
+    };
+    const landed = (): void => {
       pending.current = null;
-      return;
+      keepInViewWhileSettling(canvas, id, stops, stop);
+    };
+    if (revealNode(canvas, id)) {
+      landed();
+      return stop;
     }
     // Not drawn yet: try again whenever the canvas's content changes, and stop
     // watching the first time it lands or when the canvas goes away.
     const observer = new MutationObserver(() => {
       if (!revealNode(canvas, id)) return;
-      pending.current = null;
       observer.disconnect();
+      landed();
     });
     observer.observe(canvas, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    stops.push(() => observer.disconnect());
+    return stop;
   }, [canvas]);
+}
+
+/**
+ * How long the editor is given to settle around the section, in ms.
+ *
+ * Exported for the test that waits it out, so the two cannot disagree.
+ */
+export const SETTLE_MS = 2000;
+
+/** What an author does to take over: scroll, point, or type. */
+const TAKE_OVER = ["wheel", "pointerdown", "keydown", "touchstart"] as const;
+
+/**
+ * Keep the section in view while the editor finishes laying out around it.
+ *
+ * Opening Layers adds a panel a render or two after the first scroll and
+ * narrows the canvas; the text above the section reflows and can carry it back
+ * out of view. So the section is revealed again whenever the canvas resizes,
+ * until the author takes over — the first scroll, click or key is theirs, and
+ * pulling them back would fight them — or the editor has had time to settle.
+ */
+function keepInViewWhileSettling(
+  canvas: HTMLElement,
+  id: string,
+  stops: (() => void)[],
+  stop: () => void
+): void {
+  const view = canvas.ownerDocument.defaultView;
+  if (view === null) return;
+  if (typeof view.ResizeObserver !== "undefined") {
+    const observer = new view.ResizeObserver(() => {
+      revealNode(canvas, id);
+    });
+    observer.observe(canvas);
+    stops.push(() => observer.disconnect());
+  }
+  const timer = view.setTimeout(stop, SETTLE_MS);
+  stops.push(() => view.clearTimeout(timer));
+  for (const type of TAKE_OVER) {
+    view.addEventListener(type, stop, { capture: true });
+    stops.push(() => view.removeEventListener(type, stop, { capture: true }));
+  }
 }

@@ -126,6 +126,12 @@ export interface PageMiniatureProps {
 /** One section a person may open from the preview. */
 export interface MiniatureSection {
   id: string;
+  /**
+   * Every top-level node the section is drawn as, when it is more than its
+   * own: a placed component's definition can have several roots. The link
+   * covers them all. Absent means the section is `id` alone.
+   */
+  parts?: readonly string[];
   name: string;
   href: string;
 }
@@ -146,26 +152,46 @@ interface Box {
 const MIN_TARGET = 24;
 
 /**
- * Where a section's link goes: over the section, grown to the least target
- * height about its own middle and kept within the page's on-screen height.
- * Unmeasured, it takes no room rather than covering the page.
+ * One axis of a section's link: its start and length, grown to the least
+ * target about its own middle and kept within the page along that axis, whose
+ * frame clips anything past its edges. A section at an edge grows inward; a
+ * page shorter than the target cannot hold it, and starts at the edge.
  */
-function linkBox(box: Box | undefined, pageHeight: number): CSSProperties {
-  if (box === undefined) return { top: 0, left: 0, width: 0, height: 0 };
-  if (box.height >= MIN_TARGET) return box;
-  const centred = box.top - (MIN_TARGET - box.height) / 2;
-  // Kept inside the page, whose frame clips anything past its edges: a thin
-  // first or last section grows inward instead. A page shorter than the
-  // target cannot hold it, and starts at the top.
-  const top = Math.max(0, Math.min(centred, pageHeight - MIN_TARGET));
+function growAxis(
+  start: number,
+  length: number,
+  limit: number
+): { start: number; length: number } {
+  if (length >= MIN_TARGET) return { start, length };
+  const centred = start - (MIN_TARGET - length) / 2;
   return {
-    ...box,
-    top,
-    height: MIN_TARGET,
-    // Above its neighbours, whose links it now overlaps: drawn later, they
-    // would otherwise cover most of it again. They lose a few pixels of a
-    // target many times larger.
-    zIndex: 1,
+    start: Math.max(0, Math.min(centred, limit - MIN_TARGET)),
+    length: MIN_TARGET,
+  };
+}
+
+/**
+ * Where a section's link goes: over the section, grown to the least target in
+ * each direction and kept within the page's on-screen box. Unmeasured, it
+ * takes no room rather than covering the page.
+ */
+function linkBox(
+  box: Box | undefined,
+  page: { width: number; height: number }
+): CSSProperties {
+  if (box === undefined) return { top: 0, left: 0, width: 0, height: 0 };
+  const down = growAxis(box.top, box.height, page.height);
+  const across = growAxis(box.left, box.width, page.width);
+  const grown = down.length !== box.height || across.length !== box.width;
+  return {
+    top: down.start,
+    height: down.length,
+    left: across.start,
+    width: across.length,
+    // A grown link is drawn above its neighbours, whose links it now
+    // overlaps: drawn later, they would otherwise cover most of it again.
+    // They lose a few pixels of a target many times larger.
+    ...(grown ? { zIndex: 1 } : {}),
   };
 }
 
@@ -193,15 +219,21 @@ function measureBoxes(
     if (id !== null && !drawn.has(id)) drawn.set(id, element);
   }
   const boxes: Record<string, Box> = {};
-  for (const { id } of sections) {
-    const element = drawn.get(id);
-    if (element === undefined) continue;
-    const rect = element.getBoundingClientRect();
+  for (const { id, parts = [id] } of sections) {
+    // The smallest box around every part that is drawn.
+    const rects = parts
+      .map(part => drawn.get(part)?.getBoundingClientRect())
+      .filter(rect => rect !== undefined);
+    if (rects.length === 0) continue;
+    const top = Math.min(...rects.map(rect => rect.top));
+    const left = Math.min(...rects.map(rect => rect.left));
+    const bottom = Math.max(...rects.map(rect => rect.bottom));
+    const right = Math.max(...rects.map(rect => rect.right));
     boxes[id] = {
-      top: rect.top - origin.top,
-      left: rect.left - origin.left,
-      width: rect.width,
-      height: rect.height,
+      top: top - origin.top,
+      left: left - origin.left,
+      width: right - left,
+      height: bottom - top,
     };
   }
   return boxes;
@@ -372,13 +404,13 @@ function ScaledPage({
 function SectionLinks({
   sections,
   boxes,
-  pageHeight,
+  page,
   onNavigate,
 }: {
   sections: readonly MiniatureSection[];
   boxes: Record<string, Box>;
-  /** The page's height on screen, which no link may extend past. */
-  pageHeight: number;
+  /** The page's size on screen, which no link may extend past. */
+  page: { width: number; height: number };
   onNavigate: (href: string) => void;
 }): JSX.Element {
   return (
@@ -390,7 +422,7 @@ function SectionLinks({
           aria-label={section.name}
           data-slot="page-miniature-section"
           className="absolute block rounded-sm outline-none ring-inset ring-primary/60 hover:ring-2 focus-visible:ring-2 focus-visible:ring-ring"
-          style={linkBox(boxes[section.id], pageHeight)}
+          style={linkBox(boxes[section.id], page)}
           {...navigateWithin(section.href, onNavigate)}
         />
       ))}
@@ -505,7 +537,10 @@ export function PageMiniature({
             <SectionLinks
               sections={sections}
               boxes={boxes}
-              pageHeight={composedHeight * scale}
+              page={{
+                width: renderWidth * scale,
+                height: composedHeight * scale,
+              }}
               onNavigate={onNavigate}
             />
           )}

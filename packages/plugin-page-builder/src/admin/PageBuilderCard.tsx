@@ -492,6 +492,7 @@ function sectionLinks(
     hrefFor,
     inPicture: sections.map(section => ({
       id: section.id,
+      parts: section.parts,
       name: sectionName(section, "Section"),
       href: hrefFor(section),
     })),

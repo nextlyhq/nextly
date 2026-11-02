@@ -249,7 +249,10 @@ describe("PageMiniature", () => {
 function stubLayout(sizes: {
   frameWidth: number;
   pageHeight: number;
-  boxes?: Record<string, { top: number; height: number }>;
+  boxes?: Record<
+    string,
+    { top: number; height: number; left?: number; width?: number }
+  >;
   /** Where the page's own box starts on screen. */
   pageTop?: number;
 }): () => void {
@@ -283,14 +286,16 @@ function stubLayout(sizes: {
       this.dataset.slot === "page-miniature-page";
     const top = box?.top ?? (isPage ? (sizes.pageTop ?? 0) : 0);
     const h = box?.height ?? 0;
+    const left = box?.left ?? 0;
+    const w = box?.width ?? 100;
     return {
       top,
       bottom: top + h,
-      left: 0,
-      right: 100,
-      width: 100,
+      left,
+      right: left + w,
+      width: w,
       height: h,
-      x: 0,
+      x: left,
       y: top,
       toJSON: () => ({}),
     };
@@ -513,6 +518,64 @@ describe("PageMiniature's sections", () => {
     const bottom = screen.getByRole("link", { name: /Section 2/ });
     expect(bottom.style.top).toBe("476px");
     expect(bottom.style.height).toBe("24px");
+  });
+
+  it("gives a narrow section a target at least 24 px wide, inside the page", () => {
+    // A block drawn a few pixels wide — an icon, a thin rule standing on end —
+    // is as hard to hit across as a divider is down. Half scale: the page is
+    // 640 px wide on screen, so one at its right edge grows leftward.
+    restore = stubLayout({
+      frameWidth: 640,
+      pageHeight: 1000,
+      boxes: {
+        a: { top: 0, height: 100, left: 300, width: 4 },
+        b: { top: 200, height: 100, left: 636, width: 4 },
+      },
+    });
+    render(
+      <PageMiniature
+        document={twoSections}
+        siteStyles={undefined}
+        render={RENDER}
+        sections={sections}
+        onNavigate={() => {}}
+      />
+    );
+
+    const middle = screen.getByRole("link", { name: /Section 1/ });
+    expect(middle.style.width).toBe("24px");
+    expect(middle.style.left).toBe("290px");
+    const edge = screen.getByRole("link", { name: /Section 2/ });
+    expect(edge.style.width).toBe("24px");
+    expect(edge.style.left).toBe("616px");
+  });
+
+  it("covers every part of a section drawn as several, such as a placed component", () => {
+    // One placed component drawn as two roots is one section: its link spans
+    // both, from the first's top to the last's bottom and across their widths.
+    restore = stubLayout({
+      frameWidth: 640,
+      pageHeight: 1000,
+      boxes: {
+        a: { top: 10, height: 100, left: 0, width: 300 },
+        b: { top: 110, height: 50, left: 20, width: 400 },
+      },
+    });
+    render(
+      <PageMiniature
+        document={twoSections}
+        siteStyles={undefined}
+        render={RENDER}
+        sections={[
+          { id: "a", parts: ["a", "b"], name: "Section 1, Band", href: "/x" },
+        ]}
+        onNavigate={() => {}}
+      />
+    );
+
+    const band = screen.getByRole("link", { name: "Section 1, Band" });
+    expect([band.style.top, band.style.height]).toEqual(["10px", "150px"]);
+    expect([band.style.left, band.style.width]).toEqual(["0px", "420px"]);
   });
 
   it("opens a section within the admin on a plain click, and on Space", () => {

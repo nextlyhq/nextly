@@ -13,9 +13,9 @@
  */
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useOpenAtSection } from "./use-open-at-section";
+import { SETTLE_MS, useOpenAtSection } from "./use-open-at-section";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -136,5 +136,77 @@ describe("useOpenAtSection", () => {
 
     expect(scroll).toHaveBeenCalledTimes(1);
     expect(select).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useOpenAtSection while the editor settles", () => {
+  /** Resize observers created, so a test can report a resize as layout would. */
+  let resized: (() => void)[] = [];
+  beforeEach(() => {
+    resized = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private live = true;
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        observe(): void {
+          // A disconnected observer reports nothing, as a real one does.
+          resized.push(() => {
+            if (!this.live) return;
+            act(() => this.callback([], this as unknown as ResizeObserver));
+          });
+        }
+        disconnect(): void {
+          this.live = false;
+        }
+      }
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  const resize = (): void => resized.forEach(report => report());
+
+  it("keeps the section in view as the canvas resizes around it", () => {
+    // Opening Layers adds a panel and narrows the canvas a render or two
+    // after the first scroll; the text above the section reflows, and the
+    // section can move back out of view.
+    const canvas = canvasElement();
+    const scroll = drawn(canvas, "plans");
+    setup("plans", canvas);
+    expect(scroll).toHaveBeenCalledTimes(1);
+
+    resize();
+
+    expect(scroll).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets go as soon as the author scrolls, clicks or types", () => {
+    const canvas = canvasElement();
+    const scroll = drawn(canvas, "plans");
+    setup("plans", canvas);
+
+    act(() => {
+      window.dispatchEvent(new WheelEvent("wheel"));
+    });
+    resize();
+
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets go once the editor has had time to settle", () => {
+    vi.useFakeTimers();
+    const canvas = canvasElement();
+    const scroll = drawn(canvas, "plans");
+    setup("plans", canvas);
+
+    act(() => {
+      vi.advanceTimersByTime(SETTLE_MS);
+    });
+    resize();
+
+    expect(scroll).toHaveBeenCalledTimes(1);
   });
 });

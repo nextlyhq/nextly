@@ -44,6 +44,7 @@
 import {
   deriveSeoFromDocument,
   type BlockDocument,
+  type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import {
   prepareDocumentAsDrawn,
@@ -58,6 +59,11 @@ import { documentNodes } from "./page-summary";
 export interface PageSection {
   /** The id the section is drawn with, which is how the preview finds it. */
   id: string;
+  /**
+   * Every top-level node the section is drawn as, `id` first: one for an
+   * author's own block, each root of a placed component's definition.
+   */
+  parts: readonly string[];
   /** The id the builder opens at: the placed instance it came from, or itself. */
   target: string;
   /** Its place on the page, counting from 1. */
@@ -98,25 +104,48 @@ export function pageSections(
 
   const lookup = (type: string) => resolver.get(type);
   const stored = new Map(documentNodes(value).map(node => [node.id, node]));
-  return prepared.nodes.map((node, index) => {
-    // `instanceOf` is set by component resolution on every node a definition
-    // contributed, naming the instance on the page; an author's own node has
-    // none.
-    const host = (node as { instanceOf?: unknown }).instanceOf;
-    const target = typeof host === "string" ? host : node.id;
+  return groupByTarget(prepared.nodes).map(({ target, nodes }, index) => {
     // Every node is offered: the tree was already gated above, so nothing left
     // in it is withheld from the reader this describes.
     const text = deriveSeoFromDocument(
-      { ...prepared, nodes: [node] },
+      { ...prepared, nodes },
       lookup,
       () => true
     );
+    const first = nodes[0];
     return {
-      id: node.id,
+      id: first.id,
+      parts: nodes.map(node => node.id),
       target,
       number: index + 1,
-      label: layerLabel(stored.get(target) ?? node, lookup),
+      label: layerLabel(stored.get(target) ?? first, lookup),
       firstLine: text.title ?? text.description ?? "",
     };
   });
+}
+
+/**
+ * The drawn top-level nodes, gathered by what the author placed.
+ *
+ * `instanceOf` is set by component resolution on every node a definition
+ * contributed, naming the instance on the page; an author's own node has none
+ * and stands alone. A placed component whose definition has several top-level
+ * nodes is one thing the author placed, so its roots — drawn one after another
+ * where the instance stood — are one section.
+ */
+function groupByTarget(
+  nodes: readonly BlockNode[]
+): { target: string; nodes: BlockNode[] }[] {
+  const groups: { target: string; nodes: BlockNode[] }[] = [];
+  for (const node of nodes) {
+    const host = (node as { instanceOf?: unknown }).instanceOf;
+    const target = typeof host === "string" ? host : node.id;
+    const last = groups.at(-1);
+    if (typeof host === "string" && last?.target === target) {
+      last.nodes.push(node);
+    } else {
+      groups.push({ target, nodes: [node] });
+    }
+  }
+  return groups;
 }

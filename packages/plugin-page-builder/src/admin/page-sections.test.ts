@@ -104,6 +104,7 @@ describe("pageSections", () => {
       {
         id: "hero",
         target: "hero",
+        parts: ["hero"],
         number: 1,
         label: "Section",
         firstLine: "Welcome to Acme",
@@ -111,6 +112,7 @@ describe("pageSections", () => {
       {
         id: "intro",
         target: "intro",
+        parts: ["intro"],
         number: 2,
         label: "Text",
         firstLine: "Plain words first.",
@@ -118,6 +120,7 @@ describe("pageSections", () => {
       {
         id: "rule",
         target: "rule",
+        parts: ["rule"],
         number: 3,
         label: "Divider",
         firstLine: "",
@@ -125,6 +128,7 @@ describe("pageSections", () => {
       {
         id: "plans",
         target: "plans",
+        parts: ["plans"],
         number: 4,
         label: "Pricing",
         firstLine: "Plans for teams",
@@ -132,6 +136,7 @@ describe("pageSections", () => {
       {
         id: "contact",
         target: "contact",
+        parts: ["contact"],
         number: 5,
         label: "Heading",
         firstLine: "Contact us",
@@ -203,6 +208,52 @@ describe("pageSections", () => {
     );
     // An ordinary section opens at its own id.
     expect(sections[0]?.target).toBe("intro");
+  });
+
+  it("lists a placed component with several top-level parts as one section", () => {
+    // The author placed ONE thing. Listed per drawn root, it showed as several
+    // sections that all opened the same instance, and the list's numbers no
+    // longer counted what the author placed.
+    const instance = {
+      id: "i1",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "band" },
+    } as BlockNode;
+    const withBand = pageRenderInputs({
+      siteStyle: undefined,
+      clientConfig: undefined,
+      previewContainer: undefined,
+      limits: DEFAULT_LIMITS,
+      definitions: new Map([
+        [
+          "band",
+          {
+            ...page([
+              block("d1", "core/heading", { text: "Band title" }),
+              block("d2", "core/text", { text: "Band words" }),
+            ]),
+            kind: "component",
+          },
+        ],
+      ]) as never,
+    });
+
+    const sections = pageSections(
+      page([instance, block("after", "core/heading", { text: "After" })]),
+      entryBlockResolver(),
+      withBand
+    );
+
+    expect(sections.map(({ target, number }) => [target, number])).toEqual([
+      ["i1", 1],
+      ["after", 2],
+    ]);
+    const band = sections[0];
+    // Both drawn roots belong to it, so the preview can cover the whole of it.
+    expect(band?.parts).toHaveLength(2);
+    expect(band?.parts[0]).toBe(band?.id);
+    expect(band?.firstLine).toBe("Band title");
   });
 
   it("keeps a block the preview draws as a placeholder in its place", () => {
