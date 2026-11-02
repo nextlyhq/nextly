@@ -1138,6 +1138,9 @@ export class FieldGroupQueryService extends BaseService {
           });
         }
       } catch (error) {
+        // As the single and repeatable reads do: a strict reader is told,
+        // since a zone read without one of its kinds is not the zone stored.
+        if (read.strict && !isMissingComponentTableError(error)) throw error;
         this.logger.debug("Could not load component for batch populate", {
           slug,
           error: error instanceof Error ? error.message : String(error),

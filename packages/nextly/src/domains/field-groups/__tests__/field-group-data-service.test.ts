@@ -1070,6 +1070,45 @@ describe("FieldGroupDataService", () => {
     });
   });
 
+  // A caller judging documents by what they hold (a publish) reads strictly:
+  // a field it failed to read must not stand in as an empty one, which an
+  // optional field or a permissive validator would then accept.
+  describe("populateComponentDataMany (batch), strict", () => {
+    const strictRead = (fields: Record<string, unknown>[]) =>
+      ctx.service.populateComponentDataMany({
+        entries: [{ id: "entry-1" }, { id: "entry-2" }],
+        parentTable: "dc_pages",
+        fields: fields as never,
+        strict: true,
+      });
+
+    it("refuses a component field whose instances could not be read", async () => {
+      ctx.adapter.select.mockRejectedValue(new Error("connection reset"));
+
+      await expect(strictRead([seoComponentField()])).rejects.toThrow(
+        "connection reset"
+      );
+    });
+
+    it("refuses a zone whose instances could not be read", async () => {
+      ctx.adapter.select.mockRejectedValue(new Error("connection reset"));
+
+      await expect(strictRead([multiComponentField()])).rejects.toThrow(
+        "connection reset"
+      );
+    });
+
+    it("reads a zone whose component table is not there yet as holding nothing", async () => {
+      ctx.adapter.select.mockRejectedValue(
+        new Error("no such table: comp_hero")
+      );
+
+      const result = await strictRead([multiComponentField()]);
+
+      expect(result.map(entry => entry.layout)).toEqual([[], []]);
+    });
+  });
+
   describe("populateComponentDataMany (batch)", () => {
     it("populates multiple entries with one query per component field (N+1 prevention)", async () => {
       ctx.adapter.select.mockResolvedValue([
