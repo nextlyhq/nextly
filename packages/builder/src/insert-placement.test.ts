@@ -44,6 +44,14 @@ beforeEach(() => {
         contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
       },
       { ...base, name: "t/heading" },
+      {
+        ...base,
+        name: "t/accordion",
+        // Plain flow itself, and seeded with a Button: what the insert builds
+        // is clickable even though the block's own props say nothing of it.
+        slots: { items: { defaultBlock: [{ type: "t/button" }] } },
+        contentModel: () => ({ is: ["flow"] }),
+      },
     ] as never,
     { source: "test" }
   );
@@ -69,7 +77,11 @@ function offeredInside(card: BlockNode): string[] {
     { kind: "slot", parentType: card.type, slot: "children" },
     registryNestingSource(),
     undefined,
-    { site, sources }
+    {
+      site,
+      sources,
+      expansion: { definitions: registryBlockSource(), nesting: undefined },
+    }
   ).map(entry => entry.blockName);
 }
 
@@ -89,5 +101,25 @@ describe("the Add panel under the one placement rule", () => {
   it("offers the Button inside the same card with its link off", () => {
     const plain: BlockNode = { id: "c", type: "t/card", version: 1, props: {} };
     expect(offeredInside(plain)).toContain("t/button");
+  });
+
+  it("judges a block with the children its insert seeds, not as an empty shell", () => {
+    // The Accordion alone is plain flow; the Button its slot starts with is
+    // what the linked card refuses. Judged as `{ type, props }` it is offered
+    // and the click that follows is refused.
+    const linked: BlockNode = {
+      id: "c",
+      type: "t/card",
+      version: 1,
+      props: { link: "/go" },
+    };
+    expect(offeredInside(linked)).not.toContain("t/accordion");
+  });
+
+  it("offers the same Accordion inside the card with its link off", () => {
+    // The control: the Accordion is in the catalog and placeable, so its
+    // absence above is the seeded Button's doing.
+    const plain: BlockNode = { id: "c", type: "t/card", version: 1, props: {} };
+    expect(offeredInside(plain)).toContain("t/accordion");
   });
 });

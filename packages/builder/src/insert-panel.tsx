@@ -52,7 +52,6 @@ import {
   allBlocks,
   placementSiteIn,
   planInsertPattern,
-  registryBlockSource,
   registryNestingSource,
   type AnyBlockDefinition,
   type BlockDocument,
@@ -60,7 +59,6 @@ import {
   type ComponentLookup,
   type NestingSource,
   type OpPosition,
-  type PlacementSite,
   type PlacementSources,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
@@ -89,6 +87,7 @@ import {
   componentEntriesFrom,
   nodeForComponentEntry,
   nodeForEntry,
+  type EntryPlacement,
   patternEntriesFrom,
   registrySlotSource,
   type BlockInsertEntry,
@@ -728,27 +727,20 @@ export function InsertPanel({
     slotSource
   );
 
-  // Computed on every render rather than memoised. `insertionPointFor` builds a
-  // fresh target each call, so a memo keyed on it could never hit — it would
-  // recompute exactly as often while reading as though it cached. The work is a
-  // filter and a group over one array, and the render it happens in is already
-  // driven by a keystroke.
-  // The canvas's lookup travels with the question: a pattern whose root is a
-  // component instance is judged by what that component draws, as its own
-  // tile is.
-  const offered =
-    point === null
-      ? []
-      : // The canvas's lookup travels with the question: a pattern whose root
-        // is a component instance is judged by what that component draws, and
-        // each entry by the one placement rule at the insertion point.
-        allowedEntries(
-          catalog,
-          point.target,
-          source,
-          componentDefinitions,
-          placementAt(editor.document, point.at, source, componentDefinitions)
-        );
+  // Remembered by what the verdicts depend on — the document, the point, the
+  // catalog and the rule's sources — and not by the query, so a keystroke asks
+  // no rule anything: judging a pattern walks its forest and a component
+  // composes its definition, once per entry. The point is keyed by value,
+  // because `insertionPointFor` builds a fresh one on every render.
+  const offerCache = React.useRef<OfferCache | undefined>(undefined);
+  const offered = cachedOffer(offerCache, {
+    document: editor.document,
+    point,
+    catalog,
+    source,
+    components: componentDefinitions,
+    expansion: { definitions: blockSource, nesting },
+  });
   // Per store, point and offer, so typing a query asks the locks nothing
   // again: the store's object changes with every document it holds, and the
   // point and the offer are rebuilt each render, so they are keyed by value.
@@ -1079,30 +1071,113 @@ export function InsertPanel({
   );
 }
 
+/** What an offer was computed from, and the offer. */
+interface OfferCache {
+  readonly document: unknown;
+  readonly point: string;
+  readonly catalog: unknown;
+  readonly source: unknown;
+  readonly components: unknown;
+  readonly definitions: unknown;
+  readonly nesting: unknown;
+  readonly offered: readonly InsertEntry[];
+}
+
+/** What the entries offered at a point are judged from. */
+interface OfferInputs {
+  readonly document: BlockDocument;
+  readonly point: InsertionPoint | null;
+  readonly catalog: readonly InsertEntry[];
+  readonly source: NestingSource;
+  readonly components: ComponentLookup | undefined;
+  readonly expansion: EntryPlacement["expansion"];
+}
+
+/**
+ * The entries the rules accept at the point, judged again only when an input
+ * the verdicts read has changed. Every input is compared by identity except
+ * the point, which is rebuilt per render and so is compared by value.
+ */
+function cachedOffer(
+  cache: { current: OfferCache | undefined },
+  inputs: OfferInputs
+): readonly InsertEntry[] {
+  const point = JSON.stringify(inputs.point);
+  const held = cache.current;
+  if (
+    held !== undefined &&
+    held.document === inputs.document &&
+    held.point === point &&
+    held.catalog === inputs.catalog &&
+    held.source === inputs.source &&
+    held.components === inputs.components &&
+    held.definitions === inputs.expansion.definitions &&
+    held.nesting === inputs.expansion.nesting
+  ) {
+    return held.offered;
+  }
+  const offered = offerAt(inputs);
+  cache.current = {
+    document: inputs.document,
+    point,
+    catalog: inputs.catalog,
+    source: inputs.source,
+    components: inputs.components,
+    definitions: inputs.expansion.definitions,
+    nesting: inputs.expansion.nesting,
+    offered,
+  };
+  return offered;
+}
+
+/**
+ * The entries the rules accept at the point. The canvas's lookup travels with
+ * the question: a pattern whose root is a component instance is judged by
+ * what that component draws, and each entry by the one placement rule at the
+ * insertion point.
+ */
+function offerAt(inputs: OfferInputs): readonly InsertEntry[] {
+  const { point } = inputs;
+  if (point === null) return [];
+  return allowedEntries(
+    inputs.catalog,
+    point.target,
+    inputs.source,
+    inputs.components,
+    placementAt(inputs, point.at)
+  );
+}
+
 /**
  * The insertion point as the one placement rule sees it, with what its
  * ancestors refuse. Undefined when the position's parent is not in the
  * document, which the name rules then judge alone.
+ *
+ * The rule reads block declarations from the palette's own source, the one
+ * its catalog and its inserts read, so a definition the host supplied is the
+ * one judged rather than the registry's under the same name.
  */
 function placementAt(
-  document: BlockDocument,
-  at: OpPosition,
-  nesting: NestingSource,
-  components: ComponentLookup | undefined
-): { site: PlacementSite; sources: PlacementSources } | undefined {
+  inputs: OfferInputs,
+  at: OpPosition
+): EntryPlacement | undefined {
   const sources: PlacementSources = {
-    nesting,
-    definitions: registryBlockSource(),
-    ...(components === undefined ? {} : { components }),
+    nesting: inputs.source,
+    definitions: inputs.expansion.definitions,
+    ...(inputs.components === undefined
+      ? {}
+      : { components: inputs.components }),
   };
   const site = placementSiteIn(
-    document.nodes,
+    inputs.document.nodes,
     at.parentId === undefined
       ? { kind: "root" }
       : { kind: "slot", parentId: at.parentId, slot: at.slot ?? "" },
     sources
   );
-  return site === undefined ? undefined : { site, sources };
+  return site === undefined
+    ? undefined
+    : { site, sources, expansion: inputs.expansion };
 }
 
 /** The last lock verdicts an inserter asked for, and what they were for. */

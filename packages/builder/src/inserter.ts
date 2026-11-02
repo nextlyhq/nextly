@@ -922,29 +922,54 @@ export function allowedEntries<TEntry extends InsertEntry>(
   definitions?: ComponentLookup,
   /**
    * The insertion point as the one placement rule sees it: the site, with what
-   * its ancestors refuse. Absent, entries are judged by the name rules alone.
+   * its ancestors refuse, and what an insert expands a block's starting
+   * children from. Absent, entries are judged by the name rules alone.
    */
-  placement?: {
-    readonly site: PlacementSite;
-    readonly sources: PlacementSources;
-  }
+  placement?: EntryPlacement
 ): TEntry[] {
   return entries.filter(
     entry =>
       entryAllowedAt(entry, target, source, definitions).allowed &&
       (placement === undefined ||
-        canPlace(insertedBy(entry), placement.site, placement.sources).allowed)
+        canPlace(
+          insertedBy(entry, placement.expansion),
+          placement.site,
+          placement.sources
+        ).allowed)
   );
 }
 
+/** What {@link allowedEntries} needs to judge entries by the one placement rule. */
+export interface EntryPlacement {
+  readonly site: PlacementSite;
+  readonly sources: PlacementSources;
+  /**
+   * The pair a click insert hands {@link nodeForEntry}, so a block is judged
+   * with exactly the children its insert seeds.
+   */
+  readonly expansion: {
+    readonly definitions: SlotDefaultSource;
+    readonly nesting: NestingSource | undefined;
+  };
+}
+
 /**
- * What an entry would insert, as the placement rule reads it: a block with
- * the props it starts with, a pattern's blocks, or a component placement.
+ * What an entry would insert, as the placement rule reads it: a block as
+ * {@link nodeForEntry} builds it, starting children included, a pattern's
+ * blocks, or a component placement.
+ *
+ * A block is built by the insert's own function rather than described as its
+ * type and props: a block whose slot starts with a clickable child is refused
+ * under a linked card for that child, and judging the empty shell would offer
+ * a row whose click the store then refuses.
  */
-function insertedBy(entry: InsertEntry): readonly PlacedNode[] {
+function insertedBy(
+  entry: InsertEntry,
+  expansion: EntryPlacement["expansion"]
+): readonly PlacedNode[] {
   switch (entry.kind) {
     case "block":
-      return [{ type: entry.blockName, props: entry.props }];
+      return [nodeForEntry(entry, expansion.definitions, expansion.nesting)];
     case "pattern":
       return entry.document.nodes;
     case "component":
