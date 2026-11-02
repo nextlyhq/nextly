@@ -34,6 +34,7 @@ import {
   useSingleDocument,
   useUpdateSingleDocument,
   validationIssues,
+  writePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   createContext,
@@ -44,6 +45,11 @@ import {
   type Context,
 } from "react";
 
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  SITE_BREAKPOINTS_ROUTE_PATH,
+  type SiteBreakpointsRequest,
+} from "../library-contract";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import {
   readSiteStyleRecord,
@@ -275,7 +281,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     scopeId: SITE_STYLE_SLUG,
   });
   // The stored document, read at the moment of a save rather than closed over.
-  const { data } = useSingleDocument(SITE_STYLE_SLUG);
+  const { data, refetch } = useSingleDocument(SITE_STYLE_SLUG);
   const stored = useRef(data);
   stored.current = data;
   const history = useContext(SiteStyleHistoryContext);
@@ -286,7 +292,19 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       value: unknown
     ): Promise<SiteStyleSaveResult> => {
       try {
-        await mutation.mutateAsync({ [section]: value });
+        if (section === "breakpoints") {
+          // The site's breakpoints change through Settings' route, the one
+          // write the Single lets change them. The document is read again
+          // after, as the Single's own update leaves it.
+          await writePluginRoute<SiteBreakpointsRequest>({
+            plugin: PAGE_BUILDER_PLUGIN_NAME,
+            path: SITE_BREAKPOINTS_ROUTE_PATH,
+            body: { breakpoints: value },
+          });
+          await refetch();
+        } else {
+          await mutation.mutateAsync({ [section]: value });
+        }
         return { saved: true, issues: {} };
       } catch (reason) {
         // Caught rather than propagated, because a studio needs the reason
@@ -308,7 +326,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         return { saved: false, issues };
       }
     },
-    [mutation]
+    [mutation, refetch]
   );
 
   /**

@@ -223,20 +223,20 @@ test("the nearest marker decides which mode a scoped sheet applies", async ({
   page,
 }) => {
   await page.setContent(`
-    <div data-nx-theme="light"><div data-nx-theme="dark"><div id="dark-nearer" class="scope"></div></div></div>
-    <div data-nx-theme="dark"><div data-nx-theme="light"><div id="light-nearer" class="scope"></div></div></div>
-    <div data-nx-theme="light"><div id="self-dark" class="scope" data-nx-theme="dark"></div></div>
+    <div data-nx-theme="light"><div data-nx-theme="dark"><div data-testid="dark-nearer" class="scope">probe</div></div></div>
+    <div data-nx-theme="dark"><div data-nx-theme="light"><div data-testid="light-nearer" class="scope">probe</div></div></div>
+    <div data-nx-theme="light"><div data-testid="self-dark" class="scope" data-nx-theme="dark">probe</div></div>
   `);
+  // Each probe found by its test id, and asked which sheet's selector it
+  // matches. Each holds a word, so it has a box: the suite finds by test id
+  // only what is visible.
   const modeOf = (id: string) =>
-    page.evaluate(
-      ([target, dark, light]) => {
-        const element = document.getElementById(target ?? "");
-        return {
-          dark: element?.matches(dark ?? "") ?? false,
-          light: element?.matches(light ?? "") ?? false,
-        };
-      },
-      [id, SCOPED_DARK, SCOPED_LIGHT]
+    page.getByTestId(id).evaluate(
+      (element, [dark, light]) => ({
+        dark: element.matches(dark ?? ""),
+        light: element.matches(light ?? ""),
+      }),
+      [SCOPED_DARK, SCOPED_LIGHT]
     );
   expect(await modeOf("dark-nearer")).toEqual({ dark: true, light: false });
   expect(await modeOf("light-nearer")).toEqual({ dark: false, light: true });

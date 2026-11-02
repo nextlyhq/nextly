@@ -51,7 +51,7 @@ has no item at all, so nothing on the rail opens an empty panel.
 | **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                  |
 | **Layers**   | The page as a tree. Select, expand and move blocks here as on the canvas.                                                                                                                                                                                                                                                  |
 | **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts**. A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. |
-| **Settings** | The entry's other fields, such as its title, slug and SEO. It appears only when the entry has fields besides the page itself.                                                                                                                                                                                              |
+| **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                       |
 | **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                |
 
 Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
@@ -59,6 +59,32 @@ Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
 The editor remembers the panel you left open, and on Design the tab you left on, the
 next time you open it. It remembers them for you, not for the browser, so two people
 who share a browser each find their own.
+
+## Settings
+
+**Settings** at the bottom of the rail opens a dialog with two tabs.
+
+**This page** holds the entry's own fields, such as its title, address and SEO, as the
+entry's page draws them. They save with the page, from **Save** or **Publish** in the top
+bar. Below them, a preview shows roughly how a link to the page looks when it is shared.
+It uses the SEO fields where the page has them, then the page's first heading, text and
+image, then its title. Your site's own metadata may differ. Pressing Enter in a field
+never saves the page.
+
+**Site** applies to the live site as soon as you change it. You see it only if your role
+may manage the page builder's site settings.
+
+- **Breakpoints** lists the site's devices, in the same words as the device buttons.
+  **Edit breakpoints** opens the editor in place. **Save breakpoints** stores the whole
+  set at once, after checking it, and **Cancel** leaves it as it was. If you close
+  Settings with an edit open, it asks before throwing the edit away.
+- **Default Layout** is the Layout pages without one of their own are shown in. Choosing
+  another saves it at once and says **Saved**, or **Not saved** with **Retry**. Changing
+  it also needs the rights to update and publish Layouts. Without them, you can see it
+  but not change it.
+
+The site's breakpoints change only here. A write to the site style that changes them
+any other way, through the API or the site style's own form, is refused.
 
 ## Moving blocks in Layers
 
@@ -70,9 +96,11 @@ leaves the block where it was. Press <kbd>Escape</kbd> to cancel a drag. Draggin
 while a search filters the list.
 
 Every move also works without dragging: select the block and press
-<kbd>Alt</kbd>+<kbd>↑</kbd>, <kbd>Alt</kbd>+<kbd>↓</kbd>, <kbd>Alt</kbd>+<kbd>→</kbd> or
-<kbd>Alt</kbd>+<kbd>←</kbd>, or right-click it on the canvas and choose **Move up**,
-**Move down**, **Move in** or **Move out**.
+
+<kbd>Alt</kbd>+<kbd>↑</kbd>, <kbd>Alt</kbd>+<kbd>↓</kbd>, <kbd>Alt</kbd>+
+<kbd>→</kbd> or
+<kbd>Alt</kbd>+<kbd>←</kbd>, or right-click it on the canvas and choose **Move
+up**, **Move down**, **Move in** or **Move out**.
 
 ## Help
 
