@@ -230,7 +230,7 @@ function CheckboxControl({
       <Switch
         id={id}
         disabled={disabled}
-        checked={prop.value === true}
+        checked={(prop.value ?? prop.defaultValue) === true}
         onCheckedChange={checked => onCommit(prop.name, checked)}
       />
       <Label htmlFor={id}>{label ?? propLabel(prop.name, prop.schema)}</Label>
@@ -259,7 +259,9 @@ function SelectControl({
 }: ContentControlProps): React.JSX.Element {
   const name = label ?? propLabel(prop.name, prop.schema);
   const labels = prop.options.map(option => optionLabel(prop.schema, option));
-  const stored = typeof prop.value === "string" ? prop.value : undefined;
+  // The stored choice, or the block's default while none is stored.
+  const shown = prop.value ?? prop.defaultValue;
+  const stored = typeof shown === "string" ? shown : undefined;
   // A stored value outside the options is shown by the menu, which can say
   // what it is; a row of buttons would show none chosen and replace it.
   const segmented =

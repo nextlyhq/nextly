@@ -80,6 +80,12 @@ export interface EditableProp {
    * so the author sees the value and is told why it holds.
    */
   readonly readOnly: boolean;
+  /**
+   * What the block holds when the prop was never set: its `defaultProps`
+   * entry, or `undefined`. A switch or a choice shows it until a value is
+   * stored, since it is the value that applies.
+   */
+  readonly defaultValue?: unknown;
 }
 
 /**
@@ -349,6 +355,9 @@ export function inspectSelection(
           name,
           schema,
           value: node.props[name],
+          defaultValue: (
+            definition.defaultProps as Record<string, unknown> | undefined
+          )?.[name],
           supported: hasContentControl(schema.type),
           options: optionsOf(schema),
           readOnly: designLock !== undefined && !content.has(name),

@@ -291,3 +291,58 @@ describe("a few short options in a row", () => {
     expect(view.getByRole("combobox", { name: "Kind" })).toBeDefined();
   });
 });
+
+describe("a prop never set", () => {
+  function registerDefaults(): void {
+    registerBlocks(
+      [
+        {
+          name: "acme/every",
+          version: 1,
+          description: "Defaults.",
+          example: { props: {} },
+          editor: { label: "Every" },
+          props: {
+            full: { type: "checkbox", label: "Allow full screen" },
+            loading: {
+              type: "select",
+              label: "Loading",
+              options: ["lazy", "eager"],
+            },
+          },
+          defaultProps: { full: true, loading: "lazy" },
+          render: () => null,
+        },
+      ] as never,
+      { source: "content-controls-test" }
+    );
+  }
+
+  it("shows the block's default, since that is the value that applies", () => {
+    registerDefaults();
+    const view = render(<InspectorPanel editor={editorFor(documentOf())} />);
+    expect(
+      view
+        .getByRole("switch", { name: "Allow full screen" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+    expect(
+      view.getByRole("radio", { name: "lazy" }).getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  it("shows a stored value over the default", () => {
+    registerDefaults();
+    const document = documentOf();
+    (document.nodes[0] as BlockNode).props = { full: false, loading: "eager" };
+    const view = render(<InspectorPanel editor={editorFor(document)} />);
+    expect(
+      view
+        .getByRole("switch", { name: "Allow full screen" })
+        .getAttribute("aria-checked")
+    ).toBe("false");
+    expect(
+      view.getByRole("radio", { name: "eager" }).getAttribute("aria-checked")
+    ).toBe("true");
+  });
+});
