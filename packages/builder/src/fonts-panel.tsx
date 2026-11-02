@@ -65,7 +65,7 @@ export interface FontsPanelProps {
   /** Why the faces are absent, when they are. */
   absence?: "pending" | "failed";
   /**
-   * Open the tokens panel, when the host offers one.
+   * Open the variables (the site's tokens), when the host offers them.
    *
    * The fix for a token naming a family this site does not provide is to edit
    * that token, and editing it belongs to the studio. Offering the jump rather
@@ -498,7 +498,7 @@ function TokenNotes({
                 className="nx-fonts__jump"
                 onClick={onOpenTokens}
               >
-                Edit in Tokens
+                Edit in Variables
               </button>
             </>
           )}

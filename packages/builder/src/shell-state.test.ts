@@ -13,6 +13,7 @@ import {
   DEFAULT_PREFERENCES,
   fitsFullShell,
   isLeftPanel,
+  RAIL_GROUPS,
   LEFT_PANELS,
   MIN_CANVAS_PANEL_WIDTH,
   MIN_CANVAS_WIDTH,
@@ -56,20 +57,18 @@ describe("which panel the rail selects", () => {
     // shrinks by one, and everything remaining passes. A vanishing test reads
     // exactly like a passing one.
     expect([...LEFT_PANELS].sort()).toEqual([
-      "classes",
+      "add",
       "components",
-      "fonts",
-      "insert",
+      "design",
       "layers",
       "pages",
       "settings",
-      "tokens",
     ]);
   });
 
   it("opens the panel that was clicked", () => {
     expect(panelAfterRailClick(null, "layers")).toBe("layers");
-    expect(panelAfterRailClick("insert", "layers")).toBe("layers");
+    expect(panelAfterRailClick("add", "layers")).toBe("layers");
   });
 
   it("closes the open panel when its own rail item is clicked again", () => {
@@ -119,7 +118,7 @@ describe("the bounds the library is handed", () => {
   it("declares a canvas floor that per-panel bounds cannot express", () => {
     // This is the number that decided the design, kept as an assertion so the
     // reasoning cannot quietly stop being true. Both panels at their individual
-    // maximums on the minimum supported viewport leave the canvas at 232px —
+    // maximums on the minimum supported viewport leave the canvas at 196px —
     // narrower than either panel — with no per-panel bound violated.
     const canvasIfPanelsMaxed =
       MIN_SHELL_WIDTH -
@@ -160,7 +159,10 @@ describe("the bounds the library is handed", () => {
 
 describe("preferences round-trip", () => {
   const stored: ShellPreferences = {
-    leftPanel: "tokens",
+    leftPanel: "design",
+    // Non-default, so the round trip carries the open panel's tab rather
+    // than passing on a default that a read which drops it also produces.
+    leftPanelView: "fonts",
     leftPinned: false,
     layouts: {
       "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
@@ -234,6 +236,7 @@ describe("preferences round-trip", () => {
     // takes the author's panel choice with it.
     expect(readPreferences(store)).toEqual({
       leftPanel: "layers",
+      leftPanelView: null,
       leftPinned: DEFAULT_PREFERENCES.leftPinned,
       layouts: { "canvas,inspector": { canvas: 70, inspector: 30 } },
       // Absent from the stored JSON above, so it falls back the same way
@@ -302,5 +305,89 @@ describe("the show-empty-elements preference", () => {
       showEmptyElements: false,
     });
     expect(readPreferences(store).showEmptyElements).toBe(false);
+  });
+});
+
+describe("the rail's items, in the order an author meets them", () => {
+  it("puts the daily tools at the top and Settings at the bottom", () => {
+    expect(RAIL_GROUPS.top).toEqual([
+      "add",
+      "layers",
+      "pages",
+      "components",
+      "design",
+    ]);
+    expect(RAIL_GROUPS.bottom).toEqual(["settings"]);
+  });
+
+  it("covers every panel exactly once between the two groups", () => {
+    expect([...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom].sort()).toEqual(
+      [...LEFT_PANELS].sort()
+    );
+  });
+});
+
+/*
+ * Panels stored by an earlier release, under the ids the rail used before it
+ * was relabelled. Each is mapped to where its contents live now, explicitly —
+ * not dropped as unknown, which would close the panel an author left open.
+ */
+describe("preferences saved before panels had parts", () => {
+  it("load whole, with no part chosen", () => {
+    // Written by the editor before the Design panel's tabs existed: no
+    // leftPanelView, and an old panel id. Every other preference must survive.
+    const yesterday = {
+      leftPanel: "layers",
+      leftPinned: false,
+      zoom: 1.5,
+      layouts: {
+        "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
+      },
+      showEmptyElements: false,
+    };
+    expect(readPreferences(memoryStore(JSON.stringify(yesterday)))).toEqual({
+      leftPanel: "layers",
+      leftPanelView: null,
+      leftPinned: false,
+      zoom: { kind: "fixed", scale: 1.5 },
+      layouts: {
+        "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
+      },
+      showEmptyElements: false,
+    });
+  });
+});
+
+describe("a panel stored under an id from before the rail was relabelled", () => {
+  it.each([
+    ["insert", "add", null],
+    ["tokens", "design", "variables"],
+    ["classes", "design", "classes"],
+    ["fonts", "design", "fonts"],
+  ] as const)("opens %s as %s, on %s", (stored, panel, view) => {
+    const read = readPreferences(
+      memoryStore(JSON.stringify({ leftPanel: stored }))
+    );
+    expect(read.leftPanel).toBe(panel);
+    expect(read.leftPanelView).toBe(view);
+  });
+
+  it("keeps the view stored with a current id", () => {
+    const read = readPreferences(
+      memoryStore(
+        JSON.stringify({ leftPanel: "design", leftPanelView: "classes" })
+      )
+    );
+    expect(read).toMatchObject({
+      leftPanel: "design",
+      leftPanelView: "classes",
+    });
+  });
+
+  it("ignores a view that is not a string", () => {
+    const read = readPreferences(
+      memoryStore(JSON.stringify({ leftPanel: "design", leftPanelView: 4 }))
+    );
+    expect(read.leftPanelView).toBeNull();
   });
 });
