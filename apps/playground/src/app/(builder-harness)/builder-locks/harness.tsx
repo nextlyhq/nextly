@@ -107,10 +107,11 @@ export function BuilderLocksHarness({ seed }: { seed: "placed" | "broken" }) {
     >
       <BuilderShell
         notices={notices}
-        availablePanels={["insert"]}
+        // The rail's panel that holds the inserter, which it names "Add".
+        availablePanels={["add"]}
         inspector={<InspectorPanel editor={editor} />}
         renderPanel={panel =>
-          panel === "insert" ? <InsertPanel editor={editor} /> : null
+          panel === "add" ? <InsertPanel editor={editor} /> : null
         }
       >
         <BlockKeyboardActions
