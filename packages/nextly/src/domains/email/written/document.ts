@@ -194,8 +194,6 @@ const listBlockSchema = z
   })
   .strict();
 
-export type ListBlock = z.infer<typeof listBlockSchema>;
-
 const blockSchema = z.discriminatedUnion("type", [
   ...contentBlocks,
   listBlockSchema,

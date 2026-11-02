@@ -21,7 +21,7 @@ import {
 } from "./document";
 
 /** The columns a written template stores. */
-export interface WrittenFields {
+interface WrittenFields {
   format: "written";
   blocks: WrittenDocument;
   htmlContent: string;
@@ -29,7 +29,7 @@ export interface WrittenFields {
 }
 
 /** A save's blocks, checked; a refusal names each field that failed. */
-export function parseWrittenDocument(blocks: unknown): WrittenDocument {
+function parseWrittenDocument(blocks: unknown): WrittenDocument {
   const parsed = writtenDocumentSchema.safeParse(blocks);
   if (!parsed.success) {
     // The validation envelope every route uses, with each path under
@@ -47,7 +47,7 @@ export function parseWrittenDocument(blocks: unknown): WrittenDocument {
 }
 
 /** The stored fields of a written template with these blocks. */
-export function writtenFields(blocks: unknown): WrittenFields {
+function writtenFields(blocks: unknown): WrittenFields {
   const document = parseWrittenDocument(blocks);
   return {
     format: "written",
