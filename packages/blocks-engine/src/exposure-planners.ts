@@ -42,7 +42,11 @@ import {
   type ExposedProperty,
   type ExposedPropertyType,
 } from "./document";
-import { MAX_ENVELOPE_ENTRIES } from "./limits";
+import {
+  DEFAULT_LIMITS,
+  MAX_ENVELOPE_ENTRIES,
+  type DocumentLimits,
+} from "./limits";
 import { isPlainRecord } from "./plain-record";
 import type { RetiredExposures } from "./retired-exposures";
 import { RICH_TEXT_PROP_TYPE } from "./rich-text";
@@ -62,10 +66,16 @@ import {
  * reads only the type of such an exposure. The envelope still requires a path
  * in the binding grammar, so it holds this one, which the inspector already
  * uses.
+ *
+ * @experimental Settles when the component editor that uses it ships.
  */
 export const VISIBILITY_PROP_PATH = "visibility";
 
-/** What an exposure drives: one prop of a node, or the node's visibility. */
+/**
+ * What an exposure drives: one prop of a node, or the node's visibility.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export type ExposureTarget =
   | {
       readonly nodeId: string;
@@ -80,10 +90,18 @@ export type ExposureTarget =
       readonly propPath?: undefined;
     };
 
-/** A new exposure: what it drives, and what the inspector calls it. */
+/**
+ * A new exposure: what it drives, and what the inspector calls it.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export type ExposeRequest = ExposureTarget & { readonly label: string };
 
-/** What the planners read besides the definition itself. */
+/**
+ * What the planners read besides the definition itself.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export interface ExposureSources {
   /**
    * The block definitions, for each prop's declared type and role and each
@@ -92,9 +110,19 @@ export interface ExposureSources {
   readonly definitions: SlotDefaultSource;
   /** The ids this component has retired, never to be minted again. */
   readonly retired?: RetiredExposures;
+  /**
+   * The host's document limits, which its save judges the definition under.
+   * Defaults to the engine's. A host that raised `maxNodes` passes its own, or
+   * a target past the default cap would read as missing.
+   */
+  readonly limits?: DocumentLimits;
 }
 
-/** Why an edit was refused. */
+/**
+ * Why an edit was refused.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export type ExposureEditProblem =
   /** The document is not a component definition, or cannot be read as one. */
   | "not-a-component"
@@ -113,7 +141,11 @@ export type ExposureEditProblem =
   /** The edited envelope would fail the definition's own save. */
   | "invalid-exposure";
 
-/** One variant a removal took a value from. */
+/**
+ * One variant a removal took a value from.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export interface PrunedVariant {
   /** The variant's key, which placements store. */
   readonly variant: string;
@@ -122,7 +154,11 @@ export interface PrunedVariant {
   readonly emptied: boolean;
 }
 
-/** An edit the definition's save would accept. */
+/**
+ * An edit the definition's save would accept.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export interface ExposureEdit {
   /** The whole edited definition. The one passed in is never changed. */
   readonly document: ComponentDocument;
@@ -139,13 +175,22 @@ export interface ExposureEdit {
   readonly warnings: readonly ValidationIssue[];
 }
 
-/** A refused edit. */
+/**
+ * A refused edit.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export interface ExposureEditRefusal {
   readonly problem: ExposureEditProblem;
   /** The envelope errors, for `"invalid-exposure"`. */
   readonly issues?: readonly ValidationIssue[];
 }
 
+/**
+ * What every planner here answers: the edit, or why it was refused.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export type ExposureEditResult = ExposureEdit | ExposureEditRefusal;
 
 /**
@@ -159,6 +204,8 @@ export type ExposureEditResult = ExposureEdit | ExposureEditRefusal;
  * An image exposes the MEDIA prop, the value the image control writes as its
  * source of truth; the block resolves its address from that, so one exposure
  * drives one path.
+ *
+ * @experimental Settles when the component editor that uses it ships.
  */
 export function exposureTypeForProp(
   schema: PropSchema | undefined
@@ -186,6 +233,8 @@ export function exposureTypeForProp(
  *
  * The id is minted from the label, past every live and retired id, and kept
  * from then on whatever the field is later renamed to.
+ *
+ * @experimental Settles when the component editor that uses it ships.
  */
 export function planExposeProperty(
   definition: BlockDocument,
@@ -197,20 +246,26 @@ export function planExposeProperty(
   const label = cleanLabel(request.label);
   if (label === undefined) return { problem: "invalid-label" };
 
-  const pointed = pointAt(draft, request, sources.definitions);
+  const limits = sources.limits ?? DEFAULT_LIMITS;
+  const pointed = pointAt(draft, request, sources.definitions, limits);
   if ("problem" in pointed) return pointed;
 
   const exposed = draft.exposed ?? [];
   const id = mintId(label, takenIds(exposed, sources.retired));
   draft.exposed = [...exposed, { id, label, ...pointed }];
-  return finished(draft, id, NOTHING_RETIRED, []);
+  return finished(draft, id, NOTHING_RETIRED, [], limits);
 }
 
-/** Rename a field. The id, and so every placement's value, is unchanged. */
+/**
+ * Rename a field. The id, and so every placement's value, is unchanged.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export function planRenameExposure(
   definition: BlockDocument,
   id: string,
-  label: string
+  label: string,
+  limits: DocumentLimits = DEFAULT_LIMITS
 ): ExposureEditResult {
   const draft = editable(definition);
   if ("problem" in draft) return draft;
@@ -222,7 +277,7 @@ export function planRenameExposure(
   const exposed = [...(draft.exposed ?? [])];
   exposed[at] = { ...exposed[at], label: clean };
   draft.exposed = exposed;
-  return finished(draft, id, NOTHING_RETIRED, []);
+  return finished(draft, id, NOTHING_RETIRED, [], limits);
 }
 
 /**
@@ -233,6 +288,8 @@ export function planRenameExposure(
  * one added in its place, under the same label, with a new id: the old id is
  * retired and pruned from the variants, exactly as {@link planRemoveExposure}
  * does, and {@link ExposureEdit.retired} says so for the caller's dialog.
+ *
+ * @experimental Settles when the component editor that uses it ships.
  */
 export function planRetargetExposure(
   definition: BlockDocument,
@@ -244,22 +301,34 @@ export function planRetargetExposure(
   if ("problem" in draft) return draft;
   const at = exposureIndex(draft, id);
   if (at === undefined) return { problem: "unknown-exposure" };
-  const pointed = pointAt(draft, target, sources.definitions);
-  if ("problem" in pointed) return pointed;
-
+  const limits = sources.limits ?? DEFAULT_LIMITS;
   const exposed = [...(draft.exposed ?? [])];
   const current = exposed[at];
+  // Re-pointing reads the stored label and choices, so they are asked first:
+  // an imported row may hold anything there, and reading a malformed one
+  // throws where this promises a refusal. Renaming and removing read neither,
+  // and stay open as the way to repair such an entry.
+  if (!isUsableExposure(current)) {
+    return {
+      problem: "invalid-exposure",
+      issues: componentEnvelopeIssues(draft, limits).filter(isErrorIssue),
+    };
+  }
+  const pointed = pointAt(draft, target, sources.definitions, limits);
+  if ("problem" in pointed) return pointed;
+
   if (keepsValues(current, pointed)) {
     exposed[at] = { id, label: current.label, ...pointed };
     draft.exposed = exposed;
-    return finished(draft, id, NOTHING_RETIRED, []);
+    return finished(draft, id, NOTHING_RETIRED, [], limits);
   }
 
   const fresh = mintId(current.label, takenIds(exposed, sources.retired));
   exposed[at] = { id: fresh, label: current.label, ...pointed };
   draft.exposed = exposed;
   const pruned = pruneVariants(draft, id);
-  return finished(draft, fresh, { properties: [id], slots: [] }, pruned);
+  const retired = { properties: [id], slots: [] };
+  return finished(draft, fresh, retired, pruned, limits);
 }
 
 /**
@@ -267,10 +336,13 @@ export function planRetargetExposure(
  *
  * Placements keep their values until the caller strips them; the retired id
  * is what tells every later write to.
+ *
+ * @experimental Settles when the component editor that uses it ships.
  */
 export function planRemoveExposure(
   definition: BlockDocument,
-  id: string
+  id: string,
+  limits: DocumentLimits = DEFAULT_LIMITS
 ): ExposureEditResult {
   const draft = editable(definition);
   if ("problem" in draft) return draft;
@@ -279,7 +351,7 @@ export function planRemoveExposure(
 
   draft.exposed = (draft.exposed ?? []).filter((_, i) => i !== at);
   const pruned = pruneVariants(draft, id);
-  return finished(draft, id, { properties: [id], slots: [] }, pruned);
+  return finished(draft, id, { properties: [id], slots: [] }, pruned, limits);
 }
 
 /**
@@ -288,10 +360,13 @@ export function planRemoveExposure(
  * The content placements gave it is no longer drawn anywhere, and goes when
  * the caller strips the retired id. Variants hold no slot content, so there is
  * nothing to prune.
+ *
+ * @experimental Settles when the component editor that uses it ships.
  */
 export function planRemoveExposedSlot(
   definition: BlockDocument,
-  slotId: string
+  slotId: string,
+  limits: DocumentLimits = DEFAULT_LIMITS
 ): ExposureEditResult {
   const draft = editable(definition);
   if ("problem" in draft) return draft;
@@ -305,7 +380,8 @@ export function planRemoveExposedSlot(
   );
   if (Object.keys(kept).length === 0) delete draft.slots;
   else draft.slots = kept;
-  return finished(draft, slotId, { properties: [], slots: [slotId] }, []);
+  const retired = { properties: [], slots: [slotId] };
+  return finished(draft, slotId, retired, [], limits);
 }
 
 const NOTHING_RETIRED: RetiredExposures = { properties: [], slots: [] };
@@ -352,6 +428,25 @@ function editable(
     problem: "invalid-exposure",
     issues: componentEnvelopeIssues(draft).filter(isErrorIssue),
   };
+}
+
+/**
+ * Whether a stored exposure has the label and choices re-pointing reads: a
+ * non-empty label, and for a select a list of `{ value, label }` strings.
+ */
+function isUsableExposure(entry: unknown): entry is ExposedProperty {
+  if (!isPlainRecord(entry)) return false;
+  if (typeof entry.label !== "string" || entry.label === "") return false;
+  if (entry.type !== "select") return true;
+  return (
+    Array.isArray(entry.options) &&
+    entry.options.every(
+      option =>
+        isPlainRecord(option) &&
+        typeof option.value === "string" &&
+        typeof option.label === "string"
+    )
+  );
 }
 
 /**
@@ -404,9 +499,12 @@ type Pointer = Omit<ExposedProperty, "id" | "label">;
 function pointAt(
   definition: ComponentDocument,
   target: ExposureTarget,
-  definitions: SlotDefaultSource
+  definitions: SlotDefaultSource,
+  limits: DocumentLimits
 ): Pointer | ExposureEditRefusal {
-  const node = nodeLocks(definition.nodes, definitions).get(target.nodeId);
+  const node = nodeLocks(definition.nodes, definitions, limits.maxNodes).get(
+    target.nodeId
+  );
   if (node === undefined) return { problem: "unknown-node" };
   const locked = node.area !== undefined;
 
@@ -541,9 +639,11 @@ function finished(
   document: ComponentDocument,
   id: string,
   retired: RetiredExposures,
-  prunedVariants: PrunedVariant[]
+  prunedVariants: PrunedVariant[],
+  limits: DocumentLimits
 ): ExposureEditResult {
-  const issues = componentEnvelopeIssues(document);
+  // Under the host's limits, as its save judges the definition.
+  const issues = componentEnvelopeIssues(document, limits);
   if (issues.some(isErrorIssue)) {
     return { problem: "invalid-exposure", issues: issues.filter(isErrorIssue) };
   }

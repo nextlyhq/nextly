@@ -31,16 +31,26 @@ import { boundedOwnKeys } from "./safe-record";
  * Two lists because they are two namespaces: a placement keys its field values
  * by exposure id in `props.overrides`, and its slot content by exposed slot id
  * in its own `slots`. A field and a slot may share a spelling.
+ *
+ * @experimental Settles when the component editor that uses it ships.
  */
 export interface RetiredExposures {
   readonly properties: readonly string[];
   readonly slots: readonly string[];
 }
 
-/** Each component's retired ids, by component id. */
+/**
+ * Each component's retired ids, by component id.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export type RetiredByComponent = ReadonlyMap<string, RetiredExposures>;
 
-/** A document with every retired value taken out, and how many there were. */
+/**
+ * A document with every retired value taken out, and how many there were.
+ *
+ * @experimental Settles when the component editor that uses it ships.
+ */
 export interface StrippedDocument<TDocument extends BlockDocument> {
   /**
    * The SAME object that was passed in when {@link removed} is 0, so a caller
@@ -73,6 +83,8 @@ export interface StrippedDocument<TDocument extends BlockDocument> {
  * Bounded by the HOST's node cap, the one its document gate accepts, so a site
  * that raised it has every placement it stores reached: a placement past a
  * smaller bound would keep a value its designer confirmed removed.
+ *
+ * @experimental Settles when the component editor that uses it ships.
  */
 export function stripRetiredExposures<TDocument extends BlockDocument>(
   document: TDocument,

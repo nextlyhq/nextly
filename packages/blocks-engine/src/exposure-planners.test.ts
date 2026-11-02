@@ -513,6 +513,81 @@ describe("a malformed envelope is refused, not thrown on", () => {
   });
 });
 
+describe("a host that raised its node cap", () => {
+  it("finds a target past the default cap", () => {
+    const filler = Array.from({ length: 5_000 }, (_, i) => card(`f${i}`));
+    const large = component({
+      nodes: [...filler, ...component().nodes],
+    });
+
+    const edit = edited(
+      planExposeProperty(
+        large,
+        { label: "Body", nodeId: "c1", propPath: "body" },
+        {
+          ...sources(),
+          limits: {
+            maxDepth: 64,
+            maxNodes: 10_000,
+            maxBytes: 64 * 1024 * 1024,
+          },
+        }
+      )
+    );
+
+    expect(edit.document.exposed?.at(-1)?.nodeId).toBe("c1");
+  });
+});
+
+describe("a malformed stored exposure is refused, not thrown on", () => {
+  it("refuses a type change of an exposure whose label is not text", () => {
+    const broken = component({
+      exposed: [
+        {
+          id: "title",
+          label: 42,
+          nodeId: "c1",
+          propPath: "title",
+          type: "text",
+        },
+      ] as never,
+    });
+
+    expect(
+      planRetargetExposure(
+        broken,
+        "title",
+        { nodeId: "c1", propPath: "body" },
+        sources()
+      )
+    ).toMatchObject({ problem: "invalid-exposure" });
+  });
+
+  it("refuses re-pointing a select whose stored choices are not a list", () => {
+    const broken = component({
+      exposed: [
+        {
+          id: "tone",
+          label: "Tone",
+          nodeId: "c1",
+          propPath: "tone",
+          type: "select",
+          options: "light",
+        },
+      ] as never,
+    });
+
+    expect(
+      planRetargetExposure(
+        broken,
+        "tone",
+        { nodeId: "c1", propPath: "shade" },
+        sources()
+      )
+    ).toMatchObject({ problem: "invalid-exposure" });
+  });
+});
+
 describe("a planner refuses what is not a component", () => {
   it("refuses a pattern", () => {
     const pattern = { ...component(), kind: "pattern" } as never;
