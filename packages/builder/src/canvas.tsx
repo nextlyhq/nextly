@@ -2086,6 +2086,21 @@ export function Canvas({
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
       /*
+       * How the SITE darkens, for the stylesheet.
+       *
+       * The canvas draws the page in the site's colours rather than the
+       * admin's, so its own scheme turns dark only when the site's would. A
+       * site on the `media` strategy darkens with the visitor's system, and
+       * only the token set says which strategy it uses — CSS cannot read it —
+       * so the stated strategy is carried here and the sheet pairs it with
+       * the media query. Absent when the host serves no site sheet.
+       */
+      data-nx-site-dark-mode={
+        typeof siteStyles === "object"
+          ? (siteStyles.tokens?.darkMode ?? "attribute")
+          : undefined
+      }
+      /*
        * What the pointer means, for the cursor.
        *
        * On the ROOT rather than per block, because a cursor during a drag is a

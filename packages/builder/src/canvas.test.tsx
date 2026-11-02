@@ -41,6 +41,8 @@ import {
   previewStateClass,
   registerBlocks,
   STYLE_STATES,
+  type BlockDocument,
+  type SiteSheetInput,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
@@ -3221,5 +3223,44 @@ describe("a link drawn on the canvas", () => {
     if (help === null) throw new Error("expected the overlay's link");
 
     expect(fireEvent.click(help)).toBe(true);
+  });
+});
+
+describe("the site's dark-mode strategy on the canvas root", () => {
+  /*
+   * The stylesheet darkens the canvas page with the system only for a site on
+   * the `media` strategy, and only the token set says which strategy that is.
+   * So the root has to carry it, and carry the DEFAULT when a site states none:
+   * an absent strategy is `attribute`, which the system's scheme never reaches.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function strategyOf(siteStyles: SiteSheetInput | false): string | null {
+    const { container } = render(
+      <Canvas document={page} siteStyles={siteStyles} />
+    );
+    return (
+      container
+        .querySelector(`.${CANVAS_ROOT_CLASS}`)
+        ?.getAttribute("data-nx-site-dark-mode") ?? null
+    );
+  }
+
+  it("states `media` for a site that darkens with the system", () => {
+    expect(
+      strategyOf({ breakpoints, tokens: { tokens: [], darkMode: "media" } })
+    ).toBe("media");
+  });
+
+  it("states `attribute` for a site that names no strategy", () => {
+    expect(strategyOf({ breakpoints, tokens: { tokens: [] } })).toBe(
+      "attribute"
+    );
+    expect(strategyOf({ breakpoints })).toBe("attribute");
+  });
+
+  it("states nothing when the host serves no site sheet", () => {
+    expect(strategyOf(false)).toBeNull();
   });
 });
