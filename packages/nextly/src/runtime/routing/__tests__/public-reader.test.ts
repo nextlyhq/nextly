@@ -5,6 +5,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  currentCallerScope,
+  currentRequestCaller,
+  runWithCallerScope,
+  runWithRequestCaller,
+  type RequestCaller,
+} from "../../../auth/caller-scope";
+import { mergeConfig } from "../../../direct-api/namespaces/helpers";
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import {
   createPublicReader,
   toPublicFind,
   type PublicReadQuery,
@@ -31,6 +40,62 @@ describe("toPublicFind", () => {
     // Present and undefined, so no default underneath can name a user.
     expect("user" in args).toBe(true);
     expect((args as { user?: unknown }).user).toBeUndefined();
+  });
+
+  it("clears every identity an instance's defaults could carry into the read", () => {
+    // The Direct API spreads its defaults under each call; the merged result
+    // is what the read is judged by.
+    const merged = mergeConfig(
+      {
+        overrideAccess: true,
+        user: { id: "staff" },
+        actor: { actorType: "apiKey" } as unknown as AuthenticatedScope,
+        fieldAccessUser: { id: "editor" },
+        trusted: {} as never,
+        req: {} as never,
+        request: new Request("https://example.test"),
+        context: { tenant: "a" },
+        showHiddenFields: true,
+      },
+      toPublicFind({ collection: "posts" })
+    );
+    expect(merged).toMatchObject({
+      overrideAccess: false,
+      showHiddenFields: false,
+    });
+    for (const key of [
+      "user",
+      "actor",
+      "fieldAccessUser",
+      "trusted",
+      "req",
+      "request",
+      "context",
+    ] as const) {
+      expect(merged[key], key).toBeUndefined();
+    }
+  });
+
+  it.each([
+    [{ select: "title" }, "select"],
+    [{ populate: "author" }, "populate"],
+    [{ filters: { field: "title" } }, "filters"],
+    [
+      { filters: [{ field: "title", op: "equals", value: { $ne: 1 } }] },
+      "filters.0.value",
+    ],
+    [{ sort: 5 }, "sort"],
+    [{ limit: "10" }, "limit"],
+    [{ collection: 7 }, "collection"],
+  ])("refuses %j as the wrong type, naming where", (bad, where) => {
+    const message = refusal(() =>
+      toPublicFind({
+        collection: "posts",
+        ...bad,
+      } as unknown as PublicReadQuery)
+    );
+    expect(message).toContain("public-read-query-invalid");
+    expect(message).toContain(where);
   });
 
   it.each([
@@ -117,6 +182,13 @@ describe("toPublicFind", () => {
 
   it("always sends a sort, so an unsorted list is in id order", () => {
     expect(toPublicFind({ collection: "posts" }).sort).toEqual([]);
+    // A string that names no key is no sort, not a string core drops whole.
+    for (const sort of ["", " ", ",", " , "]) {
+      expect(toPublicFind({ collection: "posts", sort }).sort).toEqual([]);
+    }
+    expect(
+      toPublicFind({ collection: "posts", sort: "title, -date" }).sort
+    ).toEqual(["title", "-date"]);
     expect(toPublicFind({ collection: "posts", sort: ["-date"] }).sort).toEqual(
       ["-date"]
     );
@@ -146,19 +218,16 @@ describe("toPublicFind", () => {
 });
 
 describe("createPublicReader", () => {
-  it("reads through find with the mapped arguments and answers items and total", async () => {
-    const find = vi.fn(async () => ({
-      items: [{ id: "1" }],
-      meta: { total: 7 },
-    }));
-    const count = vi.fn(async () => ({ total: 3 }));
+  it("reads through find with the mapped arguments and answers the list envelope", async () => {
+    const meta = { total: 7, page: 1, limit: 10, totalPages: 1 };
+    const find = vi.fn(async () => ({ items: [{ id: "1" }], meta, extra: 1 }));
     const reader = createPublicReader(
-      { find, count } as unknown as Parameters<typeof createPublicReader>[0],
+      { find } as unknown as Parameters<typeof createPublicReader>[0],
       { locale: "en" }
     );
     await expect(reader.find({ collection: "posts" })).resolves.toEqual({
       items: [{ id: "1" }],
-      total: 7,
+      meta,
     });
     expect(find).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -167,16 +236,62 @@ describe("createPublicReader", () => {
         locale: "en",
       })
     );
-    await expect(reader.count({ collection: "posts" })).resolves.toBe(3);
-    expect(count).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "published", overrideAccess: false })
+  });
+
+  it("counts with a one-row read of ids, in the query's language", async () => {
+    const find = vi.fn(async () => ({
+      items: [{ id: "1" }],
+      meta: { total: 3 },
+    }));
+    const reader = createPublicReader({ find } as unknown as Parameters<
+      typeof createPublicReader
+    >[0]);
+    await expect(
+      reader.count({
+        collection: "posts",
+        filters: [{ field: "title", op: "contains", value: "a" }],
+        locale: "fr",
+      })
+    ).resolves.toBe(3);
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: "posts",
+        where: { and: [{ title: { contains: "a" } }] },
+        limit: 1,
+        select: { id: true },
+        locale: "fr",
+        status: "published",
+        overrideAccess: false,
+        unknownSort: "refuse",
+      })
     );
+  });
+
+  it("reads detached from the request it runs in, so no caller's key judges it", async () => {
+    const seen: unknown[] = [];
+    const find = vi.fn(async () => {
+      seen.push(currentCallerScope(), currentRequestCaller());
+      return { items: [], meta: { total: 0 } };
+    });
+    const reader = createPublicReader({ find } as unknown as Parameters<
+      typeof createPublicReader
+    >[0]);
+    const scope = { actorType: "apiKey" } as unknown as AuthenticatedScope;
+    const caller = { userId: "u1" } as unknown as RequestCaller;
+    await runWithRequestCaller(caller, () =>
+      runWithCallerScope(scope, async () => {
+        // The control: the scope is pinned where the reader is called.
+        expect(currentCallerScope()).toBe(scope);
+        await reader.find({ collection: "posts" });
+        await reader.count({ collection: "posts" });
+      })
+    );
+    expect(seen).toEqual([undefined, undefined, undefined, undefined]);
   });
 
   it("offers the two reads and nothing else", () => {
     const reader = createPublicReader({
       find: vi.fn(),
-      count: vi.fn(),
     } as unknown as Parameters<typeof createPublicReader>[0]);
     expect(Object.keys(reader).sort()).toEqual(["count", "find"]);
     expect(Object.isFrozen(reader)).toBe(true);

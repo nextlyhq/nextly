@@ -34,7 +34,8 @@ page's lists should go through. It takes a list's query as data (typed filter ro
 keys, `limit`, `offset`, `page`, `select`, `populate`) and fixes the access options:
 published entries only, the anonymous visitor's read rules, no field the public may not
 read, and unknown sort keys refused. Any option that would widen the read is refused by
-name.
+name, and the read runs detached from any request in flight. `find` answers the canonical
+`{ items, meta }`; `count` answers a number.
 
 A collection read also takes `unknownSort: "refuse"` (`@experimental`), which refuses a
 sort key that names no sortable field, naming each one, instead of dropping it with a

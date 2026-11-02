@@ -309,7 +309,8 @@ const { ContentPage, generateMetadata } = createBlocksPage({
     find: async query => {
       if (!isLoopCollection(query.collection)) return { items: [], total: 0 };
       // Published entries and public fields only, as an anonymous visitor reads them.
-      return createPublicReader(await instance()).find(query);
+      const { items, meta } = await createPublicReader(await instance()).find(query);
+      return { items, total: meta.total };
     },
   },
 });
