@@ -37,11 +37,12 @@
  * @module layers-lock-guard
  */
 import { layersLockChanges } from "@nextlyhq/blocks-engine";
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginFieldIssue } from "@nextlyhq/plugin-sdk";
 import type { HookContext } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
+import type { BlocksFieldDescriptor } from "./class-usage-subjects";
 import type { LayersLockUnjudged } from "./fields/blocks-composition";
 import { layersLockIssuesFor } from "./fields/layers-lock-judgement";
 import { requestContextFor, SINGLE_HOOK_NAMESPACE } from "./write-target";
@@ -128,64 +129,107 @@ async function newestStored(
   return recordOf(read) ?? original;
 }
 
+/** The update a hook judges: what it writes, the row it replaces, where. */
+interface JudgedUpdate {
+  readonly data: Record<string, unknown>;
+  readonly original: Record<string, unknown>;
+  readonly slug: string;
+  readonly id: string;
+}
+
+/**
+ * The update this hook can judge, or `null` when it declines: no data or no
+ * stored row in hand, a Single, or a row without a usable id.
+ */
+function updateOf(context: HookContext<unknown>): JudgedUpdate | null {
+  const data = recordOf(context.data);
+  const original = recordOf(context.originalData);
+  const slug = context.collection;
+  if (data === null || original === null) return null;
+  if (typeof slug !== "string" || slug.startsWith(SINGLE_HOOK_NAMESPACE)) {
+    return null;
+  }
+  const id = original.id;
+  if (typeof id !== "string" || id === "") return null;
+  return { data, original, slug, id };
+}
+
+/**
+ * The top-level blocks fields this update empties, read from the collection's
+ * live configuration only once the write is known to empty something: almost
+ * every update empties no field, and then the hook costs nothing.
+ */
+async function emptiedBlocksFields(
+  args: Parameters<typeof registerLayersLockGuard>[0],
+  context: HookContext<unknown>,
+  update: JudgedUpdate
+): Promise<BlocksFieldDescriptor[]> {
+  const emptied = Object.keys(update.data).filter(key =>
+    isEmptied(update.data[key])
+  );
+  if (emptied.length === 0) return [];
+  const collection = await args.ctx.services.collections.getCollection(
+    update.slug,
+    requestContextFor(context)
+  );
+  return blocksFieldsOf(
+    collection as Parameters<typeof blocksFieldsOf>[0]
+  ).filter(field => emptied.includes(field.name));
+}
+
+/**
+ * The fields that can be judged. A translated one is reported unjudged
+ * instead, since the hook is not told the write's language.
+ */
+function judgeableFields(
+  args: Parameters<typeof registerLayersLockGuard>[0],
+  fields: readonly BlocksFieldDescriptor[],
+  update: JudgedUpdate
+): BlocksFieldDescriptor[] {
+  for (const field of fields) {
+    if (!field.localized) continue;
+    args.onUnjudged({
+      field: field.name,
+      kind: "collection",
+      slug: update.slug,
+      id: update.id,
+      reason: "language-unknown",
+    });
+  }
+  return fields.filter(field => !field.localized);
+}
+
+/** Refuse the write with every lock it breaks, or return when it breaks none. */
+function refuseIfAny(issues: readonly PluginFieldIssue[]): void {
+  if (issues.length === 0) return;
+  throw NextlyError.validation({
+    errors: issues.map(issue => ({
+      path: issue.path ?? "",
+      code: issue.code ?? "",
+      message: issue.message,
+    })),
+  });
+}
+
 /** One update, refused when it empties a field holding a locked block. */
 async function refuseEmptyingALockedField(
   args: Parameters<typeof registerLayersLockGuard>[0],
   context: HookContext<unknown>
 ): Promise<void> {
-  const data = recordOf(context.data);
-  const original = recordOf(context.originalData);
-  const slug = context.collection;
-  if (data === null || original === null) return;
-  if (typeof slug !== "string" || slug.startsWith(SINGLE_HOOK_NAMESPACE)) {
-    return;
-  }
-  const id = original.id;
-  if (typeof id !== "string" || id === "") return;
-
-  // Asked of the write before anything is read: almost every update empties
-  // no field, and then the hook costs nothing.
-  const emptied = Object.keys(data).filter(key => isEmptied(data[key]));
-  if (emptied.length === 0) return;
-
-  const collection = await args.ctx.services.collections.getCollection(
-    slug,
-    requestContextFor(context)
-  );
-  const fields = blocksFieldsOf(
-    collection as Parameters<typeof blocksFieldsOf>[0]
-  ).filter(field => emptied.includes(field.name));
-  if (fields.length === 0) return;
-
-  const judged = fields.filter(field => !field.localized);
-  for (const field of fields) {
-    if (field.localized) {
-      args.onUnjudged({
-        field: field.name,
-        kind: "collection",
-        slug,
-        id,
-        reason: "language-unknown",
-      });
-    }
-  }
+  const update = updateOf(context);
+  if (update === null) return;
+  const fields = await emptiedBlocksFields(args, context, update);
+  const judged = judgeableFields(args, fields, update);
   if (judged.length === 0) return;
 
-  const stored = await newestStored(context, original, id);
-  const issues = judged.flatMap(field =>
-    layersLockIssuesFor(
-      layersLockChanges(data[field.name], stored[field.name]),
-      field.name,
-      field.name
+  const stored = await newestStored(context, update.original, update.id);
+  refuseIfAny(
+    judged.flatMap(field =>
+      layersLockIssuesFor(
+        layersLockChanges(update.data[field.name], stored[field.name]),
+        field.name,
+        field.name
+      )
     )
   );
-  if (issues.length > 0) {
-    throw NextlyError.validation({
-      errors: issues.map(issue => ({
-        path: issue.path ?? "",
-        code: issue.code ?? "",
-        message: issue.message,
-      })),
-    });
-  }
 }
