@@ -9,6 +9,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig } from "../../config";
+import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import {
+  publishDeclaredEntities,
+  restoreDeclaredEntities,
+} from "../../domains/dynamic-collections/services/removed-from-code-writes";
 import type { PromptDispatcher } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 import {
   createTestNextly,
@@ -28,6 +33,32 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => ({
     dependencies: [],
   }),
 }));
+
+/**
+ * Which ask of the Required and Unique preconditions rejects, counted from 1 within a test (0 for
+ * none): the first is before the apply, the second the re-check after the copy.
+ */
+const preconditions = vi.hoisted(() => ({ failing: 0, asked: 0 }));
+vi.mock(
+  "../../domains/i18n/migration/leaving-constraint-preconditions",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../domains/i18n/migration/leaving-constraint-preconditions")
+      >();
+    return {
+      ...actual,
+      refusalsForConstrainedFieldsLeaving: (
+        ...args: Parameters<typeof actual.refusalsForConstrainedFieldsLeaving>
+      ) => {
+        preconditions.asked += 1;
+        return preconditions.asked === preconditions.failing
+          ? Promise.reject(new Error("connection reset"))
+          : actual.refusalsForConstrainedFieldsLeaving(...args);
+      },
+    };
+  }
+);
 
 const SLUG = "rlleaves";
 const TABLE = `dc_${SLUG}`;
@@ -86,6 +117,8 @@ describe.each(getConfiguredTestDialects())(
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
     beforeEach(async () => {
+      preconditions.failing = 0;
+      preconditions.asked = 0;
       handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
       // The reload runs its schema work only under next dev.
       vi.stubEnv("NODE_ENV", "development");
@@ -149,6 +182,56 @@ describe.each(getConfiguredTestDialects())(
 
     const told = () =>
       said.flatMap(spy => spy.mock.calls.flat().map(String)).join("\n");
+
+    /** The collections the write guard judges by, which a reload that does not land puts back. */
+    function declaredCollections(): string[] {
+      const now = publishDeclaredEntities(undefined);
+      restoreDeclaredEntities(now);
+      return [...(now?.collections ?? [])];
+    }
+
+    it("stops the reload when the registry can't be read, changing nothing", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" } });
+      vi.spyOn(
+        CollectionRegistryService.prototype,
+        "getAllTranslationShapes"
+      ).mockRejectedValueOnce(new Error("connection reset"));
+
+      // A second collection too, which the abandoned reload must not leave declared.
+      loaded.config = configWith({ localized: false }, { localized: true });
+      await reloadNextlyConfig();
+
+      expect(told()).toMatch(/registry could not be read/);
+      expect(told()).toMatch(/No code-first schema changes were applied/);
+      expect(declaredCollections()).not.toContain(OTHER);
+      expect(await columnsOf(TABLE)).not.toContain("body");
+      expect(await columnsOf(COMPANION)).toContain("body");
+    });
+
+    it("stops the reload when a read before the apply fails, changing nothing", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" } });
+      preconditions.failing = 1;
+
+      loaded.config = configWith({ localized: false }, { localized: true });
+      await reloadNextlyConfig();
+
+      expect(told()).toMatch(/connection reset.*No code-first schema changes/s);
+      expect(declaredCollections()).not.toContain(OTHER);
+      expect(await columnsOf(TABLE)).not.toContain("body");
+      expect(await columnsOf(COMPANION)).toContain("body");
+    });
+
+    it("stops the move when the re-check after the copy fails, keeping the translations column", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" } });
+      preconditions.failing = 2;
+
+      loaded.config = configWith({ localized: false });
+      await reloadNextlyConfig();
+
+      expect(told()).toMatch(/"rlleaves" were not moved: connection reset/);
+      expect(told()).toMatch(/Translation stays on for rlleaves/);
+      expect(await columnsOf(COMPANION)).toContain("body");
+    });
 
     it("keeps the default language's value on the main table, and archives the others", async () => {
       await seed({ e1: { en: "Hello", es: "Hola" } });

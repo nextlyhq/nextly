@@ -14,6 +14,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { DesiredSchema } from "../../schema/pipeline/types";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import { companionUniqueIndexName } from "../migration/companion-unique-indexes";
@@ -70,6 +71,10 @@ export interface FieldsLeavingOnReload {
  * Before the reload's gate and apply: the fields leaving translation (`fieldsLeavingOnReload`), and
  * the entities refused (`leavingRefusalsOnReload`), each refusal reported with what to do. A reload
  * with any refused applies nothing, so a refusal changes nothing.
+ *
+ * Rejects when it can't tell: a registry that can't be read, or a database read that fails. The
+ * reload then applies nothing, since applied without the move, a field becoming shared would get
+ * its main column empty while its values stayed in the translations column.
  */
 export async function prepareFieldsLeavingOnReload(
   adapter: DrizzleAdapter,
@@ -77,11 +82,16 @@ export async function prepareFieldsLeavingOnReload(
   fieldGroupTables: ReadonlyMap<string, string>,
   report: (message: string) => void
 ): Promise<{ entries: FieldsLeavingOnReload[]; refused: string[] }> {
-  const recorded = await readRecordedEntities(adapter, config, error =>
+  const recorded = await readRecordedEntities(adapter, config, error => {
     report(
-      `[nextly] The registry could not be read, so no field leaving translation is moved this reload: ${error instanceof Error ? error.message : String(error)}`
-    )
-  );
+      `[nextly] The registry could not be read, so the fields leaving translation can't be told: ${error instanceof Error ? error.message : String(error)}`
+    );
+    throw new NextlyError({
+      code: "DATABASE_ERROR",
+      publicMessage: "The registry could not be read.",
+      cause: error instanceof Error ? error : undefined,
+    });
+  });
   const entries: FieldsLeavingOnReload[] = [];
   for (const [kind, entities, tableNameOf] of localizableConfigEntities(
     config
@@ -136,8 +146,8 @@ function reloadTarget(
 /**
  * One entity's fields leaving translation, or `undefined` when none is: shared in the config,
  * translated in the registry's record before this reload, and with a translations column still.
- * Nothing leaves for an entity the registry did not record as translated, or could not be read
- * for: its translations columns are left as they are.
+ * Nothing leaves for an entity the registry did not record as translated: its translations columns
+ * are left as they are.
  */
 async function leavingIn(
   adapter: DrizzleAdapter,
@@ -384,10 +394,17 @@ export async function moveFieldsLeavingOnReload(args: {
   if (args.blockedBy.length > 0 || entries.length === 0) return [];
   const defaultLocale = defaultLocaleOf(args.config);
   const all = entries.map(e => e.slug);
-  const planned = await copyEveryEntity(args, entries, defaultLocale);
-  if (planned === undefined) return all;
-  if (!(await settleEveryEntity(args, entries, defaultLocale))) return all;
-  return dropEveryEntity(args, planned);
+  // Each phase reports its own failures; anything else that rejects, such as the re-check's reads,
+  // stops the move the same way, before any drop it has not reached.
+  try {
+    const planned = await copyEveryEntity(args, entries, defaultLocale);
+    if (planned === undefined) return all;
+    if (!(await settleEveryEntity(args, entries, defaultLocale))) return all;
+    return await dropEveryEntity(args, planned);
+  } catch (error) {
+    args.report(notMoved(all.join(", "), error));
+    return all;
+  }
 }
 
 type Mover = Pick<

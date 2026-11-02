@@ -2121,6 +2121,20 @@ async function applyReloadHolding(
   // wipe any stale entry from a previous apply before we start this one.
   clearLiveSnapshots();
 
+  // Fields this reload makes shared on an entity that stays translated, recorded translated before
+  // it (`prepareFieldsLeavingOnReload`). Found before the per-entity gate below, which judges their
+  // entities with the Required and Unique settings held back, the shape the apply pushes first, so a
+  // move an earlier reload stopped after adding the main column is finished rather than deferred.
+  // Read with the live schema below, so a read that fails abandons the reload as that one does.
+  const {
+    prepareFieldsLeavingOnReload,
+    stoppedBeforeApply,
+    heldFields,
+    withLeavingSettingsHeld,
+    moveFieldsLeavingOnReload,
+  } = await import("../domains/i18n/runtime/fields-leaving-on-reload");
+  let leaving: Awaited<ReturnType<typeof prepareFieldsLeavingOnReload>>;
+
   // ONE batched introspect for every managed table the config knows about
   // (collections + singles). If the call fails, abort the reload entirely —
   // it's a connection-level failure, not a per-table problem.
@@ -2142,6 +2156,12 @@ async function applyReloadHolding(
   try {
     liveSnapshot = await introspectLiveSnapshot(db, dialect, managedTableNames);
     identifierCase = await readIdentifierCaseRules(adapter);
+    leaving = await prepareFieldsLeavingOnReload(
+      adapter as unknown as DrizzleAdapter,
+      newConfig,
+      fieldGroupTables,
+      message => logger?.error(message)
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
@@ -2170,23 +2190,6 @@ async function applyReloadHolding(
   // into the new (e.g. single_*) tables — the false-positive rename prompt
   // the user sees on a first-install where collections are synced before
   // singles.
-  // Fields this reload makes shared on an entity that stays translated, recorded translated before
-  // it (`prepareFieldsLeavingOnReload`). Found before the per-entity gate below, which judges their
-  // entities with the Required and Unique settings held back, the shape the apply pushes first, so a
-  // move an earlier reload stopped after adding the main column is finished rather than deferred.
-  const {
-    prepareFieldsLeavingOnReload,
-    stoppedBeforeApply,
-    heldFields,
-    withLeavingSettingsHeld,
-    moveFieldsLeavingOnReload,
-  } = await import("../domains/i18n/runtime/fields-leaving-on-reload");
-  const leaving = await prepareFieldsLeavingOnReload(
-    adapter as unknown as DrizzleAdapter,
-    newConfig,
-    fieldGroupTables,
-    message => logger?.error(message)
-  );
 
   // An extension-only edit produces no entity diff, so it starts the reload
   // off as a change: the pipeline apply below is what merges the recompiled
