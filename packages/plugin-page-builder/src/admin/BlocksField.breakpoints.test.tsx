@@ -380,6 +380,17 @@ describe("the container the canvas is compiled against", () => {
   });
 });
 
+describe("the top bar's history", () => {
+  it("draws undo and redo, unavailable on a fresh document", async () => {
+    const { screen } = await import("@testing-library/react");
+    openEditor();
+    const undo = screen.getByRole("button", { name: "Undo" });
+    const redo = screen.getByRole("button", { name: "Redo" });
+    expect((undo as HTMLButtonElement).disabled).toBe(true);
+    expect((redo as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
 describe("the device being edited", () => {
   it("lays the canvas out at the device the author chooses", () => {
     openEditor();

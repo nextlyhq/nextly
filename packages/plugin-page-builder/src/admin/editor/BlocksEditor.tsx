@@ -51,6 +51,7 @@ import {
   useEditorPanels,
   type EditorPanels,
 } from "./editor-panels";
+import { HistoryButtons } from "./history-buttons";
 import { offerableTokens, siteStyleStatus } from "./site-style-studios";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -197,9 +198,12 @@ function editorTopBar(view: EditorView): React.JSX.Element {
     siteStyleError,
     editedBreakpoint,
     chooseDevice,
+    editor,
+    inline,
   } = view;
   return (
     <>
+      <HistoryButtons editor={editor} inline={inline} />
       <DocumentStatusPill isDirty={documentDirty} />
       {/* Beside the publish state, not folded into it. The two answer
                 different questions and one of them has no answer where a
