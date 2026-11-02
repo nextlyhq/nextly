@@ -514,6 +514,49 @@ describe.each(getConfiguredTestDialects())(
         status: "draft",
         hero: { heading: "fine", code: "retired" },
       });
+      ids.nestedFine = await created(t, "checked", {
+        title: "nested fine",
+        status: "draft",
+        hero: { heading: "fine", code: "current" },
+      });
+      for (const name of ["nestedBatchA", "nestedBatchB"]) {
+        ids[name] = await created(t, "checked", {
+          title: name,
+          status: "draft",
+          hero: { heading: "fine", code: "retired" },
+        });
+      }
+      for (const name of ["germanNested", "englishNested"]) {
+        ids[name] = await created(
+          t,
+          "guides",
+          {
+            title: name,
+            status: "draft",
+            hero: { heading: "fine", code: "retired" },
+          },
+          "en"
+        );
+      }
+      // Live with a hero that meets its rules, and a pending change to one
+      // that, once the rule is tightened, does not.
+      ids.promotedNested = await created(t, "drafted", {
+        title: "promoted nested",
+        status: "published",
+        hero: { heading: "Live", code: "current" },
+      });
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "drafted",
+              entryId: ids.promotedNested,
+              overrideAccess: true,
+            },
+            { hero: { heading: "Live", code: "retired" } }
+          )
+        ).success
+      ).toBe(true);
 
       ids.missingDe = await created(t, "pages", {
         title: "missing, published in German",
@@ -690,11 +733,46 @@ describe.each(getConfiguredTestDialects())(
       expect(refusedPaths(story)).toContain("tags");
     });
 
-    it("does not judge again a rule nested inside a component", async () => {
+    it("refuses a component instance that breaks a rule tightened since it was saved, naming the field inside it", async () => {
       nestedRuleOn = true;
       try {
-        const result = await publish(t, "checked", ids.nested);
-        expect(result.success, JSON.stringify(result)).toBe(true);
+        const refused = await publish(t, "checked", ids.nested);
+        expect(refused.success).toBe(false);
+        expect(refusedPaths(refused)).toContain("hero.code");
+
+        const meets = await publish(t, "checked", ids.nestedFine);
+        expect(meets.success, JSON.stringify(meets)).toBe(true);
+
+        // A pending change promoted over the live document is judged too.
+        const promoted = await publish(t, "drafted", ids.promotedNested);
+        expect(promoted.success).toBe(false);
+        expect(refusedPaths(promoted)).toContain("hero.code");
+
+        // Each document of a batch.
+        const batch = await entriesOf(t).updateEntries(
+          { collectionName: "checked", overrideAccess: true },
+          [ids.nestedBatchA, ids.nestedBatchB].map(id => ({
+            id,
+            data: { status: "published" },
+          }))
+        );
+        expect(batch).toMatchObject({ successful: 0, failed: 2 });
+      } finally {
+        nestedRuleOn = false;
+      }
+    });
+
+    it("judges a component instance's own rules in the default language only", async () => {
+      nestedRuleOn = true;
+      try {
+        // A translation falls back to the default language's values, so it
+        // is not refused for them, as a required component is not.
+        const german = await publish(t, "guides", ids.germanNested, {}, "de");
+        expect(german.success, JSON.stringify(german)).toBe(true);
+
+        const english = await publish(t, "guides", ids.englishNested, {}, "en");
+        expect(english.success).toBe(false);
+        expect(refusedPaths(english)).toContain("hero.code");
       } finally {
         nestedRuleOn = false;
       }

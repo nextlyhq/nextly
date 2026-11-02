@@ -1222,6 +1222,13 @@ interface EntryValidationArgs {
   id?: string;
   /** The write's own transaction, where it runs inside one. */
   tx?: TransactionContext;
+  /**
+   * Whether the document goes live: its top-level component instances are
+   * then judged by their own fields' rules as well, in the default language,
+   * as a required component is. A rule tightened since an instance was saved
+   * would otherwise go live unjudged.
+   */
+  goesLive?: boolean;
 }
 
 interface CreateEntryWriteParams {
@@ -2504,6 +2511,13 @@ export class CollectionMutationService extends BaseService {
     args: EntryValidationArgs
   ): Promise<ValidationIssue[]> {
     const view = this.validationView(args.data, args.fields);
+    // In the default language, or in any where the document has no
+    // translated fields and so is the same document in every language.
+    const judgeInstances =
+      args.goesLive === true &&
+      (args.localeCtx === undefined ||
+        args.localeCtx.enforceLocalizedRequired ||
+        args.localeCtx.localizedFieldNames.size === 0);
     const issues = await validateEntryData(
       view,
       attachFieldValidators("collection", args.collectionName, args.fields),
@@ -2513,14 +2527,17 @@ export class CollectionMutationService extends BaseService {
         ...args.localeCtx,
         // A component inside a group or repeater is judged here, since no
         // component write reaches it; read on the write's own connection.
+        // Going live, a top-level one too, in the default language.
         componentFields: await containedComponentResolver(
           args.fields as unknown as FieldConfig[],
           async componentSlug =>
             (await this.fieldGroupDataService?.getComponentFields(
               componentSlug,
               args.tx?.getDrizzle()
-            )) ?? null
+            )) ?? null,
+          judgeInstances
         ),
+        judgeComponentInstances: judgeInstances,
         write: this.validationWrite(
           args.collectionName,
           args.id ??
@@ -4231,6 +4248,7 @@ export class CollectionMutationService extends BaseService {
         args.fields
       ),
       id: args.entryId,
+      goesLive: true,
     });
   }
 
@@ -4270,6 +4288,7 @@ export class CollectionMutationService extends BaseService {
         user: args.user,
         reader: args.reader,
         readLocale: locale,
+        goesLive: true,
         localeCtx: componentsRequiredInDefaultLanguage(
           await this.localizedRequiredContext(
             args.collectionName,
@@ -15729,6 +15748,7 @@ export class CollectionMutationService extends BaseService {
           reader: params,
           id: entryId,
           tx,
+          goesLive: true,
         });
       }
 

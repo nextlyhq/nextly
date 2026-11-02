@@ -83,12 +83,15 @@ On a collection entry, the document going live includes its field-group
 A required component that has no instance, or a required many-to-many
 relationship with no links, refuses the publish with a validation error on that
 field. Fix the field, then publish. The custom `validate` functions of top-level
-component and many-to-many fields run too. Rules on the fields inside a
-component are not checked again at publish.
+component and many-to-many fields run too, and so do the rules on each
+component's own fields: a component instance saved before one of its fields
+became required, or before a `validate` was tightened, refuses the publish with
+an error that names the field inside the component (`hero.code`).
 
-On a localized collection, a required component is enforced for the default
-language only, as a translated field's `required` is, so one finished language
-can go live while another is still incomplete.
+On a localized collection, a required component and the rules inside a
+component are enforced for the default language only, as a translated field's
+`required` is, so one finished language can go live while another is still
+incomplete.
 
 Sending `published` again to a document that is already live, with no pending
 draft, is not checked again.

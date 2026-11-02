@@ -47,6 +47,6 @@ Compatibility: custom `validate` functions on top-level component and
 many-to-many fields now also run when an entry is published, with the stored
 value. An entry missing a value such a field requires, or holding one its
 validator refuses as published, can no longer be published until the field is
-fixed. Rules on the fields inside a component are not checked again at publish.
+fixed.
 This lifts the limit an earlier release noted, that a required component or
 relationship missing from storage was not re-checked at publish.

@@ -140,6 +140,14 @@ export interface ValidateEntryOptions {
   componentFields?: (slug: string) => ValidatableField[] | undefined;
   /** Set by the walk itself once it is inside a group or repeater's value. */
   insideContainer?: boolean;
+  /**
+   * Judge a top-level component's value against its own fields' rules too.
+   * A component's instance is judged when it is written, so an ordinary write
+   * leaves it to that write; a publish sets this, since a rule tightened since
+   * the instance was saved is then judged as it goes live. Needs
+   * `componentFields` to resolve the top-level components.
+   */
+  judgeComponentInstances?: boolean;
 }
 
 /**
@@ -717,7 +725,10 @@ async function validateFieldValue(
     // normalization passes and referential checks; no scalar rules apply. A
     // component inside a container is the exception: nothing else judges it.
     default:
-      if (options.insideContainer && isFieldGroupFieldType(field.type)) {
+      if (
+        (options.insideContainer || options.judgeComponentInstances) &&
+        isFieldGroupFieldType(field.type)
+      ) {
         await validateContainedComponents(
           field,
           value,
