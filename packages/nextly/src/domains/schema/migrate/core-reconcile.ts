@@ -23,6 +23,7 @@ import {
   bindIssuedTokens,
   type BindIssuedTokensResult,
 } from "../../auth/services/token-account-binding";
+import { RETIRED_SIZES_COLUMN } from "../../media/retired-image-sizes-constants";
 import { markUnrecordedVerifications } from "../../users/services/email-verification-write";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -31,6 +32,7 @@ import {
   onlyElements,
   withoutElements,
 } from "../extension/entity-contributions";
+import type { ExtensionColumn } from "../extension/types";
 import {
   classifyForMode,
   type ClassifierMode,
@@ -177,16 +179,24 @@ export async function reconcileCore(
   // core tables on Nextly's own elements only: a contributed column is not a
   // column the core declaration lost, and reading it as one proposed dropping
   // it on every run after the app's migration added it.
-  const contributed = coreContributions(
-    desired.tables,
-    deps.contributions,
-    dialect
-  );
   const introspected = await introspect(
     db,
     dialect,
     getCoreTableNames(coreOptions)
   );
+  // The retired `sizes` column, while the database has it, is carried as if
+  // contributed to the media table: set aside from the comparison, so the
+  // diff never plans its drop, and composed into the state the push reaches,
+  // so drizzle-kit plans nothing against it either. On SQLite a rebuild of
+  // the media table would otherwise copy only the declared columns and lose
+  // every item's record of its size files. Neither this nor any migration
+  // drops it: `nextly media remove-sizes --apply --drop` does, once the
+  // release that no longer reads it is serving and nothing names a file in it.
+  const contributions = withRetainedSizesColumn(
+    deps.contributions,
+    introspected
+  );
+  const contributed = coreContributions(desired.tables, contributions, dialect);
   const live: NextlySchemaSnapshot = {
     ...introspected,
     tables: introspected.tables.map(table => {
@@ -286,7 +296,7 @@ export async function reconcileCore(
         getDialectTablesForPush(dialect, coreOptions),
         contributed,
         introspected,
-        deps.contributions,
+        contributions,
         dialect
       )
     );
@@ -331,6 +341,39 @@ export async function reconcileCore(
   // is kept rather than dropped on a stale count.
   await executeRetiredDrops(deps, await decideRetiredDrops(deps));
   return { changed: true };
+}
+
+/** The retired `sizes` column, as a contribution to the media table. */
+const RETAINED_SIZES_COLUMN: ExtensionColumn = {
+  key: RETIRED_SIZES_COLUMN,
+  name: RETIRED_SIZES_COLUMN,
+  // The kind the column was declared with: jsonb on PostgreSQL, json on
+  // MySQL, text on SQLite.
+  kind: "json",
+  nullable: true,
+};
+
+/**
+ * The contributions to set aside and compose in, with the retired `sizes`
+ * column added for the media table when the live table still has it.
+ */
+function withRetainedSizesColumn(
+  source: EntityContributionSource | undefined,
+  live: NextlySchemaSnapshot
+): EntityContributionSource | undefined {
+  const media = live.tables.find(table => table.name === "media");
+  if (!media?.columns.some(column => column.name === RETIRED_SIZES_COLUMN)) {
+    return source;
+  }
+  const entityColumns = new Map(source?.entityColumns ?? []);
+  entityColumns.set("media", [
+    ...(entityColumns.get("media") ?? []),
+    RETAINED_SIZES_COLUMN,
+  ]);
+  return {
+    entityColumns,
+    entityIndexes: source?.entityIndexes ?? new Map(),
+  };
 }
 
 /**

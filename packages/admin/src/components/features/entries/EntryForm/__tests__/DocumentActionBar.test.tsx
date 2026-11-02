@@ -427,6 +427,41 @@ describe("folding in a host's contributions", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("tells a contributed action the document as the form holds it when it is chosen", async () => {
+    // Read at the moment it is chosen, not when the editor drew: an edit
+    // made after the last render is still the document the author sees.
+    const chosen = vi.fn();
+    let values: Record<string, unknown> = { title: "Saved title" };
+    const { actions, bindings } = acceptContributions(
+      built,
+      builtBindings,
+      [
+        {
+          action: {
+            id: "add-to-release",
+            label: "Add to release",
+            placement: "menu",
+            group: "document",
+          },
+          binding: { onSelect: chosen },
+        },
+      ],
+      () => values
+    );
+    render(<DocumentActionBar actions={actions} bindings={bindings} />);
+    values = { title: "Edited, not saved" };
+    await userEvent.click(
+      screen.getByRole("button", { name: /more actions/i })
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /add to release/i })
+    );
+
+    expect(chosen).toHaveBeenCalledWith({
+      values: { title: "Edited, not saved" },
+    });
+  });
+
   it("leaves a built-in bound to its OWN handler when a contribution reuses its id", () => {
     /*
      * The substitution this exists to prevent, and the reason one function

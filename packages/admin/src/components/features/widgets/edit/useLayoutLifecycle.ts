@@ -10,16 +10,19 @@
  *
  * @module components/features/widgets/edit/useLayoutLifecycle
  */
-import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
+import { useCallback, type Dispatch, type SetStateAction } from "react";
 
 import {
-  fetchGetStartedOnRestore,
   isConflictError,
   type UseDashboardLayoutResult,
 } from "@admin/hooks/queries/useDashboardLayout";
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
-import { hasChanges, withinSubmissionLimit } from "../layout-editor";
+import {
+  hasChanges,
+  setPlacementConfig,
+  withinSubmissionLimit,
+} from "../layout-editor";
 
 import type { LayoutDraft } from "./useLayoutEditor";
 
@@ -31,6 +34,36 @@ export interface SaveOptions {
    * without it.
    */
   replaceUnreadable?: boolean;
+  /**
+   * Cards' settings changes still in their open settings panels, as each panel's Done would keep
+   * them, saved with the draft: the unsaved-changes prompt's Save, which would otherwise leave
+   * them behind. Applied by the editor's own `setPlacementConfig`, as Done applies them.
+   */
+  staged?: readonly StagedSettings[];
+}
+
+/** One card's settings and own title, as its settings panel's Done would keep them. */
+export interface StagedSettings {
+  placementId: string;
+  config: Record<string, unknown>;
+  ownTitle: string;
+}
+
+/** The draft's placements with each staged panel's change applied, as Done applies one. */
+function withStaged(
+  placements: readonly WidgetPlacement[],
+  staged: readonly StagedSettings[] | undefined
+): WidgetPlacement[] {
+  return (staged ?? []).reduce(
+    (current, change) =>
+      setPlacementConfig(
+        current,
+        change.placementId,
+        change.config,
+        change.ownTitle
+      ),
+    [...placements]
+  );
 }
 
 /**
@@ -69,10 +102,12 @@ export interface LayoutLifecycle {
  * following the default, so later changes to it reach them. Once they change
  * the staged default it is their own arrangement, and it is saved like one.
  */
-function savesAsReset(draft: LayoutDraft): boolean {
+function savesAsReset(
+  draft: LayoutDraft,
+  placements: readonly WidgetPlacement[]
+): boolean {
   return (
-    draft.stagedReset !== null &&
-    !hasChanges(draft.stagedReset, draft.placements)
+    draft.stagedReset !== null && !hasChanges(draft.stagedReset, placements)
   );
 }
 
@@ -111,8 +146,9 @@ export function useLayoutLifecycle(
     async (options: SaveOptions = {}): Promise<SaveOutcome> => {
       // Nothing held is nothing lost: there is no draft to keep.
       if (!draft) return "saved";
+      const placements = withStaged(draft.placements, options.staged);
       try {
-        if (savesAsReset(draft)) {
+        if (savesAsReset(draft, placements)) {
           // The guards the reset was staged against, so a stale tab cannot
           // delete an arrangement another tab saved since.
           await layout.reset.mutateAsync({
@@ -125,7 +161,7 @@ export function useLayoutLifecycle(
             // the array's, so nothing is renumbered on the way out. Within the
             // endpoint's limit, shedding removed cards if a regained
             // arrangement holds more than one save may carry.
-            placements: [...withinSubmissionLimit(draft.placements)],
+            placements: [...withinSubmissionLimit(placements)],
             version: draft.version,
             scope: draft.scope,
             // The editor is the one route that can reorder, resize or remove
@@ -151,10 +187,6 @@ export function useLayoutLifecycle(
     [draft, layout, setDraft]
   );
 
-  // The draft the latest staged reset produced: a later answer for that reset
-  // may replace it, and only it.
-  const stagedDraft = useRef<LayoutDraft | null>(null);
-
   const stageReset = useCallback(() => {
     const read = layout.layout;
     if (!read?.defaultPlacements) return;
@@ -167,34 +199,9 @@ export function useLayoutLifecycle(
       stagedReset: [...defaults],
     });
     // Staged at once from this read's default, so the reset answers now.
-    setDraft(current => {
-      const next = current
-        ? withDefaults(current, read.defaultPlacements)
-        : current;
-      stagedDraft.current = next;
-      return next;
-    });
-    // A read that worked out no Get started steps (the arrangement holds no
-    // card of its own) has a default that leaves the card out, though a reset
-    // may draw it. The read that works the steps out answers the default a
-    // reset would actually land on.
-    if (read.getStarted !== undefined && read.getStarted.answer === null) {
-      const staged = stagedDraft;
-      void fetchGetStartedOnRestore().then(
-        fresh =>
-          setDraft(current => {
-            // 🔴 Applied only to the very draft this reset staged. Arriving
-            // after the reader edited, cancelled, began again or staged
-            // another reset, it would overwrite work it never saw.
-            if (current === null || current !== staged.current) return current;
-            const next = withDefaults(current, fresh.defaultPlacements);
-            staged.current = next;
-            return next;
-          }),
-        // Unanswered, this read's default stays staged.
-        () => {}
-      );
-    }
+    setDraft(current =>
+      current ? withDefaults(current, read.defaultPlacements) : current
+    );
   }, [layout.layout, setDraft]);
 
   return { begin, cancel, save, stageReset };

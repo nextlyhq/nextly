@@ -242,8 +242,19 @@ async function pushForDialect(
     case "mysql": {
       const kit = await getMySQLDrizzleKit();
       const databaseName = await currentMysqlDatabaseName(db);
+      // Introspection scoped to the DESIRED tables, as PostgreSQL's is above
+      // and for the same reason: a site's `dc_*` content tables would
+      // otherwise read as dropped, pair against a table this push adds, and
+      // crash the rename resolver. The fallback below then replays the
+      // baseline, whose `ADD CONSTRAINT` for every core foreign key the
+      // database already holds fails on its duplicate name, so the first
+      // `nextly migrate` after a release that adds a core table failed on
+      // every MySQL site with content.
       return withResolverCrashFallback(
-        () => kit.pushSchema(schema, db, databaseName),
+        () =>
+          kit.pushSchema(schema, db, databaseName, {
+            tables: drizzleTableNames(schema),
+          }),
         async () =>
           kit.generateMigration(
             await kit.generateDrizzleJson({}),
@@ -265,15 +276,19 @@ async function pushForDialect(
   }
 }
 
-// The SQLite/MySQL payload entrypoints accept no tables filter, so their
+// The SQLite payload entrypoint accepts no tables filter, so its
 // introspection sees the WHOLE live database. When an upgrade adds a new
 // core table while any non-core table exists (user dc_* content, the
 // migrate lock), v1's differ pairs the "dropped" orphan against the added
 // table and its rename resolver throws `Internal error: resolver(table) was
 // called without a HintsHandler` BEFORE emitting anything (probe-verified).
-// PG avoids this via the entities filter above; here the recovery is the
-// pre-v1 applyViaGenerate shape: generate the pure-CREATE baseline from an
-// empty snapshot. That set contains no drops by construction, and the
+// PG and MySQL avoid this by scoping introspection to the desired tables
+// above, so on MySQL this is only a backstop. SQLite survives the baseline
+// because its foreign keys live inside CREATE TABLE, which is skipped for a
+// table that exists; MySQL's are separate `ADD CONSTRAINT` statements that
+// fail on an existing name, which is why MySQL must not depend on it. The
+// recovery is the pre-v1 applyViaGenerate shape: generate the pure-CREATE
+// baseline from an empty snapshot. That set contains no drops by construction, and the
 // downstream idempotency-tolerant executor skips tables that already exist,
 // so the reconcile degrades to additive-TABLES-only instead of crashing the
 // boot.

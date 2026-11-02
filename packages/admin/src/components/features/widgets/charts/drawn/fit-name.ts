@@ -22,17 +22,23 @@ function measurer(): OffscreenCanvasRenderingContext2D | null {
   return measure;
 }
 
+/**
+ * How wide `text` is drawn in `font` (a CSS font, "12px Inter"), in pixels, or `undefined` where
+ * nothing can measure. The one measure a name is fitted and its column sized by.
+ */
+export function textWidth(text: string, font: string): number | undefined {
+  const context = measurer();
+  if (!context) return undefined;
+  context.font = font;
+  return context.measureText(text).width;
+}
+
 /** `name` cut to fit `width` in `font` (a CSS font, "12px Inter"), with "…" where it is cut. */
 export function fitName(name: string, width: number, font: string): string {
-  const context = measurer();
-  if (!context) return name;
-  context.font = font;
-  if (context.measureText(name).width <= width) return name;
+  const whole = textWidth(name, font);
+  if (whole === undefined || whole <= width) return name;
   let cut = name.length;
-  while (
-    cut > 1 &&
-    context.measureText(`${name.slice(0, cut)}…`).width > width
-  ) {
+  while (cut > 1 && (textWidth(`${name.slice(0, cut)}…`, font) ?? 0) > width) {
     cut -= 1;
   }
   return `${name.slice(0, cut)}…`;

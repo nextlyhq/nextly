@@ -274,6 +274,7 @@ describe("runWebhookDrain (real SQLite)", () => {
       oneTimeSecrets: 0,
       previewLinks: 0,
       contentEvents: 0,
+      cacheTagExpiries: 0,
     });
   });
 
@@ -299,6 +300,7 @@ describe("runWebhookDrain (real SQLite)", () => {
       oneTimeSecrets: 0,
       previewLinks: 0,
       contentEvents: 0,
+      cacheTagExpiries: 0,
     });
   });
 

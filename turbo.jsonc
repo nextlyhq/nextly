@@ -149,6 +149,11 @@
     "RESEND_USER_AGENT", // Resend email provider: User-Agent some proxies filter on
     "DATABASE_URL",
     "DB_DIALECT",
+    // nextly/testing: createTestNextly keeps a secret already set, else sets a
+    // random one for the instance and puts the environment back after it, as
+    // it does DATABASE_URL and DB_DIALECT. Passed through, not hashed: a
+    // secret changes no output, and a cache key should never carry one.
+    "NEXTLY_SECRET",
     // The machine's worker limit, set by scripts/bounded.mjs for a local run
     // and read by the playground's Next.js build for its page-data workers.
     // A memory bound has to reach the task to bound it; strict env mode drops

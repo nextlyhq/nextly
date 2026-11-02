@@ -26,3 +26,11 @@ export const MAX_PLACEMENTS = 200;
 export function isUsableText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
+
+/**
+ * The most characters a reader's own title for a card may hold, counted in
+ * code points as every bound a person is told in characters is
+ * (`shared/text-length`). Long enough for a subject and its range; a card's
+ * header draws one line and fits the rest with "…".
+ */
+export const MAX_CARD_TITLE_LENGTH = 80;

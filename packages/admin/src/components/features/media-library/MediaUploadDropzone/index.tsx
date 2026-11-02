@@ -41,7 +41,7 @@ import { Upload, AlertTriangle, X } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 import type { Media } from "@admin/types/media";
 
-import { UploadTray } from "../UploadTray";
+import { LazyUploadTray } from "../UploadTray/LazyUploadTray";
 import { useUploadQueue } from "../UploadTray/useUploadQueue";
 
 import { useMediaFileDrop } from "./useMediaFileDrop";
@@ -280,7 +280,7 @@ export function MediaUploadDropzone({
 
       {/* The tray renders whether or not the target is collapsed, so
           progress and failures stay in view after it closes. */}
-      <UploadTray
+      <LazyUploadTray
         queue={queue}
         placement="inline"
         className={isCollapsed ? undefined : "mt-4"}

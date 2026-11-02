@@ -155,6 +155,11 @@ export const NEXTLY_ERROR_STATUS = {
   // `/api/admin-meta/workspace` payload: a value `JSON.stringify` throws on
   // fails that request for every admin, not just the widget's own card.
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
+  // Plugin platform — a plugin that adds widgets or widget data sources through
+  // `contributes.admin.widgets` or `contributes.widgetSources`, keys Nextly no
+  // longer reads: a plugin declares its widgets with `defineWidget` under
+  // `contributes.dashboard`. Refused at boot, naming the plugin and the key.
+  NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL: 500,
   // A plugin's document view cannot be routed: a malformed or reserved path,
   // or one two declarations claim on the same document. Refused at boot.
   NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID: 500,

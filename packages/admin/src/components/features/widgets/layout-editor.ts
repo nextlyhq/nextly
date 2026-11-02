@@ -287,20 +287,34 @@ export function restorePlacement(
  * a missing config and an empty one identically, so keeping `{}` would be a
  * difference the layout carries and nothing can observe — and it would make
  * `hasChanges` report a card as edited for having been opened.
+ *
+ * `ownTitle` is the title the reader gave the card, when the change sets it:
+ * trimmed, as the layout write stores it. Emptied, a title the card had is kept
+ * as an empty one, the reader's clearing, so the card is titled automatically
+ * again and a title the site's default gives it does not come back; a card that
+ * had none takes none. Left out, the card keeps the title it has: a quick
+ * setting changes settings alone.
  */
 export function setPlacementConfig(
   placements: readonly WidgetPlacement[],
   placementId: string,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  ownTitle?: string
 ): WidgetPlacement[] {
   const empty = Object.keys(config).length === 0;
   return placements.map(placement => {
     if (placement.id !== placementId) return placement;
-    if (empty) {
-      const { config: _dropped, ...rest } = placement;
-      return rest;
-    }
-    return { ...placement, config };
+    const { config: _config, title: _title, ...rest } = placement;
+    const title = ownTitle === undefined ? placement.title : ownTitle.trim();
+    // Cleared: kept empty where the card had a title, so the clearing is stored; nothing where
+    // it had none, so opening a card's settings and keeping them changes nothing.
+    const kept =
+      title === "" && placement.title === undefined ? undefined : title;
+    return {
+      ...rest,
+      ...(empty ? {} : { config }),
+      ...(kept === undefined ? {} : { title: kept }),
+    };
   });
 }
 
@@ -445,6 +459,7 @@ function comparable(
     h: placement.h,
     removed: placement.removed,
     config: placement.config ?? {},
+    title: placement.title ?? "",
   };
 }
 

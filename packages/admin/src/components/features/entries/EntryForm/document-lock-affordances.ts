@@ -140,6 +140,18 @@ const READ_ONLY_FOR_READER: DocumentLockAffordances = {
 };
 
 /**
+ * A document whose collection or Single was removed from code: read-only for
+ * everyone, with no claim made, as for a reader. The strip says nothing: the
+ * editor's document banner carries the notice that names the entity and its
+ * next step, and a second sentence here would say it twice.
+ */
+export const READ_ONLY_REMOVED_FROM_CODE: DocumentLockAffordances = {
+  readOnly: true,
+  actionsDisabled: false,
+  notice: null,
+};
+
+/**
  * A reader's affordances, given who holds the document. A reader who may
  * publish writes its status, and that write waits while a colleague holds the
  * document, or until the lock has been read: a publish then would put a change

@@ -62,7 +62,6 @@ function seedPreviousBoot(): void {
       title: "Revenue",
       archetype: "metric",
       size: { default: { w: 3, h: 2 } },
-      query: { source: "plugin:stripe/revenue", op: "count" },
     },
     { source: "@acme/stripe" }
   );
@@ -96,7 +95,7 @@ describe("widget-registry reset at boot", () => {
       "system:activity",
       "system:attention",
       "system:content",
-      "system:recent-edits",
+      "system:continue",
       "system:releases",
       "system:team",
       "system:versions",

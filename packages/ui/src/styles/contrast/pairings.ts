@@ -238,6 +238,17 @@ const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
   })
 );
 
+// A success toast: its text on its own surface, both handed to the toast
+// library by the Toaster in place of the library's own colours.
+const TOAST: Pairing[] = [
+  {
+    fg: "--nx-toast-success-text",
+    bg: "--nx-toast-success-bg",
+    kind: "text",
+    label: "success toast text on its surface",
+  },
+];
+
 // The 600 shade is also painted directly on the muted surface, in the entry
 // meta strip, rather than only on its own tint. It is a `color-mix()` step
 // rather than the base token, so the base pairing above does not cover it: it
@@ -569,6 +580,7 @@ export const PAIRINGS: Pairing[] = [
   ...CODE_TEXT,
   ...STATUS_TEXT,
   ...STATUS_ON_SOLID,
+  ...TOAST,
   ...STATUS_SHADE_ON_SURFACE,
   ...DESTRUCTIVE_TEXT_ON_LIGHT_SURFACE,
   ...STATUS_SHADES,

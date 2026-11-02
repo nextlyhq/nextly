@@ -17,8 +17,10 @@
  * is the file's account. A spec that sets `storageState` itself with
  * `test.use` replaces it.
  *
- * The suite holds every spec to this `test` rather than Playwright's, which
- * would run without any of it (`session-stays-signed-in.spec.ts`).
+ * Built on `./visible`'s `test`, which holds every page to its visible
+ * elements. The suite holds every spec to this `test` (the production suite to
+ * `./visible`'s) rather than Playwright's, which would run without any of it
+ * (`scripts/e2e-specs-take-suite-test.test.mjs`).
  *
  * @module tests/support/test
  */
@@ -27,12 +29,7 @@ import { readFileSync } from "node:fs";
 import {
   expect,
   request,
-  test as base,
   type APIRequestContext,
-  type Browser,
-  type BrowserContext,
-  type Locator,
-  type Page,
   type TestInfo,
 } from "@playwright/test";
 
@@ -44,6 +41,7 @@ import {
 } from "./accounts";
 import { configuredLocks } from "./configured-locks";
 import { keepSessionFresh, STORAGE_STATE } from "./session.mjs";
+import { test as visible } from "./visible";
 
 /** A document an editor claims, as the document-lock route names it. */
 interface DocumentRef {
@@ -192,71 +190,11 @@ async function signInNewAccount(
   return storageState;
 }
 
-/**
- * The page's locators that, unlike a role locator, match hidden elements as
- * well as visible ones.
- */
-const MATCHES_HIDDEN = [
-  "getByText",
-  "getByLabel",
-  "getByTestId",
-  "getByPlaceholder",
-] as const;
+export { includingHidden } from "./visible";
 
-/** Make one of `page`'s locators find visible elements only. */
-function findVisibleOnly<M extends (typeof MATCHES_HIDDEN)[number]>(
-  page: Page,
-  method: M
-): void {
-  const find = page[method].bind(page) as (
-    ...args: Parameters<Page[M]>
-  ) => Locator;
-  page[method] = ((...args: Parameters<Page[M]>) =>
-    find(...args).filter({ visible: true })) as Page[M];
-}
-
-/** The pages already held to visible elements, so none is wrapped twice. */
-const visibleOnlyPages = new WeakSet<Page>();
-
-/** Make a page's text, label, test-id and placeholder locators visible-only. */
-function holdToVisible(page: Page): void {
-  if (visibleOnlyPages.has(page)) return;
-  visibleOnlyPages.add(page);
-  for (const method of MATCHES_HIDDEN) findVisibleOnly(page, method);
-}
-
-/** Hold every page a context has, and every page it opens later, to visible. */
-function holdContextToVisible(context: BrowserContext): void {
-  for (const page of context.pages()) holdToVisible(page);
-  context.on("page", holdToVisible);
-}
-
-/**
- * The page's whole document, for a spec that means to find a hidden element:
- * locators chained from it are not held to visible elements, as the page's
- * own are. Named at each use, so a spec reaching a hidden element says so.
- */
-export function includingHidden(page: Page): Locator {
-  return page.locator(":root");
-}
-
-export const test = base.extend<{ freshSession: string }>({
-  // Under Cache Components, Next.js keeps a visited page mounted but hidden,
-  // so the document can hold a hidden copy of the page a spec is on. A role
-  // locator leaves hidden elements out, but a text, label, test-id or
-  // placeholder locator would match the hidden copy's as readily as the
-  // visible one's, so on every page a spec reaches they find visible elements
-  // only: the page it is handed, any other its context opens, and any page of
-  // a context or page it makes itself, as a second user's sign-in does. A
-  // locator chained from one of them is held to it.
-  context: async ({ context }, use) => {
-    holdContextToVisible(context);
-    await use(context);
-  },
-  page: async ({ page }, use) => {
-    holdToVisible(page);
-    await use(page);
-  },
+// On `./visible`'s `test`, so every page a spec reaches is held to its visible
+// elements.
+export const test = visible.extend<{ freshSession: string }>({
   freshSession: [
     async ({ baseURL }, use) => {
       if (baseURL) await keepSessionFresh(baseURL);
@@ -268,24 +206,23 @@ export const test = base.extend<{ freshSession: string }>({
     if (!baseURL) throw new Error("[e2e] No baseURL configured.");
     await use(await fileAccount(baseURL, testInfo));
   },
-  browser: [
-    async ({ browser }, use) => {
-      const newContext = browser.newContext.bind(browser);
-      browser.newContext = async (
-        ...args: Parameters<Browser["newContext"]>
-      ) => {
-        const context = await newContext(...args);
-        holdContextToVisible(context);
-        return context;
-      };
-      const newPage = browser.newPage.bind(browser);
-      browser.newPage = async (...args: Parameters<Browser["newPage"]>) => {
-        const page = await newPage(...args);
-        holdToVisible(page);
-        return page;
-      };
-      await use(browser);
-    },
-    { scope: "worker" },
-  ],
 });
+
+/**
+ * Gives the tests of the group it is called in a further seat of their file's account
+ * (`fileAccount`): an account of their own, with a REST budget of its own.
+ *
+ * The REST limit gives each signed-in user 500 reads a minute. A file whose tests each load the
+ * dashboard and read its layout around it spends that budget faster than its tests take, so
+ * through one account the last of them met a 429, and an admin that could not reach the server.
+ * Each group reads through a seat of its own instead, as a seeder spreads its writes over
+ * further seats. A group that calls nothing keeps the file's own account, seat 0.
+ */
+export function ownSeat(seat: number): void {
+  test.use({
+    storageState: async ({ baseURL }, use, testInfo) => {
+      if (!baseURL) throw new Error("[e2e] No baseURL configured.");
+      await use(await fileAccount(baseURL, testInfo, seat));
+    },
+  });
+}

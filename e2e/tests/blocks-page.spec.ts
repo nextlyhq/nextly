@@ -27,6 +27,7 @@
  */
 import { expect, type APIResponse } from "@playwright/test";
 
+import { CACHE_COMPONENTS } from "./support/cache-components";
 import { fileAccount, test } from "./support/test";
 
 test.describe.configure({ mode: "serial" });
@@ -272,8 +273,28 @@ test("a condition-gated node is never sent to the client", async ({
 });
 
 test("an unpublished entry is not served", async ({ page }) => {
-  const response = await page.goto(`/blocks/${DRAFT_SLUG}`);
-  expect(response?.status()).toBe(404);
+  if (!CACHE_COMPONENTS) {
+    const response = await page.goto(`/blocks/${DRAFT_SLUG}`);
+    expect(response?.status()).toBe(404);
+    return;
+  }
+  // Under Cache Components the route streams its static shell before it reads
+  // the entry, so the status is 200 by the time it knows the entry is not
+  // published. It reads with access enforced, on every request, so Next never
+  // keeps a not-found render to answer later requests with a 404: every
+  // request, a second one included, gets the not-found page marked `noindex`,
+  // and none of the draft's content.
+  for (const request of ["first", "second"]) {
+    const response = await page.request.get(`/blocks/${DRAFT_SLUG}`);
+    const html = await response.text();
+    expect(response.status(), `${request} request`).toBe(200);
+    expect(html, `${request} request`).toMatch(
+      /<meta[^>]+name="robots"[^>]+content="noindex"/
+    );
+    expect(html, `${request} request`).toMatch(/could not be found/);
+    expect(html, `${request} request`).not.toContain(PAGE_HEADING);
+    expect(html, `${request} request`).not.toContain("Dogfood draft");
+  }
 });
 
 test("block-declared metadata reaches the head", async ({ page }) => {

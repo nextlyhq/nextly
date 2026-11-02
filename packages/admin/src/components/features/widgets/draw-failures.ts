@@ -12,9 +12,14 @@
  * @module components/features/widgets/draw-failures
  */
 
-import { createContext, useCallback, useState } from "react";
+import { createContext } from "react";
 
 import { hasComponent } from "@admin/lib/plugins/component-registry";
+
+import {
+  useReportedPlacements,
+  type PlacementReport,
+} from "./reported-placements";
 
 /** What a throw while drawing says, in the card's own words. */
 export const DREW_NOTHING = "Its component stopped while drawing.";
@@ -48,33 +53,21 @@ export function missingComponentMessage(
 }
 
 /** A card telling the grid whether its component failed to draw. */
-export type DrawFailureReport = (placementId: string, failed: boolean) => void;
+export type DrawFailureReport = PlacementReport;
 
 /** Where a card reports a failed draw; absent outside a grid. */
 export const DrawFailureContext = createContext<DrawFailureReport | undefined>(
   undefined
 );
 
-const NONE: ReadonlySet<string> = new Set();
-
 /**
  * The placements whose component failed to draw, and the report that keeps
- * them. A report that changes nothing keeps the same set, so the grid's
- * counts are not recomputed for it.
+ * them (`useReportedPlacements`).
  */
 export function useDrawFailures(): {
   failed: ReadonlySet<string>;
   report: DrawFailureReport;
 } {
-  const [failed, setFailed] = useState<ReadonlySet<string>>(NONE);
-  const report = useCallback<DrawFailureReport>((placementId, didFail) => {
-    setFailed(current => {
-      if (current.has(placementId) === didFail) return current;
-      const next = new Set(current);
-      if (didFail) next.add(placementId);
-      else next.delete(placementId);
-      return next;
-    });
-  }, []);
-  return { failed, report };
+  const { placements, report } = useReportedPlacements();
+  return { failed: placements, report };
 }

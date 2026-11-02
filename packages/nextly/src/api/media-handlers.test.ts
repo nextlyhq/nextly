@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => {
   return {
     mediaService: {
       listMedia: vi.fn(),
+      countLibrary: vi.fn(),
+      getFolderContents: vi.fn(),
       upload: vi.fn(),
       createFolder: vi.fn(),
       delete: vi.fn(),
@@ -166,5 +168,89 @@ describe("createMediaHandlers authorization", () => {
     // The folder is created for the session user, not the body's `createdBy`.
     const [, context] = mocks.mediaService.createFolder.mock.calls[0];
     expect(context.user.id).toBe("real-admin");
+  });
+
+  it("serves the sidebar's counts on the public mount, not as a media item", async () => {
+    container.registerSingleton("generalSettingsService", () => ({
+      getTimezone: async () => "UTC",
+    }));
+    const counts = {
+      all: 3,
+      missingAltText: 1,
+      unused: 2,
+      usageRecorded: true,
+      root: 1,
+      folders: { f1: 2 },
+    };
+    mocks.mediaService.countLibrary.mockResolvedValue(counts);
+
+    const response = await createMediaHandlers().GET(
+      new Request("http://localhost/api/media/counts"),
+      { params: Promise.resolve({ path: ["counts"] }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(counts);
+  });
+
+  it("says with Unused's own list whether the usage record it read was built, and with no other list", async () => {
+    container.registerSingleton("generalSettingsService", () => ({
+      getTimezone: async () => "UTC",
+    }));
+    const page = (usageRecorded?: boolean) => ({
+      data: [],
+      pagination: { total: 0, limit: 24, offset: 0, hasMore: false },
+      ...(usageRecorded === undefined ? {} : { usageRecorded }),
+    });
+    const list = async (query: string) => {
+      const response = await createMediaHandlers().GET(
+        new Request(`http://localhost/api/media${query}`),
+        { params: Promise.resolve({}) }
+      );
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { meta: Record<string, unknown> })
+        .meta;
+    };
+
+    mocks.mediaService.listMedia.mockResolvedValueOnce(page(false));
+    expect(await list("?view=unused")).toMatchObject({ usageRecorded: false });
+    mocks.mediaService.listMedia.mockResolvedValueOnce(page(true));
+    expect(await list("?view=unused")).toMatchObject({ usageRecorded: true });
+    // Another list says nothing of the record.
+    mocks.mediaService.listMedia.mockResolvedValueOnce(page());
+    expect(await list("")).not.toHaveProperty("usageRecorded");
+  });
+
+  it("asks for the folder page the query names, and refuses one past the limit", async () => {
+    container.registerSingleton("generalSettingsService", () => ({
+      getTimezone: async () => "UTC",
+    }));
+    mocks.mediaService.getFolderContents.mockResolvedValue({
+      folder: null,
+      subfolders: [],
+      files: [],
+      breadcrumbs: [],
+      meta: { total: 0, page: 2, limit: 10, totalPages: 0 },
+    });
+    const handlers = createMediaHandlers();
+    const get = (query: string) =>
+      handlers.GET(
+        new Request(`http://localhost/api/media/folders/f1/contents${query}`),
+        { params: Promise.resolve({ path: ["folders", "f1", "contents"] }) }
+      );
+
+    expect((await get("?page=2&limit=10&sortBy=filename")).status).toBe(200);
+    expect(mocks.mediaService.getFolderContents).toHaveBeenCalledWith(
+      "f1",
+      expect.anything(),
+      {
+        page: 2,
+        limit: 10,
+        sortBy: "filename",
+        sortOrder: "desc",
+      }
+    );
+
+    expect((await get("?limit=500")).status).toBe(400);
   });
 });

@@ -384,12 +384,19 @@ async function runList(
   collection: string,
   query: WidgetQuery,
   caller: ReadCaller,
-  source: WidgetSource
+  source: WidgetSource,
+  depth: 0 | undefined,
+  hookContext: Readonly<Record<string, unknown>> | undefined
 ): Promise<WidgetResult> {
   const select = toSelect(query.select);
   const result = await requireNextly().find({
     collection,
     limit: query.limit,
+    // Passed only when asked for, so every other read keeps core's default.
+    ...(depth === 0 ? { depth } : {}),
+    // The hooks' context, as core's own `find` hands it to them; a copy, so a
+    // hook writing to it changes nothing the data function holds.
+    ...(hookContext === undefined ? {} : { context: { ...hookContext } }),
     ...(query.sort ? { sort: query.sort } : {}),
     ...(select ? { select } : {}),
     ...sharedReadArgs(query, caller),
@@ -588,6 +595,20 @@ async function hasReleaseToRead(caller: ReadCaller): Promise<boolean> {
  */
 export interface CoreQueryOptions extends ResolverOptions {
   callerScope?: WidgetScope;
+  /**
+   * `0` for a collection `list` that answers each link (a relationship or an
+   * upload) as the id it stores, unexpanded: core's own `find` with
+   * `depth: 0`. Absent, the read expands links as core's `find` does by
+   * default. Handed only by a declared widget's data read, never named in a
+   * query, so a card's own query cannot ask for it.
+   */
+  depth?: 0;
+  /**
+   * The context a collection `list` hands the collection's hooks, as core's
+   * own `find` takes it. Handed only by a declared widget's data read, never
+   * named in a query.
+   */
+  hookContext?: Readonly<Record<string, unknown>>;
 }
 
 export async function executeWidgetQuery(
@@ -648,7 +669,16 @@ export async function executeWidgetQuery(
   // the same moment.
   const now = opts?.now ?? new Date();
   if (query.op === "count") return runCount(collection, query, caller, now);
-  if (query.op === "list") return runList(collection, query, caller, source);
+  if (query.op === "list") {
+    return runList(
+      collection,
+      query,
+      caller,
+      source,
+      opts?.depth,
+      opts?.hookContext
+    );
+  }
   if (query.op === "groupBy") {
     return runGroupBy(collection, query, caller, source);
   }
