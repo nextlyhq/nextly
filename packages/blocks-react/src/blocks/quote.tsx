@@ -204,10 +204,15 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
   baseStyles: QUOTE_BASE_STYLES,
   parts: QUOTE_PARTS,
   props: {
-    text: { role: "content", type: "textarea", inline: true },
-    attribution: { role: "content", type: "text" },
-    source: { role: "content", type: "text", inline: true },
-    citeUrl: { role: "content", type: "url" },
+    text: { label: "Quote", role: "content", type: "textarea", inline: true },
+    attribution: { label: "Attribution", role: "content", type: "text" },
+    source: {
+      label: "Source title",
+      role: "content",
+      type: "text",
+      inline: true,
+    },
+    citeUrl: { label: "Source URL", role: "content", type: "url" },
   },
   defaultProps: { text: "" },
   example: {

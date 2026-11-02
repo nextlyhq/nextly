@@ -133,6 +133,9 @@
   /* The rail's selected item, and the only accent the chrome spends. */
   --nx-builder-accent: var(--nx-primary);
   --nx-builder-accent-text: var(--nx-primary-foreground);
+  /* How far a block in mid-drag fades where it sits, on the canvas and in
+     Layers alike, so the thing in hand reads the same on both. */
+  --nx-builder-drag-source-opacity: 0.4;
   /* A component's own hue, worn by everything that is about a component
      rather than a block: the accepted editor mock's purple (Gutenberg's synced
      colour). Borrowed from the admin's one purple, light and dark, so a
@@ -1174,6 +1177,19 @@
 }
 
 /*
+ * A prop the panel has no control for is named in plain text rather than by a
+ * label, since there is no control for a label to name. It takes the label's
+ * place and weight, so the row still reads as the field it is.
+ */
+.nx-inspector__field-name {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+/*
  * Below the width where a label and a control can share a row, the field goes
  * back to stacking. Asked of the CONTAINER: the rail can be dragged narrow
  * while the window stays wide, and a media query would answer for the window.
@@ -1439,7 +1455,8 @@
  * state a screen reader reads, so styling from that attribute keeps what is
  * seen and what is announced reading off one value.
  */
-.nx-style-inspector__toggle > button[aria-pressed="true"] {
+.nx-style-inspector__toggle > button[aria-pressed="true"],
+.nx-style-inspector__toggle > button[aria-checked="true"] {
   background: var(--nx-accent);
   color: var(--nx-accent-foreground);
 }
@@ -1929,7 +1946,7 @@
  * thing carrying what is in flight.
  */
 .nx-canvas [data-nx-drag-source] {
-  opacity: 0.4;
+  opacity: var(--nx-builder-drag-source-opacity);
 }
 
 /*
@@ -2028,6 +2045,152 @@
 .nx-layers-panel__tree {
   flex: 1;
   min-height: 0;
+}
+
+/*
+ * A selected row takes the theme's selection surface rather than the grey a
+ * hovered row gets, so the two read apart: the selection is what the canvas
+ * and the inspector are showing, a hover is only where the pointer is.
+ * `--nx-accent` is that surface in light and dark alike.
+ */
+.nx-layers-panel__tree [role="treeitem"][aria-selected="true"] {
+  background: var(--nx-accent);
+  /* The only ink the theme means to be read on that surface, so a brand that
+     sets a strong accent keeps the row's name readable. */
+  color: var(--nx-accent-foreground);
+}
+
+/*
+ * The element a row drag is read on: the tree, and the line drawn over it.
+ *
+ * Positioned so the line and the refusal are placed in its own coordinates,
+ * and a column with `min-height: 0` for the reason the panel is one — without
+ * it the tree inside grows the panel rather than scrolling.
+ */
+.nx-layers-panel__body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/*
+ * The cursor says a row is held, over the gaps and over the rows alike: each
+ * row declares its own pointer cursor, so the drag has to reach them.
+ */
+.nx-layers-panel__body[data-nx-dragging],
+.nx-layers-panel__body[data-nx-dragging] [role="treeitem"] {
+  cursor: grabbing;
+}
+
+/* Over a place that refuses the block, as over one on the canvas. */
+.nx-layers-panel__body[data-nx-dragging="refused"],
+.nx-layers-panel__body[data-nx-dragging="refused"] [role="treeitem"] {
+  cursor: no-drop;
+}
+
+/*
+ * Where a dragged row would land: a line at the gap, starting where a row at
+ * that depth draws its name, so its indent says how deep the block will sit.
+ *
+ * Centred on the gap rather than hanging below it, and never a target itself,
+ * as the canvas line is not. Red, in the danger token the canvas refusal uses,
+ * when the placement rule or a lock refuses the drop there.
+ */
+.nx-layers-drop-line {
+  position: absolute;
+  right: 0.25rem;
+  z-index: 2;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--nx-primary);
+  transform: translateY(-1px);
+  pointer-events: none;
+}
+
+/* The canvas line's terminal, so the two read as one kind of mark. */
+.nx-layers-drop-line::before {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: inherit;
+}
+
+.nx-layers-drop-line[data-refused] {
+  background: var(--nx-destructive);
+}
+
+/*
+ * The row in hand, once it is picked up: what tells a finger that has held a
+ * row that the hold worked, before it moves. The row keeps the selection
+ * surface and gains a hairline, and its content fades as the drag source does
+ * on the canvas. On the row itself, so its corners are the row's.
+ */
+.nx-layers-panel__tree [role="treeitem"]:has([data-nx-drag-source]) {
+  background: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+  box-shadow: inset 0 0 0 1px var(--nx-builder-text-muted);
+}
+
+.nx-layer-row[data-nx-drag-source] {
+  opacity: var(--nx-builder-drag-source-opacity);
+}
+
+/*
+ * The reason a drop is refused, beside the panel and level with the line.
+ *
+ * On the chrome's raised notice surface with a red leading edge and a warning
+ * mark, as the editor's other notices are drawn, rather than a red fill: it
+ * sits among rows of ordinary text and has to read as a sentence. The edge
+ * and the mark carry the refusal; the text keeps the panel's own colours, so
+ * its contrast is the panel's.
+ */
+.nx-layers-drop-refusal {
+  /* Fixed in the window by the component, beside the panel: above the
+     canvas it overlaps, and never on the rows it explains. */
+  position: fixed;
+  z-index: 50;
+  width: max-content;
+  max-width: 18rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--nx-builder-border);
+  border-left: 3px solid var(--nx-destructive);
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.nx-layers-drop-refusal__mark {
+  flex: none;
+  margin-top: 0.0625rem;
+  color: var(--nx-destructive);
+}
+
+.nx-layers-drop-refusal__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.nx-layers-drop-refusal__why {
+  font-weight: var(--font-weight-semibold);
+}
+
+.nx-layers-drop-refusal__takes {
+  color: var(--nx-builder-text-muted);
 }
 
 .nx-layers-panel__note {
@@ -4035,4 +4198,128 @@ fieldset.nx-inspector__fields {
 .nx-lock-repair__actions {
   display: flex;
   gap: 0.5rem;
+}
+
+/*
+ * A control that holds more than one value (a list's items, a relation's
+ * search and matches) stacks its name above it and takes the panel's whole
+ * width. Beside a 6.5rem label column it was squeezed into what is left, and
+ * a list item's field showed a few letters of its text.
+ */
+.nx-inspector__field.nx-inspector__field--stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nx-inspector__field.nx-inspector__field--stacked > * {
+  grid-column: 1;
+}
+
+/* A list's items, one quiet row each: its field, then its actions. */
+.nx-inspector__array {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.nx-inspector__array-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.25rem 0.375rem;
+  padding: 0.375rem;
+  border: 1px solid var(--nx-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+/* An item's fields, one above another, taking the row's width. */
+.nx-inspector__array-fields {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+/* An item's own fields stack too: the row is narrower than a field's columns. */
+.nx-inspector__array-fields .nx-inspector__field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nx-inspector__array-fields .nx-inspector__field > * {
+  grid-column: 1;
+}
+
+.nx-inspector__array-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.nx-inspector__array-actions svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* A relation: what is chosen and its Clear on one line, then the search. */
+.nx-inspector__relation {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.nx-inspector__relation-chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-inspector__relation-chosen > p {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The matches: full-width rows, a long title cut with an ellipsis. */
+.nx-inspector__relation-matches {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-inspector__relation-matches button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 0.375rem;
+  text-align: start;
+}
+
+.nx-inspector__relation-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-inspector__relation-tick {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-inline-start: auto;
+}
+
+.nx-inspector__relation-matches button[aria-pressed="true"] {
+  font-weight: 600;
+}
+
+/*
+ * A chosen option longer than the menu button ("Load when near the screen")
+ * stays on one line, cut with an ellipsis, rather than wrapping the button
+ * to two lines in a row of one-line fields.
+ */
+.nx-inspector__field[data-content-control="select"] [data-slot="select-value"] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: start;
 }

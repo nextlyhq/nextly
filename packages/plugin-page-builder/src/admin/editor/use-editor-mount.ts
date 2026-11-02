@@ -24,7 +24,9 @@ import {
   inspectInstance,
   partOfComponentSentence,
   useEditorState,
+  createOpenPassages,
   useInlineEditing,
+  type OpenPassages,
   useNoticeQueue,
   userPreferenceStore,
   type BuilderShellProps,
@@ -33,6 +35,7 @@ import {
 import {
   loadInlineRichTextEditor,
   useCurrentUserId,
+  useDocumentLocale,
   usePluginClientConfig,
 } from "@nextlyhq/plugin-sdk/admin";
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
@@ -294,9 +297,8 @@ export function useEditorMount(
     },
     [editor.document, componentLibrary]
   );
-  const inline = useInlineEditing(
+  const { inline, passages, locale } = useInlineAndInspector(
     editor,
-    loadInlineRichTextEditor,
     announce,
     partOf
   );
@@ -336,6 +338,8 @@ export function useEditorMount(
     notices,
     editor,
     inline,
+    passages,
+    locale,
     savePattern,
     mayCreatePattern,
     preferenceStore,
@@ -351,6 +355,10 @@ export type EditorMount = {
   componentLibrary: ComponentLibraryRead;
   notices: NoticeQueue;
   editor: EditorState;
+  /** The inspector's open passages; see `createOpenPassages`. */
+  passages: OpenPassages;
+  /** The language being edited, by code, when the document has one. */
+  locale: string | undefined;
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
@@ -368,4 +376,33 @@ function placementSentence(refusal: LocatedPlacementBreak): string {
   return placementRefusalMessage(refusal.verdict, {
     labelOf: type => blockLabelFrom(type, getBlock(type)),
   });
+}
+
+/**
+ * What the canvas's inline editing and the inspector share:
+ * - the registry the inspector's rich-text fields hold an open passage in,
+ *   lent to the inline editing, whose commit finishes them before a save, and
+ *   to the inspector; one per mounted editor;
+ * - the language being edited, which the inspector's relation searches read
+ *   titles in.
+ */
+function useInlineAndInspector(
+  editor: EditorState,
+  announce: (outcome: InlineEditOutcome) => void,
+  partOf: (placementId: string) => void
+): {
+  inline: UseInlineEditingResult;
+  passages: OpenPassages;
+  locale: string | undefined;
+} {
+  const [passages] = useState(createOpenPassages);
+  const locale = useDocumentLocale()?.code ?? undefined;
+  const inline = useInlineEditing(
+    editor,
+    loadInlineRichTextEditor,
+    announce,
+    partOf,
+    passages
+  );
+  return { inline, passages, locale };
 }

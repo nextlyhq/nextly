@@ -115,8 +115,12 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["images", "photos", "grid", "carousel"],
     },
     props: {
-      as: { type: "select", options: ["div", "section", "article"] },
-      contained: { type: "checkbox" },
+      as: {
+        label: "HTML tag",
+        type: "select",
+        options: ["div", "section", "article"],
+      },
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "div", contained: false },
     example: { props: { as: "div" } },

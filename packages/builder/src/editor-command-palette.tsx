@@ -47,6 +47,9 @@ export function EditorCommandPalette({
 }: EditorCommandPaletteProps): React.JSX.Element {
   const verbs = useBlockActionsContext();
   const actions = useSelectionActions(editor);
+  // Taken out of `editor` so the list below depends on these two functions
+  // rather than on the store object, for the reason given there.
+  const { undo, redo } = editor;
 
   /*
    * Rebuilt when what it OFFERS could have changed, which is the document, the
@@ -66,21 +69,21 @@ export function EditorCommandPalette({
         // came to offer a verb the bar refused.
         actions,
         verbs,
-        undo: editor.undo,
-        redo: editor.redo,
+        // Undo and redo answer as a promise for a recorded step. The palette
+        // only runs them, and that promise settles on its own (a failed step
+        // answers `false` rather than rejecting), so the answer is let go here
+        // rather than handed to a command whose `run` returns nothing.
+        undo: () => {
+          void undo();
+        },
+        redo: () => {
+          void redo();
+        },
         canUndo: editor.canUndo,
         canRedo: editor.canRedo,
         onExit,
       }),
-    [
-      actions,
-      editor.undo,
-      editor.redo,
-      editor.canUndo,
-      editor.canRedo,
-      verbs,
-      onExit,
-    ]
+    [actions, undo, redo, editor.canUndo, editor.canRedo, verbs, onExit]
   );
 
   return <CommandPalette commands={commands} />;

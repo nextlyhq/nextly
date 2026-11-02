@@ -175,7 +175,10 @@ test.describe("the editor inside locked areas", () => {
 
     await expect(page.getByText(SEALED_DESIGN)).toBeVisible();
     await expect(page.getByLabel("Text", { exact: true })).toBeEnabled();
-    await expect(page.getByLabel("Level", { exact: true })).toBeDisabled();
+    // Level is a row of radio buttons; the held block holds every one.
+    await expect(
+      page.getByRole("radiogroup", { name: "Level" }).getByRole("radio").first()
+    ).toBeDisabled();
     // The block's own lock is held with its design: the card's menu shows
     // Lock disabled, with the reason.
     await page.getByRole("button", { name: "Actions for Heading" }).click();
@@ -203,7 +206,9 @@ test.describe("the editor inside locked areas", () => {
     // The control: a free heading's level is editable.
     await clickBlock(page, "lk-free-heading");
     await page.getByRole("tab", { name: "Content" }).click();
-    await expect(page.getByLabel("Level", { exact: true })).toBeEnabled();
+    await expect(
+      page.getByRole("radiogroup", { name: "Level" }).getByRole("radio").first()
+    ).toBeEnabled();
     await expect(includingHidden(page).getByText(SEALED_DESIGN)).toHaveCount(0);
   });
 });

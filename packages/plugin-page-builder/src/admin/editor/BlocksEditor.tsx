@@ -27,7 +27,12 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
+  type OpenPassages,
 } from "@nextlyhq/builder/shell";
+import {
+  loadInlineRichTextEditor,
+  MediaPickerDialog,
+} from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import { useState, type ComponentProps, type JSX } from "react";
 import {
@@ -41,6 +46,7 @@ import {
 import { siteSheet } from "../../site-style";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
+import { findEntries } from "../entries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import { SiteStyleHistoryContext } from "../site-style-client";
@@ -281,6 +287,64 @@ function editorTopBar(view: EditorView): {
   };
 }
 
+type ContentServices = NonNullable<
+  ComponentProps<typeof InspectorPanel>["contentServices"]
+>;
+
+let contentServices: ContentServices | undefined;
+
+/**
+ * What the inspector's Content tab borrows from the admin: the media library,
+ * to choose an image, the shared rich-text editor, and the page builder's
+ * entries route, to find an entry a `relation` prop points at with the
+ * author's own access. Built on first use and
+ * kept for the module's life, so the panel never sees a new object on a
+ * render, and loading this module reads nothing from the admin's surface
+ * until an editor is drawn.
+ */
+function borrowedServices(): ContentServices {
+  contentServices ??= {
+    MediaPicker: MediaPickerDialog,
+    loadRichTextEditor: loadInlineRichTextEditor,
+    findEntries,
+  };
+  return contentServices;
+}
+
+/**
+ * The borrowed services with this editor's open-passage registry and its
+ * language, one object per registry and language so the panel sees the same
+ * one on every render. A relation search reads titles in the language being
+ * edited.
+ */
+const servicesByPassages = new WeakMap<
+  OpenPassages,
+  Map<string, ContentServices>
+>();
+
+function servicesFor(
+  passages: OpenPassages,
+  locale: string | undefined
+): ContentServices {
+  let byLocale = servicesByPassages.get(passages);
+  if (byLocale === undefined) {
+    byLocale = new Map();
+    servicesByPassages.set(passages, byLocale);
+  }
+  const key = locale ?? "";
+  let services = byLocale.get(key);
+  if (services === undefined) {
+    services = {
+      ...borrowedServices(),
+      openPassages: passages,
+      findEntries: query =>
+        findEntries(locale === undefined ? query : { ...query, locale }),
+    };
+    byLocale.set(key, services);
+  }
+  return services;
+}
+
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
 type CardVerbs = ComponentProps<typeof InspectorPanel>["verbs"];
 
@@ -328,6 +392,7 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
+      contentServices={servicesFor(view.passages, view.locale)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}

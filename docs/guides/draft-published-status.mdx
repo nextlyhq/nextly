@@ -90,10 +90,10 @@ an error that names the field inside the component (`hero.code`). A password
 field inside a component is the exception: a stored password is never read
 back, so it is judged only when the instance is written.
 
-On a localized collection, a required component and the rules inside a
-component are enforced for the default language only, as a translated field's
-`required` is, so one finished language can go live while another is still
-incomplete.
+On a localized collection, and on one whose components hold translated values,
+a required component and the rules inside a component are enforced for the
+default language only, as a translated field's `required` is, so one finished
+language can go live while another is still incomplete.
 
 Sending `published` again to a document that is already live, with no pending
 draft, is not checked again.

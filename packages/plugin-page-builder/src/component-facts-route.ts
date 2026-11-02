@@ -41,8 +41,8 @@ import {
   type ComponentFactsResponse,
 } from "./library-contract";
 import {
-  asTheCaller,
   componentReadPermission,
+  readingAsUser,
   type ComponentStore,
 } from "./library-route";
 import type { UsageCount } from "./usage-count";
@@ -192,7 +192,7 @@ function liveRowReader(
       return await requireNextly().findByID({
         collection: slug,
         id,
-        ...(await asTheCaller(ctx)),
+        ...(await readingAsUser(ctx)),
         // The language being edited: a localized definition can expose
         // different fields in each.
         ...(locale === undefined ? {} : { locale }),

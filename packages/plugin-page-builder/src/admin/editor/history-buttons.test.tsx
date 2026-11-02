@@ -22,6 +22,7 @@ function mount(
     status?: InlineEditOutcome["status"];
     editing?: unknown;
     editingRich?: unknown;
+    inspecting?: boolean;
   } = {}
 ) {
   render(
@@ -38,6 +39,7 @@ function mount(
         },
         editing: open.editing ?? null,
         editingRich: open.editingRich ?? null,
+        inspecting: open.inspecting ?? false,
       }}
     />
   );
@@ -88,6 +90,12 @@ describe("HistoryButtons", () => {
     expect((button("Undo") as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(button("Undo"));
     expect(calls).toEqual(["commit", "undo"]);
+  });
+
+  it("offers Undo for a passage open in an inspector field", () => {
+    // Undo commits it first, so it is the step taken back.
+    mount({ canUndo: false, canRedo: false }, [], { inspecting: true });
+    expect((button("Undo") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("offers Undo for an open rich text passage too", () => {
