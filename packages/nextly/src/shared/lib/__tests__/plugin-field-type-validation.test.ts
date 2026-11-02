@@ -750,3 +750,78 @@ describe("the write a plugin field type is validated for", () => {
     expect(seen).toBeUndefined();
   });
 });
+
+describe("an emptied value, for a type that asks to judge it", () => {
+  /** A `json` type whose validate refuses every empty value it is handed. */
+  function registerGuarded(validateEmpty: boolean, seen: unknown[]): void {
+    registerFieldType({
+      type: "document",
+      storage: "json",
+      component: "@acme/docs/admin#DocumentInput",
+      validateEmpty,
+      validate: value => {
+        seen.push(value);
+        return value === null || value === ""
+          ? "Would drop what the stored document holds"
+          : true;
+      },
+    });
+  }
+
+  const BODY: ValidatableField[] = [{ name: "body", type: "document" }];
+
+  it.each([null, ""])(
+    "hands %j to validate and reports what it answers",
+    async empty => {
+      const seen: unknown[] = [];
+      registerGuarded(true, seen);
+
+      const issues = await validateEntryData({ body: empty }, BODY, {
+        mode: "update",
+      });
+
+      expect(seen).toEqual([empty]);
+      expect(issues).toEqual([
+        {
+          path: "body",
+          code: "CUSTOM",
+          message: "Would drop what the stored document holds.",
+        },
+      ]);
+    }
+  );
+
+  it("never hands it on otherwise, where `required` is the only rule", async () => {
+    const seen: unknown[] = [];
+    registerGuarded(false, seen);
+
+    expect(
+      await validateEntryData({ body: null }, BODY, { mode: "update" })
+    ).toEqual([]);
+    expect(seen).toEqual([]);
+  });
+
+  it("does not hand on a field the write left out", async () => {
+    // Absent on an update means untouched, not emptied.
+    const seen: unknown[] = [];
+    registerGuarded(true, seen);
+
+    expect(
+      await validateEntryData({ other: 1 }, BODY, { mode: "update" })
+    ).toEqual([]);
+    expect(seen).toEqual([]);
+  });
+
+  it("still reports a required field as required", async () => {
+    const seen: unknown[] = [];
+    registerGuarded(true, seen);
+
+    const issues = await validateEntryData(
+      { body: null },
+      [{ name: "body", type: "document", required: true }],
+      { mode: "update" }
+    );
+
+    expect(issues.map(issue => issue.code)).toEqual(["REQUIRED", "CUSTOM"]);
+  });
+});
