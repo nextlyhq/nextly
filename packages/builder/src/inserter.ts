@@ -27,6 +27,7 @@
 import {
   allBlocks,
   expandSlotDefaults,
+  blockLabelFrom,
   findNode,
   patternRefusal,
   getBlock,
@@ -755,36 +756,17 @@ function keywordsOf(stored: string | null | undefined): readonly string[] {
  * would keep the guess alongside it.
  */
 export function blockLabel(type: string): string {
-  const definition = getBlock(type);
-  // An unregistered type still has to read as something. Humanising its
-  // identity is the same fallback a registered-but-unlabelled block gets, so a
+  // An unregistered type still has to read as something: its name made
+  // readable, the same fallback a registered-but-unlabelled block gets, so a
   // block that disappears from the registry does not change what it is called
-  // in the middle of an editing session.
-  return definition === undefined ? humanise(type) : labelOf(definition);
+  // in the middle of an editing session. The engine words it, so a refusal
+  // from a save names a block the way the editor does.
+  return blockLabelFrom(type, getBlock(type));
 }
 
+/** A registered definition's label, as {@link blockLabel} reads it. */
 function labelOf(definition: AnyBlockDefinition): string {
-  const declared = definition.editor?.label;
-  if (declared !== undefined && declared !== "") return declared;
-  return humanise(definition.name);
-}
-
-/**
- * Turn a namespaced block name into something readable.
- *
- * The namespace is dropped because it answers "who shipped this", which a
- * palette groups by rather than repeats on every row. Separators become spaces
- * and only the first letter is capitalised — title-casing every word would
- * render "Collection Loop", which reads like a proper noun for a thing that is
- * a description.
- */
-function humanise(name: string): string {
-  const local = name
-    .slice(name.indexOf("/") + 1)
-    .replace(/[-_]+/g, " ")
-    .trim();
-  if (local === "") return name;
-  return local.charAt(0).toUpperCase() + local.slice(1);
+  return blockLabelFrom(definition.name, definition);
 }
 
 /**

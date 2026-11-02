@@ -908,6 +908,11 @@ export const pageBuilder = (
             `[page-builder] a component save left ${String(found.hosts.length)} document(s) that already break a lock inside it no worse; they need repairing where they are stored`,
             { componentId: found.componentId, hosts: found.hosts }
           ),
+        onPlacementUnjudged: found =>
+          ctx.logger.warn(
+            `[page-builder] a save kept ${String(found.breaks)} block placement(s) the editor's rules refuse, because the stored value they may already be part of could not be read; repair them in the editor`,
+            { field: found.field, collection: found.collection }
+          ),
         onLockedExposures: found =>
           ctx.logger.warn(
             `[page-builder] a component exposes ${String(found.exposures.length)} field(s) a contentOnly lock holds; placements cannot change them. Remove each exposure, or loosen the lock on its slot.`,

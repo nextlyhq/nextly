@@ -76,11 +76,16 @@ import {
   hostPlacing,
   type BoundedReader,
   type ComponentSource,
+  type HeldLibrary,
   type ReadComposition,
 } from "../composition-reading";
 
 import { isForest } from "./blocks-document";
-import { lockBaselines, storedFormsOf } from "./lock-baselines";
+import {
+  composedForms,
+  lockBaselines,
+  readStoredForms,
+} from "./lock-baselines";
 
 /** The issue shape core's validation envelope carries. */
 interface Issue {
@@ -163,6 +168,12 @@ export interface CompositionSetup {
    */
   readonly onHostsStillBroken?: (found: StillBrokenHosts) => void;
   /**
+   * Told of placement breaks a write kept because the stored value they may
+   * already be part of could not be read (a single, a localized field). Kept,
+   * not refused, so the server log is where an operator learns of them.
+   */
+  readonly onPlacementUnjudged?: (found: PlacementUnjudged) => void;
+  /**
    * Whether documents are composed against this store at all. `false` where
    * the renderer draws components from somewhere no collection can stand for
    * (a route's own `resolveComponents`): composing against this store would
@@ -170,6 +181,16 @@ export interface CompositionSetup {
    * store is still refused for containing itself.
    */
   readonly composesDocuments: boolean;
+}
+
+/** Placement breaks a write kept unjudged, for the server log. */
+export interface PlacementUnjudged {
+  /** The blocks field written. */
+  readonly field: string;
+  /** The collection written, when the write names one. */
+  readonly collection?: string;
+  /** How many breaks were kept. */
+  readonly breaks: number;
 }
 
 /**
@@ -258,8 +279,8 @@ export async function compositionIssues(
 
   const tally = hostTally(self ?? "", setup);
   // Read once for the save, and only if a lock is found broken.
-  let storedRead: Promise<readonly BlockDocument[]> | undefined;
-  const stored = () => (storedRead ??= storedFormsOf(write, args.path));
+  let storedRead: Promise<StoredRead> | undefined;
+  const stored = () => (storedRead ??= readStoredForms(write, args.path));
   for (const draft of formsChangedBy(nextStatus)) {
     const read = documentReader(source, draft);
     await judgeOwnComposition({
@@ -270,6 +291,7 @@ export async function compositionIssues(
       work,
       report,
       stored,
+      field: args.path,
     });
     if (self !== undefined) {
       await judgeHosts({
@@ -423,8 +445,13 @@ async function judgeOwnComposition(args: {
   setup: CompositionSetup;
   work: WorkAllowance;
   report: Report;
-  /** The document's stored forms, read only once a lock is found broken. */
-  stored: () => Promise<readonly BlockDocument[]>;
+  /**
+   * The document's stored forms, read only once a lock or a placement is
+   * found broken, and whether they could be read.
+   */
+  stored: () => Promise<StoredRead>;
+  /** The blocks field being written, for the server log. */
+  field?: string;
 }): Promise<void> {
   const { document, self, read, setup, work, report } = args;
   // A component's own document under its own id, so a placement leading back
@@ -443,21 +470,19 @@ async function judgeOwnComposition(args: {
     report.add("COMPOSITION_UNCHECKED", OUTGROWN);
     return;
   }
-  let faults = faultsIn(document, composed.composition, setup);
-  // A broken lock is judged again against what the page and its components
-  // already hold, which a part may keep; composed only now, so a save breaking
-  // no lock composes nothing more.
-  if (faults.some(fault => LOCK_FAULTS.has(fault.code))) {
-    const baselines = await lockBaselines({
+  // Composed again only once a lock or a placement is found broken, so a save
+  // breaking neither composes nothing more.
+  const faults = await measuredAgainstStored(
+    faultsIn(document, composed.composition, setup),
+    {
       document,
-      stored: await args.stored(),
-      library,
-      read,
-      limits: setup.limits,
-      work,
-    });
-    faults = faultsIn(document, composed.composition, setup, baselines);
-  }
+      composition: composed.composition,
+      setup,
+      reading: { library, read, limits: setup.limits, work },
+      stored: args.stored,
+      field: args.field,
+    }
+  );
   for (const fault of faults) {
     report.add(fault.code, fault.message);
   }
@@ -468,15 +493,79 @@ const OUTGROWN =
   "whether its blocks sit where they are allowed and within the depth limit " +
   "could not be established. Place fewer different components in it.";
 
+/**
+ * The faults judged again against what the page already holds, read only when
+ * a lock or a placement is found broken. A broken lock is measured against
+ * what the page and its components hold, which a part may keep; a placement
+ * break against the stored forms alone, where one already composing to it is
+ * kept. A stored value this cannot read may already compose to every
+ * placement break found, so none is refused, and the log says what was kept.
+ */
+async function measuredAgainstStored(
+  faults: readonly CompositionFault[],
+  args: {
+    document: BlockDocument;
+    composition: Parameters<typeof compositionFaults>[1];
+    setup: CompositionSetup;
+    reading: {
+      library: HeldLibrary;
+      read: BoundedReader;
+      limits: DocumentLimits;
+      work: WorkAllowance;
+    };
+    stored: () => Promise<StoredRead>;
+    field: string | undefined;
+  }
+): Promise<readonly CompositionFault[]> {
+  const lockBroken = faults.some(fault => LOCK_FAULTS.has(fault.code));
+  const placementBroken = faults.some(fault =>
+    PLACEMENT_FAULTS.has(fault.code)
+  );
+  if (!lockBroken && !placementBroken) return faults;
+  const { document, setup, reading } = args;
+  const stored = await args.stored();
+  const again = faultsIn(document, args.composition, setup, {
+    ...(lockBroken
+      ? {
+          baselines: await lockBaselines({
+            ...reading,
+            document,
+            stored: stored.forms,
+          }),
+        }
+      : {}),
+    ...(placementBroken
+      ? {
+          storedCompositions: await composedForms({
+            ...reading,
+            hosts: stored.forms,
+          }),
+        }
+      : {}),
+  });
+  if (stored.readable) return again;
+  const kept = again.filter(fault => !PLACEMENT_FAULTS.has(fault.code));
+  if (kept.length < again.length) {
+    setup.onPlacementUnjudged?.({
+      field: args.field ?? "",
+      breaks: again.length - kept.length,
+    });
+  }
+  return kept;
+}
+
 /** The composition faults, against the site's own nesting rules. */
 function faultsIn(
   host: BlockDocument,
   composition: Parameters<typeof compositionFaults>[1],
   setup: CompositionSetup,
-  baselines?: readonly unknown[]
+  measuredAgainst: {
+    baselines?: readonly unknown[];
+    storedCompositions?: readonly unknown[];
+  } = {}
 ): readonly CompositionFault[] {
   return compositionFaults(host, composition, {
-    ...(baselines === undefined ? {} : { baselines }),
+    ...measuredAgainst,
     limits: setup.limits,
     // Read through to the live registry, as the field's own nesting rule is.
     nesting: registryNestingSource(),
@@ -885,6 +974,20 @@ function faultCounts(faults: readonly HostFault[]): Map<string, number> {
 }
 
 /** The faults that are a lock broken in the composed host. */
+/** The placement rule's faults, measured against the stored forms alone. */
+const PLACEMENT_FAULTS: ReadonlySet<string> = new Set([
+  "wrong-parent",
+  "not-allowed-in-slot",
+  "restricted-at-root",
+  "undeclared-slot",
+  "holds-no-blocks",
+  "phrasing-only",
+  "content-model",
+]);
+
+/** What reading the stored forms found. */
+type StoredRead = Awaited<ReturnType<typeof readStoredForms>>;
+
 const LOCK_FAULTS: ReadonlySet<string> = new Set([
   "locked-slot-altered",
   "locked-slot-content-only",

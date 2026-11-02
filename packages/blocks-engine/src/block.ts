@@ -9,6 +9,7 @@
  * return type is opaque here and narrowed by the React binding package. That is
  * what keeps this package dependency-free and usable from any runtime.
  */
+import type { ContentModel } from "./content-model";
 import type { BlockNode, BlockPart, NodeStyles } from "./document";
 import type { MigrationMap } from "./migration";
 
@@ -564,6 +565,23 @@ export interface BlockDefinition<
    */
   rendersNothing?(this: void, props: P): boolean;
   /**
+   * What this block is as HTML content for these props, and what it lets sit
+   * beneath it: a Card with its link on is interactive and refuses anything
+   * interactive inside it; a Section rendered as a footer refuses another
+   * footer. The editor and the server both read it through the one placement
+   * rule, so a block whose settings change its HTML is judged by what it
+   * renders, not by its name.
+   *
+   * Optional. A block that declares nothing is flow content accepting flow
+   * content, which is what it was treated as before this existed.
+   *
+   * Pure and synchronous, like {@link BlockDefinition.rendersNothing}, and for
+   * the same reasons; a throw or a malformed answer is read as undeclared.
+   *
+   * @experimental Settles with the editor's placement rule.
+   */
+  contentModel?(this: void, props: P): ContentModel;
+  /**
    * What this block contributes to the page's metadata when the entry's own
    * SEO fields are blank.
    *
@@ -706,6 +724,7 @@ export interface AnyBlockDefinition
     | "localized"
     | "render"
     | "rendersNothing"
+    | "contentModel"
     | "seo"
   > {
   example: { props: object; slots?: Record<string, BlockNode[]> };
@@ -714,6 +733,8 @@ export interface AnyBlockDefinition
   localized?: string[];
   render(args: BlockRenderArgs<object, unknown>): BlockRenderResult;
   rendersNothing?(this: void, props: object): boolean;
+  /** Widened for the reason `rendersNothing` is: read with stored props. */
+  contentModel?(this: void, props: object): ContentModel;
   /**
    * Widened for the same reason as the members above, and it was the one member
    * that was missed.

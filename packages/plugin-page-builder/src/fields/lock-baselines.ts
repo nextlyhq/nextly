@@ -41,10 +41,28 @@ export async function storedFormsOf(
   write: PluginFieldWrite | undefined,
   field: string
 ): Promise<BlockDocument[]> {
-  if (write === undefined || write.kind !== "collection") return [];
+  return (await readStoredForms(write, field)).forms;
+}
+
+/**
+ * The stored forms, and whether they could be read at all.
+ *
+ * Two different empties. A create has nothing stored, so every placement break
+ * in it is the write's own; a single, or a field whose read is refused (a
+ * localized one), has a stored value this cannot see, so a break in it may be
+ * one the page already held. The placement rule refuses the first and only
+ * warns about the second.
+ */
+export async function readStoredForms(
+  write: PluginFieldWrite | undefined,
+  field: string
+): Promise<{ forms: BlockDocument[]; readable: boolean }> {
+  if (write === undefined) return { forms: [], readable: true };
+  if (write.kind !== "collection") return { forms: [], readable: false };
   const id = write.id;
-  if (id === undefined) return [];
+  if (id === undefined) return { forms: [], readable: true };
   const forms: BlockDocument[] = [];
+  let readable = true;
   for (const form of ["published", "draft"] as const) {
     try {
       const read = await write.readStored({
@@ -58,9 +76,10 @@ export async function storedFormsOf(
       }
     } catch {
       // Unreadable: measured against the starting blocks, as for a create.
+      readable = false;
     }
   }
-  return forms;
+  return { forms, readable };
 }
 
 /**
@@ -82,13 +101,34 @@ export async function lockBaselines(args: {
   limits: DocumentLimits;
   work: WorkAllowance;
 }): Promise<unknown[]> {
+  return composedForms({
+    ...args,
+    hosts: [
+      ...args.stored,
+      placementsAsComponentsHoldThem(args.document, args.limits),
+    ],
+  });
+}
+
+/**
+ * Each host composed with the same reader, library and allowance as the page.
+ * Where the allowance runs out, what was composed is returned: a baseline
+ * missing only measures more strictly.
+ *
+ * The stored forms alone are what a placement break is measured against: the
+ * page as its components hold it is the page being saved, so a break it
+ * composes to would read as one the page already held.
+ */
+export async function composedForms(args: {
+  hosts: readonly BlockDocument[];
+  library: HeldLibrary;
+  read: BoundedReader;
+  limits: DocumentLimits;
+  work: WorkAllowance;
+}): Promise<unknown[]> {
   const { library, read, limits, work } = args;
-  const hosts = [
-    ...args.stored,
-    placementsAsComponentsHoldThem(args.document, limits),
-  ];
   const baselines: unknown[] = [];
-  for (const host of hosts) {
+  for (const host of args.hosts) {
     if (read.exhausted() || work.left <= 0) break;
     const composed = await composeWithReads({
       host,

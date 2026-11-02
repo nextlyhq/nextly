@@ -363,6 +363,10 @@ export type {
   BlockSeoImage,
   BlockVariation,
   ComponentPath,
+  // What `contentModel(props)` answers with, so a block author can declare
+  // what their block is as HTML content without importing the engine.
+  ContentKind,
+  ContentModel,
   NodeStyles,
   SlotLock,
   SlotSpec,

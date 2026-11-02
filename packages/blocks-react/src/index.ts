@@ -262,6 +262,10 @@ export type {
   CompiledPageCss,
   ComponentPath,
   Condition,
+  // Reachable from `BlockDefinition.contentModel`, which a block author
+  // declares; a type reachable through a re-exported one but unnamed is a hole.
+  ContentKind,
+  ContentModel,
   DocumentFormatVersion,
   DocumentKind,
   DocumentLimits,

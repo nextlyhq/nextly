@@ -28,12 +28,19 @@ import {
   DEFAULT_LIMITS,
   LIMIT_WARNING_RATIO,
   MAX_ENVELOPE_ENTRIES,
+  MAX_NODES,
 } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
+import {
+  placementTracker,
+  type PlacementSources,
+  type TrackedPlacement,
+} from "./placement";
+import { blockLabelFrom, placementRefusalMessage } from "./placement-wording";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
 import { boundedOwnKeys } from "./safe-record";
 import { slotLockBreaks, slotLockOf, typeOfChild } from "./slot-lock";
@@ -314,6 +321,16 @@ export const ISSUE_CODES = {
     "A container's slot declares the block types it holds, and this node is not one of them.",
   "restricted-at-root":
     "A node declares the block types it may sit under, and it sits at the top level, which is inside none of them.",
+  // The placement rule's own refusals, spelled as its `PlacementRefusal`
+  // members for the reason the three above are.
+  "undeclared-slot":
+    "A node sits in a slot its container does not declare, so the container never renders it.",
+  "holds-no-blocks":
+    "A node sits inside a block that holds no blocks, so that block never renders it.",
+  "phrasing-only":
+    "A node sits in a container that takes only text-level blocks, and it is not one.",
+  "content-model":
+    "A node is a kind of HTML content an ancestor refuses beneath it, such as something clickable inside a link.",
   "locked-slot-altered":
     "A container's slot is locked, and it does not hold exactly the blocks it starts with.",
   "locked-slot-content-only":
@@ -747,11 +764,31 @@ function validateNodeForest(
   state: NodeCheckState,
   maxNodes: number
 ): void {
+  // The placement rule needs the definitions as well as the nesting source:
+  // declared slots and content models live there. A caller with only a
+  // nesting source keeps the name rules it always had.
+  const sources = placementSourcesOf(state.ctx);
+  const placement =
+    sources === undefined
+      ? undefined
+      : {
+          tracker: placementTracker(sources),
+          old: storedBreakSignatures(state.ctx.stored, sources, maxNodes),
+        };
   walkNodeForest(
     nodes,
     maxNodes,
     { definitions: state.ctx.definitions, stored: state.ctx.stored },
-    ({ node, path, placement, hidden, lock, counterparts }) => {
+    ({
+      node,
+      path,
+      placement: at,
+      hidden,
+      lock,
+      counterparts,
+      parent,
+      slot,
+    }) => {
       // Asked HERE rather than in a pass of its own, so the read is inside the
       // budget and happens on a node this loop has reached. Gating is
       // inherited, because the renderer prunes a gated node's whole subtree.
@@ -761,7 +798,18 @@ function validateNodeForest(
       // than an exception — the same guard the slot walk applies.
       const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
       validateNode(node, path, state, gated);
-      checkNesting(node, path, placement, state);
+      if (placement === undefined) {
+        checkNesting(node, path, at, state);
+      } else {
+        checkPlacement(
+          node,
+          path,
+          at,
+          placement.tracker.visit(node, parent, slot),
+          placement.old,
+          state
+        );
+      }
       checkLockedSlots(node, path, { lock, counterparts }, state);
       return gated;
     }
@@ -970,31 +1018,100 @@ function checkNesting(
     path,
     code: verdict.reason,
     severity: "error",
-    message: messageForRefusal(raw.type, placement, verdict.permitted),
+    // The one wording the editor uses too. Without definitions there is no
+    // label to read, so a type reads as its name made readable.
+    message: placementRefusalMessage(
+      {
+        allowed: false,
+        reason: verdict.reason,
+        blockType: raw.type,
+        permitted: verdict.permitted,
+      },
+      {
+        labelOf: type => blockLabelFrom(type, undefined),
+        ...(placement.at === "container" ? { regionType: placement.type } : {}),
+      }
+    ),
   });
 }
 
+/** The placement rule's sources, when the context carries both halves. */
+function placementSourcesOf(
+  ctx: ValidationContext
+): PlacementSources | undefined {
+  if (ctx.nesting === undefined || ctx.definitions === undefined) {
+    return undefined;
+  }
+  return { nesting: ctx.nesting, definitions: ctx.definitions };
+}
+
 /**
- * Names the containers the block WILL go in, because that is the author's next
- * action. A sentence saying only that the placement is wrong leaves them to find
- * the permitted set by trying positions.
+ * The signatures of every placement break the stored forms already hold.
  *
- * Takes the restriction the REFUSAL carried, never the source. Asking the source
- * again would be a second answer to the question the verdict already settled,
- * and nothing requires a caller-supplied lookup to be idempotent — so a stateful
- * or lazily-resolved one could name a set other than the one that refused this
- * placement. Both inputs now come from the verdict, so the sentence cannot
- * describe a position or a permitted set other than the ones that were judged.
+ * Judged by the same tracker over the same bounded walk as the document, so a
+ * break the stored page held reads as the same break here, and a break is old
+ * exactly when its block sits under the same chain of ancestors, unchanged
+ * (`TrackedPlacement.signature`). Empty without stored forms: a document never
+ * stored has no old breaks.
  */
-function messageForRefusal(
-  childType: string,
+export function storedBreakSignatures(
+  stored: readonly unknown[] | undefined,
+  sources: PlacementSources,
+  maxNodes: number = MAX_NODES
+): ReadonlySet<string> {
+  const found = new Set<string>();
+  for (const form of stored ?? []) {
+    const nodes = isPlainRecord(form) ? form.nodes : undefined;
+    if (!Array.isArray(nodes)) continue;
+    const tracker = placementTracker(sources);
+    walkNodeForest(
+      nodes as BlockNode[],
+      maxNodes,
+      { definitions: undefined, stored: undefined },
+      ({ node, parent, slot }) => {
+        const tracked = tracker.visit(node, parent, slot);
+        if (tracked !== undefined && !tracked.verdict.allowed) {
+          found.add(tracked.signature);
+        }
+        return false;
+      }
+    );
+  }
+  return found;
+}
+
+/**
+ * Report a node the placement rule refuses where it sits.
+ *
+ * An ERROR when the break is new, and a WARNING when a stored form already
+ * held it: a page saved before the rule must still save its other changes
+ * without losing or refusing those blocks, and the editor offers a repair.
+ * Worded by the one wording the editor uses, so an author reads the same
+ * sentence from the canvas and from a save.
+ */
+function checkPlacement(
+  node: BlockNode,
+  path: string,
   placement: Placement,
-  permitted: readonly string[]
-): string {
-  const where = permitted.map(name => describeValue(name)).join(" or ");
-  return placement.at === "container"
-    ? `A "${describeValue(childType)}" may only sit inside ${where}, not inside "${describeValue(placement.type)}".`
-    : `A "${describeValue(childType)}" may only sit inside ${where}, and a top-level node sits inside nothing.`;
+  tracked: TrackedPlacement | undefined,
+  old: ReadonlySet<string>,
+  state: NodeCheckState
+): void {
+  // As `checkNesting`: a container this walk cannot name cannot be judged.
+  if (placement.at === "unnameable-container") return;
+  const raw: unknown = node;
+  if (!isPlainRecord(raw) || !isNodeType(raw.type)) return;
+  if (tracked === undefined || tracked.verdict.allowed) return;
+  const definitions = state.ctx.definitions;
+  state.issues.push({
+    path,
+    code: tracked.verdict.reason,
+    severity: old.has(tracked.signature) ? "warning" : "error",
+    message: placementRefusalMessage(tracked.verdict, {
+      labelOf: type => blockLabelFrom(type, definitions?.get(type)),
+      ...(placement.at === "container" ? { regionType: placement.type } : {}),
+    }),
+  });
 }
 
 /**

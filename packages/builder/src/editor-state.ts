@@ -29,9 +29,13 @@
 
 import {
   DEFAULT_LIMITS,
+  placementRefusal,
+  registryBlockSource,
+  registryNestingSource,
   type BlockDocument,
   type ComponentLookup,
   type DocumentLimits,
+  type LocatedPlacementBreak,
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
@@ -133,6 +137,43 @@ export interface UseEditorStateArgs {
    * this is the one place the reason is still known.
    */
   onRefused?: (refusal: CompositionRefusal) => void;
+  /**
+   * Told when an edit was refused because it would put a block where the
+   * placement rule forbids, with the block and the reason. Every editor path
+   * (insert, drag, keyboard, toolbar, paste) ends in an op group here, so this
+   * is the one check none of them can miss; the paths also ask before acting,
+   * so the author reads the refusal where they tried.
+   */
+  onPlacementRefused?: (refusal: LocatedPlacementBreak) => void;
+}
+
+/**
+ * Whether an edit that turned `before` into `after` puts a block where the
+ * placement rule forbids — telling the host which, when it does. A break the
+ * page already held is not the edit's, so it is not refused here.
+ */
+function refusedForPlacement(
+  before: BlockDocument,
+  after: BlockDocument,
+  {
+    definitions,
+    onPlacementRefused,
+  }: Pick<UseEditorStateArgs, "definitions" | "onPlacementRefused">,
+  limits: DocumentLimits
+): boolean {
+  const refusal = placementRefusal(
+    before,
+    after,
+    {
+      nesting: registryNestingSource(),
+      definitions: registryBlockSource(),
+      ...(definitions === undefined ? {} : { components: definitions }),
+    },
+    limits
+  );
+  if (refusal === undefined) return false;
+  onPlacementRefused?.(refusal);
+  return true;
 }
 
 /**
@@ -171,12 +212,13 @@ export function useEditorState({
   limits = DEFAULT_LIMITS,
   definitions,
   onRefused,
+  onPlacementRefused,
 }: UseEditorStateArgs): EditorState {
   // Read at apply time rather than closed over, so a library that reloads or
   // a host that swaps its callback does not rebuild `apply` and everything
   // keyed on it.
-  const composition = useRef({ definitions, onRefused });
-  composition.current = { definitions, onRefused };
+  const composition = useRef({ definitions, onRefused, onPlacementRefused });
+  composition.current = { definitions, onRefused, onPlacementRefused };
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
   const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
 
@@ -300,6 +342,19 @@ export function useEditorState({
       if (
         into === "new" &&
         refusedForRoom(
+          latestDocument.current,
+          group.document,
+          composition.current,
+          limits
+        )
+      ) {
+        return null;
+      }
+      // A fresh edit only, for the reason room is: an undo or a redo returns
+      // the page to a state that was accepted when it was made.
+      if (
+        into === "new" &&
+        refusedForPlacement(
           latestDocument.current,
           group.document,
           composition.current,

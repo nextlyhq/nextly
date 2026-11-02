@@ -33,7 +33,7 @@ import {
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
-import { RichText } from "../rich-text";
+import { holdsInteractive, RichText } from "../rich-text";
 
 import { CONTENT } from "./categories";
 
@@ -149,5 +149,12 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
       effects: true,
       position: true,
     },
+    // A passage holding a link draws an `<a>`, so it is interactive while it
+    // does. Asked of the same test the renderer uses to keep anchors apart.
+    contentModel: props =>
+      isRichTextValue(props.content) &&
+      holdsInteractive(props.content.root.children)
+        ? { is: ["flow", "interactive"] }
+        : { is: ["flow"] },
     render: renderRichText,
   });

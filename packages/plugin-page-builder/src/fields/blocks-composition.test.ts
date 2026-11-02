@@ -42,8 +42,10 @@ const base = {
 beforeEach(() => {
   registerBlocks(
     [
-      { ...base, name: "acme/box" },
-      { ...base, name: "acme/columns" },
+      // Declared slots: a child in a slot its container never declares is
+      // refused on its own account, which these cases do not test.
+      { ...base, name: "acme/box", slots: { children: {} } },
+      { ...base, name: "acme/columns", slots: { children: {} } },
       { ...base, name: "acme/column", parent: ["acme/columns"] },
       {
         ...base,
