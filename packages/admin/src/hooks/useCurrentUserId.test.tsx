@@ -5,7 +5,7 @@
  * @module hooks/useCurrentUserId.test
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -72,5 +72,22 @@ describe("useCurrentUserId", () => {
     );
     await waitFor(() => expect(result.current.id).toBe("user-1"));
     expect(requested).toEqual(["/me"]);
+  });
+
+  it("answers null once a later read fails, rather than the user from before", async () => {
+    // The query keeps its last data beside a failure, and a key built from
+    // it would keep writing under an author no longer known to be signed in.
+    me = () =>
+      Promise.resolve({ id: "user-1", name: "Ada", email: "ada@example.com" });
+    const client = fresh();
+    const { result } = renderHook(() => useCurrentUserId(), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current).toBe("user-1"));
+    me = () => Promise.reject(new Error("Session expired."));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["auth", "me"] });
+    });
+    await waitFor(() => expect(result.current).toBeNull());
   });
 });

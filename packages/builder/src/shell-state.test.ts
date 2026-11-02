@@ -445,6 +445,13 @@ describe("preferences kept per signed-in user", () => {
     expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBe(LEGACY);
   });
 
+  it("is the same store for the same user, so a host may call it on every render", () => {
+    // A new store each time reads as a store swap, and the shell reloads.
+    expect(userPreferenceStore("ada")).toBe(userPreferenceStore("ada"));
+    expect(userPreferenceStore("ada")).not.toBe(userPreferenceStore("grace"));
+    expect(userPreferenceStore(null)).toBe(userPreferenceStore(null));
+  });
+
   it("remembers nothing for no one", () => {
     // Unknown, signed out or unread: nothing is kept for a guess.
     window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);

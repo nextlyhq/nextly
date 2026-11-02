@@ -15,5 +15,8 @@
 import { useDashboardUser } from "./useDashboardUser";
 
 export function useCurrentUserId(): string | null {
-  return useDashboardUser().user?.id ?? null;
+  // The query keeps its last data beside a failed read, so a failure answers
+  // null rather than the user who was signed in before it.
+  const { user, error } = useDashboardUser();
+  return error === null ? (user?.id ?? null) : null;
 }

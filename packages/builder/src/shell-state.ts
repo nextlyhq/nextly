@@ -406,6 +406,20 @@ export const SHELL_PREFERENCES_KEY = "nextly.builder.shell";
  */
 export function userPreferenceStore(userId: string | null): PreferenceStore {
   if (userId === null || typeof window === "undefined") return NO_STORAGE;
+  // One store per user, so a host may call this on every render: a new
+  // object would read as a different store, and the shell would reload.
+  const cached = userStores.get(userId);
+  if (cached !== undefined) return cached;
+  const store = keyedStore(userId);
+  userStores.set(userId, store);
+  return store;
+}
+
+/** The stores handed out so far, by user id. */
+const userStores = new Map<string, PreferenceStore>();
+
+/** The store under one user's own key, moving the earlier record on a read. */
+function keyedStore(userId: string): PreferenceStore {
   const own = browserStore(`${SHELL_PREFERENCES_KEY}:${userId}`);
   const before = browserStore(SHELL_PREFERENCES_KEY);
   return {
