@@ -511,12 +511,13 @@ export function InspectorPanel({
   const [tab, setTab] = React.useState<string>(() => openingTabFor(styleState));
 
   const commit = React.useCallback(
-    (name: string, value: unknown) => {
+    (name: string, value: unknown): BlockDocument | null => {
       const id = editor.selectedId;
-      if (id === null) return;
+      if (id === null) return null;
       // Read at commit time rather than closed over: a field committing on
-      // blur can fire after another edit has already replaced the node.
-      commitProp(editor, editor.document, id, name, value);
+      // blur can fire after another edit has already replaced the node. The
+      // document written is answered, for a caller storing it straight away.
+      return commitProp(editor, editor.document, id, name, value);
     },
     [editor]
   );
@@ -628,7 +629,7 @@ function ContentTab({
 }: {
   block: BlockInspection;
   editor: EditorState;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   inspectors: BlockInspectorResolver | undefined;
   services: ContentServices | undefined;
   blocks: BlockResolver | undefined;
@@ -834,7 +835,7 @@ function ContentSurface({
 }: {
   inspection: BlockInspection;
   editor: EditorState;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   inspectors: BlockInspectorResolver | undefined;
   services: ContentServices | undefined;
   reasonId: string;
@@ -973,7 +974,7 @@ function ContentFields({
   writable,
 }: {
   inspection: BlockInspection;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   services: ContentServices | undefined;
   /** The id of the lock reason a held field points to. */
   reasonId: string;
@@ -1023,7 +1024,7 @@ function PropField({
 }: {
   prop: EditableProp;
   disabled: boolean;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   services: ContentServices | undefined;
 }): React.JSX.Element {
   // Unique per mount, so two editors on one page never share a field id and a

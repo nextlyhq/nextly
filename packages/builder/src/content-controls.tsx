@@ -22,7 +22,11 @@
  * @module content-controls
  */
 
-import { isRichTextValue, richTextToPlainText } from "@nextlyhq/blocks-engine";
+import {
+  isRichTextValue,
+  richTextToPlainText,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import {
   Button,
   Input,
@@ -44,6 +48,7 @@ import {
   type ContentControlType,
 } from "./content-control-types";
 import { optionLabel, propLabel, type EditableProp } from "./inspector";
+import type { OpenPassages } from "./open-passages";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";
 import { useStoredDraft } from "./stored-draft";
@@ -101,6 +106,11 @@ export interface ContentServices {
    * a prop that points at one of them.
    */
   readonly findEntries?: (query: EntryQuery) => Promise<readonly FoundEntry[]>;
+  /**
+   * Where a rich-text field holds the passage it has open, so the host
+   * finishes it before the document is stored.
+   */
+  readonly openPassages?: OpenPassages;
 }
 
 /** What every content control is given. */
@@ -110,8 +120,14 @@ export interface ContentControlProps {
   readonly prop: EditableProp;
   /** Whether the prop may not be changed here: a lock, or a `contentOnly` area. */
   readonly disabled: boolean;
-  /** Set the prop, through the editor's one write path; `undefined` removes it. */
-  readonly onCommit: (name: string, value: unknown) => void;
+  /**
+   * Set the prop, through the editor's one write path; `undefined` removes
+   * it. Answers the document the write produced, when the caller knows it.
+   */
+  readonly onCommit: (
+    name: string,
+    value: unknown
+  ) => BlockDocument | null | void;
   /** What the host lends, for the controls that need the admin. */
   readonly services?: ContentServices | undefined;
   /**
@@ -425,6 +441,9 @@ function MediaControl({
               title={`Choose ${label.toLowerCase()}`}
               onSelect={media => {
                 const first = media[0];
+                // Closed here: the picker leaves closing to whoever opened it,
+                // and left open it would sit over a choice already made.
+                setOpen(false);
                 if (first === undefined) return;
                 setPicked(first);
                 onCommit(prop.name, first.id);
@@ -494,6 +513,9 @@ function RichTextControl({
     if (editable) load().catch(() => undefined);
   }, [editable, load]);
 
+  // The host's hold on this passage while it is open; see `OpenPassages`.
+  const release = React.useRef<(() => void) | null>(null);
+
   const attach = async (): Promise<void> => {
     const element = field.current;
     if (!editable || element === null || session.current !== null) return;
@@ -515,17 +537,23 @@ function RichTextControl({
     }
     setRefused(null);
     session.current = attachment.session;
+    // Finished through the latest render's `finish`, whose write path is the
+    // current one.
+    release.current =
+      services?.openPassages?.hold(() => latestFinish.current()) ?? null;
     attachment.session.focus();
   };
 
-  const finish = (): void => {
+  const finish = (): BlockDocument | null | void => {
     focused.current = false;
+    release.current?.();
+    release.current = null;
     const live = session.current;
-    if (live === null) return;
+    if (live === null) return null;
     session.current = null;
     const value = live.read();
     live.detach();
-    onCommit(prop.name, value);
+    return onCommit(prop.name, value);
   };
 
   // While no editor is attached, the field shows the passage's words, set on
@@ -545,7 +573,12 @@ function RichTextControl({
   // through a ref so the cleanup commits with this render's write path.
   const latestFinish = React.useRef(finish);
   latestFinish.current = finish;
-  React.useEffect(() => () => latestFinish.current(), []);
+  React.useEffect(
+    () => () => {
+      latestFinish.current();
+    },
+    []
+  );
 
   return (
     <div className="nx-inspector__field" data-content-control="richText">

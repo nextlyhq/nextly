@@ -20,7 +20,9 @@ import {
   type UseInlineEditingResult,
   CANVAS_ROOT_CLASS,
   useEditorState,
+  createOpenPassages,
   useInlineEditing,
+  type OpenPassages,
   useNoticeQueue,
   type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
@@ -260,7 +262,16 @@ export function useEditorMount(
     const problem = inlineEditProblem(outcome);
     if (problem !== null) toast.error(problem);
   }, []);
-  const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
+  // Where the inspector's rich-text fields hold an open passage: lent to the
+  // inline editing below, whose commit finishes them before a save, and to
+  // the inspector. One per mounted editor.
+  const [passages] = useState(createOpenPassages);
+  const inline = useInlineEditing(
+    editor,
+    loadInlineRichTextEditor,
+    announce,
+    passages
+  );
 
   // Whether the save-as-pattern form is up. A boolean here rather than the form
   // itself, because the verb that raises it belongs to the shared chain — the
@@ -285,6 +296,7 @@ export function useEditorMount(
     notices,
     editor,
     inline,
+    passages,
     savePattern,
     mayCreatePattern,
   };
@@ -298,6 +310,8 @@ export type EditorMount = {
   componentLibrary: ComponentLibraryRead;
   notices: NoticeQueue;
   editor: EditorState;
+  /** The inspector's open passages; see `createOpenPassages`. */
+  passages: OpenPassages;
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;

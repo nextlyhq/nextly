@@ -3963,3 +3963,16 @@ fieldset.nx-inspector__fields {
 .nx-inspector__relation-matches button[aria-pressed="true"] {
   font-weight: 600;
 }
+
+/*
+ * A chosen option longer than the menu button ("Load when near the screen")
+ * stays on one line, cut with an ellipsis, rather than wrapping the button
+ * to two lines in a row of one-line fields.
+ */
+.nx-inspector__field[data-content-control="select"] [data-slot="select-value"] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: start;
+}

@@ -27,6 +27,7 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
+  type OpenPassages,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
@@ -277,9 +278,11 @@ function editorTopBar(view: EditorView): {
   };
 }
 
-type ContentServices = ComponentProps<typeof InspectorPanel>["contentServices"];
+type ContentServices = NonNullable<
+  ComponentProps<typeof InspectorPanel>["contentServices"]
+>;
 
-let contentServices: ContentServices;
+let contentServices: ContentServices | undefined;
 
 /**
  * What the inspector's Content tab borrows from the admin: the media library,
@@ -297,6 +300,21 @@ function borrowedServices(): ContentServices {
     findEntries,
   };
   return contentServices;
+}
+
+/**
+ * The borrowed services with this editor's open-passage registry, one object
+ * per registry so the panel sees the same one on every render.
+ */
+const servicesByPassages = new WeakMap<OpenPassages, ContentServices>();
+
+function servicesFor(passages: OpenPassages): ContentServices {
+  let services = servicesByPassages.get(passages);
+  if (services === undefined) {
+    services = { ...borrowedServices(), openPassages: passages };
+    servicesByPassages.set(passages, services);
+  }
+  return services;
 }
 
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
@@ -345,7 +363,7 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={borrowedServices()}
+      contentServices={servicesFor(view.passages)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}

@@ -31,6 +31,7 @@ import {
 import type { ContentServices, MediaPickerProps } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
+import { createOpenPassages } from "./open-passages";
 
 beforeAll(() => {
   const element = window.Element.prototype as unknown as Record<
@@ -125,7 +126,41 @@ function FakePicker({
   );
 }
 
+/** A picker that, like the admin's, leaves closing to whoever opened it. */
+function StayingPicker({
+  open,
+  onSelect,
+}: MediaPickerProps): React.JSX.Element | null {
+  if (!open) return null;
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        onSelect([{ id: "m-7", url: "/m-7.png", filename: "team.png" }])
+      }
+    >
+      Take team.png
+    </button>
+  );
+}
+
 describe("the media control", () => {
+  it("closes the picker once a choice is made", () => {
+    register();
+    const editor = editorFor({});
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{ MediaPicker: StayingPicker }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose Media id" }));
+    fireEvent.click(screen.getByRole("button", { name: "Take team.png" }));
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Take team.png" })).toBeNull();
+  });
+
   it("stores only the chosen item's id, through the host's picker", () => {
     register();
     const editor = editorFor({});
@@ -331,5 +366,48 @@ describe("the rich-text control", () => {
       arrive();
     });
     expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("holds its open passage where the host finishes it before a save", async () => {
+    // A Save while the field still has focus finishes the passage through
+    // the field's own commit, so the words typed reach the document.
+    register();
+    const editor = editorFor({ body: { root: "stored" } });
+    const attach = vi.fn(() => ({
+      status: "attached",
+      session: {
+        focus: vi.fn(),
+        read: () => ({ root: "typed" }),
+        detach: vi.fn(),
+      },
+    }));
+    const passages = createOpenPassages();
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{
+          loadRichTextEditor: fakeEditor(attach),
+          openPassages: passages,
+        }}
+      />
+    );
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    expect(passages.isOpen()).toBe(true);
+
+    act(() => {
+      passages.finishAll();
+    });
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "a",
+      patch: { props: { body: { root: "typed" } } },
+    });
+    // Finished once: the hold is released, and leaving writes nothing more.
+    expect(passages.isOpen()).toBe(false);
+    fireEvent.blur(field);
+    expect(editor.apply).toHaveBeenCalledTimes(1);
   });
 });
