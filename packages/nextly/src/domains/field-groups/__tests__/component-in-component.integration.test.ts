@@ -31,6 +31,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { writeFieldGroupType } from "../storage/field-group-type-key";
+import {
+  STORAGE_MODES,
+  type StorageMode,
+} from "../../../plugins/__tests__/helpers/dialect-matrix";
 
 /**
  * Each schema resolution a component write makes for the components nested in it: the calls that
@@ -130,9 +134,13 @@ const plaque = () =>
     fields: [fieldGroup({ name: "seal", component: "badge", required: true })],
   });
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  storage: StorageMode
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    perLanguageStorage: storage.perLanguageStorage,
     fieldGroups: [badge(), card(), plaque()],
     collections: [
       defineCollection({
@@ -179,11 +187,20 @@ const NOT_STORED = {
     "A component placed directly in another component is not stored. Put it in a group or repeater.",
 };
 
-describe.each(getConfiguredTestDialects())(
+// Both storage layouts: where translatable values live must not change what this answers.
+describe.each(
+  STORAGE_MODES.flatMap(storage =>
+    getConfiguredTestDialects().map(dialect => ({
+      dialect,
+      storage,
+      mode: storage.name,
+    }))
+  )
+)(
   "a component inside a component (integration, %s)",
-  dialect => {
+  ({ dialect, storage }) => {
     it("is judged by its own validators when held in a group or a repeater", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const create = (card: Record<string, unknown>) =>
         outcomeOf(() =>
           t.nextly.create({
@@ -220,7 +237,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("is judged the same on a Single's write", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const refused = await outcomeOf(() =>
         t.nextly.updateSingle({
           slug: "home" as never,
@@ -237,7 +254,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses a value for one placed directly in it, on a create and an update", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const created = await t.nextly.create({
         collection: "pages" as never,
         data: { name: "P", card: { title: "T" } } as never,
@@ -292,7 +309,7 @@ describe.each(getConfiguredTestDialects())(
     // a component placed directly in it included: so there it is drawn, stored and judged, and a
     // required one is required.
     it("stores and judges one placed directly in it when the outer component is held in a group", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const create = (box: Record<string, unknown>) =>
         t.nextly.create({
           collection: "pages" as never,
@@ -313,7 +330,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("does not require one placed directly in it on a Single, published or held", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const update = (data: Record<string, unknown>) =>
         outcomeOf(() =>
           t.nextly.updateSingle({
@@ -340,7 +357,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("passes an empty value for one placed directly in it", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       for (const card of [
         { title: "T", badge: null },
         { title: "T", badge: {} },
@@ -360,7 +377,7 @@ describe.each(getConfiguredTestDialects())(
     // The admin never draws such a field (see below), so nothing seeds it: a value that holds only
     // the inner component's defaults was still sent by someone, and is lost like any other.
     it("refuses one holding only its defaults", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const refused = await outcomeOf(() =>
         t.nextly.create({
           collection: "pages" as never,
@@ -374,7 +391,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("leaves one placed directly in it out of the schema the admin draws", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const [card] = (await t
         .getService("fieldGroupRegistryService")
         .enrichFieldsWithComponentSchemas([
@@ -399,7 +416,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("draws one placed directly in it where the outer component is held in a group", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const [box] = (await t
         .getService("fieldGroupRegistryService")
         .enrichFieldsWithComponentSchemas([
@@ -424,7 +441,7 @@ describe.each(getConfiguredTestDialects())(
     // component under it is still a row of its own table, and the field is still left out. A
     // registry shape (the code-first config names every field), so it is enriched as stored.
     it("leaves one placed directly in it out under a group that only arranges the form", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const [layout] = (await t
         .getService("fieldGroupRegistryService")
         .enrichFieldsWithComponentSchemas([
@@ -444,7 +461,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("judges a held component's validators against that component's own values", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const refused = await outcomeOf(() =>
         t.nextly.create({
           collection: "pages" as never,
@@ -464,7 +481,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses a row added to a directly placed list, and a default it turned off", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       // A row the editor added, still holding only its defaults: it was added, so it is a value.
       const added = await outcomeOf(() =>
         t.nextly.create({
@@ -499,7 +516,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("resolves a held component's schema once per write, however many rows hold it", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const passes = async (rows: number) => {
         componentWriteResolutions.length = 0;
         await t.nextly.create({
