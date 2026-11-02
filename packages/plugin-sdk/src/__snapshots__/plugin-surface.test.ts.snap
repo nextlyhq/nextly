@@ -219,6 +219,8 @@ exports[`plugin-sdk public export surface > \`./blocks\` surface is unchanged 1`
   "BlockSupports (type)",
   "BlockVariation (type)",
   "ComponentPath (type)",
+  "ContentKind (type)",
+  "ContentModel (type)",
   "InferBlockProps (type)",
   "NodeStyles (type)",
   "PropSchema (type)",

@@ -10,7 +10,9 @@
 import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
-import { storedFormsOf } from "./lock-baselines";
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+
+import { composedFormsRead, storedFormsOf } from "./lock-baselines";
 
 const forest = { formatVersion: 1, kind: "page", nodes: [] };
 
@@ -107,5 +109,18 @@ describe("storedFormsOf", () => {
       )
     ).toEqual([]);
     expect(await storedFormsOf(undefined, "content")).toEqual([]);
+  });
+});
+
+describe("composedFormsRead", () => {
+  it("says a baseline is incomplete when the allowance ran out before a host", async () => {
+    const result = await composedFormsRead({
+      hosts: [forest as never],
+      library: { held: new Map(), missing: new Set() },
+      read: { exhausted: () => false } as never,
+      limits: DEFAULT_LIMITS,
+      work: { left: 0 },
+    });
+    expect(result).toEqual({ forms: [], complete: false });
   });
 });

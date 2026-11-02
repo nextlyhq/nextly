@@ -8,7 +8,7 @@
  */
 import { definePlugin, defineWidget, setting } from "@nextlyhq/plugin-sdk";
 
-import { STYLE_FIXTURE_PATH } from "./constants";
+import { FILL_PROBE_PATH, STYLE_FIXTURE_PATH } from "./constants";
 
 /**
  * A test fixture for e2e/tests/dashboard-card-settings.spec.ts: a card with
@@ -53,7 +53,14 @@ export const styleFixturePlugin = definePlugin({
   contributes: {
     admin: {
       // Render the showcase after the Posts list.
-      views: { posts: { afterList: STYLE_FIXTURE_PATH } },
+      // And a document view that only fills its box, at
+      // /admin/collections/posts/<id>/fill-probe, for the view-height test.
+      views: {
+        posts: {
+          afterList: STYLE_FIXTURE_PATH,
+          documentViews: [{ path: "fill-probe", component: FILL_PROBE_PATH }],
+        },
+      },
       // Also expose it as a standalone plugin page at
       // /admin/plugins/style-fixture/showcase, so plugin-page-routing.spec.ts
       // can cover deep-link route resolution.

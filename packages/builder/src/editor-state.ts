@@ -32,6 +32,7 @@ import {
   compositionFaults,
   DEFAULT_LIMITS,
   lockRefusal,
+  placementRefusal,
   planRepair as planDocumentRepair,
   registryBlockSource,
   registryNestingSource,
@@ -41,6 +42,7 @@ import {
   type ResolvedComposition,
   type ComponentLookup,
   type DocumentLimits,
+  type LocatedPlacementBreak,
   type LockSources,
   type NestingSource,
   type RepairPlan,
@@ -203,6 +205,40 @@ export interface UseEditorStateArgs {
    * opened stands for it.
    */
   stored?: BlockDocument;
+  /**
+   * Told when an edit was refused because it would put a block where the
+   * placement rule forbids, with the block and the reason. Every editor path
+   * (insert, drag, keyboard, toolbar, paste) ends in an op group here, so this
+   * is the one check none of them can miss, whatever a surface asked first.
+   */
+  onPlacementRefused?: (refusal: LocatedPlacementBreak) => void;
+}
+
+/**
+ * Whether an edit that turned `before` into `after` puts a block where the
+ * placement rule forbids — telling the host which, when it does. A break the
+ * page already held is not the edit's, so it is not refused here.
+ *
+ * Judged on the page itself, without composing its component placements: an
+ * edit composes the page once, for room and locks, and composing each
+ * placement again here would double that on every keystroke. What a placement
+ * draws is judged by the surfaces before they act and by the save.
+ */
+function refusedForPlacement(
+  before: BlockDocument,
+  after: BlockDocument,
+  { onPlacementRefused }: Pick<UseEditorStateArgs, "onPlacementRefused">,
+  limits: DocumentLimits
+): boolean {
+  const refusal = placementRefusal(
+    before,
+    after,
+    { nesting: registryNestingSource(), definitions: registryBlockSource() },
+    limits
+  );
+  if (refusal === undefined) return false;
+  onPlacementRefused?.(refusal);
+  return true;
 }
 
 /**
@@ -377,7 +413,11 @@ function composedLockAdded(
 interface AtApply
   extends Pick<
     UseEditorStateArgs,
-    "definitions" | "onRefused" | "onLockRefused" | "locks"
+    | "definitions"
+    | "onRefused"
+    | "onLockRefused"
+    | "locks"
+    | "onPlacementRefused"
   > {
   /** The document as last saved; the document as opened when none is given. */
   readonly stored: BlockDocument;
@@ -386,7 +426,12 @@ interface AtApply
 function atApply(
   host: Pick<
     UseEditorStateArgs,
-    "definitions" | "onRefused" | "onLockRefused" | "locks" | "stored"
+    | "definitions"
+    | "onRefused"
+    | "onLockRefused"
+    | "locks"
+    | "stored"
+    | "onPlacementRefused"
   >,
   opened: BlockDocument
 ): AtApply {
@@ -396,6 +441,7 @@ function atApply(
     onLockRefused: host.onLockRefused,
     locks: host.locks,
     stored: host.stored ?? opened,
+    onPlacementRefused: host.onPlacementRefused,
   };
 }
 
@@ -624,13 +670,21 @@ export function useEditorState({
   onLockRefused,
   locks,
   stored,
+  onPlacementRefused,
 }: UseEditorStateArgs): EditorState {
   // Read at apply time rather than closed over, so a library that reloads or
   // a host that swaps its callback does not rebuild `apply` and everything
   // keyed on it.
   // The document as last saved is read the same way, so a save the host
   // reports takes effect on the very next edit.
-  const host = { definitions, onRefused, onLockRefused, locks, stored };
+  const host = {
+    definitions,
+    onRefused,
+    onLockRefused,
+    locks,
+    stored,
+    onPlacementRefused,
+  };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
@@ -769,6 +823,19 @@ export function useEditorState({
           limits,
           compose: composerNow(),
         })
+      ) {
+        return null;
+      }
+      // A fresh edit only, for the reason room is: an undo or a redo returns
+      // the page to a state that was accepted when it was made.
+      if (
+        into === "new" &&
+        refusedForPlacement(
+          latestDocument.current,
+          group.document,
+          composition.current,
+          limits
+        )
       ) {
         return null;
       }

@@ -152,6 +152,8 @@ export const embed: BlockDefinition<EmbedProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // An `<iframe>` is interactive content.
+  contentModel: () => ({ is: ["flow", "interactive"] }),
   render: renderEmbed,
   // The whole condition is in the props: no usable source, no iframe. This is
   // the same test `renderEmbed` applies, deliberately written as one expression
