@@ -269,6 +269,43 @@ function fieldJudgesFractions(field: ValidatableField): boolean {
 }
 
 /**
+ * The pre-hook copy the hook judgment compares against. Deep on purpose: the
+ * hook runner recurses into group and repeater rows and its handlers mutate
+ * those rows IN PLACE, so a shallow spread shares the nested object and a
+ * content comparison would see the hook's own result as unchanged. A payload
+ * is JSON-shaped, so `structuredClone` answers; the shallow fallback covers
+ * whatever exotic value it refuses, at the cost of nested-in-place visibility
+ * on that corner.
+ */
+export function snapshotForHookJudgment(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  try {
+    return structuredClone(data);
+  } catch {
+    return { ...data };
+  }
+}
+
+/**
+ * The row objects a container value holds: a repeater's array filtered to
+ * its object rows, a group's single object, anything else empty. Mirrors
+ * the row walk the hook runner recurses with.
+ */
+function containerRows(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (row): row is Record<string, unknown> =>
+        row !== null && typeof row === "object"
+    );
+  }
+  if (value !== null && typeof value === "object") {
+    return [value as Record<string, unknown>];
+  }
+  return [];
+}
+
+/**
  * The whole-number floor, judged over everything a beforeChange hook left
  * changed — top-level values and numbers inside group and repeater rows.
  *
@@ -289,25 +326,6 @@ function fieldJudgesFractions(field: ValidatableField): boolean {
  * Only number fields are judged — every other rule keeps its pre-hook
  * verdict — and hasMany elements are judged as values, indexed in the path.
  */
-/**
- * The pre-hook copy the hook judgment compares against. Deep on purpose: the
- * hook runner recurses into group and repeater rows and its handlers mutate
- * those rows IN PLACE, so a shallow spread shares the nested object and a
- * content comparison would see the hook's own result as unchanged. A payload
- * is JSON-shaped, so `structuredClone` answers; the shallow fallback covers
- * whatever exotic value it refuses, at the cost of nested-in-place visibility
- * on that corner.
- */
-export function snapshotForHookJudgment(
-  data: Record<string, unknown>
-): Record<string, unknown> {
-  try {
-    return structuredClone(data);
-  } catch {
-    return { ...data };
-  }
-}
-
 export function hookChangedWholeNumberIssues(
   snapshot: Record<string, unknown> | undefined,
   data: Record<string, unknown>,
@@ -389,24 +407,6 @@ export function hookChangedWholeNumberIssues(
  * not one to refuse. Exported because anything deciding whether a document
  * would pass this validator has to leave the same fields out.
  */
-/**
- * The row objects a container value holds: a repeater's array filtered to
- * its object rows, a group's single object, anything else empty. Mirrors
- * the row walk the hook runner recurses with.
- */
-function containerRows(value: unknown): Record<string, unknown>[] {
-  if (Array.isArray(value)) {
-    return value.filter(
-      (row): row is Record<string, unknown> =>
-        row !== null && typeof row === "object"
-    );
-  }
-  if (value !== null && typeof value === "object") {
-    return [value as Record<string, unknown>];
-  }
-  return [];
-}
-
 export function isJudgedOnWrite(field: ValidatableField): boolean {
   return !isVirtualField(field);
 }

@@ -34,7 +34,13 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { defineCollection, group, number, text } from "../../../../config";
+import {
+  defineCollection,
+  defineSingle,
+  group,
+  number,
+  text,
+} from "../../../../config";
 import type { NumberFieldConfig } from "../../../../collections/fields/types/number";
 import { NextlyError } from "../../../../errors";
 import { getHookRegistry } from "../../../../hooks/hook-registry";
@@ -45,6 +51,7 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { CollectionService } from "../collection-service";
+import type { SingleEntryService } from "../../../../domains/singles/services/single-entry-service";
 
 interface ValidationIssueShape {
   path: string;
@@ -57,10 +64,13 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     const SLUG = "wnf";
     const TABLE = `dc_${SLUG}`;
+    const SINGLE_SLUG = "wnf_single";
+    const SINGLE_TABLE = `single_${SINGLE_SLUG}`;
     const CONTEXT = { overrideAccess: true };
 
     let handle: TestNextly | undefined;
     let collections: CollectionService;
+    let singles: SingleEntryService;
 
     beforeAll(async () => {
       // One boot on the harness's own throwaway database: a random name this
@@ -101,8 +111,17 @@ describe.each(getConfiguredTestDialects())(
             ],
           }),
         ],
+        singles: [
+          defineSingle({
+            slug: SINGLE_SLUG,
+            status: true,
+            versions: { drafts: true },
+            fields: [text({ name: "title" }), number({ name: "quantity" })],
+          }),
+        ],
       });
       collections = handle.getService("collectionService") as CollectionService;
+      singles = handle.getService("singleEntryService") as SingleEntryService;
 
       // A beforeChange hook that transforms whole values into fractions —
       // the case the gate before the hooks cannot see. It fires only for the
@@ -129,6 +148,25 @@ describe.each(getConfiguredTestDialects())(
         }
         return data;
       });
+
+      // Singles hook: mirrors the collection hook above, exercising the
+      // Single post-hook whole-number check.
+      getHookRegistry().register(
+        "beforeChange",
+        `single:${SINGLE_SLUG}`,
+        context => {
+          const data = context.data as Record<string, unknown>;
+          if (
+            typeof data.title === "string" &&
+            data.title.startsWith("hookfrac")
+          ) {
+            if (data.quantity === 2) {
+              data.quantity = 2.5;
+            }
+          }
+          return data;
+        }
+      );
     });
 
     afterAll(async () => {
@@ -390,6 +428,64 @@ describe.each(getConfiguredTestDialects())(
       expect(published.quantity).toBe(storedLegacyCount);
       expect((await readEntry("legacy-frac-1")).quantity).toBe(
         storedLegacyCount
+      );
+    });
+
+    it("a Single's beforeChange hook that turns a whole value into a fraction is refused", async () => {
+      // The single-mutation-service runs hookChangedWholeNumberIssues after
+      // beforeChange hooks run, so a hook that turns a whole value into a
+      // fraction on a Single is refused with a 400 naming the field before
+      // any row is written.
+      const result = await singles.update(
+        SINGLE_SLUG,
+        { title: "hookfrac-single", quantity: 2 },
+        CONTEXT
+      );
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(400);
+      const hit = result.errors?.find(e => e.field === "quantity");
+      expect(
+        hit,
+        `no issue names the field: ${JSON.stringify(result.errors)}`
+      ).toBeDefined();
+      expect(hit?.message).toBe("quantity must be a whole number.");
+    });
+
+    it("a Single's promoted draft holding a stored fraction publishes unchanged", async () => {
+      // Initialize the Single live.
+      await singles.update(
+        SINGLE_SLUG,
+        { title: "single-live", quantity: 2, status: "published" },
+        CONTEXT
+      );
+
+      // A legacy stored fraction in the database table (survives on SQLite as 2.5,
+      // column-rounded on MySQL / PostgreSQL to 3).
+      if (dialect === "sqlite") {
+        await handle!.adapter.executeQuery(
+          `UPDATE ${SINGLE_TABLE} SET quantity = 2.5`
+        );
+      }
+      const storedCount = dialect === "sqlite" ? 2.5 : 2;
+
+      // An edit while published holds a working draft carrying the stored fraction.
+      const held = await singles.update(
+        SINGLE_SLUG,
+        { title: "single-draft" },
+        CONTEXT
+      );
+      expect(held.success).toBe(true);
+
+      // Publishing promotes the draft through validateSinglePromotion. Because
+      // assembledFromStorage is true, the stored fraction is not refused.
+      const published = await singles.update(
+        SINGLE_SLUG,
+        { status: "published" },
+        CONTEXT
+      );
+      expect(published.success).toBe(true);
+      expect((published.data as Record<string, unknown>).quantity).toBe(
+        storedCount
       );
     });
   }

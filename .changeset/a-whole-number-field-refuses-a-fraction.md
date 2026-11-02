@@ -37,3 +37,8 @@ identically on every dialect, on create, update and bulk, and on hasMany
 list elements. Fields declared with `dbType: "decimal"` or the float format
 keep accepting fractions, and values already stored are untouched: a legacy
 fractional row keeps reading and publishing unchanged.
+
+SQLite compatibility: on SQLite, a default `number` field used to store 2.5
+correctly, and after this change the same write is a 400 validation refusal.
+Remedy: declare `dbType: "decimal"` (which needs a migration), or round the
+value before saving.
