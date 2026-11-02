@@ -25,6 +25,7 @@ import {
   uniqueTag,
 } from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
+import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -78,7 +79,8 @@ async function arriveAtBuilder(page: Page): Promise<void> {
   await gotoAdmin(page, BUILDER_ADDRESS);
 }
 
-test.describe("two editors on one page", () => {
+// Run on every dialect: the lease the two editors share lives in the database.
+test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
   // Two sessions, and a lock heartbeat each side waits on: the holder learns
   // of a request, and the displaced author of a takeover, only at its next
   // beat, which the steps below allow 45 seconds for.

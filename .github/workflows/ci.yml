@@ -1720,10 +1720,12 @@ jobs:
   # that both halves are now in ONE file a few dozen lines apart, so a job added
   # without a line here is visible in the diff that adds it.
   #
-  # The suites below — the browser tests, the scaffold and dev-script smokes —
-  # are deliberately NOT here yet: widening what blocks a merge is a decision
-  # about how the project ships, not a detail of this mechanism, and each is one
-  # line when that decision is made.
+  # The suites below — the whole browser suite, the scaffold and dev-script
+  # smokes — are deliberately NOT here yet: widening what blocks a merge is a
+  # decision about how the project ships, not a detail of this mechanism, and
+  # each is one line when that decision is made. The locking browser tests on
+  # PostgreSQL and MySQL (`e2e-postgres`, `e2e-mysql`) are that decision made
+  # for them: no merge may break locking on a dialect.
   gate:
     name: CI gate
     # `always()`, and it is the whole point: a gate that is skipped when
@@ -1738,6 +1740,8 @@ jobs:
       - unit-tests-admin
       - admin-published-build
       - entry-guard-smoke
+      - e2e-postgres
+      - e2e-mysql
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -1954,6 +1958,195 @@ jobs:
       # cancelled job saves nothing. That is not a detail — it is what makes the Playwright cache
       # guard above safe, because an install killed by its step timeout can never
       # persist a half-populated browser cache for later runs to skip.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # The locking and conflict specs on PostgreSQL, beside the whole suite on
+  # SQLite in `e2e`. A lease, its expiry and a document's version are compared on
+  # the database's own clock, so each dialect proves them itself. Only specs
+  # tagged `EVERY_DIALECT` (`e2e/tests/support/every-dialect.ts`) run here, and
+  # a spec tagged later runs here with nothing else to change.
+  #
+  # The run drops and creates a database of its own on this job's container
+  # (`e2e/support/e2e-database.mjs`), and never uses one it did not create. The
+  # container's password is a literal: it guards a database the job throws
+  # away. No secret and no environment: the job reads the remote build cache
+  # not at all, and builds from its own `.turbo` cache.
+  #
+  # The dev server, at one worker: the specs are few, and a production build
+  # would cost more than they take. Counted by `CI gate`.
+  e2e-postgres:
+    name: Browser tests (PostgreSQL)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TURBO_CACHE_DIR: .turbo
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        # In memory, as the integration legs keep theirs: the job throws the
+        # database away.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --tmpfs /var/lib/postgresql/data
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      # Its own lineage, for the reason `e2e`'s Restore step gives.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Chromium and its system libraries
+        uses: ./.github/actions/chromium
+
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+
+      - name: Run the locking browser tests on PostgreSQL
+        run: pnpm --filter @nextlyhq/e2e test:e2e
+        env:
+          E2E_DB_DIALECT: postgresql
+          E2E_DB_SERVER_URL: postgres://postgres:postgres@127.0.0.1:5432
+
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report-postgresql
+          path: e2e/.playwright/report
+          retention-days: 7
+
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # The locking and conflict specs on MySQL, beside the whole suite on
+  # SQLite in `e2e`. A lease, its expiry and a document's version are compared on
+  # the database's own clock, so each dialect proves them itself. Only specs
+  # tagged `EVERY_DIALECT` (`e2e/tests/support/every-dialect.ts`) run here, and
+  # a spec tagged later runs here with nothing else to change.
+  #
+  # The run drops and creates a database of its own on this job's container
+  # (`e2e/support/e2e-database.mjs`), and never uses one it did not create. The
+  # container's password is a literal: it guards a database the job throws
+  # away. No secret and no environment: the job reads the remote build cache
+  # not at all, and builds from its own `.turbo` cache.
+  #
+  # The dev server, at one worker: the specs are few, and a production build
+  # would cost more than they take. Counted by `CI gate`.
+  e2e-mysql:
+    name: Browser tests (MySQL)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TURBO_CACHE_DIR: .turbo
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: nextly
+        ports:
+          - 3306:3306
+        # In memory, as the integration legs keep theirs: the job throws the
+        # database away.
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pnextly"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --tmpfs /var/lib/mysql
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      # Its own lineage, for the reason `e2e`'s Restore step gives.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Chromium and its system libraries
+        uses: ./.github/actions/chromium
+
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+
+      - name: Run the locking browser tests on MySQL
+        run: pnpm --filter @nextlyhq/e2e test:e2e
+        env:
+          E2E_DB_DIALECT: mysql
+          E2E_DB_SERVER_URL: mysql://root:nextly@127.0.0.1:3306
+
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report-mysql
+          path: e2e/.playwright/report
+          retention-days: 7
+
       - name: Save Turbo cache
         if: success()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
