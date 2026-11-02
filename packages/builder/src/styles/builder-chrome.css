@@ -1331,19 +1331,6 @@
 }
 
 /*
- * The fieldsets that make a locked block's controls read-only at once. A
- * fieldset draws a border, padding and a minimum width by default; none of
- * that belongs here, where it only groups.
- */
-.nx-style-inspector__classes,
-fieldset.nx-inspector__fields {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  min-inline-size: 0;
-}
-
-/*
  * A property that draws several controls — a margin's four sides — is grouped
  * under one heading, so the sides read as one property rather than four.
  */
@@ -2577,7 +2564,14 @@ fieldset.nx-inspector__fields {
  * disabling it disables every control inside; it draws nothing of its own.
  */
 .nx-attributes,
-.nx-inspector__held {
+/*
+ * Also the fieldsets that hold a locked block's style controls and class
+ * chips: a fieldset draws a border, padding and a minimum width by default,
+ * and none of that belongs where it only groups.
+ */
+.nx-inspector__held,
+.nx-style-inspector__classes,
+fieldset.nx-inspector__fields {
   border: 0;
   margin: 0;
   padding: 0;
