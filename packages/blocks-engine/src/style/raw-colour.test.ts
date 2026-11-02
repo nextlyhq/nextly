@@ -21,6 +21,11 @@ describe("isRawColour", () => {
     ).toBe(false);
   });
 
+  it("does not flag light-dark(), which carries a value for each mode", () => {
+    expect(isRawColour("light-dark(#fff, #111)")).toBe(false);
+    expect(isRawColour("LIGHT-DARK(#fff, #111)")).toBe(false);
+  });
+
   it("does not flag a keyword that takes its colour from somewhere else", () => {
     for (const keyword of [
       "currentColor",

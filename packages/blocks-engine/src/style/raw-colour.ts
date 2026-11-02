@@ -45,5 +45,11 @@ export function isRawColour(value: StyleValue | undefined): boolean {
   if (isCssWideKeyword(word) || BORROWED_COLOUR_KEYWORDS.has(word)) {
     return false;
   }
+  // `light-dark()` names a value for each mode itself, so the page's scheme
+  // chooses between them as a variable's dark value would.
+  if (MODE_AWARE.test(word)) return false;
   return !referencesCustomProperty(text);
 }
+
+/** A colour function that holds a light and a dark value of its own. */
+const MODE_AWARE = /^light-dark\s*\(/;
