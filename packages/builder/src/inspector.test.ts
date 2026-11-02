@@ -23,6 +23,8 @@ import {
   renameOp,
   SUPPORTED_PROP_TYPES,
   lockStateOf,
+  lockStatusOf,
+  designIsWritable,
 } from "./inspector";
 
 const base = {
@@ -356,5 +358,106 @@ describe("lockStateOf", () => {
 
   it("reads an empty set as unlocked", () => {
     expect(lockStateOf(docWith([]), [])).toBe("unlocked");
+  });
+});
+
+describe("lockStatusOf and designIsWritable", () => {
+  /** A frame whose one slot carries the given lock, holding one text block. */
+  function framed(
+    lock: "all" | "insert" | "contentOnly",
+    child: Partial<BlockNode> = {}
+  ) {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/text",
+          editor: { label: "Text" },
+          props: {
+            body: { type: "text", role: "content" },
+            tone: { type: "text" },
+          },
+        },
+        {
+          ...base,
+          name: "acme/frame",
+          editor: { label: "Frame" },
+          props: {},
+          slots: { children: { lock, defaultBlock: [{ type: "acme/text" }] } },
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    return documentOf([
+      {
+        id: "frame",
+        type: "acme/frame",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            {
+              id: "t",
+              type: "acme/text",
+              version: 1,
+              props: {},
+              ...child,
+            } as BlockNode,
+          ],
+        },
+      } as BlockNode,
+    ]);
+  }
+
+  it("reports no lock for a free block, and its design writable", () => {
+    const doc = withHeading();
+    expect(lockStatusOf(doc, "a")).toEqual({ layers: false, slot: undefined });
+    expect(designIsWritable(doc, "a")).toBe(true);
+  });
+
+  it("reports the Layers lock, and the design read-only under it", () => {
+    const doc = documentOf([
+      {
+        id: "a",
+        type: "acme/heading",
+        version: 1,
+        props: {},
+        locked: true,
+      } as BlockNode,
+    ]);
+    withHeading();
+    expect(lockStatusOf(doc, "a").layers).toBe(true);
+    expect(designIsWritable(doc, "a")).toBe(false);
+  });
+
+  it("names the block whose slot fixes a contentOnly area, and keeps its design read-only", () => {
+    const doc = framed("contentOnly");
+    expect(lockStatusOf(doc, "t")).toEqual({
+      layers: false,
+      slot: { lock: "contentOnly", holder: "Frame" },
+    });
+    expect(designIsWritable(doc, "t")).toBe(false);
+  });
+
+  it("leaves the design writable in a slot locked all or insert, and still names the holder", () => {
+    for (const lock of ["all", "insert"] as const) {
+      clearBlocks();
+      const doc = framed(lock);
+      expect(lockStatusOf(doc, "t").slot).toEqual({ lock, holder: "Frame" });
+      expect(designIsWritable(doc, "t")).toBe(true);
+    }
+  });
+
+  it("keeps both locks apart when a block carries its own and sits in a locked slot", () => {
+    const doc = framed("contentOnly", { locked: true });
+    expect(lockStatusOf(doc, "t")).toEqual({
+      layers: true,
+      slot: { lock: "contentOnly", holder: "Frame" },
+    });
+  });
+
+  it("answers for the frame itself as unlocked: its own slot holds its children, not it", () => {
+    const doc = framed("contentOnly");
+    expect(lockStatusOf(doc, "frame").slot).toBeUndefined();
   });
 });

@@ -12,7 +12,6 @@ import {
   BASE_BREAKPOINT,
   clearBlocks,
   registerBlocks,
-  STYLE_GROUP_DEFS,
   stylePropertiesForSupports,
   type BlockDocument,
   type BlockNode,
@@ -20,6 +19,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { INSPECTOR_SECTIONS } from "./inspector-sections";
 import { inspectStyle } from "./style-inspector";
 
 afterEach(() => {
@@ -60,7 +60,7 @@ function propertiesOf(
   inspection: ReturnType<typeof inspectStyle>,
   group: string
 ): readonly string[] {
-  const section = inspection?.sections.find(entry => entry.group === group);
+  const section = inspection?.sections.find(entry => entry.key === group);
   return (section?.properties ?? []).map(property => property.property);
 }
 
@@ -70,23 +70,26 @@ describe("which sections a block offers", () => {
 
     const inspection = inspectStyle(documentOf(), "a");
 
-    expect(inspection?.sections.map(section => section.group)).toEqual([
+    expect(inspection?.sections.map(section => section.key)).toEqual([
       "spacing",
       "typography",
     ]);
   });
 
-  it("orders sections as the catalog presents them, not as supports lists them", () => {
-    // Declared in the opposite order to the catalog's, so an implementation
+  it("orders sections as the builder presents them, not as supports lists them", () => {
+    // Declared in the opposite order to the builder's, so an implementation
     // walking `supports` would produce the reverse of this.
     register({ border: true, layout: true, spacing: true });
 
     const inspection = inspectStyle(documentOf(), "a");
-    const order = STYLE_GROUP_DEFS.map(group => group.key).filter(key =>
-      ["border", "layout", "spacing"].includes(key)
+    const order = INSPECTOR_SECTIONS.map(section => section.key).filter(key =>
+      ["border", "layout", "spacing", "size"].includes(key)
     );
 
-    expect(inspection?.sections.map(section => section.group)).toEqual(order);
+    expect(inspection?.sections.map(section => section.key)).toEqual(order);
+    // Size as well: layout support brings box sizing, which the builder
+    // places behind Size's More.
+    expect(order).toEqual(["layout", "spacing", "size", "border"]);
   });
 
   it("offers no section for a group the block supports nothing in", () => {
@@ -108,10 +111,12 @@ describe("which sections a block offers", () => {
 
     const inspection = inspectStyle(documentOf(), "a");
 
-    expect(propertiesOf(inspection, "typography")).toEqual(
-      stylePropertiesForSupports({ typography: true }).map(
-        entry => entry.property
-      )
+    // Compared as sets: the engine decides WHICH properties, the placement
+    // table decides their order.
+    expect([...propertiesOf(inspection, "typography")].sort()).toEqual(
+      stylePropertiesForSupports({ typography: true })
+        .map(entry => entry.property)
+        .sort()
     );
   });
 
@@ -233,7 +238,7 @@ describe("a property the block no longer supports", () => {
 
     const inspection = inspectStyle(documentOf(styles), "a");
     const typography = inspection?.sections.find(
-      section => section.group === "typography"
+      section => section.key === "typography"
     );
 
     expect(typography?.properties.map(p => p.property)).toEqual(["fontSize"]);
@@ -253,7 +258,7 @@ describe("a property the block no longer supports", () => {
 
     const inspection = inspectStyle(documentOf(styles), "a");
     const border = inspection?.sections.find(
-      section => section.group === "border"
+      section => section.key === "border"
     );
 
     expect(border?.properties.map(p => p.property)).toEqual([
@@ -279,7 +284,7 @@ describe("a property the block no longer supports", () => {
 
     const inspection = inspectStyle(documentOf(), "a");
 
-    expect(inspection?.sections.map(section => section.group)).toEqual([
+    expect(inspection?.sections.map(section => section.key)).toEqual([
       "spacing",
     ]);
   });
@@ -358,5 +363,97 @@ describe("a block the registry does not know but that STORES styles", () => {
 
     expect(properties).toHaveLength(1);
     expect(inspection?.sections).toHaveLength(1);
+  });
+});
+
+describe("the builder's sections, over the engine's groups", () => {
+  it("orders sections Layout to Effects, whatever the engine's group order", () => {
+    // The engine lists spacing before layout and position after effects; the
+    // builder's order is Layout, Spacing, Size, Position, ..., Effects.
+    register({
+      spacing: true,
+      layout: true,
+      position: true,
+      effects: true,
+      dimensions: true,
+    });
+    const inspection = inspectStyle(documentOf(), "a");
+    expect(inspection?.sections.map(section => section.label)).toEqual([
+      "Layout",
+      "Spacing",
+      "Size",
+      "Position",
+      "Effects",
+    ]);
+  });
+
+  it("puts colour inside Typography and shadow inside Effects", () => {
+    register({ typography: true, color: true, shadow: true });
+    const inspection = inspectStyle(documentOf(), "a");
+    expect(inspection?.sections.map(section => section.key)).toEqual([
+      "typography",
+      "effects",
+    ]);
+    expect(propertiesOf(inspection, "typography")).toContain("color");
+    expect(propertiesOf(inspection, "effects")).toEqual(["boxShadow"]);
+  });
+
+  it("lists a section's properties in the table's order, not the catalog's", () => {
+    // The catalog declares boxSizing first among layout's properties; the
+    // table moves it behind Size's More.
+    register({ layout: true, dimensions: true });
+    const inspection = inspectStyle(documentOf(), "a");
+    expect(propertiesOf(inspection, "layout")[0]).toBe("display");
+    expect(propertiesOf(inspection, "layout")).not.toContain("boxSizing");
+    expect(propertiesOf(inspection, "size").at(-1)).toBe("boxSizing");
+  });
+
+  it("shows the common properties and keeps the rest for More", () => {
+    register({ typography: true });
+    const inspection = inspectStyle(documentOf(), "a");
+    const typography = inspection?.sections.find(
+      section => section.key === "typography"
+    );
+    const common = (typography?.properties ?? [])
+      .filter(p => p.common)
+      .map(p => p.property);
+    expect(common).toEqual([
+      "fontFamily",
+      "fontWeight",
+      "fontSize",
+      "lineHeight",
+      "textAlign",
+    ]);
+  });
+
+  it("shows the flex controls once the block is a flex container", () => {
+    register({ layout: true });
+    const commonOf = (styles?: NodeStyles) =>
+      (inspectStyle(documentOf(styles), "a")?.sections[0]?.properties ?? [])
+        .filter(p => p.common)
+        .map(p => p.property);
+    expect(commonOf()).toEqual(["display"]);
+    expect(
+      commonOf({
+        base: { [BASE_BREAKPOINT]: { display: "flex" } },
+      } as NodeStyles)
+    ).toEqual([
+      "display",
+      "flexDirection",
+      "justifyContent",
+      "alignItems",
+      "gap",
+      "flexWrap",
+    ]);
+  });
+
+  it("shows the media fit controls on a replaced element only", () => {
+    register({ dimensions: true });
+    const fitIsCommon = (media: boolean) =>
+      inspectStyle(documentOf(), "a", { media })?.sections[0]?.properties.find(
+        p => p.property === "objectFit"
+      )?.common;
+    expect(fitIsCommon(false)).toBe(false);
+    expect(fitIsCommon(true)).toBe(true);
   });
 });

@@ -19,8 +19,10 @@ import {
   contentPropsOf,
   getBlock,
   findNode,
+  locateNode,
   nodeLocks,
   registryBlockSource,
+  type ActiveSlotLock,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
@@ -379,6 +381,114 @@ export function propIsWritable(
   const area = nodeLocks(document.nodes, registryBlockSource()).get(id);
   if (area?.lock !== "contentOnly") return true;
   return contentPropsOf(getBlock(area.type)?.props).has(name);
+}
+
+/**
+ * The locks that hold one block, each kept apart from the other.
+ *
+ * Two kinds, and the inspector says each in its own words because they are
+ * lifted in different places:
+ *
+ * - `layers` is the block's own lock, set from Layers or the inspector's menu.
+ *   It is an edit of the page, so whoever may edit the page may lift it.
+ * - `slot` is the lock of the slot the block sits in, which the block that
+ *   declares that slot sets in code. Nothing on the page can lift it.
+ */
+export interface BlockLockStatus {
+  readonly layers: boolean;
+  /**
+   * The lock of the slot the block sits in, and the label of the block that
+   * sets it, or `undefined` where no slot lock applies.
+   */
+  readonly slot:
+    | { readonly lock: ActiveSlotLock; readonly holder: string }
+    | undefined;
+}
+
+/**
+ * Which locks hold a block.
+ *
+ * The slot lock is read through the engine's own `nodeLocks`, the walk a save
+ * is judged by, so the inspector and the save cannot disagree about it. Only
+ * the holder is found here: the `contentOnly` area names its outermost slot's
+ * block, and an `all` or `insert` lock names the nearest ancestor whose slot
+ * declares it, which is the block whose definition says so.
+ */
+export function lockStatusOf(
+  document: BlockDocument,
+  id: string
+): BlockLockStatus {
+  const node = findNode(document.nodes, id);
+  const layers = node !== undefined && isLocked(node);
+  const at = nodeLocks(document.nodes, registryBlockSource()).get(id);
+  if (at?.lock === undefined) return { layers, slot: undefined };
+  const holderType =
+    at.lock === "contentOnly" && at.area !== undefined
+      ? at.area.holderType
+      : declaringAncestor(document, id);
+  return {
+    layers,
+    slot: {
+      lock: at.lock,
+      holder:
+        holderType === undefined
+          ? "The block it sits in"
+          : blockLabel(holderType),
+    },
+  };
+}
+
+/**
+ * The type of the nearest ancestor whose own slot declares a lock over the
+ * block, walking up one parent at a time. A slot that declares nothing passes
+ * its parent's lock down, so the declaration may be several levels up.
+ */
+function declaringAncestor(
+  document: BlockDocument,
+  id: string
+): string | undefined {
+  let current = id;
+  // Bounded by the document's depth: each step moves one parent up.
+  for (;;) {
+    const location = locateNode(document.nodes, current);
+    const parent = location?.parent;
+    if (parent === undefined || location?.slot === undefined) return undefined;
+    const declared = getBlock(parent.type)?.slots?.[location.slot]?.lock;
+    if (declared !== undefined && declared !== false) return parent.type;
+    current = parent.id;
+  }
+}
+
+/** What the inspector says while a block's own Layers lock holds it. */
+const LAYERS_LOCK_REASON =
+  "Locked: it can't be moved, deleted or edited. Unlock it from the block's menu.";
+
+/**
+ * Why a block's design may not be changed here, in an author's words, or
+ * `undefined` while it may: its styles, classes, CSS id and attributes.
+ *
+ * Not on a block its Layers lock holds, and not inside a `"contentOnly"` area,
+ * where the save refuses every one of them. Asked of the live document at the
+ * moment of a write as well as when drawing, as {@link propIsWritable} is.
+ */
+export function designReadOnlyReason(
+  document: BlockDocument,
+  id: string
+): string | undefined {
+  if (findNode(document.nodes, id) === undefined) {
+    return "This block is no longer on the page.";
+  }
+  const status = lockStatusOf(document, id);
+  if (status.layers) return LAYERS_LOCK_REASON;
+  if (status.slot?.lock === "contentOnly") {
+    return `${status.slot.holder} fixes the design of the blocks it holds, so only this block's content can change here.`;
+  }
+  return undefined;
+}
+
+/** Whether a block's design may be changed: {@link designReadOnlyReason}, as a yes or no. */
+export function designIsWritable(document: BlockDocument, id: string): boolean {
+  return designReadOnlyReason(document, id) === undefined;
 }
 
 /**

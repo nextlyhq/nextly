@@ -15,15 +15,17 @@
  * a list written here would be a second answer to a question the engine already
  * holds and the two would agree only on the day they were written.
  *
- * **Every supported property is offered, and the one-open accordion is what
- * bounds the screen.** The alternative — render only the properties that
- * already hold a value and put the rest behind an "add" menu — answers a
- * problem this layout does not have: it exists for editors that expand every
- * section at once, and here exactly one section is open. Measured against the
- * catalog, the largest group is layout at twelve scalar controls, which is a
- * panel rather than a wall. A control an author cannot see is one they cannot
- * discover, and the content tab beside this one already lists every prop a
- * block declares, including the ones it cannot draw.
+ * **The sections are the builder's, not the engine's.** The engine's groups
+ * are the `supports` vocabulary block authors declare, so they decide WHICH
+ * properties a block has; `inspector-sections.ts` decides where an author
+ * finds each one — eight sections, Layout to Effects, every property placed
+ * once. A property the table has not met yet still appears, behind "+ More"
+ * in its group's section.
+ *
+ * **Every supported property is offered; the common ones show at once.** Each
+ * property carries whether it shows without being asked for (`common`), from
+ * its tier and the block in hand. The rest wait behind the section's "+ More",
+ * which is the panel's to draw. A property holding a value here always shows.
  *
  * @module style-inspector
  */
@@ -33,16 +35,21 @@ import {
   getBlock,
   getStyleProperty,
   STYLE_CATALOG,
-  STYLE_GROUP_DEFS,
   stylePropertiesForSupports,
   type BlockDocument,
   type BreakpointId,
-  type StyleGroup,
   type StyleState,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
 import { fieldLabel, selectedNode } from "./inspector";
+import {
+  INSPECTOR_SECTIONS,
+  placementOf,
+  tierShows,
+  type InspectorSectionKey,
+  type TierContext,
+} from "./inspector-sections";
 import {
   styleControlsFor,
   type StyleControl,
@@ -81,6 +88,12 @@ export interface StyleInspectionOptions extends StyleControlOptions {
    * apply at every width, not a narrow band an author never chose.
    */
   readonly breakpoint?: BreakpointId;
+  /**
+   * Whether the block renders a replaced element (an image, a video, an
+   * embed), which is where the media fit properties show without being asked
+   * for. The canvas knows what a block renders as; the document does not.
+   */
+  readonly media?: boolean;
 }
 
 /** One catalog property as the Style tab offers it. */
@@ -118,13 +131,21 @@ export interface InspectedStyleProperty {
    * it more than they need it hidden.
    */
   readonly offered: boolean;
+  /**
+   * Whether it shows without being asked for: its tier holds for this block,
+   * or it holds a value here. False puts it behind its section's "+ More".
+   */
+  readonly common: boolean;
 }
 
-/** One accordion section: a catalog group, and the properties this block has in it. */
+/** One section of the Style tab, and the properties this block has in it. */
 export interface StyleSection {
-  readonly group: StyleGroup;
+  readonly key: InspectorSectionKey;
   readonly label: string;
-  /** Never empty — a group this block supports nothing in is not a section. */
+  /**
+   * In the placement table's order. Never empty — a section this block has
+   * nothing in is not drawn.
+   */
   readonly properties: readonly InspectedStyleProperty[];
 }
 
@@ -134,7 +155,8 @@ export interface StyleInspection {
   readonly state: StyleState;
   readonly breakpoint: BreakpointId;
   /**
-   * Sections in the catalog's own order, each holding at least one property.
+   * Sections in the builder's order, Layout to Effects, each holding at least
+   * one property.
    *
    * Empty for a block that opts into no style groups at all, which is a real
    * answer rather than a failure: the panel says the block offers none, exactly
@@ -200,20 +222,34 @@ export function inspectStyle(
     if (stored !== undefined) allowed.add(entry.property);
   }
 
+  const tiers: TierContext = {
+    display: displayOf(node.styles, state, breakpoint),
+    media: options?.media === true,
+    state,
+  };
+  const inspected = [...allowed].map(property => {
+    const entry = getStyleProperty(property);
+    const placement = placementOf(property, entry?.group ?? "effects");
+    const row = inspectProperty(property, node.styles, offered.has(property), {
+      ...options,
+      state,
+      breakpoint,
+    });
+    return {
+      placement,
+      row: { ...row, common: row.set || tierShows(placement.tier, tiers) },
+    };
+  });
   const sections: StyleSection[] = [];
-  for (const group of STYLE_GROUP_DEFS) {
-    const properties = propertiesInGroup(allowed, group.key).map(property =>
-      inspectProperty(property, node.styles, offered.has(property), {
-        ...options,
-        state,
-        breakpoint,
-      })
-    );
-    // A group the block supports nothing in is not a section. Rendering an
-    // empty accordion would offer an author somewhere to click that opens onto
-    // nothing, and every block would show all eleven headings whatever it does.
+  for (const section of INSPECTOR_SECTIONS) {
+    const properties = inspected
+      .filter(each => each.placement.section === section.key)
+      .sort((a, b) => a.placement.order - b.placement.order)
+      .map(each => each.row);
+    // A section the block has nothing in is not drawn. Rendering an empty one
+    // would offer an author somewhere to click that opens onto nothing.
     if (properties.length > 0) {
-      sections.push({ group: group.key, label: group.label, properties });
+      sections.push({ key: section.key, label: section.label, properties });
     }
   }
 
@@ -221,26 +257,33 @@ export function inspectStyle(
 }
 
 /**
- * The allowed properties of one group, in the CATALOG's order.
+ * The display the block is given at this address, falling back to the base
+ * state and then to the unconditional breakpoint, as the cascade would: a flex
+ * container set at the base is still one while its hover is being edited.
  *
- * Read off `STYLE_CATALOG` rather than off the allowed set. A `Set` iterates in
- * insertion order, and the set above is built in two passes — everything the
- * block supports, then anything it merely retains — so a group holding both
- * listed the supported one first however the catalog declares them. Measured:
- * a block supporting `border: { radius: true }` while still storing `border`
- * listed `borderRadius, border` where the catalog says `border, borderRadius`.
+ * Read from what the node stores, so a block that is a flex container only by
+ * its own stylesheet keeps its flex controls behind "+ More", one click away.
  */
-function propertiesInGroup(
-  allowed: ReadonlySet<string>,
-  group: StyleGroup
-): readonly string[] {
-  const rows: string[] = [];
-  for (const entry of STYLE_CATALOG) {
-    if (entry.group === group && allowed.has(entry.property)) {
-      rows.push(entry.property);
-    }
+function displayOf(
+  styles: Parameters<typeof readStyleValue>[0],
+  state: StyleState,
+  breakpoint: BreakpointId
+): string | undefined {
+  const addresses: [StyleState, BreakpointId][] = [
+    [state, breakpoint],
+    ["base", breakpoint],
+    ["base", BASE_BREAKPOINT],
+  ];
+  for (const [atState, atBreakpoint] of addresses) {
+    const value = readStyleValue(styles, {
+      state: atState,
+      breakpoint: atBreakpoint,
+      property: "display",
+      path: [],
+    });
+    if (typeof value === "string") return value.trim().toLowerCase();
   }
-  return rows;
+  return undefined;
 }
 
 /** One property's controls and the value they are showing. */
@@ -252,7 +295,7 @@ function inspectProperty(
     state: StyleState;
     breakpoint: BreakpointId;
   }
-): InspectedStyleProperty {
+): Omit<InspectedStyleProperty, "common"> {
   // Present by construction: the name came out of `stylePropertiesForSupports`,
   // which reads the same catalog. Asked again rather than threaded through so
   // this function takes a name, which is what makes it callable from a test

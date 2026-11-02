@@ -57,6 +57,10 @@ import {
   AccordionItem,
   AccordionTrigger,
   ColorPicker,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Input,
   Label,
   Popover,
@@ -75,9 +79,14 @@ import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
 import type { EditorState } from "./editor-state";
-import { fieldLabel } from "./inspector";
+import {
+  designIsWritable,
+  designReadOnlyReason,
+  fieldLabel,
+} from "./inspector";
 import type { BuilderOp } from "./ops";
 import type { SideOrientation } from "./side-orientation";
+import { BASELINE_WITHHELD_HINT } from "./style-baseline";
 import {
   activeTokenMode,
   colourHexOf,
@@ -550,6 +559,7 @@ export function StyleInspectorPanel({
     state,
     breakpoint,
     variantAt: (property, path) => chosenForms[formKey(property, path)],
+    media: rendersMedia(renderedTag),
   });
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
@@ -613,7 +623,16 @@ export function StyleInspectorPanel({
     onJumpToBreakpoint,
   });
 
-  const groups = inspected.sections.map(section => section.group);
+  /*
+   * Why the design is read-only, read from the document's own locks: the
+   * same answer the write path refuses by, so the controls drawn and the
+   * writes allowed cannot disagree.
+   */
+  const readOnlyReason = designReadOnlyReason(
+    editor.document,
+    inspected.nodeId
+  );
+  const groups = inspected.sections.map(section => section.key);
   // Held rather than left to the accordion, so the open section survives a
   // change of selection. Falling back to the first is what keeps it valid when
   // the newly selected block does not offer the section that was open — an
@@ -653,7 +672,8 @@ export function StyleInspectorPanel({
        * it decides what the controls below are even editing. Webflow puts its
        * selector field at the top of the Style panel for the same reason.
        */}
-      <SelectedNodeClasses
+      <PanelClasses
+        readOnlyReason={readOnlyReason}
         editor={editor}
         nodeId={inspected.nodeId}
         library={classLibrary}
@@ -672,8 +692,9 @@ export function StyleInspectorPanel({
             // Keyed by node AND group: a bare group would let React reuse one
             // block's inputs for the next block's same-named section, so a field
             // would keep the previous block's uncommitted text.
-            key={`${inspected.nodeId}:${section.group}`}
+            key={`${inspected.nodeId}:${section.key}`}
             section={section}
+            readOnlyReason={readOnlyReason}
             {...surroundings}
           />
         ))}
@@ -917,9 +938,66 @@ function SideBoxFrame({
   );
 }
 
-/** One catalog group, as a section that opens onto its properties. */
+/**
+ * The elements whose content is an external resource the box fits, which is
+ * where the media fit properties show without being asked for.
+ */
+const REPLACED_ELEMENTS: ReadonlySet<string> = new Set([
+  "img",
+  "picture",
+  "video",
+  "iframe",
+  "embed",
+  "object",
+  "canvas",
+]);
+
+/** Whether the block renders as one of {@link REPLACED_ELEMENTS}. */
+function rendersMedia(renderedTag: string | undefined): boolean {
+  return renderedTag !== undefined && REPLACED_ELEMENTS.has(renderedTag);
+}
+
+/**
+ * The class chips, and above them the reason when the design is read-only.
+ *
+ * A disabled fieldset rather than a flag on every control: it disables every
+ * native control inside at once, so a control added later cannot forget to be
+ * read-only.
+ */
+function PanelClasses({
+  readOnlyReason,
+  ...classes
+}: {
+  readOnlyReason: string | undefined;
+} & React.ComponentProps<typeof SelectedNodeClasses>): React.JSX.Element {
+  return (
+    <>
+      {readOnlyReason === undefined ? null : (
+        <p className="nx-inspector__note" data-read-only="style">
+          {readOnlyReason}
+        </p>
+      )}
+      <fieldset
+        className="nx-style-inspector__classes"
+        disabled={readOnlyReason !== undefined}
+      >
+        <SelectedNodeClasses {...classes} />
+      </fieldset>
+    </>
+  );
+}
+
+/**
+ * One section: its common properties, any that hold a value, and the rest
+ * behind "+ More".
+ *
+ * **The header marks a section that holds values** with a dot and the words
+ * "has values" for a screen reader, so an author can see which sections they
+ * have touched without opening each one, and the dot is never colour alone.
+ */
 function StyleSectionItem({
   section,
+  readOnlyReason,
   orientation,
   nodeId,
   state,
@@ -933,28 +1011,44 @@ function StyleSectionItem({
   onChooseForm,
 }: {
   section: StyleSection;
+  /** Why every control is read-only, which also withholds "+ More". */
+  readOnlyReason: string | undefined;
 } & StyleFieldSurroundings): React.JSX.Element {
-  // How many of this section's properties this node sets HERE, so an author can
-  // see which sections they have touched without opening each one.
-  const setCount = section.properties.filter(property => property.set).length;
+  const readOnly = readOnlyReason !== undefined;
+  /*
+   * What the author brought out from "+ More". Held here, by a section keyed
+   * by node and section, so it lasts while this block stays selected and
+   * starts empty for the next. Panel state, like the open section: what the
+   * author chose to look at, not anything the page stores — and a property
+   * holding a value shows whatever this says, so it can hide nothing set.
+   */
+  const [revealed, setRevealed] = React.useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  const isRevealed = (property: string) => revealed.has(property);
+  const holdsValues = section.properties.some(property => property.set);
+  const shown = section.properties.filter(
+    property => property.common || isRevealed(property.property)
+  );
+  const more = section.properties.filter(
+    property => !property.common && !isRevealed(property.property)
+  );
   return (
-    <AccordionItem value={section.group}>
+    <AccordionItem value={section.key} data-section={section.key}>
       <AccordionTrigger>
         <span className="nx-style-inspector__section-label">
           {section.label}
         </span>
-        {setCount > 0 ? (
-          <span
-            className="nx-style-inspector__section-count"
-            aria-label={`${setCount} set`}
-          >
-            {setCount}
+        {holdsValues ? (
+          <span className="nx-style-inspector__section-dot" data-has-values="">
+            <span aria-hidden="true" className="nx-style-inspector__dot" />
+            <span className="nx-sr-only">has values</span>
           </span>
         ) : null}
       </AccordionTrigger>
       <AccordionContent>
-        <div className="nx-inspector__fields">
-          {section.properties.map(property => (
+        <fieldset className="nx-inspector__fields" disabled={readOnly}>
+          {shown.map(property => (
             <StylePropertyFields
               key={`${nodeId}:${property.property}`}
               property={property}
@@ -971,9 +1065,64 @@ function StyleSectionItem({
               onChooseForm={onChooseForm}
             />
           ))}
-        </div>
+          {shown.length === 0 ? (
+            <p className="nx-inspector__note">
+              Nothing set here yet. Add a property from More.
+            </p>
+          ) : null}
+        </fieldset>
+        {readOnly || more.length === 0 ? null : (
+          <MoreProperties
+            sectionLabel={section.label}
+            properties={more}
+            onReveal={property =>
+              setRevealed(current => new Set(current).add(property))
+            }
+          />
+        )}
       </AccordionContent>
     </AccordionItem>
+  );
+}
+
+/**
+ * The section's "+ More": a menu of the properties it does not show yet.
+ *
+ * Choosing one shows its control; it stays shown for this block until the
+ * panel is left, and for good once it holds a value.
+ */
+function MoreProperties({
+  sectionLabel,
+  properties,
+  onReveal,
+}: {
+  sectionLabel: string;
+  properties: readonly InspectedStyleProperty[];
+  onReveal: (property: string) => void;
+}): React.JSX.Element {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="nx-style-inspector__more"
+          aria-label={`More ${sectionLabel.toLowerCase()} properties`}
+        >
+          + More
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {properties.map(property => (
+          <DropdownMenuItem
+            key={property.property}
+            onSelect={() => onReveal(property.property)}
+            title={property.summary}
+          >
+            {property.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -1079,7 +1228,7 @@ function StylePropertyFields({
             }
             summary={many ? undefined : property.summary}
             propertyLabel={property.label}
-            clearOnly={!property.offered}
+            clearOnly={!property.offered || control.withheld}
             nodeId={nodeId}
             state={state}
             breakpoint={breakpoint}
@@ -1905,6 +2054,8 @@ function ControlValue({
         labelledBy={labelledBy}
         label={actionName}
         stored={stored}
+        // A value the Baseline gate no longer offers says why it is clear-only.
+        note={control.withheld ? BASELINE_WITHHELD_HINT : undefined}
         onClear={() => onCommit(null)}
       />
     );
@@ -2284,6 +2435,15 @@ function writeStyleValue({
 }): CommitOutcome {
   const current = findNode(editor.document.nodes, nodeId);
   if (current === undefined) return "refused";
+  /*
+   * Refused here as well as drawn read-only: the controls are disabled while a
+   * lock holds, but a lock set from Layers after the panel drew must stop the
+   * next write too, so the live document is asked at the moment of the write.
+   */
+  if (!designIsWritable(editor.document, nodeId)) {
+    setIssue("This block's design is locked, so it can't be changed here.");
+    return "refused";
+  }
   /*
    * A ONE-NODE BATCH, and the single write path for a style edit in this
    * builder.
