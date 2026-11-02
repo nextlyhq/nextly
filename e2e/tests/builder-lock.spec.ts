@@ -155,7 +155,7 @@ test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
     //
     // The test before this one ends with its second editor holding the page,
     // and closing their page does not release it.
-    await freeDocument(page.request, LOCK.homepage);
+    await freeDocument(page.request, "homepage");
     await openBuilder(page);
     await expect(block(page, "first")).toBeVisible({ timeout: 30_000 });
 

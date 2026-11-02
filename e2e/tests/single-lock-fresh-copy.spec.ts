@@ -67,7 +67,7 @@ test.describe(
     test.beforeEach(async ({ page }) => {
       // Each test ends with B holding the Single, and closing B's page does
       // not release it, so it is freed before every test, not only the first.
-      await freeDocument(page.request, LOCK.siteSettings);
+      await freeDocument(page.request, "siteSettings");
       before = `Tagline before ${uniqueTag()}`;
       // Its site name is required, so a form save is refused while it is
       // empty, as it is in a fresh database. Kept when it is already set.
