@@ -12163,10 +12163,10 @@ export class CollectionMutationService extends BaseService {
    * within the database's limit on the parameters one statement takes.
    */
   private idsPerStatement(reserved: number): number {
-    return Math.max(
-      1,
-      this.adapter.getCapabilities().maxParamsPerQuery - reserved
-    );
+    const limit = this.adapter.getCapabilities().maxParamsPerQuery;
+    // An adapter stating no limit binds every id in one statement.
+    if (!Number.isFinite(limit)) return Number.MAX_SAFE_INTEGER;
+    return Math.max(1, limit - reserved);
   }
 
   /** {@link languagesToDeleteEach} for one entry. */
