@@ -221,7 +221,7 @@ test.describe("the inspector", () => {
     await expect(bar.locator("[data-edit-state]")).toHaveText("Normal");
     // The device is the canvas's own: which band its width falls in. Moving
     // the canvas to a device moves the bar with it.
-    const widths = page.getByRole("radiogroup", { name: "Canvas width" });
+    const widths = page.getByRole("radiogroup", { name: "Device" });
     for (const device of ["Mobile", "Tablet"]) {
       await widths
         .getByRole("radio", { name: new RegExp(`^${device}`) })
