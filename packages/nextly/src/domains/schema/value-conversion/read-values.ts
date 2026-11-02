@@ -75,6 +75,7 @@ interface ValueRow {
   k2?: unknown;
   v: unknown;
   storage?: unknown;
+  real_text?: unknown;
   json_valid?: unknown;
 }
 
@@ -139,7 +140,13 @@ async function readPage(
     ),
     sql`${asText(dialect, column)} AS v`,
   ];
-  if (dialect === "sqlite") selected.push(sql`typeof(${column}) AS storage`);
+  if (dialect === "sqlite") {
+    selected.push(sql`typeof(${column}) AS storage`);
+    // A REAL's every digit: `CAST(.. AS TEXT)` gives 15 significant digits before SQLite 3.43.
+    selected.push(
+      sql`CASE WHEN typeof(${column}) = 'real' THEN printf('%!.17g', ${column}) END AS real_text`
+    );
+  }
   if (dialect === "mysql" && source.toJson) {
     selected.push(sql`JSON_VALID(${column}) AS json_valid`);
   }
@@ -208,6 +215,10 @@ function storedValue(
   };
   if (dialect === "sqlite" && isSqliteStorage(row.storage)) {
     value.storage = row.storage;
+    const exactReal = textOf(row.real_text);
+    if (row.storage === "real" && exactReal !== null) {
+      value.exactReal = exactReal;
+    }
   }
   if (dialect === "mysql" && source.toJson && row.json_valid !== undefined) {
     value.jsonValid = Number(row.json_valid) === 1;

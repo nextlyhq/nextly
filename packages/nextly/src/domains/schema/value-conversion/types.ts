@@ -68,6 +68,12 @@ export interface StoredValue {
   /** SQLite only: how the value is stored, which decides how a rebuilt column's affinity copies it. */
   storage?: SqliteStorage;
   /**
+   * SQLite only, for a REAL: the stored double to 17 significant digits, which always read back as
+   * the same double. `text` is SQLite's own text of it, the text a TEXT column is given, which a
+   * SQLite before 3.43 rounds to 15 digits.
+   */
+  exactReal?: string;
+  /**
    * Whether the database itself parses the value as JSON, where it offers a predicate that says so
    * (MySQL's `JSON_VALID`). Where it is present it is the answer, so the judgement and the database
    * cannot disagree about a value's JSON.

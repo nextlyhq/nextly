@@ -413,6 +413,36 @@ describe("judgeColumn", () => {
       ).resolves.toEqual({ class: "safe", reasons: [] });
     });
 
+    it("SQLite: a REAL is judged by its full digits, not by the text an older SQLite rounds it to", async () => {
+      // SQLite before 3.43 renders a REAL as text with 15 significant digits, both when it is read as
+      // text and when a rebuild copies it into a TEXT column; the reader also hands over all 17.
+      const rounded = {
+        text: "1.0",
+        storage: "real" as const,
+        exactReal: "1.0000000000000011",
+      };
+      const toText = await judgeColumn(
+        lite("real", "text", { compareAs: "number" }),
+        rows(rounded, sqlite("2.5", "real"))
+      );
+      expect(toText.class).toBe("blocked");
+      expect(kinds(toText)).toEqual(["stored-differently"]);
+      expect(idsOf(toText, "stored-differently")).toEqual(["1"]);
+
+      // Under INTEGER affinity a REAL with a fraction stays the same REAL.
+      await expect(
+        judgeColumn(lite("real", "integer"), rows(rounded))
+      ).resolves.toEqual({ class: "safe", reasons: [] });
+
+      // A SQLite that writes every digit into the TEXT column keeps the number.
+      await expect(
+        judgeColumn(
+          lite("real", "text", { compareAs: "number" }),
+          rows({ ...rounded, text: rounded.exactReal })
+        )
+      ).resolves.toEqual({ class: "safe", reasons: [] });
+    });
+
     it("SQLite: where the affinity does not change, values are copied as stored", async () => {
       // SQLite enforces no length, so a narrowing to varchar(N) changes nothing it holds.
       await expect(

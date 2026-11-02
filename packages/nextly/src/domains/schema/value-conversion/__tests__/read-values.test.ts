@@ -67,6 +67,35 @@ describe("readStoredValues", () => {
   });
 });
 
+describe("readStoredValues on SQLite", () => {
+  it("hands over a REAL's full digits beside SQLite's own text of it", async () => {
+    const handle = {
+      all: () => [
+        { k1: "1", v: "1.0", storage: "real", real_text: "1.0000000000000011" },
+        { k1: "2", v: "7", storage: "integer", real_text: null },
+      ],
+    };
+    const values: StoredValue[] = [];
+    for await (const value of readStoredValues(handle, "sqlite", {
+      table: "t",
+      column: "c",
+      keyedBy: "id",
+      toJson: false,
+    })) {
+      values.push(value);
+    }
+    expect(values).toEqual([
+      {
+        key: { id: "1" },
+        text: "1.0",
+        storage: "real",
+        exactReal: "1.0000000000000011",
+      },
+      { key: { id: "2" }, text: "7", storage: "integer" },
+    ]);
+  });
+});
+
 describe("judgeStoredColumn", () => {
   it("stops with the database's own error when the rows cannot be read", async () => {
     const lockTimeout = Object.assign(new Error("lock timeout"), {

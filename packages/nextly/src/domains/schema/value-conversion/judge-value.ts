@@ -201,8 +201,12 @@ function sqliteJudge(conversion: ColumnConversion): ValueJudge {
   const before = sqliteAffinity(conversion.from.type);
   const after = sqliteAffinity(conversion.to.type);
   if (before === after) return keeps;
-  return ({ text, storage }) => {
-    const stored: SqliteValue = { text, storage: storage ?? "text" };
+  return ({ text, storage, exactReal }) => {
+    const stored: SqliteValue = {
+      text,
+      storage: storage ?? "text",
+      ...(exactReal !== undefined ? { exact: exactReal } : {}),
+    };
     return sameReading(
       stored,
       sqliteStores(stored, after),
@@ -225,9 +229,16 @@ function sameReading(
   if (compareAs === "number") {
     const read = exactNumber(after.text);
     if (read === null) return "kept-unreadable";
+    // A REAL is a double, so it keeps its reading when the new value reads as that same double.
+    if (before.storage === "real") {
+      return Number(after.text) === Number(before.exact ?? before.text)
+        ? null
+        : "stored-differently";
+    }
     return read === exactNumber(before.text) ? null : "stored-differently";
   }
-  return before.storage === after.storage && before.text === after.text
+  return before.storage === after.storage &&
+    (before.exact ?? before.text) === (after.exact ?? after.text)
     ? null
     : "stored-differently";
 }

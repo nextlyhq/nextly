@@ -235,6 +235,8 @@ function readUnquotedElement(body: string, start: number): number | null {
 export interface SqliteValue {
   storage: SqliteStorage;
   text: string;
+  /** A REAL's 17 significant digits, where `text` may be rounded (`StoredValue.exactReal`). */
+  exact?: string;
 }
 
 /** The smallest and largest integers SQLite stores as an INTEGER. */
@@ -264,7 +266,10 @@ function asReal(text: string): number | null {
   return DECIMAL_LITERAL.test(text) ? Number(text) : null;
 }
 
-/** A number rendered as text, as a TEXT column stores it; anything else as it was. */
+/**
+ * A number rendered as text, as a TEXT column stores it: SQLite's own text of it, whatever digits it
+ * keeps. Anything else as it was.
+ */
 function storedAsText(value: SqliteValue): SqliteValue {
   return value.storage === "integer" || value.storage === "real"
     ? { storage: "text", text: value.text }
@@ -277,7 +282,7 @@ function storedAsText(value: SqliteValue): SqliteValue {
  */
 function storedAsNumeric(value: SqliteValue): SqliteValue {
   if (value.storage === "real")
-    return realAsInteger(Number(value.text)) ?? value;
+    return realAsInteger(Number(value.exact ?? value.text)) ?? value;
   if (value.storage !== "text") return value;
   const trimmed = value.text.trim();
   const real = asReal(trimmed);
