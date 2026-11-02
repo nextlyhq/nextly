@@ -7,7 +7,12 @@
 // the content an author held stays unpublished), merge a change that is
 // behind live over newer shared values, or tell a live language nothing.
 
-import { afterEach, describe, expect, it } from "vitest";
+import type {
+  TransactionContext,
+  TransactionOptions,
+} from "@nextlyhq/adapter-drizzle/types";
+import { getTableName, isTable } from "drizzle-orm";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import {
@@ -30,6 +35,7 @@ import type { WebhookEvent } from "../../webhooks/types";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
@@ -336,6 +342,69 @@ describe.each(getConfiguredTestDialects())(
         })
       );
       expect(await taggedSince(before, every)).toEqual(told);
+    });
+
+    // The default language going live is told once, durably and to the
+    // in-process subscribers. A draft entry whose default language's pending
+    // change creates its translation row goes live through that row, so the
+    // language's tagged `entry.published` is the transition, and an untagged
+    // one beside it tells subscribers the same publication twice. The
+    // plausible broken implementation decides the untagged event from the
+    // translation rows stored before the publish, which the default language
+    // has none of here.
+    it("tells a draft entry's default language going live once, when its pending change creates its row", async () => {
+      const entries = await boot(dialect);
+      const created = await entries.createEntry(
+        { collectionName: POSTS, overrideAccess: true, locale: "en" },
+        { tagline: "Shared", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      // As on an install whose entry was live before it was translated: no
+      // translation row of its own for the default language.
+      await current!.adapter.delete(`dc_${POSTS}_locales`, {
+        and: [{ column: "_locale", op: "=", value: "en" }],
+      });
+      const held = await entries.updateEntry(at(id, "en"), { title: "Hello" });
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      expect(await pendingLocales(id)).toEqual(["en"]);
+      // Taken down outside the app while English's change is held.
+      await current!.adapter.update(
+        `dc_${POSTS}`,
+        { status: "draft" },
+        { and: [{ column: "id", op: "=", value: id }] }
+      );
+      const before = await eventIds();
+      const inProcess: unknown[] = [];
+      current!.events.on("document.published", payload =>
+        inProcess.push(payload)
+      );
+
+      const all = await entries.publishAllLocales({
+        collectionName: POSTS,
+        entryId: id,
+        overrideAccess: true,
+      });
+      expect(all.success, JSON.stringify(all)).toBe(true);
+
+      const rows = await current!.adapter.select<EventRow>("nextly_events");
+      const published = rows
+        .filter(row => !before.has(row.id))
+        .map(
+          row =>
+            (typeof row.payload === "string"
+              ? JSON.parse(row.payload)
+              : row.payload) as WebhookEvent
+        )
+        .filter(
+          event =>
+            event.type === "entry.published" &&
+            event.resource.kind === "entry" &&
+            event.resource.id === id
+        )
+        .map(event => event.resource.locale);
+      expect(published).toEqual(["en"]);
+      await current!.events.settle();
+      expect(inProcess).toHaveLength(1);
     });
   }
 );
@@ -667,6 +736,132 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect((read.data as { title?: unknown } | null)?.title).toBe("Live");
+    });
+  }
+);
+
+// The reads a publish of every language makes under the entry's lock, of the
+// tables each language's document is read from, do not grow with the
+// languages it tells. The plausible broken implementation reads each told
+// language's document alone, before the publish and after it, so every
+// translation and component table is read twice more for each language.
+const READS = "readsposts";
+const READS_BANNER = "readsbanner";
+
+/**
+ * The translation and component tables the adapter's transactions read, each
+ * time one is read: every select made through a transaction's own handle.
+ */
+function countDocumentReads(read: string[]): void {
+  const adapter = current!.adapter;
+  const original = adapter.transaction.bind(adapter);
+  const counted = (tx: TransactionContext): TransactionContext => {
+    type Select = (...args: unknown[]) => {
+      from: (table: unknown, ...rest: unknown[]) => unknown;
+    };
+    const db = tx.getDrizzle<{ select: Select }>();
+    const select = db.select.bind(db);
+    vi.spyOn(db, "select").mockImplementation((...args: unknown[]) => {
+      const builder = select(...args);
+      const from = builder.from.bind(builder);
+      builder.from = (table: unknown, ...rest: unknown[]) => {
+        const name = isTable(table) ? getTableName(table) : undefined;
+        if (
+          name === `dc_${READS}_locales` ||
+          name?.startsWith("comp_") === true
+        ) {
+          read.push(name);
+        }
+        return from(table, ...rest);
+      };
+      return builder;
+    });
+    vi.spyOn(tx, "getDrizzle").mockReturnValue(db);
+    return tx;
+  };
+  vi.spyOn(adapter, "transaction").mockImplementation(
+    <T>(
+      work: (tx: TransactionContext) => Promise<T>,
+      options?: TransactionOptions
+    ) => original(tx => work(counted(tx)), options)
+  );
+}
+
+/** Each table read, with how many times. */
+function tally(read: readonly string[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const name of read) counts[name] = (counts[name] ?? 0) + 1;
+  return counts;
+}
+
+describe.each(getConfiguredTestDialects())(
+  "the reads a publish of every language makes under the lock (integration, %s)",
+  dialect => {
+    it("reads each document table as often for four languages as for two", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: READS_BANNER,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: READS,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title", localized: true }),
+              fieldGroup({ name: "banner", component: READS_BANNER }),
+            ],
+          }),
+        ],
+        localization: {
+          locales: ["en", "es", "fr", "de"],
+          defaultLocale: "en",
+        },
+      });
+      const entries = (
+        current.getService("collectionsHandler") as CollectionsHandler
+      ).getEntryService() as CollectionEntryService;
+      // A draft in `locales`, each translated: a publish of every language
+      // tells each of them.
+      const draftIn = async (locales: readonly string[]): Promise<string> => {
+        const created = await entries.createEntry(
+          { collectionName: READS, overrideAccess: true, locale: "en" },
+          { title: "en", banner: { heading: "Banner" }, status: "draft" }
+        );
+        const id = (created.data as { id: string }).id;
+        for (const locale of locales.filter(code => code !== "en")) {
+          const saved = await entries.updateEntry(at(id, locale, READS), {
+            title: locale,
+          });
+          expect(saved.success, JSON.stringify(saved)).toBe(true);
+        }
+        return id;
+      };
+      const two = await draftIn(["en", "es"]);
+      const four = await draftIn(["en", "es", "fr", "de"]);
+
+      const readsOf = async (id: string): Promise<Record<string, number>> => {
+        const read: string[] = [];
+        countDocumentReads(read);
+        const published = await entries.publishAllLocales({
+          collectionName: READS,
+          entryId: id,
+          overrideAccess: true,
+        });
+        vi.restoreAllMocks();
+        expect(published.success, JSON.stringify(published)).toBe(true);
+        return tally(read);
+      };
+      const forTwo = await readsOf(two);
+      const forFour = await readsOf(four);
+
+      expect(forTwo[`dc_${READS}_locales`]).toBeGreaterThan(0);
+      expect(forFour).toEqual(forTwo);
     });
   }
 );

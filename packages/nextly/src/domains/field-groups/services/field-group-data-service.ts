@@ -13,14 +13,12 @@ import {
   type DeleteComponentDataParams,
 } from "./field-group-mutation-service";
 import {
-  type ComponentReadLanguage,
   FieldGroupQueryService,
   type PopulateComponentDataParams,
   type PopulateComponentDataManyParams,
 } from "./field-group-query-service";
 
 export type {
-  ComponentReadLanguage,
   SaveComponentDataParams,
   DeleteComponentDataParams,
   PopulateComponentDataParams,

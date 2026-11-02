@@ -2031,13 +2031,22 @@ export class SinglePublishAllService extends BaseService {
       id: entryId,
     };
 
-    // Whether the default locale's own companion row transitions here. When it
-    // does, the per-locale pass emits the default language's transition tagged
-    // with its locale, and the untagged document event would duplicate it.
+    // The languages this publish tells, decided once for both passes below.
+    const told = this.languagesTold({
+      lockedRow,
+      priorCompanionStatuses,
+      promotedLocales: args.promotedLocales,
+    });
+    // Whether the default language goes live through its own tagged events
+    // here, a translation row its pending change creates included. When it
+    // does, the per-locale pass emits its transition tagged with its locale,
+    // and the untagged document event would duplicate it.
     const defaultCompanionTransitions =
       defaultLocale !== undefined &&
-      priorCompanionStatuses.has(defaultLocale) &&
-      priorCompanionStatuses.get(defaultLocale) !== "published";
+      told.some(
+        ([locale, priorStatus]) =>
+          locale === defaultLocale && priorStatus !== "published"
+      );
 
     const documentRecorded = await this.recordDocumentEvents(tx, {
       plan,
@@ -2059,12 +2068,11 @@ export class SinglePublishAllService extends BaseService {
       plan,
       lockedRow,
       publishedRow,
-      priorCompanionStatuses,
+      told,
       webhookFields,
       resource,
       priorComponents: args.priorComponents,
       priorCompanionValues: args.priorCompanionValues,
-      promotedLocales: args.promotedLocales,
     });
 
     return documentRecorded || localeRecorded;
@@ -2180,60 +2188,32 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * The locale-tagged events of each translation whose live content this
-   * publish changed, as a publish of that one language records them: a
-   * `single.updated` and a `single.published` for a translation that went
-   * live, and a `single.updated` for one already live whose pending change
-   * went live.
+   * The languages a publish of every language tells, each with its status
+   * before: those that went live, and those already live whose pending change
+   * went live, a change that creates the language's translation row included.
+   * Each one's status before is read as the outcomes read it.
    *
-   * The bulk flip moved every companion locale in one statement, but a
-   * subscriber watching a single language needs its own event, carrying that
-   * language's content and its own prior status.
-   *
-   * Only locales the app still CONFIGURES get one: a locale removed from
+   * Only locales the app still CONFIGURES are told: a locale removed from
    * configuration can leave stale companion rows behind, and an event tagged
    * with a locale that normal reads and writes reject would mislead a
    * locale-routed consumer.
    */
-  private async recordLocaleEvents(
-    tx: TransactionContext,
-    args: {
-      plan: PublishPlan;
-      lockedRow: Record<string, unknown>;
-      publishedRow: Record<string, unknown>;
-      priorCompanionStatuses: Map<string, string | null>;
-      webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
-      resource: WebhookResource;
-      priorComponents: Map<string, Record<string, unknown>>;
-      priorCompanionValues: Map<string, Record<string, unknown>>;
-      promotedLocales: ReadonlySet<string | null>;
-    }
-  ): Promise<boolean> {
-    const {
-      plan,
-      lockedRow,
-      publishedRow,
-      priorCompanionStatuses,
-      webhookFields,
-      resource,
-    } = args;
+  private languagesTold(args: {
+    lockedRow: Record<string, unknown>;
+    priorCompanionStatuses: Map<string, string | null>;
+    promotedLocales: ReadonlySet<string | null>;
+  }): (readonly [string, unknown])[] {
     const configuredLocales = new Set(
       this.localization?.locales.map(l => l.code) ?? []
     );
-    let recorded = false;
-
-    // The languages this publish tells: those that went live, and those
-    // already live whose pending change went live, a change that creates the
-    // language's translation row included. Each one's status before is read
-    // as the outcomes read it.
     const defaultLocale = this.localization?.defaultLocale ?? "";
     const candidates = new Set([
-      ...priorCompanionStatuses.keys(),
+      ...args.priorCompanionStatuses.keys(),
       ...[...args.promotedLocales].filter(
         (locale): locale is string => locale !== null
       ),
     ]);
-    const told = [...candidates]
+    return [...candidates]
       .filter(
         locale => configuredLocales.size === 0 || configuredLocales.has(locale)
       )
@@ -2243,8 +2223,8 @@ export class SinglePublishAllService extends BaseService {
             locale,
             languageStatusBefore(locale, {
               defaultLocale,
-              prior: priorCompanionStatuses,
-              mainStatus: lockedRow.status,
+              prior: args.priorCompanionStatuses,
+              mainStatus: args.lockedRow.status,
             }),
           ] as const
       )
@@ -2252,6 +2232,37 @@ export class SinglePublishAllService extends BaseService {
         ([locale, priorStatus]) =>
           priorStatus !== "published" || args.promotedLocales.has(locale)
       );
+  }
+
+  /**
+   * The locale-tagged events of each translation whose live content this
+   * publish changed, as a publish of that one language records them: a
+   * `single.updated` and a `single.published` for a translation that went
+   * live, and a `single.updated` for one already live whose pending change
+   * went live.
+   *
+   * The bulk flip moved every companion locale in one statement, but a
+   * subscriber watching a single language needs its own event, carrying that
+   * language's content and its own prior status. The languages are those
+   * `languagesTold` chose.
+   */
+  private async recordLocaleEvents(
+    tx: TransactionContext,
+    args: {
+      plan: PublishPlan;
+      lockedRow: Record<string, unknown>;
+      publishedRow: Record<string, unknown>;
+      /** The languages this publish tells, with each one's status before. */
+      told: readonly (readonly [string, unknown])[];
+      webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
+      resource: WebhookResource;
+      priorComponents: Map<string, Record<string, unknown>>;
+      priorCompanionValues: Map<string, Record<string, unknown>>;
+    }
+  ): Promise<boolean> {
+    const { plan, lockedRow, publishedRow, told, webhookFields, resource } =
+      args;
+    let recorded = false;
     // Each language's translated values as the publish left them, in one read
     // for all of them: it runs while this publish holds the row's lock. As
     // they stood before it, the promotion rewrote them where a pending change

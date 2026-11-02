@@ -185,7 +185,7 @@ import {
 } from "../../field-groups/live-read-access";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { passwordReachOf } from "../../field-groups/password-reach";
-import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import { readComponentSubtreesByLocale } from "../../field-groups/read-component-subtrees";
 import {
   fieldGroupWriteAccessOf,
   type FieldGroupWriteAccess,
@@ -199,8 +199,8 @@ import {
 } from "../../i18n/companion-columns";
 import {
   companionRowExists,
-  populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  populateCompanionFieldsByLanguage,
   readCompanionLocaleStatus,
   readCompanionLocaleStatusAll,
   readCompanionLocaleStatusAllOf,
@@ -818,6 +818,19 @@ function keptToLanguage<T extends { writeLocale: string }>(
   return split !== null && locale !== null && split.writeLocale !== locale
     ? { ...split, writeLocale: locale }
     : split;
+}
+
+/**
+ * An entry's document as stored, read on a write's transaction, with the
+ * parts it is assembled from; see `storedDocumentOnTx`.
+ */
+interface StoredDocument {
+  document: Record<string, unknown>;
+  committedLocaleStatus: string | null;
+  localizedValues: Record<string, unknown>;
+  parentRow: Record<string, unknown>;
+  components: Record<string, unknown>;
+  manyToMany: Record<string, string[]>;
 }
 
 /**
@@ -4389,27 +4402,59 @@ export class CollectionMutationService extends BaseService {
     entryIds: readonly string[],
     locale: string
   ): Promise<Map<string, Record<string, unknown>>> {
-    const rows: Record<string, unknown>[] = entryIds.map(id => ({ id }));
-    await populateCompanionFields({
-      db: executor as Parameters<typeof populateCompanionFields>[0]["db"],
+    const byLocale = await this.companionValuesByLanguageOf(
+      executor,
+      companion,
+      entryIds,
+      [locale]
+    );
+    return byLocale.get(locale) ?? new Map();
+  }
+
+  /**
+   * {@link companionValuesOf} for several languages at once, keyed by language
+   * and then by entry id: one query for every language, each language's
+   * values exactly what a read of that language alone returns.
+   */
+  private async companionValuesByLanguageOf(
+    executor: unknown,
+    companion: CompanionSchema,
+    entryIds: readonly string[],
+    locales: readonly string[]
+  ): Promise<Map<string, Map<string, Record<string, unknown>>>> {
+    const byLanguage = [...new Set(locales)].map(locale => ({
+      locale,
+      rows: entryIds.map((id): Record<string, unknown> => ({ id })),
+    }));
+    await populateCompanionFieldsByLanguage({
+      db: executor as Parameters<
+        typeof populateCompanionFieldsByLanguage
+      >[0]["db"],
       companionTable: companion.table,
       localizedFields: companion.localizedFields,
-      rows,
-      localeChain: [locale],
+      byLanguage: byLanguage.map(language => ({
+        rows: language.rows,
+        localeChain: [language.locale],
+      })),
       readiness: cachedCompanionReadiness(
         this.adapter,
         companion.companionTableName
       ),
     });
     return new Map(
-      rows.map(row => {
-        const values: Record<string, unknown> = {};
-        for (const field of companion.localizedFields) {
-          const value = row[field.name];
-          if (value !== undefined) values[field.name] = value;
-        }
-        return [String(row.id), values];
-      })
+      byLanguage.map(language => [
+        language.locale,
+        new Map(
+          language.rows.map(row => {
+            const values: Record<string, unknown> = {};
+            for (const field of companion.localizedFields) {
+              const value = row[field.name];
+              if (value !== undefined) values[field.name] = value;
+            }
+            return [String(row.id), values];
+          })
+        ),
+      ])
     );
   }
 
@@ -5149,7 +5194,38 @@ export class CollectionMutationService extends BaseService {
     components: Record<string, unknown>;
     manyToMany: Record<string, string[]>;
   }> {
-    const components = await readComponentSubtrees({
+    const { componentsByLocale, manyToMany } =
+      await this.buildFullSnapshotRelationsByLocale(
+        tx,
+        entryId,
+        collectionName,
+        parentTable,
+        fields,
+        manyToManyFields,
+        [locale]
+      );
+    return { components: componentsByLocale.get(locale) ?? {}, manyToMany };
+  }
+
+  /**
+   * {@link buildFullSnapshotRelations} for several languages at once: each
+   * component table is read once for them all, and the many-to-many values,
+   * which every language shares, once. For a reader holding the row's lock,
+   * so its reads do not multiply with the languages.
+   */
+  private async buildFullSnapshotRelationsByLocale(
+    tx: { getDrizzle<T = unknown>(): T },
+    entryId: string,
+    collectionName: string,
+    parentTable: string,
+    fields: FieldDefinition[],
+    manyToManyFields: FieldDefinition[],
+    locales: readonly (string | undefined)[]
+  ): Promise<{
+    componentsByLocale: Map<string | undefined, Record<string, unknown>>;
+    manyToMany: Record<string, string[]>;
+  }> {
+    const componentsByLocale = await readComponentSubtreesByLocale({
       fieldGroupDataService: this.fieldGroupDataService,
       tx: tx as TransactionContext,
       entryId,
@@ -5161,7 +5237,7 @@ export class CollectionMutationService extends BaseService {
       // language it was just written in. Without it the read falls back to the
       // default component locale and the snapshot records values this write
       // never touched.
-      locale,
+      locales,
       reason: "version-snapshot-component-read",
       logContext: { collection: collectionName, entryId },
       onReadFailure: (err: unknown) =>
@@ -5216,7 +5292,7 @@ export class CollectionMutationService extends BaseService {
       }
     }
 
-    return { components, manyToMany };
+    return { componentsByLocale, manyToMany };
   }
 
   /**
@@ -7112,14 +7188,19 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * One language's document as stored, read on a publish of every language's
+   * Each language's document as stored, read on a publish of every language's
    * transaction in the shape a publish of that language alone reports it
-   * (`storedDocumentOnTx`), with the caller's payload split for the language
-   * as that publish splits it: what the publish tells the language it was
-   * before, and is after, and what a promotion of its pending change is
-   * judged against.
+   * (`storedDocumentOnTx`), keyed by the language asked: what the publish
+   * tells each language it was before, and is after, and what a promotion of
+   * its pending change is judged against. One read for every language, so
+   * the reads made under the row's lock do not multiply with the languages.
+   *
+   * A language is read as a write of it would be: the default one for a
+   * pending change kept under no language (`null`), and a language the app no
+   * longer configures under its own name rather than the default it would
+   * resolve to, whose row would then be read as that language's.
    */
-  private async languageDocumentOnTx(
+  private async languageDocumentsOnTx(
     tx: TransactionContext,
     args: {
       /** The main row, as this transaction reads it. */
@@ -7129,34 +7210,22 @@ export class CollectionMutationService extends BaseService {
       tableName: string;
       fields: FieldDefinition[];
       manyToManyFields: FieldDefinition[];
-      /** The language, or `null` for a pending change kept under none. */
-      locale: string | null;
-      /** The caller's payload, of which the split takes the language's part. */
-      payload: Record<string, unknown>;
+      locales: readonly (string | null)[];
     }
-  ): Promise<{
-    document: Record<string, unknown>;
-    /** The payload's main-row part for this language. */
-    finalData: Record<string, unknown>;
-    localizedUpdate: Awaited<
-      ReturnType<CollectionMutationService["splitLocalizedWriteData"]>
-    >;
-  }> {
-    // A copy, since the split moves the translated values, and for any
-    // language but the default the status, out of what it is handed.
-    const finalData = { ...args.payload };
-    const localizedUpdate = keptToLanguage(
-      await this.splitLocalizedWriteData(
+  ): Promise<Map<string | null, Record<string, unknown>>> {
+    const locales = [...new Set(args.locales)];
+    if (locales.length === 0) return new Map();
+    try {
+      // The companion every language shares, from one split at the default
+      // language; each language named is then read under its own name.
+      const localizedUpdate = await this.splitLocalizedWriteData(
         args.collectionName,
-        finalData,
-        args.locale ?? undefined,
+        {},
+        undefined,
         false,
         tx.getDrizzle()
-      ),
-      args.locale
-    );
-    try {
-      const { document } = await this.storedDocumentOnTx(tx, {
+      );
+      const stored = await this.storedDocumentsOnTx(tx, {
         row: args.row,
         collectionName: args.collectionName,
         entryId: args.entryId,
@@ -7164,9 +7233,9 @@ export class CollectionMutationService extends BaseService {
         fields: args.fields,
         manyToManyFields: args.manyToManyFields,
         localizedUpdate,
-        locale: args.locale ?? undefined,
+        locales: locales.map(locale => locale ?? undefined),
       });
-      return { document, finalData, localizedUpdate };
+      return new Map(locales.map((locale, i) => [locale, stored[i].document]));
     } catch (err) {
       // These values feed durable language-tagged events and the promotion's
       // field rules, so a failed read aborts the publish. A raw driver error
@@ -7178,10 +7247,35 @@ export class CollectionMutationService extends BaseService {
         logContext: {
           reason: "publish-all-locale-values-read",
           collection: args.collectionName,
-          locale: args.locale,
+          locales,
         },
       });
     }
+  }
+
+  /**
+   * The caller's payload for one language's main row, split as a publish of
+   * that language alone splits it: the translated values, and for any
+   * language but the default the status, moved out of a copy.
+   */
+  private async languagePayloadOnTx(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      /** The language, or `null` for a pending change kept under none. */
+      locale: string | null;
+      payload: Record<string, unknown>;
+    }
+  ): Promise<Record<string, unknown>> {
+    const finalData = { ...args.payload };
+    await this.splitLocalizedWriteData(
+      args.collectionName,
+      finalData,
+      args.locale ?? undefined,
+      false,
+      tx.getDrizzle()
+    );
+    return finalData;
   }
 
   /**
@@ -7796,9 +7890,66 @@ export class CollectionMutationService extends BaseService {
           // Each language's pending change as the write lands it, judged
           // before anything is written.
           const promotions: PendingPromotion[] = [];
-          // Each language this publish tells, as stored before anything is
-          // written: what its events report as `previous`.
-          const toldBefore = new Map<string, Record<string, unknown>>();
+          // The languages this publish tells, as a publish of each one alone
+          // would: each that goes live, and each already live whose pending
+          // change goes live, a change that creates the language's
+          // translation row included. Every pending change is promoted or the
+          // publish is refused, so the languages promoted are those holding
+          // one. Only those the app still configures: a locale removed from
+          // configuration can leave stale companion rows and changes behind,
+          // and an event tagged with a locale that normal reads and writes
+          // reject would mislead locale-routed consumers. Each one's status
+          // before is read as the outcomes read it.
+          const promotedLocales = new Set(
+            pending.flatMap(change =>
+              change.locale === null ? [] : [change.locale]
+            )
+          );
+          const told = publishes
+            ? [
+                ...new Set([
+                  ...priorCompanionStatuses.keys(),
+                  ...promotedLocales,
+                ]),
+              ]
+                .filter(
+                  locale =>
+                    configuredLocales.size === 0 ||
+                    configuredLocales.has(locale)
+                )
+                .map(locale => ({
+                  locale,
+                  priorStatus: languageStatusBefore(locale, {
+                    defaultLocale: defaultLocale ?? "",
+                    prior: priorCompanionStatuses,
+                    mainStatus: lockedRow.status,
+                  }),
+                  promoted: promotedLocales.has(locale),
+                }))
+                .filter(
+                  language =>
+                    language.priorStatus !== direction.nextStatus ||
+                    language.promoted
+                )
+            : [];
+          // Each told language, and each pending change's, as stored before
+          // anything is written, in one read for them all: what a change's
+          // promotion is judged against, and what the events report as
+          // `previous`. The promotion rewrites the translation rows, the
+          // shared values and the component tables they would otherwise be
+          // read from afterwards.
+          const storedBefore = await this.languageDocumentsOnTx(tx, {
+            row: preImageRow,
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            tableName,
+            fields,
+            manyToManyFields,
+            locales: [
+              ...pending.map(change => change.locale),
+              ...told.map(language => language.locale),
+            ],
+          });
 
           if (publishes) {
             // Everything that goes live, judged on the row this transaction
@@ -7841,19 +7992,11 @@ export class CollectionMutationService extends BaseService {
                     )
                   : pending;
                 for (const change of changes) {
-                  const language = await this.languageDocumentOnTx(tx, {
-                    row: preImageRow,
+                  const finalData = await this.languagePayloadOnTx(tx, {
                     collectionName: params.collectionName,
-                    entryId: params.entryId,
-                    tableName,
-                    fields,
-                    manyToManyFields,
                     locale: change.locale,
                     payload: promotion.context.finalData,
                   });
-                  if (change.locale !== null) {
-                    toldBefore.set(change.locale, language.document);
-                  }
                   promotions.push(
                     await this.pendingChangePromotion(tx, {
                       change,
@@ -7864,8 +8007,8 @@ export class CollectionMutationService extends BaseService {
                       entryId: params.entryId,
                       storedId: String(existingEntry.id),
                       tableName,
-                      live: language.document,
-                      finalData: language.finalData,
+                      live: storedBefore.get(change.locale) ?? {},
+                      finalData,
                       companion,
                       caller: params,
                       grants: promotion.grants,
@@ -7948,66 +8091,6 @@ export class CollectionMutationService extends BaseService {
                 : [];
           }
 
-          // The languages this publish tells, as a publish of each one alone
-          // would: each that goes live, and each already live whose pending
-          // change went live, a change that creates the language's
-          // translation row included. Only those the app still configures: a
-          // locale removed from configuration can leave stale companion rows
-          // and changes behind, and an event tagged with a locale that normal
-          // reads and writes reject would mislead locale-routed consumers.
-          // Each one's status before is read as the outcomes read it.
-          const promotedLocales = new Set(
-            promotions.flatMap(p => (p.locale === null ? [] : [p.locale]))
-          );
-          const told = publishes
-            ? [
-                ...new Set([
-                  ...priorCompanionStatuses.keys(),
-                  ...promotedLocales,
-                ]),
-              ]
-                .filter(
-                  locale =>
-                    configuredLocales.size === 0 ||
-                    configuredLocales.has(locale)
-                )
-                .map(locale => ({
-                  locale,
-                  priorStatus: languageStatusBefore(locale, {
-                    defaultLocale: defaultLocale ?? "",
-                    prior: priorCompanionStatuses,
-                    mainStatus: lockedRow.status,
-                  }),
-                  promoted: promotedLocales.has(locale),
-                }))
-                .filter(
-                  language =>
-                    language.priorStatus !== direction.nextStatus ||
-                    language.promoted
-                )
-            : [];
-          // Every told language's content before anything is written, for the
-          // previous state of its events: the promotion rewrites the
-          // translation rows, the shared values and the component tables
-          // they would otherwise be read from afterwards.
-          for (const language of told) {
-            if (toldBefore.has(language.locale)) continue;
-            toldBefore.set(
-              language.locale,
-              (
-                await this.languageDocumentOnTx(tx, {
-                  row: preImageRow,
-                  collectionName: params.collectionName,
-                  entryId: params.entryId,
-                  tableName,
-                  fields,
-                  manyToManyFields,
-                  locale: language.locale,
-                  payload: { status: direction.nextStatus },
-                })
-              ).document
-            );
-          }
           // Where a promotion can rewrite a slug, the ones the entry was
           // reachable at until now: the main row's as locked, and each
           // language's as read before the transaction.
@@ -8308,18 +8391,41 @@ export class CollectionMutationService extends BaseService {
             },
           });
           eventRecorded = baseRecorded || eventRecorded;
-          // Whether the default locale's own companion row transitions to
-          // published here. When it does, the per-locale events below emit the
-          // default locale's transition tagged `locale: <default>` — matching
-          // the ordinary localized update path, where a default-locale status
+          // The languages whose own translation row moves to `direction`'s
+          // status here, each told by a locale-tagged transition below.
+          // Decided once, before the untagged event and the tagged ones, so
+          // both read one answer: a published translation row a promotion
+          // creates counts, and a language with no row after the publish
+          // shows the language it falls back to rather than going live.
+          const taggedTransitions = new Set(
+            publishes
+              ? told
+                  .filter(
+                    language =>
+                      language.priorStatus !== direction.nextStatus &&
+                      (priorCompanionStatuses.has(language.locale) ||
+                        translated.has(language.locale))
+                  )
+                  .map(language => language.locale)
+              : [...priorCompanionStatuses]
+                  .filter(
+                    ([locale, priorLocaleStatus]) =>
+                      (configuredLocales.size === 0 ||
+                        configuredLocales.has(locale)) &&
+                      priorLocaleStatus !== direction.nextStatus
+                  )
+                  .map(([locale]) => locale)
+          );
+          // Whether the default locale's own companion row transitions here.
+          // When it does, the per-locale events below emit the default
+          // locale's transition tagged `locale: <default>` — matching the
+          // ordinary localized update path, where a default-locale status
           // that rides the companion is emitted locale-tagged and the untagged
           // main-row event is suppressed (its companion event already encodes
           // the transition). So a consumer routing the default language by its
-          // locale still sees the default translation go live.
+          // locale still sees the default translation go live, once.
           defaultCompanionTransitions =
-            defaultLocale !== undefined &&
-            priorCompanionStatuses.has(defaultLocale) &&
-            priorCompanionStatuses.get(defaultLocale) !== direction.nextStatus;
+            defaultLocale !== undefined && taggedTransitions.has(defaultLocale);
           // The document-wide (main-row) publish transition, WITHOUT a locale
           // tag. Emitted only when a default-companion event does not already
           // encode it (a non-localized collection, or a default locale whose
@@ -8355,20 +8461,19 @@ export class CollectionMutationService extends BaseService {
             // publish left it and as it stood before. The default locale is
             // included: its companion event replaces the untagged main event
             // suppressed above.
+            // Every told language as the publish left it, in one read.
+            const storedAfter = await this.languageDocumentsOnTx(tx, {
+              row: publishedParentRow ?? preImageRow,
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              tableName,
+              fields,
+              manyToManyFields,
+              locales: told.map(language => language.locale),
+            });
             for (const language of told) {
-              const data = (
-                await this.languageDocumentOnTx(tx, {
-                  row: publishedParentRow ?? preImageRow,
-                  collectionName: params.collectionName,
-                  entryId: params.entryId,
-                  tableName,
-                  fields,
-                  manyToManyFields,
-                  locale: language.locale,
-                  payload: { status: direction.nextStatus },
-                })
-              ).document;
-              const previous = toldBefore.get(language.locale) ?? null;
+              const data = storedAfter.get(language.locale) ?? {};
+              const previous = storedBefore.get(language.locale) ?? null;
               const statusBefore =
                 typeof language.priorStatus === "string"
                   ? language.priorStatus
@@ -8395,14 +8500,7 @@ export class CollectionMutationService extends BaseService {
                 },
               });
               eventRecorded = updatedRecorded || eventRecorded;
-              // A language with no translation row after the publish has not
-              // gone live on its own: it shows the language it falls back to.
-              const hasOwnRow =
-                priorCompanionStatuses.has(language.locale) ||
-                translated.has(language.locale);
-              if (language.priorStatus === direction.nextStatus || !hasOwnRow) {
-                continue;
-              }
+              if (!taggedTransitions.has(language.locale)) continue;
               const localeRecorded = await this.recordStatusEvents(tx, {
                 collection: params.collectionName,
                 id: params.entryId,
@@ -8437,9 +8535,7 @@ export class CollectionMutationService extends BaseService {
             // untagged main event suppressed above. Only locales the app
             // still configures get an event, for the reason given above.
             for (const [locale, priorLocaleStatus] of priorCompanionStatuses) {
-              if (configuredLocales.size > 0 && !configuredLocales.has(locale))
-                continue;
-              if (priorLocaleStatus === direction.nextStatus) continue;
+              if (!taggedTransitions.has(locale)) continue;
               // Build this locale's own before/after documents. A withdrawal
               // changes only status, so the locale's translatable values AND
               // its component subtrees are identical on both sides — read them
@@ -9043,50 +9139,95 @@ export class CollectionMutationService extends BaseService {
       >;
       locale: string | undefined;
     }
-  ): Promise<{
-    document: Record<string, unknown>;
-    committedLocaleStatus: string | null;
-    /** The parts the document is assembled from. */
-    localizedValues: Record<string, unknown>;
-    parentRow: Record<string, unknown>;
-    components: Record<string, unknown>;
-    manyToMany: Record<string, string[]>;
-  }> {
+  ): Promise<StoredDocument> {
+    const { locale, ...rest } = args;
+    const [stored] = await this.storedDocumentsOnTx(tx, {
+      ...rest,
+      locales: [args.localizedUpdate?.writeLocale ?? locale],
+    });
+    return stored;
+  }
+
+  /**
+   * {@link storedDocumentOnTx} for several languages at once, in the order
+   * asked: each language's translated values and status are read in one
+   * statement for them all, each component table once, and the many-to-many
+   * values, which every language shares, once. Each language's document is
+   * exactly what a read of that language alone returns. For a reader holding
+   * the row's lock, so its reads do not multiply with the languages.
+   *
+   * `localizedUpdate` is the split of a write, whose companion every language
+   * shares; a language left undefined is the split's own.
+   */
+  private async storedDocumentsOnTx(
+    tx: TransactionContext,
+    args: {
+      row: Record<string, unknown>;
+      collectionName: string;
+      entryId: string;
+      tableName: string;
+      fields: FieldDefinition[];
+      manyToManyFields: FieldDefinition[];
+      localizedUpdate: Awaited<
+        ReturnType<CollectionMutationService["splitLocalizedWriteData"]>
+      >;
+      locales: readonly (string | undefined)[];
+    }
+  ): Promise<StoredDocument[]> {
     const { localizedUpdate } = args;
+    // Each language as its companion row is keyed: the split's own where none
+    // is named.
+    const languages = args.locales.map(locale =>
+      localizedUpdate ? (locale ?? localizedUpdate.writeLocale) : locale
+    );
+    const translated = localizedUpdate
+      ? languages.filter((locale): locale is string => locale !== undefined)
+      : [];
     // The main row holds no translatable values and, for a per-locale
     // status, no current status either — both live in the companion.
     // Without them `previous` would omit every localized field that
     // `data` carries, so the diff would report untouched translations as
     // changed and lose the old value of the ones that did change.
-    const previousLocalizedValues = localizedUpdate
-      ? await this.readCompanionLocalizedValues(
-          tx,
-          args.collectionName,
-          args.entryId,
-          localizedUpdate.writeLocale
+    const companion =
+      translated.length > 0
+        ? await this.fileManager.loadCompanionSchema(
+            args.collectionName,
+            tx.getDrizzle()
+          )
+        : null;
+    const valuesByLanguage = companion
+      ? await this.companionValuesByLanguageOf(
+          tx.getDrizzle(),
+          companion,
+          [args.entryId],
+          translated
         )
-      : {};
-    // The locale's committed status, read before the write. Gated on
+      : new Map<string, Map<string, Record<string, unknown>>>();
+    // Each language's committed status, read before the write. Gated on
     // `hasStatus` rather than on the patch carrying a status: a content-
     // only translation update still has to report THIS locale's status,
     // which can differ from the main row (a German draft under a
     // published entry). The gate is what keeps the read safe — companion
     // `_status` exists only on collections migrated for per-locale
     // status, and querying it otherwise fails the whole write.
-    const committedLocaleStatus =
-      localizedUpdate && localizedUpdate.hasStatus
-        ? await this.readLocaleStatus(tx, localizedUpdate, args.entryId)
-        : null;
-    const previousParent = this.storedParentRow(
-      args.row,
+    const statusByLanguage =
+      localizedUpdate && localizedUpdate.hasStatus && translated.length > 0
+        ? await readCompanionLocaleStatusAll(
+            tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+            localizedUpdate.companionTable,
+            args.entryId,
+            cachedCompanionReadiness(
+              this.adapter,
+              localizedUpdate.companionTableName
+            )
+          )
+        : new Map<string, string | null>();
+    const passwordReach = await this.passwordReach(
       args.fields,
-      args.tableName,
-      previousLocalizedValues,
-      committedLocaleStatus,
-      await this.passwordReach(args.fields, tx.getDrizzle())
+      tx.getDrizzle()
     );
-    const { components: previousComponents, manyToMany: previousM2M } =
-      await this.buildFullSnapshotRelations(
+    const { componentsByLocale, manyToMany } =
+      await this.buildFullSnapshotRelationsByLocale(
         tx,
         args.entryId,
         args.collectionName,
@@ -9094,21 +9235,33 @@ export class CollectionMutationService extends BaseService {
         args.fields,
         args.manyToManyFields,
         // The resolved write locale — see the create path.
-        localizedUpdate?.writeLocale ?? args.locale
+        languages
       );
-    const document = assembleDocument({
-      parentRow: previousParent,
-      components: previousComponents,
-      manyToMany: previousM2M,
+    return languages.map(locale => {
+      const localizedValues =
+        (locale !== undefined
+          ? valuesByLanguage.get(locale)?.get(args.entryId)
+          : undefined) ?? {};
+      const committedLocaleStatus =
+        locale !== undefined ? (statusByLanguage.get(locale) ?? null) : null;
+      const parentRow = this.storedParentRow(
+        args.row,
+        args.fields,
+        args.tableName,
+        localizedValues,
+        committedLocaleStatus,
+        passwordReach
+      );
+      const components = componentsByLocale.get(locale) ?? {};
+      return {
+        document: assembleDocument({ parentRow, components, manyToMany }),
+        committedLocaleStatus,
+        localizedValues,
+        parentRow,
+        components,
+        manyToMany,
+      };
     });
-    return {
-      document,
-      committedLocaleStatus,
-      localizedValues: previousLocalizedValues,
-      parentRow: previousParent,
-      components: previousComponents,
-      manyToMany: previousM2M,
-    };
   }
 
   /**

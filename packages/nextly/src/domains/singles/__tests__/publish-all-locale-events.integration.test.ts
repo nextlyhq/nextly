@@ -307,6 +307,52 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(told);
     });
 
+    // The default language going live is told once. A draft document whose
+    // default language's pending change creates its translation row goes live
+    // through that row, so the language's tagged `published` is the
+    // transition, and an untagged one beside it tells subscribers the same
+    // publication twice. The plausible broken implementation decides the
+    // untagged event from the translation rows stored before the publish,
+    // which the default language has none of here.
+    it("tells a draft document's default language going live once, when its pending change creates its row", async () => {
+      const singles = await boot(dialect);
+      const live = await singles.update(
+        EVERY,
+        { tagline: "Shared", status: "published" },
+        { overrideAccess: true }
+      );
+      expect(live.success, JSON.stringify(live)).toBe(true);
+      await current!.adapter.delete("single_preferences_every_locales", {
+        and: [{ column: "_locale", op: "=", value: "en" }],
+      });
+      const held = await singles.update(
+        EVERY,
+        { siteName: "Hello" },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      // Taken down outside the app while English's change is held: a draft
+      // document whose default language has no translation row of its own.
+      await current!.adapter.update(
+        "single_preferences_every",
+        { status: "draft" },
+        { and: [{ column: "status", op: "=", value: "published" }] }
+      );
+      const before = await eventIds();
+
+      const every = await singles.publishAllLocales(EVERY, {
+        overrideAccess: true,
+      });
+      expect(every.success, JSON.stringify(every)).toBe(true);
+
+      const published = (await eventsSince(before, EVERY)).filter(
+        event => event.type === "single.published"
+      );
+      expect(published).toEqual([
+        expect.objectContaining({ locale: "en", data: "Hello" }),
+      ]);
+    });
+
     it("tells a language whose pending change creates its row what its components were before", async () => {
       const singles = await boot(dialect, { withBanner: true });
       for (const slug of [ONE, EVERY]) {
