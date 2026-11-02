@@ -65,6 +65,17 @@ describe("a batch's stored relations", () => {
     expect(load.manyToMany).toHaveBeenCalledTimes(1);
   });
 
+  it("read each component's definition once for every document", async () => {
+    const batch = new GoingLiveRelationsBatch(["a", "b"]);
+    const read = vi.fn(() => Promise.resolve([]));
+
+    await batch.componentFields("hero", read);
+    await batch.componentFields("hero", read);
+    await batch.componentFields("card", read);
+
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("are read alone for a document outside the batch", async () => {
     const load = countingLoad();
     const batch = new GoingLiveRelationsBatch(["a"]);
@@ -235,13 +246,13 @@ describe("required components by language", () => {
         ...componentsRequiredInDefaultLanguage(
           context(false),
           [TITLE, HERO, TAGS],
-          false
+          true
         ).localizedFieldNames,
       ].sort()
     ).toEqual(["hero", "title"]);
   });
 
-  it("keeps it on a document with no translated fields, whatever the language", () => {
+  it("keeps it on a document that is the same in every language, whatever the language", () => {
     const ctx = {
       localizedFieldNames: new Set<string>(),
       enforceLocalizedRequired: false,
@@ -251,7 +262,7 @@ describe("required components by language", () => {
     );
   });
 
-  it("relaxes it where only a component is translated", () => {
+  it("relaxes it on a document whose only translated values sit in a component", () => {
     const ctx = {
       localizedFieldNames: new Set<string>(),
       enforceLocalizedRequired: false,

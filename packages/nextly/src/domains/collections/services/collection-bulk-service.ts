@@ -2493,7 +2493,11 @@ export class CollectionBulkService extends BaseService {
   ): Promise<void> {
     // Where an entry publishes, its components and relationships are read
     // for it alone once its row is locked (`storedRelationsOf`): another
-    // writer may change a later entry's before the batch reaches it.
+    // writer may change a later entry's before the batch reaches it. The
+    // component definitions it is judged against are read once for all.
+    const goingLiveBatch = new GoingLiveRelationsBatch(
+      entries.map(entry => entry.id)
+    );
     await runLegacyBatch(
       tx,
       entries,
@@ -2503,7 +2507,7 @@ export class CollectionBulkService extends BaseService {
         const updateResult =
           await this.mutationService.updateSingleEntryInTransaction(
             tx,
-            { ...params, transitionAuth },
+            { ...params, transitionAuth, goingLiveBatch },
             entry.id,
             entry.data,
             options.skipHooks,

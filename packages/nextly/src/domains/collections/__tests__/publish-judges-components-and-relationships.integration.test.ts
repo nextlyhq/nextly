@@ -41,6 +41,7 @@ import { FieldGroupQueryService } from "../../field-groups/services/field-group-
 import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 import { seedPlainAuthor } from "../../releases/__tests__/helpers/live-author";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
+import { GoingLiveRelationsBatch } from "../services/collection-mutation-service";
 import {
   CollectionRelationshipService,
   junctionLinkColumns,
@@ -115,6 +116,34 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
       defineFieldGroup({ slug: "card", fields: [text({ name: "label" })] }),
       defineFieldGroup({ slug: "aside", fields: [text({ name: "body" })] }),
+      // Translated, with a rule that, once tightened, refuses a stored value.
+      defineFieldGroup({
+        slug: "memo",
+        localized: true,
+        fields: [
+          text({
+            name: "code",
+            validate: (value: unknown) =>
+              !nestedRuleOn || value !== "retired" || "code is retired",
+          }),
+        ],
+      }),
+      // A required password: stored as a hash, which no read returns.
+      defineFieldGroup({
+        slug: "secured",
+        fields: [
+          text({ name: "label" }),
+          password({ name: "pin", required: true }),
+        ],
+      }),
+      // A component placed directly in a component, which nothing stores.
+      defineFieldGroup({
+        slug: "shell",
+        fields: [
+          text({ name: "label" }),
+          fieldGroup({ name: "core", component: "card", required: true }),
+        ],
+      }),
       // Its values are kept per language, in its translations table.
       defineFieldGroup({
         slug: "note",
@@ -215,6 +244,25 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               ) ||
               "this hero cannot go live beside this title",
           }),
+        ],
+      }),
+      // Translated only through its component: no translated field of its own.
+      defineCollection({
+        slug: "notebooks",
+        status: true,
+        localized: true,
+        fields: [
+          text({ name: "title", localized: false }),
+          fieldGroup({ name: "memo", component: "memo" }),
+        ],
+      }),
+      defineCollection({
+        slug: "vaults",
+        status: true,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "secured", component: "secured" }),
+          fieldGroup({ name: "shell", component: "shell" }),
         ],
       }),
       defineCollection({
@@ -711,6 +759,49 @@ describe.each(getConfiguredTestDialects())(
         status: "draft",
         hero: { heading: "fine", code: "retired" },
       });
+      ids.nestedFine = await created(t, "checked", {
+        title: "nested fine",
+        status: "draft",
+        hero: { heading: "fine", code: "current" },
+      });
+      for (const name of ["nestedBatchA", "nestedBatchB"]) {
+        ids[name] = await created(t, "checked", {
+          title: name,
+          status: "draft",
+          hero: { heading: "fine", code: "retired" },
+        });
+      }
+      for (const name of ["germanNested", "englishNested"]) {
+        ids[name] = await created(
+          t,
+          "guides",
+          {
+            title: name,
+            status: "draft",
+            hero: { heading: "fine", code: "retired" },
+          },
+          "en"
+        );
+      }
+      // Live with a hero that meets its rules, and a pending change to one
+      // that, once the rule is tightened, does not.
+      ids.promotedNested = await created(t, "drafted", {
+        title: "promoted nested",
+        status: "published",
+        hero: { heading: "Live", code: "current" },
+      });
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "drafted",
+              entryId: ids.promotedNested,
+              overrideAccess: true,
+            },
+            { hero: { heading: "Live", code: "retired" } }
+          )
+        ).success
+      ).toBe(true);
 
       ids.missingDe = await created(t, "pages", {
         title: "missing, published in German",
@@ -763,6 +854,34 @@ describe.each(getConfiguredTestDialects())(
           ).success
         ).toBe(true);
       }
+      for (const name of ["notebookGerman"]) {
+        ids[name] = await created(
+          t,
+          "notebooks",
+          { title: name, status: "draft", memo: { code: "retired" } },
+          "en"
+        );
+      }
+      // The German translation of the memo holds the same stored value.
+      expect(
+        (
+          await entriesOf(t).updateEntry(
+            {
+              collectionName: "notebooks",
+              entryId: ids.notebookGerman,
+              overrideAccess: true,
+              locale: "de",
+            },
+            { memo: { code: "retired" } }
+          )
+        ).success
+      ).toBe(true);
+      ids.vault = await created(t, "vaults", {
+        title: "vault",
+        status: "draft",
+        secured: { label: "front door", pin: "1234" },
+        shell: { label: "wrapper" },
+      });
       ids.aside = await created(t, "asides", {
         title: "aside",
         status: "draft",
@@ -1047,11 +1166,67 @@ describe.each(getConfiguredTestDialects())(
       expect(refusedPaths(story)).toContain("tags");
     });
 
-    it("does not judge again a rule nested inside a component", async () => {
+    it("refuses a component instance that breaks a rule tightened since it was saved, naming the field inside it", async () => {
       nestedRuleOn = true;
       try {
-        const result = await publish(t, "checked", ids.nested);
-        expect(result.success, JSON.stringify(result)).toBe(true);
+        const refused = await publish(t, "checked", ids.nested);
+        expect(refused.success).toBe(false);
+        expect(refusedPaths(refused)).toContain("hero.code");
+
+        const meets = await publish(t, "checked", ids.nestedFine);
+        expect(meets.success, JSON.stringify(meets)).toBe(true);
+
+        // A pending change promoted over the live document is judged too.
+        const promoted = await publish(t, "drafted", ids.promotedNested);
+        expect(promoted.success).toBe(false);
+        expect(refusedPaths(promoted)).toContain("hero.code");
+
+        // Each document of a batch.
+        const batch = await entriesOf(t).updateEntries(
+          { collectionName: "checked", overrideAccess: true },
+          [ids.nestedBatchA, ids.nestedBatchB].map(id => ({
+            id,
+            data: { status: "published" },
+          }))
+        );
+        expect(batch).toMatchObject({ successful: 0, failed: 2 });
+      } finally {
+        nestedRuleOn = false;
+      }
+    });
+
+    it("publishes an instance whose required password is stored, and whose unstored direct component is absent", async () => {
+      // A stored password reads back as absent, and a component placed
+      // directly in a component is never stored: neither is a missing value.
+      const result = await publish(t, "vaults", ids.vault);
+
+      expect(result.success, JSON.stringify(result)).toBe(true);
+    });
+
+    it("judges a component instance's own rules in the default language only", async () => {
+      nestedRuleOn = true;
+      try {
+        // A translation falls back to the default language's values, so it
+        // is not refused for them, as a required component is not.
+        const german = await publish(t, "guides", ids.germanNested, {}, "de");
+        expect(german.success, JSON.stringify(german)).toBe(true);
+
+        const english = await publish(t, "guides", ids.englishNested, {}, "en");
+        expect(english.success).toBe(false);
+        expect(refusedPaths(english)).toContain("hero.code");
+
+        // Translated only through a localized component, with no field of its
+        // own to translate: a publish names no language of its own, so the
+        // document goes live as one, judged in the default language.
+        const germanBook = await publish(
+          t,
+          "notebooks",
+          ids.notebookGerman,
+          {},
+          "de"
+        );
+        expect(germanBook.success).toBe(false);
+        expect(refusedPaths(germanBook)).toContain("memo.code");
       } finally {
         nestedRuleOn = false;
       }
@@ -1107,6 +1282,19 @@ describe.each(getConfiguredTestDialects())(
           links.mockRestore();
         }
       };
+
+      // The definitions its instances are judged against are asked of the
+      // batch, which reads each once for all its documents.
+      const viaBatch = vi.spyOn(
+        GoingLiveRelationsBatch.prototype,
+        "componentFields"
+      );
+      try {
+        await batchReadIds("checked", ["nestedBatchA", "nestedBatchB"]);
+        expect(viaBatch).toHaveBeenCalled();
+      } finally {
+        viaBatch.mockRestore();
+      }
 
       // Every document is refused, so each batch can be asked again.
       const bulkTwo = await bulkReads("pages", ["count0", "count1"]);

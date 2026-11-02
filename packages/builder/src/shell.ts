@@ -359,6 +359,12 @@ export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
 export { useInlineEditing } from "./use-inline-editing";
 export type { UseInlineEditingResult } from "./use-inline-editing";
 /**
+ * What a host says when a double-click lands on text a component does not
+ * expose: the hook selects the placement and hands the host its id, and the
+ * host reads the placement with `inspectInstance` against its own library.
+ */
+export { inspectInstance, partOfComponentSentence } from "./instance-inspector";
+/**
  * What finishing an inline edit did.
  *
  * A host must branch on this rather than on the presence of a document. A

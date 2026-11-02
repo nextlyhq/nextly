@@ -686,6 +686,14 @@ interface UpdateEntryWriteParams {
    * update grant, so a super-admin-owned key cannot update other users' rows.
    */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The batch this write is one of, whose component definitions it is judged
+   * against, read once for them all. Its relations are not: under the row
+   * lock each entry's are read for it alone (`storedRelationsOf`).
+   *
+   * @internal
+   */
+  goingLiveBatch?: GoingLiveRelationsBatch;
 }
 
 /** The only things that differ between the two update entry points. */
@@ -944,10 +952,10 @@ async function inChunks<T>(
  * asked for, the many-to-many ids once. A document outside the batch is read
  * on its own.
  *
- * Only for reads on the pool, which judge ahead of any lock. A judgement on a
- * transaction holds the lock of the one row it judges, so the other rows'
- * relations read with it could still change before the transaction locks
- * them; it reads its own row's alone (`storedRelationsOf`).
+ * The relations are only for reads on the pool, which judge ahead of any
+ * lock. A judgement on a transaction holds the lock of the one row it judges,
+ * so the other rows' relations read with it could still change before the
+ * transaction locks them; it reads its own row's alone (`storedRelationsOf`).
  *
  * @internal
  */
@@ -960,9 +968,31 @@ export class GoingLiveRelationsBatch {
   private manyToMany:
     | Promise<Map<string, Record<string, string[]>>>
     | undefined;
+  private readonly definitions = new Map<
+    string,
+    Promise<FieldConfig[] | null>
+  >();
 
   constructor(entryIds: readonly string[]) {
     this.entryIds = [...new Set(entryIds)];
+  }
+
+  /**
+   * A component's own fields, read once for the batch through `read`: a
+   * batch writes documents, not definitions, so every document is judged
+   * against the same ones. Unlike the relations, safe to share on a
+   * transaction too, which locks rows, not definitions.
+   */
+  componentFields(
+    slug: string,
+    read: () => Promise<FieldConfig[] | null>
+  ): Promise<FieldConfig[] | null> {
+    let found = this.definitions.get(slug);
+    if (found === undefined) {
+      found = read();
+      this.definitions.set(slug, found);
+    }
+    return found;
   }
 
   /**
@@ -1125,11 +1155,6 @@ function manyToManyValuesIn(
  * is: one finished language can go live while another is incomplete. The
  * validator relaxes `required` for the names it is given outside the default
  * language, so the components' names join the translated fields'.
- *
- * `reachesLocalizedFieldGroup` says whether the fields reach a field group
- * kept per language: a document whose only translated values sit inside a
- * component is as much a document in several languages as one with
- * translated fields of its own, which the companion's names alone miss.
  */
 export function componentsRequiredInDefaultLanguage<
   T extends {
@@ -1139,15 +1164,15 @@ export function componentsRequiredInDefaultLanguage<
 >(
   context: T,
   fields: readonly FieldDefinition[],
-  reachesLocalizedFieldGroup: boolean
+  /**
+   * Whether the document differs by language: it has translated fields, or
+   * reaches a localized field group, whose values its own translations hold.
+   * One that does not is one document in every language, its components as
+   * much the default language's as anyone's.
+   */
+  perLanguage: boolean
 ): T {
-  // A document with nothing translated, neither a field of its own nor a
-  // component's, is one document in every language: its components are as
-  // much the default language's as anyone's.
-  if (
-    context.enforceLocalizedRequired ||
-    (context.localizedFieldNames.size === 0 && !reachesLocalizedFieldGroup)
-  ) {
+  if (context.enforceLocalizedRequired || !perLanguage) {
     return context;
   }
   const components = fields
@@ -1218,11 +1243,22 @@ interface EntryValidationArgs {
   localeCtx?: {
     localizedFieldNames: ReadonlySet<string>;
     enforceLocalizedRequired: boolean;
+    /** Whether the document differs by language; see `publishLanguageContext`. */
+    perLanguage?: boolean;
   };
   /** The stored entry's id, on an update. */
   id?: string;
   /** The write's own transaction, where it runs inside one. */
   tx?: TransactionContext;
+  /**
+   * Whether the document goes live: its top-level component instances are
+   * then judged by their own fields' rules as well, in the default language,
+   * as a required component is. A rule tightened since an instance was saved
+   * would otherwise go live unjudged.
+   */
+  goesLive?: boolean;
+  /** The batch the document goes live with, which reads definitions once. */
+  batch?: GoingLiveRelationsBatch;
 }
 
 interface CreateEntryWriteParams {
@@ -2505,6 +2541,25 @@ export class CollectionMutationService extends BaseService {
     args: EntryValidationArgs
   ): Promise<ValidationIssue[]> {
     const view = this.validationView(args.data, args.fields);
+    // A component's fields, on the write's connection, read once for the
+    // whole batch where the document goes live with others.
+    const componentFieldsOf = (componentSlug: string) => {
+      const read = async () =>
+        (await this.fieldGroupDataService?.getComponentFields(
+          componentSlug,
+          args.tx?.getDrizzle()
+        )) ?? null;
+      return args.batch === undefined
+        ? read()
+        : args.batch.componentFields(componentSlug, read);
+    };
+    // In the default language, or in any where the document has no
+    // translated fields and so is the same document in every language.
+    const judgeInstances =
+      args.goesLive === true &&
+      (args.localeCtx === undefined ||
+        args.localeCtx.enforceLocalizedRequired ||
+        args.localeCtx.perLanguage === false);
     const issues = await validateEntryData(
       view,
       attachFieldValidators("collection", args.collectionName, args.fields),
@@ -2514,14 +2569,18 @@ export class CollectionMutationService extends BaseService {
         ...args.localeCtx,
         // A component inside a group or repeater is judged here, since no
         // component write reaches it; read on the write's own connection.
+        // Going live, a top-level one too, in the default language.
         componentFields: await containedComponentResolver(
           args.fields as unknown as FieldConfig[],
-          async componentSlug =>
-            (await this.fieldGroupDataService?.getComponentFields(
-              componentSlug,
-              args.tx?.getDrizzle()
-            )) ?? null
+          componentFieldsOf,
+          judgeInstances
         ),
+        judgeComponentInstances: judgeInstances,
+        // Going live in a language whose component rules are not enforced,
+        // a component held in a group or repeater is left alone too.
+        ...(args.goesLive === true && !judgeInstances
+          ? { judgeContainedComponents: false }
+          : {}),
         write: this.validationWrite(
           args.collectionName,
           args.id ??
@@ -2547,8 +2606,7 @@ export class CollectionMutationService extends BaseService {
       document: view,
       fields: args.fields as unknown as FieldConfig[],
       fieldGroups: service && {
-        getComponentFields: componentSlug =>
-          service.getComponentFields(componentSlug, args.tx?.getDrizzle()),
+        getComponentFields: componentFieldsOf,
       },
       executor: args.tx?.getDrizzle(),
       entryId: args.id,
@@ -2604,6 +2662,38 @@ export class CollectionMutationService extends BaseService {
     fields: FieldDefinition[]
   ): Record<string, unknown> {
     return relationshipValidationView(data, fields as unknown as FieldConfig[]);
+  }
+
+  /**
+   * The language rules a publish judges a document going live in, as
+   * {@link localizedRequiredContext} gives them, with its components'
+   * `required` relaxed outside the default language where the document differs
+   * by language, and whether it does.
+   */
+  private async publishLanguageContext(args: {
+    collectionName: string;
+    locale: string | undefined;
+    fields: FieldDefinition[];
+    tx?: TransactionContext;
+    companion?: CompanionSchema | null;
+  }): Promise<{
+    localizedFieldNames: ReadonlySet<string>;
+    enforceLocalizedRequired: boolean;
+    perLanguage: boolean;
+  }> {
+    const context = await this.localizedRequiredContext(
+      args.collectionName,
+      args.locale,
+      args.tx?.getDrizzle(),
+      args.companion
+    );
+    const perLanguage =
+      context.localizedFieldNames.size > 0 ||
+      (await this.reachesLocalizedFieldGroup(args.fields, args.tx));
+    return {
+      ...componentsRequiredInDefaultLanguage(context, args.fields, perLanguage),
+      perLanguage,
+    };
   }
 
   /**
@@ -4314,7 +4404,12 @@ export class CollectionMutationService extends BaseService {
     merged: Record<string, unknown>
   ): Promise<ValidationIssue[]> {
     return this.promotedDocumentIssues(
-      { ...args, companion: args.reads?.companion, tx: undefined },
+      {
+        ...args,
+        companion: args.reads?.companion,
+        batch: args.relationsBatch ?? args.reads?.relations,
+        tx: undefined,
+      },
       merged
     );
   }
@@ -4337,6 +4432,8 @@ export class CollectionMutationService extends BaseService {
     > & {
       /** The companion already resolved for a batch; read when absent. */
       companion?: CompanionSchema | null;
+      /** The batch the document goes live with, which reads definitions once. */
+      batch?: GoingLiveRelationsBatch;
       tx: TransactionContext | undefined;
     },
     merged: Record<string, unknown>
@@ -4349,17 +4446,16 @@ export class CollectionMutationService extends BaseService {
       user: args.user,
       reader: args.reader,
       readLocale: args.locale,
-      localeCtx: componentsRequiredInDefaultLanguage(
-        await this.localizedRequiredContext(
-          args.collectionName,
-          args.locale,
-          args.tx?.getDrizzle(),
-          args.companion
-        ),
-        args.fields,
-        await this.reachesLocalizedFieldGroup(args.fields, args.tx)
-      ),
+      localeCtx: await this.publishLanguageContext({
+        collectionName: args.collectionName,
+        locale: args.locale,
+        fields: args.fields,
+        ...(args.tx === undefined ? {} : { tx: args.tx }),
+        companion: args.companion,
+      }),
       id: args.entryId,
+      goesLive: true,
+      ...(args.batch === undefined ? {} : { batch: args.batch }),
       ...(args.tx === undefined ? {} : { tx: args.tx }),
     });
   }
@@ -4375,11 +4471,6 @@ export class CollectionMutationService extends BaseService {
     const languages = (await this.languagesGoingLive(args)).filter(
       locale => !(args.writeLocalePromoted && locale === args.writeLocale)
     );
-    // Whether the document is kept per language through its components, the
-    // same in every language it goes live in.
-    const translatedComponents =
-      languages.length > 0 &&
-      (await this.reachesLocalizedFieldGroup(args.fields, args.tx));
     for (const locale of languages) {
       const issues = await this.entryIssues({
         data: await this.storedDocumentGoingLive({
@@ -4402,16 +4493,15 @@ export class CollectionMutationService extends BaseService {
         user: args.user,
         reader: args.reader,
         readLocale: locale,
-        localeCtx: componentsRequiredInDefaultLanguage(
-          await this.localizedRequiredContext(
-            args.collectionName,
-            locale,
-            args.tx?.getDrizzle(),
-            args.reads?.companion
-          ),
-          args.fields,
-          translatedComponents
-        ),
+        goesLive: true,
+        batch: args.relations.batch,
+        localeCtx: await this.publishLanguageContext({
+          collectionName: args.collectionName,
+          locale,
+          fields: args.fields,
+          ...(args.tx === undefined ? {} : { tx: args.tx }),
+          companion: args.reads?.companion,
+        }),
         id: args.entryId,
         ...(args.tx === undefined ? {} : { tx: args.tx }),
       });
@@ -15902,6 +15992,8 @@ export class CollectionMutationService extends BaseService {
           reader: params,
           id: entryId,
           tx,
+          goesLive: true,
+          batch: params.goingLiveBatch,
         });
       }
 
