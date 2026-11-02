@@ -193,7 +193,8 @@ export interface SiteStyleStep {
  * does would otherwise both remember the value from before the first.
  */
 export interface SiteStyleHistory {
-  readonly record: (step: SiteStyleStep) => void;
+  /** Records a step; answers a function that withdraws it. */
+  readonly record: (step: SiteStyleStep) => () => void;
   readonly written: Map<SiteStyleSection, unknown>;
 }
 
@@ -275,22 +276,34 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   );
 
   /*
-   * A stored save inside the editor is also a step of its history, recorded
-   * once the write is stored: a refused one changed nothing to take back.
+   * A save inside the editor is also a step of its history, recorded when the
+   * author makes the change rather than when it is stored: the studios save
+   * without waiting, and a page edit made meanwhile comes after it. A refused
+   * save changed nothing, so its step is withdrawn.
+   *
+   * The section is taken as written at once, so a second save made before this
+   * one is stored builds its step on this value rather than on the one before.
    */
   const save = useCallback(
     async (
       section: SiteStyleSection,
       value: unknown
     ): Promise<SiteStyleSaveResult> => {
-      const before = history?.written.has(section)
+      if (history === null) return write(section, value);
+      const before = history.written.has(section)
         ? history.written.get(section)
         : storedSection(stored.current, section);
+      history.written.set(section, value);
+      const to = (next: unknown) => async () =>
+        (await write(section, next)).saved;
+      const withdraw = history.record({ undo: to(before), redo: to(value) });
       const result = await write(section, value);
-      if (result.saved && history !== null) {
-        const to = (next: unknown) => async () =>
-          (await write(section, next)).saved;
-        history.record({ undo: to(before), redo: to(value) });
+      if (!result.saved) {
+        withdraw();
+        // Back to what the section holds, unless a later save has moved it.
+        if (history.written.get(section) === value) {
+          history.written.set(section, before);
+        }
       }
       return result;
     },

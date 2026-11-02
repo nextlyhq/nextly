@@ -280,6 +280,9 @@ describe("a save inside the editor, as a step of its history", () => {
     const value = {
       record: (step: Step) => {
         steps.push(step);
+        return () => {
+          steps.splice(steps.indexOf(step), 1);
+        };
       },
       written: new Map(),
     };
@@ -387,5 +390,65 @@ describe("a save inside the editor, as a step of its history", () => {
       await result.current.save("tokens", { tokens: [] });
     });
     expect(writes).toHaveLength(1);
+  });
+
+  it("builds each step on the save before it, even while that save is still in flight", async () => {
+    // The studios save without waiting, so two edits can both be in flight.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const first = [{ id: "c1", slug: "card" }];
+    const second = [...first, { id: "c2", slug: "hero" }];
+    await act(async () => {
+      await Promise.all([
+        result.current.save("classes", first),
+        result.current.save("classes", second),
+      ]);
+    });
+    await act(async () => {
+      await steps[1]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ classes: first });
+  });
+
+  it("takes its place in the history when the change is made, not when it is stored", async () => {
+    // A page edit made while the save is in flight comes after it.
+    let land: (value: unknown) => void = () => {};
+    writeBehaviour = () =>
+      new Promise(resolve => {
+        land = resolve;
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.save("tokens", { tokens: [] });
+    });
+    expect(steps).toHaveLength(1);
+    await act(async () => {
+      land({ id: "1" });
+      await saving;
+    });
+    expect(steps).toHaveLength(1);
+  });
+
+  it("withdraws the step it recorded when the save is refused", async () => {
+    let refuse: (reason: unknown) => void = () => {};
+    writeBehaviour = () =>
+      new Promise((_, reject) => {
+        refuse = reject;
+      });
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.save("tokens", { tokens: [] });
+    });
+    expect(steps).toHaveLength(1);
+    await act(async () => {
+      refuse(new Error("refused"));
+      await saving;
+    });
+    expect(steps).toEqual([]);
   });
 });

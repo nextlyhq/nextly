@@ -1585,19 +1585,40 @@ describe("a step recorded from outside the document", () => {
     expect(result.current.canRedo).toBe(false);
   });
 
-  it("counts toward the history's bound", () => {
+  it("gives way to page edits at the history's bound, so the save point does not move", () => {
+    // A page saved at depth 1 stays saved however many style steps follow:
+    // the oldest step is dropped at the bound, never the page's own edit.
     const calls: string[] = [];
     const { result } = renderHook(() =>
       useEditorState({ initialDocument: doc([]) })
     );
     act(() => {
       result.current.apply(insert("first", 0));
-      for (let i = 0; i < MAX_HISTORY; i += 1) {
+      for (let i = 0; i < MAX_HISTORY + 5; i += 1) {
         result.current.recordStep(step(calls, `s${i}`));
       }
     });
-    // The oldest entry, the insert, fell off the old end.
-    expect(result.current.undoDepth).toBe(0);
+    expect(result.current.undoDepth).toBe(1);
     expect(result.current.canUndo).toBe(true);
+  });
+
+  it("can be withdrawn before it is replayed, as a refused save is", () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "style"));
+    });
+    act(() => withdraw());
+    // The next undo reaches the page edit, and the step was never replayed.
+    act(() => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a"]);
+    expect(calls).toEqual([]);
+    expect(result.current.canUndo).toBe(false);
   });
 });

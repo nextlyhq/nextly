@@ -127,6 +127,9 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       redo: () => {},
       recordStep: (step: (typeof recorded)[number]) => {
         recorded.push(step);
+        return () => {
+          recorded.splice(recorded.indexOf(step), 1);
+        };
       },
       canUndo: false,
       canRedo: false,

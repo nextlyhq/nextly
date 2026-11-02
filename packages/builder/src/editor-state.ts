@@ -101,6 +101,17 @@ function reversed(step: HistoryStep): HistoryStep {
   return { undo: step.redo, redo: step.undo };
 }
 
+/**
+ * Drop the oldest entry of a full stack: the oldest recorded step when there
+ * is one, else the oldest edit. A step goes first because dropping a document
+ * edit moves the depth a save point is measured by, and a page saved before a
+ * run of style changes would then read as unsaved.
+ */
+function evictOldest(stack: HistoryEntry[]): void {
+  const step = stack.findIndex(entry => entry.kind === "step");
+  stack.splice(step >= 0 ? step : 0, 1);
+}
+
 /** How many entries change the document, which is what a save point counts. */
 function documentEntries(stack: readonly HistoryEntry[]): number {
   return stack.filter(entry => entry.kind === "ops").length;
@@ -176,10 +187,13 @@ export interface EditorState {
   redo: () => void;
   /**
    * Record a change made outside the document as one step of this history,
-   * after it has taken effect. It ends the redo branch, as an edit does.
+   * when the author makes it, so it takes its place in order among the page's
+   * edits even while it is still being stored. It ends the redo branch, as an
+   * edit does. Answers a function that withdraws the step, for a change that
+   * did not take effect after all.
    * @experimental
    */
-  recordStep: (step: HistoryStep) => void;
+  recordStep: (step: HistoryStep) => () => void;
   canUndo: boolean;
   canRedo: boolean;
   /**
@@ -744,7 +758,8 @@ function useHistoryStacks(): {
         // Bounded from the OLD end. Dropping the newest would make the most
         // recent edit unrepeatable, which is the one an author is most likely
         // to want back.
-        if (undoStack.current.length > MAX_HISTORY) undoStack.current.shift();
+        if (undoStack.current.length > MAX_HISTORY)
+          evictOldest(undoStack.current);
         // A new edit invalidates the redo branch: those inverses were computed
         // against a document that no longer exists, so replaying one would
         // apply an edit derived from a tree that has since changed.
@@ -1027,8 +1042,12 @@ export function useEditorState({
   const redo = useCallback(() => replay("redo"), [replay]);
   // Bounded and branch-ending exactly as a fresh document edit is.
   const recordStep = useCallback(
-    (step: HistoryStep) => push({ kind: "step", step }, "new"),
-    [push]
+    (step: HistoryStep) => {
+      const entry: HistoryEntry = { kind: "step", step };
+      push(entry, "new");
+      return () => remove(entry);
+    },
+    [push, remove]
   );
 
   const select = useCallback(

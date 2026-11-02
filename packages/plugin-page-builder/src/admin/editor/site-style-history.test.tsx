@@ -16,6 +16,12 @@ const { useSiteStyleHistory } = await import("./site-style-history");
 
 type Step = { undo: () => Promise<boolean>; redo: () => Promise<boolean> };
 
+/** A history that keeps what it is handed, and withdraws nothing. */
+const record = (into: Step[]) => (s: Step) => {
+  into.push(s);
+  return () => {};
+};
+
 const step = (stored: boolean): Step => ({
   undo: () => Promise.resolve(stored),
   redo: () => Promise.resolve(stored),
@@ -27,7 +33,7 @@ describe("useSiteStyleHistory", () => {
   it("hands a step to the history the editor connected", () => {
     const { result } = renderHook(() => useSiteStyleHistory());
     const recorded: Step[] = [];
-    act(() => result.current.connect(s => recorded.push(s)));
+    act(() => result.current.connect(record(recorded)));
     act(() => result.current.history.record(step(true)));
     expect(recorded).toHaveLength(1);
   });
@@ -36,7 +42,7 @@ describe("useSiteStyleHistory", () => {
     const { result } = renderHook(() => useSiteStyleHistory());
     act(() => result.current.history.record(step(true)));
     const recorded: Step[] = [];
-    act(() => result.current.connect(s => recorded.push(s)));
+    act(() => result.current.connect(record(recorded)));
     act(() => result.current.connect(null));
     act(() => result.current.history.record(step(true)));
     expect(recorded).toEqual([]);
@@ -45,7 +51,7 @@ describe("useSiteStyleHistory", () => {
   it("moves the revision on when a step is undone or redone", async () => {
     const { result } = renderHook(() => useSiteStyleHistory());
     const recorded: Step[] = [];
-    act(() => result.current.connect(s => recorded.push(s)));
+    act(() => result.current.connect(record(recorded)));
     act(() => result.current.history.record(step(true)));
     const before = result.current.revision;
     await act(async () => {
@@ -62,7 +68,7 @@ describe("useSiteStyleHistory", () => {
   it("says so when the write taking a change back is refused", async () => {
     const { result } = renderHook(() => useSiteStyleHistory());
     const recorded: Step[] = [];
-    act(() => result.current.connect(s => recorded.push(s)));
+    act(() => result.current.connect(record(recorded)));
     act(() => result.current.history.record(step(false)));
     let undone: boolean | undefined;
     await act(async () => {

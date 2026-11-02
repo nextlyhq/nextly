@@ -37,7 +37,7 @@ import type {
 export const StyleRevisionContext: Context<number> = createContext(0);
 
 /** The editor's history, as far as a style step needs it. */
-type RecordStep = (step: SiteStyleStep) => void;
+type RecordStep = (step: SiteStyleStep) => () => void;
 
 /**
  * Held ABOVE the editor's own hooks, because some of the style writers run in
@@ -74,7 +74,7 @@ export function useSiteStyleHistory(): {
         recorder.current?.({
           undo: replay(step.undo, "undone"),
           redo: replay(step.redo, "redone"),
-        }),
+        }) ?? (() => {}),
     };
   }, [written]);
   return { history, revision, connect };
