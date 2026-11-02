@@ -29,7 +29,14 @@ import {
   usedCornerRadii,
 } from "./border-radii";
 import { isHTMLElement } from "./dom-kind";
-import type { FrameInset, Point, Rect, Scale } from "./geometry";
+import {
+  frameContentOrigin,
+  pointToCanvas,
+  type FrameInset,
+  type Point,
+  type Rect,
+  type Scale,
+} from "./geometry";
 
 /**
  * How far a frame's content viewport sits inside its border box.
@@ -83,6 +90,35 @@ function paintedScale(root: HTMLElement, painted: DOMRect): Scale {
     x: width > 0 && painted.width > 0 ? painted.width / width : 1,
     y: height > 0 && painted.height > 0 ? painted.height / height : 1,
   };
+}
+
+/**
+ * A point in the host page's client coordinates, in the frame's own.
+ *
+ * A pointer moving over the editor's panels is reported in the HOST's client
+ * coordinates, while every rectangle of the canvas is read inside the frame,
+ * relative to the frame's viewport. A drag begun on a palette row hears both,
+ * and the host's points have to be carried into the frame before they are
+ * compared with anything there.
+ *
+ * Composed from the one mapping rather than restated: the frame's border box
+ * and its painted scale are read here, where reads are allowed, and the
+ * arithmetic is {@link frameContentOrigin} and {@link pointToCanvas}. The scale
+ * is measured from the frame for the reason {@link paintedScale} gives — it may
+ * be applied by an ancestor no declaration on the frame records.
+ */
+export function hostPointInFrame(
+  frame: HTMLIFrameElement,
+  point: Point
+): Point {
+  const box = frame.getBoundingClientRect();
+  const scale = paintedScale(frame, box).x;
+  const origin = frameContentOrigin(
+    { x: box.left, y: box.top },
+    frameInsetOf(frame),
+    scale
+  );
+  return pointToCanvas(point, { origin, scale });
 }
 
 /**
@@ -365,12 +401,61 @@ export function scrollableAncestor(root: HTMLElement): HTMLElement | null {
  * indirection: every reflow-forcing read being in one file is what makes the
  * cost of one findable.
  */
-export function containerEdges(root: HTMLElement): {
+export function containerEdges(root: Element): {
   top: number;
   bottom: number;
 } {
+  /*
+   * A document's scrolling element is scrolled by the VIEWPORT, so its visible
+   * edges are the viewport's: `0` and the window's inner height. Its own
+   * rectangle is the whole document, which starts above the viewport once it
+   * has scrolled and ends far below it, so a band measured against that never
+   * contains the pointer at all.
+   */
+  const view = root.ownerDocument.defaultView;
+  if (view !== null && root === root.ownerDocument.scrollingElement) {
+    return { top: 0, bottom: view.innerHeight };
+  }
   const box = root.getBoundingClientRect();
   return { top: box.top, bottom: box.bottom };
+}
+
+/**
+ * The element that scrolls the canvas, or `null` when nothing does.
+ *
+ * In the editor's own document that is an ancestor the shell styles to
+ * scroll, which {@link scrollableAncestor} finds. In a frame of its own the
+ * canvas is scrolled by the frame's viewport instead, whose element is the
+ * frame document's `scrollingElement`: nothing above the root inside the frame
+ * is styled to scroll, so the walk would find nothing and a drag held at the
+ * frame's edge would never scroll it.
+ *
+ * `framed` comes from whoever knows the canvas is in the editor's frame, rather
+ * than from asking whether the root's window is one: an editor that is itself
+ * embedded in another page's frame is in a frame too, and its canvas is still
+ * scrolled by the shell.
+ */
+export function canvasScroller(
+  root: HTMLElement,
+  framed: boolean
+): Element | null {
+  return framed
+    ? root.ownerDocument.scrollingElement
+    : scrollableAncestor(root);
+}
+
+/**
+ * Where a scroller's `scroll` events are dispatched.
+ *
+ * At the element for an ordinary scroller, and at its DOCUMENT for a
+ * document's scrolling element: a viewport's scroll is reported on the
+ * document, never on `<html>`, so a listener on the element would hear
+ * nothing however far the page scrolled.
+ */
+export function scrollEventTarget(scroller: Element): EventTarget {
+  return scroller === scroller.ownerDocument.scrollingElement
+    ? scroller.ownerDocument
+    : scroller;
 }
 
 /**

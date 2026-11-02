@@ -65,12 +65,18 @@ import {
 } from "react";
 
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { guardCanvasNavigation } from "./canvas-link-guard";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isElement, isHTMLElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
-import { canvasContentRect, scrollableAncestor } from "./geometry-dom";
+import {
+  canvasContentRect,
+  canvasScroller,
+  scrollableAncestor,
+  scrollEventTarget,
+} from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { observeRenderedTree } from "./rendered-tree";
@@ -467,9 +473,11 @@ function useReportedInlineWidth(
     if (element === null || !measuring) return;
     // Guarded by CALLABILITY rather than presence: jsdom defines the global on
     // some setups without a working constructor, so a property test passes and
-    // the construction throws.
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(entries => {
+    // the construction throws. From the box's own window, the realm of what it
+    // observes.
+    const Sizes = element.ownerDocument.defaultView?.ResizeObserver;
+    if (typeof Sizes !== "function") return;
+    const observer = new Sizes(entries => {
       const entry = entries[0];
       if (entry === undefined) return;
       latest.current?.(inlineSizeOf(entry));
@@ -567,8 +575,10 @@ function useRegionWidth(
     if (!scaling) return;
     const region = layoutRegionOf(box.current);
     if (region === null) return;
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(entries => {
+    // From the region's own window, the realm of the element it observes.
+    const Sizes = region.ownerDocument.defaultView?.ResizeObserver;
+    if (typeof Sizes !== "function") return;
+    const observer = new Sizes(entries => {
       const entry = entries[0];
       if (entry === undefined) return;
       setWidth(inlineSizeOf(entry));
@@ -1774,6 +1784,7 @@ function DropRefusalNotice({
 }): React.JSX.Element {
   const notice = useRef<HTMLDivElement | null>(null);
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const framed = useCanvasFrame().frame !== null;
   const { parentId } = refusal;
   // One wording per rule: a lock's from the function every lock refusal uses,
   // a nesting refusal's from the drag's own.
@@ -1860,13 +1871,16 @@ function DropRefusalNotice({
      * explanation would sit still and the page would leave.
      *
      * Passive, because this only reads geometry, and on the SCROLLER rather
-     * than the canvas: the canvas does not scroll, its ancestor does.
+     * than the canvas: the canvas does not scroll, its ancestor does — or, in
+     * a frame of its own, the frame's viewport, whose scroll is dispatched at
+     * the frame's document rather than at any element.
      */
-    const scroller = scrollableAncestor(root);
+    const scroller = canvasScroller(root, framed);
     if (scroller === null) return;
-    scroller.addEventListener("scroll", measure, { passive: true });
+    const source = scrollEventTarget(scroller);
+    source.addEventListener("scroll", measure, { passive: true });
     return () => {
-      scroller.removeEventListener("scroll", measure);
+      source.removeEventListener("scroll", measure);
     };
     /*
      * Re-measured when the WORDING changes, not merely when the container does.
@@ -1882,7 +1896,7 @@ function DropRefusalNotice({
      * is a property of the text: two regions producing identical sentences need
      * no re-measure, and one region whose list changed does.
      */
-  }, [parentId, headline, remedy]);
+  }, [parentId, headline, remedy, framed]);
 
   return (
     <div

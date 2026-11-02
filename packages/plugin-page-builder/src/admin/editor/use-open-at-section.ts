@@ -98,8 +98,12 @@ export function useOpenAtSection({
       return stop;
     }
     // Not drawn yet: try again whenever the canvas's content changes, and stop
-    // watching the first time it lands or when the canvas goes away.
-    const observer = new MutationObserver(() => {
+    // watching the first time it lands or when the canvas goes away. Built
+    // from the canvas's own window, the realm of the nodes it watches, which
+    // is a frame's when the canvas is rendered in one.
+    const Mutations = canvas.ownerDocument.defaultView?.MutationObserver;
+    if (typeof Mutations !== "function") return stop;
+    const observer = new Mutations(() => {
       if (!revealNode(canvas, id)) return;
       observer.disconnect();
       landed();

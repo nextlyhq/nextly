@@ -1,0 +1,254 @@
+// @vitest-environment jsdom
+
+/**
+ * Which document and window the canvas is in, and the editor's keys reaching it.
+ *
+ * Each case that names a frame builds a real iframe: jsdom gives its
+ * `contentDocument` a window of its own, so "the frame's document" is a
+ * different object from the global `document` here exactly as it is in a
+ * browser. A fixture that handed back the global document under another name
+ * would let code reading the global pass every assertion below.
+ *
+ * @module canvas-frame-context.test
+ */
+import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
+import { cleanup, fireEvent, render, renderHook } from "@testing-library/react";
+import * as React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  CanvasFrameProvider,
+  CanvasFrameShortcuts,
+  inputDocuments,
+  useCanvasFrame,
+} from "./canvas-frame-context";
+
+afterEach(() => {
+  cleanup();
+  document.body.innerHTML = "";
+});
+
+/** An iframe attached to this document, with a readable document of its own. */
+function frameOf(): HTMLIFrameElement {
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  if (frame.contentDocument === null) throw new Error("no frame document");
+  // The control that makes every case below mean something: the frame's
+  // document is NOT the one the global names.
+  expect(frame.contentDocument).not.toBe(document);
+  return frame;
+}
+
+function framed(frame: HTMLIFrameElement | null) {
+  return function Wrapper({ children }: { children?: React.ReactNode }) {
+    return <CanvasFrameProvider frame={frame}>{children}</CanvasFrameProvider>;
+  };
+}
+
+describe("the document and window the canvas is in", () => {
+  it("is the editor's own with no provider, as a canvas mounted directly is", () => {
+    const { result } = renderHook(() => useCanvasFrame());
+    expect(result.current.frame).toBeNull();
+    expect(result.current.document).toBe(document);
+    expect(result.current.window).toBe(window);
+  });
+
+  it("is the editor's own under a provider given no frame", () => {
+    const { result } = renderHook(() => useCanvasFrame(), {
+      wrapper: framed(null),
+    });
+    expect(result.current.document).toBe(document);
+  });
+
+  it("is the frame's under a provider given one", () => {
+    const frame = frameOf();
+    const { result } = renderHook(() => useCanvasFrame(), {
+      wrapper: framed(frame),
+    });
+    expect(result.current.frame).toBe(frame);
+    expect(result.current.document).toBe(frame.contentDocument);
+    expect(result.current.window).toBe(frame.contentWindow);
+    expect(result.current.window).not.toBe(window);
+  });
+
+  it("keeps one identity across renders while nothing has changed", () => {
+    // Effects depend on it; a fresh object per render would tear down and
+    // re-add every listener on every render.
+    const frame = frameOf();
+    const { result, rerender } = renderHook(() => useCanvasFrame(), {
+      wrapper: framed(frame),
+    });
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+  });
+});
+
+describe("the documents an input gesture can be delivered to", () => {
+  it("is the editor's document and the frame's, editor's first, while framed", () => {
+    const frame = frameOf();
+    const { result } = renderHook(() => useCanvasFrame(), {
+      wrapper: framed(frame),
+    });
+    expect(inputDocuments(result.current)).toEqual([
+      document,
+      frame.contentDocument,
+    ]);
+  });
+
+  it("is the one document, once, while the canvas shares the editor's", () => {
+    // Listening twice on one document would run every listener twice.
+    const { result } = renderHook(() => useCanvasFrame());
+    expect(inputDocuments(result.current)).toEqual([document]);
+  });
+});
+
+/**
+ * Registers a Mod+S binding on whatever manager the provider above holds.
+ *
+ * Not preventing the default, and that is what makes a doubled listener
+ * visible: the manager skips a key whose default is already prevented, so with
+ * the default prevented a second listener of the same manager on the same
+ * document would run nothing and every "fires once" below would pass whether
+ * or not the listener was doubled.
+ */
+function SaveBinding({ onSave }: { onSave: () => void }): null {
+  useShortcuts(
+    [
+      {
+        keys: "mod+s",
+        description: "Save",
+        preventDefault: false,
+        run: () => onSave(),
+      },
+    ],
+    { name: "Test save" }
+  );
+  return null;
+}
+
+/** Mod+S on a manager told it is not on Apple, where `mod` is Control. */
+function pressSave(target: Document): void {
+  fireEvent.keyDown(target, { key: "s", ctrlKey: true });
+}
+
+describe("the editor's shortcuts inside the frame", () => {
+  it("fires a binding of the ONE manager for a key pressed in the frame", () => {
+    const frame = frameOf();
+    const onSave = vi.fn();
+    render(
+      <ShortcutProvider isApple={false}>
+        <CanvasFrameProvider frame={frame}>
+          <CanvasFrameShortcuts />
+          <SaveBinding onSave={onSave} />
+        </CanvasFrameProvider>
+      </ShortcutProvider>
+    );
+    // The binding was registered on the editor's manager, not on anything
+    // built for the frame: it is what the admin's save looks like.
+    pressSave(frame.contentDocument!);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires nothing in the frame without it, which is what it is for", () => {
+    // The control: a manager listening on the editor's document alone does
+    // not hear a key dispatched in the frame's.
+    const frame = frameOf();
+    const onSave = vi.fn();
+    render(
+      <ShortcutProvider isApple={false}>
+        <CanvasFrameProvider frame={frame}>
+          <SaveBinding onSave={onSave} />
+        </CanvasFrameProvider>
+      </ShortcutProvider>
+    );
+    pressSave(frame.contentDocument!);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("fires once under Strict Mode's replayed effects", () => {
+    const frame = frameOf();
+    const onSave = vi.fn();
+    render(
+      <React.StrictMode>
+        <ShortcutProvider isApple={false}>
+          <CanvasFrameProvider frame={frame}>
+            <CanvasFrameShortcuts />
+            <SaveBinding onSave={onSave} />
+          </CanvasFrameProvider>
+        </ShortcutProvider>
+      </React.StrictMode>
+    );
+    pressSave(frame.contentDocument!);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires once when two callers attach the same frame", () => {
+    const frame = frameOf();
+    const onSave = vi.fn();
+    render(
+      <ShortcutProvider isApple={false}>
+        <CanvasFrameProvider frame={frame}>
+          <CanvasFrameShortcuts />
+          <CanvasFrameShortcuts />
+          <SaveBinding onSave={onSave} />
+        </CanvasFrameProvider>
+      </ShortcutProvider>
+    );
+    pressSave(frame.contentDocument!);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the frame listened on while one of two callers goes", () => {
+    const frame = frameOf();
+    const onSave = vi.fn();
+    function Tree({ both }: { both: boolean }) {
+      return (
+        <ShortcutProvider isApple={false}>
+          <CanvasFrameProvider frame={frame}>
+            <CanvasFrameShortcuts />
+            {both ? <CanvasFrameShortcuts /> : null}
+            <SaveBinding onSave={onSave} />
+          </CanvasFrameProvider>
+        </ShortcutProvider>
+      );
+    }
+    const { rerender } = render(<Tree both />);
+    rerender(<Tree both={false} />);
+    pressSave(frame.contentDocument!);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops listening in the frame once it unmounts", () => {
+    const frame = frameOf();
+    const onSave = vi.fn();
+    function Tree({ attached }: { attached: boolean }) {
+      return (
+        <ShortcutProvider isApple={false}>
+          <CanvasFrameProvider frame={frame}>
+            {attached ? <CanvasFrameShortcuts /> : null}
+            <SaveBinding onSave={onSave} />
+          </CanvasFrameProvider>
+        </ShortcutProvider>
+      );
+    }
+    const { rerender } = render(<Tree attached />);
+    rerender(<Tree attached={false} />);
+    pressSave(frame.contentDocument!);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("adds no second listener while the canvas shares the editor's document", () => {
+    // The manager already listens on the editor's document; attaching it there
+    // again would run the save twice for one key.
+    const onSave = vi.fn();
+    render(
+      <ShortcutProvider isApple={false}>
+        <CanvasFrameShortcuts />
+        <SaveBinding onSave={onSave} />
+      </ShortcutProvider>
+    );
+    pressSave(document);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+});
