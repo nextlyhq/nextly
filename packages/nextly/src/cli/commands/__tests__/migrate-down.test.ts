@@ -187,6 +187,66 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("migrateDownCore", () => {
+  describe("an unresolved attempt", () => {
+    const refusal = new Error("unresolved attempt");
+    const refuse = () => Promise.reject(refusal);
+
+    it("is refused under the lock even with nothing to roll back, and reported by a dry run", async () => {
+      const lines: string[] = [];
+      const logger = {
+        ...createLogger({ quiet: true }),
+        info: (m: string) => {
+          lines.push(m);
+        },
+      };
+      const empty = { listFileApplies: async () => [] };
+      const real = baseDeps({ ...empty, refuseUnresolvedAttempts: refuse });
+      await expect(migrateDownCore(real.deps as never)).rejects.toBe(refusal);
+
+      const dry = baseDeps({
+        ...empty,
+        logger,
+        refuseUnresolvedAttempts: refuse,
+        options: { step: 1, allowDataLoss: false, yes: false, dryRun: true },
+      });
+      await expect(migrateDownCore(dry.deps as never)).resolves.toEqual({
+        rolledBack: [],
+      });
+      expect(lines).toContain(
+        "✖ a real run would be refused: unresolved attempt"
+      );
+    });
+
+    it("stops a run with targets before any DOWN runs", async () => {
+      const { deps, executed } = baseDeps({
+        refuseUnresolvedAttempts: refuse,
+        // Consented, so the run reaches the lock rather than stopping on it.
+        options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
+      });
+      await expect(migrateDownCore(deps as never)).rejects.toBe(refusal);
+      expect(executed).toEqual([]);
+    });
+
+    it("is not asked for a plugin's stream", async () => {
+      const asked: string[] = [];
+      const { deps } = baseDeps({
+        listFileApplies: async () => [],
+        refuseUnresolvedAttempts: async () => {
+          asked.push("asked");
+        },
+        options: {
+          step: 1,
+          allowDataLoss: false,
+          yes: false,
+          dryRun: false,
+          plugin: "shop",
+        },
+      });
+      await migrateDownCore(deps as never);
+      expect(asked).toEqual([]);
+    });
+  });
+
   it("refuses when the DOWN section is empty", async () => {
     const { deps } = baseDeps({ readDownSql: async () => down("   ") });
     await expect(migrateDownCore(deps)).rejects.toThrow(/irreversible/i);

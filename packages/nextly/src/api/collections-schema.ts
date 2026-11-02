@@ -24,6 +24,7 @@ import { getRBACService } from "../auth/code-access";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../domains/schema/sibling-fields";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { getFilterRegistry, FilterSeams } from "../filters";
@@ -245,6 +246,14 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Same rules as the ui-schema.json mirror (see api/fields-payload).
   assertValidFieldsPayload(validated.fields, { kind: "collection" });
+  // A new collection holds no pair of sibling fields yet, so every pair it is created with is
+  // new. Asked here because this route writes the registry row itself, through the create the
+  // code-first sync also uses after the start has judged it.
+  assertNoNewSiblingClashes(
+    { kind: "collection", slug: validated.slug },
+    validated.fields,
+    null
+  );
 
   const tableName = validated.slug
     .toLowerCase()

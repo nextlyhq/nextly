@@ -8,7 +8,9 @@ import {
   isMissingNamedColumnError,
   missingColumnKind,
   missingSchemaObject,
+  statementTableOf,
   TABLE_NOT_REGISTERED_CODE,
+  tableOfMissingColumn,
 } from "../missing-column";
 
 describe("isMissingColumnError", () => {
@@ -361,6 +363,21 @@ describe("firstIdentifierNamed", () => {
     ).toBe("dc_posts");
   });
 
+  it("does not match a name inside a longer dashed one", () => {
+    // `dc_posts` and `dc_posts-archive` both exist; only the second is missing.
+    expect(
+      firstIdentifierNamed("Table 'site.dc_posts-archive' doesn't exist", [
+        "dc_posts",
+      ])
+    ).toBeUndefined();
+    expect(
+      firstIdentifierNamed('relation "dc_posts-archive" does not exist', [
+        "dc_posts",
+        "dc_posts-archive",
+      ])
+    ).toBe("dc_posts-archive");
+  });
+
   it("answers the candidate named first when several are named", () => {
     expect(
       firstIdentifierNamed(
@@ -368,5 +385,61 @@ describe("firstIdentifierNamed", () => {
         ["dc_posts", "subtitle"]
       )
     ).toBe("subtitle");
+  });
+});
+
+// Each driver's own wording, as it reports a missing column on a table named
+// with a space, a dot or a dash. None of them quotes the table in a qualified
+// name, so the table is everything between the wording's lead-in and the
+// column it names.
+describe("tableOfMissingColumn", () => {
+  it.each([
+    ["lp space", "column lp space.subtitle does not exist"],
+    ["lp space", "Unknown column 'lp space.subtitle' in 'field list'"],
+    ["lp space", "no such column: lp space.subtitle"],
+    ["lp space", "table lp space has no column named subtitle"],
+    ["lp space", 'column "subtitle" of relation "lp space" does not exist'],
+    ["lp.dot", "column lp.dot.subtitle does not exist"],
+    ["lp.dot", "Unknown column 'lp.dot.subtitle' in 'field list'"],
+    ["lp.dot", "no such column: lp.dot.subtitle"],
+    ["lp.dot", "table lp.dot has no column named subtitle"],
+    ["lp-dash", "column lp-dash.subtitle does not exist"],
+    ["lp-dash", "Unknown column 'lp-dash.subtitle' in 'field list'"],
+    ["lp-dash", "no such column: lp-dash.subtitle"],
+    ["dc_posts", "column dc_posts.subtitle does not exist"],
+  ])("reads %s from %s", (table, text) => {
+    expect(tableOfMissingColumn(text, "subtitle")).toBe(table);
+  });
+
+  it("names no table where the wording names none", () => {
+    expect(
+      tableOfMissingColumn(
+        "Unknown column 'subtitle' in 'field list'",
+        "subtitle"
+      )
+    ).toBeUndefined();
+  });
+
+  it("still reads a plain name from a qualifier in a translated wording", () => {
+    // No lead-in it knows: the identifier before the column, as before.
+    expect(
+      tableOfMissingColumn(
+        "Spalte dc_posts.subtitle existiert nicht",
+        "subtitle"
+      )
+    ).toBe("dc_posts");
+  });
+});
+
+describe("statementTableOf", () => {
+  it.each([
+    ["lp space", 'select "id", "subtitle" from "lp space" where "id" = $1'],
+    ["lp.dot", 'update "lp.dot" set "subtitle" = $1'],
+    ["lp space", "insert into `lp space` (`id`, `subtitle`) values (?, ?)"],
+    ["dc_posts", 'delete from "cms"."dc_posts" where "id" = $1'],
+    ["dc_posts", "select `id` from dc_posts"],
+  ])("reads %s from the statement it ran", (table, sql) => {
+    expect(statementTableOf({ sql })).toBe(table);
+    expect(statementTableOf(new Error(`Failed query: ${sql}`))).toBe(table);
   });
 });

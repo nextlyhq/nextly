@@ -17,14 +17,14 @@
  * `dynamic_singles` row. The control is the shadowed Builder collection, whose
  * row must never be written: the code-first collection owns that slug's row.
  */
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { defineCollection, defineConfig, text } from "../../../config";
+import { defineCollection, defineConfig, group, text } from "../../../config";
 import { uiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
@@ -205,5 +205,72 @@ describe("a Builder entity's registry row is shadowed per kind", () => {
     expect(sql).toMatch(/INSERT INTO "dynamic_singles"[^;]*'The front page'/);
     // The shadowed Builder collection's row is the code-first one's to write.
     expect(sql).not.toContain('INSERT INTO "dynamic_collections"');
+  });
+});
+
+/**
+ * A new pair of sibling fields is refused before anything is written, against
+ * the fields the latest snapshot records, so the migrations folder is exactly
+ * as it was. The refused run also adds an unrelated field, which on its own
+ * writes a migration (the control after it), so an unchanged folder is the
+ * refusal's doing and not a run that had nothing to write.
+ */
+describe("a new pair of sibling fields", () => {
+  const posts = (seo: string[], extra: string[] = []) =>
+    defineConfig({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [
+            text({ name: "headline" }),
+            ...extra.map(name => text({ name })),
+            group({ name: "seo", fields: seo.map(name => text({ name })) }),
+          ],
+        }),
+      ],
+      db: { migrationsDir: "./migrations" },
+    });
+
+  /** Every file in the migrations folder and its `meta`, with its content. */
+  const folder = () =>
+    ["migrations", join("migrations", "meta")].flatMap(sub =>
+      readdirSync(join(dir, sub), { withFileTypes: true })
+        .filter(entry => entry.isFile())
+        .map(entry => [
+          join(sub, entry.name),
+          readFileSync(join(dir, sub, entry.name), "utf-8"),
+        ])
+    );
+
+  it("is refused by migrate:create with the migrations folder unchanged", async () => {
+    expect(await migrateCreate(posts(["fooBar"]))).toBeUndefined();
+    const before = folder();
+    expect(migrationFiles()).toHaveLength(1);
+
+    let thrown: unknown;
+    await migrateCreate(posts(["fooBar", "foo_bar"], ["subtitle"])).catch(
+      (error: unknown) => {
+        thrown = error;
+      }
+    );
+    expect(thrown).toMatchObject({
+      publicData: {
+        errors: [
+          {
+            path: "fields",
+            code: "FIELD_NAME_DUPLICATE",
+            message:
+              "Collection 'posts': fields 'fooBar' and 'foo_bar' in group 'seo' would both become the column 'foo_bar'. Rename one of them.",
+          },
+        ],
+      },
+    });
+    expect(folder()).toEqual(before);
+
+    // The control: the same change without the pair writes a migration.
+    expect(
+      await migrateCreate(posts(["fooBar"], ["subtitle"]))
+    ).toBeUndefined();
+    expect(migrationFiles()).toHaveLength(2);
   });
 });

@@ -543,7 +543,9 @@ export class SinglePublishAllService extends BaseService {
       this.adapter,
       this.singleRegistryService,
       slug,
-      this.logger
+      this.logger,
+      // A write: refused in production where the Single was never registered.
+      { intent: "write" }
     );
     if (!singleMeta) {
       return {

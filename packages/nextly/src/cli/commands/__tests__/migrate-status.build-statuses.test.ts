@@ -53,6 +53,39 @@ describe("buildMigrationStatuses", () => {
   });
 });
 
+describe("an applied file's checksum", () => {
+  const SUM = "a".repeat(64);
+  const file = {
+    name: "20260101_000000_000_init",
+    filePath: "/x/20260101_000000_000_init.sql",
+    checksum: SUM,
+    collections: [],
+    timestamp: "20260101_000000",
+  };
+  const applied = (sha256: string) => ({
+    id: "e1",
+    filename: "20260101_000000_000_init.sql",
+    sha256,
+    status: "applied" as const,
+    appliedBy: null,
+    durationMs: 5,
+    errorJson: null,
+    appliedAt: new Date("2026-01-01T00:00:00Z"),
+  });
+
+  it.each([
+    ["a matching checksum", SUM, "applied"],
+    ["a different recorded checksum", "b".repeat(64), "applied (modified)"],
+    // `ledgerRecords` reads a missing checksum as "".
+    ["no checksum recorded", "", "applied"],
+    ["the text an older backfill wrote", "null", "applied"],
+  ] as const)("with %s reads %s", (_name, sha256, status) => {
+    const [only] = buildMigrationStatuses([file], [applied(sha256)]);
+    expect(only?.status).toBe(status);
+    expect(only?.checksumMismatch).toBe(status === "applied (modified)");
+  });
+});
+
 describe("the order statuses are listed in", () => {
   it("lists a plugin's modules in the order they run, after the app's files", () => {
     // `10_more` runs before `1_init`: modules run in `compareModuleNames`

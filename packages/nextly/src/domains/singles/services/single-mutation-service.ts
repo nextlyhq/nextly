@@ -732,7 +732,9 @@ export class SingleMutationService extends BaseService {
         this.adapter,
         this.singleRegistryService,
         params.slug,
-        this.logger
+        this.logger,
+        // A write: refused in production where the Single was never registered.
+        { intent: "write" }
       );
       const companion = singleMeta ? this.translationsOf(singleMeta) : null;
       // Resolved before the transaction: they take a pooled connection.
@@ -829,7 +831,9 @@ export class SingleMutationService extends BaseService {
       this.adapter,
       this.singleRegistryService,
       params.slug,
-      this.logger
+      this.logger,
+      // A write: refused in production where the Single was never registered.
+      { intent: "write" }
     );
     if (!singleMeta) {
       throw NextlyError.notFound({
@@ -937,41 +941,51 @@ export class SingleMutationService extends BaseService {
     });
     // In a transaction of its own, which writes nothing: the stored-document
     // read takes one.
-    return this.adapter.transaction(async tx => {
-      const row = await tx.selectOne<SingleDocument>(meta.tableName, {});
-      if (!row) return null;
-      const pending = overlay.overlay
-        ? await new VersionsRepository(tx).findWorkingDraft(
-            { scopeKind: "single", scopeSlug: params.slug, entryId: row.id },
-            overlay.draftLocale
-          )
-        : undefined;
-      const snapshot = pending?.snapshot;
-      if (typeof snapshot === "object" && snapshot !== null) {
+    return this.adapter
+      .transaction(async tx => {
+        const row = await tx.selectOne<SingleDocument>(meta.tableName, {});
+        if (!row) return null;
+        const pending = overlay.overlay
+          ? await new VersionsRepository(tx).findWorkingDraft(
+              { scopeKind: "single", scopeSlug: params.slug, entryId: row.id },
+              overlay.draftLocale
+            )
+          : undefined;
+        const snapshot = pending?.snapshot;
+        if (typeof snapshot === "object" && snapshot !== null) {
+          return {
+            entryId: row.id,
+            document: snapshot as Record<string, unknown>,
+          };
+        }
+        const stored = await liveStoredDocument({
+          tx,
+          row,
+          locale: null,
+          companion: null,
+          companionExists: false,
+          fieldGroupDataService: this.fieldGroupDataService,
+          parentTable: meta.tableName,
+          fieldConfigs,
+          slug: params.slug,
+        });
         return {
           entryId: row.id,
-          document: snapshot as Record<string, unknown>,
+          document: this.queryService.deserializeJsonFields(
+            { ...stored, id: row.id, updatedAt: row.updatedAt },
+            meta.fields
+          ),
         };
-      }
-      const stored = await liveStoredDocument({
-        tx,
-        row,
-        locale: null,
-        companion: null,
-        companionExists: false,
-        fieldGroupDataService: this.fieldGroupDataService,
-        parentTable: meta.tableName,
-        fieldConfigs,
-        slug: params.slug,
+      })
+      .catch(async (error: unknown) => {
+        // A read the database is not migrated for answers as such, the
+        // Single named alone: its transaction wrote nothing, and the
+        // registry is read once that transaction has let its connection go.
+        throw await asNotMigrated(
+          error,
+          singleNotMigrated(this.singleRegistryService, params.slug)
+        );
       });
-      return {
-        entryId: row.id,
-        document: this.queryService.deserializeJsonFields(
-          { ...stored, id: row.id, updatedAt: row.updatedAt },
-          meta.fields
-        ),
-      };
-    });
   }
 
   /**
@@ -993,10 +1007,15 @@ export class SingleMutationService extends BaseService {
       this.logger
     );
     if (!singleMeta) return null;
-    const row = await this.adapter.selectOne<SingleDocument>(
-      singleMeta.tableName,
-      {}
-    );
+    const row = await this.adapter
+      .selectOne<SingleDocument>(singleMeta.tableName, {})
+      .catch(async (error: unknown) => {
+        // As the release's other reads of the Single answer it.
+        throw await asNotMigrated(
+          error,
+          singleNotMigrated(this.singleRegistryService, params.slug)
+        );
+      });
     if (!row) return null;
     return {
       entryId: row.id,
@@ -1235,55 +1254,65 @@ export class SingleMutationService extends BaseService {
     const readsEntry = await this.readsSingle(params.slug, params);
     // Read in a transaction of its own, which writes nothing: the gate reads
     // the live document through one.
-    return this.adapter.transaction(async tx => {
-      const row = await tx.selectOne<SingleDocument>(meta.tableName, {});
-      if (!row) return null;
-      const { draftLocale, eligible } = resolveDraftHold({
-        collectionHasStatus: true,
-        draftsVersioningEnabled: meta.versions?.drafts?.enabled === true,
-        documentLocalized: meta.localized === true,
-        entityKind: "single",
-        fields: fieldConfigs,
-        componentSchemas,
-        namedStatus: "published",
-        liveStatus: row.status,
-        requestLocale: writeLocale ?? null,
-        defaultLocale: this.localization?.defaultLocale ?? null,
+    return this.adapter
+      .transaction(async tx => {
+        const row = await tx.selectOne<SingleDocument>(meta.tableName, {});
+        if (!row) return null;
+        const { draftLocale, eligible } = resolveDraftHold({
+          collectionHasStatus: true,
+          draftsVersioningEnabled: meta.versions?.drafts?.enabled === true,
+          documentLocalized: meta.localized === true,
+          entityKind: "single",
+          fields: fieldConfigs,
+          componentSchemas,
+          namedStatus: "published",
+          liveStatus: row.status,
+          requestLocale: writeLocale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
+        const pending = eligible
+          ? await new VersionsRepository(tx).findWorkingDraft(
+              { scopeKind: "single", scopeSlug: params.slug, entryId: row.id },
+              draftLocale
+            )
+          : undefined;
+        const drafts = pending
+          ? [{ locale: draftLocale ?? null, snapshot: pending.snapshot }]
+          : (await this.writeLocaleIsLive(tx, {
+                mainStatus: row.status,
+                liveStatus: row.status,
+                companion: companionExists ? companion : null,
+                entryId: row.id,
+                writeLocale,
+              }))
+            ? []
+            : [{ locale: draftLocale ?? writeLocale ?? null, snapshot: {} }];
+        const issues = await refusalIssues(() =>
+          promotionIssues(drafts, {
+            // The caller the release's write has: the member's author, checked.
+            ...this.promotionGate(
+              setup,
+              tx,
+              row,
+              { user: params.user },
+              grants,
+              readsEntry
+            ),
+            // Every language goes live, so none falls back to another.
+            enforceLocalizedRequired: true,
+          })
+        );
+        return { entryId: row.id, issues };
+      })
+      .catch(async (error: unknown) => {
+        // A read the database is not migrated for answers as such, the
+        // Single named alone: its transaction wrote nothing, and the
+        // registry is read once that transaction has let its connection go.
+        throw await asNotMigrated(
+          error,
+          singleNotMigrated(this.singleRegistryService, params.slug)
+        );
       });
-      const pending = eligible
-        ? await new VersionsRepository(tx).findWorkingDraft(
-            { scopeKind: "single", scopeSlug: params.slug, entryId: row.id },
-            draftLocale
-          )
-        : undefined;
-      const drafts = pending
-        ? [{ locale: draftLocale ?? null, snapshot: pending.snapshot }]
-        : (await this.writeLocaleIsLive(tx, {
-              mainStatus: row.status,
-              liveStatus: row.status,
-              companion: companionExists ? companion : null,
-              entryId: row.id,
-              writeLocale,
-            }))
-          ? []
-          : [{ locale: draftLocale ?? writeLocale ?? null, snapshot: {} }];
-      const issues = await refusalIssues(() =>
-        promotionIssues(drafts, {
-          // The caller the release's write has: the member's author, checked.
-          ...this.promotionGate(
-            setup,
-            tx,
-            row,
-            { user: params.user },
-            grants,
-            readsEntry
-          ),
-          // Every language goes live, so none falls back to another.
-          enforceLocalizedRequired: true,
-        })
-      );
-      return { entryId: row.id, issues };
-    });
   }
 
   /**
@@ -1716,7 +1745,9 @@ export class SingleMutationService extends BaseService {
         this.adapter,
         this.singleRegistryService,
         slug,
-        this.logger
+        this.logger,
+        // A write: refused in production where the Single was never registered.
+        { intent: "write" }
       );
       if (!singleMeta) {
         return {
