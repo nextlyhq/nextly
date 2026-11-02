@@ -86,6 +86,7 @@ import {
 } from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
+import { useNearestThemeMarker } from "./nearest-theme";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
@@ -2191,6 +2192,7 @@ export function Canvas({
   );
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
+  const theme = useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
   const rootStyle: React.CSSProperties = { ...boxStyle, ...surface?.style };
 
@@ -2284,6 +2286,13 @@ export function Canvas({
        * keep a light ground, or the host serves no site sheet.
        */
       data-nx-site-dark-ground={surface?.darkGround === true ? "" : undefined}
+      /*
+       * The mode the nearest theme marker above the canvas names, which is
+       * the one its token values resolve to; absent with no marker, where the
+       * device decides. The scheme rules key on this rather than on ancestor
+       * selectors, which cannot tell which marker is nearest.
+       */
+      data-nx-site-theme={theme ?? undefined}
       /*
        * What the pointer means, for the cursor.
        *

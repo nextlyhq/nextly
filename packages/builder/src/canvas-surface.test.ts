@@ -131,16 +131,8 @@ function declared(body: string, property: string): string | undefined {
  * The site's attribute dark mode, keyed on the strategy the canvas states and
  * on the site's dark values including a dark ground.
  */
-const SITE_DARK = `[data-nx-theme="dark"]
-  .nx-canvas[data-nx-site-dark-ground]:not(
-    [data-nx-theme="dark"] [data-nx-theme="light"] *
-  )`;
-
-/** The light-marker rule, guarded the same way against a nearer dark one. */
-const SITE_LIGHT = `[data-nx-theme="light"]
-  .nx-canvas[data-nx-site-dark-ground]:not(
-    [data-nx-theme="light"] [data-nx-theme="dark"] *
-  )`;
+const SITE_DARK =
+  '.nx-canvas[data-nx-site-dark-ground][data-nx-site-theme="dark"]';
 
 /** Every rule whose selector names `.nx-canvas`, as selector and body. */
 function canvasRules(): { selector: string; body: string }[] {
@@ -233,18 +225,20 @@ describe("the canvas surface is the site's, not the admin's", () => {
      * under it, so an unqualified rule would draw dark ground under light
      * tokens.
      */
-    // Rules OPENING with the dark marker: the light rule names it too, in
-    // the guard that lets a nearer dark marker win.
+    // Keyed on the nearest marker the canvas states, never on an ancestor
+    // selector, which cannot tell which of several markers is nearest.
     const byAttribute = rules.filter(rule =>
-      rule.selector.startsWith('[data-nx-theme="dark"]')
+      rule.selector.includes("data-nx-theme")
     );
-    expect(byAttribute.length, "the scan finds the attribute rules").toBe(1);
-    for (const rule of byAttribute) {
-      expect(
-        rule.selector,
-        "keyed on the strategy the canvas states"
-      ).toContain(".nx-canvas[data-nx-site-dark-ground]:not(");
-    }
+    expect(byAttribute, "no rule reads the markers above the canvas").toEqual(
+      []
+    );
+    expect(
+      rules.filter(rule =>
+        rule.selector.includes('[data-nx-site-theme="dark"]')
+      ).length,
+      "one rule for the canvas's stated dark marker"
+    ).toBe(1);
     const admin = rules.filter(
       rule =>
         /\.dark\b/.test(rule.selector) &&
@@ -268,8 +262,10 @@ describe("a site that darkens with the visitor's system", () => {
      * ground; a light marker above the canvas keeps it light, as it keeps the
      * values light.
      */
+    // Only where no marker is stated: a stated marker, of either mode, is
+    // nearer than the device and decides instead.
     const block =
-      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground\] \{([^}]*)\}/.exec(
+      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground\]:not\(\[data-nx-site-theme\]\) \{([^}]*)\}/.exec(
         CHROME
       );
     expect(block, "the device rule exists").not.toBeNull();
@@ -277,17 +273,6 @@ describe("a site that darkens with the visitor's system", () => {
     expect(declared(body, "color-scheme")).toBe("dark");
     expect(declared(body, "--nx-builder-select")).toBe(
       "var(--nx-builder-select-on-dark)"
-    );
-    const light = ruleFor(SITE_LIGHT);
-    expect(declared(light, "color-scheme")).toBe("light");
-    expect(declared(light, "--nx-builder-select")).toBe(
-      "var(--nx-builder-select-on-light)"
-    );
-    // After the device rule, which it outweighs.
-    expect(CHROME.indexOf(SITE_LIGHT)).toBeGreaterThan(
-      CHROME.indexOf(
-        "@media (prefers-color-scheme: dark) {\n  .nx-canvas[data-nx-site-dark-ground]"
-      )
     );
   });
 });

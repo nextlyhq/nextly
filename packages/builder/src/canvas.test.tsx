@@ -22,6 +22,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import {
   afterAll,
@@ -3269,6 +3270,63 @@ describe("the site's dark-mode strategy on the canvas root", () => {
 
   it("states nothing when the host serves no site sheet", () => {
     expect(strategyOf(false)).toBeNull();
+  });
+});
+
+describe("the nearest theme marker above the canvas", () => {
+  /*
+   * The site's token values resolve to the NEAREST `data-nx-theme` marker,
+   * because the sheet declares them on each marker and custom properties
+   * inherit. The canvas states the same nearest marker, read from the DOM, so
+   * its scheme cannot disagree with its values at any depth of nesting.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function mountUnder(markers: readonly ("light" | "dark")[]): {
+    root: () => Element | null;
+    chain: HTMLElement[];
+  } {
+    const chain: HTMLElement[] = [];
+    let parent: HTMLElement = document.body;
+    for (const mode of markers) {
+      const wrapper = document.createElement("div");
+      wrapper.setAttribute("data-nx-theme", mode);
+      parent.append(wrapper);
+      chain.push(wrapper);
+      parent = wrapper;
+    }
+    const mount = document.createElement("div");
+    parent.append(mount);
+    render(<Canvas document={page} siteStyles={{ breakpoints }} />, {
+      container: mount,
+    });
+    return {
+      root: () => mount.querySelector(`.${CANVAS_ROOT_CLASS}`),
+      chain,
+    };
+  }
+
+  it("states the nearest marker through three alternations", async () => {
+    const { root, chain } = mountUnder(["light", "dark", "light"]);
+    await waitFor(() =>
+      expect(root()?.getAttribute("data-nx-site-theme")).toBe("light")
+    );
+    chain[2]?.setAttribute("data-nx-theme", "dark");
+    await waitFor(() =>
+      expect(root()?.getAttribute("data-nx-site-theme")).toBe("dark")
+    );
+    chain[2]?.removeAttribute("data-nx-theme");
+    // With the nearest gone, the next one out decides.
+    await waitFor(() =>
+      expect(root()?.getAttribute("data-nx-site-theme")).toBe("dark")
+    );
+  });
+
+  it("states nothing when no marker is above it, so the device decides", async () => {
+    const { root } = mountUnder([]);
+    await waitFor(() => expect(root()).not.toBeNull());
+    expect(root()?.hasAttribute("data-nx-site-theme")).toBe(false);
   });
 });
 

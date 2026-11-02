@@ -1883,45 +1883,32 @@
 /*
  * The site's OWN dark mode, which is the one thing that darkens the page.
  *
- * A site's dark token values apply with the viewer's device, unless a
- * `[data-nx-theme="light"]` marker sits above, and under a
- * `[data-nx-theme="dark"]` marker whatever the device says, as the site sheet
- * writes them. The page's ground and text already follow those values through
+ * A site's dark token values follow the nearest `data-nx-theme` marker
+ * above, or the viewer's device where there is none, as the site sheet writes
+ * them. The page's ground and text already follow those values through
  * the tokens; what these rules add is the SCHEME. The canvas root carries
  * `data-nx-site-dark-ground` only when the site's dark values include a dark
  * ground, so a site whose dark set keeps a light background keeps light
  * native controls.
  * The admin's `.dark` class is a different switch and reaches nothing here.
  */
-/* Each marker rule stands down where the other mode's marker sits between it
-   and the canvas, so the NEAREST marker decides, as it does for the site's
-   own values. */
-[data-nx-theme="dark"]
-  .nx-canvas[data-nx-site-dark-ground]:not(
-    [data-nx-theme="dark"] [data-nx-theme="light"] *
-  ) {
+/* The canvas states the nearest theme marker above it as
+   `data-nx-site-theme`, read from the DOM, which is the marker its token
+   values resolve to at any depth of nesting. Keyed on that rather than on
+   ancestor selectors, which cannot tell which marker is nearest. */
+.nx-canvas[data-nx-site-dark-ground][data-nx-site-theme="dark"] {
   color-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
 }
 
+/* With no marker stated, the device decides, as it does for the values. */
 @media (prefers-color-scheme: dark) {
-  .nx-canvas[data-nx-site-dark-ground] {
+  .nx-canvas[data-nx-site-dark-ground]:not([data-nx-site-theme]) {
     color-scheme: dark;
     --nx-builder-select: var(--nx-builder-select-on-dark);
     --nx-builder-component: var(--nx-builder-component-on-dark);
   }
-}
-
-/* A light marker above the canvas keeps its scheme light on a dark device,
-   as it keeps the site's values light. Heavier than the device rule. */
-[data-nx-theme="light"]
-  .nx-canvas[data-nx-site-dark-ground]:not(
-    [data-nx-theme="light"] [data-nx-theme="dark"] *
-  ) {
-  color-scheme: light;
-  --nx-builder-select: var(--nx-builder-select-on-light);
-  --nx-builder-component: var(--nx-builder-component-on-light);
 }
 
 /*
