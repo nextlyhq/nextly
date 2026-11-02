@@ -271,6 +271,16 @@ function combineModes(
     if (other === undefined || other.values.light === token.values.light) {
       return token;
     }
+    // A dark value of another kind would make a token the site refuses to
+    // save, so the pair is reported and the token keeps its light value.
+    if (other.kind !== token.kind) {
+      issues.push(
+        issue(
+          `"${token.name}" is a ${token.kind} in the light file and a ${other.kind} in the dark file, so its dark value was skipped.`
+        )
+      );
+      return token;
+    }
     return {
       ...token,
       values: { light: token.values.light, dark: other.values.light },

@@ -181,6 +181,28 @@ describe("an import of Figma's own export", () => {
     });
   });
 
+  it("skips a dark value whose kind differs from the light one, saying so", () => {
+    const colour = {
+      $type: "color",
+      $value: { colorSpace: "srgb", components: [1, 0, 0], hex: "#FF0000" },
+    };
+    const { tokens, issues } = modeFilesToTokens([
+      { name: "Light.tokens.json", document: { accent: colour } },
+      {
+        name: "Dark.tokens.json",
+        document: {
+          accent: { $type: "dimension", $value: { value: 16, unit: "px" } },
+        },
+      },
+    ]);
+    expect(tokens).toEqual([
+      { name: "accent", kind: "color", values: { light: "#FF0000" } },
+    ]);
+    expect(issues.map(i => i.message).join(" ")).toMatch(
+      /"accent" is a color in the light file and a dimension in the dark file/
+    );
+  });
+
   it("reads one file alone as light", () => {
     const { tokens } = modeFilesToTokens([
       { name: "Light.tokens.json", document: read("Light") },
