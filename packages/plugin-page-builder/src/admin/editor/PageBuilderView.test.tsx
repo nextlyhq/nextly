@@ -154,6 +154,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
+  // No preview here: the surrounding editor offers none.
+  useDocumentPreview: () => null,
   usePluginClientConfig: () => undefined,
   // A saved page around the view, as the admin draws it at that page's own
   // address.

@@ -69,6 +69,7 @@ import {
 } from "./limits";
 import { boundedLimit } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
+import type { RetiredExposures } from "./retired-exposures";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
 import { mintDomId, remapIdReferences } from "./tree";
@@ -2450,6 +2451,11 @@ export interface InstanceExposure {
    * leaves every instance holding a value for it, and silently discarding
    * those makes an author's work disappear at the moment somebody else edits
    * the component — so the editor is told, and can say so.
+   *
+   * A RETIRED id is not among them. A designer removed that field, was told
+   * how much content it held, and confirmed it: its values are being taken
+   * out of every page, so showing one as recoverable would offer the author
+   * work that the next save strips.
    */
   readonly orphanedOverrideIds: readonly string[];
 }
@@ -2467,7 +2473,8 @@ export interface InstanceExposure {
  */
 export function instanceExposure(
   definition: ComponentDocument,
-  instance: BlockNode
+  instance: BlockNode,
+  retired?: RetiredExposures
 ): InstanceExposure {
   const overrides = effectiveOverrides(definition, instance);
   const declared = usableExposures(definition.exposed);
@@ -2486,8 +2493,9 @@ export function instanceExposure(
   );
 
   const exposedIds = new Set(declared.map(property => property.id));
+  const retiredIds = new Set(retired?.properties);
   const orphanedOverrideIds = [...overrides.keys()].filter(
-    id => !exposedIds.has(id)
+    id => !exposedIds.has(id) && !retiredIds.has(id)
   );
 
   return { properties, orphanedOverrideIds };
