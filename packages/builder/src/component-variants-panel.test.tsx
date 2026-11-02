@@ -292,4 +292,30 @@ describe("a component's variants in its own view", () => {
       within(section()).getByRole("combobox", { name: "Tone" })
     ).toBeDefined();
   });
+
+  it("keeps variants listed after the last field is removed, to be deleted", () => {
+    const editor = mount(
+      component({
+        exposed: [],
+        variants: { a: { label: "Night", overrides: {} } },
+      })
+    );
+    expect(section().textContent).toContain("Expose a field first");
+    expect(
+      within(section()).getByRole("button", { name: "Add variant" })
+    ).toHaveProperty("disabled", true);
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Delete the variant Night",
+      })
+    );
+    act(() => {
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: "Delete variant",
+        })
+      );
+    });
+    expect(variantsOf(editor())).toBeUndefined();
+  });
 });

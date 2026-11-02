@@ -155,7 +155,13 @@ export function ComponentVariantsSection({
           No variants yet. A variant is a named set of field values, like
           “Featured” or “Compact”, that a placement can choose.
         </p>
-      ) : (
+      ) : null}
+      {/*
+        Listed whether or not any field is left: removing the last field keeps
+        the emptied variants, and placements still offer them, so they stay
+        here to be renamed or deleted.
+      */}
+      {options.length === 0 ? null : (
         <ul className="nx-variants__list">
           {options.map(option => (
             <VariantRow
@@ -283,6 +289,11 @@ function VariantRow({
       )}
       {open ? (
         <div id={valuesId} className="nx-variants__values">
+          {fields.length === 0 ? (
+            <p className="nx-inspector__note">
+              This component exposes no fields, so this variant presets nothing.
+            </p>
+          ) : null}
           {fields.map(field => (
             <VariantValueRow
               key={`${option.id}:${field.id}`}
