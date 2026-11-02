@@ -3917,21 +3917,24 @@ export class CollectionMutationService extends BaseService {
       );
       if (advisoryDraft) {
         promotesDraft = true;
-        // Completed ahead of the write's lock, as the draft itself is read;
-        // the write completes and judges it again once it holds the lock.
-        promoted = await this.withEveryRelationKey(
+        promoted = this.promotedDocumentOf(
           args,
-          this.promotedDocumentOf(
-            args,
-            buildRestorePayload(
-              advisoryDraft.snapshot,
-              args.fields as unknown as FieldConfig[],
-              args.promoteRestoreCtx
-            ).payload
-          ),
-          undefined
+          buildRestorePayload(
+            advisoryDraft.snapshot,
+            args.fields as unknown as FieldConfig[],
+            args.promoteRestoreCtx
+          ).payload
         );
-        const issues = await this.promotedDraftIssues(args, promoted);
+        // Completed for this judgement alone, in the write's language, ahead
+        // of the write's lock as the draft itself is read; the write
+        // completes and judges it again once it holds the lock. `promoted`
+        // stays as the change left it: the languages judged below each read
+        // the relations it does not name as stored in that language, which a
+        // value completed in this one would otherwise stand in for.
+        const issues = await this.promotedDraftIssues(
+          args,
+          await this.withEveryRelationKey(args, promoted, undefined)
+        );
         if (issues.length > 0) return issues;
       }
     }

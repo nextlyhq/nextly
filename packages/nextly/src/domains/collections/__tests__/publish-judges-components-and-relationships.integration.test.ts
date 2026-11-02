@@ -251,6 +251,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           }),
         ],
       }),
+      // Translated, with drafts: a pending change saved before a component
+      // kept per language was added, promoted into every language.
+      defineCollection({
+        slug: "sweeping",
+        status: true,
+        localized: true,
+        versions: { drafts: true },
+        fields: [text({ name: "title", localized: true })],
+      }),
       // A pending change saved before a required component was added, whose
       // stored value another writer then removes.
       defineCollection({
@@ -724,6 +733,32 @@ describe.each(getConfiguredTestDialects())(
           )
         ).success
       ).toBe(true);
+      // Live in English, German not yet live, and an English change pending
+      // from before `remark` existed.
+      ids.sweeping = await created(
+        t,
+        "sweeping",
+        { title: "Fine", status: "published" },
+        "en"
+      );
+      for (const [locale, data] of [
+        ["de", { title: "Fein", status: "draft" }],
+        ["en", { title: "Finer" }],
+      ] as const) {
+        expect(
+          (
+            await entriesOf(t).updateEntry(
+              {
+                collectionName: "sweeping",
+                entryId: ids.sweeping,
+                overrideAccess: true,
+                locale,
+              },
+              data
+            )
+          ).success
+        ).toBe(true);
+      }
       ids.bannered = await created(t, "bannered", {
         title: "bannered",
         status: "draft",
@@ -741,6 +776,33 @@ describe.each(getConfiguredTestDialects())(
         "growing",
         fieldGroup({ name: "extra", component: "card", required: true })
       );
+      // `remark` is added, its rule refusing a "bad" remark, and stored in
+      // each language: fine in English, refused in German.
+      const remark = fieldGroup({ name: "remark", component: "note" });
+      await addField(t, "sweeping", remark);
+      registerFieldFunctions("collection", "sweeping", [
+        text({ name: "title", localized: true }),
+        {
+          ...remark,
+          validate: (value: unknown) =>
+            (value as Doc | null)?.body !== "bad" || "this remark is bad",
+        },
+      ]);
+      for (const [locale, body] of [
+        ["en", "good"],
+        ["de", "bad"],
+      ] as const) {
+        await (
+          t.getService("fieldGroupDataService") as FieldGroupDataService
+        ).saveComponentData({
+          parentId: ids.sweeping,
+          parentTable: "dc_sweeping",
+          access: { overrideAccess: true },
+          fields: [remark] as never,
+          data: { remark: { body } },
+          locale,
+        });
+      }
       await (
         t.getService("fieldGroupDataService") as FieldGroupDataService
       ).saveComponentData({
@@ -1175,6 +1237,98 @@ describe.each(getConfiguredTestDialects())(
         where: { and: [{ column: "id", op: "=", value: ids.growing }] },
       });
       expect(row?.title).toBe("growing");
+    });
+
+    it("judges each language a publish of every language promotes into with that language's stored component", async () => {
+      // The pending change does not name `remark`: German goes live with its
+      // own stored remark, which its rule refuses, not English's.
+      const result = await publish(t, "sweeping", ids.sweeping, {}, "*");
+
+      expect(result.success).toBe(false);
+      expect(refusedPaths(result)).toContain("remark");
+    });
+
+    it("reads a zone's translations within the database's limit on a statement's parameters", async () => {
+      // A limit of four: one language and three instances to a statement,
+      // where each kind here has four or six.
+      const budget = 4;
+      const capabilities = t.adapter.getCapabilities();
+      const limit = vi
+        .spyOn(t.adapter, "getCapabilities")
+        .mockReturnValue({ ...capabilities, maxParamsPerQuery: budget });
+      // The values each translations read binds, seen on the Drizzle handle
+      // every pooled read takes.
+      const binds: number[] = [];
+      const drizzle = t.adapter.getDrizzle();
+      const recordingBuilder = (builder: object): object =>
+        new Proxy(builder, {
+          get(target, property) {
+            const value = Reflect.get(target, property) as unknown;
+            if (typeof value !== "function") return value;
+            return (...args: unknown[]) => {
+              const result = (value as (...a: unknown[]) => unknown).apply(
+                target,
+                args
+              ) as { toSQL?: () => { sql: string; params: unknown[] } };
+              if (property === "from") return recordingBuilder(result);
+              if (property === "where" && result.toSQL) {
+                const query = result.toSQL();
+                if (query.sql.includes("_locales")) {
+                  binds.push(query.params.length);
+                }
+              }
+              return result;
+            };
+          },
+        });
+      const handle = vi.spyOn(t.adapter, "getDrizzle").mockReturnValue(
+        new Proxy(drizzle as object, {
+          get(target, property) {
+            const value = Reflect.get(target, property) as unknown;
+            if (typeof value !== "function") return value;
+            return property === "select"
+              ? (...args: unknown[]) =>
+                  recordingBuilder(
+                    (value as (...a: unknown[]) => object).apply(target, args)
+                  )
+              : (value as (...a: unknown[]) => unknown).bind(target);
+          },
+        }) as ReturnType<typeof t.adapter.getDrizzle>
+      );
+      try {
+        const fieldGroups = t.getService(
+          "fieldGroupDataService"
+        ) as FieldGroupDataService;
+        const read = await fieldGroups.populateComponentDataMany({
+          entries: [{ id: ids.zonedA }, { id: ids.zonedB }],
+          parentTable: "dc_zoned",
+          fields: [
+            fieldGroup({
+              name: "blocks",
+              components: ["note", "quote"],
+              repeatable: true,
+            }),
+          ] as never,
+          depth: 0,
+          strict: true,
+          locale: "en",
+          fallbackLocale: false,
+        });
+
+        expect(
+          read.map(entry => (entry.blocks as Doc[]).map(block => block.body))
+        ).toEqual(
+          ["zonedA", "zonedB"].map(name =>
+            [1, 2, 3, 4, 5].map(at => `${name} ${at}`)
+          )
+        );
+        // Each kind in runs: six notes and four quotes, three to a run.
+        expect(binds).toHaveLength(4);
+        expect(binds.every(bound => bound <= budget)).toBe(true);
+      } finally {
+        handle.mockRestore();
+        limit.mockRestore();
+      }
     });
 
     it("reads a zone's translations once for each kind, not once for each instance", async () => {

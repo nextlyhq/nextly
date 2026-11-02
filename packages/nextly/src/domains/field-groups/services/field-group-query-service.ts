@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { batches } from "../../../auth/access/retired-manage-permissions";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
@@ -313,6 +314,20 @@ export class FieldGroupQueryService extends BaseService {
   }
 
   /**
+   * How many instances one translations read may name: it binds one
+   * parameter per instance id and one per language it reads, within the
+   * database's limit on the parameters one statement takes. A batch of more
+   * instances, as a large zone or repeatable component gives, is read in
+   * several statements.
+   */
+  private instancesPerStatement(languages: number): number {
+    const limit = this.adapter.getCapabilities().maxParamsPerQuery;
+    // An adapter stating no limit reads every instance in one statement.
+    if (!Number.isFinite(limit)) return Number.MAX_SAFE_INTEGER;
+    return Math.max(1, limit - languages);
+  }
+
+  /**
    * i18n: overlay a localized component's translatable fields onto its deserialized
    * instance data from the companion `comp_<slug>_locales` table for the requested locale
    * (with fallback). No-op when localization is off, the component isn't localized, no
@@ -362,18 +377,24 @@ export class FieldGroupQueryService extends BaseService {
         companion.companionTableName,
         executor,
         strict,
-        () =>
-          populateCompanionFieldsAllLocales({
-            db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-              typeof populateCompanionFieldsAllLocales
-            >[0]["db"],
-            companionTable: companion.table,
-            localizedFields: companion.localizedFields,
-            rows: dataArray,
-            locales: configuredLocales,
-            idKey: "id",
-            readiness: allReadiness,
-          })
+        async () => {
+          for (const rows of batches(
+            dataArray,
+            this.instancesPerStatement(configuredLocales.length)
+          )) {
+            await populateCompanionFieldsAllLocales({
+              db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+                typeof populateCompanionFieldsAllLocales
+              >[0]["db"],
+              companionTable: companion.table,
+              localizedFields: companion.localizedFields,
+              rows,
+              locales: configuredLocales,
+              idKey: "id",
+              readiness: allReadiness,
+            });
+          }
+        }
       );
       if (!ran) return;
       this.decodeJsonLocalizedValues(
@@ -415,18 +436,24 @@ export class FieldGroupQueryService extends BaseService {
     // Resolved before the overlay runs, because inside a transaction it can only be read and the
     // read itself must not be what fails.
     const readiness = await this.companionReadiness(companion, executor);
-    const overlay = () =>
-      populateCompanionFields({
-        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-          typeof populateCompanionFields
-        >[0]["db"],
-        companionTable: companion.table,
-        localizedFields: companion.localizedFields,
-        rows: dataArray,
-        localeChain,
-        idKey: "id",
-        readiness,
-      });
+    const overlay = async () => {
+      for (const rows of batches(
+        dataArray,
+        this.instancesPerStatement(localeChain.length)
+      )) {
+        await populateCompanionFields({
+          db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+            typeof populateCompanionFields
+          >[0]["db"],
+          companionTable: companion.table,
+          localizedFields: companion.localizedFields,
+          rows,
+          localeChain,
+          idKey: "id",
+          readiness,
+        });
+      }
+    };
 
     const ran = await this.runContainedOverlay(
       meta.slug,
