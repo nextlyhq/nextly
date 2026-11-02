@@ -2991,6 +2991,14 @@ export class CollectionQueryService extends BaseService {
      */
     offset?: number;
     /**
+     * What a sort key naming no sortable field does: `"drop"` (the default)
+     * warns and sorts by the other keys and the id; `"refuse"` refuses the
+     * read, naming every such key, before it runs. A reader serving the
+     * public refuses, so an author learns of the key rather than a list
+     * quietly changing order.
+     */
+    unknownSort?: "drop" | "refuse";
+    /**
      * Number of documents per page.
      * Maximum allowed is 500 to prevent abuse.
      * @default 10
@@ -3369,6 +3377,9 @@ export class CollectionQueryService extends BaseService {
         collectionTableName(collection, params.collectionName)
       );
       const sortKeys = parseSortKeys(params.sort);
+      // Keys that name no sortable field, kept to refuse together when the
+      // read asks for a refusal rather than a warning.
+      const unknownSortKeys: string[] = [];
       const orderBy = orderBySortKeys({
         keys: sortKeys,
         // An empty array asks for id order; a string naming no key asks for
@@ -3417,6 +3428,10 @@ export class CollectionQueryService extends BaseService {
             sortFieldSnake === "created_by" ||
             isHiddenColumn(sortField)
           ) {
+            // Named as unknown, as the other keys are: what the caller may
+            // not sort by is not told apart from what does not exist.
+            if (params.unknownSort === "refuse")
+              unknownSortKeys.push(sortField);
             return undefined;
           }
 
@@ -3426,7 +3441,11 @@ export class CollectionQueryService extends BaseService {
           if (column) return { expr: column, nullable: !column.notNull };
 
           // An unknown key is dropped with a warning, and the read carries on
-          // with the others and the id.
+          // with the others and the id, unless the read asked to refuse.
+          if (params.unknownSort === "refuse") {
+            unknownSortKeys.push(sortField);
+            return undefined;
+          }
           this.logger?.warn(
             `Sort field '${sortField}' (or '${sortFieldSnake}') not found in schema for collection '${params.collectionName}'. ` +
               `Available fields: ${Object.keys(schema).join(", ")}`
@@ -3434,6 +3453,15 @@ export class CollectionQueryService extends BaseService {
           return undefined;
         },
       });
+      if (unknownSortKeys.length > 0) {
+        throw NextlyError.validation({
+          errors: unknownSortKeys.map(key => ({
+            path: `sort.${key}`,
+            code: "FIELD_NOT_SORTABLE",
+            message: `"${key}" is not a field this list can be sorted by.`,
+          })),
+        });
+      }
       if (orderBy.length > 0) query = query.orderBy(...orderBy);
 
       // ============================================================
