@@ -234,6 +234,19 @@ describe("an import of Figma's own export", () => {
     );
   });
 
+  it("reports a second file whose mode its name does not say, rather than dropping it", () => {
+    const { tokens, issues } = modeFilesToTokens([
+      { name: "Light.tokens.json", document: read("Light") },
+      { name: "Contrast.tokens.json", document: read("Dark") },
+    ]);
+    expect(tokens.find(t => t.name === "color.brand")?.values).toEqual({
+      light: "#1D2B6B",
+    });
+    expect(issues.map(i => i.message).join(" ")).toMatch(
+      /Contrast\.tokens\.json.*light or dark/
+    );
+  });
+
   it("reads one file alone as light", () => {
     const { tokens } = modeFilesToTokens([
       { name: "Light.tokens.json", document: read("Light") },

@@ -227,7 +227,8 @@ export interface ModeFile {
  *
  * The mode is read from the file name ("Light.tokens.json",
  * "dark.tokens.json"). Where neither name says, the first file is light and
- * the second dark. A single file is read as light.
+ * the second dark; where only one does, the other is reported and not read.
+ * A single file is read as light.
  */
 export function modeFilesToTokens(files: readonly ModeFile[]): {
   tokens: SiteToken[];
@@ -246,9 +247,25 @@ export function modeFilesToTokens(files: readonly ModeFile[]): {
     };
   }
   const named = (word: RegExp) => files.find(file => word.test(file.name));
-  const dark = named(/dark/i) ?? (named(/light/i) ? undefined : files[1]);
-  const light =
-    named(/light/i) ?? files.find(file => file !== dark) ?? files[0];
+  const lightNamed = named(/light/i);
+  const darkNamed = named(/dark/i);
+  // Two files and only one named for its mode: the other could be either, so
+  // it is reported rather than guessed at or dropped without a word.
+  const unclear =
+    files.length === 2 &&
+    (lightNamed === undefined) !== (darkNamed === undefined)
+      ? files.find(file => file !== (lightNamed ?? darkNamed))
+      : undefined;
+  if (unclear !== undefined) {
+    const said = issue(
+      `${unclear.name} does not say in its name whether it is light or dark, so it was not read. Rename it with "light" or "dark" in its name and choose both again.`
+    );
+    if (lightNamed === undefined) return { tokens: [], issues: [said] };
+    const read = combineModes(lightNamed.document, undefined);
+    return { tokens: read.tokens, issues: [...read.issues, said] };
+  }
+  const dark = darkNamed ?? (lightNamed ? undefined : files[1]);
+  const light = lightNamed ?? files.find(file => file !== dark) ?? files[0];
   if (light === undefined) return { tokens: [], issues: [] };
   return combineModes(
     light.document,
