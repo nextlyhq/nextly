@@ -339,9 +339,15 @@ describe("events between versions", () => {
     const row = within(list)
       .getByText("Took over from Ana")
       .closest("li") as HTMLElement;
-    // Its own row between the versions, led by who took over.
+    // A row of its own, led by who took over, and no version's row.
     expect(row).toHaveTextContent("Grace");
-    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    expect(row).not.toHaveTextContent("Version");
+    // Between the two versions, in the order they happened: newest first.
+    const text = list.textContent ?? "";
+    const at = (s: string) => text.indexOf(s);
+    expect(at("Version 2")).toBeGreaterThan(-1);
+    expect(at("Version 2")).toBeLessThan(at("Took over from Ana"));
+    expect(at("Took over from Ana")).toBeLessThan(at("Version 1"));
   });
 
   it("says the previous editor is unavailable when the server could not name them", () => {
