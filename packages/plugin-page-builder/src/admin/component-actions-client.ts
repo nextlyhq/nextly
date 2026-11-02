@@ -23,7 +23,10 @@ import {
   type UpdatePatternRequest,
   type UpdatePatternResult,
 } from "../component-actions-contract";
-import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+import {
+  LIBRARY_ROUTE_PATH,
+  PAGE_BUILDER_PLUGIN_NAME,
+} from "../library-contract";
 
 import { refusalMessage } from "./save-pattern-client";
 
@@ -41,11 +44,13 @@ interface Envelope<T> {
 
 function useRouteCall<TBody, TResult>(
   path: string,
-  unexplained: string
+  unexplained: string,
+  invalidates?: readonly string[]
 ): RouteCall<TBody, TResult> {
   const { write, error } = usePluginRouteMutation<TBody, Envelope<TResult>>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path,
+    ...(invalidates === undefined ? {} : { invalidates }),
   });
   const send = useCallback(
     async (body: TBody) => (await write(body))?.item,
@@ -79,8 +84,10 @@ export function useDuplicate(
 export function useUpdatePattern(
   patternId: string
 ): RouteCall<UpdatePatternRequest, UpdatePatternResult> {
+  // The insert panel's read, so a later insert serves the new content.
   return useRouteCall(
     updatePatternPath(patternId),
-    "The pattern could not be updated. Try again."
+    "The pattern could not be updated. Try again.",
+    [LIBRARY_ROUTE_PATH]
   );
 }

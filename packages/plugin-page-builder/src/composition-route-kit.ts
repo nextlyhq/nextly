@@ -6,11 +6,12 @@
  *
  * @module composition-route-kit
  */
-import type {
-  BlockDocument,
-  DocumentLimits,
-  PlanProblem,
-  ValidationIssue,
+import {
+  sameStoredValue,
+  type BlockDocument,
+  type DocumentLimits,
+  type PlanProblem,
+  type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { slugify } from "nextly";
@@ -208,6 +209,27 @@ export function createdId(item: unknown): string {
     publicMessage: "The row was created but could not be identified.",
     logMessage: "createEntry returned no usable id",
     logContext: { reason: "composition-created-no-id" },
+  });
+}
+
+/**
+ * Refuse, rolling back what the transaction made, when the stored page
+ * changed since the action was planned against it. The write has no
+ * compare-and-swap on the page's version, so the page is read again as late
+ * as the write allows: an edit landing between this read and the update is
+ * still overwritten, a window of one statement rather than the whole request.
+ */
+export async function requireUnchangedPage(
+  readNow: () => Promise<BlockDocument | null>,
+  planned: BlockDocument
+): Promise<void> {
+  const now = await readNow();
+  if (now !== null && sameStoredValue(now, planned)) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message:
+      "The page changed while this was being done to it. Nothing was written; try again.",
+    logContext: { reason: "composition-page-changed" },
   });
 }
 

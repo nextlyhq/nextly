@@ -33,6 +33,7 @@ import {
   registryNestingSource,
   sameStoredValue,
   type BlockDocument,
+  type BlockNode,
   type BuilderOp,
   type ComponentDocument,
   type DocumentLimits,
@@ -74,6 +75,7 @@ import {
   readOrNull,
   reconcileAfterCommit,
   requirePluginStore,
+  requireUnchangedPage,
   storeOf,
   type CompositionRouteContext,
   type CompositionRouteSetup,
@@ -227,10 +229,10 @@ export async function detachPlacement(
     );
   }
 
+  // An ordinary update, whose own hooks keep the usage indexes.
+  const stored = at.stored;
+  await requireUnchangedPage(() => reads.page(stored, ctx), at.document);
   await writeStoredPage(ctx, at, plan.pageOps, limits);
-  await reconcileAfterCommit(setup, [
-    { slug: at.stored.collection, documentId: at.stored.id },
-  ]);
   return respondMutation<DetachResult>(
     "The placement was detached.",
     result(false)
@@ -259,7 +261,9 @@ async function readShownLibrary(
   };
   const library = heldLibrary();
   await composeWithReads({
-    host: at.document,
+    // Only the selected placement and what it reaches: unrelated placements
+    // elsewhere on the page would spend the walk's read budget.
+    host: { ...at.document, nodes: placementOnly(at) },
     library,
     read: documentReader(source, true),
     limits: limits ?? DEFAULT_LIMITS,
@@ -353,15 +357,25 @@ export async function duplicateComponent(
             )
           ).item
         )
-      : await duplicateStored(ctx, store.collection, data, at, repoint, limits);
+      : await duplicateStored(
+          ctx,
+          store.collection,
+          data,
+          at,
+          repoint,
+          limits,
+          reads
+        );
 
   await recordOrigin(ctx, setup, id, sourceId);
-  await reconcileAfterCommit(setup, [
-    { slug: store.collection, documentId: id },
-    ...(at?.stored === undefined
-      ? []
-      : [{ slug: at.stored.collection, documentId: at.stored.id }]),
-  ]);
+  // Only a write made in the transaction this route owns skips the usage
+  // hooks; an ordinary create keeps the indexes itself.
+  if (at?.stored !== undefined) {
+    await reconcileAfterCommit(setup, [
+      { slug: store.collection, documentId: id },
+      { slug: at.stored.collection, documentId: at.stored.id },
+    ]);
+  }
   return respondMutation<DuplicateResult>(
     "The component was duplicated.",
     result(id, false),
@@ -397,7 +411,8 @@ async function duplicateStored(
   data: Record<string, unknown>,
   at: PlacementIn,
   repoint: (id: string) => BuilderOp[],
-  limits: DocumentLimits | undefined
+  limits: DocumentLimits | undefined,
+  reads: ComponentActionReads
 ): Promise<string> {
   const stored = at.stored;
   if (stored === undefined) throw new Error("a stored placement has a page");
@@ -413,6 +428,7 @@ async function duplicateStored(
         asCaller(ctx)
       )
     );
+    await requireUnchangedPage(() => reads.page(stored, ctx), at.document);
     const converted = applyOps(at.document, repoint(id), limits).document;
     await collections.updateEntryInTransaction(
       tx,
@@ -531,6 +547,12 @@ async function placementIn(
     stored,
     ...(stored.locale === undefined ? {} : { locale: stored.locale }),
   };
+}
+
+/** The selected placement alone, as the forest a detach's walk starts from. */
+function placementOnly(at: PlacementIn): BlockNode[] {
+  const node = findNode(at.document.nodes, at.instanceId);
+  return node === undefined ? [] : [node];
 }
 
 /** The component a placement names, or the refusal that it is no placement. */

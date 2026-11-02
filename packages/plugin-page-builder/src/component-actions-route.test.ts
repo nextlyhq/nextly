@@ -335,6 +335,66 @@ describe("detaching a placement", () => {
     });
   });
 
+  it("refuses a stored detach, writing nothing, when the page changed meanwhile", async () => {
+    const { ctx, journal } = contextOver();
+    const edited = page([
+      heading("before", "Edited elsewhere"),
+      placement("p", "card"),
+    ]);
+    let read = 0;
+    const reads: ComponentActionReads = {
+      ...readsOver({
+        shown: { card: card(CARD) },
+        published: { card: card(CARD) },
+      }),
+      page: () => {
+        read += 1;
+        return Promise.resolve(read === 1 ? doc : edited);
+      },
+    };
+
+    const error = await thrownBy(
+      detachPlacement(
+        request({
+          apply: "stored",
+          page: { collection: "pages", id: "page-1" },
+          instanceId: "p",
+        }),
+        ctx,
+        { reads }
+      )
+    );
+
+    expect(error.statusCode).toBe(409);
+    expect(journal).toEqual([]);
+  });
+
+  it("reads only the components the selected placement reaches", async () => {
+    const { ctx } = contextOver();
+    const asked: string[] = [];
+    const reads: ComponentActionReads = {
+      ...readsOver({ published: { card: card(CARD) } }),
+      shown: id => {
+        asked.push(id);
+        return Promise.resolve(id === "card" ? card(CARD) : null);
+      },
+    };
+
+    await detachPlacement(
+      request({
+        document: page([
+          placement("other", "elsewhere"),
+          placement("p", "card"),
+        ]),
+        instanceId: "p",
+      }),
+      ctx,
+      { reads }
+    );
+
+    expect(asked).toEqual(["card"]);
+  });
+
   it("refuses a block that is not a placement", async () => {
     const { ctx } = contextOver();
     const error = await thrownBy(
@@ -464,6 +524,35 @@ describe("duplicating a component", () => {
       "card",
       "copy-1",
     ]);
+  });
+
+  it("rolls the copy back when the stored page changed before the re-point", async () => {
+    const { ctx, journal } = contextOver({ params: { id: "card" } });
+    let read = 0;
+    const reads: ComponentActionReads = {
+      ...readsOver({ published: { card: card(CARD) } }),
+      page: () => {
+        read += 1;
+        return Promise.resolve(
+          read === 1 ? twoPlacements : page([placement("p2", "card")])
+        );
+      },
+    };
+
+    await expect(
+      duplicateComponent(
+        request({
+          placement: {
+            apply: "stored",
+            page: { collection: "pages", id: "page-1" },
+            instanceId: "p2",
+          },
+        }),
+        ctx,
+        { reads }
+      )
+    ).rejects.toThrow();
+    expect(journal).toEqual(["begin", "create-in-tx"]);
   });
 
   it("refuses an author who may not publish components", async () => {

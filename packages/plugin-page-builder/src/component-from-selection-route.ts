@@ -48,7 +48,6 @@
 import {
   applyOps,
   DEFAULT_LIMITS,
-  sameStoredValue,
   planConvertToComponent,
   planSaveAsComponent,
   registryNestingSource,
@@ -89,6 +88,7 @@ import {
   readOrNull,
   reconcileAfterCommit,
   requirePluginStore,
+  requireUnchangedPage,
   storeOf,
   type CompositionRouteContext,
   type CompositionRouteSetup,
@@ -379,7 +379,10 @@ async function convertStored(
     // Throwing rolls the create back with the transaction.
     if (plan.problem !== undefined)
       throw planRefusal(plan, "component-from-selection");
-    await requireUnchangedPage(ctx, args.reads, args.page);
+    await requireUnchangedPage(
+      () => args.reads.page(args.page.address, ctx),
+      args.page.document
+    );
     const converted = applyOps(
       args.page.document,
       plan.pageOps,
@@ -397,27 +400,6 @@ async function convertStored(
 }
 
 /**
-/**
- * Refuse, rolling the create back, when the page changed since the convert
- * was planned against it. The write has no compare-and-swap on the page's
- * version, so the page is read again as late as the write allows: an edit
- * landing between this read and the update is still overwritten, a window of
- * one statement rather than the whole request.
- */
-async function requireUnchangedPage(
-  ctx: ComponentFromSelectionContext,
-  reads: ComponentFromSelectionReads,
-  page: StoredPage
-): Promise<void> {
-  const now = await reads.page(page.address, ctx);
-  if (now !== null && sameStoredValue(now, page.document)) return;
-  throw NextlyError.conflict({
-    reason: "state",
-    message:
-      "The page changed while it was being converted. Nothing was written; try again.",
-    logContext: { reason: "component-from-selection-page-changed" },
-  });
-}
 
 /**
  * The stored page the request names, read as the caller, and refused for a

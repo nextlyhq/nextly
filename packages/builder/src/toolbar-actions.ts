@@ -282,6 +282,20 @@ function placementActions(
     });
     return actions;
   }
+  // The copy is made from the component as this author may read it; one the
+  // canvas could not load for them is not one they can copy.
+  const source = (node.props as { componentId?: unknown }).componentId;
+  if (
+    offer.definitions !== undefined &&
+    (typeof source !== "string" || !offer.definitions.has(source))
+  ) {
+    actions.push({
+      ...duplicate,
+      enabled: false,
+      reason: "This component is not available to copy.",
+    });
+    return actions;
+  }
   // The re-point is an edit of the placement, so a lock on it, or on the slot
   // it sits in, refuses Duplicate as it would any edit.
   const held = lockBlockingDelete(document, only);

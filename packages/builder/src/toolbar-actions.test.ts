@@ -497,6 +497,23 @@ describe("detach, duplicate and update a pattern", () => {
     });
   });
 
+  it("dims Duplicate for a placement whose component this author cannot read", () => {
+    const actions = toolbarActions(
+      documentOf([placed("p")]),
+      "p",
+      ["p"],
+      anyParent,
+      true,
+      undefined,
+      { ...offer, definitions: new Map() }
+    );
+
+    expect(actionOf(actions, "duplicate-component")).toMatchObject({
+      enabled: false,
+      reason: "This component is not available to copy.",
+    });
+  });
+
   it("dims Duplicate for a locked placement, whose re-point is an edit", () => {
     const locked = node("p", "nextly/component-instance", {
       props: { componentId: "card" },
