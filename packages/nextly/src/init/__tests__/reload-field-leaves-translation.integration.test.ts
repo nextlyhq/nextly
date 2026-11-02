@@ -221,6 +221,79 @@ describe.each(getConfiguredTestDialects())(
       expect(await columnsOf(COMPANION)).toContain("body");
     });
 
+    // A write the still-installed translated handlers make between the final copy and the drop
+    // would land in a column about to go. On PostgreSQL the drops hold the translations table
+    // against writes, so such a write waits and then fails; it is never taken and then lost.
+    it.skipIf(dialect !== "postgresql")(
+      "never loses a write made between the final copy and the drop",
+      async () => {
+        await seed({ e1: { en: "Hello", es: "Hola" } });
+        const late: { write?: Promise<unknown> } = {};
+        const textOf = (query: unknown) =>
+          JSON.stringify(
+            (query as { queryChunks?: unknown }).queryChunks ?? ""
+          );
+        const drizzle = handle.adapter.getDrizzle.bind(handle.adapter);
+        vi.spyOn(handle.adapter, "getDrizzle").mockImplementation(() => {
+          const db = drizzle() as {
+            transaction(run: (tx: unknown) => Promise<void>): Promise<void>;
+          };
+          return new Proxy(db, {
+            get(target, key, receiver) {
+              if (key !== "transaction")
+                return Reflect.get(target, key, receiver);
+              return (run: (tx: unknown) => Promise<void>) =>
+                target.transaction(tx =>
+                  run(
+                    new Proxy(tx as object, {
+                      get(t, k, r) {
+                        if (k !== "execute") return Reflect.get(t, k, r);
+                        return async (query: unknown) => {
+                          const done = await (
+                            t as { execute(q: unknown): Promise<unknown> }
+                          ).execute(query);
+                          const text = textOf(query);
+                          // Right after the final copy onto main, from another connection.
+                          if (
+                            late.write === undefined &&
+                            text.includes(`UPDATE \\"${TABLE}\\"`) &&
+                            text.includes(COMPANION)
+                          ) {
+                            late.write = handle.adapter
+                              .executeQuery(
+                                `UPDATE ${q(COMPANION)} SET ${q("body")} = 'Late' WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
+                              )
+                              .then(
+                                () => "taken",
+                                () => "refused"
+                              );
+                            await new Promise(resolve =>
+                              setTimeout(resolve, 300)
+                            );
+                          }
+                          return done;
+                        };
+                      },
+                    })
+                  )
+                );
+            },
+          }) as ReturnType<typeof drizzle>;
+        });
+
+        loaded.config = configWith({ localized: false });
+        await reloadNextlyConfig();
+
+        expect(late.write).toBeDefined();
+        const outcome = await late.write;
+        expect(await columnsOf(COMPANION)).not.toContain("body");
+        expect(await mainBodies()).toEqual({
+          e1: outcome === "taken" ? "Late" : "Hello",
+        });
+        expect(outcome).toBe("refused");
+      }
+    );
+
     it("stops the move when the re-check after the copy fails, keeping the translations column", async () => {
       await seed({ e1: { en: "Hello", es: "Hola" } });
       preconditions.failing = 2;
