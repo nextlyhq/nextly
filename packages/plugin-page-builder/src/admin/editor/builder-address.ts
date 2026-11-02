@@ -70,3 +70,36 @@ export function builderAddress(
     ...elsewhere,
   };
 }
+
+/**
+ * The query key naming the section the builder opens at.
+ *
+ * The admin keeps the same key in its list of a view's own address keys, so
+ * moving between the edit form and the builder at a section stays on the one
+ * document rather than counting as leaving it.
+ */
+const SECTION_PARAM = "section";
+
+/**
+ * The builder's address `href`, opened at the section `sectionId`.
+ *
+ * Built on the address `builderAddress` gave rather than beside it, so the
+ * field, the document and the language it names are the ones the plain way in
+ * names. A section already named is replaced: an address names one place.
+ */
+export function sectionAddress(href: string, sectionId: string): string {
+  const [path = "", query = ""] = href.split("?", 2);
+  const params = new URLSearchParams(query);
+  params.set(SECTION_PARAM, sectionId);
+  return `${path}?${params.toString()}`;
+}
+
+/**
+ * The section an address's query names, or `undefined` where it names none.
+ *
+ * An empty value names none: there is no block with an empty id to open at.
+ */
+export function sectionFromSearch(search: string): string | undefined {
+  const value = new URLSearchParams(search).get(SECTION_PARAM);
+  return value === null || value === "" ? undefined : value;
+}

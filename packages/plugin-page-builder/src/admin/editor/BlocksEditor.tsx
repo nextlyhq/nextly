@@ -53,6 +53,7 @@ import {
   useHostCommit,
   useSavePoint,
 } from "./use-host-commit";
+import { useOpenAtSection } from "./use-open-at-section";
 import {
   useCanvasInputs,
   useSiteStyleInputs,
@@ -534,6 +535,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   onClose,
   name,
   control,
+  openAt,
 }: {
   initialValue: unknown;
   /** The kinds the field accepts, so a seeded document is one it will take. */
@@ -542,6 +544,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   onClose: () => void;
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
+  /** The section to open at, as the address names it; none opens at the top. */
+  openAt?: string | undefined;
 }): JSX.Element {
   const mount = useEditorMount(initialValue, kinds);
   const { editor, inline } = mount;
@@ -584,6 +588,12 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     ...panels,
     documentDirty,
   };
+  useOpenAtSection({
+    sectionId: openAt,
+    editor,
+    canvas: canvas.canvasElement,
+    requestPanel: panels.requestPanel,
+  });
   const {
     notices,
     componentLibrary,
