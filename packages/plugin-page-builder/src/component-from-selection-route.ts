@@ -48,6 +48,7 @@
 import {
   applyOps,
   DEFAULT_LIMITS,
+  sameStoredValue,
   planConvertToComponent,
   planSaveAsComponent,
   registryNestingSource,
@@ -195,6 +196,7 @@ export async function componentFromSelection(
   ctx: ComponentFromSelectionContext,
   setup: ComponentFromSelectionSetup = {}
 ): Promise<Response> {
+  requirePluginStore(setup);
   const by = await requireComponentPublisher(ctx, setup);
   const body = await readBody(req);
   const apply: ComponentApplyMode = body.apply ?? "library";
@@ -278,6 +280,7 @@ export async function componentFromSelection(
     limits,
     data: row(preview.definition),
     planFor,
+    reads,
   });
   await reconcileAfterCommit(setup, [
     { slug: page.address.collection, documentId: page.address.id },
@@ -359,6 +362,7 @@ async function convertStored(
     limits: DocumentLimits;
     data: Record<string, unknown>;
     planFor: (componentId: string) => Planned | PlanRefusal;
+    reads: ComponentFromSelectionReads;
   }
 ): Promise<{ id: string; plan: Planned }> {
   const collections = ctx.services.collections;
@@ -378,6 +382,7 @@ async function convertStored(
     const plan = args.planFor(id);
     // Throwing rolls the create back with the transaction.
     if (plan.problem !== undefined) throw refusal(plan);
+    await requireUnchangedPage(ctx, args.reads, args.page);
     const converted = applyOps(
       args.page.document,
       plan.pageOps,
@@ -395,8 +400,47 @@ async function convertStored(
 }
 
 /**
- * The caller, once shown to be allowed to create and publish components, as
- * the answer reports them; otherwise the refusal.
+ * Refuse a host whose components live in a collection of its own: that store
+ * promises only the document field, not the title, slug and publish workflow
+ * a new component is created with here.
+ */
+function requirePluginStore(setup: ComponentFromSelectionSetup): void {
+  if (setup.store?.collection === undefined) return;
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage:
+      "Components on this site are kept in a collection of its own, so they are made there rather than from a selection.",
+    logMessage: "Refused a component-from-selection request for a host store",
+    logContext: { reason: "component-from-selection-host-store" },
+  });
+}
+
+/**
+ * Refuse, rolling the create back, when the page changed since the convert
+ * was planned against it. The write has no compare-and-swap on the page's
+ * version, so the page is read again as late as the write allows: an edit
+ * landing between this read and the update is still overwritten, a window of
+ * one statement rather than the whole request.
+ */
+async function requireUnchangedPage(
+  ctx: ComponentFromSelectionContext,
+  reads: ComponentFromSelectionReads,
+  page: StoredPage
+): Promise<void> {
+  const now = await reads.page(page.address, ctx);
+  if (now !== null && sameStoredValue(now, page.document)) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message:
+      "The page changed while it was being converted. Nothing was written; try again.",
+    logContext: { reason: "component-from-selection-page-changed" },
+  });
+}
+
+/**
+ * The caller, once shown to be allowed to publish components, as the answer
+ * reports them; otherwise the refusal. `create` is the route's declared
+ * permission, judged before the handler runs, and is not asked again.
  */
 async function requireComponentPublisher(
   ctx: ComponentFromSelectionContext,
@@ -407,7 +451,6 @@ async function requireComponentPublisher(
   if (
     user === null ||
     caller === null ||
-    !(await caller.can("create", collection)) ||
     !(await caller.can("publish", collection))
   ) {
     throw NextlyError.forbidden({

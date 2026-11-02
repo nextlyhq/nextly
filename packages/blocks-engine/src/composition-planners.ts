@@ -76,6 +76,7 @@ import {
   type ComponentLookup,
   type ComponentUnresolvedReason,
   type DefinitionsById,
+  type ResolvedBlockNode,
 } from "./resolve-instances";
 import { boundedOwnKeys, defineEntry, ownKeys } from "./safe-record";
 import { contiguousRun, type RunProblem } from "./sibling-run";
@@ -1871,24 +1872,34 @@ const DEPTH_REFUSALS: ReadonlySet<ComponentUnresolvedReason> = new Set([
   "node-depth",
 ]);
 
-/** How many placements a composition of `document` leaves unresolved for depth. */
+/** The placeholders a composition leaves where depth stopped it. */
 function depthBreaks(
   document: BlockDocument,
   components: ComponentLookup,
   limits: DocumentLimits
-): number {
-  return resolveComponentInstances(document, components, {
-    limits,
-  }).unresolved.filter(entry => DEPTH_REFUSALS.has(entry.reason)).length;
+): ResolvedBlockNode[] {
+  const found: ResolvedBlockNode[] = [];
+  const nodes = resolveComponentInstances(document, components, { limits })
+    .document.nodes as readonly ResolvedBlockNode[];
+  walkNodes([...nodes], node => {
+    const reason = (node as ResolvedBlockNode).unresolvedComponent;
+    if (reason !== undefined && DEPTH_REFUSALS.has(reason)) {
+      found.push(node);
+    }
+  });
+  return found;
 }
 
 /**
- * Refuse a convert whose page composes past a depth limit it did not pass
- * before.
+ * Refuse a convert whose placement composes past a depth limit, or that
+ * leaves the rest of the page composing worse than it did.
  *
- * Counted against the page as it stands rather than asked as "any break at
- * all", so a page already holding a placement too deep elsewhere can still be
- * converted somewhere else: the plan answers for what it changes.
+ * A break is the new placement's when the placeholder is that placement or
+ * was drawn through it (`instanceOf` names the host instance at every depth).
+ * Any such break refuses, including one the run already held: wrapped in a
+ * component it stops one level further out and hides more of the run. The
+ * rest of the page is held to the count it had, so a page already holding a
+ * placement too deep elsewhere can still be converted somewhere else.
  */
 function composedDepthRefusal(args: {
   document: BlockDocument;
@@ -1904,8 +1915,15 @@ function composedDepthRefusal(args: {
     has: id => id === componentId || components.has(id),
     get: id => (id === componentId ? definition : components.get(id)),
   };
+  const inserted = args.ops.find(op => op.kind === "insert");
+  const placementId = inserted?.kind === "insert" ? inserted.node.id : "";
+  const after = depthBreaks(converted, withCreated, limits);
+  const throughPlacement = after.filter(
+    node => node.id === placementId || node.instanceOf === placementId
+  );
+  if (throughPlacement.length > 0) return { problem: "composed-depth" };
   const before = depthBreaks(args.document, components, limits);
-  return depthBreaks(converted, withCreated, limits) > before
+  return after.length > before.length
     ? { problem: "composed-depth" }
     : undefined;
 }

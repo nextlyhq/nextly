@@ -351,6 +351,48 @@ describe("who may run it", () => {
     expect(createEntry).not.toHaveBeenCalled();
   });
 
+  it("leaves create to the route's declared permission rather than asking again", async () => {
+    // The dispatcher judges `create` before the handler runs; a second answer
+    // here could refuse a request the route admitted.
+    const { ctx, createEntry } = contextOver({ grants: { create: false } });
+
+    await componentFromSelection(
+      request({
+        action: "save-as",
+        document: threeBlocks,
+        selectedIds: ["a"],
+        fields,
+      }),
+      ctx,
+      { reads: readsOver(null) }
+    );
+
+    expect(createEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a host that keeps components in a store of its own", async () => {
+    const { ctx, createEntry } = contextOver();
+
+    const error = await thrownBy(
+      componentFromSelection(
+        request({
+          action: "save-as",
+          document: threeBlocks,
+          selectedIds: ["a"],
+          fields,
+        }),
+        ctx,
+        {
+          reads: readsOver(null),
+          store: { collection: "site_blocks", field: "body" },
+        }
+      )
+    );
+
+    expect(error.statusCode).toBe(422);
+    expect(createEntry).not.toHaveBeenCalled();
+  });
+
   it("refuses a stored convert of a page the caller may not update", async () => {
     const { ctx, journal } = contextOver({ grants: { update: false } });
 
@@ -540,6 +582,36 @@ describe("in the API's stored mode", () => {
       "update-in-tx",
       "rollback",
     ]);
+  });
+
+  it("refuses, writing nothing, when the page changed since the convert was planned", async () => {
+    const { ctx, journal } = contextOver();
+    const edited = page([node("a"), node("b"), node("c"), node("d")]);
+    let reads = 0;
+    const changing: ComponentFromSelectionReads = {
+      ...readsOver(threeBlocks),
+      page: () => {
+        reads += 1;
+        return Promise.resolve(reads === 1 ? threeBlocks : edited);
+      },
+    };
+
+    const error = await thrownBy(
+      componentFromSelection(
+        request({
+          action: "convert",
+          apply: "stored",
+          page: { collection: "pages", id: "page-1" },
+          selectedIds: ["b"],
+          fields,
+        }),
+        ctx,
+        { reads: changing }
+      )
+    );
+
+    expect(error.statusCode).toBe(409);
+    expect(journal).toEqual(["begin", "create-in-tx", "rollback"]);
   });
 
   it("reconciles the usage indexes for the page and the component after the commit", async () => {

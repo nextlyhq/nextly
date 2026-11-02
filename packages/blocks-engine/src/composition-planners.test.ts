@@ -1292,6 +1292,26 @@ describe("a convert judges the composed depth of the page it leaves", () => {
     expect(pageOps(plan).at(-1)).toMatchObject({ kind: "insert" });
   });
 
+  it("refuses a run that already holds a placement too deep, which the convert pushes further out", () => {
+    const limit = deepestChain();
+    // Already one level too deep before the convert: wrapping it moves the
+    // break one level out and the count of breaks stays the same.
+    const doc = page([node("before"), placement("p", "c1")]);
+
+    const plan = planConvertToComponent(
+      doc,
+      ["p"],
+      componentTarget,
+      "def-new",
+      {},
+      anyParent,
+      DEFAULT_LIMITS,
+      lookupOf(componentChain(limit + 1))
+    );
+
+    expect(plan.problem).toBe("composed-depth");
+  });
+
   it("does not refuse a page for a break the convert did not make", () => {
     const limit = deepestChain();
     // One placement elsewhere is already too deep, and the run converted is a

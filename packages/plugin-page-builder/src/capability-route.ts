@@ -92,19 +92,17 @@ export async function readPatternCapability(
 
 /**
  * Whether this caller may make a component from a selection: `create` and
- * `publish` on the store definitions live in (a configured one literally, the
- * plugin's own under the host's name for it), since the component is created
- * published. The same two grants the route itself asks for.
+ * `publish` on the plugin's own components (under the host's name for them),
+ * since the component is created published. Never where the host keeps its
+ * components in a store of its own, which the route refuses.
  */
 export async function mayCreateComponent(
   ctx: CapabilityRouteContext,
   store: Pick<ComponentStore, "collection"> = {}
 ): Promise<boolean> {
-  if (ctx.caller === null) return false;
-  const slug =
-    store.collection ??
-    ctx.self.collections[COMPONENTS_SLUG] ??
-    COMPONENTS_SLUG;
+  // A host's own store is not one this plugin makes components in.
+  if (ctx.caller === null || store.collection !== undefined) return false;
+  const slug = ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
   return (
     (await ctx.caller.can("create", slug)) &&
     (await ctx.caller.can("publish", slug))

@@ -150,14 +150,15 @@ describe("whether the caller may make a component", () => {
     expect(await mayCreateComponent(createOnly)).toBe(false);
   });
 
-  it("asks of a configured store by its own name", async () => {
+  it("says no where the host keeps components in a store of its own", async () => {
     const configured = grants({
       "create-blocks_lib": true,
       "publish-blocks_lib": true,
+      "create-site_components": true,
+      "publish-site_components": true,
     });
-    expect(await mayCreateComponent(configured)).toBe(false);
     expect(
       await mayCreateComponent(configured, { collection: "blocks_lib" })
-    ).toBe(true);
+    ).toBe(false);
   });
 });
