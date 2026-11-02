@@ -42,6 +42,7 @@ import {
   type ComponentLookup,
   type DocumentLimits,
   type LockSources,
+  type NestingSource,
   type RepairPlan,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
@@ -182,7 +183,13 @@ export interface UseEditorStateArgs {
    * should read. Surfaces already treat a `null` apply as "nothing happened";
    * this is the one place the reason is still known.
    */
-  onRefused?: (refusal: CompositionRefusal | LockEditRefusal) => void;
+  onRefused?: (refusal: CompositionRefusal) => void;
+  /**
+   * Told why an edit was refused for a lock, with the sentence the author
+   * should read. Separate from `onRefused`, whose refusals are about room and
+   * keep the shape its callers were written against.
+   */
+  onLockRefused?: (refusal: LockEditRefusal) => void;
   /**
    * Where the locks an edit is held to are read: the block definitions and
    * nesting rules. Defaults to the live registry, so every host's editor holds
@@ -291,11 +298,11 @@ function refusedForLock(
   after: BlockDocument,
   stored: BlockDocument,
   judgement: LockJudgement,
-  onRefused: UseEditorStateArgs["onRefused"]
+  onLockRefused: UseEditorStateArgs["onLockRefused"]
 ): boolean {
   const found = lockBreakAdded(before, after, stored, judgement);
   if (found === undefined) return false;
-  onRefused?.({
+  onLockRefused?.({
     reason: "locked",
     sentence: refusalAnnouncement(lockRefusalWording(found)),
     lock: found,
@@ -368,7 +375,10 @@ function composedLockAdded(
 
 /** What the store reads at apply time: the host's sources and its saved copy. */
 interface AtApply
-  extends Pick<UseEditorStateArgs, "definitions" | "onRefused" | "locks"> {
+  extends Pick<
+    UseEditorStateArgs,
+    "definitions" | "onRefused" | "onLockRefused" | "locks"
+  > {
   /** The document as last saved; the document as opened when none is given. */
   readonly stored: BlockDocument;
 }
@@ -376,13 +386,14 @@ interface AtApply
 function atApply(
   host: Pick<
     UseEditorStateArgs,
-    "definitions" | "onRefused" | "locks" | "stored"
+    "definitions" | "onRefused" | "onLockRefused" | "locks" | "stored"
   >,
   opened: BlockDocument
 ): AtApply {
   return {
     definitions: host.definitions,
     onRefused: host.onRefused,
+    onLockRefused: host.onLockRefused,
     locks: host.locks,
     stored: host.stored ?? opened,
   };
@@ -418,26 +429,28 @@ function useLockQuestions(
   lockDefinitions: SlotDefaultSource;
 } {
   const composerNow = useComposer(composition, limits);
+  // The sources and the baseline as values, not through the ref: a host that
+  // swaps either, or a save that changes the baseline without changing the
+  // document, gives these callbacks, and so the store, a new identity, and a
+  // surface asking once per store asks again.
+  const definitions = locks?.definitions;
+  const nesting = locks?.nesting;
   const lockRefusalFor = useCallback(
     (ops: readonly BuilderOp[]): LockRefusalFacts | undefined =>
-      lockAnswerFor(
-        latestDocument.current,
-        ops,
-        composition.current.stored,
-        judgementOf(composition.current, limits, composerNow())
-      ),
-    [latestDocument, composition, limits, composerNow]
+      lockAnswerFor(latestDocument.current, ops, baseline, {
+        locks: hostLocksOf(definitions, nesting),
+        limits,
+        compose: composerNow(),
+      }),
+    [latestDocument, limits, composerNow, baseline, definitions, nesting]
   );
   const planRepair = useCallback(
     (): RepairPlan =>
       planDocumentRepair(
         latestDocument.current,
-        lockSourcesOf(composition.current.locks, baseline, limits)
+        lockSourcesOf(hostLocksOf(definitions, nesting), baseline, limits)
       ),
-    // The baseline as a value, not through the ref: a save that changes it
-    // without changing the document gives the callback, and so the store, a
-    // new identity, and a surface planning once per store plans again.
-    [latestDocument, composition, limits, baseline]
+    [latestDocument, limits, baseline, definitions, nesting]
   );
   const composed = useCallback(
     (): BlockDocument | undefined =>
@@ -446,6 +459,17 @@ function useLockQuestions(
   );
   const lockDefinitions = useLockDefinitions(locks);
   return { composerNow, lockRefusalFor, planRepair, composed, lockDefinitions };
+}
+
+/**
+ * The host's lock sources as `UseEditorStateArgs` spells them: none without
+ * definitions of its own, which then come from the live registry.
+ */
+function hostLocksOf(
+  definitions: SlotDefaultSource | undefined,
+  nesting: NestingSource | undefined
+): UseEditorStateArgs["locks"] {
+  return definitions === undefined ? undefined : { definitions, nesting };
 }
 
 /**
@@ -484,7 +508,10 @@ function refusedAsFresh(
     compose,
   }: {
     stored: BlockDocument;
-    current: Pick<UseEditorStateArgs, "definitions" | "onRefused" | "locks">;
+    current: Pick<
+      UseEditorStateArgs,
+      "definitions" | "onRefused" | "onLockRefused" | "locks"
+    >;
     limits: DocumentLimits;
     compose: Composer | undefined;
   }
@@ -500,7 +527,7 @@ function refusedAsFresh(
     after,
     stored,
     judgementOf(current, limits, compose),
-    current.onRefused
+    current.onLockRefused
   );
 }
 
@@ -594,6 +621,7 @@ export function useEditorState({
   limits = DEFAULT_LIMITS,
   definitions,
   onRefused,
+  onLockRefused,
   locks,
   stored,
 }: UseEditorStateArgs): EditorState {
@@ -602,7 +630,7 @@ export function useEditorState({
   // keyed on it.
   // The document as last saved is read the same way, so a save the host
   // reports takes effect on the very next edit.
-  const host = { definitions, onRefused, locks, stored };
+  const host = { definitions, onRefused, onLockRefused, locks, stored };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);
   const [document, setDocument] = useState<BlockDocument>(initialDocument);

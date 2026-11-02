@@ -85,6 +85,8 @@ export function BuilderLocksHarness({ seed }: { seed: "placed" | "broken" }) {
   const editor = useEditorState({
     initialDocument,
     onRefused: refusal => notices.raise(refusal.sentence),
+    // A lock refusal, said the same way: the author reads why, in words.
+    onLockRefused: refusal => notices.raise(refusal.sentence),
   });
 
   // Both drop questions answered by the registry the inserter reads.

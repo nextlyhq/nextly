@@ -62,7 +62,15 @@ export function repairOps(
   limits: DocumentLimits = DEFAULT_LIMITS
 ): RepairOps {
   const at: Translation = { current: document, ops: [], limits };
-  for (const group of slotGroups(plan.steps)) {
+  // Every reset first: a reset puts a block's parts back as it starts and
+  // touches nothing another step does, so taking them first keeps each
+  // document on the way, and each undo back, within the caps the plan's
+  // result fits, where an add made before a large reset could pass them.
+  const resetsFirst = [
+    ...plan.steps.filter(step => step.kind === "reset"),
+    ...plan.steps.filter(step => step.kind !== "reset"),
+  ];
+  for (const group of slotGroups(resetsFirst)) {
     // How many blocks this slot's repair has already placed after each block,
     // so the next one goes after them, in the order the plan placed them.
     const placedAfter = new Map<string, number>();

@@ -220,6 +220,8 @@ export function useEditorMount(
     // through this apply, and this is the one place the reason is known.
     definitions: componentLibrary.definitions,
     onRefused: refusal => notices.raise(refusal.sentence),
+    // A lock refusal, said the same way: the author reads why, in words.
+    onLockRefused: refusal => notices.raise(refusal.sentence),
     // What the next save judges locks against, so the editor refuses exactly
     // what that save would.
     stored,

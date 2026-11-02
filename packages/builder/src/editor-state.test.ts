@@ -884,14 +884,40 @@ describe("the locks an edit is held to", () => {
     slots: { [slot]: children },
   });
 
+  it("asks its lock questions again when the host swaps the lock sources", () => {
+    // A surface keyed on the store (the repair notice, the inserter's cache)
+    // must not keep answers judged against the source the host replaced.
+    const first = { get: () => undefined };
+    const second = { get: () => undefined };
+    // Opened once, as a host holds it: a new document is a new baseline.
+    const opened = doc([headline("h")]);
+    const { result, rerender } = renderHook(
+      ({ definitions }) =>
+        useEditorState({ initialDocument: opened, locks: { definitions } }),
+      { initialProps: { definitions: first } }
+    );
+    const before = result.current;
+
+    rerender({ definitions: first });
+    expect(result.current.lockRefusalFor).toBe(before.lockRefusalFor);
+
+    rerender({ definitions: second });
+    expect(result.current.lockRefusalFor).not.toBe(before.lockRefusalFor);
+    expect(result.current.planRepair).not.toBe(before.planRepair);
+    expect(result.current).not.toBe(before);
+  });
+
   it("refuses an insert into a slot locked all, tells the host why, and commits nothing", () => {
-    const onRefused = vi.fn();
+    const onLockRefused = vi.fn();
+    // Room refusals keep their own callback and shape.
+    const onRoom = vi.fn();
     const { result } = renderHook(() =>
       useEditorState({
         initialDocument: doc([
           holding("acme/fixed-row", "items", [headline("h1")]),
         ]),
-        onRefused,
+        onRefused: onRoom,
+        onLockRefused,
       })
     );
 
@@ -906,23 +932,24 @@ describe("the locks an edit is held to", () => {
 
     expect(outcome).toBeNull();
     expect(result.current.undoDepth).toBe(0);
-    expect(onRefused).toHaveBeenCalledWith(
+    expect(onLockRefused).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "locked",
         sentence:
           "This area of Fixed row is locked. Its blocks can't be added, removed or moved.",
       })
     );
+    expect(onRoom).not.toHaveBeenCalled();
   });
 
   it("refuses a design change inside contentOnly and applies a content change", () => {
-    const onRefused = vi.fn();
+    const onLockRefused = vi.fn();
     const { result } = renderHook(() =>
       useEditorState({
         initialDocument: doc([
           holding("acme/sealed-card", "body", [headline("h1")]),
         ]),
-        onRefused,
+        onLockRefused,
       })
     );
 
@@ -944,21 +971,21 @@ describe("the locks an edit is held to", () => {
         })
       ).toBeNull();
     });
-    expect(onRefused).toHaveBeenCalledTimes(1);
-    expect(onRefused.mock.calls[0]?.[0].sentence).toMatch(
+    expect(onLockRefused).toHaveBeenCalledTimes(1);
+    expect(onLockRefused.mock.calls[0]?.[0].sentence).toMatch(
       /locked to its content/
     );
   });
 
   it("applies an edit that leaves a stored break as it was", () => {
     // Stored before locks were enforced: the row holds a headline more.
-    const onRefused = vi.fn();
+    const onLockRefused = vi.fn();
     const { result } = renderHook(() =>
       useEditorState({
         initialDocument: doc([
           holding("acme/fixed-row", "items", [headline("h1"), headline("h2")]),
         ]),
-        onRefused,
+        onLockRefused,
       })
     );
     act(() => {
@@ -970,7 +997,7 @@ describe("the locks an edit is held to", () => {
         })
       ).not.toBeNull();
     });
-    expect(onRefused).not.toHaveBeenCalled();
+    expect(onLockRefused).not.toHaveBeenCalled();
   });
 
   it("judges against the document as last SAVED, so a break a saved repair removed is refused again", () => {
@@ -1119,7 +1146,7 @@ describe("the locks an edit is held to", () => {
       nodes: [holding("acme/fixed-row", "items", [headline("own")])],
       slots: { extra: { label: "Extra", nodeId: "holder", slot: "items" } },
     } as unknown as BlockDocument;
-    const onRefused = vi.fn();
+    const onLockRefused = vi.fn();
     const { result } = renderHook(() =>
       useEditorState({
         initialDocument: doc([
@@ -1131,7 +1158,7 @@ describe("the locks an edit is held to", () => {
           } as BlockNode,
         ]),
         definitions: new Map([["promo", promo]]),
-        onRefused,
+        onLockRefused,
       })
     );
     const give = (id: string) => ({
@@ -1149,7 +1176,7 @@ describe("the locks an edit is held to", () => {
     act(() => {
       expect(result.current.apply(give("second"))).toBeNull();
     });
-    expect(onRefused).toHaveBeenCalledWith(
+    expect(onLockRefused).toHaveBeenCalledWith(
       expect.objectContaining({
         sentence:
           "This area of Fixed row is locked. Its blocks can't be added, removed or moved.",
@@ -1167,7 +1194,7 @@ describe("the locks an edit is held to", () => {
       nodes: [holding("acme/fixed-row", "items", [headline("own")])],
       slots: { extra: { label: "Extra", nodeId: "holder", slot: "items" } },
     } as unknown as BlockDocument;
-    const onRefused = vi.fn();
+    const onLockRefused = vi.fn();
     const { result } = renderHook(() =>
       useEditorState({
         initialDocument: doc([
@@ -1181,7 +1208,7 @@ describe("the locks an edit is held to", () => {
           headline("loose"),
         ]),
         definitions: new Map([["promo", promo]]),
-        onRefused,
+        onLockRefused,
       })
     );
     act(() => {
@@ -1193,7 +1220,7 @@ describe("the locks an edit is held to", () => {
         })
       ).not.toBeNull();
     });
-    expect(onRefused).not.toHaveBeenCalled();
+    expect(onLockRefused).not.toHaveBeenCalled();
   });
 
   it("composes each document once: an edit composes only the document it makes", () => {

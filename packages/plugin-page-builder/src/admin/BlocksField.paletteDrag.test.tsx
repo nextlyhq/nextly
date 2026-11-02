@@ -650,6 +650,23 @@ describe("what the editor reads before anyone asks for it", () => {
     ).toContain("no room left");
   });
 
+  it("tells the author why an edit a lock refuses did nothing", () => {
+    openEditor();
+
+    const onLockRefused = editorOptions?.onLockRefused as (r: {
+      sentence: string;
+    }) => void;
+    act(() => {
+      onLockRefused({
+        sentence:
+          "This area of Fixed row is locked. Its blocks can't be added, removed or moved.",
+      });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("Fixed row is locked");
+  });
+
   it("builds the editor under the same caps the canvas draws under, so an apply agrees with the preflight", () => {
     // The insert preflight and the canvas both judge under the site's caps;
     // an editor built under the engine's defaults refuses, silently, an edit

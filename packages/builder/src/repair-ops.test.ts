@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyOps,
   clearBlocks,
+  DEFAULT_LIMITS,
   expandSlotDefaults,
   lockBreaksIn,
   makeNode,
@@ -210,5 +211,29 @@ describe("repairOps", () => {
     expect(repairOps(document, planRepair(document, sources()))).toEqual({
       refused: { reason: "locked-block", nodeId: "inner" },
     });
+  });
+  it("puts parts back before it adds, so every step stays within the byte cap", () => {
+    // A row missing its divider, and a sealed card whose headline holds a
+    // large design value the lock puts back. The page and the repaired page
+    // both fit the cap; the page with the divider added and the value not
+    // yet put back does not.
+    const row = placed("acme/fixed-row", "row");
+    row.slots!.items!.pop();
+    const card = placed("acme/sealed-card", "card");
+    card.slots!.body![0]!.props.align = "x".repeat(4000);
+    const document = page(row, card);
+    const plan = planRepair(document, sources());
+    expect(plan.steps.map(step => step.kind).sort()).toEqual(["add", "reset"]);
+    const bytes = (value: unknown) =>
+      new TextEncoder().encode(JSON.stringify(value)).length;
+    const maxBytes = bytes(document) + 8;
+    expect(bytes(plan.result)).toBeLessThan(maxBytes);
+
+    const translated = repairOps(document, plan, {
+      ...DEFAULT_LIMITS,
+      maxBytes,
+    });
+
+    expect(translated).not.toHaveProperty("refused");
   });
 });
