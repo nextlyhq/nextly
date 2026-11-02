@@ -19,6 +19,7 @@ import {
   useNoticeQueue,
   type NoticeQueue,
 } from "./builder-notices";
+import { CanvasFrameShortcuts } from "./canvas-frame-context";
 import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
@@ -1865,6 +1866,9 @@ export function BuilderShell({
 
   return (
     <ShortcutProvider>
+      {/* The same manager, listening in the canvas's frame as well, so a key
+          pressed with focus inside the page reaches every binding above. */}
+      <CanvasFrameShortcuts />
       {/* Provided here rather than required of the host: the shell's own
           controls carry tooltips, so a shell that renders them depends on this
           and should not make it someone else's setup step. Radix nests

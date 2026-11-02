@@ -25,8 +25,11 @@ import * as React from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useShortcuts } from "@nextlyhq/ui";
+
 import { useNoticeQueue, useNoticeSink } from "./builder-notices";
 import { BuilderShell, type SettingsDialogState } from "./builder-shell";
+import { CanvasFrameProvider } from "./canvas-frame-context";
 import { CommandPalette } from "./command-palette";
 import {
   DEFAULT_PREFERENCES,
@@ -2445,5 +2448,49 @@ describe("the top bar's three columns", () => {
     expect(title.getAttribute("title")).toBe(
       "A page title long enough to run into the device buttons"
     );
+  });
+});
+
+describe("the shell's keys inside the canvas's frame", () => {
+  /** A binding registered from inside the shell, on the shell's own manager. */
+  function Binding({ onPress }: { onPress: () => void }): null {
+    useShortcuts(
+      [
+        {
+          keys: "mod+s",
+          description: "Save",
+          // Not prevented, so a listener installed twice would run it twice.
+          preventDefault: false,
+          run: () => onPress(),
+        },
+      ],
+      { name: "Test binding" }
+    );
+    return null;
+  }
+
+  it("hears a key pressed in the frame's document, through the one manager", () => {
+    // A key pressed with focus inside the frame is dispatched in the frame's
+    // document. The binding sits in a slot, so it is registered on whatever
+    // manager the shell provides: firing proves the SHELL's manager listens in
+    // the frame, rather than a second one built there.
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("no frame document");
+    expect(inner).not.toBe(document);
+    stubContainerFits(true);
+    const onPress = vi.fn();
+    render(
+      <CanvasFrameProvider frame={frame}>
+        <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+          <Binding onPress={onPress} />
+        </BuilderShell>
+      </CanvasFrameProvider>
+    );
+    fireEvent.keyDown(inner, { key: "s", ctrlKey: true, metaKey: false });
+    fireEvent.keyDown(inner, { key: "s", metaKey: true, ctrlKey: false });
+    expect(onPress).toHaveBeenCalledTimes(1);
+    frame.remove();
   });
 });

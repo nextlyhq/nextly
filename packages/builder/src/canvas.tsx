@@ -65,12 +65,18 @@ import {
 } from "react";
 
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { guardCanvasNavigation } from "./canvas-link-guard";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isElement, isHTMLElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
-import { canvasContentRect, scrollableAncestor } from "./geometry-dom";
+import {
+  canvasContentRect,
+  canvasScroller,
+  scrollEventTarget,
+  visibleBandOf,
+} from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { observeRenderedTree } from "./rendered-tree";
@@ -467,9 +473,11 @@ function useReportedInlineWidth(
     if (element === null || !measuring) return;
     // Guarded by CALLABILITY rather than presence: jsdom defines the global on
     // some setups without a working constructor, so a property test passes and
-    // the construction throws.
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(entries => {
+    // the construction throws. From the box's own window, the realm of what it
+    // observes.
+    const Sizes = element.ownerDocument.defaultView?.ResizeObserver;
+    if (typeof Sizes !== "function") return;
+    const observer = new Sizes(entries => {
       const entry = entries[0];
       if (entry === undefined) return;
       latest.current?.(inlineSizeOf(entry));
@@ -567,8 +575,10 @@ function useRegionWidth(
     if (!scaling) return;
     const region = layoutRegionOf(box.current);
     if (region === null) return;
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(entries => {
+    // From the region's own window, the realm of the element it observes.
+    const Sizes = region.ownerDocument.defaultView?.ResizeObserver;
+    if (typeof Sizes !== "function") return;
+    const observer = new Sizes(entries => {
       const entry = entries[0];
       if (entry === undefined) return;
       setWidth(inlineSizeOf(entry));
@@ -1774,6 +1784,7 @@ function DropRefusalNotice({
 }): React.JSX.Element {
   const notice = useRef<HTMLDivElement | null>(null);
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const framed = useCanvasFrame().frame !== null;
   const { parentId } = refusal;
   // One wording per rule: a lock's from the function every lock refusal uses,
   // a nesting refusal's from the drag's own.
@@ -1801,6 +1812,7 @@ function DropRefusalNotice({
     // Asked by node kind: a root rendered into an iframe is built by that
     // window, and `instanceof HTMLElement` would leave the notice unplaced.
     if (!isHTMLElement(root)) return;
+    const scroller = canvasScroller(root, framed);
     const measure = (): void => {
       // The root itself when the refusal is at the page level: there is no
       // container node to point at, which is the whole of what
@@ -1826,15 +1838,17 @@ function DropRefusalNotice({
        * are not looking. A very tall container scrolled past does the same.
        *
        * The scroller defines "visible": the shell scrolls an ancestor rather than
-       * the canvas, and its rectangle measured in this canvas's own content
-       * coordinates is exactly the band on screen.
+       * the canvas, and in a frame of its own the frame's viewport scrolls it.
+       * The same scroller this effect listens to below, so what is measured
+       * and what is heard cannot be two different elements, and its visible
+       * part measured in this canvas's own content coordinates is exactly the
+       * band on screen.
        */
-      const within = scrollableAncestor(root);
-      if (within === null) {
+      if (scroller === null) {
         setAt({ x: rect.x, y: rect.y });
         return;
       }
-      const band = canvasContentRect(within, root);
+      const band = visibleBandOf(scroller, root);
       const inset = 12;
       const lowest = band.y + band.height - inset - element.offsetHeight;
       const top = band.y + inset;
@@ -1860,13 +1874,15 @@ function DropRefusalNotice({
      * explanation would sit still and the page would leave.
      *
      * Passive, because this only reads geometry, and on the SCROLLER rather
-     * than the canvas: the canvas does not scroll, its ancestor does.
+     * than the canvas: the canvas does not scroll, its ancestor does — or, in
+     * a frame of its own, the frame's viewport, whose scroll is dispatched at
+     * the frame's document rather than at any element.
      */
-    const scroller = scrollableAncestor(root);
     if (scroller === null) return;
-    scroller.addEventListener("scroll", measure, { passive: true });
+    const source = scrollEventTarget(scroller);
+    source.addEventListener("scroll", measure, { passive: true });
     return () => {
-      scroller.removeEventListener("scroll", measure);
+      source.removeEventListener("scroll", measure);
     };
     /*
      * Re-measured when the WORDING changes, not merely when the container does.
@@ -1882,7 +1898,7 @@ function DropRefusalNotice({
      * is a property of the text: two regions producing identical sentences need
      * no re-measure, and one region whose list changed does.
      */
-  }, [parentId, headline, remedy]);
+  }, [parentId, headline, remedy, framed]);
 
   return (
     <div
@@ -1915,6 +1931,40 @@ function DropRefusalNotice({
       )}
     </div>
   );
+}
+
+/**
+ * The document and window the canvas draws in, held where nothing walking an
+ * object's own keys can reach them.
+ *
+ * The value is a prop of the environment provider, and React's development
+ * build describes every changed prop for its performance panel by walking the
+ * object's own enumerable keys a few levels down. A plain `{ document, window }`
+ * leads that walk into the window, whose own keys include each child frame —
+ * and a page with an Embed block has one in an opaque origin, where reading
+ * anything throws a `SecurityError`. It threw while React was running the
+ * commit's effects, so the effects after it never ran: the canvas stopped
+ * measuring its region, and the device and zoom controls stopped moving it.
+ *
+ * Private fields behind getters are not own enumerable keys, so the walk finds
+ * nothing to enter, while `environment.window` reads exactly as before.
+ */
+class CanvasEnvironment implements BlockEnvironment {
+  readonly #document: Document;
+  readonly #window: Window;
+
+  constructor(document: Document, view: Window) {
+    this.#document = document;
+    this.#window = view;
+  }
+
+  get document(): Document {
+    return this.#document;
+  }
+
+  get window(): Window {
+    return this.#window;
+  }
 }
 
 export function Canvas({
@@ -2010,7 +2060,8 @@ export function Canvas({
    * root's OWN document rather than the globals, so the answer is the frame's
    * once the canvas renders inside one, with nothing here to change.
    * `undefined` until the root has mounted, which the hook passes on rather
-   * than falling back to the admin page.
+   * than falling back to the admin page. Built as a `CanvasEnvironment` rather
+   * than an object literal; see there for why.
    */
   const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
     undefined
@@ -2018,7 +2069,7 @@ export function Canvas({
   useEffect(() => {
     const view = root.current?.ownerDocument.defaultView;
     if (root.current === null || view == null) return;
-    setEnvironment({ document: root.current.ownerDocument, window: view });
+    setEnvironment(new CanvasEnvironment(root.current.ownerDocument, view));
   }, []);
 
   const page = useMemo(
