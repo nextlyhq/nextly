@@ -2089,7 +2089,9 @@
   border-radius: var(--radius-sm);
   background: var(--nx-builder-surface-raised);
   color: var(--nx-builder-text-muted);
-  font-size: 0.75rem;
+  /* The admin's type token, with its own value as the fallback: the scale is
+     declared inline to Tailwind, so the variable itself is not emitted. */
+  font-size: var(--text-xs, 0.75rem);
   line-height: 1.4;
   pointer-events: none;
 }

@@ -11,8 +11,15 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createElement } from "react";
+import { useBlockEnvironment } from "@nextlyhq/blocks-react/environment";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { createElement, useLayoutEffect, useRef } from "react";
 import {
   afterAll,
   afterEach,
@@ -47,10 +54,34 @@ beforeAll(() => {
             ? createElement("p", { className }, props.text)
             : createElement("a", { className, href: props.href }, props.text),
       },
+      {
+        name: "acme/where",
+        version: 1,
+        description: "A block that reads where it is drawn.",
+        example: { props: {} },
+        render: () => createElement(WhereReader),
+      },
     ] as never,
     { source: "canvas-regions-test" }
   );
 });
+
+/**
+ * A block that says whether it was told the document it is drawn in: the
+ * canvas's frame, rather than the admin's own globals.
+ */
+function WhereReader() {
+  const environment = useBlockEnvironment();
+  const own = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const element = own.current;
+    if (element === null) return;
+    element.dataset.ownDocument = String(
+      environment?.document === element.ownerDocument
+    );
+  });
+  return createElement("span", { ref: own, "data-where": "" });
+}
 
 afterAll(clearBlocks);
 
@@ -217,6 +248,58 @@ describe("the regions of a page's Layout on the canvas", () => {
     expect(screen.getByRole("status").textContent).toContain(
       "Draft changes not live: Layout Main"
     );
+  });
+
+  it("tells a region's blocks the frame the canvas draws in, as the page's", async () => {
+    // Drawn inside a frame, so the canvas's own document differs from the
+    // admin's globals that a block outside the provider would be handed.
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("the frame has no document");
+    const container = inner.createElement("div");
+    inner.body.append(container);
+    const where = (area: "header" | "footer"): CanvasRegion => {
+      const region = regionOf(area, area);
+      const componentId = `${area}-component`;
+      return {
+        ...region,
+        definitions: new Map([
+          [
+            componentId,
+            {
+              formatVersion: 1,
+              kind: "component",
+              nodes: [{ id: "w", type: "acme/where", version: 1, props: {} }],
+            } as unknown as BlockDocument,
+          ],
+        ]),
+      };
+    };
+    const onPage: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "w", type: "acme/where", version: 1, props: {} }],
+    } as BlockDocument;
+    render(
+      <Canvas
+        document={onPage}
+        siteStyles={sheet as never}
+        regions={[where("header"), where("footer")]}
+        onSelect={vi.fn()}
+        render={{ styleContext: sheet } as never}
+      />,
+      { container }
+    );
+    await waitFor(() => {
+      const readers = [...inner.querySelectorAll("[data-where]")];
+      // The page's reader and one in each region.
+      expect(readers).toHaveLength(3);
+      for (const reader of readers) {
+        expect((reader as HTMLElement).dataset.ownDocument).toBe("true");
+      }
+    });
+    frame.remove();
   });
 
   it("draws the page alone, as before, with no regions", () => {

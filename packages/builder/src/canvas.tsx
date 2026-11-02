@@ -2100,6 +2100,13 @@ interface DrawnRegion {
   sheet: PartSheet;
 }
 
+/** The page and the regions drawn around it, each with its sheet inputs. */
+interface LayoutParts {
+  page: PartSheet;
+  header: DrawnRegion | undefined;
+  footer: DrawnRegion | undefined;
+}
+
 /**
  * The page and the regions around it, each with its site-sheet inputs.
  *
@@ -2111,45 +2118,63 @@ function useLayoutParts(
   regions: readonly CanvasRegion[] | undefined,
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
   sheet: NonNullable<PageRendererProps["siteStyles"]>
-):
-  | {
-      page: PartSheet;
-      header: DrawnRegion | undefined;
-      footer: DrawnRegion | undefined;
-    }
-  | undefined {
-  return useMemo(() => {
-    const header = regions?.find(region => region.area === "header");
-    const footer = regions?.find(region => region.area === "footer");
-    if (header === undefined && footer === undefined) return undefined;
-    const parts: PagePart[] = [
-      ...(header === undefined ? [] : (["header"] as const)),
-      "page",
-      ...(footer === undefined ? [] : (["footer"] as const)),
-    ];
-    const sheets = layoutPartSheets({
-      parts,
-      styleContext: rendered?.styleContext,
-      siteStyles: sheet,
-      pageScope:
-        typeof rendered?.styles?.scope === "string"
-          ? rendered.styles.scope
-          : undefined,
-    });
-    const sheetFor = (part: PagePart): PartSheet =>
-      sheets[parts.indexOf(part)] ?? {};
-    return {
-      page: sheetFor("page"),
-      header:
-        header === undefined
-          ? undefined
-          : { region: header, sheet: sheetFor("header") },
-      footer:
-        footer === undefined
-          ? undefined
-          : { region: footer, sheet: sheetFor("footer") },
-    };
-  }, [regions, rendered, sheet]);
+): LayoutParts | undefined {
+  return useMemo(
+    () => layoutPartsOf(regions, rendered, sheet),
+    [regions, rendered, sheet]
+  );
+}
+
+/** {@link useLayoutParts}'s answer, computed. */
+function layoutPartsOf(
+  regions: readonly CanvasRegion[] | undefined,
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  sheet: NonNullable<PageRendererProps["siteStyles"]>
+): LayoutParts | undefined {
+  const header = regions?.find(region => region.area === "header");
+  const footer = regions?.find(region => region.area === "footer");
+  if (header === undefined && footer === undefined) return undefined;
+  const parts = drawingOrder(header !== undefined, footer !== undefined);
+  const sheets = layoutPartSheets({
+    parts,
+    styleContext: rendered?.styleContext,
+    siteStyles: sheet,
+    pageScope: pageScopeOf(rendered),
+  });
+  const sheetFor = (part: PagePart): PartSheet =>
+    sheets[parts.indexOf(part)] ?? {};
+  return {
+    page: sheetFor("page"),
+    header: drawnRegion(header, sheetFor),
+    footer: drawnRegion(footer, sheetFor),
+  };
+}
+
+/** The parts in the order they are drawn: header, page, footer. */
+function drawingOrder(hasHeader: boolean, hasFooter: boolean): PagePart[] {
+  return [
+    ...(hasHeader ? (["header"] as const) : []),
+    "page",
+    ...(hasFooter ? (["footer"] as const) : []),
+  ];
+}
+
+/** The scope the page's own styles compile under, when it states one. */
+function pageScopeOf(
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined
+): string | undefined {
+  const scope = rendered?.styles?.scope;
+  return typeof scope === "string" ? scope : undefined;
+}
+
+/** One region with its sheet inputs, or nothing for a region not drawn. */
+function drawnRegion(
+  region: CanvasRegion | undefined,
+  sheetFor: (part: PagePart) => PartSheet
+): DrawnRegion | undefined {
+  return region === undefined
+    ? undefined
+    : { region, sheet: sheetFor(region.area) };
 }
 
 /**
@@ -2410,19 +2435,25 @@ export function Canvas({
       onPointerDown={pointerDown}
     >
       {drawn?.header === undefined ? null : (
-        <CanvasRegionFrame
-          region={drawn.header.region}
-          rendered={rendered}
-          sheet={drawn.header.sheet}
-        />
+        // In the page's environment, so a header block that measures itself
+        // or listens is told the frame the canvas draws in, as the page is.
+        <BlockEnvironmentProvider value={environment}>
+          <CanvasRegionFrame
+            region={drawn.header.region}
+            rendered={rendered}
+            sheet={drawn.header.sheet}
+          />
+        </BlockEnvironmentProvider>
       )}
       {page}
       {drawn?.footer === undefined ? null : (
-        <CanvasRegionFrame
-          region={drawn.footer.region}
-          rendered={rendered}
-          sheet={drawn.footer.sheet}
-        />
+        <BlockEnvironmentProvider value={environment}>
+          <CanvasRegionFrame
+            region={drawn.footer.region}
+            rendered={rendered}
+            sheet={drawn.footer.sheet}
+          />
+        </BlockEnvironmentProvider>
       )}
       {overlay}
       {refusalDrawn === null ? null : (
