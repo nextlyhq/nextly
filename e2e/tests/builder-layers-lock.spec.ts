@@ -5,10 +5,10 @@
  *   says why: Layers, the canvas drag, the block toolbar, the keyboard and
  *   the inspector. A click still selects a locked block, so it can be
  *   unlocked.
- * - Unlocking a block and changing it saves as one write, answered OK, with
- *   the history untouched by the save and both changes stored.
- * - A save that fails stores nothing and keeps the editor's work, and the
- *   next save stores it.
+ * - Unlocking a block and changing it saves as one write and one "Saved",
+ *   with the history untouched by the save and both changes stored.
+ * - A save that fails stores nothing and keeps the editor's work, with Retry,
+ *   which stores it.
  * - A block the saved page still holds locked cannot be deleted until its
  *   unlock is saved: Delete says "Save first", and works after a save.
  *
@@ -24,6 +24,7 @@ import {
   clickBlock,
   layerRow,
   openLayers,
+  pressSave,
   selection,
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
@@ -151,13 +152,16 @@ function isWrite(request: { url(): string; method(): string }): boolean {
   );
 }
 
+/** The top bar's save state chip. */
+function saveState(page: Page) {
+  return page
+    .locator('[data-topbar="end"]')
+    .locator('[data-testid="save-state-indicator"]');
+}
+
 /**
- * Save the draft through the header and wait for it to be stored, counting
- * the writes the one save sends.
- *
- * Counted at the network rather than read off a chip: the editor's screen
- * draws over the entry form's save chip, so what proves "one save" here is
- * one write, answered OK, and the stored document it leaves.
+ * Save without publishing from the top bar and wait for it to be stored,
+ * counting the writes the one save sends.
  */
 async function saveDraft(page: Page): Promise<number> {
   let writes = 0;
@@ -168,8 +172,9 @@ async function saveDraft(page: Page): Promise<number> {
   const stored = page.waitForResponse(
     response => isWrite(response.request()) && response.ok()
   );
-  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await pressSave(page);
   await stored;
+  await expect(saveState(page)).toHaveText("Saved", { timeout: 30_000 });
   // Settled: anything else this save would send has gone by now.
   await page.waitForLoadState("networkidle");
   page.off("request", count);
@@ -240,7 +245,7 @@ test.describe("a block locked in Layers", () => {
     ]);
   });
 
-  test("saves an unlock and a change to the block in one write, and keeps the history", async ({
+  test("saves an unlock and a change to the block in one write, with one Saved, and keeps the history", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -254,8 +259,8 @@ test.describe("a block locked in Layers", () => {
     await textField(page).press("Tab");
 
     expect(await saveDraft(page)).toBe(1);
-    // One save, said once: the editor's one confirmation of a stored write.
-    await expect(page.getByText("Entry updated successfully")).toHaveCount(1);
+    // One save, said once: the chip says "Saved" for the one write.
+    await expect(saveState(page)).toHaveText("Saved");
 
     const [hero] = await storedNodes(page.request, id);
     expect(hero?.locked).toBeUndefined();
@@ -270,7 +275,7 @@ test.describe("a block locked in Layers", () => {
     await expect(textField(page)).toHaveValue("Locked heading");
   });
 
-  test("keeps the editor's work and stores nothing when the save fails, and saves it next time", async ({
+  test("keeps the editor's work and stores nothing when the save fails, with Retry", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -305,19 +310,25 @@ test.describe("a block locked in Layers", () => {
     const refused = page.waitForResponse(
       response => isWrite(response.request()) && response.status() === 500
     );
-    await page.getByRole("button", { name: "Save draft", exact: true }).click();
+    await pressSave(page);
     await refused;
+    const indicator = saveState(page);
+    await expect(indicator).toContainText("Not saved", { timeout: 30_000 });
+    const retry = indicator.getByRole("button", { name: "Retry" });
+    await expect(retry).toBeVisible();
 
     // Nothing stored changed, and the editor still holds the work.
     const [hero] = await storedNodes(page.request, id);
     expect(hero?.locked).toBe(true);
     await expect(textField(page)).toHaveValue("Not stored yet");
-    await expect(
-      page.getByRole("button", { name: "Save draft", exact: true })
-    ).toBeEnabled();
 
-    // Saving again, as Retry does, stores the unlock and the change at once.
-    expect(await saveDraft(page)).toBe(1);
+    // Retry stores the unlock and the change in one write.
+    const stored = page.waitForResponse(
+      response => isWrite(response.request()) && response.ok()
+    );
+    await retry.click();
+    await stored;
+    await expect(indicator).toHaveText("Saved", { timeout: 30_000 });
     const [after] = await storedNodes(page.request, id);
     expect(after?.locked).toBeUndefined();
   });

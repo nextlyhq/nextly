@@ -2413,8 +2413,9 @@
 
 /*
  * The selected block's Layers lock, said at the start of its bar: a lock icon
- * and "Locked", or "Locked by" the block whose lock covers it. Muted like a
- * Layers badge, and set apart from the buttons by a rule rather than a fill.
+ * and "Locked", or "Locked by" the block whose lock covers it. In the bar's own
+ * ink, so it reads on the dark bar in either theme, and set apart from the
+ * buttons by a rule in that ink rather than by a fill.
  */
 .nx-block-toolbar__lock {
   display: inline-flex;
@@ -2422,8 +2423,9 @@
   gap: 0.25rem;
   padding-inline: 0.375rem 0.5rem;
   margin-inline-end: 0.125rem;
-  border-inline-end: 1px solid var(--nx-builder-border);
-  color: var(--nx-builder-text-muted);
+  border-inline-end: 1px solid
+    color-mix(in srgb, var(--nx-builder-ink-text) 25%, transparent);
+  color: var(--nx-builder-ink-text);
   font-size: 0.75rem;
   white-space: nowrap;
 }
