@@ -141,9 +141,15 @@ function normalise(answer: unknown): ResolvedContentModel | undefined {
   const { is, accepts } = answer as { is?: unknown; accepts?: unknown };
   const kinds = kindList(is);
   if (kinds === undefined || kinds.length === 0) return undefined;
-  if (accepts === undefined) {
-    return { is: kinds, content: "flow", without: [] };
-  }
+  const beneath = acceptsOf(accepts);
+  return beneath === undefined ? undefined : { is: kinds, ...beneath };
+}
+
+/** The `accepts` half in its normal form, or undefined when it is malformed. */
+function acceptsOf(
+  accepts: unknown
+): Pick<ResolvedContentModel, "content" | "without"> | undefined {
+  if (accepts === undefined) return { content: "flow", without: [] };
   if (typeof accepts !== "object" || accepts === null) return undefined;
   const { content, without } = accepts as {
     content?: unknown;
@@ -154,7 +160,7 @@ function normalise(answer: unknown): ResolvedContentModel | undefined {
   }
   const refused = without === undefined ? [] : kindList(without);
   if (refused === undefined) return undefined;
-  return { is: kinds, content: content ?? "flow", without: refused };
+  return { content: content ?? "flow", without: refused };
 }
 
 /**

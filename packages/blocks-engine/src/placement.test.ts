@@ -526,3 +526,56 @@ describe("canPlace: a block that draws nothing", () => {
     ).toMatchObject({ reason: "content-model" });
   });
 });
+
+describe("canPlace: a placement's phrasing ignores roots that draw nothing", () => {
+  it("takes a component of an empty frame and a Button into a phrasing slot", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "t/frame",
+          rendersNothing: (props: { src?: string }) => !props.src,
+          contentModel: () => ({ is: ["flow", "interactive"] }),
+        },
+      ] as never,
+      { source: "test" }
+    );
+    const pair = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        { id: "f", type: "t/frame", version: 1, props: {} },
+        { id: "b", type: "t/button", version: 1, props: {} },
+      ],
+    } as unknown as BlockDocument;
+    expect(
+      canPlace(
+        [instance("c")],
+        into(node("t/label")),
+        sources(new Map([["c", pair]]))
+      )
+    ).toEqual({ allowed: true });
+  });
+});
+
+describe("resolveContentModel: what a container accepts", () => {
+  it.each([
+    [{ is: ["flow"], accepts: { content: "phrasing" } }, "phrasing", []],
+    [{ is: ["flow"], accepts: { without: ["form"] } }, "flow", ["form"]],
+    [{ is: ["flow"], accepts: {} }, "flow", []],
+  ])("reads %j", (answer, content, without) => {
+    expect(resolveContentModel(() => answer, {})).toMatchObject({
+      content,
+      without,
+    });
+  });
+
+  it.each([
+    { is: ["flow"], accepts: null },
+    { is: ["flow"], accepts: "phrasing" },
+  ])("reads %j as undeclared", answer => {
+    expect(resolveContentModel(() => answer, {})).toBe(
+      UNDECLARED_CONTENT_MODEL
+    );
+  });
+});

@@ -47,12 +47,15 @@ import {
 import {
   placementTracker,
   type PlacementRefusal,
+  type PlacementRefused,
   type PlacementTracker,
   type TrackedPlacement,
 } from "./placement";
+import { placementBreaksIn } from "./placement-breaks";
 import { blockLabelFrom, placementRefusalMessage } from "./placement-wording";
 import { isPlainRecord } from "./plain-record";
 import type {
+  ComponentLookup,
   ResolvedBlockNode,
   ResolvedComposition,
 } from "./resolve-instances";
@@ -151,6 +154,14 @@ export interface CompositionFaultOptions {
    * placement break composition is part of is reported.
    */
   storedCompositions?: readonly unknown[];
+  /**
+   * The component definitions the composition was resolved with, so what the
+   * page puts in a placement's slots is judged against the slots it exposes.
+   * Absent, those slots are not judged here.
+   */
+  components?: ComponentLookup;
+  /** The host's stored forms, raw, for the old-or-new rule on those slots. */
+  storedHosts?: readonly unknown[];
 }
 
 /**
@@ -295,7 +306,48 @@ export function compositionFaults(
   ) {
     judgeVisit(pending[head], judge, pending);
   }
+  reportPlacementContents(host, options, judge, placed);
   return faults;
+}
+
+/**
+ * What the page itself puts in its placements' slots, judged against the
+ * slots each component exposes: an exposure the component does not declare
+ * (the content would be dropped) and the exposure's own `allow` list, which
+ * the composed tree no longer carries once the content sits in the inner
+ * block's slot. Read with the component lookup the composition used; a break
+ * the stored page already held is kept.
+ */
+function reportPlacementContents(
+  host: BlockDocument,
+  options: CompositionFaultOptions,
+  judge: Judge,
+  placed: ReadonlyMap<string, string>
+): void {
+  const { nesting, definitions, components } = options;
+  if (
+    nesting === undefined ||
+    definitions === undefined ||
+    components === undefined
+  ) {
+    return;
+  }
+  const sources = { nesting, definitions, components };
+  const old = storedBreakSignatures(
+    options.storedHosts,
+    sources,
+    judge.limits.maxNodes
+  );
+  for (const found of placementBreaksIn(host, sources, judge.limits)) {
+    if (found.parentId === undefined || !placed.has(found.parentId)) continue;
+    if (old.has(found.signature)) continue;
+    judge.report(found.verdict.reason, found.parentId, {
+      type: found.verdict.blockType,
+      sentence: placementRefusalMessage(found.verdict, {
+        labelOf: type => blockLabelFrom(type, definitions.get(type)),
+      }),
+    });
+  }
 }
 
 /** Judge one node of the composed tree, and queue what lies beneath it. */
@@ -376,9 +428,7 @@ function reportPlacement(
   const composedPart =
     reached.composed ||
     visit.containerComposed ||
-    (verdict.reason === "content-model" &&
-      verdict.refusedBy.id !== undefined &&
-      placement.composed.has(verdict.refusedBy.id));
+    refusedByComposed(verdict, placement.composed);
   if (!composedPart || placement.old.has(tracked.signature)) return;
   const definitions = judge.definitions;
   judge.report(verdict.reason, reached.through, {
@@ -389,6 +439,18 @@ function reportPlacement(
       labelOf: type => blockLabelFrom(type, definitions?.get(type)),
     }),
   });
+}
+
+/** Whether a content-model refusal comes from a node a definition put here. */
+function refusedByComposed(
+  verdict: PlacementRefused,
+  composed: ReadonlySet<string>
+): boolean {
+  return (
+    verdict.reason === "content-model" &&
+    verdict.refusedBy.id !== undefined &&
+    composed.has(verdict.refusedBy.id)
+  );
 }
 
 /** The nesting rule for one composed node, asked of the one implementation. */

@@ -51,6 +51,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
+  type ComponentLookup,
   type CompositionFault,
   type DocumentLimits,
   type LockedExposure,
@@ -83,7 +84,7 @@ import {
 
 import { isForest } from "./blocks-document";
 import {
-  composedForms,
+  composedFormsRead,
   lockBaselines,
   readStoredForms,
 } from "./lock-baselines";
@@ -246,7 +247,8 @@ const MOST_HOSTS_JUDGED = 1000;
  */
 export async function compositionIssues(
   value: unknown,
-  args: Pick<PluginFieldValidateArgs, "data" | "path" | "write">,
+  args: Pick<PluginFieldValidateArgs, "data" | "path" | "write"> &
+    Partial<Pick<PluginFieldValidateArgs, "field">>,
   setup: CompositionSetup
 ): Promise<Issue[]> {
   const write = args.write;
@@ -290,7 +292,8 @@ export async function compositionIssues(
     (storedRead ??= readStoredForms(
       write,
       args.path,
-      formsChangedBy(nextStatus)
+      formsChangedBy(nextStatus),
+      (args.field as { localized?: unknown } | undefined)?.localized === true
     ));
   for (const draft of formsChangedBy(nextStatus)) {
     const read = documentReader(source, draft);
@@ -487,7 +490,9 @@ async function judgeOwnComposition(args: {
   // Composed again only once a lock or a placement is found broken, so a save
   // breaking neither composes nothing more.
   const faults = await measuredAgainstStored(
-    faultsIn(document, composed.composition, setup),
+    faultsIn(document, composed.composition, setup, {
+      components: lookupOf(library),
+    }),
     {
       document,
       composition: composed.composition,
@@ -540,7 +545,11 @@ async function measuredAgainstStored(
   if (!lockBroken && !placementBroken) return faults;
   const { document, setup, reading } = args;
   const stored = await args.stored();
+  const composedStored = placementBroken
+    ? await composedFormsRead({ ...reading, hosts: stored.forms })
+    : undefined;
   const again = faultsIn(document, args.composition, setup, {
+    components: lookupOf(reading.library),
     ...(lockBroken
       ? {
           baselines: await lockBaselines({
@@ -550,16 +559,16 @@ async function measuredAgainstStored(
           }),
         }
       : {}),
-    ...(placementBroken
-      ? {
-          storedCompositions: await composedForms({
-            ...reading,
-            hosts: stored.forms,
-          }),
-        }
-      : {}),
+    ...(composedStored === undefined
+      ? {}
+      : {
+          storedCompositions: composedStored.forms,
+          storedHosts: stored.forms,
+        }),
   });
-  if (stored.readable) return again;
+  // Old breaks are known only from a stored page this could read and compose
+  // whole; a baseline cut short could miss one and call it new.
+  if (stored.readable && composedStored?.complete !== false) return again;
   const kept = again.filter(fault => !PLACEMENT_FAULTS.has(fault.code));
   if (kept.length < again.length) {
     setup.onPlacementUnjudged?.({
@@ -571,6 +580,14 @@ async function measuredAgainstStored(
   return kept;
 }
 
+/** A held library as the engine's component lookup. */
+function lookupOf(library: HeldLibrary): ComponentLookup {
+  return {
+    has: id => library.held.has(id),
+    get: id => library.held.get(id) as BlockDocument | undefined,
+  };
+}
+
 /** The composition faults, against the site's own nesting rules. */
 function faultsIn(
   host: BlockDocument,
@@ -579,6 +596,8 @@ function faultsIn(
   measuredAgainst: {
     baselines?: readonly unknown[];
     storedCompositions?: readonly unknown[];
+    storedHosts?: readonly unknown[];
+    components?: ComponentLookup;
   } = {}
 ): readonly CompositionFault[] {
   return compositionFaults(host, composition, {

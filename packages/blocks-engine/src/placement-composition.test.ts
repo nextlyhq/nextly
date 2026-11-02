@@ -160,3 +160,47 @@ describe("compositionFaults: the content model across a placement", () => {
     expect(faults(host, { cta }, [stored])).toEqual([]);
   });
 });
+
+describe("compositionFaults: what a page puts in a placement's slots", () => {
+  const tile = (allow?: readonly string[]) =>
+    component([card("inner", {})], {
+      body: {
+        label: "Body",
+        nodeId: "inner",
+        slot: "children",
+        ...(allow ? { allow } : {}),
+      },
+    });
+  const judgeWith = (
+    host: BlockDocument,
+    definitions: Record<string, BlockDocument>,
+    storedHosts?: readonly unknown[]
+  ) => {
+    const lookup = new Map(Object.entries(definitions));
+    return compositionFaults(host, resolveComponentInstances(host, lookup), {
+      nesting: registryNestingSource(),
+      definitions: registryBlockSource(),
+      components: lookup,
+      ...(storedHosts === undefined ? {} : { storedHosts }),
+    });
+  };
+
+  it("refuses content in a slot the component does not expose", () => {
+    const host = page([instance("i", "tile", { aside: [button("b")] })]);
+    expect(
+      judgeWith(host, { tile: tile() }).map(f => [f.code, f.instanceId])
+    ).toEqual([["undeclared-slot", "i"]]);
+  });
+
+  it("refuses content the exposure's own allow-list excludes", () => {
+    const host = page([instance("i", "tile", { body: [button("b")] })]);
+    expect(
+      judgeWith(host, { tile: tile(["t/card"]) }).map(f => f.code)
+    ).toEqual(["not-allowed-in-slot"]);
+  });
+
+  it("keeps such a break the stored page already held", () => {
+    const host = page([instance("i", "tile", { aside: [button("b")] })]);
+    expect(judgeWith(host, { tile: tile() }, [host])).toEqual([]);
+  });
+});

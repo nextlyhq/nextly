@@ -31,7 +31,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type BlockNode,
 } from "./document";
-import { MAX_NODES } from "./limits";
+import { MAX_ENVELOPE_ENTRIES, MAX_NODES } from "./limits";
 import {
   canBeRoot,
   canNest,
@@ -46,6 +46,7 @@ import {
   resolveComponentInstances,
   type ComponentLookup,
 } from "./resolve-instances";
+import { boundedOwnKeys } from "./safe-record";
 import type { SlotDefaultSource } from "./tree";
 import { declaresNoMarkup } from "./visibility";
 
@@ -336,8 +337,12 @@ function composeInstance(
   const definition = readableDefinition(components.get(componentId));
   if (definition === undefined) return undefined;
   const exposed = isPlainRecord(definition.slots) ? definition.slots : {};
+  // Read through the envelope bound, as the resolver reads it: a definition
+  // exposing more slots than that is malformed, and its slots are unknown.
+  const slotIds = boundedOwnKeys(exposed, MAX_ENVELOPE_ENTRIES);
+  if (slotIds === null) return undefined;
   const probes: Record<string, BlockNode[]> = {};
-  for (const slot of Object.keys(exposed)) {
+  for (const slot of slotIds) {
     probes[slot] = [
       { id: probeId(slot), type: PROBE_TYPE, version: 1, props: {} },
     ];
@@ -390,7 +395,9 @@ function readComposed(
       }
       const model = modelOf(at, sources, memo);
       if (parent === undefined) {
-        rootsArePhrasing &&= model.is.includes("phrasing");
+        // A root drawing nothing is neutral: only drawn roots decide.
+        rootsArePhrasing &&=
+          model.is.length === 0 || model.is.includes("phrasing");
       }
       // Phrasing is a fact about the roots, which are what sits in the host's
       // slot; every other kind counts from anywhere inside, for what an
@@ -554,8 +561,30 @@ function judgeOne(
     nameRules(type, parent.type, slot, rule, sources)
   );
   if (!byName.allowed) return byName;
-  const content = rule?.content ?? parentModel.content;
-  // A block drawing nothing is no content, so nothing it is can be refused.
+  return contentVerdict(blockType, model, {
+    parent,
+    parentModel,
+    rule,
+    inherited: site.inherited,
+  });
+}
+
+/**
+ * The content-model half of a placement: the parent's direct content, then
+ * what any ancestor refuses beneath it. A block drawing nothing is no content,
+ * so nothing it is can be refused.
+ */
+function contentVerdict(
+  blockType: string,
+  model: ResolvedContentModel,
+  at: {
+    parent: PlacedNode;
+    parentModel: ResolvedContentModel;
+    rule: SlotRule | undefined;
+    inherited: readonly ContentRefuser[];
+  }
+): PlacementVerdict {
+  const content = at.rule?.content ?? at.parentModel.content;
   if (
     content === "phrasing" &&
     model.is.length > 0 &&
@@ -565,12 +594,12 @@ function judgeOne(
       allowed: false,
       reason: "phrasing-only",
       blockType,
-      parentType: parent.type,
+      parentType: at.parent.type,
     };
   }
   const beneath = joinRefusals(
-    withRefusals(site.inherited, parent, parentModel),
-    rule?.without ?? []
+    withRefusals(at.inherited, at.parent, at.parentModel),
+    at.rule?.without ?? []
   );
   const refused = refusalFor(model, beneath);
   return refused === undefined
