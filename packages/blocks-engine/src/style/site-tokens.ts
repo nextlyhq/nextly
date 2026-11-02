@@ -356,9 +356,27 @@ const ROOT_TOKEN_SELECTOR = ":root";
  * correct.
  */
 function darkSelectorFor(selector: string, dark: readonly string[]): string {
-  const body = `{${dark.join(";")}}`;
+  return markerBlockFor(selector, "dark", dark);
+}
+
+/**
+ * Declarations under the marker for one mode, on whichever element carries it.
+ *
+ * The light block is the same shape as the dark one, for the same reason: the
+ * device block above is guarded only against a marker on the root itself, so a
+ * `data-nx-theme="light"` on `<body>` or a wrapper would otherwise inherit the
+ * dark values from the root. Declaring the light values on the marked element
+ * puts them nearer than anything inherited.
+ */
+function markerBlockFor(
+  selector: string,
+  mode: TokenMode,
+  declarations: readonly string[]
+): string {
+  const body = `{${declarations.join(";")}}`;
+  const marker = `[${DARK_MODE_ATTRIBUTE}="${mode}"]`;
   if (selector === ROOT_TOKEN_SELECTOR) {
-    return `[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+    return `${marker}${body}`;
   }
   // `:is()` around the whole selector, because this one may be a LIST. Appending
   // the attribute to `.preview-a,.preview-b` yields `.preview-a` bare and only
@@ -367,7 +385,7 @@ function darkSelectorFor(selector: string, dark: readonly string[]): string {
   // takes the specificity of its most specific argument, so a list of single
   // classes weighs exactly what one of them did.
   const scoped = `:is(${selector})`;
-  return `[${DARK_MODE_ATTRIBUTE}="dark"] ${scoped},${scoped}[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+  return `${marker} ${scoped},${scoped}${marker}${body}`;
 }
 
 /**
@@ -1161,6 +1179,9 @@ export function emitTokenBlocks(
 
   const light: string[] = [];
   const dark: string[] = [];
+  // The light values of the variables that have a dark one: what a light
+  // marker has to restore, and nothing else.
+  const undoDark: string[] = [];
   const seen = new Map<string, string>();
   /*
    * The tokens this call actually WROTE.
@@ -1270,6 +1291,7 @@ export function emitTokenBlocks(
     light.push(`${property}:${token.values.light}`);
     if (token.values.dark !== undefined) {
       dark.push(`${property}:${token.values.dark}`);
+      undoDark.push(`${property}:${token.values.light}`);
     }
   }
 
@@ -1296,8 +1318,13 @@ export function emitTokenBlocks(
   // work with no setup; the marker block after it lets a host choose dark on a
   // light device. `set.darkMode` is deliberately not read: it once picked one
   // of the two, and its default picked the form nothing set.
+  // The light marker block comes last, so where a light marker sits inside a
+  // dark one the nearer marker decides.
   if (dark.length > 0) {
-    css += deviceDarkBlockFor(selector, dark) + darkSelectorFor(selector, dark);
+    css +=
+      deviceDarkBlockFor(selector, dark) +
+      darkSelectorFor(selector, dark) +
+      markerBlockFor(selector, "light", undoDark);
   }
   return { css, issues, emitted };
 }

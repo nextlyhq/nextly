@@ -590,8 +590,54 @@ describe("emitTokenBlocks", () => {
     expect(css).toBe(
       ":root{--site-color-text:#111}" +
         `@media (prefers-color-scheme:dark){:root:not([${DARK_MODE_ATTRIBUTE}="light"]){--site-color-text:#eee}}` +
-        `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}`
+        `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}` +
+        `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`
     );
+  });
+
+  it("declares light values at a light marker, so one below the root pins light too", () => {
+    // `:root:not(...)` sees only a marker on `<html>`. A marker on `<body>` or
+    // a wrapper would still inherit the dark values from the root, so the
+    // light values are declared on the marked element itself, after the dark
+    // block, and only for the variables that have a dark value to undo.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+          { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+        ],
+      },
+      ":root"
+    );
+    const light = `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`;
+    expect(css).toContain(light);
+    expect(css.indexOf(light)).toBeGreaterThan(
+      css.indexOf(`[${DARK_MODE_ATTRIBUTE}="dark"]{`)
+    );
+  });
+
+  it("writes a scoped light block for a light marker at or above the scope", () => {
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(
+      css.endsWith(
+        `[${DARK_MODE_ATTRIBUTE}="light"] :is(${SCOPE}),:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`
+      )
+    ).toBe(true);
   });
 
   it("guards a scoped selector's media block against a light marker at or above it", () => {

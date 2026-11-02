@@ -166,6 +166,22 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
     expect(await resolved()).toBe(LIGHT);
     await page.emulateMedia({ colorScheme: "dark" });
     await expect.poll(resolved).toBe(DARK);
+
+    // A light marker below the root pins light there, on a dark device: the
+    // sheet declares the light values at the marked element itself.
+    const wrapperValue = () =>
+      page.evaluate(property => {
+        const wrapper = document.createElement("div");
+        wrapper.dataset.nxTheme = "light";
+        document.body.append(wrapper);
+        const value = getComputedStyle(wrapper)
+          .getPropertyValue(property)
+          .trim();
+        wrapper.remove();
+        return value;
+      }, PROPERTY);
+    expect(await wrapperValue()).toBe(LIGHT);
+    expect(await resolved()).toBe(DARK);
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before },
