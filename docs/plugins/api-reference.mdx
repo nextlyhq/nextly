@@ -210,9 +210,11 @@ is still frozen and still typed readonly.
 ### Transactions
 
 ```ts
-ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>): Promise<T>;
+ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>, options?: { isolation?: "snapshot" }): Promise<T>;
 // PluginTransaction = PluginDatabase without `transaction`; calling one rejects (INVALID_INPUT, nested-plugin-transaction)
 // insert / insertReturning take PluginInsert<T>: InferInsert<T> with the col.id() key optional; ctx.db fills a UUIDv7
+// options.isolation "snapshot": read-only, every read sees one moment (REPEATABLE READ on PostgreSQL and MySQL;
+// SQLite's transactions are serial already); a write through tx rejects (INVALID_INPUT, write-in-snapshot-transaction)
 
 ctx.db.raw.transaction(work: (tx: DatabaseInstance) => Promise<T>): Promise<T>;
 // PluginRawDatabase: the fluent builder; the live Drizzle instance with rawSql granted
@@ -315,6 +317,7 @@ interface PluginFieldType {
   surfaces?: FieldSurface[];       // where it may be offered; defaults to entries/singles only
   layout?: "takeover";
   validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;  // see below
+  validateEmpty?: boolean;         // experimental: hand `validate` an emptied value too
   validateOptions?: (field) => true | string | PluginFieldIssue[];              // see below
 }
 ```
@@ -379,6 +382,10 @@ so you never have to re-check that you were handed the shape your type stores.
 For `json` that check is representability — a cycle or a `BigInt` is rejected
 before you see it — and nothing more, so the shape of the document is yours to
 define.
+
+_Experimental:_ a type that sets `validateEmpty: true` is also handed a value a write
+empties (`null` or `""`), for content a write must not drop unasked, such as the
+blocks an author locked. Its `required` issue is still reported as before.
 
 #### Judging a value against stored rows: `write.readStored`
 

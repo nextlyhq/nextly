@@ -46,6 +46,7 @@ import {
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
@@ -603,12 +604,11 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     showEmptyElements
                   )}
                   onAppend={nodeId => {
-                    // Select first, then open. The inserter derives its
-                    // target from the selection, so selecting the container
-                    // is what makes the next insert land inside it — there
-                    // is no second targeting path to keep in step.
+                    // Select the container and open Add to add INSIDE it,
+                    // said explicitly: selecting a container never implies
+                    // inside, so a click on a selected block adds after it.
                     editor.select(nodeId);
-                    openInsertPanel();
+                    openInsertPanel(nodeId);
                   }}
                 />
               </>
@@ -748,6 +748,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentLibrary,
     savePattern,
     mayCreatePattern,
+    makeComponent,
+    componentVerbs,
     checklist,
     availablePanels,
     openPanelRequest,
@@ -853,6 +855,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             this plugin's business, not the canvas's.
           */
           mayCreatePattern={mayCreatePattern}
+          components={componentVerbs}
           onShareVerbs={setCardVerbs}
         >
           {/*
@@ -880,6 +883,13 @@ function EditorBody<TFieldValues extends FieldValues>({
             selectedIds={editor.selection.ids}
             onClose={savePattern.close}
             returnFocusTo={savePattern.returnFocusTo}
+          />
+          <ComponentFromSelectionPrompt
+            request={makeComponent.request}
+            editor={editor}
+            library={componentLibrary}
+            onClose={makeComponent.close}
+            returnFocusTo={makeComponent.returnFocusTo}
           />
         </BlockKeyboardActions>
       </BuilderShell>

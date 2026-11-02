@@ -225,6 +225,7 @@ export const BLOCK_ICONS = [
   // Content
   "heading",
   "text",
+  "rich-text",
   "list",
   "quote",
   "code",
@@ -247,6 +248,8 @@ export const BLOCK_ICONS = [
   "user",
   "cart",
   "star",
+  // A component the site made, so the Add panel can say what it is at a glance.
+  "component",
 ] as const;
 
 /**

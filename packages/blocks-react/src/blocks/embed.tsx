@@ -124,8 +124,11 @@ const EMBED_BASE_STYLES = {
 export const embed: BlockDefinition<EmbedProps, PageContext> = defineBlock({
   name: "core/embed",
   version: 1,
-  description:
-    "Third-party content in a sandboxed iframe, with an accessible name and a referrer policy that does not leak the page's path.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: Third-party content in a
+  // sandboxed iframe, with an accessible name and a referrer policy that does
+  // not leak the page's path.
+  description: "A video, map or page from another site.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.

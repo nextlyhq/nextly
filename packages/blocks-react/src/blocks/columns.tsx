@@ -120,8 +120,11 @@ export const columns: BlockDefinition<ContainerProps, PageContext> =
   defineBlock({
     name: COLUMNS_BLOCK,
     version: 1,
-    description:
-      "A row of columns. Restricts its slot to core/column so each column keeps an identity that can be selected and styled.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A row of columns.
+    // Restricts its slot to core/column so each column keeps an identity that
+    // can be selected and styled.
+    description: "Blocks side by side, in columns.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
