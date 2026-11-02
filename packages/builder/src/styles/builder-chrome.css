@@ -506,10 +506,11 @@
 /*
  * The parts of a selected component placement an author can edit: its exposed
  * values, dashed in the accent a component wears, so they stand apart from
- * the component's own design around them. Outside the element, unlike the
- * selection ring, so the two never draw over each other.
+ * the component's own design around them. An element that is also the
+ * placement's selected root keeps the selection ring alone: one element draws
+ * one outline, and the ring says more there.
  */
-.nx-canvas [data-nx-exposed] {
+.nx-canvas [data-nx-exposed]:not([data-nx-selected]) {
   outline: 1px dashed var(--nx-primary);
   outline-offset: 2px;
 }

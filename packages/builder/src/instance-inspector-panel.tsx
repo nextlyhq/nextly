@@ -141,11 +141,18 @@ export function InstanceInspectorPanel({
   inspection,
   editor,
   verbs,
+  canvasRoot,
 }: {
   inspection: InstanceInspection;
   editor: EditorState;
   /** The shared block verbs for the card's menu, as a block's card gets. */
   verbs?: CardVerbs | undefined;
+  /**
+   * The canvas's root, where the placement's exposed parts are marked; the
+   * page's document when the host names none. Scoped so a canvas drawn in a
+   * frame is reached, and another editor's marks are left alone.
+   */
+  canvasRoot?: HTMLElement | null | undefined;
 }): React.JSX.Element {
   // Read the node at commit time rather than closing over one. A field
   // committing on blur can fire after another edit has already replaced the
@@ -176,10 +183,10 @@ export function InstanceInspectorPanel({
   // document this panel reads, and cleared when the selection moves on.
   const composed = editor.composed();
   React.useEffect(() => {
-    const root = globalThis.document;
+    const root: ParentNode = canvasRoot ?? globalThis.document;
     markExposedParts(root, inspection.nodeId, composed);
     return () => markExposedParts(root, null, undefined);
-  }, [inspection.nodeId, composed]);
+  }, [inspection.nodeId, composed, canvasRoot]);
   // The sentence every held row points to while the placement is locked in
   // Layers. Its own lock control stays live above, so it can be unlocked.
   const lockedReasonId = React.useId();

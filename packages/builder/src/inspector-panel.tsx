@@ -385,7 +385,9 @@ function surfaceFor(
   editor: EditorState,
   instance: InstanceInspection | null,
   inspection: BlockInspection | null,
-  verbs: CardVerbs | undefined
+  verbs: CardVerbs | undefined,
+  /** The canvas's root, where the instance panel marks a placement's parts. */
+  canvasRoot?: HTMLElement | null
 ):
   | { readonly tabless: React.JSX.Element }
   | { readonly block: BlockInspection } {
@@ -420,6 +422,7 @@ function surfaceFor(
           inspection={instance}
           editor={editor}
           verbs={verbs}
+          canvasRoot={canvasRoot}
         />
       ),
     };
@@ -527,7 +530,7 @@ export function InspectorPanel({
   // the early return, as every hook here is.
   const reasonId = React.useId();
 
-  const surface = surfaceFor(editor, instance, inspection, verbs);
+  const surface = surfaceFor(editor, instance, inspection, verbs, canvasRoot);
   if ("tabless" in surface) return surface.tabless;
   const block = surface.block;
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));

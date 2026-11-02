@@ -272,6 +272,12 @@ test.describe("a placement's exposed fields", () => {
       "data-nx-exposed",
       ""
     );
+    // The heading is also the placement's selected root: it keeps the solid
+    // selection ring rather than trading it for the dashed one.
+    await expect(await headline(page, "p1")).toHaveCSS(
+      "outline-style",
+      "solid"
+    );
     await expect(
       (await canvasRoot(page))
         .locator('[data-nx-instance="p1"]')
