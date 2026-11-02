@@ -14,6 +14,16 @@ export type {
   LayoutSite,
   PageLayoutChoice,
 } from "./resolve-layout";
+// The regions a Layout fills around a page, and the document each is drawn
+// from: one reading of a stored Layout, shared by the route, the editor and
+// the plugin.
+export {
+  layoutRelationId,
+  regionDocument,
+  regionsOf,
+  REGION_AREAS,
+} from "./layout-regions";
+export type { LayoutRegion, RegionArea } from "./layout-regions";
 export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 
 export {

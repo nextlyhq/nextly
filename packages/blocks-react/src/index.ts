@@ -348,3 +348,15 @@ export {
   COMPONENT_DOCUMENT_FIELD,
   type ComponentSource,
 } from "./component-source";
+// The same discovery for a reader that needs the definitions themselves: the
+// page builder's Layout choices read a region's components, nested ones
+// included, at the posture the published route reads them.
+export { definitionsFor } from "./component-source";
+
+// How a page and the regions of its Layout share one site sheet and keep
+// their own styles apart: one answer for the published route and the editor's
+// canvas, so an author sees the cascade a visitor gets.
+export { layoutPartSheets, type PagePart, type PartSheet } from "./page-parts";
+// The area type `PagePart` names, re-exported so a consumer of this entry can
+// name it without a dependency on the engine.
+export type { RegionArea } from "@nextlyhq/blocks-engine";
