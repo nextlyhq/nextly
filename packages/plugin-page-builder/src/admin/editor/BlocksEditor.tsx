@@ -29,7 +29,7 @@ import {
   SpacingOverlay,
 } from "@nextlyhq/builder/shell";
 import { Button } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import { useState, type ComponentProps, type JSX } from "react";
 import {
   useFormState,
   useWatch,
@@ -272,8 +272,14 @@ function editorTopBar(view: EditorView): {
   };
 }
 
+/** The block verbs the inspector's card offers, as the verbs provider shares them. */
+type CardVerbs = ComponentProps<typeof InspectorPanel>["verbs"];
+
 /** The inspector, given the same readings the canvas draws with. */
-function editorInspector(view: EditorView): React.JSX.Element {
+function editorInspector(
+  view: EditorView,
+  verbs: CardVerbs
+): React.JSX.Element {
   const {
     editor,
     canvasElement,
@@ -308,6 +314,10 @@ function editorInspector(view: EditorView): React.JSX.Element {
       // component map; a block whose inspector did not load keeps its
       // generated controls.
       inspectors={contributedInspector}
+      // The verbs provider's own verbs and verdicts for Duplicate and Delete,
+      // handed out of it because the inspector is drawn beside the canvas
+      // rather than under it.
+      verbs={verbs}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
@@ -532,6 +542,20 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
 }
 
 /**
+ * The document's title as the author has it right now, for the top bar: the
+ * form's `title` value while it is text, and nothing otherwise.
+ */
+function usePageTitle<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>
+): string | undefined {
+  const title: unknown = useWatch({
+    control,
+    name: "title" as Path<TFieldValues>,
+  });
+  return typeof title === "string" ? title : undefined;
+}
+
+/**
  * The editor itself, mounted only while open.
  *
  * Separate component so the hooks below — editor state, and the chrome request
@@ -600,10 +624,11 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     savePoint,
   });
 
-  const pageTitle: unknown = useWatch({
-    control,
-    name: "title" as Path<TFieldValues>,
-  });
+  const pageTitle = usePageTitle(control);
+  // What the verbs provider shares for the card's menu; `undefined` until it
+  // mounts, when the menu offers Rename and Lock alone.
+  const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
+
   const view: EditorView = {
     ...mount,
     ...style,
@@ -661,7 +686,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         {...editorTopBar(view)}
         // The document's title, read-only, as the author has it in the form
         // right now. Nothing for a document with no title field.
-        title={typeof pageTitle === "string" ? pageTitle : undefined}
+        title={pageTitle}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears
@@ -677,7 +702,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // already holds and cannot enumerate one. This is the MERGED set the
         // canvas compiles with, so the picker offers exactly the tokens the
         // page will resolve.
-        inspector={editorInspector(view)}
+        inspector={editorInspector(view, cardVerbs)}
         // Switched on the panel id rather than rendering the inserter for
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter
@@ -725,6 +750,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             this plugin's business, not the canvas's.
           */
           mayCreatePattern={mayCreatePattern}
+          onShareVerbs={setCardVerbs}
         >
           {/*
             Inside the verbs provider, which is what lets the palette run

@@ -116,6 +116,18 @@ function deviceOptions(breakpoints: BreakpointSet | undefined): DeviceOption[] {
   ];
 }
 
+/**
+ * What the switcher calls the device for this tier, or `undefined` for a tier
+ * it does not offer (a container tier). Read from the switcher's own list, so
+ * a surface naming the device being edited says what the switcher says.
+ */
+export function deviceLabel(
+  breakpoints: BreakpointSet | undefined,
+  id: BreakpointId
+): string | undefined {
+  return deviceOptions(breakpoints).find(option => option.id === id)?.label;
+}
+
 /** How many devices are buttons, the base counting as one. */
 const BUTTON_COUNT = 3;
 

@@ -570,6 +570,36 @@ describe("the write a plugin field type is validated for", () => {
     return { write, scopedTo };
   }
 
+  it("hands the validator the write's language, and none for the default language however it is spelled", async () => {
+    const seen: (string | undefined)[] = [];
+    registerDocument(async (_value, args) => {
+      seen.push(args.write?.locale);
+      return true;
+    });
+    const { write } = writeContext();
+    const judged = (locale: string | undefined) =>
+      validateEntryData(
+        { body: { nodes: [] } },
+        [{ name: "body", type: "document" }],
+        {
+          mode: "update",
+          write: {
+            ...write,
+            defaultLocale: "en",
+            ...(locale === undefined ? {} : { locale }),
+          },
+        }
+      );
+
+    await judged("de");
+    await judged("en");
+    await judged(undefined);
+
+    // The default language reaches a validator as no language, whether the
+    // caller named it or left it out.
+    expect(seen).toEqual(["de", undefined, undefined]);
+  });
+
   it("hands the validator which entry is written, and a read scoped to its own type", async () => {
     let seen: PluginFieldValidateArgs["write"];
     let read: unknown;

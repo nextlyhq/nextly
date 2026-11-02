@@ -105,13 +105,16 @@ test.describe("the device being edited", () => {
 
     await clickBlock(page, TEXT_ID);
     await page.getByRole("tab", { name: "Style" }).click();
-    // The Color section starts closed for a text block; open it once.
-    const section = page.getByRole("button", { name: "Color", exact: true });
-    if ((await section.getAttribute("aria-expanded")) === "false") {
+    // Colour sits in Typography, which starts closed for a text block.
+    const section = page.getByRole("button", {
+      name: "Typography",
+      exact: true,
+    });
+    if ((await section.getAttribute("aria-expanded")) !== "true") {
       await section.click();
     }
     const color = page
-      .getByRole("region", { name: "Color" })
+      .getByRole("region", { name: /^Typography/ })
       .getByRole("textbox", { name: "Color", exact: true });
     await color.fill("#1155cc");
     await color.press("Enter");

@@ -6,7 +6,10 @@
  * @module admin/editor/history-buttons.test
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderToString } from "react-dom/server";
+import { afterEach, describe, expect, it } from "vitest";
+
+import type { InlineEditOutcome } from "@nextlyhq/builder/shell";
 
 import { HistoryButtons } from "./history-buttons";
 
@@ -14,7 +17,12 @@ afterEach(cleanup);
 
 function mount(
   state: { canUndo: boolean; canRedo: boolean },
-  calls: string[] = []
+  calls: string[] = [],
+  open: {
+    status?: InlineEditOutcome["status"];
+    editing?: unknown;
+    editingRich?: unknown;
+  } = {}
 ) {
   render(
     <HistoryButtons
@@ -26,8 +34,10 @@ function mount(
       inline={{
         commit: () => {
           calls.push("commit");
-          return { status: "none" } as never;
+          return { status: open.status ?? "unchanged" } as InlineEditOutcome;
         },
+        editing: open.editing ?? null,
+        editingRich: open.editingRich ?? null,
       }}
     />
   );
@@ -66,5 +76,74 @@ describe("HistoryButtons", () => {
     mount({ canUndo: true, canRedo: true });
     expect(button("Undo").getAttribute("title")).toMatch(/^Undo \(.+Z\)$/);
     expect(button("Redo").getAttribute("title")).toMatch(/^Redo \(.+\)$/);
+  });
+
+  it("offers Undo for an open inline edit on a fresh document", () => {
+    // The edit is not in the history yet, and Undo is what commits it and
+    // takes it back.
+    const calls = mount({ canUndo: false, canRedo: false }, [], {
+      status: "written",
+      editing: { nodeId: "a" },
+    });
+    expect((button("Undo") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(button("Undo"));
+    expect(calls).toEqual(["commit", "undo"]);
+  });
+
+  it("offers Undo for an open rich text passage too", () => {
+    mount({ canUndo: false, canRedo: false }, [], {
+      editingRich: { nodeId: "a" },
+    });
+    expect((button("Undo") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("leaves the history alone when the inline edit is refused and stays open", () => {
+    // Its words exist nowhere else: stepping the history underneath them
+    // would leave the passage unable to commit.
+    for (const status of ["refused", "unavailable"] as const) {
+      cleanup();
+      const calls = mount({ canUndo: true, canRedo: true }, [], { status });
+      fireEvent.click(button("Undo"));
+      fireEvent.click(button("Redo"));
+      expect(calls).toEqual(["commit", "commit"]);
+    }
+  });
+
+  it("does not redo once the inline edit becomes a new step", () => {
+    // A new step ends the branch Redo would replay.
+    const calls = mount({ canUndo: true, canRedo: true }, [], {
+      status: "written",
+    });
+    fireEvent.click(button("Redo"));
+    expect(calls).toEqual(["commit"]);
+  });
+
+  it("redoes when the inline edit changed nothing", () => {
+    const calls = mount({ canUndo: true, canRedo: true }, [], {
+      status: "discarded",
+    });
+    fireEvent.click(button("Redo"));
+    expect(calls).toEqual(["commit", "redo"]);
+  });
+
+  it("names only the action until the platform's keys are known", () => {
+    // What a server render emits, so the browser's first render matches it.
+    const html = renderToString(
+      <HistoryButtons
+        editor={{
+          canUndo: true,
+          canRedo: true,
+          undo: () => undefined,
+          redo: () => undefined,
+        }}
+        inline={{
+          commit: () => ({ status: "unchanged" }) as InlineEditOutcome,
+          editing: null,
+          editingRich: null,
+        }}
+      />
+    );
+    expect(html).toContain('title="Undo"');
+    expect(html).toContain('title="Redo"');
   });
 });

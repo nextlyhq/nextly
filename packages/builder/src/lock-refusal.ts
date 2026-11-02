@@ -83,11 +83,12 @@ export function lockRefusalWording(found: LockRefusalFacts): RefusalWording {
 }
 
 /**
- * One step of a lock repair, as the preview lists it before the author
- * confirms: which block, whose locked area, and what happens.
+ * One step of a repair, as the preview lists it before the author confirms:
+ * which block, whose locked area or which container, and what happens.
  *
  * Here beside the refusals so an area is named the same way in both: by the
- * block that holds it.
+ * block that holds it. A move says which rule moved the block, a lock or the
+ * placement rule, since the author is told why it leaves.
  *
  * @param document - the document the plan was made from, where every block a
  *   step names is found
@@ -102,7 +103,9 @@ export function repairStepSentence(
   };
   switch (step.kind) {
     case "move":
-      return `Move ${blockLabel(step.type)} out of ${named(step.from.holderId)}'s locked area, to just after ${named(step.after)}.`;
+      return step.cause === "lock"
+        ? `Move ${blockLabel(step.type)} out of ${named(step.from.holderId)}'s locked area, to just after ${named(step.after)}.`
+        : `Move ${blockLabel(step.type)} out of ${named(step.from.holderId)}, where it isn't allowed, to just after ${named(step.after)}.`;
     case "add":
       return `Add the ${blockLabel(step.type)} that ${named(step.at.holderId)}'s locked area starts with.`;
     case "reorder":
