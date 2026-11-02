@@ -7,7 +7,10 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-panels
  */
-import { CORE_CATEGORIES } from "@nextlyhq/blocks-react/blocks";
+import {
+  CORE_CATEGORIES,
+  CORE_PALETTE_ORDER,
+} from "@nextlyhq/blocks-react/blocks";
 import {
   DEFAULT_PREFERENCES,
   type LeftPanel,
@@ -108,6 +111,7 @@ function InsertPanelWithLibrary({
 }: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
   categoryOrder: React.ComponentProps<typeof InsertPanel>["categoryOrder"];
+  blockOrder: React.ComponentProps<typeof InsertPanel>["blockOrder"];
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
   /** The container to add inside, when its "+" asked for it. */
   inside?: string;
@@ -453,6 +457,7 @@ export function editorPanelRenderer({
         <InsertPanelWithLibrary
           editor={editor}
           categoryOrder={CORE_CATEGORIES}
+          blockOrder={CORE_PALETTE_ORDER}
           beginInsertDrag={drag.beginInsertDrag}
           components={offered}
           offerablePatterns={offerablePatterns}

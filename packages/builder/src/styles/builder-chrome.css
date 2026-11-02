@@ -292,12 +292,18 @@
   border-radius: 0.3125rem;
   font-size: 0.71875rem;
   line-height: 1.4;
-  color: var(--nx-primary);
-  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+  /*
+   * The accent's hue, pulled toward the text colour: the accent itself is a
+   * fill colour and falls short of AA as small text on its own tint. Toward
+   * the foreground it darkens in light mode and lightens in dark mode.
+   */
+  color: color-mix(in oklch, var(--nx-primary) 55%, var(--nx-foreground));
+  background: color-mix(in oklch, var(--nx-primary) 10%, transparent);
 }
 
 .nx-insert-panel__placement svg {
   flex: none;
+  color: var(--nx-primary);
 }
 
 .nx-insert-panel__placement b {
@@ -516,9 +522,19 @@
  * because choosing it adds nothing. Still drawn and still reachable — its
  * reason is in the popover and its description.
  */
+/*
+ * A refused tile is greyed in its icon and border, not by fading the whole
+ * tile: it stays reachable and is not `aria-disabled` (see the panel), so its
+ * label is text an author reads and has to meet AA contrast like any other.
+ */
 .nx-insert-panel [cmdk-item][data-refused="true"] {
-  opacity: 0.5;
+  border-style: dashed;
+  color: var(--nx-muted-foreground);
   cursor: not-allowed;
+}
+
+.nx-insert-panel [cmdk-item][data-refused="true"] .nx-block-icon {
+  opacity: 0.45;
 }
 
 .nx-insert-panel [cmdk-item][data-refused="true"]:hover,

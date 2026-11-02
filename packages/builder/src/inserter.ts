@@ -1110,13 +1110,37 @@ export function groupByCategory<TEntry extends InsertEntry>(
  */
 export function paletteGroups<TEntry extends InsertEntry>(
   entries: readonly TEntry[],
-  preferred: readonly string[] = []
+  preferred: readonly string[] = [],
+  blockOrder: readonly string[] = []
 ): InsertGroup<TEntry>[] {
-  const groups = groupByCategory(entries, [...preferred, COMPONENT_CATEGORY]);
+  const groups = groupByCategory(entries, [
+    ...preferred,
+    COMPONENT_CATEGORY,
+  ]).map(group => ({
+    ...group,
+    entries: inBlockOrder(group.entries, blockOrder),
+  }));
   return [
     ...groups.filter(group => group.category !== UNCATEGORISED),
     ...groups.filter(group => group.category === UNCATEGORISED),
   ];
+}
+
+/**
+ * A group's entries with the blocks the host ranks first, in its order, and
+ * everything else after them as it arrived (by label). A sort that keeps
+ * ties in place, so a block's variations stay right behind it.
+ */
+function inBlockOrder<TEntry extends InsertEntry>(
+  entries: readonly TEntry[],
+  blockOrder: readonly string[]
+): TEntry[] {
+  if (blockOrder.length === 0) return [...entries];
+  const rank = new Map(blockOrder.map((name, index) => [name, index]));
+  const rankOf = (entry: TEntry): number =>
+    (entry.kind === "block" ? rank.get(entry.blockName) : undefined) ??
+    blockOrder.length;
+  return [...entries].sort((a, b) => rankOf(a) - rankOf(b));
 }
 
 /**

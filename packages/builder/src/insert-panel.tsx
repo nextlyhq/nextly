@@ -234,6 +234,12 @@ export interface InsertPanelProps {
    * categories still appear, after these.
    */
   categoryOrder?: readonly string[];
+  /**
+   * Block names to offer first within their category, in order; the rest
+   * follow by label. Supplied by the host for the same reason as
+   * `categoryOrder`.
+   */
+  blockOrder?: readonly string[];
   /** Notified after a successful insert, with the node that was added. */
   onInsert?: (node: BlockNode) => void;
   /**
@@ -737,6 +743,49 @@ function placementWords(
   );
 }
 
+/**
+ * Start a tile's drag, when the host has a canvas to drop onto.
+ *
+ * Blocks only. A drag carries ONE node to a drop target, and a pattern is a
+ * forest placed as a group — so there is no node to hand the drag, and
+ * offering the gesture would start something that cannot finish. A refused
+ * block is not dragged either: the tile says it cannot go here.
+ */
+function dragTile(
+  event: Parameters<NonNullable<InsertPanelProps["beginInsertDrag"]>>[0],
+  entry: InsertEntry,
+  refusal: string | undefined,
+  drag: {
+    begin: InsertPanelProps["beginInsertDrag"];
+    definitions: Parameters<typeof nodeForEntry>[1];
+    nesting: NestingSource | undefined;
+    onInserted: InsertPanelProps["onInsert"];
+  }
+): void {
+  if (entry.kind !== "block" || refusal !== undefined) return;
+  drag.begin?.(event, {
+    blockName: entry.blockName,
+    makeNode: () => nodeForEntry(entry, drag.definitions, drag.nesting),
+    // The same notification the click path sends, so a host cannot see one
+    // kind of insert and miss the other.
+    onInserted: drag.onInserted,
+  });
+}
+
+/**
+ * What a tile says before what it is: why it cannot go here, or where it goes
+ * when that is past the place the placement line names.
+ */
+function tileAside(
+  offer: EntryOffer | undefined,
+  document: BlockDocument
+): string | undefined {
+  if (offer?.refusal !== undefined) return offer.refusal;
+  return offer?.climbed === true
+    ? placementSentence("Goes", document, offer.place)
+    : undefined;
+}
+
 /** The same place as one plain sentence, for a tile's description. */
 function placementSentence(
   lead: string,
@@ -766,6 +815,7 @@ export function InsertPanel({
   library,
   nesting,
   categoryOrder,
+  blockOrder,
   onInsert,
   beginInsertDrag,
   inside,
@@ -869,7 +919,8 @@ export function InsertPanel({
       catalog.filter(entry => tabOf(entry) === tab),
       query
     ),
-    categoryOrder
+    categoryOrder,
+    blockOrder
   );
 
   /*
@@ -1088,11 +1139,7 @@ export function InsertPanel({
               // What the author needs before what the block is: why it
               // cannot go here, or where it goes when that is past the
               // place the line above names.
-              const aside =
-                refusal ??
-                (offer?.climbed === true
-                  ? placementSentence("Goes", editor.document, offer.place)
-                  : undefined);
+              const aside = tileAside(offer, editor.document);
               // The aside's own id, beside the description's, so the tile
               // is described by the aside first, then what it is.
               const why = token === undefined ? undefined : `${token}-why`;
@@ -1158,17 +1205,10 @@ export function InsertPanel({
                     event.currentTarget.dispatchEvent(
                       new PointerEvent("pointermove", { bubbles: true })
                     );
-                    // Blocks only. A drag carries ONE node to a drop target,
-                    // and a pattern is a forest placed as a group — so there is
-                    // no node to hand the drag, and offering the gesture would
-                    // start something that cannot finish. A refused block is
-                    // not dragged either: the tile says it cannot go here.
-                    if (entry.kind !== "block" || refusal !== undefined) return;
-                    beginInsertDrag?.(event, {
-                      blockName: entry.blockName,
-                      makeNode: () => nodeForEntry(entry, blockSource, nesting),
-                      // The same notification the click path sends, so a host
-                      // cannot see one kind of insert and miss the other.
+                    dragTile(event, entry, refusal, {
+                      begin: beginInsertDrag,
+                      definitions: blockSource,
+                      nesting,
                       onInserted: onInsert,
                     });
                   }}
@@ -1256,12 +1296,13 @@ export function InsertPanel({
           <TabsTrigger value="sections">Sections</TabsTrigger>
         </TabsList>
         {/* One tab panel per tab, so each trigger controls an element that
-            exists; only the open one draws the palette. */}
+            exists. A closed tab panel renders none of its children, so the
+            palette is drawn once, in the open one. */}
         <TabsContent value="blocks" className="nx-insert-panel__tab">
-          {tab === "blocks" ? paletteView : null}
+          {paletteView}
         </TabsContent>
         <TabsContent value="sections" className="nx-insert-panel__tab">
-          {tab === "sections" ? paletteView : null}
+          {paletteView}
         </TabsContent>
       </Tabs>
     </div>

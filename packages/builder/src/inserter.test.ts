@@ -480,6 +480,54 @@ describe("paletteGroups and categoryHeading", () => {
     ]);
   });
 
+  it("offers the blocks the host ranks first in its order, the rest by label, variations behind their block", () => {
+    const blocks = catalog([
+      {
+        ...base,
+        name: "acme/aaa",
+        editor: { label: "Aaa", category: "layout" },
+      },
+      {
+        ...base,
+        name: "acme/section",
+        editor: {
+          label: "Section",
+          category: "layout",
+          variations: [{ name: "wide", label: "Wide section" }],
+        },
+      },
+      {
+        ...base,
+        name: "acme/box",
+        editor: { label: "Box", category: "layout" },
+      },
+      {
+        ...base,
+        name: "acme/zed",
+        editor: { label: "Zed", category: "layout" },
+      },
+    ]);
+
+    const labels = (order: readonly string[]) =>
+      paletteGroups(blocks, ["layout"], order)[0]?.entries.map(e => e.label);
+
+    // Unranked, the label order the catalog arrives in: the control.
+    expect(labels([])).toEqual([
+      "Aaa",
+      "Box",
+      "Section",
+      "Wide section",
+      "Zed",
+    ]);
+    expect(labels(["acme/section", "acme/box", "acme/nothing"])).toEqual([
+      "Section",
+      "Wide section",
+      "Box",
+      "Aaa",
+      "Zed",
+    ]);
+  });
+
   it("names the library's categories as an author reads them, and leaves a plugin's as written", () => {
     expect(categoryHeading("layout")).toBe("Layout");
     expect(categoryHeading("content")).toBe("Text");

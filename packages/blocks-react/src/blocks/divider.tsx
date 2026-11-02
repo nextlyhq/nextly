@@ -13,7 +13,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
-import { CONTENT } from "./categories";
+import { LAYOUT } from "./categories";
 
 export type DividerProps = Record<string, never>;
 
@@ -67,7 +67,7 @@ export const divider: BlockDefinition<DividerProps, PageContext> = defineBlock({
   editor: {
     label: "Divider",
     icon: "divider",
-    category: CONTENT,
+    category: LAYOUT,
     keywords: ["hr", "rule", "separator", "break"],
   },
   props: {},
