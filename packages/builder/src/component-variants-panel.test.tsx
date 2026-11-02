@@ -318,4 +318,31 @@ describe("a component's variants in its own view", () => {
     });
     expect(variantsOf(editor())).toBeUndefined();
   });
+
+  it("shows a cleared visibility as hidden, as the part is drawn", () => {
+    const base = component();
+    mount({
+      ...base,
+      exposed: [
+        {
+          id: "shown",
+          label: "Shown",
+          nodeId: "h1",
+          propPath: "visibility",
+          type: "visibility",
+        },
+      ],
+      variants: {
+        a: { label: "Night", overrides: { shown: { $unset: true } } },
+      },
+    });
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Show the values of Night",
+      })
+    );
+    const toggle = within(section()).getByRole("switch", { name: "Shown" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(section().textContent).toContain("Hidden");
+  });
 });

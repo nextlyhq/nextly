@@ -396,7 +396,7 @@ function VariantValueRow({
       <VariantValueControl
         id={id}
         field={field}
-        value={isUnsetOverride(value) ? undefined : value}
+        value={shownValue(field, value)}
         onCommit={commit}
       />
       {set ? (
@@ -418,6 +418,15 @@ function VariantValueRow({
       )}
     </div>
   );
+}
+
+/**
+ * What a field's control shows for a stored value. A cleared field shows
+ * empty, and a cleared visibility hides its part, as the resolver draws it.
+ */
+function shownValue(field: ExposedProperty, value: unknown): unknown {
+  if (!isUnsetOverride(value)) return value;
+  return field.type === "visibility" ? false : undefined;
 }
 
 /** The control for one field's value, by the field's type. */
