@@ -70,13 +70,7 @@ export async function claimedBy(
   await expect
     .poll(
       async () => {
-        const read = await api.get(
-          `/admin/api/document-lock?${new URLSearchParams({ ...document })}`
-        );
-        expect(read.ok(), await read.text()).toBe(true);
-        const { holder } = (await read.json()) as {
-          holder: LockHolder | null;
-        };
+        const holder = await holderOf(api, document);
         label = holder?.ownerLabel ?? null;
         return holder !== null;
       },
@@ -87,4 +81,36 @@ export async function claimedBy(
   // their sentences read "null is editing this document".
   expect(label, "the holder's label").toBeTruthy();
   return String(label);
+}
+
+/**
+ * Waits until the lock route names `label` as the holder of `document`.
+ *
+ * What a screen shows after a takeover is the client's account of it; this is
+ * the database's. A takeover the page drew but the server never recorded
+ * passes every check made of the page and fails this one.
+ */
+export async function expectHeldBy(
+  api: APIRequestContext,
+  document: LockedDocument,
+  label: string
+): Promise<void> {
+  await expect
+    .poll(async () => (await holderOf(api, document))?.ownerLabel ?? null, {
+      message: `the lock route names ${label} as the holder`,
+      timeout: 30_000,
+    })
+    .toBe(label);
+}
+
+/** The holder the lock route reports for `document`, or null when it is free. */
+async function holderOf(
+  api: APIRequestContext,
+  document: LockedDocument
+): Promise<LockHolder | null> {
+  const read = await api.get(
+    `/admin/api/document-lock?${new URLSearchParams({ ...document })}`
+  );
+  expect(read.ok(), await read.text()).toBe(true);
+  return ((await read.json()) as { holder: LockHolder | null }).holder;
 }

@@ -9,6 +9,10 @@
  * is, and an address that already names a database is refused, because that
  * database is somebody's.
  *
+ * The database is kept after the run, as the SQLite file is, so a failure can
+ * be read from it; the next run on the same port drops it first. One per port,
+ * so a checkout's runs reuse one name rather than piling up.
+ *
  * Read by the Playwright config (which database the server is given) and by
  * `scripts/reset-e2e-db.mjs` (which database is dropped and created), so the
  * two can never disagree about which one the run owns.

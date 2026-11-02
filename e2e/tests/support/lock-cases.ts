@@ -23,6 +23,7 @@ import {
 import { gotoAdmin } from "./admin";
 import {
   claimedBy,
+  expectHeldBy,
   SECOND_EDITOR,
   secondEditor,
   type LockedDocument,
@@ -98,7 +99,7 @@ export async function takeoverKeepsUnsavedEdits(
   const { document, address, stored } = await screen.prepare(page.request);
   await gotoAdmin(page, address);
   await expect(screen.field(page)).toHaveValue(stored, { timeout: 30_000 });
-  await claimedBy(page.request, document);
+  const first = await claimedBy(page.request, document);
   const unsaved = `${stored}, edited and not saved`;
   await screen.field(page).fill(unsaved);
 
@@ -110,6 +111,8 @@ export async function takeoverKeepsUnsavedEdits(
     // was never saved, so it is not theirs to see.
     await expect(screen.field(other.page)).toBeEditable({ timeout: 30_000 });
     await expect(screen.field(other.page)).toHaveValue(stored);
+    // And the server agrees: the takeover is recorded, not only drawn.
+    await expectHeldBy(page.request, document, SECOND_EDITOR);
 
     // The first editor is told, by name, and their edit is still in their
     // form, which no longer saves.
@@ -125,6 +128,7 @@ export async function takeoverKeepsUnsavedEdits(
     await page.getByRole("button", { name: "Take it back" }).click();
     await expect(screen.field(page)).toBeEditable({ timeout: 30_000 });
     await expect(screen.field(page)).toHaveValue(unsaved);
+    await expectHeldBy(page.request, document, first);
   } finally {
     await other.context.close();
   }
