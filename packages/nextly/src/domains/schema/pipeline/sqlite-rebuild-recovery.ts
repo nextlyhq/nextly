@@ -22,6 +22,8 @@
  */
 import { sql } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
+
 import { runStatement } from "./_internal/run-statement";
 
 /** The prefix a SQLite table rebuild names its copy with. */
@@ -51,7 +53,22 @@ export async function recoverInterruptedSqliteRebuilds(
     const table = name.slice(REBUILD_COPY_PREFIX.length);
     const expected = expectedColumns.get(table);
     if (expected === undefined) continue;
-    if (!sameColumns(await columnsOf(db, name), expected)) continue;
+    if (!sameColumns(await columnsOf(db, name), expected)) {
+      // Beside its table, another owner's table: left alone. In place of it, it may hold the
+      // table's rows under another shape, and going on would have the push create the table
+      // empty beside them, so the apply stops, naming it.
+      if (!present.has(table)) {
+        throw new NextlyError({
+          code: "NEXTLY_MIGRATION_APPLY_FAILED",
+          publicMessage:
+            `This change was not applied, because the table "${table}" is missing and a table ` +
+            `"${name}" stands in its place with other columns. It may hold that table's rows ` +
+            `from a change stopped part-way. Restore or remove it, then save again.`,
+          logContext: { table, copy: name },
+        });
+      }
+      continue;
+    }
     if (present.has(table)) {
       await runStatement(db, "sqlite", sql`DROP TABLE ${sql.identifier(name)}`);
       done.push(`dropped ${name}, a copy of ${table} its rebuild never used`);

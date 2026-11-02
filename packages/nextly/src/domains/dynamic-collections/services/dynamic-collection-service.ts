@@ -1067,9 +1067,14 @@ export class DynamicCollectionService extends BaseService {
     // A Required field added over rows is filled by the apply between its two pushes: added
     // optional, filled with this value, then made Required. A fill answered to the push itself
     // would run before the column it fills exists.
+    //
+    // Only a field new to the collection: one reaching the main table from the companion (leaving
+    // translation, or every translated field when translation is turned off) gets its values from
+    // the companion's restore, which a fill made NOT NULL first would refuse.
+    const known = new Set(change.oldFields.map(f => f.name));
     const fills: Array<{ field: string; value: unknown }> = [];
     for (const field of added) {
-      if (field.required !== true) continue;
+      if (field.required !== true || known.has(field.name)) continue;
       const value = this.schemaService.addedColumnFillValue(field, now);
       if (value !== undefined) fills.push({ field: field.name, value });
     }

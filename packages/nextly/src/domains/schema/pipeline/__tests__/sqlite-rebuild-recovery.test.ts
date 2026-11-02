@@ -64,13 +64,17 @@ describe("a rebuild's copy where its table is gone", () => {
     expect(tables()).toEqual(["dc_items"]);
   });
 
-  it("is left alone when its columns are not the table's", async () => {
+  it("refuses, leaving it as it is, when its columns are not the table's", async () => {
+    // Its rows may be the table's, under another shape. Going on would have the push create the
+    // table empty beside them, so the apply stops here and says which table to look at.
     db.run(sql`CREATE TABLE __new_dc_items (id text PRIMARY KEY, other text)`);
 
-    const done = await recoverInterruptedSqliteRebuilds(db, EXPECTED);
-
+    await expect(
+      recoverInterruptedSqliteRebuilds(db, EXPECTED)
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining("__new_dc_items"),
+    });
     expect(tables()).toEqual(["__new_dc_items"]);
-    expect(done).toEqual([]);
   });
 });
 
