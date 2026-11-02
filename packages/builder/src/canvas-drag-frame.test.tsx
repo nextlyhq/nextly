@@ -50,17 +50,25 @@ afterEach(async () => {
   dragging = null;
 });
 
-beforeAll(() => {
-  const element = window.Element.prototype as unknown as Record<
-    string,
-    unknown
-  >;
+/**
+ * Pointer capture, which jsdom does not implement, on one realm's elements.
+ *
+ * Per realm because each window has its own `Element.prototype`: a block in
+ * the frame is the frame's element, and a stub on the editor's prototype
+ * leaves it without one, so capturing on it throws inside the handler.
+ */
+function stubPointerCapture(view: Window & typeof globalThis): void {
+  const element = view.Element.prototype as unknown as Record<string, unknown>;
   element.setPointerCapture = function setPointerCapture(): void {};
   element.releasePointerCapture = function releasePointerCapture(): void {};
   element.hasPointerCapture = function hasPointerCapture(): boolean {
     return true;
   };
   element.scrollIntoView = function scrollIntoView(): void {};
+}
+
+beforeAll(() => {
+  stubPointerCapture(window);
 });
 
 const BLOCKS: AnyBlockDefinition[] = [
@@ -160,7 +168,10 @@ function renderFramed() {
   const frame = document.createElement("iframe");
   document.body.append(frame);
   const inner = frame.contentDocument;
-  if (inner === null) throw new Error("no frame document");
+  if (inner === null || inner.defaultView === null) {
+    throw new Error("no frame document");
+  }
+  stubPointerCapture(inner.defaultView);
   const result = render(
     <CanvasFrameProvider frame={frame}>
       <Host frame={frame} />
@@ -325,5 +336,95 @@ describe("a palette drag onto a canvas in a frame", () => {
 
     expect(scrolled).toBeGreaterThan(0);
     fireEvent.keyDown(inner, { key: "Escape" });
+  });
+});
+
+/**
+ * Put the frame at (100, 150) in the editor, painted at `scale` of its 800 by
+ * 1000 layout size, as Fit does on a narrow region.
+ */
+function paintFrameAt(frame: HTMLIFrameElement, scale: number): void {
+  frame.getBoundingClientRect = () =>
+    ({
+      x: 100,
+      y: 150,
+      left: 100,
+      top: 150,
+      width: 800 * scale,
+      height: 1000 * scale,
+      right: 100 + 800 * scale,
+      bottom: 150 + 1000 * scale,
+    }) as DOMRect;
+  Object.defineProperty(frame, "offsetWidth", { value: 800 });
+  Object.defineProperty(frame, "offsetHeight", { value: 1000 });
+}
+
+describe("a drag over a frame painted at a quarter of its size", () => {
+  /*
+   * Every threshold here is about how far a HAND moved, in the pixels the
+   * author sees. At a quarter size one of those is four of the frame's, so a
+   * threshold counted in the frame's pixels asks a quarter of the movement it
+   * means: a click's jitter starts a drag, and a release then swallows the
+   * click that would have inserted the block.
+   */
+  it("does not start a palette drag on a pixel of jitter", () => {
+    const { frame, inner, row } = renderFramed();
+    paintFrameAt(frame, 0.25);
+    // The row is pressed at the editor's (150, 172.5): the frame's (200, 90).
+    fireEvent.pointerDown(row, {
+      button: 0,
+      pointerId: 7,
+      clientX: 150,
+      clientY: 172.5,
+    });
+    // Four and two of the frame's pixels: about one of the author's.
+    fireEvent.pointerMove(inner, { pointerId: 7, clientX: 204, clientY: 92 });
+    expect(dragging).toBeNull();
+    // The control: twenty of the author's pixels do start one.
+    fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 170 });
+    expect(dragging).toBe("test/heading");
+    fireEvent.keyDown(inner, { key: "Escape" });
+  });
+
+  it("does not start a block drag on a pixel of jitter", () => {
+    const { frame, inner } = renderFramed();
+    paintFrameAt(frame, 0.25);
+    const block = inner.querySelector<HTMLElement>(
+      `[${NODE_ID_ATTRIBUTE}="a"]`
+    );
+    if (block === null) throw new Error("no block drawn");
+    fireEvent.pointerDown(block, {
+      button: 0,
+      pointerId: 9,
+      clientX: 200,
+      clientY: 50,
+    });
+    fireEvent.pointerMove(block, { pointerId: 9, clientX: 204, clientY: 52 });
+    expect(dragging).toBeNull();
+    // The control: the same press, moved eighty of the frame's pixels.
+    fireEvent.pointerMove(block, { pointerId: 9, clientX: 200, clientY: 130 });
+    expect(dragging).toBe("test/heading");
+    fireEvent.keyDown(inner, { key: "Escape" });
+  });
+
+  it("holds a target until the pointer has moved past it by the author's pixels", () => {
+    // The gap after the first block is the target at y 90. Past y 150 the
+    // candidate is the gap after the second, and the switch waits for 8 of
+    // the author's pixels beyond where the candidate changed: 32 of the
+    // frame's. Eight of the frame's is two of the author's, not enough.
+    const { frame, inner, row } = renderFramed();
+    paintFrameAt(frame, 0.25);
+    fireEvent.pointerDown(row, {
+      button: 0,
+      pointerId: 7,
+      clientX: 150,
+      clientY: 160,
+    });
+    fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 90 });
+    expect(dragging).toBe("test/heading");
+    fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 152 });
+    fireEvent.pointerMove(inner, { pointerId: 7, clientX: 200, clientY: 160 });
+    fireEvent.pointerUp(inner, { pointerId: 7, clientX: 200, clientY: 160 });
+    expect(ids()).toEqual(["a", INSERTED, "b"]);
   });
 });

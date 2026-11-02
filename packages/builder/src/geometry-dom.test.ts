@@ -30,6 +30,7 @@ import {
   containerEdges,
   hasScrollbarGutter,
   hostPointInFrame,
+  visibleBandOf,
   overflowApplies,
   renderSkips,
   scrollEventTarget,
@@ -1248,5 +1249,80 @@ describe("what scrolls a canvas in a frame", () => {
     const region = document.createElement("section");
     document.body.appendChild(region);
     expect(scrollEventTarget(region)).toBe(region);
+  });
+});
+
+describe("the part of a scroller on screen, in canvas content coordinates", () => {
+  it("is the frame's viewport for a frame's scrolling element", () => {
+    // The page is scrolled 1000 down a 600-tall viewport: the root's top is
+    // at -1000, so the viewport shows content 1000 to 1600. The document's own
+    // rectangle would claim the whole page.
+    const inner = frameDocument();
+    const view = inner.defaultView;
+    const scroller = inner.scrollingElement;
+    if (view === null || scroller === null) throw new Error("no frame realm");
+    Object.defineProperty(view, "innerWidth", { value: 800 });
+    Object.defineProperty(view, "innerHeight", { value: 600 });
+    scroller.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: -1000,
+        left: 0,
+        top: -1000,
+        width: 800,
+        height: 4000,
+        bottom: 3000,
+      }) as DOMRect;
+    const root = inner.createElement("div");
+    inner.body.appendChild(root);
+    root.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: -1000,
+        left: 0,
+        top: -1000,
+        width: 800,
+        height: 4000,
+      }) as DOMRect;
+
+    expect(visibleBandOf(scroller, root)).toEqual({
+      x: 0,
+      y: 1000,
+      width: 800,
+      height: 600,
+    });
+  });
+
+  it("is an ordinary scroller's own rectangle", () => {
+    const region = document.createElement("section");
+    region.getBoundingClientRect = () =>
+      ({
+        x: 40,
+        y: 56,
+        left: 40,
+        top: 56,
+        width: 900,
+        height: 800,
+        bottom: 856,
+      }) as DOMRect;
+    const root = document.createElement("div");
+    region.appendChild(root);
+    document.body.appendChild(region);
+    root.getBoundingClientRect = () =>
+      ({
+        x: 40,
+        y: -144,
+        left: 40,
+        top: -144,
+        width: 900,
+        height: 3000,
+      }) as DOMRect;
+
+    expect(visibleBandOf(region, root)).toEqual({
+      x: 0,
+      y: 200,
+      width: 900,
+      height: 800,
+    });
   });
 });

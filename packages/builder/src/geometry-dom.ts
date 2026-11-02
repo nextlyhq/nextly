@@ -112,13 +112,24 @@ export function hostPointInFrame(
   point: Point
 ): Point {
   const box = frame.getBoundingClientRect();
-  const scale = paintedScale(frame, box).x;
+  const scale = framePaintedScale(frame);
   const origin = frameContentOrigin(
     { x: box.left, y: box.top },
     frameInsetOf(frame),
     scale
   );
   return pointToCanvas(point, { origin, scale });
+}
+
+/**
+ * How many of the host's painted pixels one of a frame's pixels covers.
+ *
+ * `0.25` for a frame Fit has painted at a quarter of its layout size. A
+ * distance read inside the frame is multiplied by it to become a distance the
+ * author's hand moved, which is what every drag threshold is about.
+ */
+export function framePaintedScale(frame: HTMLIFrameElement): number {
+  return paintedScale(frame, frame.getBoundingClientRect()).x;
 }
 
 /**
@@ -138,7 +149,16 @@ export function hostPointInFrame(
  * and lands on what was measured.
  */
 export function canvasContentRect(element: Element, root: HTMLElement): Rect {
-  const box = element.getBoundingClientRect();
+  return clientRectInCanvas(element.getBoundingClientRect(), root);
+}
+
+/**
+ * A rectangle in CLIENT coordinates, in the canvas's content coordinates.
+ *
+ * The conversion {@link canvasContentRect} applies to an element's own box,
+ * for a rectangle that is not one element's: the visible part of a viewport.
+ */
+function clientRectInCanvas(box: Rect, root: HTMLElement): Rect {
   const rootBox = root.getBoundingClientRect();
   const scale = paintedScale(root, rootBox);
   return {
@@ -212,11 +232,16 @@ export interface CanvasPointerPoints {
 export function canvasPointerPoints(
   clientX: number,
   clientY: number,
-  root: HTMLElement
+  root: HTMLElement,
+  handScale = 1
 ): CanvasPointerPoints {
   const rootBox = root.getBoundingClientRect();
   const scale = paintedScale(root, rootBox);
-  const painted = { x: clientX - rootBox.x, y: clientY - rootBox.y };
+  const offset = { x: clientX - rootBox.x, y: clientY - rootBox.y };
+  // `handScale` carries the offset into the host's painted pixels when the
+  // canvas is in a frame the host paints scaled: the root's own rectangle is
+  // read inside the frame, where that scale does not show.
+  const painted = { x: offset.x * handScale, y: offset.y * handScale };
   return {
     painted,
     // DERIVED from the painted offset rather than subtracting the root a second
@@ -228,8 +253,8 @@ export function canvasPointerPoints(
     // laid-out content, which a transform never touches — so dividing it would
     // shrink a real offset by the zoom.
     content: {
-      x: painted.x / scale.x + root.scrollLeft,
-      y: painted.y / scale.y + root.scrollTop,
+      x: offset.x / scale.x + root.scrollLeft,
+      y: offset.y / scale.y + root.scrollTop,
     },
   };
 }
@@ -376,7 +401,7 @@ export function viewportPositioned(element: Element): boolean {
  * Starts at the root's parent: the root is excluded by definition, since it is
  * the thing being scrolled WITHIN.
  */
-export function scrollableAncestor(root: HTMLElement): HTMLElement | null {
+function scrollableAncestor(root: HTMLElement): HTMLElement | null {
   let element = root.parentElement;
   while (element !== null) {
     const overflowY = getComputedStyle(element).overflowY;
@@ -405,19 +430,42 @@ export function containerEdges(root: Element): {
   top: number;
   bottom: number;
 } {
-  /*
-   * A document's scrolling element is scrolled by the VIEWPORT, so its visible
-   * edges are the viewport's: `0` and the window's inner height. Its own
-   * rectangle is the whole document, which starts above the viewport once it
-   * has scrolled and ends far below it, so a band measured against that never
-   * contains the pointer at all.
-   */
-  const view = root.ownerDocument.defaultView;
-  if (view !== null && root === root.ownerDocument.scrollingElement) {
-    return { top: 0, bottom: view.innerHeight };
+  const visible = visibleClientRect(root);
+  return { top: visible.y, bottom: visible.y + visible.height };
+}
+
+/**
+ * The part of a scroller on screen, in CLIENT coordinates.
+ *
+ * A document's scrolling element is scrolled by the VIEWPORT, so what is on
+ * screen is the viewport: from `0` to the window's inner size. Its own
+ * rectangle is the whole document, which starts above the viewport once it
+ * has scrolled and ends far below it, so an edge band or a clamp measured
+ * against that never holds the pointer or the message at all.
+ */
+function visibleClientRect(scroller: Element): Rect {
+  const view = scroller.ownerDocument.defaultView;
+  if (view !== null && scroller === scroller.ownerDocument.scrollingElement) {
+    return { x: 0, y: 0, width: view.innerWidth, height: view.innerHeight };
   }
-  const box = root.getBoundingClientRect();
-  return { top: box.top, bottom: box.bottom };
+  const box = scroller.getBoundingClientRect();
+  return {
+    x: box.left,
+    y: box.top,
+    width: box.width,
+    height: box.bottom - box.top,
+  };
+}
+
+/**
+ * The part of a scroller on screen, in the canvas's content coordinates.
+ *
+ * What chrome drawn in the canvas has to stay inside to be seen. Read through
+ * the same {@link visibleClientRect} the drag's edges are, so a scroller that
+ * is a frame's viewport is clamped to the viewport here as well.
+ */
+export function visibleBandOf(scroller: Element, root: HTMLElement): Rect {
+  return clientRectInCanvas(visibleClientRect(scroller), root);
 }
 
 /**

@@ -85,6 +85,7 @@ import {
   canvasPointerPoints,
   canvasScroller,
   containerEdges,
+  framePaintedScale,
   hostPointInFrame,
   type CanvasPointerPoints,
 } from "./geometry-dom";
@@ -417,8 +418,20 @@ interface Gesture {
    * to 71%, the 4px that separates a click from a drag needs only 2.85px of
    * real movement, so ordinary click jitter starts committing moves — and the
    * target hysteresis loosens by the same factor at the same time.
+   *
+   * In the canvas document's client coordinates, like every later point of
+   * the gesture, and turned into the author's pixels by {@link handScale}.
    */
   readonly originClient: Point;
+  /**
+   * How many of the author's on-screen pixels one of the canvas document's
+   * client pixels is: `1` in the editor's own document, the frame's painted
+   * scale in a frame. The host paints a frame scaled, and nothing read inside
+   * the frame shows it, so a distance measured there is multiplied by this
+   * before any threshold about the hand is applied to it. Read once at the
+   * press: the scale does not change during a gesture.
+   */
+  readonly handScale: number;
   readonly regions: readonly DropRegion[];
   readonly rects: RectSource;
   readonly forbiddenParents: ReadonlySet<string>;
@@ -572,6 +585,15 @@ function listenOn<K extends keyof DocumentEventMap>(
  */
 function frameLoopOf(drag: Gesture): Window | null {
   return drag.root.ownerDocument.defaultView;
+}
+
+/**
+ * How many of the author's on-screen pixels one canvas client pixel is.
+ *
+ * See {@link Gesture.handScale}.
+ */
+function handScaleOf(canvas: CanvasFrame): number {
+  return canvas.frame === null ? 1 : framePaintedScale(canvas.frame);
 }
 
 /**
@@ -736,6 +758,7 @@ export function useCanvasDrag({
         lockVerdicts: new Map(),
         root,
         scroller: canvasScroller(root, frameRef.current.frame !== null),
+        handScale: handScaleOf(frameRef.current),
         clientX: event.clientX,
         clientY: event.clientY,
         frame: null,
@@ -890,7 +913,15 @@ export function useCanvasDrag({
         // Measured AFTER the assignment above, which is the one thing in this
         // module that moves the canvas: the root's rectangle has just travelled
         // and the pointer has to be placed against where it is now.
-        aim(drag, canvasPointerPoints(drag.clientX, drag.clientY, drag.root));
+        aim(
+          drag,
+          canvasPointerPoints(
+            drag.clientX,
+            drag.clientY,
+            drag.root,
+            drag.handScale
+          )
+        );
       }
     }
     drag.frame = frameLoopOf(drag)?.requestAnimationFrame(pump) ?? null;
@@ -938,7 +969,12 @@ export function useCanvasDrag({
        * that scrolls, resizes or writes a style invalidates the pair and has to
        * measure again.
        */
-      const pointer = canvasPointerPoints(clientX, clientY, drag.root);
+      const pointer = canvasPointerPoints(
+        clientX,
+        clientY,
+        drag.root,
+        drag.handScale
+      );
       // Recorded for the frame loop, which runs between moves and has no event
       // of its own to read a position from.
       drag.clientX = clientX;
@@ -948,10 +984,11 @@ export function useCanvasDrag({
         // CLIENT pixels: the threshold separates a click from an intent to
         // move, which is a property of the hand rather than of the canvas's
         // scale. Measured in content pixels it shrinks with the canvas.
-        const travelled = Math.hypot(
-          clientX - drag.originClient.x,
-          clientY - drag.originClient.y
-        );
+        const travelled =
+          Math.hypot(
+            clientX - drag.originClient.x,
+            clientY - drag.originClient.y
+          ) * drag.handScale;
         if (travelled < activationPx) return;
         drag.active = true;
         /*
@@ -1284,6 +1321,7 @@ export function useCanvasDrag({
         lockVerdicts: new Map(),
         root,
         scroller: canvasScroller(root, frameRef.current.frame !== null),
+        handScale: handScaleOf(frameRef.current),
         clientX: pressed.x,
         clientY: pressed.y,
         frame: null,

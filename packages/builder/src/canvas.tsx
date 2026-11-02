@@ -74,8 +74,8 @@ import { refusalWording } from "./drag-refusal";
 import {
   canvasContentRect,
   canvasScroller,
-  scrollableAncestor,
   scrollEventTarget,
+  visibleBandOf,
 } from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
@@ -1812,6 +1812,7 @@ function DropRefusalNotice({
     // Asked by node kind: a root rendered into an iframe is built by that
     // window, and `instanceof HTMLElement` would leave the notice unplaced.
     if (!isHTMLElement(root)) return;
+    const scroller = canvasScroller(root, framed);
     const measure = (): void => {
       // The root itself when the refusal is at the page level: there is no
       // container node to point at, which is the whole of what
@@ -1837,15 +1838,17 @@ function DropRefusalNotice({
        * are not looking. A very tall container scrolled past does the same.
        *
        * The scroller defines "visible": the shell scrolls an ancestor rather than
-       * the canvas, and its rectangle measured in this canvas's own content
-       * coordinates is exactly the band on screen.
+       * the canvas, and in a frame of its own the frame's viewport scrolls it.
+       * The same scroller this effect listens to below, so what is measured
+       * and what is heard cannot be two different elements, and its visible
+       * part measured in this canvas's own content coordinates is exactly the
+       * band on screen.
        */
-      const within = scrollableAncestor(root);
-      if (within === null) {
+      if (scroller === null) {
         setAt({ x: rect.x, y: rect.y });
         return;
       }
-      const band = canvasContentRect(within, root);
+      const band = visibleBandOf(scroller, root);
       const inset = 12;
       const lowest = band.y + band.height - inset - element.offsetHeight;
       const top = band.y + inset;
@@ -1875,7 +1878,6 @@ function DropRefusalNotice({
      * a frame of its own, the frame's viewport, whose scroll is dispatched at
      * the frame's document rather than at any element.
      */
-    const scroller = canvasScroller(root, framed);
     if (scroller === null) return;
     const source = scrollEventTarget(scroller);
     source.addEventListener("scroll", measure, { passive: true });

@@ -293,7 +293,9 @@ describe("the drop refusal notice, in a frame", () => {
       `[${NODE_ID_ATTRIBUTE}="box"]`
     );
     if (notice === null || box === null) throw new Error("nothing drawn");
-    expect(notice.style.top).toBe("0px");
+    // Held 12 pixels inside the top of the frame's viewport, where an
+    // unmeasured box at the page's origin is.
+    expect(notice.style.top).toBe("12px");
 
     // The page scrolls under a stationary pointer: the box is now elsewhere,
     // and only the scroll can say so.
@@ -310,5 +312,74 @@ describe("the drop refusal notice, in a frame", () => {
       realm.doc.dispatchEvent(new Event("scroll"));
     });
     expect(notice.style.top).toBe("300px");
+  });
+
+  it("is held inside the frame's viewport for a tall container whose top has scrolled away", async () => {
+    // The frame's page is scrolled 1000 pixels down a 600-pixel viewport, and
+    // the refused container starts 100 pixels into the page and runs on for
+    // 3000. Its top is far above the viewport, so the explanation belongs at
+    // the viewport's top edge, 12 pixels in: content y 1012. Nothing inside a
+    // frame is styled to scroll, so a band taken from an ancestor walk finds
+    // none and leaves the explanation at y 100, out of sight.
+    registerBlocks(BLOCKS, { source: "canvas-frame-realm-test" });
+    const realm = frameRealm();
+    Object.defineProperty(realm.doc, "scrollingElement", {
+      value: realm.doc.documentElement,
+    });
+    const view = realm.doc.defaultView;
+    if (view === null) throw new Error("no frame window");
+    Object.defineProperty(view, "innerHeight", { value: 600 });
+    Object.defineProperty(view, "innerWidth", { value: 800 });
+    const container = containerIn(realm.doc);
+    const drag: CanvasDragState = {
+      draggingId: "leaf",
+      draggingBlockName: "realm/leaf",
+      target: null,
+      refusal: {
+        regionId: "box::children",
+        parentId: "box",
+        reason: "wrong-parent",
+        permitted: [],
+      } as never,
+    };
+    const result = render(
+      <CanvasFrameProvider frame={realm.frame}>
+        <Canvas document={PAGE} siteStyles={false} drag={drag} />
+      </CanvasFrameProvider>,
+      { container }
+    );
+    await act(async () => undefined);
+    const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+    const box = container.querySelector<HTMLElement>(
+      `[${NODE_ID_ATTRIBUTE}="box"]`
+    );
+    const notice = container.querySelector<HTMLElement>(".nx-drop-refusal");
+    if (root === null || box === null || notice === null) {
+      throw new Error("nothing drawn");
+    }
+    root.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: -1000,
+        left: 0,
+        top: -1000,
+        width: 800,
+        height: 4000,
+      }) as DOMRect;
+    box.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: -900,
+        left: 0,
+        top: -900,
+        width: 800,
+        height: 3000,
+      }) as DOMRect;
+    // Re-measured by the scroll it subscribes to, now that the page is laid out.
+    await act(async () => {
+      realm.doc.dispatchEvent(new Event("scroll"));
+    });
+    expect(notice.style.top).toBe("1012px");
+    result.unmount();
   });
 });

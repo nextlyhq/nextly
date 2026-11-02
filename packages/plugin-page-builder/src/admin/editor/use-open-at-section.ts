@@ -150,8 +150,28 @@ function keepInViewWhileSettling(
   }
   const timer = view.setTimeout(stop, SETTLE_MS);
   stops.push(() => view.clearTimeout(timer));
-  for (const type of TAKE_OVER) {
-    view.addEventListener(type, stop, { capture: true });
-    stops.push(() => view.removeEventListener(type, stop, { capture: true }));
+  for (const target of takeOverWindows(view)) {
+    for (const type of TAKE_OVER) {
+      target.addEventListener(type, stop, { capture: true });
+      stops.push(() =>
+        target.removeEventListener(type, stop, { capture: true })
+      );
+    }
   }
+}
+
+/**
+ * Every window the author can take over from: the canvas's, and the editor's
+ * around it when the canvas is in a frame of its own.
+ *
+ * A click, key or wheel over the editor's panels is delivered to the editor's
+ * window and never reaches the frame's, so listening on the canvas's alone
+ * would keep pulling the author back while they work in a panel. Reached
+ * through `frameElement`, which is `null` for a top-level window and for a
+ * frame whose parent this page may not read, so no window is listened on
+ * that could refuse it.
+ */
+function takeOverWindows(view: Window): Window[] {
+  const around = view.frameElement?.ownerDocument.defaultView ?? null;
+  return around === null || around === view ? [view] : [view, around];
 }
