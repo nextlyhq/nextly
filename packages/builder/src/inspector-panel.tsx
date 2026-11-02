@@ -55,6 +55,7 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import type { EditorState } from "./editor-state";
+import { HeldByLock } from "./held-by-lock";
 import { IdentityFields } from "./identity-fields";
 import type { SavedComponent } from "./inserter";
 import {
@@ -62,6 +63,7 @@ import {
   fieldLabel,
   inspectSelection,
   lockStateOf,
+  lockViewOf,
   propIsWritable,
   propPatch,
   selectedNode,
@@ -71,6 +73,7 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
+import { refusalAnnouncement } from "./move-refusal";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import { useStoredDraft } from "./stored-draft";
@@ -458,7 +461,11 @@ export function InspectorPanel({
     cascade,
     previewContainer,
   });
-  const inspection = inspectSelection(editor.document, editor.selectedId);
+  const inspection = inspectSelection(
+    editor.document,
+    editor.selectedId,
+    lockViewOf(editor)
+  );
   /*
    * Asked beside the block inspection rather than instead of it, and the two
    * cannot both answer: a node is an instance or a registered block, never
@@ -505,13 +512,24 @@ export function InspectorPanel({
     [editor]
   );
 
+  // Declared before the early return, as every hook here is.
+  const reasonId = React.useId();
+
   const surface = surfaceFor(editor, instance, inspection);
   if ("tabless" in surface) return surface.tabless;
   const block = surface.block;
+  const heldBy = heldByOf(block, reasonId);
 
   return (
     <div className="nx-inspector">
       <h2 className="nx-inspector__title">{block.label}</h2>
+
+      {/*
+        Under the title rather than inside a tab, because the lock holds
+        controls on all three tabs and above them; one sentence here is what
+        each held control points to.
+      */}
+      <DesignLockReason id={reasonId} wording={block.designLock} />
 
       {/*
         What the block IS, above what it holds.
@@ -532,6 +550,7 @@ export function InspectorPanel({
         nodeId={block.nodeId}
         identity={block.identity}
         editor={editor}
+        heldBy={heldBy}
       />
 
       {/*
@@ -567,6 +586,7 @@ export function InspectorPanel({
             editor={editor}
             onCommit={commit}
             inspectors={inspectors}
+            reasonId={reasonId}
           />
         </TabsContent>
 
@@ -587,23 +607,25 @@ export function InspectorPanel({
             node={styleNode}
             breakpoints={breakpoints}
           />
-          <StyleInspectorPanel
-            editor={editor}
-            renderedTag={canvas.tag}
-            sideOrientation={canvas.orientation}
-            policy={policy}
-            state={editedStyleState(styleState)}
-            breakpoint={breakpoint}
-            cascade={cascade}
-            breakpoints={breakpoints}
-            previewContainer={previewContainer}
-            liveBreakpoints={liveBreakpoints}
-            onJumpToBreakpoint={onJumpToBreakpoint}
-            tokens={tokens}
-            classLibrary={classLibrary}
-            classLibraryAbsence={classLibraryAbsence}
-            onCreateClass={onCreateClass}
-          />
+          <HeldByLock reasonId={heldBy}>
+            <StyleInspectorPanel
+              editor={editor}
+              renderedTag={canvas.tag}
+              sideOrientation={canvas.orientation}
+              policy={policy}
+              state={editedStyleState(styleState)}
+              breakpoint={breakpoint}
+              cascade={cascade}
+              breakpoints={breakpoints}
+              previewContainer={previewContainer}
+              liveBreakpoints={liveBreakpoints}
+              onJumpToBreakpoint={onJumpToBreakpoint}
+              tokens={tokens}
+              classLibrary={classLibrary}
+              classLibraryAbsence={classLibraryAbsence}
+              onCreateClass={onCreateClass}
+            />
+          </HeldByLock>
         </TabsContent>
 
         {/*
@@ -621,19 +643,21 @@ export function InspectorPanel({
           accessibility tree exactly as an unmounted panel was.
         */}
         <TabsContent value="advanced" forceMount hidden={tab !== "advanced"}>
-          <AdvancedPanel
-            // Keyed by node, so a half-typed attribute does not travel to the
-            // next block the way an uncommitted name would. The panel holds
-            // rows locally; without this an author would select another block
-            // and find this one's unsaved row waiting there.
-            key={`${block.nodeId}:advanced`}
-            nodeId={block.nodeId}
-            cssId={block.html.cssId}
-            attributes={block.html.attributes}
-            editor={editor}
-            active={tab === "advanced"}
-            blocks={blocks}
-          />
+          <HeldByLock reasonId={heldBy}>
+            <AdvancedPanel
+              // Keyed by node, so a half-typed attribute does not travel to the
+              // next block the way an uncommitted name would. The panel holds
+              // rows locally; without this an author would select another block
+              // and find this one's unsaved row waiting there.
+              key={`${block.nodeId}:advanced`}
+              nodeId={block.nodeId}
+              cssId={block.html.cssId}
+              attributes={block.html.attributes}
+              editor={editor}
+              active={tab === "advanced"}
+              blocks={blocks}
+            />
+          </HeldByLock>
         </TabsContent>
       </Tabs>
     </div>
@@ -680,14 +704,21 @@ function ContentSurface({
   editor,
   onCommit,
   inspectors,
+  reasonId,
 }: {
   inspection: BlockInspection;
   editor: EditorState;
   onCommit: (name: string, value: unknown) => void;
   inspectors: BlockInspectorResolver | undefined;
+  /** The lock reason a held generated prop points to. */
+  reasonId: string;
 }): React.JSX.Element {
   const generated = (
-    <ContentFields inspection={inspection} onCommit={onCommit} />
+    <ContentFields
+      inspection={inspection}
+      onCommit={onCommit}
+      reasonId={reasonId}
+    />
   );
   const Custom =
     inspection.inspector === undefined
@@ -745,7 +776,9 @@ function CustomInspector({
   const commit = React.useCallback(
     (name: string, value: unknown): void => {
       const { editor: current, document } = live.current;
-      if (!propIsWritable(document, nodeId, name)) return;
+      if (!propIsWritable(document, nodeId, name, lockViewOf(current))) {
+        return;
+      }
       const next = commitProp(current, document, nodeId, name, value);
       if (next !== null) live.current = { editor: current, document: next };
     },
@@ -796,13 +829,45 @@ class CustomInspectorBoundary extends React.Component<
   }
 }
 
+/**
+ * The id of the reason a held control points to, or undefined where nothing
+ * is held. Inside an area locked to its content, everything but the content is
+ * held: shown with its value, and read-only with the reason, rather than
+ * hidden.
+ */
+function heldByOf(
+  block: BlockInspection,
+  reasonId: string
+): string | undefined {
+  return block.designLock === undefined ? undefined : reasonId;
+}
+
+/** The sentence every control a lock holds points to, or nothing. */
+function DesignLockReason({
+  id,
+  wording,
+}: {
+  id: string;
+  wording: BlockInspection["designLock"];
+}): React.JSX.Element | null {
+  if (wording === undefined) return null;
+  return (
+    <p id={id} className="nx-inspector__note">
+      {refusalAnnouncement(wording)}
+    </p>
+  );
+}
+
 /** The Content tab: one field per declared prop, or the note that there are none. */
 function ContentFields({
   inspection,
   onCommit,
+  reasonId,
 }: {
   inspection: BlockInspection;
   onCommit: (name: string, value: unknown) => void;
+  /** The lock reason a held prop points to. */
+  reasonId: string;
 }): React.JSX.Element {
   if (inspection.props.length === 0) {
     return (
@@ -814,14 +879,15 @@ function ContentFields({
   return (
     <div className="nx-inspector__fields">
       {inspection.props.map(prop => (
-        <PropField
+        <HeldByLock
           // Keyed by node AND prop: a bare prop name would let React reuse one
           // block's field for the next block's same-named prop, so the input
           // would keep the previous block's uncommitted text.
           key={`${inspection.nodeId}:${prop.name}`}
-          prop={prop}
-          onCommit={onCommit}
-        />
+          reasonId={prop.readOnly ? reasonId : undefined}
+        >
+          <PropField prop={prop} onCommit={onCommit} />
+        </HeldByLock>
       ))}
     </div>
   );

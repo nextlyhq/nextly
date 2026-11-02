@@ -23,19 +23,26 @@ import {
   EditorCommandPalette,
   EmptyContainerAppenders,
   InspectorPanel,
+  RepairNotice,
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
 } from "@nextlyhq/builder/shell";
 import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import type { Control, FieldValues, Path } from "react-hook-form";
+import {
+  useFormState,
+  type Control,
+  type FieldValues,
+  type Path,
+} from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
+import { valueAtPath } from "../snapshot-merge";
 import { UnsavedChangesPill } from "../UnsavedChangesPill";
 
 import { DocumentActionButtons } from "./document-action-buttons";
@@ -370,6 +377,12 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
         state={componentLibrary.state}
         retry={componentLibrary.retry}
       />
+      {/*
+        Beside the other notes about the page as a whole: a locked area that
+        holds what its lock doesn't allow, and the repair the author can review
+        and confirm.
+      */}
+      <RepairNotice editor={editor} />
       {siteStylePending ||
       siteStyleError !== null ||
       componentLibrary.state === "pending" ? (
@@ -519,7 +532,15 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   /** The section to open at, as the address names it; none opens at the top. */
   openAt?: string | undefined;
 }): JSX.Element {
-  const mount = useEditorMount(initialValue, kinds);
+  // The field's value as last loaded or saved: the form resets its defaults to
+  // what a save stored, so the editor holds an edit to the locks against the
+  // same stored copy the next save is judged against.
+  const { defaultValues } = useFormState({ control, name });
+  const mount = useEditorMount(
+    initialValue,
+    kinds,
+    valueAtPath(defaultValues, name)
+  );
   const { editor, inline } = mount;
 
   /*
