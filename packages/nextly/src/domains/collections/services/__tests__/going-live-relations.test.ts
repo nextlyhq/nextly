@@ -88,6 +88,17 @@ describe("a batch's stored relations", () => {
     });
   });
 
+  it("read each component's definition once for every document", async () => {
+    const batch = new GoingLiveRelationsBatch(["a", "b"]);
+    const read = vi.fn(() => Promise.resolve([]));
+
+    await batch.componentFields("hero", read);
+    await batch.componentFields("hero", read);
+    await batch.componentFields("card", read);
+
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("are read alone for a document outside the batch", async () => {
     const load = countingLoad();
     const batch = new GoingLiveRelationsBatch(["a"]);
@@ -255,25 +266,29 @@ describe("required components by language", () => {
   it("relaxes a component's required outside the default language, as a translated field's", () => {
     expect(
       [
-        ...componentsRequiredInDefaultLanguage(context(false), [
-          TITLE,
-          HERO,
-          TAGS,
-        ]).localizedFieldNames,
+        ...componentsRequiredInDefaultLanguage(
+          context(false),
+          [TITLE, HERO, TAGS],
+          true
+        ).localizedFieldNames,
       ].sort()
     ).toEqual(["hero", "title"]);
   });
 
-  it("keeps it on a document with no translated fields, whatever the language", () => {
+  it("keeps it on a document that is the same in every language, whatever the language", () => {
     const ctx = {
       localizedFieldNames: new Set<string>(),
       enforceLocalizedRequired: false,
     };
-    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO])).toBe(ctx);
+    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], false)).toBe(
+      ctx
+    );
   });
 
   it("keeps it in the default language", () => {
     const ctx = context(true);
-    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO])).toBe(ctx);
+    expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], true)).toBe(
+      ctx
+    );
   });
 });

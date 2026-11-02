@@ -6,6 +6,14 @@
  * created, inspected, and transformed from any JavaScript environment.
  */
 export { deriveSeoFromDocument } from "./derive-seo";
+// Which Layout a page is drawn inside: the one rule the render, the editor
+// and the tests share.
+export { resolvePageLayout } from "./resolve-layout";
+export type {
+  LayoutResolution,
+  LayoutSite,
+  PageLayoutChoice,
+} from "./resolve-layout";
 export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 
 export {
@@ -423,6 +431,19 @@ export type {
   TrackedPlacement,
 } from "./placement";
 export { placementBreaksIn, placementRefusal } from "./placement-breaks";
+// What a write may store as a placement's own values: ids its component
+// exposes, with values of the type each field takes. Judged by the write path
+// against the definitions it composes with, and by the inspector before a
+// commit.
+export {
+  exposedValueFits,
+  neededFor,
+  placementValueIssues,
+} from "./placement-values";
+export type {
+  PlacementValueIssue,
+  PlacementValueProblem,
+} from "./placement-values";
 export type { LocatedPlacementBreak } from "./placement-breaks";
 export {
   asPermittedList,

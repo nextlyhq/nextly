@@ -43,6 +43,7 @@ import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
+import { SiteStyleHistoryContext } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 import { UnsavedChangesPill } from "../UnsavedChangesPill";
 
@@ -54,6 +55,12 @@ import {
 } from "./editor-panels";
 import { HistoryButtons } from "./history-buttons";
 import { PreviewButton } from "./preview-button";
+import {
+  ConnectStyleHistoryContext,
+  RemountOnStyleReplay,
+  StyleRevisionContext,
+  useSiteStyleHistory,
+} from "./site-style-history";
 import { offerableTokens, siteStyleStatus } from "./site-style-studios";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -237,11 +244,13 @@ function editorTopBar(view: EditorView): {
          * `undefined` comparison is true on success too — the same mistake
          * that once withheld the provenance trace unconditionally.
          */}
-        <BreakpointManager
-          value={canvasRender.styleContext.breakpoints}
-          onSave={saveBreakpoints}
-          status={siteStyleStatus(siteStylePending, siteStyleError)}
-        />
+        <RemountOnStyleReplay>
+          <BreakpointManager
+            value={canvasRender.styleContext.breakpoints}
+            onSave={saveBreakpoints}
+            status={siteStyleStatus(siteStylePending, siteStyleError)}
+          />
+        </RemountOnStyleReplay>
         {/*
          * Beside the manager, and gated on the same read for the same
          * reason it is: until the stored style has answered, the set in
@@ -567,15 +576,7 @@ function usePageTitle<TFieldValues extends FieldValues>(
  * ask the admin to hide its navigation for every entry form holding a blocks
  * field, open or not.
  */
-export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
-  initialValue,
-  kinds,
-  onCommit,
-  onClose,
-  name,
-  control,
-  openAt,
-}: {
+interface BlocksEditorProps<TFieldValues extends FieldValues> {
   initialValue: unknown;
   /** The kinds the field accepts, so a seeded document is one it will take. */
   kinds: readonly DocumentKind[] | undefined;
@@ -585,7 +586,37 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   control: Control<TFieldValues>;
   /** The section to open at, as the address names it; none opens at the top. */
   openAt?: string | undefined;
-}): JSX.Element {
+}
+
+export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
+  props: BlocksEditorProps<TFieldValues>
+): JSX.Element {
+  /*
+   * A change to the site's shared styles is a step of the editor's undo
+   * history. Provided from here, above the editor's own hooks, because some
+   * of the style writers run in the editor component itself.
+   */
+  const style = useSiteStyleHistory();
+  return (
+    <SiteStyleHistoryContext.Provider value={style.history}>
+      <StyleRevisionContext.Provider value={style.replay}>
+        <ConnectStyleHistoryContext.Provider value={style.connect}>
+          <EditorBody {...props} />
+        </ConnectStyleHistoryContext.Provider>
+      </StyleRevisionContext.Provider>
+    </SiteStyleHistoryContext.Provider>
+  );
+}
+
+function EditorBody<TFieldValues extends FieldValues>({
+  initialValue,
+  kinds,
+  onCommit,
+  onClose,
+  name,
+  control,
+  openAt,
+}: BlocksEditorProps<TFieldValues>): JSX.Element {
   // The field's value as last loaded or saved: the form resets its defaults to
   // what a save stored, so the editor holds an edit to the locks against the
   // same stored copy the next save is judged against.
@@ -668,6 +699,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       <BuilderShell
         notices={notices}
         onExit={done}
+        // The signed-in author's own preferences, not the browser's.
+        store={mount.preferenceStore}
         availablePanels={availablePanels}
         // Forces the insert panel open from the empty-container appender,
         // which lives on the canvas below rather than beside the rail that

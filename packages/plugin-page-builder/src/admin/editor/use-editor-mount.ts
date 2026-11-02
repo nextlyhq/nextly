@@ -15,19 +15,25 @@ import {
   type DocumentLimits,
   type LocatedPlacementBreak,
 } from "@nextlyhq/blocks-engine";
+import { deepActiveElement, isHTMLElement } from "@nextlyhq/builder";
 import {
   type ComponentFieldsHost,
   type NoticeQueue,
   type EditorState,
   type UseInlineEditingResult,
   CANVAS_ROOT_CLASS,
+  inspectInstance,
+  partOfComponentSentence,
   useEditorState,
   useInlineEditing,
   useNoticeQueue,
+  userPreferenceStore,
+  type BuilderShellProps,
   type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
+  useCurrentUserId,
   useDocumentIdentity,
   usePluginClientConfig,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -46,6 +52,7 @@ import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
 import { useMayCreatePattern } from "../pattern-capability-client";
 
+import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
 
@@ -95,7 +102,7 @@ type SavePatternVerb = {
  * editor they would be three things to keep in step; here the order is the
  * function body.
  */
-function useSavePatternVerb(
+export function useSavePatternVerb(
   editor: { document: BlockDocument },
   inline: { commit: () => InlineEditOutcome }
 ): SavePatternVerb {
@@ -126,8 +133,11 @@ function useSavePatternVerb(
      */
     const finished = finishInlineEdit(inline, editor.document);
     if (!finished.mayClose) return;
-    const active = window.document.activeElement;
-    setOpenedFrom(active instanceof HTMLElement ? active : null);
+    // Read through any focused frame, and classified by node kind: a control
+    // inside a canvas mounted in an iframe is that window's element, and from
+    // here focus on it reads only as the iframe around it.
+    const active = deepActiveElement(window.document);
+    setOpenedFrom(isHTMLElement(active) ? active : null);
     setDocument(finished.document);
   }, [editor.document, inline]);
 
@@ -238,6 +248,9 @@ export function useEditorMount(
     // rather than seeing the edit silently not happen.
     onPlacementRefused: refusal => notices.raise(placementSentence(refusal)),
   });
+  // A shared style change saved while this editor is open is a step of its
+  // history, so the editor connects the history to the style writers.
+  useConnectStyleHistory(editor.recordStep);
 
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
@@ -264,7 +277,31 @@ export function useEditorMount(
     const problem = inlineEditProblem(outcome);
     if (problem !== null) toast.error(problem);
   }, []);
-  const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
+  /*
+   * A double-click on text a component does not expose selects the placement
+   * (the hook does that) and says whose the text is, with the variant, so the
+   * gesture is never met with nothing. Read against the same library the
+   * canvas draws with. A toast rather than the builder's notice queue, which
+   * holds failures: this is information, and it fades.
+   */
+  const partOf = useCallback(
+    (placementId: string) => {
+      const inspection = inspectInstance(
+        editor.document,
+        placementId,
+        componentLibrary.definitions,
+        componentLibrary.components
+      );
+      if (inspection !== null) toast.info(partOfComponentSentence(inspection));
+    },
+    [editor.document, componentLibrary]
+  );
+  const inline = useInlineEditing(
+    editor,
+    loadInlineRichTextEditor,
+    announce,
+    partOf
+  );
 
   // Whether the save-as-pattern form is up. A boolean here rather than the form
   // itself, because the verb that raises it belongs to the shared chain — the
@@ -287,6 +324,15 @@ export function useEditorMount(
     isComponentDocument(initialDocument) ? identity?.documentId : undefined
   );
 
+  /*
+   * Where the shell keeps this author's panel, device and zoom: under their
+   * own id, so two authors of one browser each get their own. While no one is
+   * known it keeps nothing; the shell moves to the author's store once their
+   * id arrives.
+   */
+  const userId = useCurrentUserId();
+  const preferenceStore = useMemo(() => userPreferenceStore(userId), [userId]);
+
   return {
     initialDocument,
     clientConfig,
@@ -297,6 +343,7 @@ export function useEditorMount(
     inline,
     savePattern,
     mayCreatePattern,
+    preferenceStore,
     componentFacts,
   };
 }
@@ -312,6 +359,8 @@ export type EditorMount = {
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
+  /** Where the shell keeps the signed-in author's preferences. */
+  preferenceStore: NonNullable<BuilderShellProps["store"]>;
   /** What the inspector is told about the component being edited, if any. */
   componentFacts: ComponentFieldsHost | undefined;
 };

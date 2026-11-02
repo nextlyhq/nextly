@@ -108,6 +108,20 @@ export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin";
 export { useDocumentPreview, type DocumentPreview } from "@nextlyhq/admin";
 
 /**
+ * The signed-in user's id (@experimental).
+ *
+ * For a plugin that keeps something per user on a browser several people
+ * share, such as the page builder's own editor preferences. Read from the
+ * query the admin's chrome already holds, so it costs no request.
+ *
+ * `null` while the answer is not known yet, when no one is signed in, and when
+ * the read failed: keep nothing for nobody rather than for a guess. Experimental
+ * while its first consumer settles; the intent is to keep its name and its
+ * `string | null` answer stable.
+ */
+export { useCurrentUserId } from "@nextlyhq/admin";
+
+/**
  * How the surrounding document stands (@experimental).
  *
  * For a field that covers the editor's own chrome — the page builder takes the

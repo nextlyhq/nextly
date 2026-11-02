@@ -31,12 +31,19 @@ describe("pages carries no custom CSS surface", () => {
     expect(fieldNames()).not.toContain("customCss");
   });
 
-  it("declares no permission, now that no rule reads one", () => {
+  it("declares no custom CSS permission; its one permission is the one the make-default route reads", () => {
     // A permission nothing consults grants nothing when held and prevents
     // nothing when withheld, while still being offered to an administrator to
-    // assign.
+    // assign. So the declared list is exactly the permissions a route reads:
+    // `manage-page-builder-site`, demanded by make-default.
     const declared = pageBuilder().contributes?.permissions ?? [];
-    expect(declared).toHaveLength(0);
+    expect(
+      declared.map(permission => `${permission.action}-${permission.resource}`)
+    ).toEqual(["manage-page-builder-site"]);
+    const route = pageBuilder().contributes?.routes?.find(candidate =>
+      candidate.path.endsWith("/make-default")
+    );
+    expect(route?.requiredPermission).toBe("manage-page-builder-site");
   });
 });
 

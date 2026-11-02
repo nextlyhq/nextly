@@ -1738,6 +1738,49 @@ describe("F6 from a focused drag handle", () => {
       (document.activeElement as HTMLElement | null)?.getAttribute("aria-label")
     ).toBeTruthy();
   });
+
+  it("recognises a separator built by another realm", () => {
+    // The same press, with the shell rendered into an iframe's document. Its
+    // separator carries that window's constructors, so a check made with this
+    // realm's `HTMLElement` declines it and the handle keeps F6 for itself.
+    stubContainerFits(true);
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    // Removed however the test ends: a frame left holding focus would be the
+    // active element for every case after this one.
+    try {
+      const inner = frame.contentDocument;
+      if (inner === null) throw new Error("the iframe has no document");
+      // The panel library builds its observer from the element's own window,
+      // which jsdom gives none; the same driven stub as this realm's.
+      Reflect.set(
+        frame.contentWindow ?? {},
+        "ResizeObserver",
+        DrivenResizeObserver
+      );
+      const container = inner.createElement("div");
+      inner.body.appendChild(container);
+      render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />, {
+        container,
+      });
+
+      const separator = within(container).getAllByRole("separator")[0];
+      expect(separator).toBeDefined();
+      if (separator === undefined) return;
+      // The control: the handle really is foreign to this realm.
+      expect(separator instanceof HTMLElement).toBe(false);
+      separator.focus();
+      // Identity as a boolean: a failing `toBe` cannot print another realm's node.
+      expect(inner.activeElement === separator).toBe(true);
+
+      fireEvent.keyDown(separator, { key: "F6" });
+
+      expect(inner.activeElement === separator).toBe(false);
+      expect(inner.activeElement?.getAttribute("aria-label")).toBeTruthy();
+    } finally {
+      frame.remove();
+    }
+  });
 });
 
 describe("telling the host which zoom the shell is holding", () => {
