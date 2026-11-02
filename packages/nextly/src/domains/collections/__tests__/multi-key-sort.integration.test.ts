@@ -271,6 +271,27 @@ describe.each(getConfiguredTestDialects())(
       expect(titles).toEqual([...titles].sort());
     });
 
+    it("refuses unknown sort keys, naming each, when the read asks to", async () => {
+      const refusal = await t.nextly
+        .find({
+          collection: SLUG,
+          sort: ["grp", "nope", "createdBy"],
+          unknownSort: "refuse",
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => JSON.stringify(error)
+        );
+      expect(refusal).toContain("sort.nope");
+      // The owner column is named as unknown too, not as forbidden.
+      expect(refusal).toContain("sort.createdBy");
+      expect(refusal).not.toContain("sort.grp");
+      // The control: by default the same keys are dropped and the read runs.
+      await expect(
+        t.nextly.find({ collection: SLUG, sort: ["grp", "nope"] })
+      ).resolves.toBeDefined();
+    });
+
     it("refuses an offset given together with a page", async () => {
       await expect(
         t.nextly.find({ collection: SLUG, offset: 5, page: 2 })
