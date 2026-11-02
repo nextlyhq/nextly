@@ -44,6 +44,11 @@ interface Store {
    * depth 0 hands the hook bare ids and gets the stored document instead.
    */
   populated?: Record<string, unknown>;
+  /**
+   * Layout ids a row rule hides from the caller: a read made as the caller
+   * does not return them, a read made as the system does.
+   */
+  filtered?: string[];
 }
 
 /** The row clamp the real query service applies to every list read. */
@@ -62,6 +67,11 @@ function fake(store: Store) {
           args.where as { title?: { contains?: string } } | undefined
         )?.title?.contains;
         const rows = store.layouts
+          .filter(
+            row =>
+              args.overrideAccess === true ||
+              !(store.filtered ?? []).includes(String(row.id))
+          )
           .filter(row => asked === undefined || asked.includes(String(row.id)))
           .filter(
             row =>
@@ -424,6 +434,67 @@ describe("readLayoutChoices", () => {
     });
     const { meta } = await readLayoutChoices(context(), nextly, asked("l7"));
     expect(Object.keys(meta.regionDefinitions).sort()).toEqual(["h0", "h7"]);
+  });
+  it("tells a Layout the caller cannot read from one that does not exist", async () => {
+    // A row rule hides "secret" from this caller; "gone" exists for nobody.
+    const secret = layoutRow("secret", "Secret", "secret-header");
+    const { nextly, calls } = fake({
+      ...store,
+      layouts: [...store.layouts, secret],
+      components: { ...store.components, "secret-header": component([]) },
+      filtered: ["secret"],
+    });
+    const hidden = await readLayoutChoices(context(), nextly, asked("secret"));
+    expect(hidden.items.some(item => item.id === "secret")).toBe(false);
+    // Existence and publication only: no title, no regions, no content.
+    expect(hidden.meta.inaccessible).toEqual([
+      { id: "secret", published: true },
+    ]);
+    expect(Object.keys(hidden.meta.regionDefinitions)).not.toContain(
+      "secret-header"
+    );
+    // Asked as the system for those ids alone, and only their id and status.
+    const systemReads = calls.filter(call => call.overrideAccess === true);
+    expect(systemReads).toHaveLength(1);
+    expect(systemReads[0]).toMatchObject({
+      where: { id: { in: ["secret"] } },
+      select: { id: true, status: true },
+    });
+
+    const { nextly: again } = fake(store);
+    const gone = await readLayoutChoices(context(), again, asked("gone"));
+    expect(gone.meta.inaccessible).toEqual([]);
+  });
+
+  it("says a region has draft changes when a component it embeds does", async () => {
+    // The header itself has none; the logo it places has a pending draft.
+    const { nextly } = fake({ ...store, drafts: ["logo"] });
+    const { meta } = await readLayoutChoices(context(), nextly, asked());
+    expect(meta.regionComponents.header).toEqual({
+      draftChangesNotLive: true,
+    });
+  });
+
+  it("bounds the draft reads for a region's nested components", async () => {
+    const nested = Array.from({ length: 40 }, (_, i) => `c${i}`);
+    const components: Record<string, unknown> = {
+      header: component(
+        nested.map(id => ({
+          id: `n-${id}`,
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: id },
+        }))
+      ),
+    };
+    for (const id of nested) components[id] = component([]);
+    const { nextly, calls } = fake({ ...store, components, drafts: [] });
+    await readLayoutChoices(context(), nextly, asked());
+    const componentDraftReads = calls.filter(
+      call => call.collection === "components" && call.draft === true
+    );
+    expect(componentDraftReads.length).toBeLessThanOrEqual(25);
+    expect(componentDraftReads.length).toBeGreaterThan(1);
   });
 });
 

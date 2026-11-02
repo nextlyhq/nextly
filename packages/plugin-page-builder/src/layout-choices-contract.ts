@@ -132,8 +132,18 @@ export interface LayoutChoicesResponse {
      */
     readonly more: boolean;
     /**
+     * The selected and default Layouts that exist but the caller may not
+     * read, with whether each is published, and nothing else about them. A
+     * named Layout neither listed nor here does not exist.
+     */
+    readonly inaccessible: readonly {
+      readonly id: string;
+      readonly published: boolean;
+    }[];
+    /**
      * Facts about the region components of the selected Layout and the
-     * default, by id, for an author who may update components.
+     * default, by id, for an author who may update components: a region has
+     * draft changes when any component it draws does, nested ones included.
      */
     readonly regionComponents: Readonly<Record<string, RegionComponentFacts>>;
     /**

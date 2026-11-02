@@ -21,6 +21,9 @@ import type {
   LayoutChoicesResponse,
 } from "../layout-choices-contract";
 
+/** What a Layout the author may not read is called, wherever it is named. */
+const UNREADABLE_LAYOUT = "A Layout you can't view";
+
 /** The picker's value for "use the site's default Layout". */
 export const SITE_DEFAULT_VALUE = "site-default";
 /** The picker's value for "no header or footer". */
@@ -103,7 +106,9 @@ function optionLabel(item: LayoutChoice, site: LayoutSite): string {
  * - a Layout that no longer exists: "Site default (the chosen Layout was
  *   deleted)";
  * - "No header or footer";
- * - without the right to read Layouts, read-only: "A Layout you can't view".
+ * - without the right to read Layouts, read-only: "A Layout you can't view";
+ * - a Layout that exists but a row rule hides from this author: the same
+ *   words, while one that does not exist at all reads as deleted.
  */
 export function layoutPickerView(
   stored: StoredLayoutChoice,
@@ -132,9 +137,7 @@ function viewWithoutList(
 ): LayoutPickerView {
   // Only a refusal says the author can't view it; while the list is still
   // on its way the stored Layout is named without a claim about access.
-  const namedLabel = forbidden
-    ? "A Layout you can't view"
-    : "The chosen Layout";
+  const namedLabel = forbidden ? UNREADABLE_LAYOUT : "The chosen Layout";
   const options: PickerOption[] = [
     { value: SITE_DEFAULT_VALUE, label: "Site default" },
     ...(named === null || switchedOff
@@ -162,7 +165,7 @@ function whyWithoutList(
 ): string {
   if (switchedOff) return "No header or footer";
   if (!forbidden) return "";
-  return named === null ? "Site default" : "A Layout you can't view";
+  return named === null ? "Site default" : UNREADABLE_LAYOUT;
 }
 
 /** The option the stored values select; a deleted Layout selects the default. */
@@ -182,7 +185,19 @@ function viewFromList(
   choices: LayoutChoicesResponse
 ): LayoutPickerView {
   const { items, meta } = choices;
-  const byId = new Map(items.map(item => [item.id, item]));
+  // A Layout that exists but this author may not read stands in under the
+  // words they can see, with its published state and no regions: the page is
+  // drawn inside it as the published route draws it, showing nothing of it.
+  const hidden = meta.inaccessible.map(
+    (layout): LayoutChoice => ({
+      id: layout.id,
+      title: UNREADABLE_LAYOUT,
+      published: layout.published,
+      draftChangesNotLive: false,
+      regions: [],
+    })
+  );
+  const byId = new Map([...items, ...hidden].map(item => [item.id, item]));
   const isPublished = (id: string) => byId.get(id)?.published === true;
   const site: LayoutSite = { defaultLayout: meta.defaultLayout, isPublished };
   const toOption = (item: LayoutChoice): PickerOption => ({
@@ -200,6 +215,9 @@ function viewFromList(
     },
     ...items.filter(item => item.published).map(toOption),
     ...items.filter(item => !item.published).map(toOption),
+    // The page's own Layout when it is one they cannot view, so the picker
+    // still shows what is chosen.
+    ...hidden.filter(item => item.id === named).map(toOption),
     NONE_OPTION,
   ];
 

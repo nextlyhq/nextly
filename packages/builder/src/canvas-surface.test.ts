@@ -25,6 +25,17 @@ const CHROME = readFileSync(
 );
 
 /**
+ * The canvas mounted on its own, with no builder scope above it. Matches
+ * nothing inside the shell, where the tokens are inherited, and at zero
+ * specificity, so the canvas's own rules still win where they apply.
+ */
+const STANDALONE_CANVAS =
+  ":where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))";
+
+/** The token scopes' selector list: the shell's two, and a lone canvas. */
+const TOKENS = `.nx-builder-tokens,\n.nx-builder-chrome,\n${STANDALONE_CANVAS}`;
+
+/**
  * Every place a rule is written under exactly `selector`: at the start of a
  * line, followed by its brace, and not the last line of a longer selector LIST
  * — a list such as `.a,\n.nx-canvas {` names the canvas too, but declares
@@ -330,12 +341,7 @@ describe("the editor's chrome on the canvas keeps the admin's theme", () => {
      * The scheme is the admin's, picked by the admin's theme where every
      * other builder token is: light at rest, dark under `.dark`.
      */
-    expect(
-      declared(
-        ruleFor(".nx-builder-tokens,\n.nx-builder-chrome"),
-        "--nx-builder-scheme"
-      )
-    ).toBe("light");
+    expect(declared(ruleFor(TOKENS), "--nx-builder-scheme")).toBe("light");
     expect(declared(ruleFor(ADMIN_DARK), "--nx-builder-scheme")).toBe("dark");
   });
 });
@@ -366,8 +372,7 @@ function hexOf(body: string, property: string): string {
 }
 
 const CONSTANTS = ".nx-builder-tokens,\n.nx-builder-chrome,\n.nx-canvas";
-const ADMIN_DARK =
-  ".dark .nx-builder-tokens,\n.dark .nx-builder-chrome,\n.nx-builder-tokens.dark,\n.nx-builder-chrome.dark";
+const ADMIN_DARK = `.dark .nx-builder-tokens,\n.dark .nx-builder-chrome,\n.dark ${STANDALONE_CANVAS},\n.nx-builder-tokens.dark,\n.nx-builder-chrome.dark`;
 
 describe("the editing colours drawn on the page", () => {
   it("are builder tokens, never the admin's black-or-white primary", () => {
@@ -536,7 +541,7 @@ describe("the editing colours drawn on the page", () => {
       "var(--nx-builder-ink-text)"
     );
 
-    const light = ruleFor(".nx-builder-tokens,\n.nx-builder-chrome");
+    const light = ruleFor(TOKENS);
     const text = hexOf(light, "--nx-builder-ink-text");
     const inks = [
       hexOf(light, "--nx-builder-ink"),
@@ -548,5 +553,44 @@ describe("the editing colours drawn on the page", () => {
         `toolbar text on ${ink}`
       ).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+/**
+ * The selector list of the rule whose body declares `property`, where that
+ * rule is the one opening with `first`.
+ */
+function selectorListDeclaring(first: string, property: string): string[] {
+  const pattern =
+    /(?:^|\n)((?:[^{}\n/*][^{}\n]*,\n)*[^{}\n/*][^{}\n]*)\s*\{([^{}]*)\}/g;
+  for (const match of CHROME.matchAll(pattern)) {
+    // One selector per line: a comma inside `:is(...)` is not a list's.
+    const selectors = (match[1] ?? "")
+      .split(",\n")
+      .map(selector => selector.trim().replace(/,$/, ""));
+    if (selectors[0] === first && (match[2] ?? "").includes(`${property}:`)) {
+      return selectors;
+    }
+  }
+  return [];
+}
+
+describe("a canvas mounted outside the editor shell", () => {
+  it("declares the builder tokens its region chrome reads", () => {
+    // The token block: the region's opacity, and the border, surface and text
+    // its badge and tag are drawn with.
+    const scope = selectorListDeclaring(
+      ".nx-builder-tokens",
+      "--nx-builder-region-opacity"
+    );
+    expect(scope).toContain(STANDALONE_CANVAS);
+  });
+
+  it("takes the dark picks under the admin's dark theme, as the shell does", () => {
+    const dark = selectorListDeclaring(
+      ".dark .nx-builder-tokens",
+      "--nx-builder-scheme"
+    );
+    expect(dark).toContain(`.dark ${STANDALONE_CANVAS}`);
   });
 });

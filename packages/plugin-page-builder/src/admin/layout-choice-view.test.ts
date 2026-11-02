@@ -52,6 +52,7 @@ function ready(
         layoutsCollection: "layouts",
         canUpdateLayouts: true,
         more: false,
+        inaccessible: [],
         regionComponents: {},
         regionDefinitions: {},
         ...overrides,
@@ -109,6 +110,35 @@ describe("the page's Layout picker", () => {
       "Site default (the chosen Layout was deleted)"
     );
     expect(view.why).toBe("Site default: Main (the chosen Layout was deleted)");
+  });
+
+  it("names a Layout the author cannot read as one they can't view, not as deleted", () => {
+    // It exists and is published, but a row rule hides it from this author.
+    const view = layoutPickerView(
+      page("secret"),
+      ready({ inaccessible: [{ id: "secret", published: true }] })
+    );
+    expect(view.value).toBe(layoutValue("secret"));
+    expect(view.options.find(o => o.value === view.value)?.label).toBe(
+      "A Layout you can't view"
+    );
+    expect(view.options[0]?.label).toBe("Site default (Main)");
+    expect(view.why).toBe("A Layout you can't view");
+    // Drawn inside it, as the published route draws the page, with nothing
+    // of its content shown to an author who may not read it.
+    expect(view.effective?.id).toBe("secret");
+    expect(view.effective?.regions).toEqual([]);
+  });
+
+  it("falls back as the published route does for a hidden Layout that is not published", () => {
+    const view = layoutPickerView(
+      page("secret"),
+      ready({ inaccessible: [{ id: "secret", published: false }] })
+    );
+    expect(view.why).toBe(
+      "A Layout you can't view (not published, so the site default shows)"
+    );
+    expect(view.effective?.id).toBe("main");
   });
 
   it("draws a page inside its own Layout when the route added it past the list's bound", () => {

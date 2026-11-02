@@ -80,6 +80,7 @@ const choices: LayoutChoicesResponse = {
     layoutsCollection: "layouts",
     canUpdateLayouts: true,
     more: false,
+    inaccessible: [],
     regionComponents: {},
     regionDefinitions: {},
   },

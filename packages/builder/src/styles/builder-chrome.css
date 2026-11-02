@@ -120,9 +120,16 @@
  *
  * `.nx-builder-tokens` is that scope on its own. One declaration block serves
  * both, so the two cannot drift apart; only the painting below is the chrome's.
+ *
+ * The canvas is a third case: it is also mounted on its own, with no scope
+ * above it, and the chrome it draws (a Layout's region badge and tag) reads
+ * these tokens too. It takes them only when nothing above it declares them,
+ * and at zero specificity, so inside the shell it inherits the shell's values
+ * untouched and its own rules below still win where they apply.
  */
 .nx-builder-tokens,
-.nx-builder-chrome {
+.nx-builder-chrome,
+:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
      raised surfaces use that, and the frame must read as a layer behind them. */
   --nx-builder-surface: var(--nx-muted);
@@ -195,6 +202,7 @@
  */
 .dark .nx-builder-tokens,
 .dark .nx-builder-chrome,
+.dark :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
 .nx-builder-tokens.dark,
 .nx-builder-chrome.dark {
   --nx-builder-scheme: dark;
@@ -225,7 +233,8 @@
    * should be quiet when someone has asked for more contrast.
    */
   .nx-builder-tokens,
-  .nx-builder-chrome {
+  .nx-builder-chrome,
+  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);
   }

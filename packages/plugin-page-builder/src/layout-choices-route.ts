@@ -15,6 +15,7 @@
  * @module layout-choices-route
  */
 import {
+  componentIdsIn,
   DEFAULT_LIMITS,
   regionDocument,
   regionsOf,
@@ -185,6 +186,13 @@ export async function readLayoutChoices(
   const items = rows
     .map(choiceOf)
     .filter((item): item is LayoutChoice => item !== null);
+  // Of the two, those the caller's own reads did not return: hidden from them
+  // by a row rule, or gone. Told apart as the system, by existence alone.
+  const inaccessible = await existingButHidden(
+    nextly,
+    layouts,
+    focus.filter(id => !items.some(item => item.id === id))
+  );
 
   const canUpdateLayouts = (await ctx.caller?.can("update", layouts)) === true;
   const focused = items.filter(item => focus.includes(item.id));
@@ -199,12 +207,38 @@ export async function readLayoutChoices(
   const focusedComponents = [
     ...new Set(focused.flatMap(item => item.regions.map(r => r.componentId))),
   ];
+  // Only the Layouts a page can be drawn inside: the canvas draws no other,
+  // and every other Layout's graph would only grow the answer.
+  const regionDefinitions = await publishedDefinitions(
+    nextly,
+    {
+      collection: components,
+      field: request.store.field,
+      locale: request.locale,
+    },
+    focused.flatMap(item => item.regions),
+    { reading: asUser, limits: request.limits }
+  );
+  const reachable = reachableComponents(
+    focusedComponents,
+    regionDefinitions,
+    request.limits
+  );
   const componentDrafts =
     (await ctx.caller?.can("update", components)) === true
-      ? await pendingDrafts(nextly, components, focusedComponents, {
-          ...asUser,
-          ...inLocale,
-        })
+      ? await pendingDrafts(
+          nextly,
+          components,
+          // Each region's own component first, so a deep header cannot
+          // crowd the footer's out of the bound.
+          [
+            ...new Set([
+              ...focusedComponents,
+              ...[...reachable.values()].flat(),
+            ]),
+          ].slice(0, MAX_NESTED_DRAFT_READS),
+          { ...asUser, ...inLocale }
+        )
       : new Set<string>();
 
   return {
@@ -218,26 +252,91 @@ export async function readLayoutChoices(
       canUpdateLayouts,
       more:
         (listing as { meta?: { hasNext?: unknown } }).meta?.hasNext === true,
+      inaccessible,
+      // A region has edits not live when ANY component it draws does: the
+      // one it names, or one that component places, however deep.
       regionComponents: Object.fromEntries(
         focusedComponents.map((id): [string, RegionComponentFacts] => [
           id,
-          { draftChangesNotLive: componentDrafts.has(id) },
+          {
+            draftChangesNotLive: (reachable.get(id) ?? []).some(reached =>
+              componentDrafts.has(reached)
+            ),
+          },
         ])
       ),
-      // Only the Layouts a page can be drawn inside: the canvas draws no
-      // other, and every other Layout's graph would only grow the answer.
-      regionDefinitions: await publishedDefinitions(
-        nextly,
-        {
-          collection: components,
-          field: request.store.field,
-          locale: request.locale,
-        },
-        focused.flatMap(item => item.regions),
-        { reading: asUser, limits: request.limits }
-      ),
+      regionDefinitions,
     },
   };
+}
+
+/**
+ * How many components a region's draft facts are asked of, nested ones
+ * included. Each is a read by id, so the bound keeps a deep header from
+ * costing a read per component it reaches; the first ones reached, the ones a
+ * visitor sees first, are asked.
+ */
+const MAX_NESTED_DRAFT_READS = 25;
+
+/**
+ * Every component each region reaches, in the order reached: the one it names,
+ * then those its definition places, and theirs, through the definitions read.
+ */
+function reachableComponents(
+  tops: readonly string[],
+  definitions: Readonly<Record<string, BlockDocument>>,
+  limits: DocumentLimits
+): Map<string, string[]> {
+  const reached = new Map<string, string[]>();
+  for (const top of tops) {
+    const order: string[] = [top];
+    const seen = new Set(order);
+    for (let at = 0; at < order.length; at += 1) {
+      const nodes = (definitions[order[at]] as { nodes?: unknown })?.nodes;
+      if (!Array.isArray(nodes)) continue;
+      for (const id of componentIdsIn(nodes, limits.maxNodes)) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        order.push(id);
+      }
+    }
+    reached.set(top, order);
+  }
+  return reached;
+}
+
+/**
+ * Which of `ids` exist, and whether each is published, asked as the system.
+ *
+ * For the selected and default Layouts the caller's own reads did not return,
+ * so a Layout a row rule hides is told from one that is gone. Only the id and
+ * the status are read: nothing about a row the caller may not read leaves
+ * here but that it exists and whether it is live, which is what the page's
+ * published route acts on.
+ */
+async function existingButHidden(
+  nextly: LayoutChoicesDirectApi,
+  layouts: string,
+  ids: readonly string[]
+): Promise<{ id: string; published: boolean }[]> {
+  if (ids.length === 0) return [];
+  const rows = rowsOf(
+    await nextly.find({
+      collection: layouts,
+      where: { id: { in: [...ids] } },
+      overrideAccess: true,
+      user: undefined,
+      req: undefined,
+      status: "all",
+      select: { id: true, status: true },
+      limit: ids.length,
+      depth: 0,
+    })
+  );
+  return rows.flatMap(row => {
+    const id = rowId(row);
+    return id === null ? [] : [{ id, published: row.status === "published" }];
+  });
 }
 
 /**
