@@ -162,6 +162,15 @@ export {
   type DocumentStatus,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
+ * The surrounding document's full-page preview, for a field that shows the
+ * page and offers to open it as the editor's own Preview action does. Null
+ * wherever that action is absent.
+ */
+export {
+  useDocumentPreview,
+  type DocumentPreview,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
  * The fields an active takeover hid, for the surface that took the body over.
  *
  * A takeover collapses the form body to the takeover field alone, so the rest
