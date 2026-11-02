@@ -46,15 +46,14 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url));
  * Files still carrying a realm-bound check, by exact path, with exactly the
  * constructors each names.
  *
- * Both are the inline-editing hooks, whose event-target checks move to
- * `dom-kind` together with the change that hands them the canvas's document
- * in place of the global one. An entry is compared for EQUALITY, not
+ * The inline text hook, whose event-target check moves to `dom-kind`
+ * together with the change that hands it the canvas's document in place of
+ * the global one. An entry is compared for EQUALITY, not
  * containment: a new check added to one of these files fails like anywhere
  * else, and converting the listed one fails until its entry is removed, so the
  * list can only shrink.
  */
 const PENDING: ReadonlyMap<string, readonly string[]> = new Map([
-  ["use-inline-editing.ts", ["Element"]],
   ["use-inline-text.ts", ["Element"]],
 ]);
 
