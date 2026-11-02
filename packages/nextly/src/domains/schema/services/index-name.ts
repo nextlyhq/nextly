@@ -13,6 +13,7 @@
 // genuinely reachable; with letters outside ASCII it is reached sooner.
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { isMysqlTextOrBlobType } from "../pipeline/sql-templates/create-index";
 
 /**
  * The index name for one column of one table, bounded so every dialect stores it whole.
@@ -249,5 +250,7 @@ export function uniquenessCanBeAnIndex(
 ): boolean {
   if (!columnTypeIsIndexable(columnType, dialect)) return false;
   if (dialect !== "mysql") return true;
-  return !/\b(text|blob|longtext|mediumtext|tinytext)\b/i.test(columnType);
+  // The same TEXT/BLOB question the index renderer asks before keying a column by prefix, every
+  // size of both included.
+  return !isMysqlTextOrBlobType(columnType);
 }

@@ -23,7 +23,6 @@
  *
  * @module cli/commands/migrate-baseline
  */
-import { createHash } from "node:crypto";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -41,6 +40,7 @@ import {
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import {
   EMPTY_SNAPSHOT,
   planBaseline,
@@ -597,11 +597,10 @@ export async function baselineCore(
         eventType: "file_apply",
         source: "cli-migrate",
         filename: `${baseName}.sql`,
-        // `migrate:status` compares this against the file's checksum and reads
-        // a missing value as the empty string, so a row recorded without it
-        // reports the file as edited since it was applied — on a project that
-        // has just generated it and touched nothing.
-        sha256: createHash("sha256").update(sqlContent).digest("hex"),
+        // The checksum of the text written, as a run records it, so a later
+        // edit to the baseline stops `nextly migrate` and reads as modified
+        // in `migrate:status`.
+        sha256: checksumOf(sqlContent),
       });
       await repo.markApplied(eventId, {
         statementsExecuted: 0,

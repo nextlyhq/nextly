@@ -69,13 +69,18 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       availablePanels,
       inspector,
     }: {
-      renderPanel?: (panel: string) => React.ReactNode;
+      renderPanel?: (
+        panel: string,
+        view: { current: string | null; choose: (view: string) => void }
+      ) => React.ReactNode;
       availablePanels?: readonly string[];
       inspector?: React.ReactNode;
     }): React.JSX.Element => (
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
-        <div data-testid="panel">{renderPanel?.("classes")}</div>
+        <div data-testid="panel">
+          {renderPanel?.("design", { current: "classes", choose: () => {} })}
+        </div>
         {/* Rendered, not merely constructed: the inspector recorder only runs
             when the element is actually drawn, and the class-creation callback
             reaches the queue through it. */}
@@ -231,12 +236,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the classes manager reaching an author", () => {
-  it("offers the classes rail slot at all", () => {
-    // The slot was reserved and dark: `LEFT_PANELS` named it and nothing
-    // rendered into it, so the shell drew it disabled as "coming soon".
+  it("offers the Design panel, whose Classes tab this is, at all", () => {
+    // The slot was reserved and dark: the shell named it and nothing rendered
+    // into it, so authors never reached it.
     storedRead = { data: { classes: [] }, isPending: false, error: null };
     openEditor();
-    expect(screen.getByTestId("rail").textContent).toContain("classes");
+    expect(screen.getByTestId("rail").textContent).toContain("design");
   });
 
   it("renders the manager into that slot rather than nothing", () => {

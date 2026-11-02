@@ -325,8 +325,8 @@ describe("the sentence the panel draws", () => {
     expect(summary).toContain("1 hold a value no browser will read");
   });
 
-  it("points at the Tokens panel when there is nothing to report on", () => {
-    expect(tokenSummary([], [])).toContain("Tokens panel");
+  it("points at Design's Variables tab when there is nothing to report on", () => {
+    expect(tokenSummary([], [])).toContain("Design’s Variables tab");
   });
 
   it("never calls a family missing or unavailable", () => {

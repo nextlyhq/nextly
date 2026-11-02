@@ -106,10 +106,14 @@ describe("the panel over a site that has been read", () => {
     const { rerender } = render(
       <FontsPanel faces={[]} tokens={tokens} onOpenTokens={onOpenTokens} />
     );
-    expect(screen.getByRole("button", { name: "Edit in Tokens" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Edit in Variables" })
+    ).toBeTruthy();
 
     rerender(<FontsPanel faces={[]} tokens={tokens} />);
-    expect(screen.queryByRole("button", { name: "Edit in Tokens" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Edit in Variables" })
+    ).toBeNull();
   });
 
   it("demonstrates each face with its OWN weight and style", () => {

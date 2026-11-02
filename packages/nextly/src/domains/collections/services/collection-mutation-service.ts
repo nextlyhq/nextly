@@ -8559,14 +8559,16 @@ export class CollectionMutationService extends BaseService {
     collectionName: string,
     entryIds: readonly string[]
   ): Promise<Map<string, Record<string, unknown>>> {
-    const schema = await this.fileManager.loadDynamicSchema(collectionName);
-    const rows = (await this.db
-      .select()
-      .from(schema)
-      .where(inArray(schema.id, [...new Set(entryIds)]))) as Array<
-      Record<string, unknown>
-    >;
-    return new Map(rows.map(row => [String(row.id), row]));
+    return this.readingStored(collectionName, async () => {
+      const schema = await this.fileManager.loadDynamicSchema(collectionName);
+      const rows = (await this.db
+        .select()
+        .from(schema)
+        .where(inArray(schema.id, [...new Set(entryIds)]))) as Array<
+        Record<string, unknown>
+      >;
+      return new Map(rows.map(row => [String(row.id), row]));
+    });
   }
 
   /** The entry's stored row, or `undefined` when it is not there. */
@@ -8574,13 +8576,36 @@ export class CollectionMutationService extends BaseService {
     collectionName: string,
     entryId: string
   ): Promise<Record<string, unknown> | undefined> {
-    const schema = await this.fileManager.loadDynamicSchema(collectionName);
-    const [row] = await this.db
-      .select()
-      .from(schema)
-      .where(eq(schema.id, entryId))
-      .limit(1);
-    return row as Record<string, unknown> | undefined;
+    return this.readingStored(collectionName, async () => {
+      const schema = await this.fileManager.loadDynamicSchema(collectionName);
+      const [row] = await this.db
+        .select()
+        .from(schema)
+        .where(eq(schema.id, entryId))
+        .limit(1);
+      return row as Record<string, unknown> | undefined;
+    });
+  }
+
+  /**
+   * `read` of stored rows, with a table or column the database has not been
+   * migrated for answered as the entry read answers it. These reads serve the
+   * update check and the release checks, on the pool and for callers that are
+   * not trusted with the schema's physical names, so the answer names the
+   * collection and the reason only.
+   */
+  private async readingStored<T>(
+    collectionName: string,
+    read: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await read();
+    } catch (error) {
+      throw await asNotMigrated(
+        error,
+        collectionNotMigrated(this.collectionService, collectionName)
+      );
+    }
   }
 
   /**
