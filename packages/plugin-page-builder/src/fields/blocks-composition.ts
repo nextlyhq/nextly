@@ -548,17 +548,12 @@ async function measuredAgainstStored(
   const composedStored = placementBroken
     ? await composedFormsRead({ ...reading, hosts: stored.forms })
     : undefined;
+  const baselines = lockBroken
+    ? await lockBaselines({ ...reading, document, stored: stored.forms })
+    : undefined;
   const again = faultsIn(document, args.composition, setup, {
     components: lookupOf(reading.library),
-    ...(lockBroken
-      ? {
-          baselines: await lockBaselines({
-            ...reading,
-            document,
-            stored: stored.forms,
-          }),
-        }
-      : {}),
+    ...(baselines === undefined ? {} : { baselines }),
     ...(composedStored === undefined
       ? {}
       : {
@@ -569,12 +564,24 @@ async function measuredAgainstStored(
   // Old breaks are known only from a stored page this could read and compose
   // whole; a baseline cut short could miss one and call it new.
   if (stored.readable && composedStored?.complete !== false) return again;
-  const kept = again.filter(fault => !PLACEMENT_FAULTS.has(fault.code));
-  if (kept.length < again.length) {
+  return keptUnjudged(again, setup, args);
+}
+
+/**
+ * The faults with every placement break kept unjudged, and the server log
+ * told how many, naming the document.
+ */
+function keptUnjudged(
+  faults: readonly CompositionFault[],
+  setup: CompositionSetup,
+  at: { field: string | undefined; writtenTo: WrittenTo | undefined }
+): readonly CompositionFault[] {
+  const kept = faults.filter(fault => !PLACEMENT_FAULTS.has(fault.code));
+  if (kept.length < faults.length) {
     setup.onPlacementUnjudged?.({
-      field: args.field ?? "",
-      ...args.writtenTo,
-      breaks: again.length - kept.length,
+      field: at.field ?? "",
+      ...at.writtenTo,
+      breaks: faults.length - kept.length,
     });
   }
   return kept;
@@ -1152,8 +1159,8 @@ async function footprintOf(
 /** The deepest node of a composed forest, counted from its own top. */
 /**
  * The placement facts of a composed tree, as one comparable string: every
- * distinct block type with its resolved content model, bounded as `deepest`
- * is. A set rather than a count per node, so moving a block changes nothing
+ * node by id with its type and resolved content model, bounded as `deepest`
+ * is. Keyed by id rather than position, so moving a block changes nothing
  * here (the slot and depth footprints see moves).
  */
 function placementFacts(
@@ -1165,9 +1172,14 @@ function placementFacts(
     definitions: registryBlockSource(),
   };
   const facts = new Set<string>();
+  // Per node, by id: a set of type/model pairs alone would not move when two
+  // Cards swap linked and unlinked, while the host filling one of them is
+  // affected.
   eachComposed(nodes, setup, entry => {
     if (typeof entry?.type !== "string") return;
-    facts.add(`${entry.type}|${contentModelKeyOf(entry, sources)}`);
+    facts.add(
+      `${String(entry.id)}|${entry.type}|${contentModelKeyOf(entry, sources)}`
+    );
   });
   return [...facts].sort().join("\n");
 }

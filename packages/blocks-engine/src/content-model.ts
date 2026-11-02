@@ -155,12 +155,16 @@ function acceptsOf(
     content?: unknown;
     without?: unknown;
   };
-  if (content !== undefined && content !== "flow" && content !== "phrasing") {
-    return undefined;
-  }
+  const direct = contentOf(content);
   const refused = without === undefined ? [] : kindList(without);
-  if (refused === undefined) return undefined;
-  return { content: content ?? "flow", without: refused };
+  if (direct === undefined || refused === undefined) return undefined;
+  return { content: direct, without: refused };
+}
+
+/** What a container's direct children must be; omitted means flow. */
+function contentOf(content: unknown): "flow" | "phrasing" | undefined {
+  if (content === undefined) return "flow";
+  return content === "flow" || content === "phrasing" ? content : undefined;
 }
 
 /**

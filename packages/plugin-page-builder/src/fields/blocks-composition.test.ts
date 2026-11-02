@@ -1199,6 +1199,58 @@ describe("a component save judged inside the documents that use it", () => {
     expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
   });
 
+  it("judges its hosts when two cards swap which one is linked", async () => {
+    // The same type/model pairs before and after, so only a footprint that
+    // knows WHICH card is linked sees the host's call to action move under a
+    // link.
+    const pair = (aLinked: boolean) =>
+      component(
+        [
+          {
+            id: "a",
+            type: "acme/linkcard",
+            version: 1,
+            props: aLinked ? { link: "/go" } : {},
+            slots: { children: [] },
+          },
+          {
+            id: "b",
+            type: "acme/linkcard",
+            version: 1,
+            props: aLinked ? {} : { link: "/go" },
+            slots: { children: [] },
+          },
+        ],
+        { slots: { first: { label: "First", nodeId: "a", slot: "children" } } }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { pair: { published: pair(false) } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "pair", {
+              slots: {
+                first: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ pair: [hostPage] });
+
+    const issues = await judge(
+      pair(true),
+      write(readStored, COMPONENTS, "pair"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
+  });
+
   it("does not report a host that was already broken before this save", async () => {
     // The page already places a restricted block at its top level through the
     // component; deepening the component changes nothing about that fault.

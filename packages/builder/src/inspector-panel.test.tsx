@@ -103,6 +103,8 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
+    composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 
@@ -1880,5 +1882,128 @@ describe("removing an empty id while a row is refused", () => {
     expect(screen.getByRole("alert").textContent).toContain(
       "does not put that attribute"
     );
+  });
+});
+
+describe("a block inside an area locked to its content", () => {
+  /*
+   * Its content stays editable; everything else is SHOWN read-only, with the
+   * reason, rather than hidden: an author sees what the block is set to and
+   * is told why it holds. Asserted through `:disabled`, which a disabled
+   * fieldset gives every control inside it, Radix's buttons included.
+   */
+  function mountHeld(top: "held" | "free" = "held") {
+    registerBlocks(
+      [
+        {
+          name: "acme/headline",
+          version: 1,
+          description: "A headline.",
+          example: { props: {} },
+          editor: { label: "Headline" },
+          props: {
+            text: { type: "text", role: "content" },
+            align: { type: "select", options: ["left", "right"] },
+          },
+          // Declared so the Style tab draws controls for the lock to hold.
+          supports: { spacing: { margin: true, padding: true } },
+          render: () => null,
+        },
+        {
+          name: "acme/hero",
+          version: 1,
+          description: "A hero.",
+          example: { props: {} },
+          editor: { label: "Hero" },
+          slots: {
+            body: {
+              defaultBlock: [{ type: "acme/headline" }],
+              lock: top === "held" ? "contentOnly" : undefined,
+            },
+          },
+          render: () => null,
+        },
+      ] as never,
+      { source: "inspector-panel-test" }
+    );
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "h",
+          type: "acme/hero",
+          version: 1,
+          props: {},
+          slots: {
+            body: [
+              {
+                id: "a",
+                type: "acme/headline",
+                version: 1,
+                props: { text: "Title", align: "left" },
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument);
+    render(<InspectorPanel editor={editor} />);
+    return editor;
+  }
+
+  const isDisabled = (element: Element) => element.matches(":disabled");
+  const controlsIn = (panel: Element) =>
+    Array.from(
+      panel.querySelectorAll("input, button, select, textarea")
+    ).filter(control => control.getAttribute("role") !== "tab");
+
+  it("keeps its content and its layer name editable", () => {
+    mountHeld();
+
+    expect(isDisabled(screen.getByLabelText("Text"))).toBe(false);
+    expect(isDisabled(screen.getByLabelText("Name"))).toBe(false);
+  });
+
+  it("shows its other settings and its own lock read-only", () => {
+    mountHeld();
+
+    expect(isDisabled(screen.getByLabelText("Align"))).toBe(true);
+    expect(isDisabled(screen.getByLabelText("Lock this block"))).toBe(true);
+  });
+
+  it("says why, in the words the store's refusal uses, tied to the controls it holds", () => {
+    mountHeld();
+
+    const reason = screen.getByText(
+      "This area of Hero is locked to its content. Headline's design and settings can't change here."
+    );
+    const held = screen.getByLabelText("Align").closest("fieldset");
+    expect(held?.getAttribute("aria-describedby")).toBe(reason.id);
+  });
+
+  it("shows the Style and Advanced tabs read-only", () => {
+    mountHeld();
+
+    for (const name of ["Style", "Advanced"]) {
+      fireEvent.mouseDown(screen.getByRole("tab", { name }));
+      const panel = screen.getByRole("tabpanel");
+      const controls = controlsIn(panel);
+      // Not vacuous: each tab draws controls, and every one is held.
+      expect(controls.length).toBeGreaterThan(0);
+      expect(controls.filter(control => !isDisabled(control))).toEqual([]);
+    }
+  });
+
+  it("holds nothing where the slot fixes no design", () => {
+    // The control: the same blocks, the slot unlocked. Every check above
+    // would pass on a panel that disabled these controls for every block.
+    mountHeld("free");
+
+    expect(isDisabled(screen.getByLabelText("Align"))).toBe(false);
+    expect(isDisabled(screen.getByLabelText("Lock this block"))).toBe(false);
+    expect(screen.queryByText(/locked to its content/)).toBeNull();
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+    expect(isDisabled(screen.getByLabelText("CSS id"))).toBe(false);
   });
 });

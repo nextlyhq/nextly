@@ -54,6 +54,7 @@ import {
   type PlacementSite,
   type PlacementSources,
   type PlacementTarget,
+  type ResolvedComposition,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
@@ -665,19 +666,23 @@ export function compositionRefusal(
   before: BlockDocument,
   after: BlockDocument,
   definitions: ComponentLookup,
-  limits?: DocumentLimits
-): CompositionRefusal | undefined {
-  const options = limits === undefined ? {} : { limits };
-  const standing = new Set(
-    resolveComponentInstances(before, definitions, options).unresolved.map(
-      entry => entry.instanceId
+  limits?: DocumentLimits,
+  /**
+   * How a document is composed, for a caller that already holds compositions:
+   * the editor's store shares one per document between this check and its
+   * lock check. Defaults to composing each document here.
+   */
+  compose: (document: BlockDocument) => ResolvedComposition = document =>
+    resolveComponentInstances(
+      document,
+      definitions,
+      limits === undefined ? {} : { limits }
     )
+): CompositionRefusal | undefined {
+  const standing = new Set(
+    compose(before).unresolved.map(entry => entry.instanceId)
   );
-  const introduced = resolveComponentInstances(
-    after,
-    definitions,
-    options
-  ).unresolved.find(
+  const introduced = compose(after).unresolved.find(
     entry => !standing.has(entry.instanceId) && entry.reason in ROOM_REFUSALS
   );
   if (introduced === undefined) return undefined;
@@ -758,14 +763,23 @@ function keywordsOf(stored: string | null | undefined): readonly string[] {
  * Derived rather than stored, because a definition gaining a real label must
  * override this immediately, and a copy written into the entry at build time
  * would keep the guess alongside it.
+ *
+ * `lookup` is where the definition comes from, the process registry unless a
+ * caller says otherwise. A surface outside the editor — the entry screen, which
+ * deliberately registers nothing — resolves blocks through its own resolver,
+ * and asking the empty registry there would humanise a block whose declared
+ * label the editor shows, so the two screens would name one block twice.
  */
-export function blockLabel(type: string): string {
+export function blockLabel(
+  type: string,
+  lookup: (type: string) => AnyBlockDefinition | undefined = getBlock
+): string {
   // An unregistered type still has to read as something: its name made
   // readable, the same fallback a registered-but-unlabelled block gets, so a
   // block that disappears from the registry does not change what it is called
   // in the middle of an editing session. The engine words it, so a refusal
   // from a save names a block the way the editor does.
-  return blockLabelFrom(type, getBlock(type));
+  return blockLabelFrom(type, lookup(type));
 }
 
 /** A registered definition's label, as {@link blockLabel} reads it. */

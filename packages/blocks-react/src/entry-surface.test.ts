@@ -414,6 +414,7 @@ describe("the root entry", () => {
       "islandsFor",
       "migrationSourceFor",
       "pageStyleTrace",
+      "prepareDocumentAsDrawn",
       "prepareDocumentForRead",
       "preparePageForRead",
       "previewContainerFor",

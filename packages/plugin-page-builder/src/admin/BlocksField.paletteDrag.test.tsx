@@ -238,6 +238,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: record("insertPanel"),
+    RepairNotice: nothing,
     LayersPanel: nothing,
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
@@ -649,9 +650,26 @@ describe("what the editor reads before anyone asks for it", () => {
     ).toContain("no room left");
   });
 
+  it("tells the author why an edit a lock refuses did nothing", () => {
+    openEditor();
+
+    const onLockRefused = editorOptions?.onLockRefused as (r: {
+      sentence: string;
+    }) => void;
+    act(() => {
+      onLockRefused({
+        sentence:
+          "This area of Fixed row is locked. Its blocks can't be added, removed or moved.",
+      });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("Fixed row is locked");
+  });
+
   it("tells the author why an edit was refused for where it put a block", () => {
-    // The op store refuses a placement whichever surface asked for it; until
-    // every surface asks first, this is where the author learns why.
+    // The op store refuses a placement whichever surface asked for it; this is
+    // where the author learns why.
     openEditor();
 
     const onPlacementRefused = editorOptions?.onPlacementRefused as (r: {

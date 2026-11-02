@@ -59,8 +59,10 @@ import {
   type BlockNode,
   type ComponentLookup,
   type NestingSource,
+  type OpPosition,
   type PlacementSite,
   type PlacementSources,
+  type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 import {
   Command,
@@ -89,6 +91,7 @@ import {
   nodeForEntry,
   patternEntriesFrom,
   registrySlotSource,
+  type BlockInsertEntry,
   type ComponentInsertEntry,
   type InsertGroup,
   type InsertionPoint,
@@ -97,7 +100,9 @@ import {
   type SavedComponent,
   type SavedPattern,
 } from "./inserter";
-import type { BuilderOp, OpPosition } from "./ops";
+import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
+import { refusalAnnouncement } from "./move-refusal";
+import type { BuilderOp } from "./ops";
 
 /**
  * Where one tier of the host's library read stands, as the panel says it.
@@ -728,34 +733,40 @@ export function InsertPanel({
   // recompute exactly as often while reading as though it cached. The work is a
   // filter and a group over one array, and the render it happens in is already
   // driven by a keystroke.
-  const groups =
+  // The canvas's lookup travels with the question: a pattern whose root is a
+  // component instance is judged by what that component draws, as its own
+  // tile is.
+  const offered =
     point === null
+      ? []
+      : // The canvas's lookup travels with the question: a pattern whose root
+        // is a component instance is judged by what that component draws, and
+        // each entry by the one placement rule at the insertion point.
+        allowedEntries(
+          catalog,
+          point.target,
+          source,
+          componentDefinitions,
+          placementAt(editor.document, point.at, source, componentDefinitions)
+        );
+  // Per store, point and offer, so typing a query asks the locks nothing
+  // again: the store's object changes with every document it holds, and the
+  // point and the offer are rebuilt each render, so they are keyed by value.
+  const lockCache = React.useRef<LockedEntriesCache | undefined>(undefined);
+  const { kept, pointLock } = cachedLockedEntries(lockCache, {
+    at: point?.at,
+    offered,
+    editor,
+    sources: { blockSource, nesting },
+  });
+  const groups =
+    point === null || kept.length === 0
       ? []
       : // Allowed first, then the query. Both orders yield the same set, but
         // this one keeps the empty state honest: "no blocks match" after a
         // search is a different message from "nothing can go here", and
         // filtering first would collapse them into one.
-        groupByCategory(
-          filterEntries(
-            // The canvas's lookup travels with the question: a pattern whose
-            // root is a component instance is judged by what that component
-            // draws, as its own tile is.
-            allowedEntries(
-              catalog,
-              point.target,
-              source,
-              componentDefinitions,
-              placementAt(
-                editor.document,
-                point.at,
-                source,
-                componentDefinitions
-              )
-            ),
-            query
-          ),
-          categoryOrder
-        );
+        groupByCategory(filterEntries(kept, query), categoryOrder);
 
   /*
    * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
@@ -955,11 +966,7 @@ export function InsertPanel({
         </p>
         <LibraryNotices library={library} />
         <CommandList>
-          <CommandEmpty>
-            {query.trim() === ""
-              ? "No blocks can be added here."
-              : `No blocks match "${query.trim()}".`}
-          </CommandEmpty>
+          <CommandEmpty>{emptyStateText(pointLock, query)}</CommandEmpty>
           {groups.map(group => (
             <CommandGroup key={group.category} heading={group.category}>
               {group.entries.map(entry => (
@@ -1096,4 +1103,110 @@ function placementAt(
     sources
   );
   return site === undefined ? undefined : { site, sources };
+}
+
+/** The last lock verdicts an inserter asked for, and what they were for. */
+interface LockedEntriesCache {
+  readonly editor: unknown;
+  readonly sources: unknown;
+  readonly key: string;
+  readonly result: ReturnType<typeof lockedEntriesAt>;
+}
+
+/** {@link lockedEntriesAt}, asked again only when what it was asked of changed. */
+function cachedLockedEntries(
+  cache: { current: LockedEntriesCache | undefined },
+  args: {
+    at: OpPosition | undefined;
+    offered: readonly InsertEntry[];
+    editor: Pick<EditorState, "lockRefusalFor">;
+    sources: {
+      blockSource: SlotDefaultSource;
+      nesting: NestingSource | undefined;
+    };
+  }
+): ReturnType<typeof lockedEntriesAt> {
+  const key = `${JSON.stringify(args.at ?? null)}\u0001${args.offered
+    .map(entry => entry.id)
+    .join("\u0000")}`;
+  const held = cache.current;
+  if (
+    held !== undefined &&
+    held.editor === args.editor &&
+    held.sources === args.sources.blockSource &&
+    held.key === key
+  ) {
+    return held.result;
+  }
+  const result = lockedEntriesAt(
+    args.at,
+    args.offered,
+    args.editor,
+    args.sources
+  );
+  cache.current = {
+    editor: args.editor,
+    sources: args.sources.blockSource,
+    key,
+    result,
+  };
+  return result;
+}
+
+/**
+ * The entries the locks let in at an insertion point, and the reason the
+ * first refused one was refused.
+ *
+ * Each block is judged by its own insert, the store's own question: where a
+ * locked slot is already broken, inserting the block it is missing can repair
+ * it while any other block breaks it further, so one block's answer is not
+ * every block's. A pattern or a component arrives as a block of its own type,
+ * which no lock's starting blocks name, so it follows the answer for the
+ * point's first block.
+ */
+function lockedEntriesAt(
+  at: OpPosition | undefined,
+  offered: readonly InsertEntry[],
+  editor: Pick<EditorState, "lockRefusalFor">,
+  sources: {
+    blockSource: SlotDefaultSource;
+    nesting: NestingSource | undefined;
+  }
+): { kept: readonly InsertEntry[]; pointLock: LockRefusalFacts | undefined } {
+  if (at === undefined) return { kept: offered, pointLock: undefined };
+  const refusalOf = (entry: BlockInsertEntry) =>
+    editor.lockRefusalFor([
+      {
+        kind: "insert",
+        node: nodeForEntry(entry, sources.blockSource, sources.nesting),
+        at,
+      },
+    ]);
+  const verdicts = new Map<InsertEntry, LockRefusalFacts | undefined>();
+  for (const entry of offered) {
+    if (entry.kind === "block") verdicts.set(entry, refusalOf(entry));
+  }
+  const firstBlock = offered.find(entry => entry.kind === "block");
+  const pointAnswer =
+    firstBlock === undefined ? undefined : verdicts.get(firstBlock);
+  const kept = offered.filter(entry =>
+    entry.kind === "block"
+      ? verdicts.get(entry) === undefined
+      : pointAnswer === undefined
+  );
+  const pointLock = [...verdicts.values()].find(v => v !== undefined);
+  return { kept, pointLock: kept.length === 0 ? pointLock : undefined };
+}
+
+/** What the list says when it offers nothing: the lock's reason, or why not. */
+function emptyStateText(
+  pointLock: LockRefusalFacts | undefined,
+  query: string
+): string {
+  if (pointLock !== undefined) {
+    return refusalAnnouncement(lockRefusalWording(pointLock));
+  }
+  return query.trim() === ""
+    ? "No blocks can be added here."
+    : `No blocks match "${query.trim()}".`;
 }

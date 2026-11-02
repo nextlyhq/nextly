@@ -579,3 +579,32 @@ describe("resolveContentModel: what a container accepts", () => {
     );
   });
 });
+
+describe("canPlace: a placement's name rules are its composed roots'", () => {
+  it("is refused at the top level, and taken by the slot that allows its root", () => {
+    registerBlocks(
+      [
+        { ...base, name: "t/row", slots: { children: { allow: ["t/col"] } } },
+        { ...base, name: "t/col", parent: ["t/row"], slots: { children: {} } },
+      ] as never,
+      { source: "test" }
+    );
+    const colRooted = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [{ id: "c", type: "t/col", version: 1, props: {} }],
+    } as unknown as BlockDocument;
+    const components = new Map([["c", colRooted]]);
+    expect(
+      canPlace([instance("c")], { kind: "root" }, sources(components))
+    ).toMatchObject({
+      reason: "restricted-at-root",
+      blockType: "t/col",
+    });
+    expect(
+      canPlace([instance("c")], into(node("t/row")), sources(components))
+    ).toEqual({
+      allowed: true,
+    });
+  });
+});
