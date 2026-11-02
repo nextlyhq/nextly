@@ -608,3 +608,49 @@ describe("canPlace: a placement's name rules are its composed roots'", () => {
     });
   });
 });
+
+describe("canPlace: a cycle of component placements", () => {
+  it("reads the placement that closes the cycle as a placeholder, in bounded work", () => {
+    const placing = (id: string, componentId: string) => ({
+      id,
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId },
+    });
+    const a = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "wrap",
+          type: "t/box",
+          version: 1,
+          props: {},
+          slots: { children: [placing("ib", "b")] },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const b = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [placing("ia", "a")],
+    } as unknown as BlockDocument;
+    const known = new Map([
+      ["a", a],
+      ["b", b],
+    ]);
+    let asked = 0;
+    const counting = {
+      has: (id: string) => (asked++, known.has(id)),
+      get: (id: string) => (asked++, known.get(id)),
+    };
+    expect(
+      canPlace([instance("a")], into(node("t/box")), {
+        nesting: registryNestingSource(),
+        definitions: registryBlockSource(),
+        components: counting,
+      })
+    ).toEqual({ allowed: true });
+    expect(asked).toBeLessThan(100);
+  });
+});

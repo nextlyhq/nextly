@@ -1251,6 +1251,123 @@ describe("a component save judged inside the documents that use it", () => {
     expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
   });
 
+  it("judges its hosts when an exposed slot's holder moves under a link", async () => {
+    // Every id, model, depth and root unchanged: only where the holder sits
+    // moves, under the linked card, and the host's call to action with it.
+    const cards = (holderUnderLink: boolean) => {
+      const holder = {
+        id: "h",
+        type: "acme/box",
+        version: 1,
+        props: {},
+        slots: { children: [] },
+      };
+      return component(
+        [
+          {
+            id: "p",
+            type: "acme/linkcard",
+            version: 1,
+            props: {},
+            slots: { children: holderUnderLink ? [] : [holder] },
+          },
+          {
+            id: "l",
+            type: "acme/linkcard",
+            version: 1,
+            props: { link: "/go" },
+            slots: { children: holderUnderLink ? [holder] : [] },
+          },
+        ],
+        { slots: { body: { label: "Body", nodeId: "h", slot: "children" } } }
+      );
+    };
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: cards(false) } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "cards", {
+              slots: {
+                body: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ cards: [hostPage] });
+
+    const issues = await judge(
+      cards(true),
+      write(readStored, COMPONENTS, "cards"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
+  });
+
+  it("does not let a new placement break pass as the old one of the same kind", async () => {
+    // The host already has a call to action under the linked first card; the
+    // save unlinks the first and links the second, where the host has
+    // another. One break of that kind before and after, under one placement.
+    const two = (firstLinked: boolean) =>
+      component(
+        [
+          {
+            id: "a",
+            type: "acme/linkcard",
+            version: 1,
+            props: firstLinked ? { link: "/go" } : {},
+            slots: { children: [] },
+          },
+          {
+            id: "b",
+            type: "acme/linkcard",
+            version: 1,
+            props: firstLinked ? {} : { link: "/go" },
+            slots: { children: [] },
+          },
+        ],
+        {
+          slots: {
+            first: { label: "First", nodeId: "a", slot: "children" },
+            second: { label: "Second", nodeId: "b", slot: "children" },
+          },
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { two: { published: two(true) } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "two", {
+              slots: {
+                first: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+                second: [{ id: "y", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ two: [hostPage] });
+
+    const issues = await judge(
+      two(false),
+      write(readStored, COMPONENTS, "two"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
+  });
+
   it("does not report a host that was already broken before this save", async () => {
     // The page already places a restricted block at its top level through the
     // component; deepening the component changes nothing about that fault.

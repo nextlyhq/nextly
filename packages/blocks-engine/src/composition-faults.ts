@@ -104,6 +104,12 @@ export interface CompositionFault {
    * edit adds from one the page already had. Absent for every other rule.
    */
   readonly lock?: ComposedLockBreak;
+  /**
+   * For a placement break, the break's identity (`TrackedPlacement`): two
+   * breaks of one code under one placement are told apart by it, so a save
+   * cannot trade an old break for a new one of the same kind.
+   */
+  readonly signature?: string;
 }
 
 /** A lock break in the composed tree: the block whose slot is locked, and how. */
@@ -269,7 +275,7 @@ export function compositionFaults(
       // issue allowance on the same repair. A lock is per SLOT, though: two
       // locked slots broken are two repairs, and one hidden behind the other
       // would let a save that breaks a second pass as no worse.
-      const key = `${code}\u0000${instanceId}\u0000${detail.holder ?? ""}\u0000${detail.slot ?? ""}`;
+      const key = `${code}\u0000${instanceId}\u0000${detail.holder ?? ""}\u0000${detail.slot ?? ""}\u0000${detail.nodeId ?? ""}`;
       if (reported.has(key)) return;
       reported.add(key);
       const componentId = placed.get(instanceId) ?? "";
@@ -279,6 +285,9 @@ export function compositionFaults(
         componentId,
         message: messageFor(code, componentId, detail, limits),
         ...(detail.lockBreak === undefined ? {} : { lock: detail.lockBreak }),
+        ...(detail.signature === undefined
+          ? {}
+          : { signature: detail.signature }),
       });
     },
   };
@@ -346,6 +355,8 @@ function reportPlacementContents(
       sentence: placementRefusalMessage(found.verdict, {
         labelOf: type => blockLabelFrom(type, definitions.get(type)),
       }),
+      signature: found.signature,
+      ...(found.id === undefined ? {} : { nodeId: found.id }),
     });
   }
 }
@@ -438,6 +449,8 @@ function reportPlacement(
     sentence: placementRefusalMessage(verdict, {
       labelOf: type => blockLabelFrom(type, definitions?.get(type)),
     }),
+    signature: tracked.signature,
+    nodeId: node.id,
   });
 }
 
@@ -646,6 +659,14 @@ interface Detail {
   readonly lockBreak?: ComposedLockBreak;
   /** For a placement break, the rule's own sentence. */
   readonly sentence?: string;
+  /** For a placement break, its identity across documents. */
+  readonly signature?: string;
+  /**
+   * For a placement break, the block that breaks it. The composed tree and
+   * the page's own placement contents can both see one break; the block is
+   * what makes it one, so it is reported once.
+   */
+  readonly nodeId?: string;
 }
 
 /** What every message is built from, worked out once. */

@@ -799,6 +799,8 @@ interface HostFault {
   readonly code: string;
   readonly instanceId: string;
   readonly message: string;
+  /** A placement break's identity, so two of one code are told apart. */
+  readonly signature?: string;
 }
 
 /** Everything one document would suffer from the save. */
@@ -1003,7 +1005,12 @@ function reportWhatBroke(args: {
  */
 function faultIdentity(fault: HostFault): string {
   const base = `${fault.code}\u0000${fault.instanceId}`;
-  return LOCK_FAULTS.has(fault.code) ? `${base}\u0000${fault.message}` : base;
+  if (LOCK_FAULTS.has(fault.code)) return `${base}\u0000${fault.message}`;
+  // A placement break is told apart by where it is, so a new one of the same
+  // code under the same placement is not counted as the old one.
+  return fault.signature === undefined
+    ? base
+    : `${base}\u0000${fault.signature}`;
 }
 
 /** How many faults of each identity a composition holds. */
@@ -1159,9 +1166,8 @@ async function footprintOf(
 /** The deepest node of a composed forest, counted from its own top. */
 /**
  * The placement facts of a composed tree, as one comparable string: every
- * node by id with its type and resolved content model, bounded as `deepest`
- * is. Keyed by id rather than position, so moving a block changes nothing
- * here (the slot and depth footprints see moves).
+ * node by id, under its container and slot, with its type and resolved
+ * content model, bounded as `deepest` is.
  */
 function placementFacts(
   nodes: readonly BlockNode[],
@@ -1172,13 +1178,14 @@ function placementFacts(
     definitions: registryBlockSource(),
   };
   const facts = new Set<string>();
-  // Per node, by id: a set of type/model pairs alone would not move when two
-  // Cards swap linked and unlinked, while the host filling one of them is
-  // affected.
-  eachComposed(nodes, setup, entry => {
+  // Per node, by id and by where it sits: a set of type/model pairs alone
+  // would not move when two Cards swap linked and unlinked, nor when an
+  // exposed slot's holder moves under a linked Card, and either can break a
+  // host filling that slot.
+  eachComposed(nodes, setup, (entry, _at, under) => {
     if (typeof entry?.type !== "string") return;
     facts.add(
-      `${String(entry.id)}|${entry.type}|${contentModelKeyOf(entry, sources)}`
+      `${under}>${String(entry.id)}|${entry.type}|${contentModelKeyOf(entry, sources)}`
     );
   });
   return [...facts].sort().join("\n");
@@ -1199,18 +1206,20 @@ function deepest(nodes: readonly BlockNode[], setup: CompositionSetup): number {
 function eachComposed(
   nodes: readonly BlockNode[],
   setup: CompositionSetup,
-  visitNode: (entry: BlockNode, at: number) => void
+  visitNode: (entry: BlockNode, at: number, under: string) => void
 ): void {
-  const visit = (forest: unknown, at: number): void => {
+  const visit = (forest: unknown, at: number, under: string): void => {
     if (!Array.isArray(forest) || at > setup.limits.maxDepth + 1) return;
     for (const entry of forest as BlockNode[]) {
-      visitNode(entry, at);
+      visitNode(entry, at, under);
       const slots = (entry as { slots?: unknown }).slots;
       if (typeof slots !== "object" || slots === null) continue;
-      for (const children of Object.values(slots)) visit(children, at + 1);
+      for (const [slot, children] of Object.entries(slots)) {
+        visit(children, at + 1, `${String(entry?.id)}/${slot}`);
+      }
     }
   };
-  visit(nodes, 1);
+  visit(nodes, 1, "");
 }
 
 /**

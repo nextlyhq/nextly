@@ -23,6 +23,7 @@ import {
   contentModelKey,
   NO_MARKUP_CONTENT_MODEL,
   resolveContentModel,
+  UNDECLARED_CONTENT_MODEL,
   type ContentKind,
   type ResolvedContentModel,
 } from "./content-model";
@@ -406,7 +407,12 @@ function readComposed(
         recordProbe(at, { parent, slot }, exposed, sources, slots);
         return undefined;
       }
-      const model = modelOf(at, sources, memo);
+      // A placement the resolver left standing (a cycle, a component too deep
+      // or unreadable) draws a placeholder: read it as plain flow rather than
+      // composing it again, which for a cycle would never end.
+      const model = isUnresolved(at)
+        ? UNDECLARED_CONTENT_MODEL
+        : modelOf(at, sources, memo);
       if (parent === undefined) {
         // A root drawing nothing is neutral: only drawn roots decide.
         rootsArePhrasing &&=
@@ -434,6 +440,15 @@ function readComposed(
       .map(root => root.type)
       .filter(type => type !== PROBE_TYPE),
   };
+}
+
+/** Whether a composed node is a placement the resolver could not inline. */
+function isUnresolved(node: PlacedNode): boolean {
+  return (
+    node.type === COMPONENT_INSTANCE_TYPE &&
+    (node as { unresolvedComponent?: unknown }).unresolvedComponent !==
+      undefined
+  );
 }
 
 /** Record the rule of the exposed slot a stand-in landed in, by its holder. */
