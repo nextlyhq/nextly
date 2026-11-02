@@ -9,11 +9,14 @@
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
-  usesJunctionTable,
+  componentRelationshipHoldsReferenceList,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 import { parseColumnType } from "../value-conversion/column-type";
-import { judgeStoredColumn } from "../value-conversion/read-values";
+import {
+  judgeStoredColumn,
+  type KeyedBy,
+} from "../value-conversion/read-values";
 import type {
   ColumnConversion,
   CompareAs,
@@ -57,13 +60,16 @@ export interface DifferenceToClass {
    */
   liveTable: string;
   liveColumn: string;
+  /** How the live table's rows are keyed, read from its primary key (`keyedByOf`). */
+  keyedBy: KeyedBy;
 }
 
 /**
  * The conversion a difference asks for: from the live column to the one its field expects.
  *
- * A field group's many-to-many keeps its references on the row as a JSON list, and such a column
- * is converted by reading each stored value as a list of references, never as JSON text.
+ * A field group's relation that keeps its references on the row as a JSON list (a `hasMany` or a
+ * many-to-many, by the rule the schema diff marks the same column with) is converted by reading each
+ * stored value as a list of references, never as JSON text.
  */
 function conversionFor(
   difference: DifferenceToClass,
@@ -73,7 +79,7 @@ function conversionFor(
   const referenceList =
     kind === "fieldGroup" &&
     !location.translation &&
-    usesJunctionTable(field) &&
+    componentRelationshipHoldsReferenceList(field) &&
     isJson(expected);
   return {
     dialect,
@@ -93,6 +99,6 @@ export async function classifyDifference(
   return judgeStoredColumn(db, conversionFor(difference, dialect), {
     table: difference.liveTable,
     column: difference.liveColumn,
-    keyedBy: difference.location.translation ? "translation" : "id",
+    keyedBy: difference.keyedBy,
   });
 }

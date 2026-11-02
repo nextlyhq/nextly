@@ -69,7 +69,7 @@ export function valueJudgeFor(conversion: ColumnConversion): ValueJudge | null {
   if (conversion.dialect === "sqlite") return sqliteJudge(conversion);
   const from = parseColumnType(conversion.from);
   const to = parseColumnType(conversion.to);
-  if (conversion.referenceList) return referenceListJudge(conversion, from, to);
+  if (conversion.referenceList) return referenceListJudge(conversion, to);
   return (
     jsonJudge(conversion, from, to) ??
     stringJudge(conversion, from, to) ??
@@ -100,19 +100,15 @@ export function lateWriteCanChange(conversion: ColumnConversion): boolean {
   return false;
 }
 
-/** A relation's stored value read as the list it becomes. */
+/**
+ * A relation's stored value read as the list it becomes. The list conversion reads any column
+ * through its text (`reference-list-conversion.ts`), so every old type converts, a number included.
+ */
 function referenceListJudge(
   conversion: ColumnConversion,
-  from: ParsedType,
   to: ParsedType
 ): ValueJudge | null {
   if (to.family !== "json") return null;
-  // A relation's id was kept in a uuid, a string or a fixed-length string (MySQL's uuid column).
-  const scalar =
-    from.family === "uuid" ||
-    from.family === "char" ||
-    STRING_FAMILIES.has(from.family);
-  if (!scalar) return null;
   // MySQL's conversion wraps every value that is not a JSON list in one, so it reads every value.
   if (conversion.dialect === "mysql") return keeps;
   return ({ text }) =>

@@ -14,10 +14,7 @@
 import { sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import {
-  COMPANION_LOCALE_COLUMN,
-  COMPANION_PARENT_COLUMN,
-} from "../../i18n/companion-columns";
+import { COMPANION_KEY_COLUMNS } from "../../i18n/companion-columns";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import type { ColumnSpec } from "../pipeline/diff/types";
 import type { SupportedDialect } from "../services/field-column-descriptor";
@@ -65,7 +62,7 @@ export function keyedByOf(columns: readonly ColumnSpec[]): KeyedBy {
     .map(column => column.name)
     .sort();
   if (key.length === 1 && key[0] === "id") return "id";
-  const translation = [COMPANION_LOCALE_COLUMN, COMPANION_PARENT_COLUMN].sort();
+  const translation = [...COMPANION_KEY_COLUMNS].sort();
   if (key.length === 2 && key.every((name, i) => name === translation[i])) {
     return "translation";
   }
@@ -109,10 +106,8 @@ function asText(dialect: SupportedDialect, column: SQLWrapper): SQL {
 function keyColumns(source: ValueSource): SQLWrapper[] {
   if (source.keyedBy === "id") return [sql.identifier("id")];
   if (source.keyedBy === "translation") {
-    return [
-      sql.identifier(COMPANION_PARENT_COLUMN),
-      sql.identifier(COMPANION_LOCALE_COLUMN),
-    ];
+    // In key order: the parent, then the locale.
+    return COMPANION_KEY_COLUMNS.map(name => sql.identifier(name));
   }
   return [];
 }

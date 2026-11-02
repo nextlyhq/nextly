@@ -204,6 +204,24 @@ describe("judgeColumn", () => {
       ]);
     });
 
+    it("a component's relation list from a number column: the list conversion reads every value as one id", async () => {
+      // The list conversion reads any column through its text, so a number column converts too.
+      for (const from of ["integer", "bigint", "numeric(10,2)"]) {
+        await expect(
+          judgeColumn(
+            pg(from, "jsonb", { compareAs: "json", referenceList: true }),
+            rows("7", "-3", "12.50", null)
+          )
+        ).resolves.toEqual({ class: "safe", reasons: [] });
+        await expect(
+          judgeColumn(
+            my(from, "json", { compareAs: "json", referenceList: true }),
+            rows(mysqlJson("7", true), mysqlJson(null, false))
+          )
+        ).resolves.toEqual({ class: "safe", reasons: [] });
+      }
+    });
+
     it("a component's many-to-many on MySQL: every stored value reads, so none blocks", async () => {
       const toList = my("varchar(36)", "json", {
         compareAs: "json",

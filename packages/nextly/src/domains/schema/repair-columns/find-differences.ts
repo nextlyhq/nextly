@@ -19,6 +19,7 @@ import {
   getComponentRowColumnDescriptor,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
+import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
 
 import { classifyDifference } from "./classify";
 import { compareColumn } from "./column-comparison";
@@ -172,13 +173,17 @@ function liveColumnAt(
     ?.columns.get(location.column.toLowerCase());
 }
 
-/** The table and column at a location as the database spells them, for a query to name. */
+/**
+ * The table and column at a location as the database spells them, for a query to name, and how the
+ * table's rows are keyed, from its primary key.
+ */
 function liveNamesOf(
   live: LiveTables,
   location: ColumnLocation
-): { liveTable: string; liveColumn: string } {
+): { liveTable: string; liveColumn: string; keyedBy: KeyedBy } {
   const table = live.get(location.table.toLowerCase());
   return {
+    keyedBy: keyedByOf([...(table?.columns.values() ?? [])]),
     liveTable: table?.name ?? location.table,
     liveColumn:
       table?.columns.get(location.column.toLowerCase())?.name ??

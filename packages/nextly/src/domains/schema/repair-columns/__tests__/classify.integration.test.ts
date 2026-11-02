@@ -48,6 +48,12 @@ const SCORE = f({ name: "score", type: "number" });
 const TITLE = f({ name: "title", type: "text" });
 const REQUIRED = f({ name: "req", type: "text", required: true });
 const AUTHOR = f({ name: "author", type: "relationship", relationTo: "users" });
+const AUTHORS = f({
+  name: "authors",
+  type: "relationship",
+  relationTo: "users",
+  hasMany: true,
+});
 const RELATED = f({
   name: "related",
   type: "relationship",
@@ -315,6 +321,19 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("classes a table keyed by another column from its primary key, not from its kind", async () => {
+      await run(
+        `CREATE TABLE ${q(TABLE)} (${q("code")} ${keyType} PRIMARY KEY, ${q("req")} ${keyType})`
+      );
+      await run(
+        `INSERT INTO ${q(TABLE)} (${q("code")}, ${q("req")}) VALUES ('a', 'x'), ('b', NULL)`
+      );
+      const [req] = await find([entityOf([REQUIRED])]);
+      expect(req?.aspects.nullability).toBe(true);
+      expect(req?.judgement?.class).toBe("blocked");
+      expect(rowsOf(req!, "null-under-not-null").count).toBe(1);
+    });
+
     it("dropping a required relationship's NOT NULL is safe", async () => {
       const type = dialect === "mysql" ? "varchar(36)" : "text";
       await createTable(TABLE, `${q("author")} ${type} NOT NULL`);
@@ -353,6 +372,26 @@ describe.each(getConfiguredTestDialects())(
           count: 1,
           keys: ["r7"],
         });
+      }
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "component hasMany relationship: a bare id converts to a one-item list, as the many-to-many does",
+      async () => {
+        await createTable(CARDS, `${q("authors")} varchar(36)`);
+        await insert(CARDS, "authors", [
+          ["r1", "6f1c1f3a-2b7e-4c2a-9d8e-0a1b2c3d4e5f"],
+          ["r2", null],
+        ]);
+        const [authors] = await find([
+          entityOf([AUTHORS], {
+            kind: "fieldGroup",
+            table: CARDS,
+            origin: "fieldGroup",
+          }),
+        ]);
+        expect(authors?.aspects.type).toBe(true);
+        expect(authors?.judgement).toEqual({ class: "safe", reasons: [] });
       }
     );
 
