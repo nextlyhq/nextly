@@ -99,6 +99,7 @@ import {
 } from "./geometry-dom";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
+import { useNearestThemeMarker } from "./nearest-theme";
 import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
@@ -2312,6 +2313,7 @@ export function Canvas({
   );
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
+  useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
   const rootStyle: React.CSSProperties = { ...boxStyle, ...surface?.style };
 
@@ -2405,6 +2407,11 @@ export function Canvas({
        * keep a light ground, or the host serves no site sheet.
        */
       data-nx-site-dark-ground={surface?.darkGround === true ? "" : undefined}
+      /*
+       * `data-nx-site-theme`, the mode the nearest theme marker above names,
+       * is written onto this element by `useNearestThemeMarker` before paint,
+       * not rendered here: see that hook.
+       */
       /*
        * Whether the site's ground is fully opaque, in every mode. Only then
        * does the rendered page carry the ground as well as the canvas: painted

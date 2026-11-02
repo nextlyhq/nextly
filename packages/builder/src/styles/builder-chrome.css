@@ -1965,36 +1965,32 @@
 /*
  * The site's OWN dark mode, which is the one thing that darkens the page.
  *
- * A site's dark token values apply with the viewer's device, unless a
- * `[data-nx-theme="light"]` marker sits above, and under a
- * `[data-nx-theme="dark"]` marker whatever the device says, as the site sheet
- * writes them. The page's ground and text already follow those values through
+ * A site's dark token values follow the nearest `data-nx-theme` marker
+ * above, or the viewer's device where there is none, as the site sheet writes
+ * them. The page's ground and text already follow those values through
  * the tokens; what these rules add is the SCHEME. The canvas root carries
  * `data-nx-site-dark-ground` only when the site's dark values include a dark
  * ground, so a site whose dark set keeps a light background keeps light
  * native controls.
  * The admin's `.dark` class is a different switch and reaches nothing here.
  */
-[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground] {
+/* The canvas states the nearest theme marker above it as
+   `data-nx-site-theme`, read from the DOM, which is the marker its token
+   values resolve to at any depth of nesting. Keyed on that rather than on
+   ancestor selectors, which cannot tell which marker is nearest. */
+.nx-canvas[data-nx-site-dark-ground][data-nx-site-theme="dark"] {
   color-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
 }
 
+/* With no marker stated, the device decides, as it does for the values. */
 @media (prefers-color-scheme: dark) {
-  .nx-canvas[data-nx-site-dark-ground] {
+  .nx-canvas[data-nx-site-dark-ground]:not([data-nx-site-theme]) {
     color-scheme: dark;
     --nx-builder-select: var(--nx-builder-select-on-dark);
     --nx-builder-component: var(--nx-builder-component-on-dark);
   }
-}
-
-/* A light marker above the canvas keeps its scheme light on a dark device,
-   as it keeps the site's values light. After the device rule and heavier. */
-[data-nx-theme="light"] .nx-canvas[data-nx-site-dark-ground] {
-  color-scheme: light;
-  --nx-builder-select: var(--nx-builder-select-on-light);
-  --nx-builder-component: var(--nx-builder-component-on-light);
 }
 
 /*
@@ -3049,14 +3045,14 @@
   width: 14px;
   height: 14px;
   border: 1px solid var(--nx-border);
-  border-radius: 3px;
+  border-radius: calc(var(--radius-sm) - 1px);
   background: var(--nx-swatch, transparent);
 }
 
 .nx-vars__swatch--main {
   width: 20px;
   height: 20px;
-  border-radius: 5px;
+  border-radius: calc(var(--radius-sm) + 1px);
 }
 
 .nx-vars__pair {
@@ -3084,7 +3080,7 @@
   width: 14px;
   height: 14px;
   border: 1px solid var(--nx-border);
-  border-radius: 3px;
+  border-radius: calc(var(--radius-sm) - 1px);
   background: var(--nx-card);
 }
 
@@ -3223,6 +3219,24 @@
   gap: 0.375rem;
   font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
+}
+
+/* A dark value in the type-size pair, with its own way back to light. */
+.nx-vars-editor__cell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nx-vars-editor__cell > input {
+  min-width: 0;
+}
+
+.nx-vars-editor__cell-action {
+  flex: none;
+  width: 24px;
+  height: 24px;
 }
 
 .nx-vars-editor__inline-action {
