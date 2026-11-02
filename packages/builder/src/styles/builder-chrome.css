@@ -983,6 +983,19 @@
 }
 
 /*
+ * A prop the panel has no control for is named in plain text rather than by a
+ * label, since there is no control for a label to name. It takes the label's
+ * place and weight, so the row still reads as the field it is.
+ */
+.nx-inspector__field-name {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+/*
  * Below the width where a label and a control can share a row, the field goes
  * back to stacking. Asked of the CONTAINER: the rail can be dragged narrow
  * while the window stays wide, and a media query would answer for the window.

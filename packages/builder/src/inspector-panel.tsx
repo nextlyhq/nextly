@@ -37,25 +37,17 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { BlockResolver, PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
-  Checkbox,
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-  Textarea,
   useIsomorphicLayoutEffect,
 } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
+import { contentControlFor } from "./content-controls";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import type { SavedComponent } from "./inserter";
@@ -79,7 +71,6 @@ import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
-import { useStoredDraft } from "./stored-draft";
 import {
   breakpointLabel,
   StyleInspectorPanel,
@@ -963,18 +954,25 @@ function PropField({
   disabled: boolean;
   onCommit: (name: string, value: unknown) => void;
 }): React.JSX.Element {
-  const id = `nx-prop-${prop.name}`;
+  // Unique per mount, so two editors on one page never share a field id and a
+  // label never points at the other editor's control.
+  const id = React.useId();
+  const Control = contentControlFor(prop.schema.type);
 
-  if (!prop.supported) {
+  if (Control === undefined) {
     return (
       <div className="nx-inspector__field" data-unsupported="">
-        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
         {/*
           Listed rather than omitted. A block declaring a prop this panel cannot
           draw is still a block with that prop, and hiding it presents an
           incomplete block as a complete one — an author would conclude the
           field does not exist rather than that it is edited elsewhere.
+
+          Named in plain text, not by a label: a label names a control, and
+          one pointing at nothing reads to a screen reader as a field nobody
+          can reach.
         */}
+        <p className="nx-inspector__field-name">{fieldLabel(prop.name)}</p>
         <p className="nx-inspector__note">
           Not editable here ({prop.schema.type}).
         </p>
@@ -982,134 +980,8 @@ function PropField({
     );
   }
 
-  if (prop.schema.type === "checkbox") {
-    return (
-      <div className="nx-inspector__field nx-inspector__field--inline">
-        <Checkbox
-          id={id}
-          disabled={disabled}
-          checked={prop.value === true}
-          onCheckedChange={checked => onCommit(prop.name, checked === true)}
-        />
-        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-      </div>
-    );
-  }
-
-  if (prop.schema.type === "select") {
-    return (
-      <div className="nx-inspector__field">
-        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-        <Select
-          disabled={disabled}
-          value={typeof prop.value === "string" ? prop.value : undefined}
-          onValueChange={next => onCommit(prop.name, next)}
-        >
-          <SelectTrigger id={id}>
-            <SelectValue placeholder="Choose" />
-          </SelectTrigger>
-          <SelectContent>
-            {prop.options.map(option => (
-              <SelectItem key={option} value={option}>
-                {option}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    );
-  }
-
   return (
-    <TextishField id={id} prop={prop} disabled={disabled} onCommit={onCommit} />
-  );
-}
-
-/** A prop's value as editable text, or empty when it is not representable. */
-function storedText(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return "";
-}
-
-/**
- * A field the author types into: text, textarea, url, number.
- *
- * Holds its own value while focused so typing is responsive, and reports it on
- * blur. Reading straight from the node would make every keystroke a document
- * edit; reporting only on blur without local state would make the field refuse
- * to show what was typed.
- */
-function TextishField({
-  id,
-  prop,
-  disabled,
-  onCommit,
-}: {
-  id: string;
-  prop: EditableProp;
-  disabled: boolean;
-  onCommit: (name: string, value: unknown) => void;
-}): React.JSX.Element {
-  // Only a primitive becomes text. `String({})` is "[object Object]", and a
-  // field showing that would COMMIT it on blur — turning a prop the panel
-  // cannot represent into a string that permanently replaces it. An
-  // unrepresentable value shows empty and, because `send` compares against
-  // this, an untouched field writes nothing.
-  const stored = storedText(prop.value);
-  const [draft, setDraft] = useStoredDraft(stored);
-
-  const send = () => {
-    if (draft === stored) return;
-    if (prop.schema.type === "number") {
-      const parsed = Number(draft);
-      // A number field that cannot parse reverts rather than writing NaN, which
-      // survives JSON as `null` and reaches the renderer as a missing prop.
-      if (draft.trim() === "" || Number.isNaN(parsed)) {
-        setDraft(stored);
-        return;
-      }
-      onCommit(prop.name, parsed);
-      return;
-    }
-    onCommit(prop.name, draft);
-  };
-
-  const shared = {
-    id,
-    disabled,
-    value: draft,
-    onBlur: send,
-    onChange: (
-      event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-    ) => setDraft(event.target.value),
-  };
-
-  return (
-    <div className="nx-inspector__field">
-      <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-      {prop.schema.type === "textarea" ? (
-        <Textarea {...shared} rows={3} />
-      ) : (
-        <Input
-          {...shared}
-          type={prop.schema.type === "number" ? "number" : "text"}
-          inputMode={prop.schema.type === "url" ? "url" : undefined}
-          // Enter commits as well as blur. A single-line field is where an
-          // author expects Enter to mean "done", and waiting for them to click
-          // elsewhere leaves the canvas stale after a deliberate action.
-          onKeyDown={event => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              send();
-            }
-          }}
-        />
-      )}
-    </div>
+    <Control id={id} prop={prop} disabled={disabled} onCommit={onCommit} />
   );
 }
 

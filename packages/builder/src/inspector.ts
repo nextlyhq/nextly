@@ -30,6 +30,10 @@ import {
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  CONTENT_CONTROL_TYPES,
+  hasContentControl,
+} from "./content-control-types";
 import { blockLabel } from "./inserter";
 import { isLocked } from "./locking";
 import type { BuilderOp, NodePatch } from "./ops";
@@ -43,14 +47,8 @@ import type { BuilderOp, NodePatch } from "./ops";
  * told the prop exists and is not editable here — because omitting it entirely
  * would present an incomplete block as a complete one.
  */
-export const SUPPORTED_PROP_TYPES = [
-  "text",
-  "textarea",
-  "url",
-  "number",
-  "checkbox",
-  "select",
-] as const;
+export const SUPPORTED_PROP_TYPES: typeof CONTENT_CONTROL_TYPES =
+  CONTENT_CONTROL_TYPES;
 
 export type SupportedPropType = (typeof SUPPORTED_PROP_TYPES)[number];
 
@@ -307,9 +305,7 @@ export function inspectSelection(
           name,
           schema,
           value: node.props[name],
-          supported: (SUPPORTED_PROP_TYPES as readonly string[]).includes(
-            schema.type
-          ),
+          supported: hasContentControl(schema.type),
           options: optionsOf(schema),
         },
       ];
