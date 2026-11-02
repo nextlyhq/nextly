@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SiteSettingsRead } from "../../library-contract";
 
 let siteRead: SiteSettingsRead | undefined;
+let siteError: Error | null = null;
 const refetch = vi.fn();
 const writes: Array<{ path: string }> = [];
 let writeAnswer: () => Promise<unknown> = async () => ({});
@@ -26,7 +27,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: () => ({
     data: siteRead,
     pending: false,
-    error: null,
+    error: siteError,
     refetch,
   }),
   writePluginRoute: async (write: { path: string }) => {
@@ -40,12 +41,19 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 vi.mock("@nextlyhq/builder/shell", () => ({
   BreakpointManager: ({
     onEditingChange,
+    onSavingChange,
   }: {
     onEditingChange?: (editing: boolean) => void;
+    onSavingChange?: (saving: boolean) => void;
   }) => (
-    <button type="button" onClick={() => onEditingChange?.(true)}>
-      Edit breakpoints
-    </button>
+    <>
+      <button type="button" onClick={() => onEditingChange?.(true)}>
+        Edit breakpoints
+      </button>
+      <button type="button" onClick={() => onSavingChange?.(true)}>
+        Start saving
+      </button>
+    </>
   ),
 }));
 
@@ -55,6 +63,7 @@ const MANAGER: SiteSettingsRead = {
   mayManageSite: true,
   mayChooseDefaultLayout: true,
   defaultLayout: "main",
+  breakpoints: null,
   layouts: [
     { id: "main", title: "Main" },
     { id: "bare", title: "No header or footer" },
@@ -84,6 +93,7 @@ function show(onOpenChange = vi.fn()) {
 
 beforeEach(() => {
   siteRead = MANAGER;
+  siteError = null;
   writes.length = 0;
   writeAnswer = async () => ({});
   refetch.mockClear();
@@ -211,5 +221,69 @@ describe("the Settings dialog", () => {
         screen.getByText(/needs the rights to update and publish Layouts/)
       ).toBeTruthy()
     );
+  });
+
+  it("asks before a tab switch drops a breakpoint edit", async () => {
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "This page" }));
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    // Still on Site until the author says to discard (the question hides
+    // the dialog behind it from the accessibility tree while it is open).
+    expect(
+      screen
+        .getByRole("tab", { name: "Site", hidden: true })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+    await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(
+      screen
+        .getByRole("tab", { name: "This page" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+  });
+
+  it("neither closes nor switches while a breakpoint save is in flight", async () => {
+    const onOpenChange = show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Start saving" }));
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await userEvent.click(screen.getByRole("tab", { name: "This page" }));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(
+      screen.getByRole("tab", { name: "Site" }).getAttribute("aria-selected")
+    ).toBe("true");
+  });
+
+  it("says the Site tab could not load, with Retry, rather than hiding it", async () => {
+    siteRead = undefined;
+    siteError = new Error("Network down");
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    expect(
+      screen.getByText("The site's settings could not be loaded.")
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it("keeps the chosen default shown after Saved, until the read catches up", async () => {
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    const select = screen.getByLabelText(
+      "Pages without a Layout of their own use"
+    ) as HTMLSelectElement;
+    await userEvent.selectOptions(select, "bare");
+    await screen.findByText("Saved");
+    expect(select.value).toBe("bare");
   });
 });

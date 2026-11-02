@@ -215,18 +215,30 @@ const LAYOUTS = [
 ];
 
 /** The Direct API slice the read uses, recording what it was asked. */
-function siteData(defaultLayout: string | null) {
+function siteData(
+  defaultLayout: string | null,
+  layouts: ReadonlyArray<{ id: string; title: string }> = LAYOUTS,
+  pageSize = 100
+) {
   const finds: Array<Record<string, unknown>> = [];
   return {
     finds,
     nextly: {
-      findSingle: async () => ({ defaultLayout }),
+      findSingle: async (args: { slug: string }) =>
+        args.slug === SITE_STYLE_SLUG
+          ? { breakpoints: SET }
+          : { defaultLayout },
       find: async (args: Record<string, unknown>) => {
         finds.push(args);
         const where = args.where as { id?: { in?: string[] } } | undefined;
         const only = where?.id?.in;
+        const all = layouts.filter(
+          l => only === undefined || only.includes(l.id)
+        );
+        const page = (args.page as number | undefined) ?? 1;
         return {
-          items: LAYOUTS.filter(l => only === undefined || only.includes(l.id)),
+          items: all.slice((page - 1) * pageSize, page * pageSize),
+          meta: { hasNext: page * pageSize < all.length },
         };
       },
     } as unknown as Parameters<typeof readSiteSettings>[1],
@@ -241,6 +253,7 @@ describe("what the Site tab reads", () => {
       mayManageSite: false,
       mayChooseDefaultLayout: false,
       defaultLayout: null,
+      breakpoints: null,
       layouts: [],
     });
     expect(data.finds).toEqual([]);
@@ -259,6 +272,7 @@ describe("what the Site tab reads", () => {
       mayManageSite: true,
       mayChooseDefaultLayout: true,
       defaultLayout: "main",
+      breakpoints: SET,
       layouts: LAYOUTS,
     });
     // Published only, from the RESOLVED Layouts collection.
@@ -283,6 +297,7 @@ describe("what the Site tab reads", () => {
         mayManageSite: true,
         mayChooseDefaultLayout: false,
         defaultLayout: "bare",
+        breakpoints: SET,
         layouts: [{ id: "bare", title: "No header or footer" }],
       });
     }
@@ -296,6 +311,31 @@ describe("what the Site tab reads", () => {
     );
     expect(read.layouts).toEqual([]);
     expect(data.finds).toEqual([]);
+  });
+
+  it("offers every published Layout, past the first page", async () => {
+    const many = Array.from({ length: 5 }, (_, n) => ({
+      id: `l${n}`,
+      title: `Layout ${n}`,
+    }));
+    const data = siteData("l4", many, 2);
+    const all = holding(
+      "manage-page-builder-site",
+      "update-site_layouts",
+      "publish-site_layouts"
+    );
+    const read = await readSiteSettings(
+      route({ caller: all.caller }),
+      data.nextly
+    );
+    expect(read.layouts.map(layout => layout.id)).toEqual([
+      "l0",
+      "l1",
+      "l2",
+      "l3",
+      "l4",
+    ]);
+    expect(data.finds.length).toBe(3);
   });
 
   it("tells nobody nothing", async () => {

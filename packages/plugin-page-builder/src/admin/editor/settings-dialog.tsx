@@ -114,22 +114,19 @@ export function SettingsDialog({
     staleTime: 0,
     enabled: open,
   });
-  // Whether the breakpoints are mid-edit: leaving then asks first.
-  const [editingBreakpoints, setEditingBreakpoints] = useState(false);
-  const [askingToDiscard, setAskingToDiscard] = useState(false);
-
-  const requestOpenChange = (next: boolean): void => {
-    if (!next && editingBreakpoints) {
-      setAskingToDiscard(true);
-      return;
-    }
-    onOpenChange(next);
-  };
-  const mayManageSite = site.data?.mayManageSite === true;
+  const leave = useLeaveGuard(onOpenChange);
+  // The Site tab is offered to a manager, and also when the read failed: a
+  // failure must not look like a missing permission.
+  const siteTab = site.data?.mayManageSite === true || site.error !== null;
 
   return (
     <>
-      <Dialog open={open} onOpenChange={requestOpenChange}>
+      <Dialog
+        open={open}
+        onOpenChange={next =>
+          next ? onOpenChange(true) : leave.request({ kind: "close" })
+        }
+      >
         <DialogContent
           className="flex max-h-[85vh] max-w-[680px] flex-col gap-0 p-0"
           onKeyDown={keepEnterFromThePage}
@@ -146,12 +143,14 @@ export function SettingsDialog({
               {"This page's settings, and the site's."}
             </DialogDescription>
           </DialogHeader>
-          <Tabs defaultValue="page" className="flex min-h-0 flex-1 flex-col">
+          <Tabs
+            value={leave.tab}
+            onValueChange={next => leave.request({ kind: "tab", to: next })}
+            className="flex min-h-0 flex-1 flex-col"
+          >
             <TabsList className="mx-6 mt-3 w-fit">
               <TabsTrigger value="page">This page</TabsTrigger>
-              {mayManageSite ? (
-                <TabsTrigger value="site">Site</TabsTrigger>
-              ) : null}
+              {siteTab ? <TabsTrigger value="site">Site</TabsTrigger> : null}
             </TabsList>
             <TabsContent
               value="page"
@@ -159,16 +158,16 @@ export function SettingsDialog({
             >
               <ThisPage pageFields={pageFields} share={share} host={host} />
             </TabsContent>
-            {mayManageSite && site.data !== undefined ? (
+            {siteTab ? (
               <TabsContent
                 value="site"
                 className="min-h-0 flex-1 overflow-y-auto px-6 pb-6"
               >
-                <SiteSettings
-                  read={site.data}
-                  reread={site.refetch}
+                <SiteTab
+                  site={site}
                   breakpoints={breakpoints}
-                  onEditingBreakpoints={setEditingBreakpoints}
+                  onEditingBreakpoints={leave.setEditing}
+                  onSavingBreakpoints={leave.setSaving}
                 />
               </TabsContent>
             ) : null}
@@ -180,7 +179,12 @@ export function SettingsDialog({
           </p>
         </DialogContent>
       </Dialog>
-      <AlertDialog open={askingToDiscard} onOpenChange={setAskingToDiscard}>
+      <AlertDialog
+        open={leave.asking}
+        onOpenChange={asking => {
+          if (!asking) leave.keepEditing();
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
@@ -192,18 +196,107 @@ export function SettingsDialog({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep editing</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setEditingBreakpoints(false);
-                onOpenChange(false);
-              }}
-            >
+            <AlertDialogAction onClick={leave.discard}>
               Discard
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+/** A way out of the breakpoint editor: closing Settings, or another tab. */
+type Leave = { kind: "close" } | { kind: "tab"; to: string };
+
+/**
+ * Leaving the Site tab while its breakpoints are being edited asks first, by
+ * closing Settings or by switching tabs alike, since either takes the draft
+ * away. While a save of them is in flight, neither happens: the write must
+ * answer on screen, and a "discard" could not stop it reaching the site.
+ */
+function useLeaveGuard(onOpenChange: (open: boolean) => void) {
+  const [tab, setTab] = useState("page");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [pending, setPending] = useState<Leave | null>(null);
+  const go = (leave: Leave): void => {
+    if (leave.kind === "close") onOpenChange(false);
+    else setTab(leave.to);
+  };
+  return {
+    tab,
+    asking: pending !== null,
+    setEditing,
+    setSaving,
+    request: (leave: Leave): void => {
+      if (saving) return;
+      if (leave.kind === "tab" && leave.to === tab) return;
+      if (editing && tab === "site") {
+        setPending(leave);
+        return;
+      }
+      go(leave);
+    },
+    keepEditing: (): void => setPending(null),
+    discard: (): void => {
+      setEditing(false);
+      if (pending !== null) go(pending);
+      setPending(null);
+    },
+  };
+}
+
+/** The Site tab: what the read answered, or why it could not answer. */
+function SiteTab({
+  site,
+  breakpoints,
+  onEditingBreakpoints,
+  onSavingBreakpoints,
+}: {
+  site: ReturnType<typeof usePluginRoute<SiteSettingsRead>>;
+  breakpoints: SettingsDialogProps["breakpoints"];
+  onEditingBreakpoints: (editing: boolean) => void;
+  onSavingBreakpoints: (saving: boolean) => void;
+}): JSX.Element | null {
+  if (site.data === undefined) {
+    return site.error === null ? null : (
+      <div className="flex items-center gap-3 pt-4 text-sm">
+        <AlertCircle
+          className="size-4 shrink-0 text-destructive"
+          aria-hidden="true"
+        />
+        <span>{"The site's settings could not be loaded."}</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={site.refetch}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
+  const read = site.data;
+  return (
+    <SiteSettings
+      read={read}
+      reread={site.refetch}
+      breakpoints={{
+        // Read with the site permission, as their write is, so a role that
+        // may manage them sees them without Design's read.
+        value: read.breakpoints ?? breakpoints.value,
+        status: "ready",
+        onSave: async next => {
+          const answer = await breakpoints.onSave(next);
+          site.refetch();
+          return typeof answer === "string" ? answer : undefined;
+        },
+      }}
+      onEditingBreakpoints={onEditingBreakpoints}
+      onSavingBreakpoints={onSavingBreakpoints}
+    />
   );
 }
 
@@ -272,11 +365,13 @@ function SiteSettings({
   reread,
   breakpoints,
   onEditingBreakpoints,
+  onSavingBreakpoints,
 }: {
   read: SiteSettingsRead;
   reread: () => void;
   breakpoints: SettingsDialogProps["breakpoints"];
   onEditingBreakpoints: (editing: boolean) => void;
+  onSavingBreakpoints: (saving: boolean) => void;
 }): JSX.Element {
   return (
     <div className="space-y-6 pt-4">
@@ -300,6 +395,7 @@ function SiteSettings({
         <BreakpointManager
           {...breakpoints}
           onEditingChange={onEditingBreakpoints}
+          onSavingChange={onSavingBreakpoints}
         />
       </section>
       <DefaultLayout read={read} reread={reread} />
@@ -323,6 +419,13 @@ function DefaultLayout({
 }): JSX.Element {
   const selectId = useId();
   const [save, setSave] = useState<DefaultLayoutSave>({ kind: "idle" });
+  // The Layout just made the default, held until the read says so too, so the
+  // select never shows the old default beside "Saved".
+  const [chosen, setChosen] = useState<string | null>(null);
+  const shown =
+    chosen !== null && chosen !== read.defaultLayout
+      ? chosen
+      : read.defaultLayout;
   const choose = (id: string): void => {
     setSave({ kind: "saving" });
     writePluginRoute({
@@ -331,6 +434,7 @@ function DefaultLayout({
       body: {},
     }).then(
       () => {
+        setChosen(id);
         setSave({ kind: "saved" });
         reread();
       },
@@ -346,7 +450,7 @@ function DefaultLayout({
       }
     );
   };
-  const current = read.layouts.find(layout => layout.id === read.defaultLayout);
+  const current = read.layouts.find(layout => layout.id === shown);
   return (
     <section aria-labelledby={`${selectId}-title`} className="space-y-2">
       <h3 id={`${selectId}-title`} className="text-sm font-semibold">
@@ -358,7 +462,7 @@ function DefaultLayout({
       <div className="flex flex-wrap items-center gap-3">
         <select
           id={selectId}
-          value={read.defaultLayout ?? ""}
+          value={shown ?? ""}
           disabled={!read.mayChooseDefaultLayout || save.kind === "saving"}
           onChange={event => choose(event.target.value)}
           className="h-9 min-w-56 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"

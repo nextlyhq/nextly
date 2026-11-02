@@ -56,6 +56,11 @@ export interface BreakpointEditorProps {
    */
   onClose: () => void;
   /**
+   * Told when a save starts and settles, so a host that could take the editor
+   * away (closing a dialog, switching a tab) holds off until the write answers.
+   */
+  onSavingChange?: (saving: boolean) => void;
+  /**
    * Called with the edited set when the author saves.
    *
    * Only ever called with a set that produces no issues, so a host does not
@@ -202,6 +207,7 @@ export function BreakpointEditor({
   value,
   onSave,
   onClose,
+  onSavingChange,
 }: BreakpointEditorProps): React.JSX.Element {
   const fieldId = React.useId();
   const [draft, setDraft] = React.useState<Record<BreakpointAxis, DraftRow[]>>(
@@ -222,7 +228,11 @@ export function BreakpointEditor({
    * loop — and the only thing that knows when THIS save settled is the promise
    * returned to THIS click.
    */
-  const [saving, setSaving] = React.useState(false);
+  const [saving, setSavingState] = React.useState(false);
+  const setSaving = (next: boolean): void => {
+    setSavingState(next);
+    onSavingChange?.(next);
+  };
   const [refusal, setRefusal] = React.useState<string | undefined>(undefined);
 
   const issues = React.useMemo(

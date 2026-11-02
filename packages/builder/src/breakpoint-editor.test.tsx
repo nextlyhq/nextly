@@ -453,3 +453,28 @@ describe("where each breakpoint applies", () => {
     expect(screen.getByText("the base, always applies")).toBeTruthy();
   });
 });
+
+describe("telling the host about a save", () => {
+  it("says when a save starts and when it settles", async () => {
+    let settle: (value: undefined) => void = () => {};
+    const onSave = vi.fn(
+      () =>
+        new Promise<undefined>(resolve => {
+          settle = resolve;
+        })
+    );
+    const onSavingChange = vi.fn();
+    render(
+      <BreakpointEditor
+        value={stored()}
+        onSave={onSave}
+        onClose={vi.fn()}
+        onSavingChange={onSavingChange}
+      />
+    );
+    fireEvent.click(saveButton());
+    expect(onSavingChange).toHaveBeenLastCalledWith(true);
+    settle(undefined);
+    await waitFor(() => expect(onSavingChange).toHaveBeenLastCalledWith(false));
+  });
+});

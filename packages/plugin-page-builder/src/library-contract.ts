@@ -444,6 +444,12 @@ export interface SiteSettingsRead {
   /** The site's default Layout, by id, or `null` when it has none. */
   readonly defaultLayout: string | null;
   /**
+   * The site's breakpoints, as the canvas resolves them (the stored set over
+   * the configured one). Read here, under the same permission as their one
+   * write, so a role that may manage them can see them without Design's read.
+   */
+  readonly breakpoints: BreakpointSet | null;
+  /**
    * The published Layouts: every one the caller may choose from, or only the
    * current default, to name it, for a caller who may not choose.
    */

@@ -63,6 +63,8 @@ export interface BreakpointManagerProps {
    * a draft open in the editor is work not saved yet.
    */
   onEditingChange?: (editing: boolean) => void;
+  /** Told when a save of the set starts and settles; see the editor's. */
+  onSavingChange?: (saving: boolean) => void;
 }
 
 /**
@@ -74,6 +76,7 @@ export function BreakpointManager({
   onSave,
   status,
   onEditingChange,
+  onSavingChange,
 }: BreakpointManagerProps): React.JSX.Element {
   const ready = status === "ready";
   const [editing, setEditingState] = React.useState(false);
@@ -165,6 +168,7 @@ export function BreakpointManager({
         value={authored}
         onSave={persist}
         onClose={() => setEditing(false)}
+        {...(onSavingChange === undefined ? {} : { onSavingChange })}
       />
     );
   }

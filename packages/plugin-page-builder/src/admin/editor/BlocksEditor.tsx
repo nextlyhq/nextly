@@ -12,6 +12,10 @@
  */
 import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
 import {
+  prepareDocumentForRead,
+  registeredBlocks,
+} from "@nextlyhq/blocks-react";
+import {
   BlockContextMenu,
   BlockKeyboardActions,
   BlockToolbar,
@@ -61,7 +65,11 @@ import {
 import { HistoryButtons } from "./history-buttons";
 import { PreviewButton } from "./preview-button";
 import { SettingsDialog } from "./settings-dialog";
-import { sharePreview, type ShareSeoFields } from "./share-preview";
+import {
+  sharePreview,
+  type SharePreview,
+  type ShareSeoFields,
+} from "./share-preview";
 import {
   ConnectStyleHistoryContext,
   RemountOnStyleReplay,
@@ -623,6 +631,31 @@ function usePageFacts<TFieldValues extends FieldValues>(
 }
 
 /**
+ * How a shared link to the page would look, from the page as the published
+ * route reads it: prepared with the canvas's own inputs (the same resolver,
+ * limits and component definitions), so a component's heading speaks for the
+ * page as it does once published.
+ */
+function pagePreview(view: EditorView, page: PageFacts): SharePreview {
+  const { editor, canvasRender } = view;
+  const resolver = registeredBlocks();
+  const prepared = prepareDocumentForRead(editor.document, {
+    resolver,
+    styleContext: canvasRender.styleContext,
+    definitions: canvasRender.definitions,
+    ...(canvasRender.limits === undefined
+      ? {}
+      : { limits: canvasRender.limits }),
+  });
+  return sharePreview({
+    seo: page.seo,
+    document: prepared,
+    pageTitle: page.title ?? "",
+    definitions: type => resolver.get(type),
+  });
+}
+
+/**
  * Settings, as the shell's rail opens it: the entry's own fields and a share
  * preview built from the page as it is now, and the site's breakpoints, read
  * from the same answer the canvas and the device buttons are.
@@ -633,7 +666,6 @@ function editorSettings(
 ): NonNullable<React.ComponentProps<typeof BuilderShell>["renderSettings"]> {
   const {
     entryFields,
-    editor,
     canvasRender,
     saveBreakpoints,
     siteStylePending,
@@ -647,11 +679,11 @@ function editorSettings(
         {...dialog}
         pageFields={entryFields}
         // Built only while the dialog is drawn, from the page on screen.
-        share={sharePreview({
-          seo: page.seo,
-          document: editor.document,
-          pageTitle: page.title ?? "",
-        })}
+        share={
+          // Prepared only while Settings is open: the shell asks for the
+          // dialog on every pass, open or not.
+          dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
+        }
         host={window.location.host}
         breakpoints={{
           value: canvasRender.styleContext.breakpoints,

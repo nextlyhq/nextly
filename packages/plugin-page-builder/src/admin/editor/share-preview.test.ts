@@ -109,4 +109,34 @@ describe("the share preview", () => {
       }).image
     ).toEqual({ kind: "media" });
   });
+
+  it("reads an upload's stored id as a library image, and an address as an address", () => {
+    const of = (ogImage: unknown) =>
+      sharePreview({
+        seo: { ogImage },
+        document: page(),
+        pageTitle: "About us",
+        definitions,
+      }).image;
+    expect(of("6f1c2a9e-media-id")).toEqual({ kind: "media" });
+    expect(of("https://cdn.example.com/og.png")).toEqual({
+      kind: "url",
+      url: "https://cdn.example.com/og.png",
+    });
+    expect(of("/uploads/og.png")).toEqual({
+      kind: "url",
+      url: "/uploads/og.png",
+    });
+  });
+
+  it("falls back to the title when nothing on the page is readable", () => {
+    expect(
+      sharePreview({
+        seo: undefined,
+        document: null,
+        pageTitle: "About us",
+        definitions,
+      })
+    ).toEqual({ title: "About us" });
+  });
 });

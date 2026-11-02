@@ -1188,7 +1188,7 @@ export const pageBuilder = (
         makeDefaultRoute(),
         // Settings' Site tab: what the caller may change there, and the one
         // way the site's breakpoints change.
-        siteSettingsRoute(),
+        siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
       ],
       // The grant that lets a role change the site's settings in the editor's

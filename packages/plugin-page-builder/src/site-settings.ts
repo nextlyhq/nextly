@@ -27,10 +27,14 @@ import {
   SITE_BREAKPOINTS_ROUTE_PATH,
   SITE_SETTINGS_ROUTE_PATH,
   type SiteBreakpointsRequest,
+  type SiteLayoutOption,
   type SiteSettingsRead,
 } from "./library-contract";
+import { walkPages } from "./paged-walk";
+import type { SiteStyleData } from "./site-style";
 import { checkStoredBreakpoints } from "./site-style-record";
 import {
+  loadSiteStyle,
   SITE_SETTINGS_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
 } from "./site-style-storage";
@@ -148,11 +152,13 @@ const NOTHING: SiteSettingsRead = {
   mayManageSite: false,
   mayChooseDefaultLayout: false,
   defaultLayout: null,
+  breakpoints: null,
   layouts: [],
 };
 
-/** How many Layouts the Site tab offers to choose from. */
-const LAYOUT_OPTIONS_LIMIT = 100;
+/** How many Layouts are read per page, and the most pages walked. */
+const LAYOUT_PAGE_SIZE = 100;
+const LAYOUT_PAGES_MAX = 50;
 
 /**
  * What the Site tab shows, and what this caller may change there: the site
@@ -163,7 +169,9 @@ const LAYOUT_OPTIONS_LIMIT = 100;
  */
 export async function readSiteSettings(
   ctx: SiteSettingsRouteContext,
-  nextly: Pick<DefaultLayoutDirectApi, "find" | "findSingle">
+  nextly: Pick<DefaultLayoutDirectApi, "find" | "findSingle">,
+  /** The configured site style, which the stored breakpoints sit over. */
+  defaults?: SiteStyleData
 ): Promise<SiteSettingsRead> {
   const { caller } = ctx;
   if (caller === null) return NOTHING;
@@ -187,27 +195,43 @@ export async function readSiteSettings(
     : defaultLayout === null
       ? []
       : [defaultLayout];
-  const layouts =
-    only !== undefined && only.length === 0
-      ? []
-      : (
-          await nextly.find({
-            collection: slugs.layouts,
-            ...(only === undefined ? {} : { where: { id: { in: only } } }),
-            status: "published",
-            limit: LAYOUT_OPTIONS_LIMIT,
-            depth: 0,
-            select: { id: true, title: true },
-            overrideAccess: true,
-          })
-        ).items.flatMap(row => {
-          const { id, title } = row;
-          return typeof id === "string" && typeof title === "string"
-            ? [{ id, title }]
-            : [];
-        });
+  const layouts: SiteLayoutOption[] = [];
+  if (only === undefined || only.length > 0) {
+    // Every page of them: an option left off would be a Layout that cannot be
+    // made the default, or a default the select could not show.
+    await walkPages({
+      describe: "the published Layouts",
+      maxPages: LAYOUT_PAGES_MAX,
+      fetchPage: async page =>
+        await nextly.find({
+          collection: slugs.layouts,
+          ...(only === undefined ? {} : { where: { id: { in: only } } }),
+          status: "published",
+          limit: LAYOUT_PAGE_SIZE,
+          page,
+          depth: 0,
+          select: { id: true, title: true },
+          overrideAccess: true,
+        }),
+      onPage: rows => {
+        for (const row of rows) {
+          const { id, title } = row as Record<string, unknown>;
+          if (typeof id === "string" && typeof title === "string") {
+            layouts.push({ id, title });
+          }
+        }
+      },
+    });
+  }
+  // The breakpoints as the canvas resolves them, read past Design's read:
+  // the site permission admits their write, so it admits seeing them.
+  const { breakpoints } = await loadSiteStyle({
+    nextly,
+    ...(defaults === undefined ? {} : { defaults }),
+  });
   return {
     mayManageSite: true,
+    breakpoints: breakpoints ?? null,
     mayChooseDefaultLayout,
     defaultLayout,
     layouts,
@@ -219,7 +243,7 @@ export async function readSiteSettings(
  * required permission: the permission is what it reports on, and gating the
  * question on the answer would refuse exactly the authors it tells "no".
  */
-export function siteSettingsRoute(): {
+export function siteSettingsRoute(defaults?: SiteStyleData): {
   method: "GET";
   path: string;
   handler: (req: Request, ctx: SiteSettingsRouteContext) => Promise<Response>;
@@ -228,6 +252,8 @@ export function siteSettingsRoute(): {
     method: "GET",
     path: SITE_SETTINGS_ROUTE_PATH,
     handler: async (_req, ctx) =>
-      Response.json(await readSiteSettings(ctx, await getCachedNextly())),
+      Response.json(
+        await readSiteSettings(ctx, await getCachedNextly(), defaults)
+      ),
   };
 }

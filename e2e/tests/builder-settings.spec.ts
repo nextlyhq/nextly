@@ -112,7 +112,6 @@ test.describe("Settings", () => {
         .getByLabel("Name", { exact: true })
         .last()
         .fill("Wide phone");
-      await dialog.getByLabel("Id", { exact: true }).last().fill("wide-phone");
       await dialog.getByLabel("Up to", { exact: true }).last().fill("700");
       const saved = page.waitForResponse(
         response =>

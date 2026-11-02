@@ -43,10 +43,18 @@ function text(value: unknown): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
+/** Whether a stored string is an address rather than a media library id. */
+function isAddress(value: string): boolean {
+  return /^(https?:)?\/\//i.test(value) || value.startsWith("/");
+}
+
 /** A media value's address, whatever shape the field stored it in. */
 function seoImage(value: unknown): ShareImage | undefined {
-  const url = text(value);
-  if (url !== undefined) return { kind: "url", url };
+  const stored = text(value);
+  if (stored !== undefined) {
+    // An upload field stores the media's id, which is not an image address.
+    return isAddress(stored) ? { kind: "url", url: stored } : { kind: "media" };
+  }
   if (value !== null && typeof value === "object") {
     const nested = text((value as Record<string, unknown>).url);
     return nested === undefined
@@ -63,17 +71,25 @@ function seoImage(value: unknown): ShareImage | undefined {
  */
 export function sharePreview(args: {
   seo: ShareSeoFields | undefined;
-  document: BlockDocument;
+  /**
+   * The page as the published route reads it (`prepareDocumentForRead`):
+   * components resolved, limits applied, placeholders pruned. `null` when
+   * nothing on it is readable.
+   */
+  document: BlockDocument | null;
   pageTitle: string;
   /** The block definitions, by type: the editor's registry unless given. */
   definitions?: SeoDefinitionSource;
 }): SharePreview {
   const seo = args.seo ?? {};
-  const derived = deriveSeoFromDocument(
-    args.document,
-    args.definitions ?? (type => getBlock(type)),
-    node => !isConditionGated(node)
-  );
+  const derived: ReturnType<typeof deriveSeoFromDocument> =
+    args.document === null
+      ? {}
+      : deriveSeoFromDocument(
+          args.document,
+          args.definitions ?? (type => getBlock(type)),
+          node => !isConditionGated(node)
+        );
   const title =
     text(seo.metaTitle) ??
     text(derived.title) ??
