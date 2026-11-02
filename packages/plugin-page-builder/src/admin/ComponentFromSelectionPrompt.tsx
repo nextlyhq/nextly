@@ -84,7 +84,7 @@ export interface ComponentFromSelectionPromptProps {
 }
 
 /** How long a convert waits for the canvas to hold the new definition. */
-const DEFINITION_WAIT_MS = 4000;
+const DEFINITION_WAIT_MS = 8000;
 
 const COPY: Record<
   ComponentFromSelectionAction,
@@ -169,9 +169,11 @@ interface PendingOps {
 }
 
 /**
- * A convert's ops, applied once the canvas holds the definition they place,
- * or after a bounded wait, when the placement draws its loading marker until
- * the library answers.
+ * A convert's ops, applied once the canvas holds the definition they place.
+ * Never before: a placement of a definition the editor cannot draw would
+ * stand on the page as a placeholder. If it has not arrived after a bounded
+ * wait (the author may not read components, or the read failed), nothing is
+ * applied and the author is told the component is in the library, unused.
  */
 function usePendingApply(
   pending: PendingOps | null,
@@ -183,24 +185,27 @@ function usePendingApply(
   const onClose = props.onClose;
   React.useEffect(() => {
     if (pending === null) return;
-    const apply = () => {
-      if (applyAll(pending.ops) === null) {
-        toast.error(
-          "The component was created, but this page could not be changed. It is in your library, unused."
-        );
-      } else {
-        const inserted = pending.ops.find(op => op.kind === "insert");
-        if (inserted?.kind === "insert") select(inserted.node.id, "replace");
-        toast.success(done);
-      }
+    const unused = (why: string) => {
+      toast.error(
+        `The component was created, but ${why}. It is in your library, unused, and this page is unchanged.`
+      );
       onClose();
     };
-    if (definitions.has(pending.id)) {
-      apply();
+    if (!definitions.has(pending.id)) {
+      const timer = window.setTimeout(
+        () => unused("this editor could not load it"),
+        DEFINITION_WAIT_MS
+      );
+      return () => window.clearTimeout(timer);
+    }
+    if (applyAll(pending.ops) === null) {
+      unused("this page could not take it");
       return;
     }
-    const timer = window.setTimeout(apply, DEFINITION_WAIT_MS);
-    return () => window.clearTimeout(timer);
+    const inserted = pending.ops.find(op => op.kind === "insert");
+    if (inserted?.kind === "insert") select(inserted.node.id, "replace");
+    toast.success(done);
+    onClose();
   }, [pending, definitions, applyAll, select, onClose, done]);
 }
 

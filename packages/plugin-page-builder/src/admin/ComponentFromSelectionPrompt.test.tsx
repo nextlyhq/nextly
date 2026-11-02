@@ -162,18 +162,39 @@ describe("converting from the editor", () => {
 
   it("leaves the page unchanged when it refuses the ops, and the component unused", async () => {
     stubWriter();
-    const { applyAll, select, onClose } = mount();
+    const { applyAll, select, onClose, props, view } = mount();
     applyAll.mockReturnValue(null);
 
     await confirm();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
-    });
+    view.rerender(
+      <ShortcutProvider>
+        <ComponentFromSelectionPrompt
+          {...props}
+          library={{
+            ...props.library,
+            definitions: new Map([["cmp-1", PAGE]]),
+          }}
+        />
+      </ShortcutProvider>
+    );
 
     // The one apply was refused, so nothing of the page changed, and nothing
     // was selected as if it had.
     expect(applyAll).toHaveBeenCalledTimes(1);
     expect(select).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("applies nothing when the new definition never reaches the canvas", async () => {
+    stubWriter();
+    const { applyAll, onClose } = mount();
+
+    await confirm();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(applyAll).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
 

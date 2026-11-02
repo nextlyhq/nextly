@@ -271,6 +271,25 @@ describe("in the editor's library mode", () => {
     expect(item.by).toEqual({ kind: "user", userId: "u1" });
   });
 
+  it("answers with the definition it stored", async () => {
+    const { ctx, createEntry } = contextOver();
+
+    const { item } = await answered(
+      await componentFromSelection(
+        request({
+          action: "convert",
+          document: threeBlocks,
+          selectedIds: ["b"],
+          fields,
+        }),
+        ctx,
+        { reads: readsOver(null) }
+      )
+    );
+
+    expect(item.definition).toEqual(createEntry.mock.calls[0]?.[1]?.content);
+  });
+
   it("saves a copy without touching the page", async () => {
     const { ctx, createEntry } = contextOver();
 
@@ -391,6 +410,77 @@ describe("who may run it", () => {
 
     expect(error.statusCode).toBe(422);
     expect(createEntry).not.toHaveBeenCalled();
+  });
+
+  it("saves from a stored page the caller may read but not update", async () => {
+    const { ctx, createEntry } = contextOver({ grants: { update: false } });
+
+    await componentFromSelection(
+      request({
+        action: "save-as",
+        apply: "stored",
+        page: { collection: "pages", id: "page-1" },
+        selectedIds: ["b"],
+        fields,
+      }),
+      ctx,
+      { reads: readsOver(threeBlocks) }
+    );
+
+    expect(createEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a convert whose page's definitions could not all be read", async () => {
+    const { ctx, createEntry } = contextOver();
+    const reads: ComponentFromSelectionReads = {
+      ...readsOver(null),
+      definitions: () => Promise.resolve({ kind: "unreadable" as const }),
+    };
+
+    const error = await thrownBy(
+      componentFromSelection(
+        request({
+          action: "convert",
+          document: page([placement("p", "c1")]),
+          selectedIds: ["p"],
+          fields,
+        }),
+        ctx,
+        { reads }
+      )
+    );
+
+    expect(error.statusCode).toBe(422);
+    expect(createEntry).not.toHaveBeenCalled();
+  });
+
+  it("reads and writes a stored page in the language named", async () => {
+    const { ctx, updateEntryInTransaction } = contextOver();
+    const asked: unknown[] = [];
+    const reads: ComponentFromSelectionReads = {
+      ...readsOver(threeBlocks),
+      page: address => {
+        asked.push(address);
+        return Promise.resolve(threeBlocks);
+      },
+    };
+
+    await componentFromSelection(
+      request({
+        action: "convert",
+        apply: "stored",
+        page: { collection: "pages", id: "page-1", locale: "fr" },
+        selectedIds: ["b"],
+        fields,
+      }),
+      ctx,
+      { reads }
+    );
+
+    expect(asked[0]).toMatchObject({ locale: "fr" });
+    expect(updateEntryInTransaction.mock.calls[0]?.[4]).toMatchObject({
+      locale: "fr",
+    });
   });
 
   it("refuses a stored convert of a page the caller may not update", async () => {

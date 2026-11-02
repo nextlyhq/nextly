@@ -90,7 +90,7 @@ import {
   type ComponentFromSelectionResult,
   type StoredPageAddress,
 } from "./library-contract";
-import type { ComponentStore } from "./library-route";
+import { readingAsUser, type ComponentStore } from "./library-route";
 
 /** The status a new component is created with. */
 const CREATED_STATUS = "published";
@@ -123,6 +123,7 @@ const RequestBody = z
         collection: z.string().min(1),
         id: z.string().min(1),
         field: z.string().min(1).optional(),
+        locale: z.string().min(1).optional(),
       })
       .optional(),
   })
@@ -167,7 +168,7 @@ export type ComponentFromSelectionContext = Pick<
 export interface ComponentFromSelectionReads {
   /** A stored page's blocks document, read as the caller, or `null`. */
   page(
-    address: Required<StoredPageAddress>,
+    address: StoredAddress,
     ctx: ComponentFromSelectionContext
   ): Promise<BlockDocument | null>;
   /** The published definitions placements resolve to, read for judging. */
@@ -206,7 +207,7 @@ export async function componentFromSelection(
 
   const page =
     apply === "stored"
-      ? await storedPage(ctx, reads, pageAddressOf(body))
+      ? await storedPage(ctx, reads, pageAddressOf(body), body.action)
       : undefined;
   const document = page?.document ?? documentOf(body.document);
   const components =
@@ -230,6 +231,8 @@ export async function componentFromSelection(
   if (preview.problem !== undefined) throw refusal(preview);
 
   const fields = fieldsToStore(body.fields);
+  // The definition is the one stored: each plan re-identifies the run, so
+  // the plan made with the created id carries different node ids.
   const answer = (
     id: string,
     plan: Planned,
@@ -239,7 +242,7 @@ export async function componentFromSelection(
     action: body.action,
     apply,
     component: { id, title: fields.title },
-    definition: plan.definition,
+    definition: preview.definition,
     pageOps: plan.pageOps,
     warnings: plan.warnings,
     by,
@@ -346,7 +349,7 @@ function plannedAction(args: {
 
 /** The stored page, once read, with where it lives. */
 interface StoredPage {
-  readonly address: Required<StoredPageAddress>;
+  readonly address: StoredAddress;
   readonly document: BlockDocument;
 }
 
@@ -393,7 +396,7 @@ async function convertStored(
       address.collection,
       address.id,
       { [address.field]: converted },
-      asCaller(ctx)
+      asCaller(ctx, address.locale)
     );
     return { id, plan };
   });
@@ -466,13 +469,21 @@ async function requireComponentPublisher(
     : { kind: "user", userId: user.id };
 }
 
-/** The stored page the request names, refused unless the caller may update it. */
+/**
+ * The stored page the request names, read as the caller, and refused for a
+ * convert unless the caller may update it.
+ */
 async function storedPage(
   ctx: ComponentFromSelectionContext,
   reads: ComponentFromSelectionReads,
-  address: Required<StoredPageAddress>
+  address: StoredAddress,
+  action: ComponentFromSelectionAction
 ): Promise<StoredPage> {
-  if (!(await ctx.caller?.can("update", address.collection))) {
+  // Only a convert writes the page; a save reads it, as the caller.
+  if (
+    action === "convert" &&
+    !(await ctx.caller?.can("update", address.collection))
+  ) {
     throw NextlyError.forbidden({
       logContext: { reason: "component-from-selection-needs-page-update" },
     });
@@ -500,13 +511,25 @@ async function placedDefinitions(
   limits: DocumentLimits
 ): Promise<ComponentLookup> {
   const library = heldLibrary();
-  await composeWithReads({
+  const walked = await composeWithReads({
     host: document,
     library,
     read: documentReader(reads.definitions, false),
     limits,
     work: { left: MOST_COMPOSED_NODES },
   });
+  // A walk cut short (too many components, a definition that could not be
+  // read) would judge the run against definitions it lacks, and a missing
+  // one reads as no depth at all.
+  if (walked.incomplete) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage:
+        "This page places more components than a convert can check, or one could not be read, so the convert was not made.",
+      logMessage: "Refused a convert whose definitions could not all be read",
+      logContext: { reason: "component-from-selection-walk-incomplete" },
+    });
+  }
   return {
     has: id => library.held.has(id),
     get: id => library.held.get(id) as BlockDocument | undefined,
@@ -530,9 +553,13 @@ function storeOf(
 /** The field the plugin's own components collection stores a definition in. */
 const DEFAULT_COMPONENT_FIELD = "content";
 
-/** The write options every write here runs with: as the caller, key and all. */
-function asCaller(ctx: ComponentFromSelectionContext) {
+/**
+ * The write options every write here runs with: as the caller, key and all,
+ * in the language named when the page's blocks field is translated.
+ */
+function asCaller(ctx: ComponentFromSelectionContext, locale?: string) {
   return {
+    ...(locale === undefined ? {} : { locale }),
     as: "user" as const,
     user: ctx.user ?? undefined,
     ...(ctx.authenticatedScope === undefined
@@ -580,15 +607,20 @@ function createdId(item: unknown): string {
 }
 
 /** The page address with its field defaulted. */
-function pageAddressOf(body: ParsedBody): Required<StoredPageAddress> {
+function pageAddressOf(body: ParsedBody): StoredAddress {
   const page = body.page;
   if (page === undefined) throw malformed("page");
   return {
     collection: page.collection,
     id: page.id,
     field: page.field ?? DEFAULT_PAGE_FIELD,
+    ...(page.locale === undefined ? {} : { locale: page.locale }),
   };
 }
+
+/** A stored page's address with its field defaulted. */
+type StoredAddress = Required<Omit<StoredPageAddress, "locale">> &
+  Pick<StoredPageAddress, "locale">;
 
 /** The document a library request carries, or the refusal that it is not one. */
 function documentOf(value: unknown): BlockDocument {
@@ -690,7 +722,8 @@ function directReads(store: {
           requireNextly().findByID({
             collection: address.collection,
             id: address.id,
-            ...(await asReader(ctx)),
+            ...(await readingAsUser(ctx)),
+            ...(address.locale === undefined ? {} : { locale: address.locale }),
             status: "all",
             draft: true,
             depth: 0,
@@ -715,18 +748,6 @@ function directReads(store: {
         return { kind: "unreadable" };
       }
     },
-  };
-}
-
-/** The caller as an enforced read takes them, key scope and all. */
-async function asReader(ctx: ComponentFromSelectionContext) {
-  const identity = await ctx.caller?.identity();
-  return {
-    overrideAccess: false as const,
-    user: identity?.user,
-    ...(identity?.authenticatedScope === undefined
-      ? {}
-      : { actor: identity.authenticatedScope }),
   };
 }
 

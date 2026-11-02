@@ -450,8 +450,9 @@ export interface ComponentFromSelectionFields {
 }
 
 /**
- * The stored page a `stored` convert edits: its collection, its id, and the
- * blocks field holding the selection (`content` when not given).
+ * The stored page a `stored` convert edits: its collection, its id, the
+ * blocks field holding the selection (`content` when not given), and the
+ * language when that field is translated.
  *
  * @experimental Settles when the composition API ships.
  */
@@ -459,6 +460,11 @@ export interface StoredPageAddress {
   readonly collection: string;
   readonly id: string;
   readonly field?: string;
+  /**
+   * The language to read and write, when the blocks field is translated.
+   * Absent, the site's default language.
+   */
+  readonly locale?: string;
 }
 
 /**
