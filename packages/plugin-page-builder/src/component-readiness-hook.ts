@@ -47,6 +47,7 @@ import type { HookContext } from "nextly";
 import { recordAdvisoryNotice } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
+import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import {
   requestContextFor,
   writeTargetOf,
@@ -58,18 +59,6 @@ const PUBLISHING_PHASES = ["afterCreate", "afterUpdate"] as const;
 
 /** The canonical code a consumer branches on. */
 export const COMPONENTS_NOT_PUBLISHED_CODE = "COMPONENTS_NOT_PUBLISHED";
-
-/**
- * How many ids one readiness query may ask about.
- *
- * A collection query is CLAMPED to `PAGINATION_DEFAULTS.maxLimit` (500) and
- * returns a subset silently, while a document may reference far more component
- * instances than that — the default node cap is 5,000. Asking for all of them
- * at once returns the first page, and every published component missing from it
- * is then reported as unpublished: a false warning, produced by the read rather
- * than by the data. Under the cap the answer is the whole answer.
- */
-const READINESS_BATCH_SIZE = 128;
 
 /** The reads this notice makes on its own behalf. */
 export interface ReadinessDirectApi {
@@ -467,7 +456,7 @@ function storeSource(
 ): ComponentSource {
   return async (ids: readonly string[]) => {
     const found = new Map<string, BlockDocument>();
-    for (const chunk of chunked(ids, READINESS_BATCH_SIZE)) {
+    for (const chunk of chunked(ids, ID_BATCH_SIZE)) {
       const page = await nextly.find({
         collection,
         where: { id: { in: [...chunk] } },
@@ -510,15 +499,6 @@ function storeSource(
     }
     return found;
   };
-}
-
-/** Successive slices of at most `size`. */
-function chunked<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
-  }
-  return out;
 }
 
 /**

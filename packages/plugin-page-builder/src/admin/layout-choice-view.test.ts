@@ -51,7 +51,6 @@ function ready(
         defaultLayout: "main",
         layoutsCollection: "layouts",
         canUpdateLayouts: true,
-        truncated: false,
         regionComponents: {},
         regionDefinitions: {},
         ...overrides,
@@ -111,9 +110,17 @@ describe("the page's Layout picker", () => {
     expect(view.why).toBe("Site default: Main (the chosen Layout was deleted)");
   });
 
-  it("does not call a Layout deleted when the list was cut short", () => {
-    const view = layoutPickerView(page("gone"), ready({ truncated: true }));
-    expect(view.options[0]?.label).toBe("Site default (Main)");
+  it("draws a page inside its own Layout when the route added it past the list's bound", () => {
+    // The route lists Layouts by title up to a bound, then the page's own
+    // Layout when the bound cut it: the last row here, out of title order.
+    const past: LayoutChoice = { ...landing, id: "zz", title: "Zebra" };
+    const view = layoutPickerView(
+      page("zz"),
+      ready({}, [main, unfinished, landing, past])
+    );
+    expect(view.value).toBe("layout:zz");
+    expect(view.why).toBe("Zebra");
+    expect(view.effective?.id).toBe("zz");
   });
 
   it("draws nothing for a page with no header or footer, whatever it names", () => {

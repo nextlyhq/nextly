@@ -28,7 +28,10 @@ import {
   COMPONENT_LIBRARY_ROUTE_PATH,
   LIBRARY_ROUTE_PATH,
 } from "../library-contract";
-import { LAYOUT_CHOICES_ROUTE_PATH } from "../layout-choices-contract";
+import {
+  LAYOUT_CHOICES_ROUTE_PATH,
+  PAGE_COLLECTION_ROUTE_PATH,
+} from "../layout-choices-contract";
 
 /**
  * What the library route answers, for the one case that cares.
@@ -97,6 +100,7 @@ const paths = vi.hoisted(() => ({
   components: "/library/components",
   capability: "/capability",
   layoutChoices: "/layouts/choices",
+  pageCollection: "/layouts/page-collection",
 }));
 
 /** Props the recorders captured on the most recent render. */
@@ -320,9 +324,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // and a mock that counted both as one made "does not read the library" fail
   // for a read of something else entirely.
   usePluginRoute: (args: { path: string }) => {
-    // The page's Layout choices, a read of its own: this form is not a page's,
-    // so it is asked for nothing, and it is not the library these count.
-    if (args.path === paths.layoutChoices) {
+    // The page's Layout reads, reads of their own: which collection holds the
+    // pages, answered with nothing so this form is not a page's, and the
+    // choices, asked for nothing. Neither is the library these count.
+    if (
+      args.path.startsWith(paths.layoutChoices) ||
+      args.path === paths.pageCollection
+    ) {
       return {
         data: undefined,
         pending: false,
@@ -600,6 +608,7 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(paths.components).toBe(COMPONENT_LIBRARY_ROUTE_PATH);
     expect(paths.capability).toBe(CAPABILITY_ROUTE_PATH);
     expect(paths.layoutChoices).toBe(LAYOUT_CHOICES_ROUTE_PATH);
+    expect(paths.pageCollection).toBe(PAGE_COLLECTION_ROUTE_PATH);
   });
 
   it("asks what the author may do EAGERLY, before any panel is opened", () => {

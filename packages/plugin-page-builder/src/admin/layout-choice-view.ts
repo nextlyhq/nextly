@@ -174,10 +174,9 @@ function viewFromList(
   const { items, meta } = choices;
   const byId = new Map(items.map(item => [item.id, item]));
   const isPublished = (id: string) => byId.get(id)?.published === true;
-  // A named Layout the list does not hold. Listed whole up to its bound, so
-  // past the bound it may exist unseen; within it, it is gone.
-  const deleted =
-    named !== null && !byId.has(named) && !meta.truncated && !switchedOff;
+  // A named Layout the answer does not hold is gone: the route answers for
+  // the page's selected Layout however far past its bound it sorts.
+  const deleted = named !== null && !byId.has(named) && !switchedOff;
 
   const options: PickerOption[] = [
     {

@@ -29,6 +29,7 @@ import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
 import { writeLayoutSettings } from "../default-layout/store";
 import {
   LAYOUT_CHOICES_ROUTE_PATH,
+  LAYOUT_CHOICES_SELECTED_PARAM,
   type LayoutChoicesResponse,
 } from "../layout-choices-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
@@ -113,11 +114,16 @@ describe.each(getConfiguredTestDialects())(
     }
 
     async function choices(
-      cookie: string
+      cookie: string,
+      selected: string | null = null
     ): Promise<{ status: number; body: LayoutChoicesResponse }> {
       const handlers = createDynamicHandlers();
       const sub = LAYOUT_CHOICES_ROUTE_PATH.split("/").filter(Boolean);
-      const url = `${ORIGIN}/api/plugins/${PAGE_BUILDER_PLUGIN_NAME}/${sub.join("/")}`;
+      const query =
+        selected === null
+          ? ""
+          : `?${new URLSearchParams({ [LAYOUT_CHOICES_SELECTED_PARAM]: selected }).toString()}`;
+      const url = `${ORIGIN}/api/plugins/${PAGE_BUILDER_PLUGIN_NAME}/${sub.join("/")}${query}`;
       const response = await handlers.GET(
         new Request(url, { headers: { cookie, origin: ORIGIN } }),
         {
@@ -244,7 +250,9 @@ describe.each(getConfiguredTestDialects())(
         "read-components",
       ]);
 
-      const answer = await choices(await sessionOf(t, manager));
+      // Asked about by the page that selected it: draft facts are read for the
+      // selected Layout and the default, the two a page can be drawn inside.
+      const answer = await choices(await sessionOf(t, manager), landing);
 
       expect(answer.status).toBe(200);
       expect(answer.body.meta.canUpdateLayouts).toBe(true);

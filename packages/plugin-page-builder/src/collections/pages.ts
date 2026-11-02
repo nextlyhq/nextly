@@ -11,6 +11,10 @@ import {
 import { blocks } from "../fields/blocksHelper";
 
 import { LAYOUTS_SLUG } from "./layouts";
+
+/** The slug pages are stored under, before any rename a host applies. */
+export const PAGES_SLUG = "pages";
+
 /**
  * There is no page-level custom CSS field.
  *
@@ -113,7 +117,7 @@ export function pagesCollection(
   const { previewPath, breakpoints } = options;
 
   return defineCollection({
-    slug: "pages",
+    slug: PAGES_SLUG,
     labels: { singular: "Page", plural: "Pages" },
     fields: [
       text({ name: "title", required: true }),

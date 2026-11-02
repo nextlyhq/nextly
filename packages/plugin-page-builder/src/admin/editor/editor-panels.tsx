@@ -28,7 +28,6 @@ import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
-import { FormSection } from "@nextlyhq/ui";
 import {
   useCallback,
   useMemo,
@@ -332,7 +331,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   }
 ): EditorPanels {
   const { editor, clientConfig } = mount;
-  // The picker, or null for a form that is not a page drawn in a Layout.
+  // The Layout section, or null for a form that is not a page's.
   const layoutPicker = usePageLayoutSettings(page.control);
   // From the form's unsaved values, so a change of Layout redraws at once.
   const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
@@ -359,13 +358,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
         {/* The form's own panel pads itself, so only the top and sides here:
             the two sections then sit one panel-gap apart. */}
         <div className="px-4 pt-4">
-          {/* A section of its own, as the form's own groups are drawn. */}
-          <FormSection
-            label="Header and footer"
-            description="Which Layout this page is drawn inside."
-          >
-            {layoutPicker}
-          </FormSection>
+          {/* The section carries its own heading and words. */}
+          {layoutPicker}
         </div>
         {formFields}
       </div>

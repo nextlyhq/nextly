@@ -23,15 +23,34 @@ import {
   vi,
 } from "vitest";
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ usePluginRoute: vi.fn() }));
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  usePluginRoute: vi.fn(),
+  useDocumentIdentity: vi.fn(),
+}));
 
-import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentIdentity,
+  usePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
 
-import type { LayoutChoicesResponse } from "../layout-choices-contract";
+import {
+  LAYOUT_CHOICES_ROUTE_PATH,
+  PAGE_COLLECTION_ROUTE_PATH,
+  type LayoutChoicesResponse,
+} from "../layout-choices-contract";
 
-import { PageLayoutPicker, usePageLayoutRegions } from "./page-layout";
+import {
+  PageLayoutPicker,
+  usePageLayoutRegions,
+  usePageLayoutSettings,
+} from "./page-layout";
 
 const read = vi.mocked(usePluginRoute);
+const identity = vi.mocked(useDocumentIdentity);
+
+/** The collection the form under test belongs to, and the site's pages. */
+let formCollection = "pages";
+let pagesCollection = "pages";
 
 const choices: LayoutChoicesResponse = {
   items: [
@@ -57,19 +76,40 @@ const choices: LayoutChoicesResponse = {
     defaultLayout: "main",
     layoutsCollection: "layouts",
     canUpdateLayouts: true,
-    truncated: false,
     regionComponents: {},
     regionDefinitions: {},
   },
 };
 
 function answering(data: LayoutChoicesResponse | undefined, error?: unknown) {
-  read.mockReturnValue({
-    data,
-    error: error ?? null,
-    pending: data === undefined && error === undefined,
-    refetch: () => {},
-  } as unknown as ReturnType<typeof usePluginRoute>);
+  identity.mockImplementation(() => ({
+    kind: "collection",
+    slug: formCollection,
+  }));
+  read.mockImplementation(({ path }) => {
+    // The page collection's answer is the site's, whatever the choices say.
+    if (path === PAGE_COLLECTION_ROUTE_PATH) {
+      return {
+        data: { pagesCollection },
+        error: null,
+        pending: false,
+        refetch: () => {},
+      } as unknown as ReturnType<typeof usePluginRoute>;
+    }
+    return {
+      data,
+      error: error ?? null,
+      pending: data === undefined && error === undefined,
+      refetch: () => {},
+    } as unknown as ReturnType<typeof usePluginRoute>;
+  });
+}
+
+/** The paths the choices were asked at. */
+function choicePaths(): string[] {
+  return read.mock.calls
+    .map(([request]) => request.path)
+    .filter(path => path.startsWith(LAYOUT_CHOICES_ROUTE_PATH));
 }
 
 beforeAll(() => {
@@ -80,7 +120,12 @@ beforeAll(() => {
   proto.scrollIntoView = () => {};
 });
 
-beforeEach(() => answering(choices));
+beforeEach(() => {
+  formCollection = "pages";
+  pagesCollection = "pages";
+  read.mockClear();
+  answering(choices);
+});
 afterEach(cleanup);
 
 let values: () => FieldValues = () => ({});
@@ -163,7 +208,39 @@ describe("the page's Layout picker", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
+  it("asks for the page's own Layout by id, so a Layout past the list's bound is answered", () => {
+    renderPicker({ layout: "landing", noHeaderFooter: false });
+    expect(choicePaths()).toContain(
+      `${LAYOUT_CHOICES_ROUTE_PATH}?selected=landing`
+    );
+  });
+
+  it("draws on the pages collection a host renamed", () => {
+    formCollection = "site-pages";
+    pagesCollection = "site-pages";
+    answering(choices);
+    renderPicker();
+    expect(screen.getByRole("combobox", { name: "Layout" })).toBeTruthy();
+  });
+
+  it("draws nothing on another collection with its own switch of the same name", () => {
+    // A field-name collision: this collection has a boolean called
+    // `noHeaderFooter` of its own, and is not the pages collection.
+    formCollection = "campaigns";
+    answering(choices);
+    const { container } = render(
+      <Form defaults={{ title: "A campaign", noHeaderFooter: false }}>
+        {control => <PageLayoutPicker control={control} />}
+      </Form>
+    );
+    expect(container.textContent).toBe("");
+    expect(Object.keys(values()).sort()).toEqual(["noHeaderFooter", "title"]);
+    expect(choicePaths()).toEqual([]);
+  });
+
   it("draws nothing, and adds no field, on a form that is not a page's", () => {
+    formCollection = "posts";
+    answering(choices);
     const { container } = render(
       <Form defaults={{ title: "A post" }}>
         {control => <PageLayoutPicker control={control} />}
@@ -171,6 +248,36 @@ describe("the page's Layout picker", () => {
     );
     expect(container.textContent).toBe("");
     expect(Object.keys(values())).toEqual(["title"]);
+  });
+});
+
+describe("the Settings section for the page's Layout", () => {
+  function Section({ defaults }: { defaults: FieldValues }) {
+    const form = useForm({ defaultValues: defaults });
+    return <>{usePageLayoutSettings(form.control)}</>;
+  }
+
+  it("carries its own heading and description, then the picker", () => {
+    render(<Section defaults={{ layout: null, noHeaderFooter: false }} />);
+    const section = screen.getByRole("region", { name: "Header and footer" });
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Header and footer" })
+    ).toBeTruthy();
+    expect(section.textContent).toContain(
+      "Which Layout this page is drawn inside."
+    );
+    expect(
+      section.contains(screen.getByRole("combobox", { name: "Layout" }))
+    ).toBe(true);
+  });
+
+  it("is nothing for a form that is not a page's", () => {
+    formCollection = "campaigns";
+    answering(choices);
+    const { container } = render(
+      <Section defaults={{ title: "A campaign", noHeaderFooter: false }} />
+    );
+    expect(container.textContent).toBe("");
   });
 });
 

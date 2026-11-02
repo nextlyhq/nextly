@@ -48,7 +48,7 @@ import {
 } from "./collections/components";
 import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
-import { pagesCollection } from "./collections/pages";
+import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import {
   USAGE_BACKFILL_STATE_SLUG,
@@ -75,7 +75,10 @@ import { entriesRoute } from "./entries-route";
 import type { CompositionSetup } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
-import { layoutChoicesRoute } from "./layout-choices-route";
+import {
+  layoutChoicesRoute,
+  pageCollectionRoute,
+} from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
@@ -1024,7 +1027,7 @@ export const pageBuilder = (
       // site's default until its own is published, and the author is told.
       registerLayoutReadinessNotice({
         ctx,
-        pages: ctx.self.collections.pages ?? "pages",
+        pages: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
         layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
         settings:
           ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
@@ -1201,8 +1204,12 @@ export const pageBuilder = (
         // Layouts) that a plain Single write cannot state.
         makeDefaultRoute(),
         // The Layouts an author may choose for a page, with the published
-        // regions the editor draws around it, read as the author.
-        layoutChoicesRoute(),
+        // regions the editor draws around it, read as the author from the
+        // component store the editor's library reads.
+        layoutChoicesRoute(componentStoreOf(opts)),
+        // Which collection holds the pages, as renamed: the picker draws on
+        // that collection's forms and no other.
+        pageCollectionRoute(),
       ],
       // The grant that lets a role choose the site's default Layout, read by
       // the make-default route. A permission of its own rather than

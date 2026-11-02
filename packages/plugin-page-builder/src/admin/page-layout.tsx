@@ -13,12 +13,16 @@
  * @module admin/page-layout
  */
 import {
+  layoutRelationId,
   regionDocument,
   type BlockDocument,
   type RegionArea,
 } from "@nextlyhq/blocks-engine";
 import type { CanvasRegion, LayersRegionRow } from "@nextlyhq/builder/shell";
-import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentIdentity,
+  usePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   Label,
@@ -28,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { useId, useMemo, type JSX } from "react";
+import { useEffect, useId, useMemo, useState, type JSX } from "react";
 import {
   useController,
   useWatch,
@@ -38,8 +42,10 @@ import {
 } from "react-hook-form";
 
 import {
-  LAYOUT_CHOICES_ROUTE_PATH,
+  layoutChoicesPath,
+  PAGE_COLLECTION_ROUTE_PATH,
   type LayoutChoicesResponse,
+  type PageCollectionResponse,
 } from "../layout-choices-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
@@ -56,19 +62,35 @@ const LAYOUT_FIELD = "layout";
 /** The page's stored switch for no header or footer. */
 const SWITCH_FIELD = "noHeaderFooter";
 
-/** The Layout choices, read as the author, with where the read stands. */
-function useLayoutChoices(enabled: boolean): {
+/**
+ * The Layout choices, read as the author, with where the read stands.
+ *
+ * Asked about the page's `selected` Layout by id, so a Layout the list's bound
+ * cut is still answered for. A new choice asks again; until the new answer
+ * arrives the last one stands, so the picker and canvas never blank between
+ * the two.
+ */
+function useLayoutChoices(
+  enabled: boolean,
+  selected: string | null
+): {
   state: LayoutChoicesState;
   retry: () => void;
 } {
   const read = usePluginRoute<LayoutChoicesResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: LAYOUT_CHOICES_ROUTE_PATH,
+    path: layoutChoicesPath(selected),
     enabled,
     // Asked again on every mount: a Layout published or made the default in
     // another tab is a choice the author should see when they come back.
     staleTime: 0,
   });
+  const [held, setHeld] = useState<LayoutChoicesResponse | undefined>(
+    undefined
+  );
+  useEffect(() => {
+    if (read.data !== undefined) setHeld(read.data);
+  }, [read.data]);
   const state = useMemo((): LayoutChoicesState => {
     if (read.data !== undefined) return { kind: "ready", choices: read.data };
     if (read.error !== null) {
@@ -78,22 +100,42 @@ function useLayoutChoices(enabled: boolean): {
         ? { kind: "forbidden" }
         : { kind: "failed" };
     }
-    return { kind: "pending" };
-  }, [read.data, read.error]);
+    return held === undefined
+      ? { kind: "pending" }
+      : { kind: "ready", choices: held };
+  }, [read.data, read.error, held]);
   return { state, retry: read.refetch };
 }
 
 /**
- * The stored values, or `undefined` when this form has no Layout fields.
+ * Whether this form is one of the plugin's pages: the pages collection's own
+ * form, by the slug the site resolved, renamed or not.
  *
- * Read with `useWatch`, which never registers a field: a form for another
- * collection must not gain `layout` or `noHeaderFooter` by asking. The switch
- * is a checkbox with a default, so a page's form always holds a boolean there
- * and any other form holds nothing.
+ * By identity rather than by the form's fields, because another collection
+ * may hold a field of the same name; the picker must not draw there, register
+ * a `layout` field, or write that collection's own switch.
+ */
+function useIsPageForm(): boolean {
+  const identity = useDocumentIdentity();
+  const candidate = identity?.kind === "collection";
+  const read = usePluginRoute<PageCollectionResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: PAGE_COLLECTION_ROUTE_PATH,
+    enabled: candidate,
+  });
+  return candidate && read.data?.pagesCollection === identity.slug;
+}
+
+/**
+ * The stored values on a page's form, or `undefined` on any other form.
+ *
+ * Read with `useWatch`, which never registers a field, so asking adds nothing
+ * to a form that is not a page's.
  */
 function useStoredLayout<T extends FieldValues>(
   control: Control<T>
 ): { layout: unknown; noHeaderFooter: boolean } | undefined {
+  const isPage = useIsPageForm();
   const layout: unknown = useWatch({
     control,
     name: LAYOUT_FIELD as Path<T>,
@@ -106,23 +148,53 @@ function useStoredLayout<T extends FieldValues>(
   // when the choice changes.
   return useMemo(
     () =>
-      typeof noHeaderFooter === "boolean"
-        ? { layout, noHeaderFooter }
-        : undefined,
-    [layout, noHeaderFooter]
+      isPage ? { layout, noHeaderFooter: noHeaderFooter === true } : undefined,
+    [isPage, layout, noHeaderFooter]
   );
 }
 
+/** The id the stored values select, which the choices are asked about. */
+function selectedOf(
+  stored: { layout: unknown; noHeaderFooter: boolean } | undefined
+): string | null {
+  return stored === undefined ? null : layoutRelationId(stored.layout);
+}
+
 /**
- * The Layout picker for the editor's Settings panel, or null for a form that
- * is not a page's, so the panel draws no empty "Header and footer" section
- * for a collection without a Layout.
+ * The page's Layout section for a settings surface, or null for a form that is
+ * not a page's.
+ *
+ * A whole section, heading and description included, so any surface that
+ * holds page settings places it without restating its words.
  */
 export function usePageLayoutSettings<T extends FieldValues>(
   control: Control<T>
 ): JSX.Element | null {
   const isPage = useStoredLayout(control) !== undefined;
-  return isPage ? <PageLayoutPicker control={control} /> : null;
+  return isPage ? <PageLayoutSection control={control} /> : null;
+}
+
+/** "Header and footer": what the section says, then the picker. */
+function PageLayoutSection<T extends FieldValues>({
+  control,
+}: {
+  control: Control<T>;
+}): JSX.Element {
+  const titleId = `${useId()}-title`;
+  return (
+    <section aria-labelledby={titleId} className="space-y-3">
+      {/* The heading and its line together, then the picker a step below. */}
+      <div className="space-y-1">
+        <h3 id={titleId} className="text-sm font-semibold">
+          Header and footer
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          Which Layout this page is drawn inside.
+        </p>
+      </div>
+      <PageLayoutPicker control={control} />
+    </section>
+  );
 }
 
 /**
@@ -163,7 +235,7 @@ function Picker<T extends FieldValues>({
     control,
     name: SWITCH_FIELD as Path<T>,
   });
-  const { state, retry } = useLayoutChoices(true);
+  const { state, retry } = useLayoutChoices(true, selectedOf(stored));
   const view = layoutPickerView(stored, state);
   const id = useId();
   const whyId = `${id}-why`;
@@ -259,7 +331,7 @@ export function usePageLayoutRegions<T extends FieldValues>(
   canvasRoot: HTMLElement | null
 ): { canvas: readonly CanvasRegion[]; layers: readonly LayersRegionRow[] } {
   const stored = useStoredLayout(control);
-  const { state } = useLayoutChoices(stored !== undefined);
+  const { state } = useLayoutChoices(stored !== undefined, selectedOf(stored));
   return useMemo(
     () => regionsOf(stored, state, canvasRoot),
     [stored, state, canvasRoot]
