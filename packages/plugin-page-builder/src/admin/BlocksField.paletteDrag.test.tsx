@@ -166,12 +166,16 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BuilderShell: ({
       inspector,
       topBar,
+      topBarCenter,
+      topBarEnd,
       children,
       renderPanel,
       notices,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
+      topBarCenter?: React.ReactNode;
+      topBarEnd?: React.ReactNode;
       children?: React.ReactNode;
       notices?: {
         notices: readonly { message: string }[];
@@ -186,6 +190,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          * would leave its assertions passing on absence.
          */}
         {topBar}
+        {topBarCenter}
+        {topBarEnd}
         {inspector}
         {/*
          * The real shell draws one panel at a time and this mock draws none,
@@ -355,6 +361,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // `null` is a real answer the pill handles — "no status has been persisted",
   // which is what a create form and a preview both look like — so this mounts
   // the top bar without putting a second subject in the assertions below.
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
   useDocumentStatus: () => null,
   // The stored style tier. Answered as "nothing stored yet" here, because what
   // this file asserts is which props reach the two enforcing surfaces — the

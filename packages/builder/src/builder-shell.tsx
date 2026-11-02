@@ -223,8 +223,21 @@ export interface BuilderShellProps {
   children?: React.ReactNode;
   /** The inspector's contents. */
   inspector?: React.ReactNode;
-  /** Rendered into the top bar, between the page menu and the actions. */
+  /**
+   * The document's title, shown read-only at the start of the top bar and cut
+   * short with its full text in a tooltip when the bar is narrow.
+   */
+  title?: string;
+  /** The top bar's start column, after the exit button and the title. */
   topBar?: React.ReactNode;
+  /**
+   * The top bar's centre column, before the zoom: the device buttons. Centred
+   * between two equal side columns, so it stays in the middle of the editor
+   * whatever the sides hold.
+   */
+  topBarCenter?: React.ReactNode;
+  /** The top bar's end column, before the side-panel buttons: the actions. */
+  topBarEnd?: React.ReactNode;
   /** The ancestor breadcrumb, along the bottom bar. */
   breadcrumb?: React.ReactNode;
   /**
@@ -772,6 +785,168 @@ function focusNextRegion(map: Record<Region, HTMLElement | null> | null): void {
 }
 
 /**
+ * The panel set about to be rendered, named the same way a persisted layout
+ * is keyed. Derived from what is shown because that is what decides the set;
+ * the persisted key is derived from the layout's own ids, and the two meet at
+ * `topologyKey` rather than being two spellings of one arrangement.
+ */
+function panelTopology(
+  openPanel: LeftPanel | null,
+  inspectorShown: boolean
+): string {
+  return topologyKey([
+    ...(openPanel === null ? [] : ["panel"]),
+    "canvas",
+    ...(inspectorShown ? ["inspector"] : []),
+  ]);
+}
+
+/**
+ * Help's open state, and the control focus returns to when it closes.
+ *
+ * Help closes when the editor gives way to the narrow-window notice. The
+ * regions stay mounted there, hidden and inert, and a modal left open would
+ * keep its focus trap and its hold on the keyboard over a notice whose Exit
+ * button it would then keep out of reach. Closed rather than hidden, so
+ * widening the window again does not bring back a dialog nobody reopened.
+ */
+function useHelpDialog(active: boolean): {
+  helpOpen: boolean;
+  setHelpOpen: (open: boolean) => void;
+  helpOpener: React.RefObject<HTMLElement | null>;
+} {
+  const [helpOpen, setHelpOpen] = React.useState(false);
+  const helpOpener = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    if (!active) setHelpOpen(false);
+  }, [active]);
+  return { helpOpen, setHelpOpen, helpOpener };
+}
+
+/**
+ * The editor's top bar: three columns, the outer two equal, so the centre one
+ * (the devices and the zoom) stays in the middle of the editor whatever the
+ * sides hold. The shell draws its own controls here (exit, the zoom, the side
+ * toggles) around what the host puts in each column.
+ */
+function ShellTopBar({
+  headerRef,
+  onExit,
+  title,
+  topBar,
+  topBarCenter,
+  topBarEnd,
+  zoom,
+  appliedScale,
+  onZoomPick,
+  leftShown,
+  inspectorShown,
+  onLeft,
+  onInspector,
+}: Pick<
+  BuilderShellProps,
+  "onExit" | "title" | "topBar" | "topBarCenter" | "topBarEnd"
+> & {
+  headerRef: (element: HTMLElement | null) => void;
+  zoom: CanvasZoom;
+  appliedScale: number;
+  onZoomPick: ((next: CanvasZoom) => void) | undefined;
+  leftShown: boolean;
+  inspectorShown: boolean;
+  onLeft: () => void;
+  onInspector: () => void;
+}): React.JSX.Element {
+  return (
+    <header
+      ref={headerRef}
+      // Focusable by F6, not by Tab: Tab reaches the controls inside it.
+      tabIndex={-1}
+      // Three columns, the outer two equal, so the centre column (the
+      // devices and the zoom) sits in the middle of the editor whatever the
+      // sides hold. A container, so controls inside can give way by width.
+      className="border-[color:var(--nx-builder-border)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
+      aria-label="Editor actions"
+    >
+      <div data-topbar="start" className="flex min-w-0 items-center gap-2">
+        {/*
+         * Rendered only when there is somewhere to go. A button carrying no
+         * handler still looks operable — it takes focus, it depresses — and
+         * teaches the author that leaving does nothing, which is worse than
+         * offering no exit at all.
+         */}
+        {onExit ? (
+          <button
+            type="button"
+            onClick={onExit}
+            data-builder-animates
+            /*
+             * The NAME stays "Exit editor" while the label becomes a glyph.
+             * This is the only route back to the document — `ChromeSuppression`
+             * withholds the navigation rail from a surface that cannot be left,
+             * on the grounds that an author with unsaved work and no way out is
+             * the worst state the editor can reach — so it keeps a real
+             * accessible name and a tooltip rather than relying on the arrow
+             * being self-evident.
+             *
+             * An arrow rather than a cross: this returns to the document that
+             * opened the editor, and a cross reads as discarding rather than
+             * as going back.
+             */
+            aria-label="Exit editor"
+            title="Exit editor"
+            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border p-1.5 focus-visible:ring-2 focus-visible:outline-none"
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+          </button>
+        ) : null}
+        {title !== undefined && title !== "" ? (
+          <span
+            title={title}
+            className="min-w-0 shrink truncate text-sm font-medium"
+          >
+            {title}
+          </span>
+        ) : null}
+        {topBar}
+      </div>
+      <div data-topbar="centre" className="flex items-center gap-2">
+        {topBarCenter}
+        {/*
+          Rendered by the shell, not handed to the host as a slot, because the
+          shell owns preferences and this control edits one. A host drawing its
+          own would hold the value in a second place, and the two would correct
+          each other on every open.
+
+          Only where the host has WIRED it, though. The canvas belongs to the
+          host, so without `onZoomChange` there is nothing to apply a choice to:
+          the control would store a preference, report a percentage the canvas
+          does not honour, and read 100% whatever was picked. A shell that
+          predates this — the README example and the playground harness among
+          them — should gain no control rather than a dead one.
+        */}
+        <CanvasZoomControl
+          zoom={zoom}
+          appliedScale={appliedScale}
+          onChange={onZoomPick}
+        />
+      </div>
+      <div
+        data-topbar="end"
+        className="flex min-w-0 items-center justify-end gap-2"
+      >
+        {topBarEnd}
+        <SidePanelToggles
+          leftShown={leftShown}
+          inspectorShown={inspectorShown}
+          onLeft={onLeft}
+          onInspector={onInspector}
+        />
+      </div>
+    </header>
+  );
+}
+
+/**
  * The top bar's buttons that show or hide each side of the editor, so the
  * canvas can take the room. Pressed means shown; each keeps its panel's name,
  * and the pressed state says which way it is.
@@ -955,7 +1130,10 @@ function ShellRegions({
   availablePanels,
   children,
   inspector,
+  title,
   topBar,
+  topBarCenter,
+  topBarEnd,
   breadcrumb,
   checklist,
   onExit,
@@ -1041,32 +1219,13 @@ function ShellRegions({
     toggleLeft,
     toggleInspector,
   } = useSidePanels(preferences, update, isAvailable, active, claimsKeys);
-  // The panel set about to be rendered, named the same way a persisted layout
-  // is keyed. Derived from `openPanel` because that is what decides the set;
-  // the persisted key is derived from the layout's own ids, and the two meet at
-  // `topologyKey` rather than being two spellings of one arrangement.
-  const mountedTopology = topologyKey([
-    ...(openPanel === null ? [] : ["panel"]),
-    "canvas",
-    ...(inspectorShown ? ["inspector"] : []),
-  ]);
+  const mountedTopology = panelTopology(openPanel, inspectorShown);
 
   const panelView: PanelView = {
     current: preferences.leftPanelView,
     choose: view => update(current => ({ ...current, leftPanelView: view })),
   };
-  const [helpOpen, setHelpOpen] = React.useState(false);
-  const helpOpener = React.useRef<HTMLElement | null>(null);
-  /*
-   * Help closes when the editor gives way to the narrow-window notice. The
-   * regions stay mounted there, hidden and inert, and a modal left open would
-   * keep its focus trap and its hold on the keyboard over a notice whose Exit
-   * button it would then keep out of reach. Closed rather than hidden, so
-   * widening the window again does not bring back a dialog nobody reopened.
-   */
-  React.useEffect(() => {
-    if (!active) setHelpOpen(false);
-  }, [active]);
+  const { helpOpen, setHelpOpen, helpOpener } = useHelpDialog(active);
 
   return (
     <div
@@ -1085,72 +1244,23 @@ function ShellRegions({
         ? {}
         : { [EMPTY_ELEMENTS_ATTRIBUTE]: "hidden" })}
     >
-      <header
-        ref={element => {
+      <ShellTopBar
+        headerRef={element => {
           regionRefs.current.header = element;
         }}
-        // Focusable by F6, not by Tab: Tab reaches the controls inside it.
-        tabIndex={-1}
-        className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
-        aria-label="Editor actions"
-      >
-        {/*
-         * Rendered only when there is somewhere to go. A button carrying no
-         * handler still looks operable — it takes focus, it depresses — and
-         * teaches the author that leaving does nothing, which is worse than
-         * offering no exit at all.
-         */}
-        {onExit ? (
-          <button
-            type="button"
-            onClick={onExit}
-            data-builder-animates
-            /*
-             * The NAME stays "Exit editor" while the label becomes a glyph.
-             * This is the only route back to the document — `ChromeSuppression`
-             * withholds the navigation rail from a surface that cannot be left,
-             * on the grounds that an author with unsaved work and no way out is
-             * the worst state the editor can reach — so it keeps a real
-             * accessible name and a tooltip rather than relying on the arrow
-             * being self-evident.
-             *
-             * An arrow rather than a cross: this returns to the document that
-             * opened the editor, and a cross reads as discarding rather than
-             * as going back.
-             */
-            aria-label="Exit editor"
-            title="Exit editor"
-            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border p-1.5 focus-visible:ring-2 focus-visible:outline-none"
-          >
-            <ArrowLeft className="size-4" aria-hidden="true" />
-          </button>
-        ) : null}
-        <div className="flex min-w-0 flex-1 items-center gap-2">{topBar}</div>
-        {/*
-          Rendered by the shell, not handed to the host as a slot, because the
-          shell owns preferences and this control edits one. A host drawing its
-          own would hold the value in a second place, and the two would correct
-          each other on every open.
-
-          Only where the host has WIRED it, though. The canvas belongs to the
-          host, so without `onZoomChange` there is nothing to apply a choice to:
-          the control would store a preference, report a percentage the canvas
-          does not honour, and read 100% whatever was picked. A shell that
-          predates this — the README example and the playground harness among
-          them — should gain no control rather than a dead one.
-        */}
-        <CanvasZoomControl
-          zoom={preferences.zoom}
-          appliedScale={appliedScale}
-          onChange={onZoomPick}
-        />
-        <SidePanelToggles
-          leftShown={leftShown}
-          inspectorShown={inspectorShown}
-          onLeft={toggleLeft}
-          onInspector={toggleInspector}
-        />
-      </header>
+        onExit={onExit}
+        title={title}
+        topBar={topBar}
+        topBarCenter={topBarCenter}
+        topBarEnd={topBarEnd}
+        zoom={preferences.zoom}
+        appliedScale={appliedScale}
+        onZoomPick={onZoomPick}
+        leftShown={leftShown}
+        inspectorShown={inspectorShown}
+        onLeft={toggleLeft}
+        onInspector={toggleInspector}
+      />
 
       <div className="flex min-h-0 flex-1">
         <EditorRail

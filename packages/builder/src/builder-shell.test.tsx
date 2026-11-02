@@ -2178,3 +2178,50 @@ describe("hiding the side panels", () => {
     ).toBeTruthy();
   });
 });
+
+describe("the top bar's three columns", () => {
+  it("places the host's start, centre and end content, and its own controls, in their columns", () => {
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="About us"
+        topBar={<span>start content</span>}
+        topBarCenter={<span>centre content</span>}
+        topBarEnd={<span>end content</span>}
+        onZoomChange={vi.fn()}
+      />
+    );
+    const column = (name: string) =>
+      document.querySelector<HTMLElement>(`[data-topbar="${name}"]`);
+    const start = column("start");
+    const centre = column("centre");
+    const end = column("end");
+    expect(start?.textContent).toContain("About us");
+    expect(start?.textContent).toContain("start content");
+    expect(start?.querySelector('[aria-label="Exit editor"]')).not.toBeNull();
+    expect(centre?.textContent).toContain("centre content");
+    expect(centre?.querySelector(".nx-zoom-control")).not.toBeNull();
+    expect(end?.textContent).toContain("end content");
+    expect(end?.querySelector('[aria-label="Inspector"]')).not.toBeNull();
+  });
+
+  it("truncates a long title rather than pushing the centre column", () => {
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="A page title long enough to run into the device buttons"
+      />
+    );
+    const title = screen.getByText(
+      "A page title long enough to run into the device buttons"
+    );
+    expect(title.className).toContain("truncate");
+    expect(title.getAttribute("title")).toBe(
+      "A page title long enough to run into the device buttons"
+    );
+  });
+});
