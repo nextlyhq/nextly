@@ -1,0 +1,144 @@
+/**
+ * Reading the Fontsource catalogue: its list of families and one family's
+ * metadata, parsed at the boundary.
+ *
+ * Both answers come from another server, so neither is trusted past here.
+ * An entry this cannot read is skipped and counted rather than failing the
+ * list, and nothing an entry says is used to build an address without first
+ * matching the narrow grammar below.
+ *
+ * @module site-fonts/catalogue
+ */
+import { z } from "nextly/zod";
+
+import {
+  FONT_CATEGORIES,
+  type CatalogueFamily,
+  type FontStyleName,
+} from "./contract";
+
+/** A catalogue id: lower-case words joined by single hyphens. */
+export const FONT_ID: RegExp = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** The longest catalogue id accepted. Real ids are far shorter. */
+export const MAX_FONT_ID_LENGTH = 64;
+
+/** A script's name, such as `latin-ext`, as it appears in a file name. */
+export const SUBSET_NAME: RegExp = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** A plain release number, the only version a file address is pinned to. */
+const RELEASE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
+
+/** A `unicode-range`, in characters that cannot leave a CSS descriptor. */
+const UNICODE_RANGE =
+  /^[Uu]\+[0-9A-Fa-f?]{1,6}(?:-[0-9A-Fa-f]{1,6})?(?:\s*,\s*[Uu]\+[0-9A-Fa-f?]{1,6}(?:-[0-9A-Fa-f]{1,6})?)*$/;
+
+const STYLE_ORDER: readonly FontStyleName[] = ["normal", "italic"];
+
+const Entry = z.object({
+  id: z.string().max(MAX_FONT_ID_LENGTH).regex(FONT_ID),
+  family: z.string().min(1).max(200),
+  subsets: z.array(z.string()),
+  weights: z.array(z.number()),
+  styles: z.array(z.string()),
+  defSubset: z.string(),
+  variable: z.boolean(),
+  category: z.string(),
+  license: z.string().max(100),
+  type: z.string(),
+});
+
+type Entry = z.infer<typeof Entry>;
+
+const Metadata = Entry.extend({
+  npmVersion: z.string().regex(RELEASE),
+  unicodeRange: z.record(z.string(), z.string().max(4000).regex(UNICODE_RANGE)),
+});
+
+/** One family's metadata, as an add reads it. */
+export interface FontMetadata extends CatalogueFamily {
+  /** Where the family comes from; only `google` may be added. */
+  readonly type: string;
+  /** The catalogue package's release, which file addresses are pinned to. */
+  readonly version: string;
+  /** Each script's `unicode-range`. */
+  readonly unicodeRange: Readonly<Record<string, string>>;
+}
+
+/** Whether a category is one the editor offers. Icon fonts are not text. */
+function isCategory(value: string): value is CatalogueFamily["category"] {
+  return (FONT_CATEGORIES as readonly string[]).includes(value);
+}
+
+/**
+ * The family as the editor lists it, or nothing when it is not a Google text
+ * family. Weights a face could not be stored with, and names that could not
+ * be part of a file address, are dropped.
+ */
+function familyOf(entry: Entry): CatalogueFamily | undefined {
+  if (entry.type !== "google" || !isCategory(entry.category)) return undefined;
+  const subsets = entry.subsets.filter(subset => SUBSET_NAME.test(subset));
+  if (!subsets.includes(entry.defSubset)) return undefined;
+  const styles = STYLE_ORDER.filter(style => entry.styles.includes(style));
+  const weights = entry.weights.filter(
+    weight =>
+      Number.isInteger(weight) &&
+      weight % 100 === 0 &&
+      weight >= 100 &&
+      weight <= 900
+  );
+  if (styles.length === 0 || weights.length === 0) return undefined;
+  return {
+    id: entry.id,
+    family: entry.family,
+    category: entry.category,
+    weights: [...new Set(weights)].sort((a, b) => a - b),
+    styles,
+    subsets,
+    defSubset: entry.defSubset,
+    variable: entry.variable,
+    licence: entry.license,
+  };
+}
+
+/**
+ * The catalogue's list, as families the editor can offer.
+ *
+ * `skipped` counts entries that could not be read at all, which is worth a
+ * line in the log; families filtered out on purpose (another source, an icon
+ * font) are not counted. `unreadable` says the answer was not a list.
+ */
+export function parseCatalogue(raw: unknown): {
+  families: CatalogueFamily[];
+  skipped: number;
+  unreadable?: true;
+} {
+  if (!Array.isArray(raw))
+    return { families: [], skipped: 0, unreadable: true };
+  const families: CatalogueFamily[] = [];
+  let skipped = 0;
+  for (const item of raw) {
+    const parsed = Entry.safeParse(item);
+    if (!parsed.success) {
+      skipped += 1;
+      continue;
+    }
+    const family = familyOf(parsed.data);
+    if (family !== undefined) families.push(family);
+  }
+  return { families, skipped };
+}
+
+/** One family's metadata, or nothing when any part of it cannot be trusted. */
+export function parseFontMetadata(raw: unknown): FontMetadata | undefined {
+  const parsed = Metadata.safeParse(raw);
+  if (!parsed.success) return undefined;
+  const family = familyOf(parsed.data);
+  if (family === undefined) return undefined;
+  return {
+    ...family,
+    type: parsed.data.type,
+    version: parsed.data.npmVersion,
+    unicodeRange: parsed.data.unicodeRange,
+  };
+}

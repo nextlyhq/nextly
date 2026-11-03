@@ -93,6 +93,11 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
+import {
+  resolveFontOptions,
+  type PageBuilderFontOptions,
+} from "./site-fonts/options";
+import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
@@ -447,6 +452,15 @@ export interface PageBuilderOptions {
    * Ignored without a `pagePreviewPath`: there is no preview to offer them on.
    */
   pagePreviewBreakpoints?: PreviewViewportsDeclaration | false;
+
+  /**
+   * Catalogue fonts in Design → Fonts. Adding one makes the SERVER download
+   * its files from the catalogue into the site's media, so published pages
+   * load fonts only from the site. The server reaches the two catalogue hosts
+   * (declared as this plugin's outbound hosts) and nothing else. `{ catalogue:
+   * false }` turns the catalogue off; uploading a font file still works.
+   */
+  fonts?: PageBuilderFontOptions;
 }
 
 /**
@@ -834,6 +848,8 @@ export const pageBuilder = (
   // the defaults tier. The stored tier reaches the published route through
   // `loadSiteStyle`, which reads per request.
   const configStyle = resolveSiteStyle(opts.siteStyle);
+  // The font catalogue's hosts and caps, refused at boot when unusable.
+  const fonts = resolveFontOptions(opts.fonts);
 
   // The usage indexes' reconciler for a write made in a transaction the
   // caller owns, which their hooks skip. Set by `init`, read per request.
@@ -869,6 +885,12 @@ export const pageBuilder = (
     category: "content",
     tags: ["page-builder", "blocks", "visual-editor"],
     enabled: opts.enabled,
+    // The catalogue's two hosts, the only ones the server may reach, so an
+    // add's downloads go through `ctx.fetch` and are listed where a reviewer
+    // reads them.
+    ...(fonts === false
+      ? {}
+      : { capabilities: { net: { outbound: [...fonts.outbound] } } }),
     admin: {
       // How the plugin names itself wherever the admin lists it. Without this
       // the dashboard section and the plugins list fall back to `meta.name`,
@@ -1239,6 +1261,8 @@ export const pageBuilder = (
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
+        // Design → Fonts' catalogue: read it, and add a family to the site.
+        ...(fonts === false ? [] : siteFontRoutes({ fonts })),
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,
