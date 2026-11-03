@@ -65,9 +65,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // Present because the mock REPLACES the module wholesale: an export the
   // subject imports and this omits is a missing-export error rather than an
   // unused stub.
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   // No preview here: the surrounding editor offers none.
   useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   usePluginClientConfig: () => undefined,
   // A saved page around the field, so the card has the builder's address to
   // link to; outside a document, or before a first save, it has none.
@@ -112,6 +116,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useDocumentStatus: () => null,
   useSingleDocument: () => siteStyleRead,

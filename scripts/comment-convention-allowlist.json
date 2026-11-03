@@ -431,34 +431,6 @@
       "e08787490dbf8ff1"
     ]
   },
-  "packages/nextly/src/domains/collections/services/collection-query-service.ts": {
-    "count": 23,
-    "digests": [
-      "13831d4dec7eab02",
-      "28f392c8dea7766d",
-      "374fbd2500c1f21d",
-      "401670576a557b49",
-      "542449bc209a7f75",
-      "6ab3ed7302fb99c6",
-      "7e979ca7f5d94b0b",
-      "8623ab6ac27f4a80",
-      "b233f10203ab0427",
-      "bc34f887455ae217",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "d24956f183fae02f",
-      "d268ba7d4939e20e",
-      "d2bf74438e37e4a6",
-      "d6d984c369b0071a",
-      "e0fa793c61a3a767",
-      "e472fc3e4568c53a",
-      "fb53c28b1b38a335"
-    ]
-  },
   "packages/nextly/src/domains/collections/services/collection-registry-service.ts": {
     "count": 1,
     "digests": ["0be665a130c86d73"]

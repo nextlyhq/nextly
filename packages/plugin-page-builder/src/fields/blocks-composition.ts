@@ -39,21 +39,28 @@
  * @module fields/blocks-composition
  */
 import {
+  componentIdsIn,
   compositionFaults,
   contentOnlyExposures,
   MAX_COMPOSED_DEPTH,
+  contentModelKeyOf,
   nodeLocks,
+  placementValueIssues,
+  placementVariantIssues,
   registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
+  variantLockChanges,
   variantNamesIn,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
+  type ComponentLookup,
   type CompositionFault,
   type DocumentLimits,
   type LockedExposure,
   type NodeLock,
+  type PlacementValueProblem,
   type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -76,11 +83,22 @@ import {
   hostPlacing,
   type BoundedReader,
   type ComponentSource,
+  type HeldLibrary,
   type ReadComposition,
 } from "../composition-reading";
 
 import { isForest } from "./blocks-document";
-import { lockBaselines, storedFormsOf } from "./lock-baselines";
+import {
+  LAYERS_LOCK_CHANGED,
+  placedLockMessage,
+  variantLockMessage,
+} from "./layers-lock-wording";
+import {
+  composedFormsRead,
+  lockBaselines,
+  readStoredForms,
+} from "./lock-baselines";
+import { placedLayersLocks } from "./placement-layers-locks";
 
 /** The issue shape core's validation envelope carries. */
 interface Issue {
@@ -163,6 +181,19 @@ export interface CompositionSetup {
    */
   readonly onHostsStillBroken?: (found: StillBrokenHosts) => void;
   /**
+   * Told of placement breaks a write kept because the stored value they may
+   * already be part of could not be read (a single, a localized field). Kept,
+   * not refused, so the server log is where an operator learns of them.
+   */
+  readonly onPlacementUnjudged?: (found: PlacementUnjudged) => void;
+  /**
+   * Told of a write whose Layers locks could not be judged, because the
+   * stored value they would be judged against could not be read (see
+   * `LayersLockUnjudged.reason`). Kept, not refused, so the server log is
+   * where an operator learns of it.
+   */
+  readonly onLayersLockUnjudged?: (found: LayersLockUnjudged) => void;
+  /**
    * Whether documents are composed against this store at all. `false` where
    * the renderer draws components from somewhere no collection can stand for
    * (a route's own `resolveComponents`): composing against this store would
@@ -170,6 +201,32 @@ export interface CompositionSetup {
    * store is still refused for containing itself.
    */
   readonly composesDocuments: boolean;
+}
+
+/** Which document a write is to: a collection or a single, its slug, an id. */
+export interface WrittenTo {
+  readonly kind?: string;
+  readonly slug?: string;
+  readonly id?: string;
+}
+
+/** Placement breaks a write kept unjudged, for the server log. */
+export interface PlacementUnjudged extends WrittenTo {
+  /** The blocks field written. */
+  readonly field: string;
+  /** How many breaks were kept. */
+  readonly breaks: number;
+}
+
+/** A write whose Layers locks were not judged, for the server log. */
+export interface LayersLockUnjudged extends WrittenTo {
+  /** The blocks field written. */
+  readonly field: string;
+  /**
+   * Why its stored value could not be read: a translated field whose language
+   * store is not ready, or a field inside a group or a repeater.
+   */
+  readonly reason: "language-not-ready" | "nested-field";
 }
 
 /**
@@ -219,7 +276,8 @@ const MOST_HOSTS_JUDGED = 1000;
  */
 export async function compositionIssues(
   value: unknown,
-  args: Pick<PluginFieldValidateArgs, "data" | "path" | "write">,
+  args: Pick<PluginFieldValidateArgs, "data" | "path" | "write"> &
+    Partial<Pick<PluginFieldValidateArgs, "field">>,
   setup: CompositionSetup
 ): Promise<Issue[]> {
   const write = args.write;
@@ -232,6 +290,13 @@ export async function compositionIssues(
   const report = issueReport(args.path);
   if (savesComponent(write, args.path, setup.store)) {
     await judgeLockedExposures(document, write, setup, report);
+    await judgeVariantLocks({
+      document,
+      args,
+      setup,
+      read: documentReader(source, true),
+      report,
+    });
   }
   // ONE allowance for every composition this save performs, the loop check
   // included, so the bound is on the save rather than on each check.
@@ -258,8 +323,14 @@ export async function compositionIssues(
 
   const tally = hostTally(self ?? "", setup);
   // Read once for the save, and only if a lock is found broken.
-  let storedRead: Promise<readonly BlockDocument[]> | undefined;
-  const stored = () => (storedRead ??= storedFormsOf(write, args.path));
+  let storedRead: Promise<StoredRead> | undefined;
+  const stored = () =>
+    (storedRead ??= readStoredForms(
+      write,
+      args.path,
+      formsChangedBy(nextStatus),
+      (args.field as { localized?: unknown } | undefined)?.localized === true
+    ));
   for (const draft of formsChangedBy(nextStatus)) {
     const read = documentReader(source, draft);
     await judgeOwnComposition({
@@ -270,6 +341,8 @@ export async function compositionIssues(
       work,
       report,
       stored,
+      field: args.path,
+      writtenTo: documentOf(write),
     });
     if (self !== undefined) {
       await judgeHosts({
@@ -305,6 +378,77 @@ function savesComponent(
     write.slug === store.collection &&
     path === store.field
   );
+}
+
+/**
+ * Refuse a component save whose variant changes a block the component locks
+ * in Layers (`variantLockChanges`), naming the block and the variant.
+ *
+ * Judged against the WRITTEN component's locks, so a lock this save adds holds
+ * over a variant already stored, and a create is judged as well as an update.
+ * Drawn with the library a full composition reads, surveyed through every
+ * component the written and stored forms place, so a variant reaching a block
+ * locked inside a nested component is seen. A variant the stored component
+ * already drew the same way is kept. A localized field whose language store
+ * is not ready is kept unjudged, as the page's own locks are.
+ */
+async function judgeVariantLocks(args: {
+  document: BlockDocument;
+  args: Pick<PluginFieldValidateArgs, "path" | "write"> &
+    Partial<Pick<PluginFieldValidateArgs, "field">>;
+  setup: CompositionSetup;
+  read: BoundedReader;
+  report: Report;
+}): Promise<void> {
+  const { document, setup, read, report } = args;
+  const { path, write, field } = args.args;
+  if ((variantNamesIn(document) ?? []).length === 0) return;
+  const stored = await readStoredForms(write, path, [true], isLocalized(field));
+  if (!stored.readable) return;
+  const [newest] = stored.forms;
+  const library = await placedLibrary(
+    [document, ...(newest === undefined ? [] : [newest])],
+    read,
+    setup.limits
+  );
+  const changes = variantLockChanges(document, newest, {
+    limits: setup.limits,
+    components: lookupOf(library),
+  });
+  const label = fieldLabel(field, path);
+  for (const change of changes) {
+    report.add(LAYERS_LOCK_CHANGED, `${label}: ${variantLockMessage(change)}`);
+  }
+}
+
+/** Whether a field is kept per language. */
+function isLocalized(
+  field: Partial<Pick<PluginFieldValidateArgs, "field">>["field"]
+): boolean {
+  return (field as { localized?: unknown } | undefined)?.localized === true;
+}
+
+/** A field's label for an issue, or its path where it has none. */
+function fieldLabel(
+  field: Partial<Pick<PluginFieldValidateArgs, "field">>["field"],
+  path: string
+): string {
+  return typeof field?.label === "string" && field.label !== ""
+    ? field.label
+    : path;
+}
+
+/** Every component the documents place, read into one library. */
+async function placedLibrary(
+  documents: readonly BlockDocument[],
+  read: BoundedReader,
+  limits: DocumentLimits
+): Promise<HeldLibrary> {
+  const library = heldLibrary();
+  for (const placing of documents) {
+    await readEveryPlacedDefinition(placing, library, read, limits);
+  }
+  return library;
 }
 
 /**
@@ -423,8 +567,15 @@ async function judgeOwnComposition(args: {
   setup: CompositionSetup;
   work: WorkAllowance;
   report: Report;
-  /** The document's stored forms, read only once a lock is found broken. */
-  stored: () => Promise<readonly BlockDocument[]>;
+  /**
+   * The document's stored forms, read only once a lock or a placement is
+   * found broken, and whether they could be read.
+   */
+  stored: () => Promise<StoredRead>;
+  /** The blocks field being written, for the server log. */
+  field?: string;
+  /** Which document is being written, for the server log. */
+  writtenTo?: WrittenTo;
 }): Promise<void> {
   const { document, self, read, setup, work, report } = args;
   // A component's own document under its own id, so a placement leading back
@@ -443,23 +594,233 @@ async function judgeOwnComposition(args: {
     report.add("COMPOSITION_UNCHECKED", OUTGROWN);
     return;
   }
-  let faults = faultsIn(document, composed.composition, setup);
-  // A broken lock is judged again against what the page and its components
-  // already hold, which a part may keep; composed only now, so a save breaking
-  // no lock composes nothing more.
-  if (faults.some(fault => LOCK_FAULTS.has(fault.code))) {
-    const baselines = await lockBaselines({
+  // Composed again only once a lock or a placement is found broken, so a save
+  // breaking neither composes nothing more.
+  const faults = await measuredAgainstStored(
+    faultsIn(document, composed.composition, setup, {
+      components: lookupOf(library),
+    }),
+    {
       document,
-      stored: await args.stored(),
-      library,
-      read,
-      limits: setup.limits,
-      work,
-    });
-    faults = faultsIn(document, composed.composition, setup, baselines);
-  }
+      composition: composed.composition,
+      setup,
+      reading: { library, read, limits: setup.limits, work },
+      stored: args.stored,
+      field: args.field,
+      writtenTo: args.writtenTo,
+    }
+  );
   for (const fault of faults) {
     report.add(fault.code, fault.message);
+  }
+  // Every placement's definition, the ones a condition gates included: the
+  // composition never expanded those, and both checks below read them.
+  await readEveryPlacedDefinition(document, library, read, setup.limits);
+  // Past the reader's bound a definition reads as unreadable and its
+  // placement would go unjudged, so the save is refused as unchecked instead.
+  if (read.exhausted()) {
+    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
+  await judgePlacedLocks({
+    document,
+    composed: composed.composition.document,
+    reading: { library, read, limits: setup.limits, work },
+    stored: args.stored,
+    report,
+    setup,
+    unjudged: { field: args.field ?? "", ...args.writtenTo },
+  });
+  await judgePlacementValues({
+    document,
+    library,
+    limits: setup.limits,
+    stored: args.stored,
+    report,
+  });
+  await judgePlacementVariants({
+    document,
+    components: lookupOf(library),
+    limits: setup.limits,
+    stored: args.stored,
+    report,
+  });
+}
+
+/**
+ * Refuse a placement's value or slot content that changes a block its
+ * component locks in Layers (`placedLayersLocks`), naming the block. Where the
+ * stored page cannot be read (a localized field whose language is not ready),
+ * the write is kept and the server log says so, as for the page's own locks.
+ */
+async function judgePlacedLocks(
+  args: Parameters<typeof placedLayersLocks>[0] & {
+    report: Report;
+    setup: CompositionSetup;
+    unjudged: Omit<LayersLockUnjudged, "reason">;
+  }
+): Promise<void> {
+  const answer = await placedLayersLocks(args);
+  if (answer.kind === "unchecked") {
+    args.report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
+  if (answer.kind === "unjudged") {
+    args.setup.onLayersLockUnjudged?.({
+      ...args.unjudged,
+      reason: "language-not-ready",
+    });
+    return;
+  }
+  for (const change of answer.changes) {
+    args.report.add(LAYERS_LOCK_CHANGED, placedLockMessage(change));
+  }
+}
+
+/**
+ * Read the definition of every component the document places into the library,
+ * and of every component those definitions place, as deep as composition goes.
+ *
+ * A placement the composition never expanded (one a condition gates) still
+ * stores its values, and is served with them once the condition lifts, so its
+ * component is read too; and a gated placement inside a definition is never
+ * expanded either, so the definitions held are surveyed the same way, level by
+ * level, to the composed depth. Stops asking once the reader's bound is spent,
+ * which the caller then refuses as unchecked.
+ */
+async function readEveryPlacedDefinition(
+  document: BlockDocument,
+  library: HeldLibrary,
+  read: BoundedReader,
+  limits: DocumentLimits
+): Promise<void> {
+  const surveyed = new Set<string>();
+  let level: readonly unknown[] = [document];
+  for (let depth = 0; depth <= MAX_COMPOSED_DEPTH; depth += 1) {
+    if (level.length === 0 || read.exhausted()) return;
+    level = await readPlacedBy(level, { library, read, limits, surveyed });
+  }
+}
+
+/**
+ * One level of {@link readEveryPlacedDefinition}: read what each document
+ * places that is not yet surveyed, and answer the definitions held for them,
+ * which are the next level down.
+ */
+async function readPlacedBy(
+  documents: readonly unknown[],
+  at: {
+    library: HeldLibrary;
+    read: BoundedReader;
+    limits: DocumentLimits;
+    surveyed: Set<string>;
+  }
+): Promise<unknown[]> {
+  const { library, surveyed } = at;
+  const next: unknown[] = [];
+  for (const placing of documents) {
+    if (!isForest(placing)) continue;
+    const nodes = (placing as BlockDocument).nodes;
+    for (const id of componentIdsIn(nodes, at.limits.maxNodes)) {
+      if (surveyed.has(id)) continue;
+      surveyed.add(id);
+      await readInto(library, at.read, id);
+      if (library.held.has(id)) next.push(library.held.get(id));
+    }
+  }
+  return next;
+}
+
+/** One definition into the library, unless it was already asked for. */
+async function readInto(
+  library: HeldLibrary,
+  read: BoundedReader,
+  id: string
+): Promise<void> {
+  if (library.held.has(id) || library.missing.has(id)) return;
+  const answer = await read(id);
+  if (answer.kind === "document") library.held.set(id, answer.document);
+  else library.missing.add(id);
+}
+
+/** The issue code for each way a placement's value is refused. */
+const PLACEMENT_VALUE_CODES: Readonly<Record<PlacementValueProblem, string>> = {
+  "unknown-field": "PLACEMENT_VALUE_UNKNOWN_FIELD",
+  "wrong-type": "PLACEMENT_VALUE_WRONG_TYPE",
+  "too-many-values": "PLACEMENT_VALUE_TOO_MANY",
+};
+
+/**
+ * Refuse a value the write sets on a placement that its component does not
+ * accept: an id the component does not expose, or a value of the wrong type
+ * for its field. Judged against the definitions this form composes with, so
+ * every write path that validates the field, an import included, is held to
+ * what the inspector can write.
+ *
+ * A value the stored document already holds is kept, so a field removed from
+ * a component, or one written to under its id with another type, does not
+ * make every page placing it unsavable; the stored forms are read only once
+ * something is found. Where they cannot be read (a localized field whose
+ * language is not ready), any value found may be one the stored document
+ * already held, so none is refused, as a placement break there is not.
+ */
+async function judgePlacementValues(args: {
+  document: BlockDocument;
+  library: HeldLibrary;
+  limits: DocumentLimits;
+  stored: () => Promise<StoredRead>;
+  report: Report;
+}): Promise<void> {
+  const { document, library, limits, report } = args;
+  const components = lookupOf(library);
+  if (placementValueIssues(document, components, [], limits).length === 0) {
+    return;
+  }
+  const stored = await args.stored();
+  if (!stored.readable) return;
+  const issues = placementValueIssues(
+    document,
+    components,
+    stored.forms,
+    limits
+  );
+  for (const issue of issues) {
+    report.add(PLACEMENT_VALUE_CODES[issue.problem], issue.message);
+  }
+}
+
+/**
+ * Refuse a variant the write newly sets on a placement that its component does
+ * not define. Judged against the definitions this form composes with, so every
+ * write path that validates the field, an import included, is held to what the
+ * picker can choose.
+ *
+ * A key the stored document already holds at that placement is kept: a
+ * deleted variant leaves its key on placements, which render the defaults. The
+ * stored forms are read only once something is found; where they cannot be
+ * read (a localized field whose language is not ready), any key found may be
+ * one the stored document already held, so none is refused.
+ */
+async function judgePlacementVariants(args: {
+  document: BlockDocument;
+  components: ComponentLookup;
+  limits: DocumentLimits;
+  stored: () => Promise<StoredRead>;
+  report: Report;
+}): Promise<void> {
+  const { document, components, limits, report } = args;
+  if (placementVariantIssues(document, components, [], limits).length === 0) {
+    return;
+  }
+  const stored = await args.stored();
+  if (!stored.readable) return;
+  for (const issue of placementVariantIssues(
+    document,
+    components,
+    stored.forms,
+    limits
+  )) {
+    report.add("PLACEMENT_VARIANT_UNKNOWN", issue.message);
   }
 }
 
@@ -468,15 +829,102 @@ const OUTGROWN =
   "whether its blocks sit where they are allowed and within the depth limit " +
   "could not be established. Place fewer different components in it.";
 
+/**
+ * The faults judged again against what the page already holds, read only when
+ * a lock or a placement is found broken. A broken lock is measured against
+ * what the page and its components hold, which a part may keep; a placement
+ * break against the stored forms alone, where one already composing to it is
+ * kept. A stored value this cannot read may already compose to every
+ * placement break found, so none is refused, and the log says what was kept.
+ */
+async function measuredAgainstStored(
+  faults: readonly CompositionFault[],
+  args: {
+    document: BlockDocument;
+    composition: Parameters<typeof compositionFaults>[1];
+    setup: CompositionSetup;
+    reading: {
+      library: HeldLibrary;
+      read: BoundedReader;
+      limits: DocumentLimits;
+      work: WorkAllowance;
+    };
+    stored: () => Promise<StoredRead>;
+    field: string | undefined;
+    writtenTo: WrittenTo | undefined;
+  }
+): Promise<readonly CompositionFault[]> {
+  const lockBroken = faults.some(fault => LOCK_FAULTS.has(fault.code));
+  const placementBroken = faults.some(fault =>
+    PLACEMENT_FAULTS.has(fault.code)
+  );
+  if (!lockBroken && !placementBroken) return faults;
+  const { document, setup, reading } = args;
+  const stored = await args.stored();
+  const composedStored = placementBroken
+    ? await composedFormsRead({ ...reading, hosts: stored.forms })
+    : undefined;
+  const baselines = lockBroken
+    ? await lockBaselines({ ...reading, document, stored: stored.forms })
+    : undefined;
+  const again = faultsIn(document, args.composition, setup, {
+    components: lookupOf(reading.library),
+    ...(baselines === undefined ? {} : { baselines }),
+    ...(composedStored === undefined
+      ? {}
+      : {
+          storedCompositions: composedStored.forms,
+          storedHosts: stored.forms,
+        }),
+  });
+  // Old breaks are known only from a stored page this could read and compose
+  // whole; a baseline cut short could miss one and call it new.
+  if (stored.readable && composedStored?.complete !== false) return again;
+  return keptUnjudged(again, setup, args);
+}
+
+/**
+ * The faults with every placement break kept unjudged, and the server log
+ * told how many, naming the document.
+ */
+function keptUnjudged(
+  faults: readonly CompositionFault[],
+  setup: CompositionSetup,
+  at: { field: string | undefined; writtenTo: WrittenTo | undefined }
+): readonly CompositionFault[] {
+  const kept = faults.filter(fault => !PLACEMENT_FAULTS.has(fault.code));
+  if (kept.length < faults.length) {
+    setup.onPlacementUnjudged?.({
+      field: at.field ?? "",
+      ...at.writtenTo,
+      breaks: faults.length - kept.length,
+    });
+  }
+  return kept;
+}
+
+/** A held library as the engine's component lookup. */
+function lookupOf(library: HeldLibrary): ComponentLookup {
+  return {
+    has: id => library.held.has(id),
+    get: id => library.held.get(id) as BlockDocument | undefined,
+  };
+}
+
 /** The composition faults, against the site's own nesting rules. */
 function faultsIn(
   host: BlockDocument,
   composition: Parameters<typeof compositionFaults>[1],
   setup: CompositionSetup,
-  baselines?: readonly unknown[]
+  measuredAgainst: {
+    baselines?: readonly unknown[];
+    storedCompositions?: readonly unknown[];
+    storedHosts?: readonly unknown[];
+    components?: ComponentLookup;
+  } = {}
 ): readonly CompositionFault[] {
   return compositionFaults(host, composition, {
-    ...(baselines === undefined ? {} : { baselines }),
+    ...measuredAgainst,
     limits: setup.limits,
     // Read through to the live registry, as the field's own nesting rule is.
     nesting: registryNestingSource(),
@@ -667,6 +1115,8 @@ interface HostFault {
   readonly code: string;
   readonly instanceId: string;
   readonly message: string;
+  /** A placement break's identity, so two of one code are told apart. */
+  readonly signature?: string;
 }
 
 /** Everything one document would suffer from the save. */
@@ -801,14 +1251,22 @@ async function judgeOneHost(args: {
   }
   if (stored === undefined) return;
 
-  const compose = (seed: ReadonlyMap<string, unknown> | undefined) =>
-    composeWithReads({
+  // The library each composition read is kept with it, so what the host puts
+  // in a placement's slots is judged against the slots the component exposes,
+  // before and after the save, and not only through the composed tree.
+  const compose = async (
+    seed: ReadonlyMap<string, unknown> | undefined
+  ): Promise<ComposedWithLibrary> => {
+    const library = heldLibrary(seed);
+    const composed = await composeWithReads({
       host: stored,
-      library: heldLibrary(seed),
+      library,
       read,
       limits: setup.limits,
       work,
     });
+    return { ...composed, components: lookupOf(library) };
+  };
   const before = await compose(undefined);
   const after = await compose(new Map([[self, document]]));
   if (read.exhausted() || work.left <= 0) {
@@ -828,11 +1286,16 @@ async function judgeOneHost(args: {
  * them: the component composed alone shows none, because the host's placement
  * is what re-points the nested reference back at it.
  */
+/** A composition with the component lookup it was read with. */
+type ComposedWithLibrary = ReadComposition & {
+  readonly components: ComponentLookup;
+};
+
 function reportWhatBroke(args: {
   host: HostRef;
   stored: BlockDocument;
-  before: ReadComposition;
-  after: ReadComposition;
+  before: ComposedWithLibrary;
+  after: ComposedWithLibrary;
   setup: CompositionSetup;
   tally: Tally;
 }): void {
@@ -848,8 +1311,14 @@ function reportWhatBroke(args: {
   }
   // Counted, not only named: two locked slots of one block type broken the
   // same way read alike, and a save breaking the second is still a new break.
-  const had = faultCounts(faultsIn(stored, before.composition, setup));
-  for (const fault of faultsIn(stored, after.composition, setup)) {
+  const had = faultCounts(
+    faultsIn(stored, before.composition, setup, {
+      components: before.components,
+    })
+  );
+  for (const fault of faultsIn(stored, after.composition, setup, {
+    components: after.components,
+  })) {
     const identity = faultIdentity(fault);
     const left = had.get(identity) ?? 0;
     if (left > 0) {
@@ -871,7 +1340,12 @@ function reportWhatBroke(args: {
  */
 function faultIdentity(fault: HostFault): string {
   const base = `${fault.code}\u0000${fault.instanceId}`;
-  return LOCK_FAULTS.has(fault.code) ? `${base}\u0000${fault.message}` : base;
+  if (LOCK_FAULTS.has(fault.code)) return `${base}\u0000${fault.message}`;
+  // A placement break is told apart by where it is, so a new one of the same
+  // code under the same placement is not counted as the old one.
+  return fault.signature === undefined
+    ? base
+    : `${base}\u0000${fault.signature}`;
 }
 
 /** How many faults of each identity a composition holds. */
@@ -885,6 +1359,20 @@ function faultCounts(faults: readonly HostFault[]): Map<string, number> {
 }
 
 /** The faults that are a lock broken in the composed host. */
+/** The placement rule's faults, measured against the stored forms alone. */
+const PLACEMENT_FAULTS: ReadonlySet<string> = new Set([
+  "wrong-parent",
+  "not-allowed-in-slot",
+  "restricted-at-root",
+  "undeclared-slot",
+  "holds-no-blocks",
+  "phrasing-only",
+  "content-model",
+]);
+
+/** What reading the stored forms found. */
+type StoredRead = Awaited<ReturnType<typeof readStoredForms>>;
+
 const LOCK_FAULTS: ReadonlySet<string> = new Set([
   "locked-slot-altered",
   "locked-slot-content-only",
@@ -930,7 +1418,7 @@ function describeHost(host: HostRef): string {
  */
 interface Footprint {
   readonly complete: boolean;
-  /** Keyed by variant name; the default selection under "". */
+  /** Keyed by variant id; the default selection under "". */
   readonly selections: ReadonlyMap<string, SelectionFootprint>;
   /** Each exposed slot, as the holder type, its slot and its depth. */
   readonly slots: ReadonlyMap<string, string>;
@@ -939,6 +1427,12 @@ interface Footprint {
 }
 
 interface SelectionFootprint {
+  /**
+   * What the placement rule reads of the composed component: each block
+   * type with the content model its settings give it. A Card switching its
+   * link on, or a Button added inside, changes it with the shape unmoved.
+   */
+  readonly placement: string;
   readonly rootTypes: ReadonlySet<string>;
   readonly depth: number;
   readonly componentDepth: number;
@@ -985,6 +1479,7 @@ async function footprintOf(
     if (composed.incomplete || componentDepth === undefined) complete = false;
     const nodes = composed.composition.document.nodes;
     selections.set(variant ?? "", {
+      placement: placementFacts(nodes, setup),
       rootTypes: new Set(nodes.map(root => root.type)),
       depth: deepest(nodes, setup),
       componentDepth: componentDepth ?? MAX_COMPOSED_DEPTH + 1,
@@ -1004,19 +1499,62 @@ async function footprintOf(
 }
 
 /** The deepest node of a composed forest, counted from its own top. */
+/**
+ * The placement facts of a composed tree, as one comparable string: every
+ * node by id, under its container and slot, with its type and resolved
+ * content model, bounded as `deepest` is.
+ */
+function placementFacts(
+  nodes: readonly BlockNode[],
+  setup: CompositionSetup
+): string {
+  const sources = {
+    nesting: registryNestingSource(),
+    definitions: registryBlockSource(),
+  };
+  const facts = new Set<string>();
+  // Per node, by id and by where it sits: a set of type/model pairs alone
+  // would not move when two Cards swap linked and unlinked, nor when an
+  // exposed slot's holder moves under a linked Card, and either can break a
+  // host filling that slot.
+  eachComposed(nodes, setup, (entry, _at, under) => {
+    if (typeof entry?.type !== "string") return;
+    facts.add(
+      `${under}>${String(entry.id)}|${entry.type}|${contentModelKeyOf(entry, sources)}`
+    );
+  });
+  return [...facts].sort().join("\n");
+}
+
 function deepest(nodes: readonly BlockNode[], setup: CompositionSetup): number {
   let most = 0;
-  const visit = (forest: unknown, at: number): void => {
+  eachComposed(nodes, setup, (_entry, at) => {
+    most = Math.max(most, at);
+  });
+  return most;
+}
+
+/**
+ * Every node of a composed tree with its depth, to one level past the cap:
+ * the one walk the footprint's measurements share.
+ */
+function eachComposed(
+  nodes: readonly BlockNode[],
+  setup: CompositionSetup,
+  visitNode: (entry: BlockNode, at: number, under: string) => void
+): void {
+  const visit = (forest: unknown, at: number, under: string): void => {
     if (!Array.isArray(forest) || at > setup.limits.maxDepth + 1) return;
-    for (const entry of forest) {
-      most = Math.max(most, at);
+    for (const entry of forest as BlockNode[]) {
+      visitNode(entry, at, under);
       const slots = (entry as { slots?: unknown }).slots;
       if (typeof slots !== "object" || slots === null) continue;
-      for (const children of Object.values(slots)) visit(children, at + 1);
+      for (const [slot, children] of Object.entries(slots)) {
+        visit(children, at + 1, `${String(entry?.id)}/${slot}`);
+      }
     }
   };
-  visit(nodes, 1);
-  return most;
+  visit(nodes, 1, "");
 }
 
 /**
@@ -1113,7 +1651,9 @@ function exposedSlots(
       id,
       holder === undefined
         ? "?"
-        : `${nodeId}|${holder.type}|${name}|${holder.depth}|${lockOf(locks, nodeId)}`
+        : // The allow-list too: narrowing it can refuse content a host
+          // already put in the slot, with nothing else about the slot moved.
+          `${nodeId}|${holder.type}|${name}|${holder.depth}|${lockOf(locks, nodeId)}|${JSON.stringify((slot as { allow?: unknown }).allow ?? null)}`
     );
   }
   return out;
@@ -1187,6 +1727,9 @@ function selectionWorsens(
   before: SelectionFootprint,
   after: SelectionFootprint
 ): boolean {
+  // Any change to what the placement rule reads may break a host, in either
+  // direction a host cannot be told apart from here, so it is judged.
+  if (after.placement !== before.placement) return true;
   if (after.depth > before.depth) return true;
   if (after.componentDepth > before.componentDepth) return true;
   for (const type of after.rootTypes) {
@@ -1196,4 +1739,14 @@ function selectionWorsens(
     if (count > (before.lockFaults.get(fault) ?? 0)) return true;
   }
   return false;
+}
+
+/** Which document a write is to, for the server log: kind, slug and entry id. */
+export function documentOf(write: PluginFieldWrite | undefined): WrittenTo {
+  if (write === undefined) return {};
+  return {
+    kind: write.kind,
+    slug: write.slug,
+    ...(write.id === undefined ? {} : { id: write.id }),
+  };
 }

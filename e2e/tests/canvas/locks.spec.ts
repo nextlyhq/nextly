@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 
+import { CANVAS_FRAME, canvasLayer } from "../support/canvas-frame";
 import { includingHidden, test } from "../support/test";
 
 import {
@@ -47,6 +48,21 @@ async function undoDepth(page: Page): Promise<number> {
 
 async function open(page: Page, seed?: "broken"): Promise<void> {
   await page.goto(seed === undefined ? ROUTE : `${ROUTE}?seed=${seed}`);
+  // The canvas's frame first, one of it, and on screen: the route streams the harness, and until the
+  // stream is swapped in its first copy waits in a hidden container, so a
+  // frame counted then is not the one the page keeps.
+  await expect
+    .poll(
+      () =>
+        page
+          .locator(CANVAS_FRAME)
+          .evaluateAll(
+            frames =>
+              frames.length === 1 && (frames[0] as HTMLElement).offsetWidth > 0
+          ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
   // On screen before anything is aimed at it, as the editor suite waits.
   await expect(await block(page, "lk-free-text")).toBeVisible({
     timeout: 30_000,
@@ -67,7 +83,7 @@ test.describe("the editor inside locked areas", () => {
     await open(page);
     expect(await tree(page)).toEqual(PLACED);
     await expect(
-      page.getByRole("region", { name: "Locked areas" })
+      page.getByRole("region", { name: "Repair this page" })
     ).toHaveCount(0);
   });
 
@@ -114,10 +130,24 @@ test.describe("the editor inside locked areas", () => {
       steps: 20,
     });
 
-    // Refused while the pointer is still over it, in the lock's words.
-    await expect(page.locator(".nx-drop-refusal")).toContainText(
-      "This area of Fixed row is locked."
-    );
+    // Refused while the pointer is still over it, in the lock's words, drawn
+    // over the frame in the editor's document.
+    const notice = canvasLayer(page).locator(".nx-drop-refusal");
+    await expect(notice).toContainText("This area of Fixed row is locked.");
+    // The neutral notice Layers draws too: the editor's surface with a red
+    // edge and a warning mark, not a red fill.
+    const look = await notice.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        fill: style.backgroundColor,
+        edge: style.borderLeftColor,
+        edgeWidth: style.borderLeftWidth,
+        mark: element.querySelector("svg") !== null,
+      };
+    });
+    expect(look.edgeWidth).toBe("3px");
+    expect(look.mark).toBe(true);
+    expect(look.fill).not.toBe(look.edge);
     await page.mouse.up();
     expect(await tree(page)).toEqual(PLACED);
     expect(await undoDepth(page)).toBe(0);
@@ -148,22 +178,32 @@ test.describe("the editor inside locked areas", () => {
     ).not.toHaveAttribute("aria-disabled", "true");
   });
 
-  test("offers nothing to insert into a slot locked all, and says why", async ({
+  test("adds after a slot locked all rather than into it, and says where", async ({
     page,
   }) => {
     await open(page);
     await clickBlock(page, "lk-row-heading");
-    await page.getByRole("button", { name: "Insert" }).click();
-    // The inserter's own sentence: the toolbar carries the same reason for
-    // its dimmed actions, so the page holds it more than once.
-    await expect(page.getByRole("listbox").getByText(FIXED)).toBeVisible({
-      timeout: 15_000,
-    });
-    await expect(page.getByRole("option")).toHaveCount(0);
+    // The rail's button for the panel holding the inserter.
+    await page.getByRole("button", { name: "Add" }).click();
+    const heading = page.getByRole("option", { name: "Heading", exact: true });
+    // The row refuses every block, so a tile climbs past it and says so.
+    await expect(heading).toHaveAccessibleDescription(
+      /^Goes after Fixed row\./,
+      { timeout: 15_000 }
+    );
+    await heading.click();
 
-    // The control: after a free block, the inserter offers blocks.
+    const placed = (await tree(page)) as unknown[];
+    expect(placed).toHaveLength(PLACED.length + 1);
+    // The row as it was, and the new block straight after it.
+    expect(placed[1]).toEqual(PLACED[1]);
+    expect(typeof placed[2]).toBe("string");
+    expect(placed.slice(3)).toEqual(PLACED.slice(2));
+
+    // The control: after a free block, a tile goes where the line says, with
+    // nothing to add about it.
     await clickBlock(page, "lk-free-text");
-    await expect(page.getByRole("option").first()).toBeVisible();
+    await expect(heading).not.toHaveAccessibleDescription(/Goes/);
   });
 
   test("shows a block's design read-only inside contentOnly, its content editable", async ({
@@ -174,19 +214,29 @@ test.describe("the editor inside locked areas", () => {
 
     await expect(page.getByText(SEALED_DESIGN)).toBeVisible();
     await expect(page.getByLabel("Text", { exact: true })).toBeEnabled();
-    await expect(page.getByLabel("Level", { exact: true })).toBeDisabled();
-    await expect(page.getByLabel("Lock this block")).toBeDisabled();
+    // Level is a row of radio buttons; the held block holds every one.
+    await expect(
+      page.getByRole("radiogroup", { name: "Level" }).getByRole("radio").first()
+    ).toBeDisabled();
+    // The block's own lock is held with its design: the card's menu shows
+    // Lock disabled, with the reason.
+    await page.getByRole("button", { name: "Actions for Heading" }).click();
+    await expect(page.getByRole("menuitem", { name: /^Lock/ })).toBeDisabled();
+    await page.keyboard.press("Escape");
     // Content still saves through the store.
     const text = page.getByLabel("Text", { exact: true });
     await text.fill("Spring sale");
     await text.blur();
     await expect.poll(() => undoDepth(page)).toBe(1);
 
-    // The Style tab is shown, every control in it held.
+    // The Style tab is shown, every control that edits held. A section's
+    // toggle and the state switcher only choose what is shown.
     await page.getByRole("tab", { name: "Style" }).click();
     const controls = page
       .getByRole("tabpanel")
-      .locator("input, button, select, textarea");
+      .locator(
+        'input, button:not([aria-expanded]):not([role="radio"]), select, textarea'
+      );
     expect(await controls.count()).toBeGreaterThan(0);
     for (const control of await controls.all()) {
       await expect(control).toBeDisabled();
@@ -195,7 +245,9 @@ test.describe("the editor inside locked areas", () => {
     // The control: a free heading's level is editable.
     await clickBlock(page, "lk-free-heading");
     await page.getByRole("tab", { name: "Content" }).click();
-    await expect(page.getByLabel("Level", { exact: true })).toBeEnabled();
+    await expect(
+      page.getByRole("radiogroup", { name: "Level" }).getByRole("radio").first()
+    ).toBeEnabled();
     await expect(includingHidden(page).getByText(SEALED_DESIGN)).toHaveCount(0);
   });
 });
@@ -220,7 +272,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
   }) => {
     await open(page, "broken");
     expect(await tree(page)).toEqual(BROKEN);
-    const notice = page.getByRole("region", { name: "Locked areas" });
+    const notice = page.getByRole("region", { name: "Repair this page" });
     await notice.getByRole("button", { name: "Review the repair" }).click();
 
     await expect(notice.getByRole("listitem")).toHaveText([
@@ -238,7 +290,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
     page,
   }) => {
     await open(page, "broken");
-    const notice = page.getByRole("region", { name: "Locked areas" });
+    const notice = page.getByRole("region", { name: "Repair this page" });
     await notice.getByRole("button", { name: "Review the repair" }).click();
     await notice.getByRole("button", { name: "Repair" }).click();
 
@@ -256,7 +308,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
       ]);
     expect(await undoDepth(page)).toBe(1);
     await expect(
-      page.getByRole("region", { name: "Locked areas" })
+      page.getByRole("region", { name: "Repair this page" })
     ).toHaveCount(0);
 
     // One undo takes the whole repair back, and the notice with it.
@@ -266,7 +318,7 @@ test.describe("repairing a page stored before its locks were enforced", () => {
     await page.keyboard.press("Control+z");
     await expect.poll(() => tree(page)).toEqual(BROKEN);
     await expect(
-      page.getByRole("region", { name: "Locked areas" })
+      page.getByRole("region", { name: "Repair this page" })
     ).toBeVisible();
   });
 });

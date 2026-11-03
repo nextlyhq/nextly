@@ -36,6 +36,11 @@
       "nextly/route-path": [
         "../../packages/nextly/src/runtime/routing/slug-param.ts"
       ],
+      // The source behind a subpath that is not at the top of src, as with
+      // route-path above: the catch-all below would look for it there.
+      "nextly/reserved-filter-keys": [
+        "../../packages/nextly/src/domains/collections/query/reserved-filter-keys.ts"
+      ],
       "nextly/*": ["../../packages/nextly/src/*"],
       "@nextlyhq/adapter-drizzle": [
         "../../packages/adapter-drizzle/src/index.ts"

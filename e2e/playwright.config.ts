@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 
 import { e2eDatabase } from "./support/e2e-database.mjs";
+import { FONT_CATALOGUE_ORIGIN } from "./support/font-catalogue-server.mjs";
 import { EVERY_DIALECT } from "./tests/support/every-dialect";
 import { E2E_NEXTLY_SECRET } from "./tests/support/preview-links";
 
@@ -72,6 +73,11 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  *   (`tests/production/widget-preview.spec.ts`).
  * - `removed-from-code-singles-list`: the Singles list it reads is the Schema
  *   Builder's, which a production build turns off.
+ * - `builder-field-gates`, `builder-runtime-collection`, `builder-nested-field`:
+ *   each makes its collection through the Schema Builder's own calls.
+ * - `builder-fonts`: its stand-in font catalogue is plain http on localhost,
+ *   which only a development server may reach; a production server rightly
+ *   refuses it.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
@@ -81,7 +87,10 @@ const DEV_SPECS = [
   "**/schema-leaving-translation.spec.ts",
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",
+  "**/builder-nested-field.spec.ts",
+  "**/builder-canvas-embed.spec.ts",
   "**/removed-from-code-singles-list.spec.ts",
+  "**/builder-fonts.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
@@ -290,6 +299,9 @@ export default defineConfig({
       // `next start` refuses to boot without the app's own address, which the
       // dev server never needed.
       NEXT_PUBLIC_APP_URL: BASE_URL,
+      // Points the page builder's font catalogue at the stand-in global setup
+      // starts, so adding a font never reaches the real catalogue.
+      NEXTLY_E2E_FONT_CATALOGUE: FONT_CATALOGUE_ORIGIN,
     },
   },
 

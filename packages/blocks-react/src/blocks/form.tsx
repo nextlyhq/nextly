@@ -365,8 +365,11 @@ export function renderForm({
 export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
   name: "core/form",
   version: 1,
-  description:
-    "A plain HTML form that posts to a URL you choose. Stores nothing and ships no JavaScript; the form-builder plugin is the one that collects submissions.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A plain HTML form that posts
+  // to a URL you choose. Stores nothing and ships no JavaScript; the form-
+  // builder plugin is the one that collects submissions.
+  description: "A form that sends what visitors type to an address you choose.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.
@@ -377,10 +380,31 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
     keywords: ["contact", "input", "submit", "fields"],
   },
   props: {
-    action: { type: "url" },
-    method: { type: "select", options: [...FORM_METHODS] },
-    fields: { type: "array", of: "object" },
-    submitText: { role: "content", type: "text" },
+    action: { label: "Send to", type: "url" },
+    method: {
+      label: "Method",
+      optionLabels: { post: "POST", get: "GET" },
+      type: "select",
+      options: [...FORM_METHODS],
+    },
+    // Each field's own settings, so the inspector can draw a control for
+    // each. Description only: the stored shape is the same list of records.
+    fields: {
+      label: "Fields",
+      type: "array",
+      of: "object",
+      item: {
+        label: { label: "Label", type: "text" },
+        name: { label: "Name sent with the form", type: "text" },
+        type: {
+          label: "Field type",
+          type: "select",
+          options: [...FORM_FIELD_TYPES],
+        },
+        required: { label: "Required", type: "checkbox" },
+      },
+    },
+    submitText: { label: "Submit button text", role: "content", type: "text" },
   },
   defaultProps: { method: "post", submitText: "Submit", fields: [] },
   example: {
@@ -407,5 +431,7 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // Its fields and its submit button are interactive, and it is a form.
+  contentModel: () => ({ is: ["flow", "form", "interactive"] }),
   render: renderForm,
 });

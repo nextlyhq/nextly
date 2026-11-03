@@ -823,6 +823,9 @@ for (const dialect of getConfiguredTestDialects()) {
       return createTestNextly({
         adapter: database.adapter as never,
         plugins: [PROBE_PLUGIN],
+        // The app under test's folder, which `projectFiles` reads: absent,
+        // the instance would write to a temporary folder of its own.
+        basePath: projectRoot,
       });
     }
 

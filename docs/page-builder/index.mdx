@@ -63,6 +63,13 @@ boot refuses to start:
 npx nextly plugins install @nextlyhq/plugin-page-builder
 ```
 
+The plugin keeps the bookkeeping behind its usage counts (how far the background job
+has indexed existing pages, and whether an index write has failed) in two tables of
+its own, `page_builder__usage_runs` and `page_builder__usage_progress`. No admin
+screen or API reaches them. Installing creates them; a site upgrading from a version
+without them runs `npx nextly migrate` before it starts on the new version, since a
+production boot refuses a plugin whose tables are behind it.
+
 Last, run `npx nextly generate:types`. It writes the file that registers the builder's
 screen with the admin, and that file also loads the editor's styles, so there is nothing
 to import by hand. In a project created before that file existed, import the generated
@@ -157,8 +164,8 @@ The device is your choice alone. Opening or closing a panel, or a narrower windo
 only how far the canvas is zoomed to fit; the zoom menu reads "Fit · 72%" while it fits.
 Choose a fixed zoom from the menu, press <kbd>Ctrl</kbd>+<kbd>0</kbd> (<kbd>⌘</kbd>+<kbd>0</kbd>
 on a Mac) for actual size, or <kbd>Shift</kbd>+<kbd>1</kbd> to fit again. Choosing another
-device goes back to fitting. The editor remembers the device and the zoom you left, in the
-same browser. If the breakpoint you were styling has been removed, the editor goes back to
+device goes back to fitting. The editor remembers the device and the zoom you left, for you
+rather than for the browser. If the breakpoint you were styling has been removed, the editor goes back to
 Desktop.
 
 ### Limits
@@ -166,9 +173,14 @@ Desktop.
 - **Styles only.** What changes per breakpoint is what the Style tab sets. A block's
   content and settings are the same at every width.
 - **A width, not a device.** The device buttons choose a breakpoint and lay the canvas out
-  at its width; they do not show the page as a particular phone or tablet would. The canvas is not an iframe, so sizes in `vw` or `vh`, `@media`
-  rules you write yourself and code that reads the window's width follow the admin
-  window, not the canvas.
+  at its width; they do not show the page as a particular phone or tablet would. The canvas
+  is a frame of its own at that width, so sizes in `vw` or `vh`, `@media` rules you write
+  yourself and code that reads the window's width answer for the device, as they do on the
+  published page.
+- **Your site's global stylesheet is not loaded into the canvas yet.** The canvas has the
+  page's block styles and the site's shared styles, but rules from your app's own CSS
+  files, such as a `globals.css` that styles `h2` or `body`, do not reach it. Boxes size as
+  `border-box`, which most site resets set.
 - **Saved breakpoints reach a page only when its route reads them.** Breakpoints you save
   in the editor are stored in the plugin's `site-style` single. The route above compiles
   against the breakpoints it declares in `styleContext` and never reads that single, so a
@@ -262,8 +274,10 @@ loads:
 
 The editor's canvas draws your page with the same React renderer that serves it,
 `PageRenderer` from `@nextlyhq/blocks-react`. It is not pixel-identical to the published
-page: the canvas adds editing outlines and markers, and, not being an iframe, it answers
-viewport units and your own `@media` rules with the admin window's width.
+page: the editor draws its outlines and markers over the canvas, and your app's own global
+stylesheet is not loaded into it yet. The page is drawn in a frame of its own at the
+device's width, so viewport units and your own `@media` rules answer as they do when
+published, and neither the admin's styles nor the page's reach the other.
 
 ## Use it as a field instead
 
@@ -287,40 +301,53 @@ blocks once per entry — a post list, a team grid, a product row — without an
 a query. The developer decides which collections are available to it; the editor decides
 what each repeated item looks like.
 
-The loop reads through a `data` provider you pass to `createBlocksPage`. Without one it
-renders nothing. The provider answers one call, `find({ collection, limit, sort, locale })`,
-with `{ items, total }`. It is also where you name the collections a loop may read:
+The loop reads through the route's **public reader**, which every blocks route binds to each
+render. With no `data` option the loop reads through it directly, so a published page lists
+published entries with no wiring. To name the collections a loop may read, pass `data`, a
+function from that reader to a provider:
 
 ```tsx
-// The collections an editor's loop may list. Anything else reads nothing.
-const loopCollections = ["posts"] as const;
-const isLoopCollection = (
-  name: string,
-): name is (typeof loopCollections)[number] =>
-  (loopCollections as readonly string[]).includes(name);
+import { createDefaultDataProvider } from "@nextlyhq/blocks-react";
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 
 const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["pages"],
   field: "content",
   // ...and the rest of the options above...
-  data: {
-    find: async ({ collection, limit, sort, locale }) => {
-      if (!isLoopCollection(collection)) return { items: [], total: 0 };
-      const result = await (await instance()).find({
-        collection,
-        limit,
-        sort,
-        locale,
-        // Published entries only, judged by the collection's own read rule, as an
-        // anonymous visitor would read them.
-        status: "published",
-        overrideAccess: false,
-      });
-      return { items: result.items, total: result.meta.total };
-    },
-  },
+  // The collections an editor's loop may list. Anything else reads nothing.
+  data: reader => createDefaultDataProvider(reader, { collections: ["posts"] }),
 });
 ```
+
+`data` takes a function, never a provider object: a provider holding a reader of its own would
+decide by itself who sees what, so the route refuses one when it is built. Each list read is
+cached like the page and tagged with its collection, so publishing a post refreshes the pages
+that list it. A change to a collection's access rule is not a write, so a page cached before it
+shows the old answer until it revalidates.
+
+A loop always sends a sort, so a list with none comes back in id order. If the reader refuses
+a loop's stored sort (a field since removed, or one the public may not read), the loop lists in
+id order instead of going empty.
+
+A provider you wrote yourself, for `PageRenderer` outside a route, now receives `sort` as one
+key or an array of keys, and an empty array for a loop with no sort. Read it as "no sort
+given": `[sort ?? []].flat()` gives the keys either way.
+
+The reader is `createPublicReader` (from `nextly/runtime`, `@experimental`), which you can also
+call yourself over a Nextly instance. It takes a list's query as data and fixes everything that decides who sees what:
+
+- published entries only, judged by each collection's read rule as an anonymous visitor;
+- fields the public may not read never come back, and filtering or sorting on one is refused;
+- a sort key that names no field is refused, not dropped, and ties come back in id order;
+- `limit` (1 to 100), `offset` and `page` are checked, and the read answers in the route's language.
+
+A query that tries to widen the read (`status`, `overrideAccess`, `user`, a raw `where`, and
+so on) is refused by name rather than ignored. This is a contract your provider relies on,
+not a sandbox: code holding the Direct API can still read whatever it is trusted to.
+
+Filter rows are typed `{ field, op, value }`, with `op` one of `equals`, `not_equals`, `gt`,
+`gte`, `lt`, `lte`, `contains`, `in`, `not_in` and `exists`. `contains` ignores case for
+ASCII letters on every database; letters outside ASCII follow each database's own rules.
 
 <Callout type="warn">
 Field bindings inside a loop are stored but not resolved yet. Each repeated item shows

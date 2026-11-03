@@ -15,7 +15,10 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { watchCanvasFor } from "./canvas-geometry-watch";
+import {
+  OVERLAY_OUTPUT_ATTRIBUTE,
+  watchCanvasFor,
+} from "./canvas-geometry-watch";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 function canvas(): {
@@ -155,6 +158,113 @@ describe("a batch that changed nothing", () => {
 
     await delivered();
     expect(moves).toBe(0);
+    stop?.();
+  });
+});
+
+describe("another overlay drawing", () => {
+  it("re-measures nothing, while a page change beside it still does", async () => {
+    /*
+     * A layer drawn over the page and marked as overlay output moves no block,
+     * so one overlay drawing must not make every other re-measure. The same
+     * mutation in the page is the positive control: it shows this watch does
+     * hear the subtree the layer sits in.
+     */
+    const { root, layer } = canvas();
+    const other = document.createElement("div");
+    other.setAttribute(OVERLAY_OUTPUT_ATTRIBUTE, "");
+    root.append(other);
+    await delivered();
+    let moves = 0;
+    const stop = watchCanvasFor(
+      () => layer,
+      () => {
+        moves += 1;
+      }
+    );
+
+    other.append(document.createElement("div"));
+    await delivered();
+    expect(moves, "another overlay's drawing").toBe(0);
+
+    root.append(document.createElement("div"));
+    await delivered();
+    expect(moves, "a change in the page").toBe(1);
+    stop?.();
+  });
+});
+
+describe("a block rendered after the watch began", () => {
+  /*
+   * A ResizeObserver the test drives: it remembers what it was asked to
+   * observe and reports a resize only for those, as a real one does.
+   */
+  class DrivenResizeObserver {
+    static instances: DrivenResizeObserver[] = [];
+    readonly observed = new Set<Element>();
+    constructor(private readonly report: () => void) {
+      DrivenResizeObserver.instances.push(this);
+    }
+    observe(element: Element): void {
+      this.observed.add(element);
+    }
+    unobserve(element: Element): void {
+      this.observed.delete(element);
+    }
+    disconnect(): void {
+      this.observed.clear();
+    }
+    /** A resize of `element`, delivered only if it is being observed. */
+    resize(element: Element): void {
+      if (this.observed.has(element)) this.report();
+    }
+  }
+
+  afterEach(() => {
+    DrivenResizeObserver.instances = [];
+    Reflect.deleteProperty(window, "ResizeObserver");
+  });
+
+  it("is observed for resizes once it arrives, and released when it leaves", async () => {
+    /*
+     * A block inserted after setup — a Suspense or async block resolving — is
+     * measured on insertion, but an image loading inside it later resizes only
+     * that block. Unobserved, nothing reports it and every overlay drawn over
+     * it stays at the size it had before the image arrived.
+     */
+    Object.defineProperty(window, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: DrivenResizeObserver,
+    });
+    const { root, layer } = canvas();
+    let moves = 0;
+    const stop = watchCanvasFor(
+      () => layer,
+      () => {
+        moves += 1;
+      }
+    );
+    const sizes = DrivenResizeObserver.instances[0];
+    expect(sizes, "the watch observes sizes").toBeDefined();
+
+    // Arrives later, inside a wrapper, as a resolved block's subtree does.
+    const wrapper = document.createElement("section");
+    const late = document.createElement("div");
+    late.setAttribute("data-nx-node", "late");
+    wrapper.append(late);
+    root.append(wrapper);
+    await delivered();
+    const settled = moves;
+
+    sizes?.resize(late);
+    expect(moves, "a resize of the late block re-measures").toBe(settled + 1);
+
+    wrapper.remove();
+    await delivered();
+    expect(sizes?.observed.has(late), "a removed block is released").toBe(
+      false
+    );
     stop?.();
   });
 });

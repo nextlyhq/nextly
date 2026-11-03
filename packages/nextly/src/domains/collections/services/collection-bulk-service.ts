@@ -46,7 +46,10 @@ import type {
   DeleteRowLanguages,
   RowVerdict,
 } from "./collection-mutation-service";
-import { isWriteIntegrityFailure } from "./collection-mutation-service";
+import {
+  GoingLiveRelationsBatch,
+  isWriteIntegrityFailure,
+} from "./collection-mutation-service";
 import type { CollectionQueryService } from "./collection-query-service";
 import type {
   BatchOperationResult,
@@ -940,6 +943,9 @@ export class CollectionBulkService extends BaseService {
     // post-update values); failures carry canonical NextlyErrorCode.
     // Per-id updates run concurrently via Promise.allSettled. See
     // bulkDeleteEntries for the rationale on concurrency + per-row hooks.
+    // Where they publish, the documents' components and relationships are
+    // read once for them all, not once for each.
+    const goingLiveBatch = new GoingLiveRelationsBatch(params.ids);
     const outcomes = await Promise.allSettled(
       params.ids.map(
         async (entryId): Promise<PerItemOutcome<Record<string, unknown>>> => {
@@ -959,6 +965,7 @@ export class CollectionBulkService extends BaseService {
                 request: params.request,
                 // Judge the key's own publish/unpublish grant per row.
                 authenticatedScope: params.authenticatedScope,
+                goingLiveBatch,
               },
               params.data
             );
@@ -1798,16 +1805,26 @@ export class CollectionBulkService extends BaseService {
     const state = newLegacyBatchState();
     let committed = false;
     try {
-      await this.adapter.transaction(async tx => {
-        await this.runUpdateBatch(
-          tx,
-          params,
-          transitionAuth,
-          entries,
-          { batchSize, stopOnError, skipHooks, rowGate, rowVerdicts },
-          state
-        );
-      });
+      // Read committed on every dialect, so each entry is read as committed
+      // once the batch locks it. MySQL's default, REPEATABLE READ, would give
+      // every plain read the snapshot the batch's first read took: a later
+      // entry's components, many-to-many ids, working draft and versions
+      // would be read as they stood before another writer's committed
+      // change, though the batch holds that entry's lock. PostgreSQL already
+      // reads committed, and SQLite runs one writer at a time.
+      await this.adapter.transaction(
+        async tx => {
+          await this.runUpdateBatch(
+            tx,
+            params,
+            transitionAuth,
+            entries,
+            { batchSize, stopOnError, skipHooks, rowGate, rowVerdicts },
+            state
+          );
+        },
+        { isolationLevel: "read committed" }
+      );
       committed = true;
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Clear the aggregated
@@ -1902,6 +1919,13 @@ export class CollectionBulkService extends BaseService {
    *
    * Same as updateEntries but uses an externally managed transaction.
    * Useful when bulk updates need to be part of a larger transaction.
+   *
+   * The caller's transaction decides what each entry is read as once it is
+   * locked. On MySQL, opened at its default REPEATABLE READ, a later entry's
+   * components and relationships are read as they stood at the
+   * transaction's first read, not as committed when its lock is taken; open
+   * it with `{ isolationLevel: "read committed" }`, as updateEntries does,
+   * to judge each entry on what is stored.
    *
    * @param tx - Transaction context from adapter
    * @param params - Collection name and optional user context
@@ -2484,6 +2508,13 @@ export class CollectionBulkService extends BaseService {
     },
     state: LegacyBatchState
   ): Promise<void> {
+    // Where an entry publishes, its components and relationships are read
+    // for it alone once its row is locked (`storedRelationsOf`): another
+    // writer may change a later entry's before the batch reaches it. The
+    // component definitions it is judged against are read once for all.
+    const goingLiveBatch = new GoingLiveRelationsBatch(
+      entries.map(entry => entry.id)
+    );
     await runLegacyBatch(
       tx,
       entries,
@@ -2493,7 +2524,7 @@ export class CollectionBulkService extends BaseService {
         const updateResult =
           await this.mutationService.updateSingleEntryInTransaction(
             tx,
-            { ...params, transitionAuth },
+            { ...params, transitionAuth, goingLiveBatch },
             entry.id,
             entry.data,
             options.skipHooks,
