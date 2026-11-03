@@ -442,7 +442,10 @@ function PaletteGroup({
           onSelect={() => choose(command)}
         >
           {command.icon === undefined ? null : (
-            <span aria-hidden="true" className="shrink-0 text-muted-foreground">
+            <span
+              aria-hidden="true"
+              className="flex shrink-0 items-center text-muted-foreground"
+            >
               {command.icon}
             </span>
           )}

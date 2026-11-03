@@ -150,7 +150,7 @@ export function EditorCommandPalette({
   });
   const found = [
     ...(insert === undefined ? [] : addCommands(offers, editor, query)),
-    ...pageCommands(editor, query, revealBlock),
+    ...pageCommands(editor, query, revealBlock, iconsOf(offers.catalog)),
     ...(results?.commands ?? []),
     ...commands,
   ];
@@ -199,7 +199,7 @@ function addCommands(
   query: string
 ): BuilderCommand[] {
   if (query === "") return [];
-  return filterEntries(catalog, query).flatMap(entry => {
+  return byLabelFirst(filterEntries(catalog, query), query).flatMap(entry => {
     const offer = offers.get(entry.id);
     if (entry.kind === "pattern" || offer?.place === undefined) return [];
     return [
@@ -230,7 +230,8 @@ function addCommands(
 function pageCommands(
   editor: Pick<EditorState, "document" | "select">,
   query: string,
-  revealBlock: ((id: string) => void) | undefined
+  revealBlock: ((id: string) => void) | undefined,
+  icons: ReadonlyMap<string, string | undefined>
 ): BuilderCommand[] {
   if (query === "") return [];
   return blocksOnPage(editor.document).map(({ layer, parent }) => {
@@ -238,6 +239,8 @@ function pageCommands(
     return {
       id: `block:${layer.id}`,
       label: layer.label,
+      // The same mark the Add panel draws for this kind of block.
+      icon: <BlockIconMark icon={icons.get(layer.type)} size={16} />,
       // Found by what it is as well as by its name: "heading" finds them all.
       keywords: [kind],
       group: PAGE_GROUP,
@@ -253,6 +256,40 @@ function pageCommands(
       },
     };
   });
+}
+
+/**
+ * The panel's matches, those whose NAME the search begins a word of first,
+ * then those whose name holds it, then the rest (a match in a description or
+ * a keyword). Stable, so the panel's order holds within each.
+ */
+function byLabelFirst<TEntry extends { label: string }>(
+  entries: readonly TEntry[],
+  query: string
+): TEntry[] {
+  const wanted = query.toLowerCase();
+  const rank = (label: string): number => {
+    const lower = label.toLowerCase();
+    if (lower.startsWith(wanted) || lower.includes(` ${wanted}`)) return 0;
+    return lower.includes(wanted) ? 1 : 2;
+  };
+  return entries
+    .map((entry, index) => ({ entry, index, rank: rank(entry.label) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(ranked => ranked.entry);
+}
+
+/** Each block type's mark, as the Add panel's catalogue names it. */
+function iconsOf(
+  catalog: InsertOffers["catalog"]
+): ReadonlyMap<string, string | undefined> {
+  const icons = new Map<string, string | undefined>();
+  for (const entry of catalog) {
+    if (entry.kind === "block" && !icons.has(entry.blockName)) {
+      icons.set(entry.blockName, entry.icon);
+    }
+  }
+  return icons;
 }
 
 /** Every block on the page, in document order, with the block it sits in. */

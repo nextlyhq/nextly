@@ -161,6 +161,22 @@ describe("the editor's search", () => {
     expect(editor.select).toHaveBeenCalledWith(op.node.id);
   });
 
+  it("lists blocks whose name the search begins first, before a match in a description", () => {
+    register();
+    registerBlocks(
+      [
+        { ...base, name: "acme/quote", editor: { label: "Zebra block" } },
+      ] as never,
+      { source: "acme" }
+    );
+    mount(editorSpy(page(), null));
+    // Every fixture's description is "A block.", so all of them match; the one
+    // NAMED for it leads, though it comes last in the catalogue.
+    search("block");
+    const [first] = rowsUnder("Add");
+    expect(first?.textContent).toContain("Zebra block");
+  });
+
   it("finds a block on the page by its name or its kind, and selects and reveals it", () => {
     register();
     const editor = editorSpy(page(), null);

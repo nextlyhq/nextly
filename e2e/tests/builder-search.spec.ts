@@ -116,7 +116,8 @@ test.describe("the editor's search", () => {
     await search(page, "divider");
     const row = group(page, "Add").getByRole("option").first();
     await expect(row).toContainText("Divider");
-    await expect(row).toContainText("Adding after Search heading");
+    // Named as Layers names it: a block without a name of its own is its kind.
+    await expect(row).toContainText("Adding after Heading");
     await expect(palette(page)).toContainText("Add");
     await page.keyboard.press("Enter");
     await expect(palette(page)).toBeHidden();
@@ -163,7 +164,9 @@ test.describe("the editor's search", () => {
     await openBuilder(page, id);
     await page.locator(`.nx-canvas [data-nx-node="${HEADING}"]`).click();
 
-    await page.keyboard.press("ControlOrMeta+k");
+    // Control, not ControlOrMeta: the editor reads `mod` from the platform the
+    // browser reports, and this suite's device reports Windows on every host.
+    await page.keyboard.press("Control+k");
     await expect(palette(page)).toBeVisible();
     await palette(page).getByRole("combobox").fill("duplicate");
     await palette(page)
