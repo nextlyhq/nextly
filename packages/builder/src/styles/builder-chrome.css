@@ -2990,6 +2990,20 @@
   left: 0;
 }
 
+/* Inside the ring, at its bottom corner, when neither side has room on
+   screen, as on a block that fills it. The insets keep the corner on screen
+   where the ring runs past it; the marks set them. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="inside"]::after {
+  top: auto;
+  bottom: var(--nx-tag-inset-bottom, 4px);
+  right: var(--nx-tag-inset-side, 4px);
+}
+
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="inside"][data-tag-edge="left"]::after {
+  right: auto;
+  left: var(--nx-tag-inset-side, 4px);
+}
+
 /*
  * Where a dragged block will land.
  *

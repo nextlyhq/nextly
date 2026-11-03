@@ -510,6 +510,43 @@ describe("a selected block shown although the page hides it", () => {
     expect(tagsOf(container)).toEqual(["above:right", "below:right"]);
   });
 
+  it("puts its tag inside the ring, at the screen's corner, when neither side has room", async () => {
+    // A hero that fills the 500px screen ("a") and one that runs 300px past
+    // it ("c"): no room above or below either, so the tag goes inside, moved
+    // up by as much as the ring runs past the screen.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "a") return new DOMRect(0, 0, 1000, 500);
+        if (id === "c") return new DOMRect(0, 0, 1000, 800);
+        return new DOMRect(0, 0, 1000, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId="a"
+          selectedIds={["a", "c"]}
+          overlay={<CanvasMarks revealed={["a", "c"]} />}
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(2));
+    const insets = halosIn(container)
+      .map(
+        mark =>
+          `${mark.getAttribute("data-tag")}:${(mark as HTMLElement).style.getPropertyValue("--nx-tag-inset-bottom")}`
+      )
+      .sort();
+    expect(insets).toEqual(["inside:304px", "inside:4px"]);
+  });
+
   it("lines its tag up with the left edge of a narrow block at the left of the screen", async () => {
     onScreenGeometry();
     const { container } = render(

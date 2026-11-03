@@ -75,11 +75,17 @@ interface Mark {
    */
   readonly hidden: boolean;
   /**
-   * Where a hidden block's tag sits: below the ring, or above it when the
-   * ring ends at the bottom of what is on screen, where the canvas would cut
-   * a tag below it off.
+   * Where a hidden block's tag sits: below the ring, above it when the ring
+   * ends at the bottom of what is on screen, where the canvas would cut a tag
+   * below it off, or inside it when neither fits, as on a block that fills
+   * the screen.
    */
-  readonly tag: "below" | "above";
+  readonly tag: "below" | "above" | "inside";
+  /**
+   * For a tag inside the ring, how far in from the ring's bottom and side
+   * edges it sits, so it stays on screen when the ring runs past the screen.
+   */
+  readonly tagInset: { readonly bottom: number; readonly side: number };
   /**
    * Which of the ring's edges the tag lines up with: its right edge, so the
    * tag runs leftwards, or its left edge when there is no room on screen for
@@ -99,6 +105,11 @@ const NO_IDS: readonly string[] = [];
 
 /** The height a hidden block's tag takes outside its ring, with its gap. */
 const TAG_ROOM = 24;
+
+/** The gap between a tag inside the ring and the ring's edges. */
+const TAG_GAP = 4;
+
+const NO_INSET = { bottom: TAG_GAP, side: TAG_GAP } as const;
 
 /**
  * About how wide a tag of `label` is drawn: its 11px face runs under 7px a
@@ -135,6 +146,7 @@ function markKey(mark: Mark): string {
     hidden,
     tag,
     tagEdge,
+    tagInset,
     clipped,
     radius,
     rect,
@@ -147,6 +159,8 @@ function markKey(mark: Mark): string {
     hidden,
     tag,
     tagEdge,
+    tagInset.bottom,
+    tagInset.side,
     clipped,
     radius,
     rect.x,
@@ -163,6 +177,26 @@ function sameMarks(a: readonly Mark[], b: readonly Mark[]): boolean {
     const other = b[index];
     return other !== undefined && markKey(mark) === markKey(other);
   });
+}
+
+/**
+ * A mark's box, and for a tag inside the ring the insets the stylesheet places
+ * it by: custom properties, read only under `data-tag="inside"`.
+ */
+function markStyle(mark: Mark): React.CSSProperties {
+  const box: React.CSSProperties = {
+    left: mark.rect.x,
+    top: mark.rect.y,
+    width: mark.rect.width,
+    height: mark.rect.height,
+    borderRadius: mark.radius,
+  };
+  if (!mark.hidden || mark.tag !== "inside") return box;
+  return {
+    ...box,
+    "--nx-tag-inset-bottom": `${String(mark.tagInset.bottom)}px`,
+    "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
+  } as React.CSSProperties;
 }
 
 /** Corner radii as the `border-radius` shorthand writes them, both axes. */
@@ -252,10 +286,33 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       ? canvasContentRect(root, root)
       : visibleBandOf(scroller, root)
   );
-  const roomBelow = (rect: Rect): boolean =>
-    rect.y + rect.height + TAG_ROOM <= onScreen.y + onScreen.height;
+  const screenBottom = onScreen.y + onScreen.height;
+  const screenRight = onScreen.x + onScreen.width;
   const roomLeft = (rect: Rect): boolean =>
     rect.x + rect.width - inputs.tagWidth >= onScreen.x;
+  // Below if it fits on screen, above if that does, and otherwise inside the
+  // ring, which is the one place left that is always on screen.
+  const tagSide = (rect: Rect): Mark["tag"] => {
+    if (rect.y + rect.height + TAG_ROOM <= screenBottom) return "below";
+    if (rect.y - TAG_ROOM >= onScreen.y) return "above";
+    return "inside";
+  };
+  // Inside, the tag keeps a small gap from the ring's edges, and moves in as
+  // far as the ring runs past the screen, so its corner is the screen's.
+  const insetOf = (rect: Rect, edge: Mark["tagEdge"]): Mark["tagInset"] => ({
+    bottom: TAG_GAP + Math.max(0, rect.y + rect.height - screenBottom),
+    side:
+      TAG_GAP +
+      (edge === "right"
+        ? Math.max(0, rect.x + rect.width - screenRight)
+        : Math.max(0, onScreen.x - rect.x)),
+  });
+  const placedTag = (
+    rect: Rect
+  ): Pick<Mark, "tag" | "tagEdge" | "tagInset"> => {
+    const tagEdge = roomLeft(rect) ? "right" : "left";
+    return { tag: tagSide(rect), tagEdge, tagInset: insetOf(rect, tagEdge) };
+  };
   const found: Mark[] = [];
   root
     .querySelectorAll(
@@ -274,6 +331,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         hidden: false,
         tag: "below" as const,
         tagEdge: "right" as const,
+        tagInset: NO_INSET,
       };
       const selected = marked.getAttribute(SELECTED_ATTRIBUTE);
       if (selected !== null) {
@@ -285,8 +343,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
           component: marked.hasAttribute(INSTANCE_ATTRIBUTE),
           locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
           hidden: address !== null && inputs.revealed.has(address),
-          tag: roomBelow(outline.rect) ? "below" : "above",
-          tagEdge: roomLeft(outline.rect) ? "right" : "left",
+          ...placedTag(outline.rect),
         });
       }
       // An exposed part that is itself selected keeps its ring alone: one
@@ -325,6 +382,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         hidden: false,
         tag: "below",
         tagEdge: "right",
+        tagInset: NO_INSET,
       });
     });
   }
@@ -409,13 +467,7 @@ export function CanvasMarks({
           data-tag={mark.hidden ? mark.tag : undefined}
           data-tag-edge={mark.hidden ? mark.tagEdge : undefined}
           data-clipped={mark.clipped ? "" : undefined}
-          style={{
-            left: mark.rect.x,
-            top: mark.rect.y,
-            width: mark.rect.width,
-            height: mark.rect.height,
-            borderRadius: mark.radius,
-          }}
+          style={markStyle(mark)}
         />
       ))}
     </div>
