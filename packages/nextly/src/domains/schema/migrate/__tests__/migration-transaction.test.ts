@@ -218,6 +218,51 @@ describe("a unit run outside a transaction that fails part-way", () => {
   });
 });
 
+describe("a unit run outside a transaction refused at a column made required", () => {
+  // The refusal says itself which statements ran and that they stayed applied, so it reaches the
+  // caller as it is, under its own code, rather than as a statement that failed part-way.
+  it("keeps the refusal, naming the column, its count and what stayed applied", async () => {
+    sqlite.exec(
+      `INSERT INTO parent VALUES ('p2', NULL); INSERT INTO parent VALUES ('p3', NULL)`
+    );
+    const thrown = await runMigrationStatements(
+      adapter,
+      [
+        "UPDATE parent SET label = 'two' WHERE id = 'p2'",
+        "CREATE TABLE __new_parent (id TEXT PRIMARY KEY, label TEXT NOT NULL)",
+        "INSERT INTO __new_parent (id, label) SELECT id, label FROM parent",
+        "DROP TABLE parent",
+        "ALTER TABLE __new_parent RENAME TO parent",
+      ],
+      { source: "0002_label.sql", transaction: false }
+    ).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(NextlyError.is(thrown)).toBe(true);
+    const error = thrown as NextlyError;
+    expect(error.code).toBe("VALIDATION_ERROR");
+    expect(error.publicData).toEqual({
+      errors: [
+        {
+          path: "tables.parent.label",
+          code: "REQUIRED_COLUMN_HAS_NULLS",
+          message:
+            "Table 'parent': column 'label' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the column nullable.",
+        },
+      ],
+    });
+    expect(error.publicMessage).toContain(
+      "They ran outside a transaction, and stayed applied."
+    );
+    // The fill before it stayed; the rebuild never started.
+    expect(
+      sqlite.prepare(`SELECT label FROM parent WHERE id = 'p2'`).get()
+    ).toEqual({ label: "two" });
+    expect(count("parent")).toBe(3);
+  });
+});
+
 describe("the runner's own writes after a unit's statements", () => {
   /**
    * An adapter that logs what its transaction runs, in order: the unit's

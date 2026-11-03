@@ -17,8 +17,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   requiredColumnUncountedError,
   requiredColumnOverNullsError,
@@ -26,7 +25,10 @@ import {
   type RequiredColumnEntity,
   type RequiredColumnEntityKind,
 } from "../required-column-refusal";
-import { toSnakeCase } from "../services/field-column-descriptor";
+import {
+  fieldsByColumnOf,
+  requiredColumnRegistries,
+} from "../required-column-registries";
 
 import {
   countRowsBreakingNotNull,
@@ -95,12 +97,19 @@ function ownersByTable(desired: DesiredSchema): Map<string, Owner> {
  * case (`getColumnDescriptor`), so `subTitle` is named rather than `sub_title`. A column no
  * top-level field produces is named as the column.
  */
-function fieldNameOf(owner: Owner, column: string): string {
-  const wanted = column.toLowerCase();
-  const field = owner.fields.find(
-    f => typeof f.name === "string" && toSnakeCase(f.name) === wanted
+function fieldNameOf(
+  owner: Owner,
+  column: string,
+  dialect: SupportedDialect
+): string {
+  // The field whose column this is, by the descriptor every road maps fields through.
+  return (
+    fieldsByColumnOf(
+      owner.fields as readonly FieldDefinition[],
+      dialect,
+      owner.entity.kind === "fieldGroup"
+    ).get(column.toLowerCase()) ?? column
   );
-  return field?.name ?? column;
 }
 
 /**
@@ -114,20 +123,11 @@ async function registryEntitiesByTable(
   fieldGroupRegistryTable: string | undefined
 ): Promise<Map<string, RequiredColumnEntity>> {
   const byTable = new Map<string, RequiredColumnEntity>();
-  const registries: [RequiredColumnEntityKind, string][] = [
-    ["collection", "dynamic_collections"],
-    ["single", "dynamic_singles"],
-    [
-      "fieldGroup",
-      fieldGroupRegistryTable ??
-        // Resolved as the push resolves it: the registry may sit under its migrated name. A
-        // catalog that cannot answer leaves the current spelling, and a missing table names none.
-        (await resolveRegistryNameFromCatalog({
-          dialect,
-          getDrizzle: <T>() => db as T,
-        }).catch(() => STORAGE_FORMAT.registryTable)),
-    ],
-  ];
+  const registries = await requiredColumnRegistries(
+    db,
+    dialect,
+    fieldGroupRegistryTable
+  );
   for (const [kind, registry] of registries) {
     const rows = await querySqlRows<{ slug: string; table_name: string }>(
       db,
@@ -201,7 +201,9 @@ export async function refuseRequiredColumnsOverNulls(args: {
       // A count that fails cannot say the change is safe: refused before anything runs.
       throw requiredColumnUncountedError({
         table: event.tableName,
-        field: owner ? fieldNameOf(owner, event.columnName) : event.columnName,
+        field: owner
+          ? fieldNameOf(owner, event.columnName, dialect)
+          : event.columnName,
         cause,
       });
     }
@@ -241,7 +243,7 @@ export async function refuseRequiredColumnsOverNulls(args: {
     }
     breaks.push({
       entity: owner.entity,
-      field: fieldNameOf(owner, event.columnName),
+      field: fieldNameOf(owner, event.columnName, dialect),
       count: total,
       added,
       ...(users ? { users } : {}),

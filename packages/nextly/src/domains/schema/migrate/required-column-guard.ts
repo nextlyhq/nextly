@@ -27,7 +27,6 @@ import { sql } from "drizzle-orm";
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   countRowsBreakingNotNull,
   querySqlRows,
@@ -45,9 +44,9 @@ import {
   requiredColumnUncountedError,
 } from "../required-column-refusal";
 import {
-  getColumnDescriptor,
-  getComponentRowColumnDescriptor,
-} from "../services/field-column-descriptor";
+  fieldsByColumnOf,
+  requiredColumnRegistries,
+} from "../required-column-registries";
 
 import type { MigrationUnit } from "./migration-transaction";
 import { readNotNullChanges } from "./not-null-statements";
@@ -100,16 +99,6 @@ export interface RequiredColumnFacts {
   }): Promise<RowsBreakingNotNull>;
 }
 
-/** The registry tables, with the kind of entity each records. */
-const REGISTRIES: ReadonlyArray<{
-  table: string;
-  kind: RequiredColumnEntity["kind"];
-}> = [
-  { table: "dynamic_collections", kind: "collection" },
-  { table: "dynamic_singles", kind: "single" },
-  { table: STORAGE_FORMAT.registryTable, kind: "fieldGroup" },
-];
-
 /**
  * The columns that would break, counted for each target: the one judgement both the pre-run
  * and the at-statement count make. A target on a table the registry does not name is left
@@ -129,6 +118,14 @@ export async function judgeRequiredColumnTargets(
     const table = owner?.table ?? target.table;
     const live = facts.live(table, target.column);
     if (live === undefined) continue;
+    // A column added NOT NULL that the table already has (`ADD COLUMN IF NOT EXISTS`) is skipped
+    // by the database, so it breaks no row; without IF NOT EXISTS the statement fails on its own.
+    if (
+      target.column === null &&
+      facts.live(table, target.required) !== undefined
+    ) {
+      continue;
+    }
     if (target.column !== null && !live.nullable) continue;
     let rows: RowsBreakingNotNull;
     try {
@@ -192,18 +189,22 @@ export async function readRequiredColumnOwners(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<RequiredColumnOwners> {
+  // The registries as every road reads them: the field-group one under its resolved name.
+  const registries = (await requiredColumnRegistries(db, dialect)).map(
+    ([kind, table]) => ({ kind, table })
+  );
   const present = new Set(
     (
       await introspectTableNames(
         db,
         dialect,
-        REGISTRIES.map(r => r.table)
+        registries.map(r => r.table)
       )
     ).map(name => name.toLowerCase())
   );
   const owners = new Map<string, TableOwner>();
-  for (const registry of REGISTRIES) {
-    if (!present.has(registry.table)) continue;
+  for (const registry of registries) {
+    if (!present.has(registry.table.toLowerCase())) continue;
     const rows = await querySqlRows<{
       slug: string;
       table_name: string;
@@ -215,17 +216,11 @@ export async function readRequiredColumnOwners(
     );
     const fieldGroup = registry.kind === "fieldGroup";
     for (const row of rows) {
-      const fieldsByColumn = new Map<string, string>();
-      for (const field of fieldsOf(row.fields)) {
-        if (typeof field?.name !== "string") continue;
-        // The column a field occupies is the descriptor's answer, never a second spelling of it.
-        const descriptor = fieldGroup
-          ? getComponentRowColumnDescriptor(field, dialect, "fieldGroup")
-          : getColumnDescriptor(field, dialect, "collection");
-        if (descriptor !== null) {
-          fieldsByColumn.set(descriptor.name.toLowerCase(), field.name);
-        }
-      }
+      const fieldsByColumn = fieldsByColumnOf(
+        fieldsOf(row.fields),
+        dialect,
+        fieldGroup
+      );
       owners.set(String(row.table_name).toLowerCase(), {
         entity: { kind: registry.kind, slug: String(row.slug) },
         table: String(row.table_name),
@@ -381,15 +376,32 @@ export async function previewRequiredColumns(
   logger: { info(message: string): void }
 ): Promise<void> {
   const statements = splitSqlStatements(file.upSql, dialect, file);
-  for (const b of await requiredColumnBreaksBeforeRun(
-    db,
-    dialect,
-    statements
-  )) {
+  let breaks: RequiredColumnBreak[];
+  try {
+    breaks = await requiredColumnBreaksBeforeRun(db, dialect, statements);
+  } catch (error) {
+    // A file whose rows cannot be counted is one a real run would refuse: reported as a line of
+    // the preview, not as the end of it. Anything else still fails the preview.
+    const issue = uncountedIssue(error);
+    if (issue === undefined) throw error;
+    logger.info(`    ✖ a real run would refuse it: ${issue}`);
+    return;
+  }
+  for (const b of breaks) {
     logger.info(
       `    ✖ a real run would refuse it: ${requiredColumnBreakMessage(b)}`
     );
   }
+}
+
+/** The sentence of a refusal over rows that could not be counted, or undefined for any other error. */
+function uncountedIssue(error: unknown): string | undefined {
+  if (!NextlyError.isValidation(error)) return undefined;
+  const data = error.publicData as
+    | { errors?: Array<{ code?: string; message?: string }> }
+    | undefined;
+  return data?.errors?.find(e => e.code === "REQUIRED_COLUMN_UNCOUNTED")
+    ?.message;
 }
 
 /**

@@ -6,11 +6,15 @@
  * named by each collection and Single holding them, and a count that fails refuses rather than
  * passing.
  */
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { RowsBreakingNotNull } from "../../pipeline/classifier/count-helpers";
 import {
+  previewRequiredColumns,
+  readRequiredColumnOwners,
   judgeRequiredColumnTargets,
   requiredColumnMigrationRefusal,
   type RequiredColumnFacts,
@@ -46,6 +50,8 @@ const OWNERS: Record<
 
 /** Every live column nullable unless listed here. */
 const NOT_NULL = new Set(["dc_posts.id"]);
+/** Columns not on the live table: those a file adds. */
+const ABSENT = new Set(["single_settings.tagline"]);
 
 function facts(
   counts: Record<string, RowsBreakingNotNull | Error>
@@ -71,7 +77,7 @@ function facts(
       },
     },
     live: (table, column) =>
-      column === "missing"
+      column === "missing" || ABSENT.has(`${table}.${String(column)}`)
         ? undefined
         : { nullable: !NOT_NULL.has(`${table}.${String(column)}`) },
     count: target => {
@@ -164,6 +170,21 @@ describe("judgeRequiredColumnTargets", () => {
     ).toEqual([]);
     // Every column that could hold a null was counted, a table the registry does not name too.
     expect(f.counted).toEqual(["users.name", "dc_pages.body"]);
+  });
+
+  // `ADD COLUMN IF NOT EXISTS c ... NOT NULL` over a column already there is skipped by the
+  // database, so it breaks no row.
+  it("leaves alone a required column added over one the table already has", async () => {
+    const f = facts({
+      "dc_posts.null": { total: 3, byParentTable: new Map() },
+    });
+    expect(
+      await judgeRequiredColumnTargets(
+        [{ table: "dc_posts", column: null, required: "slug" }],
+        f
+      )
+    ).toEqual([]);
+    expect(f.counted).toEqual([]);
   });
 
   // A table that is not a collection, a Single or a field group (a plugin's, an extension's) is
@@ -281,5 +302,74 @@ describe("requiredColumnMigrationRefusal", () => {
     expect(error.publicMessage).toContain(
       "rolled back, so none of them stayed applied"
     );
+  });
+});
+
+describe("readRequiredColumnOwners", () => {
+  // A field-group registry moved to its newer name is read there, as the push reads it, so
+  // `nextly migrate` names the same field group the Schema Builder does.
+  it("reads the field-group registry under the name it has now", async () => {
+    const sqlite = new Database(":memory:");
+    try {
+      sqlite.exec(
+        `CREATE TABLE dynamic_field_groups (slug TEXT, table_name TEXT, fields TEXT)`
+      );
+      sqlite.exec(
+        `INSERT INTO dynamic_field_groups VALUES ('promo', 'fg_promo', '[{"name":"cta","type":"text"}]')`
+      );
+      const owners = await readRequiredColumnOwners(
+        drizzle({ client: sqlite }),
+        "sqlite"
+      );
+      expect(owners.owner("fg_promo")).toMatchObject({
+        entity: { kind: "fieldGroup", slug: "promo" },
+        fieldGroup: true,
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+describe("previewRequiredColumns", () => {
+  // `--dry-run` reports a file it cannot count as a line of the preview, as a real run would
+  // refuse it, rather than ending the whole preview on the first such file.
+  it("reports a count that fails as a line, naming the table", async () => {
+    const sqlite = new Database(":memory:");
+    const lines: string[] = [];
+    try {
+      sqlite.exec(`CREATE TABLE dc_posts (id TEXT, title TEXT)`);
+      const db = drizzle({ client: sqlite });
+      // The table is read for its columns, then gone when its rows are counted.
+      const failing = new Proxy(db, {
+        get(target, key, receiver) {
+          if (key === "all") {
+            return (query: unknown) => {
+              const text = JSON.stringify(query);
+              if (text.includes("COUNT(*)"))
+                throw new Error("table unreadable");
+              return (target as unknown as { all(q: unknown): unknown }).all(
+                query
+              );
+            };
+          }
+          return Reflect.get(target, key, receiver) as unknown;
+        },
+      });
+      await previewRequiredColumns(
+        failing,
+        "sqlite",
+        {
+          upSql: `ALTER TABLE "dc_posts" ADD COLUMN "slug" text NOT NULL;`,
+          transaction: true,
+        },
+        { info: message => lines.push(message) }
+      );
+    } finally {
+      sqlite.close();
+    }
+    expect(lines).toEqual([
+      "    ✖ a real run would refuse it: Table 'dc_posts': the rows that would break making 'slug' required could not be counted, so the change was refused before anything ran. Check that the database can be reached and the table read, then try again.",
+    ]);
   });
 });

@@ -266,9 +266,11 @@ export async function runMigrationStatements(
     execute: (statement: string) => Promise<unknown>
   ): Promise<void> => {
     for (const [index, statement] of statements.entries()) {
+      // Outside a transaction each statement has committed, so the pool reads what they left. The
+      // refusal names the statements that ran and says they stayed applied, so it reaches the
+      // caller as it is, not as a statement that failed part-way.
+      await checkpoint?.(adapter.getDrizzle(), index);
       try {
-        // Outside a transaction each statement has committed, so the pool reads what they left.
-        await checkpoint?.(adapter.getDrizzle(), index);
         await execute(statement);
       } catch (error) {
         throw partialFailure(unit, index, statements.length, error);
