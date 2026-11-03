@@ -553,6 +553,37 @@ describe("writing a shared style's styles while it is the target", () => {
     });
   });
 
+  it("takes each edit's place in the history when it is made, not when the ones before it are stored", async () => {
+    const { locked: _unlocked, ...stored } = card;
+    storedRead = { data: { classes: [stored] }, isPending: false, error: null };
+    openEditor();
+
+    const write = classProps().sharedStyles?.writeStyles;
+    let both: Promise<unknown> = Promise.resolve();
+    act(() => {
+      both = Promise.all([
+        write?.("c-card", setting("opacity", 0.5)),
+        write?.("c-card", setting("color", "#222222")),
+      ]);
+    });
+    // Both steps are in the history before either save has answered, so a
+    // page edit made now comes after both, as it was made.
+    expect(recorded).toHaveLength(2);
+
+    await act(async () => {
+      await both;
+    });
+    expect(recorded).toHaveLength(2);
+    expect(saved.at(-1)).toEqual({
+      classes: [
+        {
+          ...stored,
+          styles: { base: { base: { color: "#222222", opacity: 0.5 } } },
+        },
+      ],
+    });
+  });
+
   it("refuses a style the site no longer has, and writes nothing", async () => {
     openEditor();
     let refused: string | undefined;

@@ -105,6 +105,7 @@ import { layerLabel } from "./layers";
 import { usePrefersDark } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
 import {
+  moveToSharedStyleClear,
   planMoveToSharedStyle,
   sharedStyleChange,
   sharedStyleWrite,
@@ -3214,9 +3215,11 @@ function useFieldTarget({
     setIssue(null);
   }, [stored]);
   const survive = useSurvivingReport();
-  // The target as it is now, for a write that answers after a switch.
+  // The target and the editor as they are now, for a write that answers later.
   const current = React.useRef(target);
   current.current = target;
+  const liveEditor = React.useRef(editor);
+  liveEditor.current = editor;
   /*
    * A refusal of a write that answers later, for the target that made it:
    * said beside the field while the field is on screen AND still edits that
@@ -3255,6 +3258,7 @@ function useFieldTarget({
     moveTo: shared =>
       moveToSharedStyle({
         editor,
+        live: () => liveEditor.current,
         nodeId,
         target: shared,
         address,
@@ -3312,9 +3316,12 @@ function writeSharedStyleValue({
     return "refused";
   }
   setIssue(null);
-  if (write.kind === "unchanged") return "unchanged";
-  // The change, not the styles just computed: the host applies it to the
-  // style as it stands after any edit still on its way, so none is lost.
+  /*
+   * Queued even when the read in hand already holds the value: an edit still
+   * on its way may have changed it since, so whether this one changes
+   * anything is the host's to decide against what it has queued. The change,
+   * not the styles just computed, so none is lost.
+   */
   void target.write(sharedStyleChange(address, value, policy)).then(refused => {
     if (refused !== undefined) report(refused);
   });
@@ -3328,6 +3335,7 @@ function writeSharedStyleValue({
  */
 function moveToSharedStyle({
   editor,
+  live,
   nodeId,
   target,
   address,
@@ -3336,6 +3344,8 @@ function moveToSharedStyle({
   report,
 }: {
   editor: EditorState;
+  /** The editor as it stands when the style's write answers. */
+  live: () => EditorState;
   nodeId: string;
   target: Extract<StyleTarget, { kind: "shared" }>;
   address: StyleAddress;
@@ -3364,7 +3374,18 @@ function moveToSharedStyle({
       report(refused);
       return;
     }
-    if (plan.ops.length > 0 && editor.applyAll(plan.ops) === null) {
+    /*
+     * The block's value cleared at this one address, from the block as it
+     * stands NOW: an edit made to it while the style's write was on its way
+     * is kept, where a clear built before the write would put it back.
+     */
+    const now = live();
+    const ops = moveToSharedStyleClear(
+      findNode(now.document.nodes, nodeId),
+      address,
+      policy
+    );
+    if (ops.length > 0 && now.applyAll(ops) === null) {
       report(
         `${target.style.name} has the value, but it could not be cleared from this block.`
       );

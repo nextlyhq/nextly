@@ -685,14 +685,22 @@ function useWriteClassStyles(
   writes: ClassWrites,
   configured: readonly NamedClass[] | undefined
 ) {
-  const { save: saveSection } = useSaveSiteStyle();
+  const { reserve } = useSaveSiteStyle();
   return useCallback(
     async (
       classId: string,
       change: SharedStyleChange
-    ): Promise<string | undefined> =>
-      writes.run<string | undefined>(async existing => {
+    ): Promise<string | undefined> => {
+      /*
+       * The history place is taken NOW, when the author makes the edit; the
+       * payload is composed and sent in the queue, after the writes before
+       * it. A page edit made while those are stored then comes after this
+       * one in the history, as it was made.
+       */
+      const slot = reserve("classes");
+      return writes.run<string | undefined>(async existing => {
         if (existing === undefined) {
+          slot.cancel();
           return {
             result:
               "This site's shared styles could not be read, so this one can't be changed.",
@@ -700,6 +708,7 @@ function useWriteClassStyles(
         }
         const entry = existing.find(each => each.id === classId);
         if (entry === undefined) {
+          slot.cancel();
           return { result: "This shared style is no longer on the site." };
         }
         /*
@@ -710,15 +719,14 @@ function useWriteClassStyles(
          * the first.
          */
         const changed = change(entry.styles);
+        // Nothing to save gives the history place up again.
+        if (changed.kind !== "write") slot.cancel();
         if (changed.kind === "refused") return { result: changed.reason };
         if (changed.kind === "unchanged") return { result: undefined };
         const next = existing.map(each =>
           each.id === classId ? { ...each, styles: changed.styles } : each
         );
-        const result = await saveSection(
-          "classes",
-          classOverrideOf(configured, next)
-        );
+        const result = await slot.save(classOverrideOf(configured, next));
         const refused = refusalOf(
           result,
           "This shared style could not be changed."
@@ -726,8 +734,9 @@ function useWriteClassStyles(
         return refused === undefined
           ? { result: undefined, next }
           : { result: refused };
-      }),
-    [writes, configured, saveSection]
+      });
+    },
+    [writes, configured, reserve]
   );
 }
 

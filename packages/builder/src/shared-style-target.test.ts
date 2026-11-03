@@ -18,6 +18,7 @@ import {
   nodeSharedStyles,
   overlaidStyles,
   planDetachSharedStyle,
+  moveToSharedStyleClear,
   planMoveToSharedStyle,
   planRemoveSharedStyle,
   planSaveAsSharedStyle,
@@ -68,6 +69,9 @@ const hero: NamedClass = {
   orderIndex: 1,
   styles: {},
 };
+
+/** A well-formed envelope, beside the malformed ones. */
+const colour: NodeStyles = { base: { base: { color: "#123456" } } };
 
 const offer = (library: readonly NamedClass[] = [card], mayChange = true) => ({
   library,
@@ -259,6 +263,43 @@ describe("the shared styles a block wears", () => {
   });
 });
 
+describe("a stored envelope that is malformed at some level", () => {
+  const malformed = [
+    { base: null },
+    { base: "red" },
+    { base: { base: null } },
+    { hover: { base: 5 } },
+    { base: { base: ["color"] } },
+  ] as unknown as NodeStyles[];
+
+  it.each(malformed)(
+    "is read as holding nothing there, never thrown on: %j",
+    styles => {
+      expect(() => hasOwnStyles(styles)).not.toThrow();
+      expect(hasOwnStyles(styles)).toBe(false);
+      expect(() =>
+        saveAsSharedStyleRefusal(page({ styles }), "a", offer())
+      ).not.toThrow();
+      expect(sharedStyleMoveSummary(styles, "Card")).toBe(
+        "Moves this block's 0 values into Card."
+      );
+      expect(overlaidStyles(styles, colour)).toEqual(colour);
+      expect(overlaidStyles(colour, styles)).toEqual(colour);
+      expect(() =>
+        planDetachSharedStyle(
+          page({ styles, classes: ["c-card"] }),
+          "a",
+          { id: "c-card", styles },
+          [
+            { id: "c-card", styles },
+            { id: "c-late", styles: colour },
+          ]
+        )
+      ).not.toThrow();
+    }
+  );
+});
+
 describe("detaching and removing a block's style", () => {
   it("keeps the look on the block: the style's values under its own", () => {
     const style = {
@@ -405,11 +446,25 @@ describe("Move to", () => {
       kind: "write",
       styles: { base: { base: { color: "#000001", opacity: 0.5 } } },
     });
-    expect(plan.ops).toEqual([
+    // The block's half, built from the block as it stands when the style
+    // has the value: an edit made meanwhile (padding) is kept.
+    expect(
+      moveToSharedStyleClear(
+        {
+          id: "a",
+          styles: {
+            base: { base: { color: "#000001", margin: "4px", padding: "2px" } },
+          },
+        },
+        address
+      )
+    ).toEqual([
       {
         kind: "update",
         id: "a",
-        patch: { styles: { base: { base: { margin: "4px" } } } },
+        patch: {
+          styles: { base: { base: { margin: "4px", padding: "2px" } } },
+        },
       },
     ]);
   });

@@ -18,12 +18,17 @@
  * @module style-target
  */
 
-import type { NamedClass, StyleState } from "@nextlyhq/blocks-engine";
+import type {
+  NamedClass,
+  NodeStyles,
+  StyleState,
+} from "@nextlyhq/blocks-engine";
 import { findNode } from "@nextlyhq/blocks-engine";
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { CardVerbs } from "./block-card";
+import { useSurvivingReport } from "./builder-notices";
 import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
@@ -128,27 +133,84 @@ export function useStyleTarget(
     },
     [nodeId]
   );
-  const style =
+  const read =
     chosen !== null && chosen.nodeId === nodeId && host !== undefined
       ? worn.find(row => row.id === chosen.id)
       : undefined;
-  if (style === undefined || host === undefined) {
+  const queued = useQueuedStyles(read, host);
+  if (read === undefined || host === undefined || queued === undefined) {
     return { target: { kind: "block", worn }, choose };
   }
   return {
     target: {
       kind: "shared",
       worn,
-      style,
+      style: queued.style,
       readOnly: !host.mayChange
         ? NO_DESIGN_RIGHT
-        : style.locked
-          ? lockedStyleReason(style.name)
+        : read.locked
+          ? lockedStyleReason(read.name)
           : undefined,
-      write: change => host.writeStyles(style.id, change),
+      write: queued.write,
     },
     choose,
   };
+}
+
+/**
+ * The target's styles as the edits queued since the last read leave them,
+ * and the write that queues one.
+ *
+ * Every write still goes to the host as an address-level change, which the
+ * host applies to what it has queued and judges unchanged or not there. The
+ * controls show the edits on their way, so a value changed and changed back
+ * before the first is read back is a change to the field (and so a write)
+ * rather than a match with the stale read. A new read replaces them. A
+ * refused edit stays shown, with its refusal beside the field, as a refused
+ * block edit keeps the author's draft, until the next read.
+ */
+function useQueuedStyles(
+  read: SharedStyleRow | undefined,
+  host: SharedStylesHost | undefined
+):
+  | {
+      style: SharedStyleRow;
+      write: (change: SharedStyleChange) => Promise<string | undefined>;
+    }
+  | undefined {
+  const [queued, setQueued] = React.useState<{
+    id: string;
+    over: NodeStyles;
+    styles: NodeStyles;
+  } | null>(null);
+  const write = React.useCallback(
+    (change: SharedStyleChange): Promise<string | undefined> => {
+      if (read === undefined || host === undefined) {
+        return Promise.resolve("This shared style is no longer the target.");
+      }
+      setQueued(current => {
+        const base =
+          current !== null &&
+          current.id === read.id &&
+          current.over === read.styles
+            ? current.styles
+            : read.styles;
+        const next = change(base);
+        return next.kind === "write"
+          ? { id: read.id, over: read.styles, styles: next.styles }
+          : current;
+      });
+      return host.writeStyles(read.id, change);
+    },
+    [read, host]
+  );
+  if (read === undefined) return undefined;
+  // Only while the read they were made over is still the read in hand.
+  const showing =
+    queued !== null && queued.id === read.id && queued.over === read.styles
+      ? { ...read, styles: queued.styles }
+      : read;
+  return { style: showing, write };
 }
 
 /**
@@ -222,12 +284,22 @@ export interface StyleTargetBarProps {
   readonly stateControl?: React.ReactNode;
 }
 
-/** Apply the ops of a page edit, saying nothing when the store refuses. */
+/**
+ * Apply the ops of a chip's page edit, or say why not: the plan's refusal
+ * (the block's lock), or the page refusing the change (its limits). Said
+ * through the shell, since the menu that asked has closed.
+ */
 function applyPlan(
   editor: EditorState,
-  plan: { ok: true; ops: BuilderOp[] } | { ok: false; reason: string }
+  plan: { ok: true; ops: BuilderOp[] } | { ok: false; reason: string },
+  refusedWords: string,
+  report: (reason: string) => void
 ): void {
-  if (plan.ok) editor.applyAll(plan.ops);
+  if (!plan.ok) {
+    report(plan.reason);
+    return;
+  }
+  if (editor.applyAll(plan.ops) === null) report(refusedWords);
 }
 
 /**
@@ -238,7 +310,8 @@ function applyPlan(
 function chipActions(
   editor: EditorState,
   nodeId: string | null,
-  worn: readonly SharedStyleRow[]
+  worn: readonly SharedStyleRow[],
+  report: (reason: string) => void
 ): {
   onRemove?: (id: string) => void;
   onDetach?: (id: string) => void;
@@ -248,7 +321,9 @@ function chipActions(
     onRemove: id =>
       applyPlan(
         editor,
-        planRemoveSharedStyle(editor.document, nodeId, id, lockViewOf(editor))
+        planRemoveSharedStyle(editor.document, nodeId, id, lockViewOf(editor)),
+        `${nameOf(worn, id)} could not be taken off this block: the page could not take the change.`,
+        report
       ),
     onDetach: id => {
       const style = worn.find(row => row.id === id);
@@ -261,10 +336,17 @@ function chipActions(
           style,
           worn,
           lockViewOf(editor)
-        )
+        ),
+        `${style.name} could not be detached from this block: the page could not take the change.`,
+        report
       );
     },
   };
+}
+
+/** A worn style's name by its id, for words about it. */
+function nameOf(worn: readonly SharedStyleRow[], id: string): string {
+  return worn.find(row => row.id === id)?.name ?? "This shared style";
 }
 
 /** The "what you're editing" bar, over the target this tab holds. */
@@ -282,6 +364,10 @@ export function StyleTargetBar({
   stateControl,
 }: StyleTargetBarProps): React.JSX.Element {
   const nodeId = editor.selectedId;
+  // The bar has no line of its own for a refusal, so it speaks through the
+  // shell's notices, which outlive the menu that asked.
+  const survive = useSurvivingReport();
+  const report = (reason: string): void => survive(reason, () => false);
   const reach = useReachSentence(
     target.kind === "shared" ? target.style.id : undefined,
     host
@@ -301,7 +387,7 @@ export function StyleTargetBar({
         locked: row.locked,
       }))}
       onTargetChange={host === undefined ? undefined : onChoose}
-      {...chipActions(editor, nodeId, worn)}
+      {...chipActions(editor, nodeId, worn, report)}
       chipActionsHeld={held}
       sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
       actions={

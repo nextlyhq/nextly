@@ -282,9 +282,9 @@ describe("the shared style target", () => {
     const writeStyles = vi.fn(
       options.writeStyles ?? (async () => undefined as string | undefined)
     );
-    const panel = (
+    const panelFor = (current: EditorState) => (
       <InspectorPanel
-        editor={editor}
+        editor={current}
         classLibrary={options.library ?? [hero, card, promo]}
         sharedStyles={{
           mayChange: options.mayChange ?? true,
@@ -295,15 +295,26 @@ describe("the shared style target", () => {
         }}
       />
     );
-    render(
+    const tree = (current: EditorState) =>
       options.raise === undefined ? (
-        panel
+        panelFor(current)
       ) : (
-        <NoticeSinkProvider raise={options.raise}>{panel}</NoticeSinkProvider>
-      )
-    );
+        <NoticeSinkProvider raise={options.raise}>
+          {panelFor(current)}
+        </NoticeSinkProvider>
+      );
+    const view = render(tree(editor));
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    return { editor, writeStyles };
+    /** The block as an edit made meanwhile leaves it, drawn again. */
+    const withStyles = (styles: NodeStyles) => {
+      const next = editorFor({
+        ...document,
+        nodes: [{ ...document.nodes[0], styles } as BlockNode],
+      });
+      view.rerender(tree(next));
+      return next;
+    };
+    return { editor, writeStyles, withStyles };
   }
 
   /**
@@ -515,6 +526,85 @@ describe("the shared style target", () => {
         [BASE_BREAKPOINT]: { opacity: 0.8, padding: { blockStart: "12px" } },
       },
     });
+  });
+
+  it("stores a value changed and changed back before the first is read back", async () => {
+    const host = queuedHost();
+    mountTarget({
+      classes: ["c-card"],
+      writeStyles: host.writeStyles as never,
+    });
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.blur(field);
+    // Back to the value the last read shows, before 0.8 has been stored.
+    fireEvent.change(field, { target: { value: "0.5" } });
+    fireEvent.blur(field);
+
+    await host.settle();
+
+    expect(host.stored()).toEqual({
+      base: { [BASE_BREAKPOINT]: { opacity: 0.5 } },
+    });
+  });
+
+  it("clears only the moved value from the block, as it stands once the style has it", async () => {
+    let store: (refused: string | undefined) => void = () => {};
+    const { withStyles } = mountTarget({
+      classes: ["c-card"],
+      supports: { effects: true, spacing: true },
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+      writeStyles: () =>
+        new Promise<string | undefined>(resolve => {
+          store = resolve;
+        }),
+    });
+    fireEvent.click(chip("Card"));
+    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    // A local edit lands on another address while Card's write is in flight.
+    const later = withStyles({
+      base: {
+        [BASE_BREAKPOINT]: { opacity: 0.2, padding: { blockStart: "12px" } },
+      },
+    });
+
+    await act(async () => {
+      store(undefined);
+    });
+
+    expect(later.applyAll).toHaveBeenCalledWith([
+      {
+        kind: "update",
+        id: "a",
+        patch: {
+          styles: {
+            base: { [BASE_BREAKPOINT]: { padding: { blockStart: "12px" } } },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("says through the shell when Detach could not be applied to the page", () => {
+    const raise = vi.fn();
+    const { editor } = mountTarget({ classes: ["c-card"], raise });
+    editor.applyAll.mockReturnValue(null);
+    fireEvent.pointerDown(
+      within(bar()).getByRole("button", {
+        name: "Actions for shared style Card",
+      }),
+      { button: 0, ctrlKey: false }
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /^Detach: keep the look/ })
+    );
+    expect(raise).toHaveBeenCalledWith(
+      "Card could not be detached from this block: the page could not take the change."
+    );
   });
 
   it("raises a refusal through the shell once the author has switched target", async () => {

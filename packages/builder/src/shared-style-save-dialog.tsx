@@ -40,6 +40,7 @@ import { sharedStyleSlug } from "./shared-style-library";
 import {
   newSharedStyleName,
   planSaveAsSharedStyle,
+  saveAsSharedStyleOps,
   sharedStyleMoveSummary,
   sharedStyleMoveWhat,
   type SharedStyleOffer,
@@ -108,7 +109,13 @@ export function SaveSharedStyleDialog({
         setProblem(refused);
         return;
       }
-      if (live.current.applyAll(plan.ops) === null) {
+      // From the block as it stands now: a value it gained while the style
+      // was being stored is kept, where the plan's ops would drop it.
+      const now = live.current;
+      const block = findNode(now.document.nodes, nodeId);
+      const ops =
+        block === undefined ? null : saveAsSharedStyleOps(block, plan.entry);
+      if (ops === null || now.applyAll(ops) === null) {
         setProblem(
           `${plan.entry.label ?? plan.entry.slug} was saved, but this block could not be changed to use it.`
         );

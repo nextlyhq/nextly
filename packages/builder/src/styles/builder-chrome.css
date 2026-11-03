@@ -1194,8 +1194,8 @@
 
 /*
  * The "what you're editing" bar: line one the target chips, line two the
- * device and the state, from the canvas. A tinted ground, so it reads as the
- * frame the controls below sit in. Kept at the top of the Style tab while its
+ * device and the state, from the canvas. A box set apart from the panel, so it
+ * reads as the frame the controls below sit in. Kept at the top of the Style tab while its
  * sections scroll.
  */
 .nx-editing-bar {
@@ -1207,8 +1207,14 @@
   gap: 0.375rem;
   margin: 0 0 0.75rem;
   padding: 0.4375rem 0.5625rem;
+  /*
+   * A card on the inspector's surface: the panel is drawn in --nx-muted, so
+   * the box takes --nx-card (white on the light grey, darker than the dark
+   * grey) with a hairline, which differs from the panel in both schemes.
+   */
+  border: 1px solid var(--nx-border);
   border-radius: 0.4375rem;
-  background: var(--nx-muted);
+  background: var(--nx-card);
   font-size: var(--text-xs);
 }
 

@@ -14,6 +14,7 @@
  */
 import {
   findNode,
+  isPlainRecord,
   isTokenRef,
   newId,
   type BlockDocument,
@@ -77,13 +78,11 @@ export function nodeSharedStyles(
 
 /** Whether an envelope sets any value at all, in any state or breakpoint. */
 export function hasOwnStyles(styles: NodeStyles | undefined): boolean {
-  if (styles === undefined) return false;
-  return Object.values(styles).some(
-    byBreakpoint =>
-      byBreakpoint !== undefined &&
-      Object.values(byBreakpoint).some(
-        values => values !== undefined && Object.keys(values).length > 0
-      )
+  // Through the guarded walk, so a malformed tier reads as holding nothing.
+  return ownEntries<unknown>(styles).some(([, byBreakpoint]) =>
+    ownEntries<unknown>(byBreakpoint).some(
+      ([, values]) => ownEntries(values).length > 0
+    )
   );
 }
 
@@ -210,15 +209,26 @@ export function planSaveAsSharedStyle(
   return {
     ok: true,
     entry,
-    ops: [
-      {
-        kind: "update",
-        id: nodeId,
-        patch: { classes: [...(node.classes ?? []), entry.id] },
-        unset: ["styles"],
-      },
-    ],
+    ops: saveAsSharedStyleOps(node, entry),
   };
+}
+
+/**
+ * Save as's page half: the new style put on the block, and the values it took
+ * cleared from it. Built from the block as it stands once the style is stored,
+ * so a value the block gained meanwhile (one the style does not hold) is kept.
+ */
+export function saveAsSharedStyleOps(
+  node: Pick<BlockNode, "id" | "styles" | "classes">,
+  entry: Pick<NamedClass, "id" | "styles">
+): BuilderOp[] {
+  return [
+    nodeStylesAndClassesOp(
+      node.id,
+      uncoveredStyles(node.styles ?? {}, entry.styles),
+      [...(node.classes ?? []), entry.id]
+    ),
+  ];
 }
 
 /**
@@ -264,10 +274,10 @@ function countValues(styles: NodeStyles | undefined): {
   const states: StyleState[] = [];
   for (const [state, byBreakpoint] of ownEntries<object>(styles)) {
     const sets = ownEntries<object>(byBreakpoint).filter(
-      ([, set]) => Object.keys(set).length > 0
+      ([, set]) => ownEntries(set).length > 0
     );
     for (const [breakpoint, set] of sets) {
-      values += Object.keys(set).length;
+      values += ownEntries(set).length;
       devices.add(breakpoint);
     }
     if (sets.length > 0 && state !== "base") states.push(state as StyleState);
@@ -310,8 +320,12 @@ function overlayValue(
 }
 
 /** A record's own entries, with `__proto__` read as a key like any other. */
-function ownEntries<T>(record: object | undefined): [string, T][] {
-  return Object.entries(record ?? {}) as [string, T][];
+function ownEntries<T>(record: unknown): [string, T][] {
+  // The envelope guard the style readers use at every level (`isPlainRecord`,
+  // as `stateHasOwnValues` asks it): a stored tier that is null, a primitive
+  // or an array holds nothing the compiler emits, and is read as empty here
+  // rather than thrown on.
+  return isPlainRecord(record) ? (Object.entries(record) as [string, T][]) : [];
 }
 
 /** A copy of a record defining one more own key, whatever its name. */
@@ -342,12 +356,11 @@ export function overlaidStyles(
   let merged: Record<string, Record<string, Record<string, StyleValue>>> = {};
   for (const source of [under, over]) {
     for (const [state, byBreakpoint] of ownEntries<object>(source)) {
+      // A malformed state holds nothing to lay over, and adds no empty tier.
+      if (!isPlainRecord(byBreakpoint)) continue;
       const states = Object.hasOwn(merged, state) ? merged[state] : {};
-      merged = withKey(
-        merged,
-        state,
-        overlaidBreakpoints(states, byBreakpoint)
-      );
+      const laid = overlaidBreakpoints(states, byBreakpoint);
+      if (Object.keys(laid).length > 0) merged = withKey(merged, state, laid);
     }
   }
   return merged;
@@ -360,6 +373,7 @@ function overlaidBreakpoints(
 ): Record<string, Record<string, StyleValue>> {
   let merged = under;
   for (const [breakpoint, values] of ownEntries<object>(over)) {
+    if (!isPlainRecord(values)) continue;
     const set = Object.hasOwn(merged, breakpoint) ? merged[breakpoint] : {};
     merged = withKey(merged, breakpoint, overlaidValues(set, values));
   }
@@ -446,10 +460,11 @@ function uncoveredValue(
 }
 
 /** A record's own entry at a key, or an empty one, `__proto__` included. */
-function ownRecord<T>(record: object, key: string): Record<string, T> {
-  return Object.hasOwn(record, key)
-    ? (record as Record<string, Record<string, T>>)[key]
-    : {};
+function ownRecord<T>(record: unknown, key: string): Record<string, T> {
+  // Guarded as `ownEntries` is: anything but a plain record reads as empty.
+  if (!isPlainRecord(record) || !Object.hasOwn(record, key)) return {};
+  const value = record[key];
+  return isPlainRecord(value) ? (value as Record<string, T>) : {};
 }
 
 /** One breakpoint's values with what another sets taken out, property by property. */
@@ -620,7 +635,7 @@ export function planMoveToSharedStyle(
   style: Pick<NamedClass, "styles">,
   address: StyleAddress,
   policy?: StylePolicy
-): SharedStylePlan<{ change: SharedStyleChange; ops: BuilderOp[] }> {
+): SharedStylePlan<{ change: SharedStyleChange }> {
   const value = readStyleValue(node.styles, address);
   if (value === undefined) {
     return { ok: false, reason: "This block sets no value here to move." };
@@ -630,7 +645,21 @@ export function planMoveToSharedStyle(
   // is refused before anything is stored.
   const write = change(style.styles);
   if (write.kind === "refused") return { ok: false, reason: write.reason };
+  return { ok: true, change };
+}
+
+/**
+ * Move to's page half: the block's value cleared at one address, built from
+ * the block as it stands when the style has taken the value, so an edit made
+ * to the block meanwhile is kept. Nothing for a block that is gone or holds
+ * nothing there any more.
+ */
+export function moveToSharedStyleClear(
+  node: Pick<BlockNode, "id" | "styles"> | undefined,
+  address: StyleAddress,
+  policy?: StylePolicy
+): BuilderOp[] {
+  if (node === undefined) return [];
   const cleared = styleClearOp(node.id, node.styles, address, policy);
-  const ops = cleared.ok && cleared.op !== null ? [cleared.op] : [];
-  return { ok: true, change, ops };
+  return cleared.ok && cleared.op !== null ? [cleared.op] : [];
 }

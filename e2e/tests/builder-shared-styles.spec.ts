@@ -111,6 +111,26 @@ async function styleOf(page: Page, id: string): Promise<void> {
 }
 
 /**
+ * The bar's own background and the nearest painted background behind it (the
+ * inspector's surface), with the admin in light or dark.
+ */
+async function groundsOf(page: Page, dark: boolean): Promise<[string, string]> {
+  return bar(page).evaluate((element, wantDark) => {
+    element.ownerDocument.documentElement.classList.toggle("dark", wantDark);
+    const paint = (node: Element | null): string => {
+      for (let at = node; at !== null; at = at.parentElement) {
+        const colour = getComputedStyle(at).backgroundColor;
+        if (colour !== "rgba(0, 0, 0, 0)" && colour !== "transparent") {
+          return colour;
+        }
+      }
+      return "none";
+    };
+    return [paint(element), paint(element.parentElement)];
+  }, dark);
+}
+
+/**
  * The Typography section's Colour field. Its name carries where its value
  * comes from ("Colour From Card"), so it is matched by its start.
  */
@@ -172,6 +192,14 @@ test.describe("shared styles on a block", () => {
     ]);
     await page.getByRole("tab", { name: "Style" }).click();
     await expect(chip(page, "Card")).toHaveAttribute("aria-pressed", "false");
+
+    // The bar's box stands apart from the inspector it sits on, in both
+    // schemes, read from the computed colours rather than by eye.
+    for (const dark of [false, true]) {
+      const [box, panel] = await groundsOf(page, dark);
+      expect(box, `the bar against the panel, dark=${dark}`).not.toBe(panel);
+    }
+    await groundsOf(page, false);
 
     // Another block wears it.
     await styleOf(page, B);

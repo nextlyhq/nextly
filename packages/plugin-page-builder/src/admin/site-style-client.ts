@@ -279,12 +279,25 @@ export function storedSection(
 }
 
 /** Saving one section, and what the last attempt said. */
+/** A place taken in the editor's history for a change whose value comes later. */
+export interface SiteStyleSlot {
+  /** Save the change's value into the place taken. */
+  readonly save: (value: unknown) => Promise<SiteStyleSaveResult>;
+  /** Give the place up: nothing is saved. */
+  readonly cancel: () => void;
+}
+
 export interface SiteStyleWrite {
   /** Save ONE section. Every other section is left exactly as it was. */
   readonly save: (
     section: SiteStyleSection,
     value: unknown
   ) => Promise<SiteStyleSaveResult>;
+  /**
+   * Take a place in the editor's history for a change to one section now,
+   * and save its value into it later.
+   */
+  readonly reserve: (section: SiteStyleSection) => SiteStyleSlot;
   /** Whether a save is in flight. */
   readonly saving: boolean;
 }
@@ -423,10 +436,77 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   );
 
   /*
+   * A place in the editor's history, taken when the author makes a change
+   * whose value is only known later: the shared-style edits compose their
+   * section inside a queue, after the writes before them. The step is recorded
+   * now, so a page edit made meanwhile comes after it as it was made; its undo
+   * and redo wait until the value is known. Withdrawn when nothing is saved.
+   */
+  const reserve = useCallback(
+    (section: SiteStyleSection): SiteStyleSlot => {
+      if (history === null) {
+        return { save: value => write(section, value), cancel: () => {} };
+      }
+      const { settled } = history;
+      let fill: (
+        filled: { before: unknown; value: unknown } | null
+      ) => void = () => {};
+      const filled = new Promise<{ before: unknown; value: unknown } | null>(
+        resolve => {
+          fill = resolve;
+        }
+      );
+      // Set once the change is dropped or refused: an undo or redo of it
+      // queued in the meantime then writes nothing.
+      let withdrawn = false;
+      const replay =
+        (pick: (known: { before: unknown; value: unknown }) => unknown) =>
+        async (): Promise<SiteStyleReplay> => {
+          const known = await filled;
+          const { result, holds } = await inTurn(
+            chainOf(settled, section),
+            section,
+            () => (withdrawn || known === null ? SKIP : pick(known))
+          ).done;
+          return { stored: result.saved, section, value: holds };
+        };
+      const withdraw = history.record({
+        undo: replay(known => known.before),
+        redo: replay(known => known.value),
+      });
+      const drop = (): void => {
+        withdrawn = true;
+        fill(null);
+        withdraw();
+      };
+      return {
+        cancel: drop,
+        save: async value => {
+          const chain = chainOf(settled, section);
+          // A save that leaves the section as it stands is no step to take
+          // back.
+          if (chain.pending === 0 && sameSection(chain.held, value)) {
+            drop();
+            return write(section, value);
+          }
+          const { before, done } = inTurn(chain, section, () => value);
+          fill({ before, value });
+          const { result } = await done;
+          // A refused save changed nothing, so its step is withdrawn.
+          if (!result.saved) drop();
+          return result;
+        },
+      };
+    },
+    [write, history, inTurn, chainOf]
+  );
+
+  /*
    * A save inside the editor is also a step of its history, recorded when the
    * author makes the change rather than when it is stored: the studios save
-   * without waiting, and a page edit made meanwhile comes after it. A refused
-   * save changed nothing, so its step is withdrawn.
+   * without waiting, and a page edit made meanwhile comes after it. One that
+   * leaves the section as it stands is no step at all, and must not end the
+   * redo branch, so it is not given a place.
    */
   const save = useCallback(
     async (
@@ -434,42 +514,16 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       value: unknown
     ): Promise<SiteStyleSaveResult> => {
       if (history === null) return write(section, value);
-      const { settled } = history;
-      const chain = chainOf(settled, section);
-      // A save that leaves the section as it stands is no step to take back,
-      // and must not end the redo branch.
+      const chain = chainOf(history.settled, section);
       if (chain.pending === 0 && sameSection(chain.held, value)) {
         return write(section, value);
       }
-      const { before, done } = inTurn(chain, section, () => value);
-      // Set once the save is refused: an undo or redo of it queued in the
-      // meantime then writes nothing, or a change would be stored with no
-      // step left to take it back.
-      let withdrawn = false;
-      const replay =
-        (target: () => unknown) => async (): Promise<SiteStyleReplay> => {
-          const { result, holds } = await inTurn(
-            chainOf(settled, section),
-            section,
-            () => (withdrawn ? SKIP : target())
-          ).done;
-          return { stored: result.saved, section, value: holds };
-        };
-      const withdraw = history.record({
-        undo: replay(() => before),
-        redo: replay(() => value),
-      });
-      const { result } = await done;
-      if (!result.saved) {
-        withdrawn = true;
-        withdraw();
-      }
-      return result;
+      return reserve(section).save(value);
     },
-    [write, history, inTurn, chainOf]
+    [write, history, chainOf, reserve]
   );
 
-  return { save, saving: mutation.isPending };
+  return { save, reserve, saving: mutation.isPending };
 }
 
 /**

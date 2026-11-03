@@ -6,6 +6,7 @@
  */
 import type { BlockDocument, NamedClass } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -27,7 +28,12 @@ const card: NamedClass = {
   styles: {},
 };
 
-function editorWith(): EditorState & { applyAll: ReturnType<typeof vi.fn> } {
+function editorWith(
+  styles: Record<string, unknown> = {
+    base: { base: { color: "#123456" }, md: { color: "#654321" } },
+    hover: { base: { color: "#000000" } },
+  }
+): EditorState & { applyAll: ReturnType<typeof vi.fn> } {
   const document = {
     formatVersion: 1,
     kind: "page",
@@ -37,10 +43,7 @@ function editorWith(): EditorState & { applyAll: ReturnType<typeof vi.fn> } {
         type: "core/box",
         version: 1,
         props: {},
-        styles: {
-          base: { base: { color: "#123456" }, md: { color: "#654321" } },
-          hover: { base: { color: "#000000" } },
-        },
+        styles,
       },
     ],
   } as unknown as BlockDocument;
@@ -141,6 +144,51 @@ describe("saving", () => {
       editor.applyAll.mock.invocationCallOrder[0] ?? 0
     );
     expect(onSaved).toHaveBeenCalledWith("Promo");
+  });
+
+  it("keeps an edit made to the block while the style was being stored", async () => {
+    let store: (refused: string | undefined) => void = () => {};
+    const onAdd = vi.fn(
+      (_entry: NamedClass) =>
+        new Promise<string | undefined>(resolve => {
+          store = resolve;
+        })
+    );
+    const first = editorWith();
+    const props = {
+      nodeId: "a",
+      offer: { library: [card], mayChange: true },
+      onAdd,
+      onClose: vi.fn(),
+    };
+    const view = render(<SaveSharedStyleDialog editor={first} {...props} />);
+    fireEvent.change(name(), { target: { value: "Promo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save shared style" }));
+
+    // The block gains a value the style does not hold while the save is out.
+    const node = first.document.nodes[0] as unknown as Record<string, unknown>;
+    const styles = node.styles as { base: { base: Record<string, unknown> } };
+    const later = editorWith({
+      ...styles,
+      base: { ...styles.base, base: { ...styles.base.base, opacity: 0.5 } },
+    });
+    view.rerender(<SaveSharedStyleDialog editor={later} {...props} />);
+    await act(async () => {
+      store(undefined);
+    });
+
+    const entry = onAdd.mock.calls[0]?.[0];
+    expect(later.applyAll).toHaveBeenCalledWith([
+      {
+        kind: "update",
+        id: "a",
+        // Only what the style took leaves the block; the new value stays.
+        patch: {
+          styles: { base: { base: { opacity: 0.5 } } },
+          classes: [entry.id],
+        },
+      },
+    ]);
   });
 
   it("leaves the block untouched when the style is refused, and says why", async () => {
