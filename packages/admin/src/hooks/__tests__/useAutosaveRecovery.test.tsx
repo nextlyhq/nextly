@@ -43,8 +43,11 @@ function wrapper({ children }: { children: ReactNode }) {
  * through one: a stubbed `reset` would let a test pass while the values never
  * reached the form, and `isDirty` is exactly the thing being asserted.
  */
-function useRecoveryHarness(scope: VersionScope | null) {
-  const form = useForm<Record<string, unknown>>({ defaultValues: STORED });
+function useRecoveryHarness(
+  scope: VersionScope | null,
+  stored: Record<string, unknown> = STORED
+) {
+  const form = useForm<Record<string, unknown>>({ defaultValues: stored });
   const recovery = useAutosaveRecovery({ scope, form });
   /*
    * `isDirty` is READ DURING RENDER and returned, deliberately.
@@ -58,8 +61,11 @@ function useRecoveryHarness(scope: VersionScope | null) {
   return { form, recovery, isDirty: form.formState.isDirty };
 }
 
-function renderRecovery(scope: VersionScope | null) {
-  return renderHook(() => useRecoveryHarness(scope), { wrapper });
+function renderRecovery(
+  scope: VersionScope | null,
+  stored?: Record<string, unknown>
+) {
+  return renderHook(() => useRecoveryHarness(scope, stored), { wrapper });
 }
 
 beforeEach(() => {
@@ -165,6 +171,55 @@ describe("useAutosaveRecovery", () => {
     const newer = renderRecovery(SCOPE);
     await waitFor(() =>
       expect(newer.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("offers a point rewritten in the same second with newer work, after the earlier one was put off", async () => {
+    // SQLite stores the time to the second: the time alone cannot tell the
+    // two points apart, and the newer work must not be hidden.
+    const at = "2026-08-17T10:00:00.000Z";
+    getSpy.mockResolvedValue({
+      snapshot: { title: "first" },
+      updatedAt: at,
+      locale: null,
+    });
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    first.unmount();
+
+    getSpy.mockResolvedValue({
+      snapshot: { title: "second" },
+      updatedAt: at,
+      locale: null,
+    });
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("passes over a password the server stripped, and only an empty one", async () => {
+    // Every stored recovery point lacks its password fields, which the form
+    // seeds with "": otherwise equal, it holds nothing to offer.
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    const stripped = renderRecovery(SCOPE, { ...STORED, secret: "" });
+    await waitFor(() =>
+      expect(stripped.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(stripped.result.current.recovery.offer).toBeNull();
+    stripped.unmount();
+
+    // A stored value the point lacks is not passed over.
+    const differs = renderRecovery(SCOPE, { ...STORED, note: "kept" });
+    await waitFor(() =>
+      expect(differs.result.current.recovery.offer).not.toBeNull()
     );
   });
 

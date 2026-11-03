@@ -15,17 +15,84 @@ import { useCallback, useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { canonicalJson } from "@admin/lib/canonical-json";
-import { versionApi, type VersionScope } from "@admin/services/versionApi";
+import {
+  versionApi,
+  type AutosaveDetail,
+  type VersionScope,
+} from "@admin/services/versionApi";
 
 /**
  * Where "Not now" is remembered: this browser tab's session storage, keyed by
- * the document, holding the time of the recovery point put off.
+ * the document, holding the identity of the recovery point put off.
+ *
+ * Session storage is copied into a tab duplicated from this one or opened from
+ * it, so the point stays put off there too; a tab opened on its own, or a new
+ * window, starts without it.
  */
 function putOffKey(documentKey: string): string {
   return `nextly:recovery-not-now:${documentKey}`;
 }
 
-/** Whether this tab already put off the recovery point stored at `at`. */
+/**
+ * A string's 53-bit hash (cyrb53), to name a recovery point's content in a
+ * short key rather than storing the whole document.
+ */
+function hash53(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/**
+ * Which recovery point this is: when it was stored and what it holds. The time
+ * alone is not enough, since SQLite stores it to the second and a point
+ * rewritten within that second with newer work keeps the same time.
+ */
+function pointIdentity(point: AutosaveDetail): string {
+  return `${point.updatedAt}|${hash53(canonicalJson(point.snapshot))}`;
+}
+
+/**
+ * Whether a recovery point holds what the document stores: equal everywhere,
+ * except that a key the snapshot lacks is passed over where the document holds
+ * an empty string. The server strips password fields from every recovery point
+ * it stores, and the form seeds each with "", so a point holding nothing else
+ * new would otherwise never match.
+ */
+function holdsStored(snapshot: unknown, stored: unknown): boolean {
+  if (Array.isArray(snapshot) || Array.isArray(stored)) {
+    return (
+      Array.isArray(snapshot) &&
+      Array.isArray(stored) &&
+      snapshot.length === stored.length &&
+      snapshot.every((item, index) => holdsStored(item, stored[index]))
+    );
+  }
+  if (isPlainRecord(snapshot) && isPlainRecord(stored)) {
+    const keys = new Set([...Object.keys(snapshot), ...Object.keys(stored)]);
+    return [...keys].every(key =>
+      Object.hasOwn(snapshot, key)
+        ? holdsStored(snapshot[key], stored[key])
+        : stored[key] === "" || stored[key] === undefined
+    );
+  }
+  return canonicalJson(snapshot) === canonicalJson(stored);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Whether this tab already put off the recovery point named `at`. */
 function wasPutOff(documentKey: string, at: string): boolean {
   try {
     return window.sessionStorage.getItem(putOffKey(documentKey)) === at;
@@ -35,7 +102,7 @@ function wasPutOff(documentKey: string, at: string): boolean {
   }
 }
 
-/** Remember that this tab put off the recovery point stored at `at`. */
+/** Remember that this tab put off the recovery point named `at`. */
 function rememberPutOff(documentKey: string, at: string): void {
   try {
     window.sessionStorage.setItem(putOffKey(documentKey), at);
@@ -92,9 +159,11 @@ export interface UseAutosaveRecoveryResult {
    * tab's session, reloads included.
    *
    * It does NOT delete the stored recovery point, deliberately: a newer one,
-   * from edits made after, is offered again, and so is this one in a new tab,
-   * so an author never discovers work gone because they closed an offer. What
-   * it ends is the same offer returning on every load of the editor.
+   * from edits made after, is offered again, and so is this one in a tab or
+   * window opened on its own (a tab duplicated from this one, or opened from
+   * it, shares its session storage and keeps it put off), so an author never
+   * discovers work gone because they closed an offer. What it ends is the same
+   * offer returning on every load of the editor.
    */
   dismiss: () => void;
   /**
@@ -151,7 +220,7 @@ export function useAutosaveRecovery({
 
   const dismiss = useCallback(() => {
     setDismissed(true);
-    if (data) rememberPutOff(documentKey, data.updatedAt);
+    if (data) rememberPutOff(documentKey, pointIdentity(data));
   }, [data, documentKey]);
 
   // The document as stored, which the form was loaded with.
@@ -180,11 +249,11 @@ export function useAutosaveRecovery({
     const savedAt = new Date(data.updatedAt);
     if (Number.isNaN(savedAt.getTime())) return null;
     // Put off in this tab already: see `dismiss`.
-    if (wasPutOff(documentKey, data.updatedAt)) return null;
+    if (wasPutOff(documentKey, pointIdentity(data))) return null;
     // A recovery point holding what the document already stores is no unsaved
     // work: an author who undid back to the saved document left one behind,
     // and offering it back on every load restores nothing.
-    if (canonicalJson(data.snapshot) === canonicalJson(stored)) return null;
+    if (holdsStored(data.snapshot, stored)) return null;
     return { savedAt, snapshot: data.snapshot };
   }, [dismissed, data, documentKey, stored]);
 
