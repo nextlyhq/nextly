@@ -306,12 +306,16 @@ export interface SectionChain {
    * is written, so every later write and replay waits behind it.
    */
   waiting?: HeldWrite;
-  /**
-   * The answers of this editor's writes to the section still on their way:
-   * what a barrier waits for, and reads to learn whether any was refused,
-   * which the tail cannot say since it settles to the value either way.
-   */
+  /** The answers of this editor's writes to the section still on their way. */
   writing?: Set<Promise<SiteStyleSaveResult>>;
+  /**
+   * Why the section's last write was refused, while that stands: until a
+   * later write of the section is stored (the correction, an undo of an
+   * earlier change included) or the refused change itself is undone. Save
+   * and Publish are refused while it stands, since the page may refer to
+   * what was never stored. `by` is the write it came from.
+   */
+  refused?: { readonly reasons: readonly string[]; readonly by: object };
 }
 
 /** A save held for the author's pause. */
@@ -354,14 +358,14 @@ export async function releaseHeldSiteStyle(
   // Every write still on its way, not only the ones released here: one
   // released earlier, when an editor closed, is no longer held but has not
   // answered either, and a page saved meanwhile must wait for it too.
-  const answers = await Promise.all(
+  await Promise.all(
     [...history.settled.values()].flatMap(chain => [...(chain.writing ?? [])])
   );
-  // Why any was refused, so a caller that must not go on without them, as
-  // Save does, can say so. A write withdrawn before it was sent carries no
-  // reason and was no refusal.
-  return answers.flatMap(answer =>
-    answer.saved ? [] : Object.values(answer.issues)
+  // Then every refusal still standing, those answered just now and earlier
+  // alike, so a caller that must not go on without them, as Save does, can
+  // say why.
+  return [...history.settled.values()].flatMap(
+    chain => chain.refused?.reasons ?? []
   );
 }
 
@@ -529,6 +533,8 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     ) => {
       const before = chain.tail;
       chain.pending += 1;
+      // This write, as a standing refusal names the one it came from.
+      const turn = {};
       const done = before.then(async held => {
         const next = await value(held);
         // A write whose step was withdrawn while it waited stores nothing.
@@ -539,8 +545,10 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             wrote: false,
           };
         }
-        // Nothing to write: the section already holds what was asked for.
+        // Nothing to write: the section already holds what was asked for,
+        // which is as good a correction of a refusal as a stored write.
         if (next === UNCHANGED) {
+          delete chain.refused;
           return {
             result: { saved: true, issues: {} },
             holds: held,
@@ -548,6 +556,9 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           };
         }
         const result = await write(section, next);
+        const reasons = Object.values(result.issues);
+        if (result.saved) delete chain.refused;
+        else if (reasons.length > 0) chain.refused = { reasons, by: turn };
         return { result, holds: result.saved ? next : held, wrote: true };
       });
       // Counted while it is on its way, for a barrier to wait on and read.
@@ -563,7 +574,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         }
         return holds;
       });
-      return { before, done };
+      return { before, done, turn };
     },
     [write]
   );
@@ -590,6 +601,9 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         pending: 0,
         held,
         heldAt: stored.current,
+        // Begun again from a newer read, the section's standing refusal
+        // stays: nothing has stored a correction yet.
+        ...(known?.refused === undefined ? {} : { refused: known.refused }),
       };
       settled.set(section, fresh);
       return fresh;
@@ -627,7 +641,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         return write(section, value);
       }
       const held = options?.hold === true ? holdFor(chain, value) : undefined;
-      const { before, done } = inTurn(chain, section, prior =>
+      const { before, done, turn } = inTurn(chain, section, prior =>
         held === undefined ? value : held.next(prior)
       );
       if (held !== undefined) {
@@ -645,7 +659,13 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             chainOf(settled, section),
             section,
             async () => {
-              if (withdrawn) return SKIP;
+              if (withdrawn) {
+                // Undoing a change that was refused takes it back: its
+                // refusal no longer stands in the way of Save.
+                const current = chainOf(settled, section);
+                if (current.refused?.by === turn) delete current.refused;
+                return SKIP;
+              }
               // The section's value, not a promise of it: an undo's target is
               // what the section held, which may still be settling.
               sent = await target();

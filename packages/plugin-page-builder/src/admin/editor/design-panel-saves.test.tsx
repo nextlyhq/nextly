@@ -540,4 +540,61 @@ describe("the Design panel's writes", () => {
       await expect(saving).rejects.toThrow(/design change was refused/);
     });
   });
+  /** Run Save's before-action and answer with what it threw, if anything. */
+  async function save(): Promise<unknown> {
+    let refusal: unknown;
+    await act(async () => {
+      try {
+        await beforeAction.run?.();
+      } catch (error) {
+        refusal = error;
+      }
+    });
+    return refusal;
+  }
+
+  it("refuses Save for a held edit refused after the pause, before Save", async () => {
+    single.refuse = "That colour cannot be stored.";
+    render(<Editor steps={[]} />);
+    enter(openBrand(), "#000014");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toHaveLength(1);
+    const refusal = await save();
+    expect((refusal as Error | undefined)?.message).toBe(
+      "The page was not saved because a design change was refused: That colour cannot be stored."
+    );
+  });
+
+  it("lets Save go ahead once a later edit of the section is stored", async () => {
+    single.refuse = "That colour cannot be stored.";
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    enter(field, "#000015");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    single.refuse = undefined;
+    enter(field, "#000016");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toHaveLength(2);
+    expect(await save()).toBeUndefined();
+  });
+
+  it("lets Save go ahead once the refused edit is undone", async () => {
+    single.refuse = "That colour cannot be stored.";
+    const steps: EditorStep[] = [];
+    render(<Editor steps={steps} />);
+    enter(openBrand(), "#000017");
+    // Undone while it waits: written first, refused, and taken back.
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    await settle();
+    expect(writes).toHaveLength(1);
+    expect(await save()).toBeUndefined();
+  });
 });
