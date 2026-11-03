@@ -513,6 +513,50 @@ describe("the Content tab's Advanced", () => {
   });
 });
 
+describe("a section opening and closing", () => {
+  it("eases its height and opacity out over 150ms", () => {
+    // The Style tab's sections only: a plugin's own inspector in the Content
+    // tab may use the shared accordion and keeps its own motion.
+    // The shared accordion's 300ms in-out curve read as slow in a panel opened
+    // and closed all day, and its height alone made the fields pop in.
+    expect(
+      ruleBody(
+        '.nx-style-inspector [data-section] > [data-slot="accordion-content"][data-state="open"]'
+      )
+    ).toContain("animation: nx-section-open 150ms ease-out");
+    expect(
+      ruleBody(
+        '.nx-style-inspector [data-section] > [data-slot="accordion-content"][data-state="closed"]'
+      )
+    ).toContain("animation: nx-section-close 150ms ease-out");
+    expect(FLAT).toContain(
+      "@keyframes nx-section-open { from { height: 0; opacity: 0; overflow: hidden; } to { height: var(--radix-accordion-content-height); opacity: 1; overflow: hidden; } }"
+    );
+    expect(FLAT).toContain(
+      "@keyframes nx-section-close { from { height: var(--radix-accordion-content-height); opacity: 1; overflow: hidden; } to { height: 0; opacity: 0; overflow: hidden; } }"
+    );
+  });
+
+  it("clips its fields while it moves, though an open section shows its overflow", () => {
+    // An open section is overflow-visible for a field's focus tooltip; while
+    // opening, that drew the fields over the headings below. The keyframes
+    // hold it clipped for exactly the animation, so the open rule applies after.
+    expect(
+      ruleBody(
+        '.nx-style-inspector [data-slot="accordion-content"][data-state="open"]'
+      )
+    ).toContain("overflow: visible");
+  });
+
+  it("does not move at all for an author who asks for less motion", () => {
+    // As weighty as the open and closed rules, and after them, so it wins:
+    // a lighter selector lost to them and the section still moved.
+    expect(FLAT).toContain(
+      '@media (prefers-reduced-motion: reduce) { .nx-style-inspector [data-section] > [data-slot="accordion-content"][data-state] { animation: none; } .nx-style-inspector .nx-style-inspector__section-trigger > svg { transition: none; } }'
+    );
+  });
+});
+
 describe("the inspector at the editor's density", () => {
   it("sizes every control to the density's height and its text to 12px", () => {
     // The shared controls size from these tokens, so pointing them at the
