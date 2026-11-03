@@ -76,7 +76,8 @@ export interface UninstallDependentsInput {
   /**
    * Its own Singles and field groups, whose fields go with it too, and the
    * fields it added to other owners' entities by `extend` or a transform
-   * (entity slug to top-level field names), which go with it as well.
+   * (entity slug to field name paths: a top-level name, or the dotted path
+   * of one nested in a group or repeater), which go with it as well.
    */
   ownEntities?: {
     single?: readonly string[];
@@ -441,11 +442,18 @@ async function onItsTables(
   const ownSingles = new Set(input.ownEntities?.single ?? []);
   const ownGroups = new Set(input.ownEntities?.fieldGroup ?? []);
   const extended = input.ownEntities?.extendedFields;
-  // A field its `extend` added is matched by the top-level field the clause
-  // declared: a relationship nested in a group it added is that group's.
-  const addedByIt = (field: { entitySlug: string; fieldPath: string }) =>
-    extended?.get(field.entitySlug)?.has(field.fieldPath.split(".")[0]) ===
-    true;
+  // A field it added is matched by its whole path, or by a field on that
+  // path it added: a relationship nested in a group its `extend` added is
+  // that group's, and one its transform put inside another owner's group is
+  // recorded by its own path. A field matched by neither stays its entity
+  // owner's and counts, so a path recorded some other way refuses rather
+  // than drops.
+  const addedByIt = (field: { entitySlug: string; fieldPath: string }) => {
+    const added = extended?.get(field.entitySlug);
+    if (added === undefined) return false;
+    const names = field.fieldPath.split(".");
+    return names.some((_, at) => added.has(names.slice(0, at + 1).join(".")));
+  };
   for (const dependents of onTables.values()) {
     const othersFields = dependents.fields.filter(
       field =>
@@ -873,9 +881,10 @@ function recordedOwnerOf(
 }
 
 /**
- * The top-level fields `pluginName` added to other owners' entities, by
- * entity slug: those its `extend` clauses declare, and those the fold's
- * ownership ledgers record it adding, by `extend` or a transform.
+ * The fields `pluginName` added to other owners' entities, by entity slug
+ * and field name path: the top-level ones its `extend` clauses declare, and
+ * those, at any depth, the fold's ownership ledgers record it adding, by
+ * `extend` or a transform.
  */
 function addedBy(
   pluginName: string,
@@ -906,7 +915,7 @@ export interface PluginEntities {
   single: string[];
   /** Its field groups' slugs, after a host's renames. */
   fieldGroup: string[];
-  /** Entity slug to the top-level fields it added there, by `extend` or a transform. */
+  /** Entity slug to the field name paths it added there, by `extend` or a transform. */
   extendedFields: ReadonlyMap<string, ReadonlySet<string>>;
 }
 

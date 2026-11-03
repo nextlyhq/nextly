@@ -805,6 +805,47 @@ describe("applyPluginSchemaContributions (transforms — C11)", () => {
     expect(fieldsAddedByPlugins.has("fx-notes")).toBe(false);
   });
 
+  it("records a field a transform put inside another owner's group by its whole path", () => {
+    // The app's `settings` group, and the app's own field in it, stay the
+    // app's: only the field fx nested there goes with fx.
+    const config = cfg({
+      collections: [
+        collFields("posts", [groupField("settings", [field("theme")])]),
+      ],
+    });
+    const plugins = [
+      plugin("fx", {
+        collections: [coll("fx-notes")],
+        transforms: [
+          {
+            target: "posts",
+            transform: entity => ({
+              ...entity,
+              fields: ((entity.fields as FieldConfig[] | undefined) ?? []).map(
+                outer =>
+                  (outer as { name?: string }).name === "settings"
+                    ? groupField("settings", [
+                        ...((outer as { fields?: FieldConfig[] }).fields ?? []),
+                        relField("fxNote", "fx-notes"),
+                      ])
+                    : outer
+              ),
+            }),
+          },
+        ],
+      }),
+    ];
+
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      config,
+      plugins
+    );
+
+    expect(fieldsAddedByPlugins.get("posts")).toEqual(
+      new Map([["settings.fxNote", "fx"]])
+    );
+  });
+
   it("refuses a transform naming an entity nothing declares", () => {
     // Doing nothing silently means the plugin appears installed and simply
     // has no effect, which is the hardest kind of "working" to diagnose.
