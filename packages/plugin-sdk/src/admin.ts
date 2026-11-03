@@ -862,3 +862,13 @@ export type {
   PluginFieldTypeDocumentView,
   PluginMenuItem,
 } from "nextly";
+
+/**
+ * `WEB_FONT_FORMATS` — the web font formats the host accepts, serves and
+ * advertises: each one's type, file suffix, `format()` keyword and the four
+ * bytes it begins with. Published so a plugin that takes a font file reads
+ * the table the upload gate checks rather than restating it. Intended to be
+ * stable: the host's own table, which changes only with a release that says
+ * so.
+ */
+export { WEB_FONT_FORMATS } from "nextly/config";

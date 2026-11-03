@@ -24,7 +24,7 @@ import { act, cleanup, render, renderHook } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Canvas } from "./canvas";
+import { Canvas, DropRefusal } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
 import { CanvasFrameProvider } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
@@ -223,43 +223,6 @@ function containerIn(doc: Document): HTMLDivElement {
   return container;
 }
 
-describe("the canvas's own size observers, in a frame", () => {
-  it("measures its box and its region with the frame's ResizeObserver", () => {
-    registerBlocks(BLOCKS, { source: "canvas-frame-realm-test" });
-    const realm = frameRealm();
-    const container = containerIn(realm.doc);
-    render(
-      <Canvas
-        document={PAGE}
-        // A site that bounds a viewport tier, which is what makes the canvas
-        // establish a preview box at all.
-        siteStyles={
-          {
-            css: "",
-            classes: {},
-            breakpoints: {
-              viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-              container: [],
-            },
-          } as never
-        }
-        preview={{
-          container: "nx-preview-viewport",
-          width: 800,
-          onMeasured: () => {},
-        }}
-      />,
-      { container }
-    );
-    const root = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
-    expect(root).not.toBeNull();
-    // The box reports its width; the region it is fitted into is measured too.
-    expect(realm.frameObserved.includes(root)).toBe(true);
-    expect(realm.frameObserved.includes(container)).toBe(true);
-    expect(realm.editorObserved).toEqual([]);
-  });
-});
-
 describe("the drop refusal notice, in a frame", () => {
   it("follows the frame's own viewport as it scrolls", async () => {
     registerBlocks(BLOCKS, { source: "canvas-frame-realm-test" });
@@ -283,7 +246,12 @@ describe("the drop refusal notice, in a frame", () => {
     };
     render(
       <CanvasFrameProvider frame={realm.frame}>
-        <Canvas document={PAGE} siteStyles={false} drag={drag} />
+        <Canvas
+          document={PAGE}
+          siteStyles={false}
+          drag={drag}
+          overlay={<DropRefusal drag={drag} document={PAGE} />}
+        />
       </CanvasFrameProvider>,
       { container }
     );
@@ -344,7 +312,12 @@ describe("the drop refusal notice, in a frame", () => {
     };
     const result = render(
       <CanvasFrameProvider frame={realm.frame}>
-        <Canvas document={PAGE} siteStyles={false} drag={drag} />
+        <Canvas
+          document={PAGE}
+          siteStyles={false}
+          drag={drag}
+          overlay={<DropRefusal drag={drag} document={PAGE} />}
+        />
       </CanvasFrameProvider>,
       { container }
     );

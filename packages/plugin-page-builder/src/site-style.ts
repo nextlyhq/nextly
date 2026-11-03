@@ -91,8 +91,8 @@ export interface SiteStyleData {
  *   id is the unit of override: a stored class replaces the config class with
  *   the same id and keeps every other one. Each entry keeps its own
  *   `orderIndex`; precedence stays the engine's question.
- * - **Fonts merge by face identity** — family, weight and style together,
- *   because one family legitimately ships several faces and replacing by
+ * - **Fonts merge by face identity** — family, weight, style and range
+ *   together, because one family legitimately ships several faces and replacing by
  *   family alone would drop the italics when someone re-uploads the regular.
  * - **Breakpoints REPLACE as a whole set.** A breakpoint set is one designed
  *   cascade; splicing half of one set into half of another produces at-rules
@@ -285,11 +285,15 @@ function hasBreakpoints(set: BreakpointSet | undefined): boolean {
   );
 }
 
-/** What makes two font faces the same face: family, weight and style. */
+/**
+ * What makes two font faces the same face: family, weight, style and the
+ * characters it covers. One cut in two scripts is two files, each with its
+ * own `unicode-range`, and both must load.
+ */
 function faceIdentity(face: FontFaceDef): string {
   // Weight and style default at emission (`normal` both), so an absent value
   // and the default spelled out are the same face and must collide here.
-  return `${face.family} ${face.weight ?? "normal"} ${face.style ?? "normal"}`;
+  return `${face.family} ${face.weight ?? "normal"} ${face.style ?? "normal"} ${face.unicodeRange ?? ""}`;
 }
 
 /**

@@ -15,6 +15,7 @@ import { openEditorWith, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+import { canvasFrame } from "./support/canvas-frame";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
 
@@ -131,7 +132,7 @@ test.describe("the top bar's far end", () => {
     }
 
     // An edit is unsaved work, in the chip beside the verbs that store it.
-    await page
+    await canvasFrame(page)
       .locator('.nx-canvas [data-nx-node="bar-second"]')
       .first()
       .click();

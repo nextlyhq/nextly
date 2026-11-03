@@ -7,6 +7,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { openEditorWith } from "./canvas/editor-driver";
 import { expectNoAxeViolations } from "./support/axe";
+import { canvasFrame } from "./support/canvas-frame";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -162,8 +163,10 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
 
     // The compiled sheet carries the dark value under the guarded device
     // block, and the browser applies it only when the device prefers dark.
-    const sheet = await page.evaluate(() =>
-      [...document.querySelectorAll("style")]
+    // In the canvas's own document, where the page and its sheet are drawn.
+    const canvasRoot = canvasFrame(page).locator("html");
+    const sheet = await canvasRoot.evaluate(root =>
+      [...root.ownerDocument.querySelectorAll("style")]
         .map(style => style.textContent ?? "")
         .join("\n")
     );
@@ -173,11 +176,9 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
       DEVICE_DARK_OPENING
     );
     const resolved = () =>
-      page.evaluate(
-        property =>
-          getComputedStyle(document.documentElement)
-            .getPropertyValue(property)
-            .trim(),
+      canvasRoot.evaluate(
+        (root, property) =>
+          getComputedStyle(root).getPropertyValue(property).trim(),
         PROPERTY
       );
     expect(await resolved()).toBe(LIGHT);
@@ -187,10 +188,10 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
     // A light marker below the root pins light there, on a dark device: the
     // sheet declares the light values at the marked element itself.
     const wrapperValue = () =>
-      page.evaluate(property => {
-        const wrapper = document.createElement("div");
+      canvasRoot.evaluate((root, property) => {
+        const wrapper = root.ownerDocument.createElement("div");
         wrapper.dataset.nxTheme = "light";
-        document.body.append(wrapper);
+        root.ownerDocument.body.append(wrapper);
         const value = getComputedStyle(wrapper)
           .getPropertyValue(property)
           .trim();
@@ -203,7 +204,7 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
     // The canvas's scheme follows the NEAREST marker, as its token values do,
     // through three alternations: light > dark > light above the canvas, then
     // with the nearest flipped to dark.
-    const canvas = page.locator(".nx-canvas");
+    const canvas = canvasFrame(page).locator(".nx-canvas");
     const canvasMode = () =>
       canvas.evaluate((element, property) => {
         const style = getComputedStyle(element);

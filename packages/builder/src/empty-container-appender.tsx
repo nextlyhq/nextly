@@ -201,13 +201,14 @@ import {
 } from "react";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import { EMPTY_CONTAINER_SELECTOR, emptySlotOf } from "./empty-slot";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
-  canvasRootFrom,
   clippedByAncestorRect,
+  overlaySpaceOf,
   layoutFragments,
   renderSkips,
   viewportPositioned,
@@ -652,9 +653,12 @@ export function EmptyContainerAppenders({
    */
   const measure = useCallback(() => {
     const element = layer.current;
-    const root =
-      element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
-    if (root === null) {
+    // The canvas the controls are drawn over, and the space they are drawn
+    // in: see `overlaySpaceOf`.
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    const root = space?.root ?? null;
+    if (space === null || root === null) {
       setPlacements(current => (current.size === 0 ? current : NO_PLACEMENTS));
       return;
     }
@@ -689,7 +693,9 @@ export function EmptyContainerAppenders({
         next.set(container.id, DECLINED);
         continue;
       }
-      const measured = canvasContentRect(target, root);
+      // Placed in the chrome's coordinates before the control is centred in
+      // it, so the control keeps its own size at any zoom.
+      const measured = space.place(canvasContentRect(target, root));
       next.set(container.id, {
         kind: "measured",
         rect: centeredControlRect(measured, APPENDER_SIZE_PX),
@@ -701,6 +707,9 @@ export function EmptyContainerAppenders({
   // Measured before paint, matching `BlockToolbar` and `SpacingOverlay`: a
   // control drawn at a stale rectangle for one frame is worse than one that
   // appears a frame late.
+  // A zoom, or a page loading into the frame, moves the containers on screen
+  // while nothing in the document changes.
+  const canvasFrame = useCanvasFrame();
   useLayoutEffect(() => {
     if (hidden) return;
     measure();
@@ -709,7 +718,7 @@ export function EmptyContainerAppenders({
     // which containers are empty, and a re-measure keyed on the container set
     // alone would keep describing the layout the container had before the
     // edit.
-  }, [measure, hidden, document]);
+  }, [measure, hidden, document, canvasFrame]);
 
   /*
    * Re-measure for the changes no render reports, all of them: a resize with
@@ -734,7 +743,7 @@ export function EmptyContainerAppenders({
   useEffect(() => {
     if (hidden || containers.length === 0) return;
     return watchCanvasFor(() => layer.current, measure);
-  }, [measure, hidden, containers, document]);
+  }, [measure, hidden, containers, document, canvasFrame]);
 
   // `hidden` renders NOTHING, matching how `BlockToolbar` is suppressed during
   // a drag: a control that were merely invisible would still take a press, and

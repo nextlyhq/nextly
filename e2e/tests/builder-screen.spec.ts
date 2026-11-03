@@ -12,6 +12,7 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { canvasFrame } from "./support/canvas-frame";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.homepage] });
@@ -35,7 +36,7 @@ async function seed(page: Page, nodes: unknown[]): Promise<void> {
 }
 
 function block(page: Page, id: string) {
-  return page.locator(`.nx-canvas [data-nx-node="${id}"]`).first();
+  return canvasFrame(page).locator(`.nx-canvas [data-nx-node="${id}"]`).first();
 }
 
 async function openBuilder(page: Page): Promise<void> {
