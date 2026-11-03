@@ -143,10 +143,13 @@ function hiddenTitlesPlugin(): PluginDefinition {
           target: PAGES_SLUG,
           transform: entity => ({
             ...entity,
-            fields: entity.fields.map(field =>
-              "name" in field && field.name === "title"
-                ? { ...field, access: { read: () => false } }
-                : field
+            fields: (Array.isArray(entity.fields) ? entity.fields : []).map(
+              (field: unknown) =>
+                typeof field === "object" &&
+                field !== null &&
+                (field as { name?: unknown }).name === "title"
+                  ? { ...field, access: { read: () => false } }
+                  : field
             ),
           }),
         },

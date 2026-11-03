@@ -315,6 +315,7 @@ function deps(
 ): RemoveLayoutDeps & {
   store: ReturnType<typeof memoryStore>;
   warned: string[];
+  pagesSlug: string;
 } {
   const warned: string[] = [];
   let tokens = 0;
@@ -322,6 +323,7 @@ function deps(
     nextly: directApi(s),
     store,
     slugs: { layouts: "layouts", settings: "settings", pages: "pages" },
+    pagesSlug: "pages",
     person: { userId: "author", as: PERSON as never },
     warn: message => warned.push(message),
     warned,
