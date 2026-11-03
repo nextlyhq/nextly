@@ -102,6 +102,35 @@ describe("the exposure picker", () => {
     expect(screen.queryByLabelText("Count")).toBeNull();
   });
 
+  it("names each value by the property's own label, with no type beside it", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/box",
+          props: {
+            as: { label: "HTML tag", type: "select", options: ["div", "aside"] },
+          },
+        },
+      ] as never,
+      { source: "acme-box" }
+    );
+    const seen = { value: [] as readonly RequestedProperty[] };
+    render(
+      <Harness
+        document={page([{ id: "b1", type: "acme/box", version: 1, props: {} }])}
+        selectedIds={["b1"]}
+        seen={seen}
+      />
+    );
+    // "HTML tag", the block's word for it, never "As (Choice)".
+    expect(screen.getByLabelText("HTML tag")).toBeTruthy();
+    expect(screen.queryByLabelText("As")).toBeNull();
+    expect(screen.queryByText("Choice")).toBeNull();
+    fireEvent.click(screen.getByLabelText("HTML tag"));
+    expect(seen.value[0]).toMatchObject({ label: "HTML tag", propPath: "as" });
+  });
+
   it("hands back a nomination aimed at the page's node, with a minted id", () => {
     const seen = { value: [] as readonly RequestedProperty[] };
     render(

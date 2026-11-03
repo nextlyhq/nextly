@@ -283,6 +283,8 @@ export type {
   BlockKeyboardActionsResult,
   ComponentVerbsHost,
 } from "./keyboard-actions";
+// Which way "Turn into component…" may go, as the host is told when it opens.
+export type { TurnIntoChoice } from "./toolbar-actions";
 
 /**
  * The floating toolbar, from this entry because it is a client component and
@@ -626,7 +628,7 @@ export type {
 
 /**
  * Which values each placement of a new component may change: the picker the
- * host's "Save as component" and "Convert to component" forms draw.
+ * host's "Turn into component" form draws.
  */
 export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
 export type { ExposurePickerProps } from "./exposure-picker";

@@ -5987,12 +5987,6 @@ fieldset.nx-inspector__fields {
   font-size: 0.875rem;
 }
 
-.nx-expose-picker__type {
-  flex: none;
-  font-size: 0.75rem;
-  color: var(--nx-muted-foreground);
-}
-
 .nx-expose-picker__label {
   height: 2rem;
 }
