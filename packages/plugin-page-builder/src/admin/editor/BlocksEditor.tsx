@@ -371,6 +371,7 @@ function editorInspector(
     canvasSiteStyle,
     siteStylePending,
     siteStyleError,
+    componentFacts,
   } = view;
   return (
     <InspectorPanel
@@ -419,6 +420,9 @@ function editorInspector(
         siteStylePending,
         siteStyleError
       )}
+      // In a component's own view: the ids its live definition holds, which a
+      // new field must never reuse, and how far a removal reaches.
+      componentFields={componentFacts}
     />
   );
 }
@@ -905,6 +909,7 @@ function EditorBody<TFieldValues extends FieldValues>({
           <SelectionBreadcrumb
             editor={editor}
             hints={{ editText: true, goUp: true, commandPalette: true }}
+            componentTitle={componentLibrary.titleOf}
           />
         }
         // Rendered only while it has somewhere to go: passing an element the
@@ -965,6 +970,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             canvas={canvas.canvasElement}
             // The Add panel's own sources, so search offers what it offers.
             insert={searchInsertSources(panels)}
+            componentTitle={componentLibrary.titleOf}
             open={panels.search.open}
             onOpenChange={panels.search.setOpen}
           />

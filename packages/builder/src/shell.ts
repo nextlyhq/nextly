@@ -168,6 +168,8 @@ export type {
   BlockInspectorResolver,
   InspectorPanelProps,
 } from "./inspector-panel";
+// What a host tells the inspector about the component it edits, beside it.
+export type { ComponentFieldsHost } from "./component-fields";
 
 /**
  * The Style half of the same inspector.

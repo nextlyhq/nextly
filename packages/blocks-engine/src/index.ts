@@ -1050,6 +1050,8 @@ export {
   type AppliedOps,
   type ApplyOptions,
   type BuilderOp,
+  type EnvelopeField,
+  type EnvelopePatch,
   type NodePatch,
   type OpPosition,
   type SlotAddress,

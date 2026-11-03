@@ -99,6 +99,7 @@ const paths = vi.hoisted(() => ({
   library: "/library",
   components: "/library/components",
   capability: "/capability",
+  componentFacts: "/component-facts",
   layoutChoices: "/layouts/choices",
   pageCollection: "/layouts/page-collection",
 }));
@@ -334,7 +335,17 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // library when the insert panel opens, and the capability eagerly on mount —
   // and a mock that counted both as one made "does not read the library" fail
   // for a read of something else entirely.
-  usePluginRoute: (args: { path: string }) => {
+  usePluginRoute: (args: { path: string; enabled?: boolean }) => {
+    // The component editor's own facts, read only while a component is open;
+    // a page's editor leaves the read disabled, so it answers nothing here.
+    if (args.path.startsWith(paths.componentFacts)) {
+      return {
+        data: undefined,
+        pending: args.enabled !== false,
+        error: null,
+        refetch: () => {},
+      };
+    }
     // The page's Layout reads, reads of their own: which collection holds the
     // pages, answered with nothing so this form is not a page's, and the
     // choices, asked for nothing. Neither is the library these count.
