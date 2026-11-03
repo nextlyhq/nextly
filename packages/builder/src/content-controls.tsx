@@ -535,7 +535,9 @@ export function ChosenMedia({
           {name}
         </p>
         {summary?.alt === undefined ? null : (
-          <p className="nx-inspector__note">Alt text: {summary.alt}</p>
+          // Named as the library's: a page's own Alt text, where the block
+          // has one, wins over it, and this is only the fallback.
+          <p className="nx-inspector__note">Library alt text: {summary.alt}</p>
         )}
       </div>
     </div>
