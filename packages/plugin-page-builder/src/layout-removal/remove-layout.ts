@@ -50,8 +50,12 @@ import {
   LAYOUT_REMOVAL_CONTEXT_KEY,
   VERSION_MOVED,
 } from "./layout-removal-guard";
-import { republishFromCopy, type RestoreDeps } from "./restore";
-import { settleRemoval, writeLanded } from "./settle";
+import type { RestoreDeps } from "./restore";
+import {
+  settleRemoval,
+  undoUnpublishIfPagesNameIt,
+  writeLanded,
+} from "./settle";
 import type { RemovalAction } from "./store";
 import {
   ALREADY_BEING_REMOVED,
@@ -402,11 +406,9 @@ async function copyThenRemove(
 }
 
 /**
- * Step 7, for an unpublish: scan again, live rows included. A page published
- * while the unpublish ran, naming the Layout, would show the site default in
- * its place with nobody having confirmed it; so the Layout is published again
- * from its copy, the fence comes down, and the removal answers as blocked by
- * that page, having changed nothing.
+ * Step 7, for an unpublish: the look after the write that the sweep also runs
+ * ({@link undoUnpublishIfPagesNameIt}). When it put the Layout back, the
+ * removal answers as blocked by the pages it found, having changed nothing.
  */
 async function undoIfPagesNameIt(
   deps: RemoveLayoutDeps,
@@ -414,22 +416,23 @@ async function undoIfPagesNameIt(
   token: string
 ): Promise<void> {
   const { layoutId } = request;
-  const pages = await checkPages(deps, layoutId);
-  if (pages.complete && pages.pages.length + pages.unreadable === 0) return;
-  const removal = await deps.store.removalOf(layoutId);
-  await republishFromCopy(deps, layoutId, removal?.copy ?? null, {
-    [LAYOUT_REMOVAL_CONTEXT_KEY]: token,
-  });
-  await deps.store.stop(layoutId, token);
-  deps.warn(
-    "[page-builder] a page was published onto a Layout while it was being unpublished; the Layout was published again",
-    { layoutId }
+  const scan = await undoUnpublishIfPagesNameIt(
+    { ...deps, pagesSlug: deps.slugs.pages },
+    layoutId,
+    token
   );
+  if (scan === null) return;
+  const named = await readableTitles({
+    nextly: deps.nextly,
+    pages: deps.slugs.pages,
+    references: scan.references,
+    asPerson: deps.person.as,
+  });
   throw conflict(
     pagesUseItRefusal({
-      titles: pages.pages.map(page => page.title),
-      unreadable: pages.unreadable,
-      complete: pages.complete,
+      titles: named.readable.map(page => page.title),
+      unreadable: named.unreadable,
+      complete: scan.complete,
     }),
     "layout-removal-page-published-meanwhile",
     layoutId

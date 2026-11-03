@@ -1084,6 +1084,41 @@ describe("the sweep", () => {
     expect(d.store.rows.size).toBe(0);
   });
 
+  it("undoes an unpublish it finishes when a page published meanwhile names the Layout", async () => {
+    const s = site();
+    const d = deps(s);
+    const live = s.layouts.get("landing");
+    await d.store.mark({
+      layoutId: "landing",
+      action: "unpublish",
+      token: "stopped",
+      startedBy: null,
+      now: new Date(),
+    });
+    const removal = d.store.rows.get("landing");
+    if (removal === undefined || live === undefined) throw new Error("no row");
+    d.store.rows.set("landing", {
+      ...removal,
+      step: "final",
+      copy: { live: { ...live }, draft: null },
+    });
+    // The unpublish landed, then the request stopped; a page published in
+    // between names the Layout.
+    s.layouts.set("landing", { ...live, status: "draft" });
+    s.pages.push({
+      id: "home",
+      title: "Home",
+      status: "published",
+      layout: "landing",
+    });
+
+    await settleLayoutRemovals({ ...d, now: stale });
+
+    expect(s.layouts.get("landing")?.status).toBe("published");
+    expect(d.store.rows.has("landing")).toBe(false);
+    expect(s.pages[0]?.layout).toBe("landing");
+  });
+
   it("leaves a row inside its lease to the request that holds it", async () => {
     const s = site();
     const d = deps(s);

@@ -28,7 +28,8 @@
  * - at `marked` or `checked` nothing was changed yet, so the row is removed;
  * - at `final`, the Layout as it is says whether the write landed: still there
  *   (or still published, for an unpublish) and the row is removed; gone and it
- *   is settled as the request would have;
+ *   is settled as the request would have, an unpublish first looking for pages
+ *   published onto it meanwhile ({@link undoUnpublishIfPagesNameIt});
  * - at `removed`, the check after the write is run;
  * - at `restoring`, a restore that stopped part-way cannot tell whether its
  *   Layout was created, so it is settled and logged rather than run twice.
@@ -53,9 +54,15 @@ import {
   idChunks,
   scanLayoutReferences,
   type PageReference,
+  type ReferenceScan,
 } from "./layout-references";
+import { LAYOUT_REMOVAL_CONTEXT_KEY } from "./layout-removal-guard";
 import { clearPageReference, IN_FLIGHT_CLEARED } from "./page-reference-guard";
-import { restoreFromCopy, type RestoreDeps } from "./restore";
+import {
+  republishFromCopy,
+  restoreFromCopy,
+  type RestoreDeps,
+} from "./restore";
 import { REMOVAL_LEASE_MS, type LayoutRemoval } from "./store";
 
 /** What the check after the write did. */
@@ -76,6 +83,44 @@ export type SettleDeps = RestoreDeps & {
   /** The RESOLVED pages slug. */
   readonly pagesSlug: string;
 };
+
+/**
+ * An unpublish's look after its write, the same from the request and from the
+ * sweep finishing a request that stopped: scan pages again, live rows
+ * included. A page published while the unpublish ran, naming the Layout, would
+ * show the site default in its place with nobody having confirmed it; so the
+ * Layout is published again from its copy, with the removal's token, and the
+ * fence comes down. Answers the scan that found the pages, or `null` when
+ * nothing names the Layout and the unpublish stands.
+ */
+export async function undoUnpublishIfPagesNameIt(
+  deps: Pick<
+    SettleDeps,
+    "nextly" | "slugs" | "pagesSlug" | "store" | "warn"
+  > & {
+    readonly budget?: number;
+  },
+  layoutId: string,
+  token: string
+): Promise<ReferenceScan | null> {
+  const scan = await scanLayoutReferences({
+    nextly: deps.nextly,
+    pages: deps.pagesSlug,
+    layoutId,
+    ...(deps.budget === undefined ? {} : { budget: deps.budget }),
+  });
+  if (scan.complete && scan.references.length === 0) return null;
+  const removal = await deps.store.removalOf(layoutId);
+  await republishFromCopy(deps, layoutId, removal?.copy ?? null, {
+    [LAYOUT_REMOVAL_CONTEXT_KEY]: token,
+  });
+  await deps.store.stop(layoutId, token);
+  deps.warn(
+    "[page-builder] a page was published onto a Layout while it was being unpublished; the Layout was published again",
+    { layoutId }
+  );
+  return scan;
+}
 
 /**
  * Clear the Layout from every page a write in flight left on it: the scan
@@ -205,6 +250,16 @@ async function finishFinal(
 ): Promise<void> {
   if (!(await writeLanded(deps, removal))) {
     await deps.store.stopStale(removal);
+    return;
+  }
+  if (
+    removal.action === "unpublish" &&
+    (await undoUnpublishIfPagesNameIt(
+      deps,
+      removal.layoutId,
+      removal.token
+    )) !== null
+  ) {
     return;
   }
   const moved = await deps.store.advance({
