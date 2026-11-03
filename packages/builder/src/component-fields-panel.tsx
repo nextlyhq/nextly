@@ -270,9 +270,10 @@ function ExposeToggle({
             <Component size={15} aria-hidden="true" />
           </button>
         </TooltipTrigger>
-        {/* To the icon's left, over its own label: above or below, it would
-            cover the neighbouring property, or the field name just exposed. */}
-        <TooltipContent side="left" className="nx-expose__tip">
+        {/* Below the icon, ending at its right edge: the row's own label stays
+            readable beside the icon, and the tip lies over the next row, which
+            the author isn't reading while pointing here. */}
+        <TooltipContent side="bottom" align="end" className="nx-expose__tip">
           {held ?? title}
         </TooltipContent>
       </Tooltip>
