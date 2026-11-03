@@ -226,6 +226,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // Nothing stored, read successfully: the site's style is ready, so the
   // read-only page is drawn rather than held back for a sheet still coming.
   useUpdateSingleDocument: () => ({

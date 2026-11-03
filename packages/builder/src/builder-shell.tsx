@@ -1682,7 +1682,9 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label={panelLabel(openPanel)}
-                  className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
+                  // The one surface every left panel sits on, the rail's own:
+                  // a panel paints nothing of its own behind its content.
+                  className="bg-[color:var(--nx-builder-surface)] h-full overflow-auto"
                 >
                   {/* Keyed by the panel, because the prop's contract says the
                       result is keyed by the panel and React's default
