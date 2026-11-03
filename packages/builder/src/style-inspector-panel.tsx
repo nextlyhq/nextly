@@ -5243,6 +5243,9 @@ function TextField({
     <Input
       id={id}
       {...shownText(display, typing, draft, hint)}
+      // A side of the spacing box is narrow: its whole value is in its
+      // tooltip, for one the cell cannot show.
+      title={compact && draft !== "" ? draft : undefined}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per

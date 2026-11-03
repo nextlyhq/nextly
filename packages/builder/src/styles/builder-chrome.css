@@ -5975,7 +5975,13 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   writing-mode: var(--nx-side-writing-mode, horizontal-tb);
   direction: var(--nx-side-direction, ltr);
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  /*
+   * The width goes to the sides: the centre takes only what it holds (the
+   * inner box, or a small square), so every side cell is at least 3.5rem and
+   * a value like "0.95rem" is not cut to "0.95re", as it was when each inner
+   * side had a third of a third of the panel.
+   */
+  grid-template-columns: minmax(3.5rem, 1fr) auto minmax(3.5rem, 1fr);
   gap: 0.25rem;
   align-items: center;
 }
@@ -5988,8 +5994,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * every side the moment one appears. Each field says which side it draws and
  * this reads it, which is also why these selectors stay shallow.
  */
+/*
+ * The block sides span their row, centred at a side cell's width: the centre
+ * column is only as wide as what it holds, which for the inner box is too
+ * narrow for a value.
+ */
 .nx-style-inspector__side-box > [data-side="blockStart"] {
-  grid-area: 1 / 2;
+  grid-area: 1 / 1 / 2 / -1;
+  justify-self: center;
+  inline-size: 3.5rem;
 }
 
 .nx-style-inspector__side-box > [data-side="inlineStart"] {
@@ -6001,7 +6014,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 .nx-style-inspector__side-box > [data-side="blockEnd"] {
-  grid-area: 3 / 2;
+  grid-area: 3 / 1 / 4 / -1;
+  justify-self: center;
+  inline-size: 3.5rem;
 }
 
 /*
@@ -6061,6 +6076,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   grid-area: 2 / 2;
   align-self: stretch;
   min-height: 1.25rem;
+  min-inline-size: 1.5rem;
   border: 1px dashed var(--nx-border);
   border-radius: 0.25rem;
 }
@@ -6080,6 +6096,16 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * the quantity the whole 96px. Only inside a box: a full-width row has room for
  * both and reads better with them on one line.
  */
+/*
+ * A side's value centred in even-width digits, the cell's padding kept small,
+ * so values up to seven characters ("0.95rem") fit a 3.5rem cell whole.
+ */
+.nx-style-inspector__side-box input[data-slot="input"] {
+  padding-inline: 0.25rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .nx-style-inspector__side-box .nx-style-inspector__numeric {
   flex-direction: column;
   align-items: stretch;
