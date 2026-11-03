@@ -78,8 +78,9 @@ import {
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
-  fileDeletions,
   readDeletionFacts,
+  runDeletions,
+  runStatements,
 } from "../../domains/schema/migrate/file-deletions";
 import {
   outsideTransactionNotice,
@@ -921,8 +922,9 @@ export async function previewMigrate(args: {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
   }
-  for (const m of pendingFiles) {
-    await previewPendingFile(m, db, dialect, logger);
+  const pendingDeletions = await pendingRunDeletions(pendingFiles, db, dialect);
+  for (const { file: m, deletions } of pendingDeletions) {
+    previewPendingFile(m, deletions, dialect, logger);
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
@@ -1007,14 +1009,14 @@ export async function previewRetiredImageSizes(
  * check, so the preview and the run cannot disagree, and the SQL it would run,
  * as `migrate:down --dry-run` prints the SQL a rollback would run. A file
  * that deletes data is listed with each deletion, read as a real run reads
- * it (`fileDeletions`), and the consent that run needs.
+ * it (`pendingRunDeletions`), and the consent that run needs.
  */
-async function previewPendingFile(
+function previewPendingFile(
   m: ParsedMigration,
-  db: unknown,
+  deletions: readonly Deletion[],
   dialect: SupportedDialect,
   logger: CommandContext["logger"]
-): Promise<void> {
+): void {
   logger.info(
     `  • ${m.name}.sql${m.transaction ? "" : " (runs outside a transaction)"}`
   );
@@ -1025,11 +1027,6 @@ async function previewPendingFile(
   })) {
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
-  const deletions = fileDeletions(
-    statements,
-    dialect,
-    await readDeletionFacts(db, dialect, statements)
-  );
   if (deletions.length > 0) {
     logger.info(
       `    ⚠ deletes data: ${deletions.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletions)}.`
@@ -1885,13 +1882,15 @@ export async function refuseUnresolvedAppAttempts(args: {
 
 /**
  * Refuses, before the run changes anything, an app migration file it would
- * apply that deletes data (`fileDeletions`, read from the file's statements
- * for this dialect, never from its header) unless the consent covers every
+ * apply that deletes data (`pendingRunDeletions`, read from the files'
+ * statements for this dialect, never from a header, each file against the
+ * schema as the files before it leave it) unless the consent covers every
  * deletion in it, naming the file and each deletion (`judgeDataLoss`).
  *
  * Asked twice. Before the lock (`agreed` absent), a person at a terminal is
  * shown every file's deletions, each file named above its own, and asked once
- * for the whole run; a decline stops the run with nothing changed. Under the lock (`agreed` given), the files are judged again against
+ * for the whole run; a decline stops the run with nothing changed. Under the
+ * lock (`agreed` given), the files are judged again against
  * the database as it stands then, and only what was agreed is accepted without
  * asking: anything new is refused rather than asked about while other runs
  * wait. Returns the deletions agreed to.
@@ -1921,14 +1920,11 @@ async function judgeFileDeletions(
   const first = agreed === undefined;
   // Each deletion keeps the file it comes from, by identity, for the listing.
   const sources = new Map<Deletion, string>();
-  for (const { file } of listed) {
-    if (!plan.runs.has(file)) continue;
-    const statements = splitSqlStatements(file.upSql, deps.dialect, file);
-    const deletions = fileDeletions(
-      statements,
-      deps.dialect,
-      await readDeletionFacts(deps.db, deps.dialect, statements)
-    );
+  for (const { file, deletions } of await pendingRunDeletions(
+    listed.flatMap(({ file }) => (plan.runs.has(file) ? [file] : [])),
+    deps.db,
+    deps.dialect
+  )) {
     for (const deletion of deletions) sources.set(deletion, `${file.name}.sql`);
   }
   const deletions = [...sources.keys()];
@@ -1955,6 +1951,25 @@ async function judgeFileDeletions(
     });
   }
   return [...(agreed ?? []), ...deletions];
+}
+
+/**
+ * What each file of a run deletes, the run read as one list
+ * (`runDeletions`): a file is judged against the schema as the files before
+ * it leave it, so a table an earlier file creates holds only what the run
+ * put there. The live facts are read once, for every file's statements.
+ */
+async function pendingRunDeletions(
+  files: readonly ParsedMigration[],
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<{ file: ParsedMigration; deletions: Deletion[] }[]> {
+  const lists = files.map(file =>
+    splitSqlStatements(file.upSql, dialect, file)
+  );
+  const facts = await readDeletionFacts(db, dialect, runStatements(lists));
+  const perFile = runDeletions(lists, dialect, facts);
+  return files.map((file, at) => ({ file, deletions: perFile[at] ?? [] }));
 }
 
 /**

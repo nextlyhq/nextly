@@ -259,6 +259,34 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     expect(await databaseState()).toEqual(before);
   }, 180_000);
 
+  it("asks nothing for a table rebuild in a later file of the run, when an earlier file of the run creates the table", async () => {
+    // A fresh environment: the table and its rebuild are both pending.
+    const fresh = `${P}_fresh`;
+    file(
+      [`CREATE TABLE ${fresh} (id integer PRIMARY KEY, title varchar(64))`],
+      []
+    );
+    file(
+      [
+        `CREATE TABLE __new_${fresh} (id integer PRIMARY KEY, title varchar(64) NOT NULL)`,
+        `INSERT INTO __new_${fresh} (id, title) SELECT id, title FROM ${fresh}`,
+        `DROP TABLE ${fresh}`,
+        `ALTER TABLE __new_${fresh} RENAME TO ${fresh}`,
+      ],
+      []
+    );
+    expect((await migrate()).applied).toBe(2);
+  }, 180_000);
+
+  it("names a live table an earlier file of the run renames by its live name, for what a later file deletes", async () => {
+    const renamed = `${P}_renamed`;
+    file([`ALTER TABLE ${posts} RENAME TO ${renamed}`], []);
+    file([`ALTER TABLE ${renamed} DROP COLUMN summary`], []);
+    const message = await refusedUnchanged(() => migrate());
+    expect(message).toContain(`${posts}.summary`);
+    expect((await migrate(consentFor(`${posts}.summary`))).applied).toBe(2);
+  }, 180_000);
+
   it("stops with nothing changed when the person at the terminal declines", async () => {
     file([`DROP TABLE ${posts}`], []);
     const message = await refusedUnchanged(() =>

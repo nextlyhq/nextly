@@ -14,7 +14,11 @@ import { describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import type { Deletion } from "../data-loss-consent";
-import { fileDeletions, type DeletionFacts } from "../file-deletions";
+import {
+  fileDeletions,
+  runDeletions,
+  type DeletionFacts,
+} from "../file-deletions";
 
 /** What the fake database answers, every name lower-case. */
 interface Facts {
@@ -379,6 +383,84 @@ describe("SQLite rebuilds", () => {
       .slice(1, -1)
       .map(statement => statement.replaceAll("`", '"'));
     expect(read("postgresql", statements, live)).toEqual([table("posts")]);
+  });
+});
+
+describe("a run of files", () => {
+  // The rebuild the generator writes when a field of posts becomes required.
+  const rebuildPosts = [
+    "CREATE TABLE `__new_posts` (`id` integer PRIMARY KEY NOT NULL, `title` text NOT NULL)",
+    'INSERT INTO `__new_posts`("id", "title") SELECT "id", "title" FROM `posts`',
+    "DROP TABLE `posts`",
+    "ALTER TABLE `__new_posts` RENAME TO `posts`",
+  ];
+  const createPosts = [
+    "CREATE TABLE `posts` (`id` integer PRIMARY KEY NOT NULL, `title` text)",
+  ];
+  const run = (
+    dialect: SupportedDialect,
+    files: string[][],
+    facts?: Facts
+  ): Deletion[][] => runDeletions(files, dialect, fake(facts));
+
+  it("asks nothing for a rebuild of a table an earlier file of the run creates, on a fresh database", () => {
+    // No live posts: read alone, the rebuild would be the drop of a table
+    // whose columns are unknown.
+    expect(read("sqlite", rebuildPosts)).toEqual([table("posts")]);
+    expect(run("sqlite", [createPosts, rebuildPosts])).toEqual([[], []]);
+  });
+
+  it("names a live table a later file's rebuild narrows, under the file that does it", () => {
+    const live = {
+      columns: { posts: { id: "integer", title: "text", body: "text" } },
+    };
+    expect(
+      run(
+        "sqlite",
+        [["CREATE TABLE `tags` (`id` integer)"], rebuildPosts],
+        live
+      )
+    ).toEqual([[], [column("posts", "body")]]);
+  });
+
+  it("follows a live table an earlier file renames, naming it by its live name", () => {
+    const live = {
+      columns: { posts: { id: "integer", title: "text", body: "text" } },
+    };
+    const rebuildArticles = rebuildPosts.map(statement =>
+      statement.replaceAll("posts", "articles")
+    );
+    expect(
+      run(
+        "sqlite",
+        [["ALTER TABLE `posts` RENAME TO `articles`"], rebuildArticles],
+        live
+      )
+    ).toEqual([[], [column("posts", "body")]]);
+  });
+
+  it("names on PostgreSQL and MySQL what each file deletes, under the file, as one file read alone does", () => {
+    for (const dialect of ["postgresql", "mysql"] as const) {
+      const first = ["DELETE FROM posts WHERE id = 1"];
+      const second = ["ALTER TABLE posts DROP COLUMN body", "DROP TABLE posts"];
+      expect(run(dialect, [first, second])).toEqual([
+        read(dialect, first),
+        read(dialect, second),
+      ]);
+      expect(run(dialect, [first, second])).toEqual([
+        [rows("posts")],
+        [column("posts", "body"), table("posts")],
+      ]);
+    }
+  });
+
+  it("names nothing a file deletes from a table an earlier file of the run creates", () => {
+    expect(
+      run("postgresql", [
+        ["CREATE TABLE posts (id integer)"],
+        ["DROP TABLE posts"],
+      ])
+    ).toEqual([[], []]);
   });
 });
 

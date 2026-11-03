@@ -829,8 +829,11 @@ interface ColumnNames {
 
 /** One walk over a statement list, following names and collecting deletions. */
 class FileWalk {
-  readonly deletions: Deletion[] = [];
+  /** Each deletion with the part of the list (a file of a run) whose statement made it. */
+  readonly found: { deletion: Deletion; part: number }[] = [];
   private readonly seen = new Set<string>();
+  /** The part the statement being read belongs to. */
+  private part = 0;
   /**
    * Each table name the list has given a meaning: the live table it reaches
    * (followed through renames), or null for one the list made itself.
@@ -870,7 +873,12 @@ class FileWalk {
     return names?.away.has(live) === true ? undefined : live;
   }
 
-  /** Records a deletion, once by kind, table and column. */
+  /** The statements read next belong to `part`. */
+  enter(part: number): void {
+    this.part = part;
+  }
+
+  /** Records a deletion, once per part by kind, table and column. */
   private emit(deletion: Deletion): void {
     const key =
       deletion.kind === "unnamed"
@@ -878,9 +886,10 @@ class FileWalk {
         : deletion.kind === "column"
           ? `column:${deletion.table}.${deletion.column}`
           : `${deletion.kind}:${deletion.table}`;
-    if (this.seen.has(key)) return;
-    this.seen.add(key);
-    this.deletions.push(deletion);
+    const once = `${String(this.part)}|${key}`;
+    if (this.seen.has(once)) return;
+    this.seen.add(once);
+    this.found.push({ deletion, part: this.part });
   }
 
   apply(step: Step): void {
@@ -1043,8 +1052,9 @@ class FileWalk {
 function walk(
   statements: readonly string[],
   dialect: SupportedDialect,
-  facts: FactSource
-): Deletion[] {
+  facts: FactSource,
+  partOf: (at: number) => number = () => 0
+): { deletion: Deletion; part: number }[] {
   const file = new FileWalk(facts);
   const rebuilds = rebuildsIn(statements, dialect);
   const byDrop = new Map(rebuilds.map(rebuild => [rebuild.dropAt, rebuild]));
@@ -1058,13 +1068,24 @@ function walk(
     ])
   );
   statements.forEach((statement, at) => {
+    file.enter(partOf(at));
     const rebuild = byDrop.get(at);
     if (rebuild !== undefined) file.rebuild(rebuild, statements);
     else if (!owned.has(at)) {
       for (const step of readStatement(statement, dialect)) file.apply(step);
     }
   });
-  return file.deletions;
+  return file.found;
+}
+
+/** The questions a walk asks, answered from facts read once. */
+function factSource(facts: DeletionFacts): FactSource {
+  return {
+    cascadeFrom: table => facts.cascadeFrom(table),
+    truncateCascadeFrom: table => facts.truncateCascadeFrom(table),
+    liveColumns: table => facts.liveColumns.get(table),
+    liveType: (table, column) => facts.liveColumnTypes?.get(table)?.get(column),
+  };
 }
 
 /** Every deletion `statements` (one file or down section, split for `dialect`) make, in statement order, each once. */
@@ -1073,12 +1094,43 @@ export function fileDeletions(
   dialect: SupportedDialect,
   facts: DeletionFacts
 ): Deletion[] {
-  return walk(statements, dialect, {
-    cascadeFrom: table => facts.cascadeFrom(table),
-    truncateCascadeFrom: table => facts.truncateCascadeFrom(table),
-    liveColumns: table => facts.liveColumns.get(table),
-    liveType: (table, column) => facts.liveColumnTypes?.get(table)?.get(column),
-  });
+  return walk(statements, dialect, factSource(facts)).map(
+    found => found.deletion
+  );
+}
+
+/**
+ * The deletions of a run of files, each file's own, in run order: the files
+ * read as one list against the database as it is before the run, so each
+ * file is judged against the schema as the files before it leave it. A
+ * table or column an earlier file creates holds only what the run put there,
+ * and a table an earlier file renames is followed to the live one it is.
+ * `facts` are read for every file's statements together
+ * (`readDeletionFacts` over `runStatements(files)`).
+ */
+export function runDeletions(
+  files: readonly (readonly string[])[],
+  dialect: SupportedDialect,
+  facts: DeletionFacts
+): Deletion[][] {
+  const partOf: number[] = files.flatMap((statements, part) =>
+    statements.map(() => part)
+  );
+  const perFile: Deletion[][] = files.map(() => []);
+  for (const { deletion, part } of walk(
+    runStatements(files),
+    dialect,
+    factSource(facts),
+    at => partOf[at] ?? 0
+  )) {
+    perFile[part]?.push(deletion);
+  }
+  return perFile;
+}
+
+/** A run's files' statements as one list, in run order. */
+export function runStatements(files: readonly (readonly string[])[]): string[] {
+  return files.flat();
 }
 
 /** A read that answers undefined rather than throwing. */
