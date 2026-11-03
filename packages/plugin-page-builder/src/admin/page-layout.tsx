@@ -62,10 +62,12 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
 import {
   layoutPickerView,
+  layoutValue,
   storedFor,
   type EffectiveLayout,
   type LayoutChoicesState,
   type LayoutPickerView,
+  type PickerOption,
 } from "./layout-choice-view";
 
 /** The page's stored Layout reference, as the pages collection names it. */
@@ -389,9 +391,35 @@ function useLayoutSearch(
   const options = !searching
     ? view.options
     : found.kind === "ready" && answered
-      ? layoutPickerView(stored, found).options
+      ? matchingOptions(stored, found, search)
       : [];
   return { typed, setTyped, searching, answered, failed, options, retry };
+}
+
+/**
+ * The options a search found: only the Layouts whose title holds the query.
+ *
+ * The answer also carries rows the route adds whatever the query (the page's
+ * own Layout and the default), and the view adds the default and "No header
+ * or footer" to every list; none of those matched, so none is a result, and
+ * "No Layouts match" can say so. Matched as the route matches: the query
+ * anywhere in the title, ignoring case. The current choice stays in the
+ * trigger.
+ */
+function matchingOptions(
+  stored: { layout: unknown; noHeaderFooter: boolean },
+  found: Extract<LayoutChoicesState, { kind: "ready" }>,
+  search: string
+): PickerOption[] {
+  const query = search.toLowerCase();
+  const matched = new Set(
+    found.choices.items
+      .filter(item => item.title.toLowerCase().includes(query))
+      .map(item => layoutValue(item.id))
+  );
+  return layoutPickerView(stored, found).options.filter(option =>
+    matched.has(option.value)
+  );
 }
 
 /** What the list says when it shows no Layouts: why, and what to do. */

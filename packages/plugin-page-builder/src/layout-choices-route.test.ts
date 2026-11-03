@@ -46,6 +46,12 @@ interface Store {
    */
   populated?: Record<string, unknown>;
   /**
+   * The ids whose working draft the caller may see, as the service decides
+   * per row: a draft is overlaid only for a caller who may update that row.
+   * Every id when unstated.
+   */
+  updatable?: string[];
+  /**
    * Layout ids a row rule hides from the caller: a read made as the caller
    * does not return them, a read made as the system does.
    */
@@ -103,7 +109,9 @@ function fake(store: Store) {
     }),
     findByID: vi.fn(async (args: Record<string, unknown>) => {
       calls.push(args);
-      return store.drafts.includes(String(args.id))
+      const id = String(args.id);
+      const mayUpdate = store.updatable?.includes(id) ?? true;
+      return store.drafts.includes(id) && mayUpdate
         ? { id: args.id, _isWorkingDraft: true }
         : { id: args.id };
     }),
@@ -207,12 +215,12 @@ describe("readLayoutChoices", () => {
   });
 
   it("answers the default, the caller's right to edit, and the region facts", async () => {
-    const { nextly } = fake(store);
+    const { nextly } = fake({ ...store, updatable: [] });
     const { meta } = await readLayoutChoices(context(false), nextly, asked());
     expect(meta.defaultLayout).toBe("main");
     expect(meta.canUpdateLayouts).toBe(false);
-    // Draft facts are asked only for an author who may update: the service
-    // shows a working draft to no one else.
+    // The service shows a working draft only to a caller who may update the
+    // row, so this author is told of none.
     expect(meta.regionComponents).toEqual({
       header: { draftChangesNotLive: false },
     });
@@ -298,10 +306,61 @@ describe("readLayoutChoices", () => {
     expect(await readsFor(150)).toBe(few);
   });
 
-  it("asks no draft read of an author who may not update", async () => {
-    const { nextly, calls } = fake(store);
-    await readLayoutChoices(context(false), nextly, asked("main"));
-    expect(calls.filter(call => call.draft === true)).toEqual([]);
+  it("warns of a Layout's draft when a row rule lets the author update that Layout", async () => {
+    // The collection-wide question answers no, as it does for a rule that
+    // filters rows; the row itself is one this author may update.
+    const { nextly } = fake({ ...store, updatable: ["main", "header"] });
+    const { items, meta } = await readLayoutChoices(
+      context(false),
+      nextly,
+      asked("main")
+    );
+    expect(items.find(item => item.id === "main")?.draftChangesNotLive).toBe(
+      true
+    );
+    expect(meta.regionComponents.header).toEqual({
+      draftChangesNotLive: true,
+    });
+  });
+
+  it("tells an author the rule does not let update nothing of a draft", async () => {
+    const { nextly, calls } = fake({ ...store, updatable: [] });
+    const answer = await readLayoutChoices(
+      context(false),
+      nextly,
+      asked("main")
+    );
+    expect(
+      answer.items.find(item => item.id === "main")?.draftChangesNotLive
+    ).toBe(false);
+    expect(answer.meta.regionComponents.header).toEqual({
+      draftChangesNotLive: false,
+    });
+    // Every draft read is made as this author, so the access gate judges it.
+    const draftReads = calls.filter(call => call.draft === true);
+    for (const read of draftReads) expect(read.overrideAccess).toBe(false);
+  });
+
+  it("fails the answer when a draft read fails for any reason but access", async () => {
+    const throwing = (error: Error) => {
+      const { nextly } = fake(store);
+      (nextly as { findByID: unknown }).findByID = async () => {
+        throw error;
+      };
+      return nextly;
+    };
+    await expect(
+      readLayoutChoices(context(), throwing(new Error("hook threw")), asked())
+    ).rejects.toThrow("hook threw");
+    // A refusal is expected: no draft facts, and the answer stands.
+    const refused = await readLayoutChoices(
+      context(),
+      throwing(NextlyError.notFound()),
+      asked()
+    );
+    expect(refused.meta.regionComponents.header).toEqual({
+      draftChangesNotLive: false,
+    });
   });
 
   it("reads definitions from the component store the plugin was told about", async () => {

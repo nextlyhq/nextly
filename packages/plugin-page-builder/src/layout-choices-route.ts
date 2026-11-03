@@ -127,9 +127,9 @@ function hasPendingDraft(row: unknown): boolean {
  * facts of those two and their region components, and the definitions in
  * batches. Draft facts need a read by id, since only that read overlays a
  * working draft, so they are asked only of the two Layouts a page can be drawn
- * inside, and only for an author who may update what is asked about: the
- * service shows a working draft to no one else, so the read would tell anyone
- * else nothing.
+ * inside and their components. Each is read as this author: the service shows
+ * a working draft only to a caller who may update that row, so the read tells
+ * anyone else nothing.
  */
 export async function readLayoutChoices(
   ctx: LayoutChoicesContext,
@@ -195,14 +195,16 @@ export async function readLayoutChoices(
 
   const canUpdateLayouts = (await ctx.caller?.can("update", layouts)) === true;
   const focused = items.filter(item => focus.includes(item.id));
-  const drafts = canUpdateLayouts
-    ? await pendingDrafts(
-        nextly,
-        layouts,
-        focused.filter(item => item.published).map(item => item.id),
-        { ...asUser, ...inLocale }
-      )
-    : new Set<string>();
+  // Asked of each focused row as this author, whatever the collection-wide
+  // answer: a rule may let them update this Layout and not others, and only
+  // a read of the row can apply it. The service overlays a working draft only
+  // for a caller who may update that row, so one who may not learns nothing.
+  const drafts = await pendingDrafts(
+    nextly,
+    layouts,
+    focused.filter(item => item.published).map(item => item.id),
+    { ...asUser, ...inLocale }
+  );
   const focusedComponents = [
     ...new Set(focused.flatMap(item => item.regions.map(r => r.componentId))),
   ];
@@ -223,22 +225,17 @@ export async function readLayoutChoices(
     regionDefinitions,
     request.limits
   );
-  const componentDrafts =
-    (await ctx.caller?.can("update", components)) === true
-      ? await pendingDrafts(
-          nextly,
-          components,
-          // Each region's own component first, so a deep header cannot
-          // crowd the footer's out of the bound.
-          [
-            ...new Set([
-              ...focusedComponents,
-              ...[...reachable.values()].flat(),
-            ]),
-          ].slice(0, MAX_NESTED_DRAFT_READS),
-          { ...asUser, ...inLocale }
-        )
-      : new Set<string>();
+  // Asked as this author of each component, for the reason the Layouts are.
+  const componentDrafts = await pendingDrafts(
+    nextly,
+    components,
+    // Each region's own component first, so a deep header cannot crowd the
+    // footer's out of the bound.
+    [
+      ...new Set([...focusedComponents, ...[...reachable.values()].flat()]),
+    ].slice(0, MAX_NESTED_DRAFT_READS),
+    { ...asUser, ...inLocale }
+  );
 
   return {
     items: items.map(item => ({
@@ -385,9 +382,14 @@ async function pendingDrafts(
           depth: 0,
         });
         return hasPendingDraft(row) ? id : null;
-      } catch {
-        // A row the caller cannot read by id says nothing about a draft.
-        return null;
+      } catch (error) {
+        // A row the caller may not read says nothing about a draft. Any
+        // other failure fails the request, so the editor offers to try again
+        // rather than silently dropping a warning the author needed.
+        if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
+          return null;
+        }
+        throw error;
       }
     })
   );

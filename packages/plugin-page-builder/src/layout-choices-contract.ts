@@ -96,8 +96,8 @@ export interface LayoutChoice {
    * for one never published: everything about it is unpublished.
    *
    * Asked only of the two Layouts a page can be drawn inside, its selected
-   * one and the site's default, and only for an author who may update
-   * Layouts: false for every other row.
+   * one and the site's default, and true only for an author who may update
+   * that Layout: false for every other row.
    */
   readonly draftChangesNotLive: boolean;
   /**
@@ -141,8 +141,9 @@ export interface LayoutChoicesResponse {
     readonly more: boolean;
     /**
      * Facts about the region components of the selected Layout and the
-     * default, by id, for an author who may update components: a region has
-     * draft changes when any component it draws does, nested ones included.
+     * default, by id, telling of a draft only where the author may update
+     * the component. A region has draft changes when any component it draws
+     * does, nested ones included.
      */
     readonly regionComponents: Readonly<Record<string, RegionComponentFacts>>;
     /**
