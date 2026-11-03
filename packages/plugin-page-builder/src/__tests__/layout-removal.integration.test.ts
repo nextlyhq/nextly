@@ -22,7 +22,11 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  text,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -106,6 +110,19 @@ function probePlugin(holder: { store?: LayoutRemovalStore }): PluginDefinition {
     dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
     init(ctx) {
       holder.store = layoutRemovalStore(ctx.db, ctx.dialect);
+    },
+  });
+}
+
+/** A plugin adding its own field to Layouts, as any plugin may. */
+function taglinePlugin(): PluginDefinition {
+  return definePlugin({
+    name: "@test/layout-tagline",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+    contributes: {
+      extend: [{ target: LAYOUTS_SLUG, fields: [text({ name: "tagline" })] }],
     },
   });
 }
@@ -1468,6 +1485,33 @@ describe.each(getConfiguredTestDialects())(
         });
         // Once: a second run finds a usable default and restores nothing.
         expect(await ensure(t)).toBe("kept");
+      });
+
+      it("keeps another plugin's fields on the Layout it restores", async () => {
+        const t = await boot([taglinePlugin()]);
+        const created = await t.nextly.create({
+          collection: LAYOUTS_SLUG,
+          data: {
+            title: "Other",
+            slug: "other",
+            areas: [],
+            status: "published",
+            tagline: "Made for landing pages",
+          },
+          overrideAccess: true,
+        });
+        const other = String(created.item.id);
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+
+        expect(await ensure(t)).toBe("restored");
+
+        const restored = String((await settingsOf(t)).defaultLayout);
+        expect(await layoutRow(t, restored)).toMatchObject({
+          title: "Other",
+          tagline: "Made for landing pages",
+          status: "published",
+        });
       });
 
       it("never writes a copy over a Layout that still exists", async () => {

@@ -52,24 +52,49 @@ export interface RestoreDeps {
   readonly warn: (message: string, meta?: Record<string, unknown>) => void;
 }
 
-/** The authored fields of a stored Layout row, as a write takes them. */
+/**
+ * The columns a stored Layout row carries that the system writes, never an
+ * author: its id, its timestamps and its lifecycle. A restore leaves them to
+ * the write it makes. Keys starting with `_` (a read's own bookkeeping, such as
+ * `_isWorkingDraft`) are left off too.
+ */
+const SYSTEM_FIELDS: ReadonlySet<string> = new Set([
+  "id",
+  "status",
+  "createdAt",
+  "updatedAt",
+  "created_at",
+  "updated_at",
+  "firstPublishedAt",
+  "first_published_at",
+  "publishedAt",
+  "published_at",
+]);
+
+/**
+ * The authored fields of a stored Layout row, as a write takes them: the whole
+ * row less what the system writes, so fields another plugin added to Layouts
+ * come back with it. The address is left to each caller, which knows whether
+ * the row's own is still free.
+ */
 function authored(row: Record<string, unknown>): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (SYSTEM_FIELDS.has(key) || key === "slug" || key.startsWith("_")) {
+      continue;
+    }
+    fields[key] = value;
+  }
   // Read through `areaRows`, so a copy holding the repeater as SQLite's JSON
   // text keeps its areas as the other dialects' copies do.
-  const areas = areaRows(row).map(area => {
+  fields.areas = areaRows(row).map(area => {
     if (typeof area !== "object" || area === null) return area;
     // A repeater row's own id belongs to the deleted Layout's rows.
     const rest: Record<string, unknown> = { ...area };
     delete rest.id;
     return rest;
   });
-  return {
-    title: row.title,
-    ...(typeof row.description === "string"
-      ? { description: row.description }
-      : {}),
-    areas,
-  };
+  return fields;
 }
 
 /**
