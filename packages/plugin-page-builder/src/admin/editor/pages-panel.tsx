@@ -508,7 +508,11 @@ function PageRow({
           {title}
         </button>
       )}
-      {editing ? <Chip>Editing</Chip> : null}
+      {/* Plain words, not a chip: being edited is where the author is, not
+          a state of the page beside its status. */}
+      {editing ? (
+        <span className="shrink-0 text-xs text-muted-foreground">Editing</span>
+      ) : null}
       {page.state === undefined ? null : <Chip>{STATE_WORDS[page.state]}</Chip>}
       <RowMenu
         page={page}

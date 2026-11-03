@@ -214,7 +214,9 @@ describe("the list", () => {
     ]);
     const home = screen.getByRole("button", { name: "Home" });
     expect(home.getAttribute("aria-current")).toBe("page");
-    expect(within(row("Home")).getByText("Editing")).toBeTruthy();
+    const editing = within(row("Home")).getByText("Editing");
+    // Plain words, not a status: no dot, so the row does not read as two states.
+    expect(editing.querySelector('[aria-hidden="true"]')).toBeNull();
     const post = screen.getByRole("button", { name: "Blog post" });
     expect(post.getAttribute("aria-current")).toBeNull();
     expect(within(row("Blog post")).queryByText("Editing")).toBeNull();
