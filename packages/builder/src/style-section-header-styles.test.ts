@@ -1,0 +1,77 @@
+/**
+ * The style sections' headings, as the stylesheet draws them.
+ *
+ * The shared accordion draws its chevron pointing down and turns it up when
+ * open. The inspector's sections point it right when closed and down when
+ * open, as the design and every other disclosure in the editor do, so the
+ * direction is read from the builder's own rules, which outrank the shared
+ * component's utilities by sitting outside their layer.
+ *
+ * @module style-section-header-styles.test
+ */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
+// Comments replaced by a marker, so a rule's prose never answers for its
+// declarations, while the marker still ends the text before the next rule.
+const FLAT = readFileSync(
+  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
+  "utf8"
+)
+  .replace(/\/\*[\s\S]*?\*\//g, "*/")
+  .replace(/\s+/g, " ");
+
+/**
+ * The declarations of the one rule written for exactly `selector`: preceded by
+ * the end of a rule or a comment, so the tail of a longer selector list (a
+ * hover rule ending in the same selector) is not mistaken for it.
+ */
+function ruleBody(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [
+    ...FLAT.matchAll(new RegExp(`(?:}|\\*/) ${escaped} \\{`, "g")),
+  ];
+  if (matches.length === 0)
+    throw new Error(`no rule for selector: ${selector}`);
+  if (matches.length > 1) {
+    throw new Error(`selector appears more than once: ${selector}`);
+  }
+  const start = (matches[0]?.index ?? 0) + (matches[0]?.[0].length ?? 0);
+  return FLAT.slice(start, FLAT.indexOf("}", start));
+}
+
+describe("a style section's heading", () => {
+  it("points its chevron right while closed and down while open", () => {
+    expect(ruleBody(".nx-style-inspector__section-trigger > svg")).toContain(
+      "rotate: -90deg"
+    );
+    expect(
+      ruleBody('.nx-style-inspector__section-trigger[data-state="open"] > svg')
+    ).toContain("rotate: 0deg");
+  });
+
+  it("is not underlined on hover, which reads as a link", () => {
+    expect(ruleBody(".nx-style-inspector__section-trigger:hover")).toContain(
+      "text-decoration: none"
+    );
+  });
+});
+
+describe("a field's provenance dot", () => {
+  it("waits for its field to be pointed at or focused, and stays in the accessibility tree", () => {
+    // The section heading's dot says which sections hold values at a glance;
+    // a dot on every field beside it was the noise the design leaves out.
+    // Faded rather than hidden: `visibility: hidden` or `display: none` would
+    // also take the dot's spoken label away.
+    const resting = ruleBody(".nx-style-inspector__provenance");
+    expect(resting).toContain("opacity: 0");
+    expect(resting).not.toContain("visibility");
+    expect(
+      ruleBody(
+        ".nx-inspector__field:hover .nx-style-inspector__provenance, .nx-inspector__field:focus-within .nx-style-inspector__provenance"
+      )
+    ).toContain("opacity: 1");
+  });
+});

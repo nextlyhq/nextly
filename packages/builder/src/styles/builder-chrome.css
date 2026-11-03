@@ -1044,6 +1044,31 @@
   min-block-size: var(--nx-control-height-sm);
 }
 
+/*
+ * The block's mark on a tile, the design's 30px square. The theme's accent
+ * surface and its own foreground, the pair it means to be read together, so
+ * a brand that sets a strong accent keeps the mark visible in either scheme.
+ */
+.nx-block-card__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: 1.875rem;
+  block-size: 1.875rem;
+  border-radius: var(--radius-md);
+  background: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+}
+
+/* The name over its one-line description, taking the room between the
+   tile and the menu. */
+.nx-block-card__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
 .nx-block-card__title {
   flex: 1;
   min-inline-size: 0;
@@ -1090,6 +1115,13 @@
   font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--nx-muted-foreground);
+}
+
+/* One line: the whole sentence is in the element and its title. */
+.nx-block-card__description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nx-block-card__status {
@@ -1877,15 +1909,42 @@
  * is never colour alone.
  */
 .nx-style-inspector__section-label {
-  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
   text-align: start;
   font-size: 0.8125rem;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .nx-style-inspector__section-dot {
   display: inline-flex;
   align-items: center;
+}
+
+/*
+ * A section's heading at the design's height (9px above and below, where the
+ * shared accordion pads 16px), unlined on hover, which would read as a link,
+ * and with the chevron pointing right while closed and down while open, as
+ * every other disclosure in the editor does. The shared component turns its
+ * chevron with a utility in a cascade layer; these rules sit outside the
+ * layers, so they win without raising specificity.
+ */
+.nx-style-inspector__section-trigger {
+  padding-block: 0.5625rem;
+}
+
+.nx-style-inspector__section-trigger:hover {
+  text-decoration: none;
+}
+
+.nx-style-inspector__section-trigger > svg {
+  rotate: -90deg;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-style-inspector__section-trigger[data-state="open"] > svg {
+  rotate: 0deg;
 }
 
 .nx-style-inspector__dot {
@@ -4082,6 +4141,20 @@ fieldset.nx-inspector__fields {
    * `<label>`, and a press on any of a label's content still activates the
    * label, so the field is focused either way.
    */
+  /*
+   * Shown when its field is pointed at or focused. The section heading's dot
+   * says which sections hold values at a glance, and a dot beside every field
+   * as well was the noise the design leaves out. Faded rather than hidden, so
+   * the dot keeps its place (nothing shifts when it appears) and its spoken
+   * label, which `visibility` or `display` would take away.
+   */
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-inspector__field:hover .nx-style-inspector__provenance,
+.nx-inspector__field:focus-within .nx-style-inspector__provenance {
+  opacity: 1;
 }
 
 .nx-style-inspector__provenance[data-provenance="authored"] {

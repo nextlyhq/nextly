@@ -564,6 +564,25 @@ describe("sections", () => {
     expect(effects.textContent).not.toContain("has values");
   });
 
+  it("draws a section's dot beside its name, in a heading the panel styles as its own", () => {
+    // The dot belongs to the name, as the design sets it, not beside the
+    // chevron at the far end; and the trigger carries the panel's own class,
+    // which is what sets its height and the chevron's direction.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { margin: "8px" } },
+    } as NodeStyles;
+    mount({ spacing: true }, styles);
+
+    const spacing = screen.getByRole("button", { name: /Spacing/ });
+    expect(
+      spacing.classList.contains("nx-style-inspector__section-trigger")
+    ).toBe(true);
+    const label = spacing.querySelector(".nx-style-inspector__section-label");
+    expect(
+      label?.querySelector(".nx-style-inspector__section-dot")
+    ).toBeTruthy();
+  });
+
   it("shows a section's common properties and lists the rest under More", () => {
     mount({ effects: true });
 

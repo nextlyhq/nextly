@@ -1024,16 +1024,22 @@ function StyleSectionItem({
   );
   return (
     <AccordionItem value={section.key} data-section={section.key}>
-      <AccordionTrigger>
+      {/* The panel's own class sets the heading's height and turns the
+          shared chevron to point right while closed and down while open. */}
+      <AccordionTrigger className="nx-style-inspector__section-trigger">
         <span className="nx-style-inspector__section-label">
           {section.label}
+          {/* Beside the name it qualifies, as the design sets it. */}
+          {holdsValues ? (
+            <span
+              className="nx-style-inspector__section-dot"
+              data-has-values=""
+            >
+              <span aria-hidden="true" className="nx-style-inspector__dot" />
+              <span className="nx-sr-only">has values</span>
+            </span>
+          ) : null}
         </span>
-        {holdsValues ? (
-          <span className="nx-style-inspector__section-dot" data-has-values="">
-            <span aria-hidden="true" className="nx-style-inspector__dot" />
-            <span className="nx-sr-only">has values</span>
-          </span>
-        ) : null}
       </AccordionTrigger>
       <AccordionContent>
         <fieldset className="nx-inspector__fields" disabled={readOnly}>
