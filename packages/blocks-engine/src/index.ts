@@ -361,6 +361,9 @@ export {
   // own value. Two implementations of that order agree until a variant rule
   // changes in one of them.
   instanceExposure,
+  // A component's own tree as one of its variants draws it, ids kept, for
+  // the editor's canvas to preview the variant open in the component's view.
+  variantPreview,
   // What a supplied definition has to be before the resolver inlines it.
   // Published because the editor's inspector draws from the same lookup the
   // canvas resolves against, and must refuse exactly what the canvas refuses.

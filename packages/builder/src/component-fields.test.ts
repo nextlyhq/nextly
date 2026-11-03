@@ -25,6 +25,7 @@ import {
   exposeOffer,
   exposeProp,
   exposeVisibility,
+  fieldSource,
   idsIn,
   planFieldRemoval,
   propExposure,
@@ -32,6 +33,7 @@ import {
   removalSentences,
   renameField,
   reservedIds,
+  slotSource,
   visibilityExposure,
   type FieldEditContext,
 } from "./component-fields";
@@ -184,7 +186,8 @@ describe("exposing a prop", () => {
       type: "select",
     });
     expect(exposeOffer({ type: "number" })).toEqual({
-      reason: expect.stringMatching(/number value/),
+      reason:
+        "Pages can’t set a number value, so this stays the same everywhere it is used.",
     });
   });
 
@@ -320,7 +323,9 @@ describe("removing a field", () => {
         { kind: "field" },
         { count: 3, complete: false }
       ).placements
-    ).toMatch(/placed directly in at least 3 documents\.$/);
+    ).toMatch(
+      /^When you publish this component, every use of it that set this field loses its value\. .*placed directly in at least 3 documents\.$/
+    );
     expect(
       removalSentences(planned, { kind: "field" }, { count: 1, complete: true })
         .placements
@@ -407,5 +412,117 @@ describe("the reach phrase", () => {
     expect(reachPhrase({ count: 4, complete: true })).toBe("4 documents");
     expect(reachPhrase(undefined)).toBeUndefined();
     expect(reachPhrase({ count: 0, complete: false })).toBeUndefined();
+  });
+});
+
+describe("where a field comes from, in plain words", () => {
+  beforeEach(() => {
+    registerBlocks(
+      [
+        {
+          name: "acme/heading",
+          version: 1,
+          description: "A heading.",
+          example: { props: {} },
+          editor: { label: "Heading" },
+          render: () => null,
+          props: {
+            text: { label: "Text", type: "text", role: "content" },
+            level: { label: "Level", type: "select", options: ["h1", "h2"] },
+          },
+        },
+        {
+          name: "acme/photo",
+          version: 1,
+          description: "An image.",
+          example: { props: {} },
+          editor: { label: "Image" },
+          render: () => null,
+          props: { mediaId: { label: "Image", type: "media" } },
+        },
+        {
+          name: "acme/button",
+          version: 1,
+          description: "A button.",
+          example: { props: {} },
+          editor: { label: "Button" },
+          render: () => null,
+          props: { href: { label: "Link", type: "url" } },
+          slots: { inside: {} },
+        },
+      ] as never,
+      { source: "component-fields-source-test" }
+    );
+  });
+
+  const nodes = [
+    { id: "h", type: "acme/heading", version: 1, props: {} },
+    { id: "p", type: "acme/photo", version: 1, props: {} },
+    { id: "b", type: "acme/button", version: 1, props: {} },
+  ];
+  const doc = component({ nodes });
+  const field = (over: Record<string, unknown>) =>
+    ({
+      id: "f",
+      label: "Headline",
+      nodeId: "h",
+      propPath: "text",
+      type: "text",
+      ...over,
+    }) as never;
+
+  it("is the block and the property, by the names the block gives them", () => {
+    expect(fieldSource(doc, field({}))).toBe("Heading text");
+    // Never the stored prop name: "href" is the button's link.
+    expect(
+      fieldSource(
+        doc,
+        field({ nodeId: "b", propPath: "href", type: "link", label: "CTA" })
+      )
+    ).toBe("Button link");
+  });
+
+  it("is the block alone where the property is named as the block is", () => {
+    expect(
+      fieldSource(
+        doc,
+        field({
+          nodeId: "p",
+          propPath: "mediaId",
+          type: "image",
+          label: "Photo",
+        })
+      )
+    ).toBe("Image");
+  });
+
+  it("separates block and property where the line would only repeat the field's name", () => {
+    expect(
+      fieldSource(
+        doc,
+        field({ propPath: "level", type: "select", label: "Heading level" })
+      )
+    ).toBe("Heading · level");
+  });
+
+  it("says what a visibility field does rather than naming a prop", () => {
+    expect(
+      fieldSource(
+        doc,
+        field({ propPath: "visibility", type: "visibility", label: "Show" })
+      )
+    ).toBe("Heading, shown or hidden");
+  });
+
+  it("says a block is missing rather than naming an id", () => {
+    expect(fieldSource(doc, field({ nodeId: "gone" }))).toBe("A missing block");
+  });
+
+  it("says what each page does with an exposed slot", () => {
+    const slotted = component({
+      nodes,
+      slots: { body: { label: "Body", nodeId: "b", slot: "inside" } },
+    });
+    expect(slotSource(slotted, "body")).toBe("Button, filled by each use");
   });
 });

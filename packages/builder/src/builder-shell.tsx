@@ -600,6 +600,15 @@ const REQUIRED_HOST_TOKEN = "--nx-background";
 const OWN_STYLESHEET_TOKEN = "--nx-builder-surface";
 
 /**
+ * The one surface both sides of the editor sit on, the rail's own: the left
+ * panels and the Inspector read as one frame around the canvas, divided from it
+ * by the resize handle's single line, and a panel paints nothing of its own
+ * behind its content. One class, so the two sides cannot drift apart.
+ */
+const SIDE_PANEL_CLASS =
+  "bg-[color:var(--nx-builder-surface)] h-full overflow-auto";
+
+/**
  * Tell a developer when the design system's stylesheet has not been loaded.
  *
  * The editor's own sheet supplements that one rather than restating it, so a
@@ -1030,7 +1039,8 @@ function ShellTopBar({
       // Three columns, the outer two equal, so the centre column (the
       // devices and the zoom) sits in the middle of the editor whatever the
       // sides hold. A container, so controls inside can give way by width.
-      className="border-[color:var(--nx-builder-border)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
+      // `nx-builder-topbar` sets every control inside at the editor's density.
+      className="nx-builder-topbar border-[color:var(--nx-builder-border)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
       aria-label="Editor actions"
     >
       <div data-topbar="start" className="flex min-w-0 items-center gap-2">
@@ -1060,7 +1070,8 @@ function ShellTopBar({
              */
             aria-label="Exit editor"
             title="Exit editor"
-            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border p-1.5 focus-visible:ring-2 focus-visible:outline-none"
+            // A square at the editor's control height, as the bar's others are.
+            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height)] items-center justify-center rounded-md border focus-visible:ring-2 focus-visible:outline-none"
           >
             <ArrowLeft className="size-4" aria-hidden="true" />
           </button>
@@ -1682,7 +1693,7 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label={panelLabel(openPanel)}
-                  className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
+                  className={SIDE_PANEL_CLASS}
                 >
                   {/* Keyed by the panel, because the prop's contract says the
                       result is keyed by the panel and React's default
@@ -1745,7 +1756,7 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label="Inspector"
-                  className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
+                  className={SIDE_PANEL_CLASS}
                 >
                   {inspector}
                 </aside>

@@ -50,6 +50,12 @@ export interface CatalogueFamily {
   readonly variable: boolean;
   /** The licence as the catalogue names it, such as `OFL-1.1`. */
   readonly licence: string;
+  /**
+   * How many times the family was downloaded from npm in the last month, which
+   * the editor orders "Popular" by. Absent when the catalogue's stats could
+   * not be read, and the editor then orders by name.
+   */
+  readonly popularity?: number;
 }
 
 /** What the catalogue route answers. */

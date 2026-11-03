@@ -130,7 +130,8 @@ export const card: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     // announced as a landmark, which is noise on a card that merely groups a
     // heading and a sentence. The author knows which one theirs is.
     as: {
-      label: "HTML tag",
+      label: "Element type",
+      display: "menu",
       type: "select",
       options: ["div", "article", "section", "aside"],
     },
