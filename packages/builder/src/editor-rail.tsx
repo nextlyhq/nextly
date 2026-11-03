@@ -67,7 +67,9 @@ const ITEM_CLASS =
   "focus-visible:ring-ring inline-flex size-9 items-center justify-center rounded-md focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
 
 /**
- * A tooltip's open state that also closes when the pointer moves into a frame.
+ * A tooltip's open state that also closes when the pointer moves into a frame,
+ * unless its item has keyboard focus: the icon-only rail's tooltip is that
+ * item's only visible name, and the author is still on it.
  *
  * The canvas is an iframe beside the rail. A pointer leaving an item for it
  * passes into another document, so this one sees no further move and Radix,
@@ -79,17 +81,23 @@ const ITEM_CLASS =
 function useTooltipClosedByFrames(): {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  trigger: React.RefObject<HTMLButtonElement | null>;
 } {
   const [open, setOpen] = React.useState(false);
+  const trigger = React.useRef<HTMLButtonElement | null>(null);
   React.useEffect(() => {
     if (!open) return;
     const intoFrame = (event: PointerEvent) => {
-      if (isIFrame(event.target)) setOpen(false);
+      if (!isIFrame(event.target)) return;
+      // `:focus-visible`, not focus: a clicked item keeps focus too, and its
+      // tooltip was opened by the pointer that has now left it.
+      if (trigger.current?.matches(":focus-visible") === true) return;
+      setOpen(false);
     };
     document.addEventListener("pointerover", intoFrame, true);
     return () => document.removeEventListener("pointerover", intoFrame, true);
   }, [open]);
-  return { open, onOpenChange: setOpen };
+  return { open, onOpenChange: setOpen, trigger };
 }
 
 function RailItem({
@@ -108,11 +116,12 @@ function RailItem({
   onClick: (button: HTMLElement) => void;
 } & Record<`data-${string}`, string>) {
   const key = shortcut?.toUpperCase();
-  const tooltip = useTooltipClosedByFrames();
+  const { trigger, ...tooltip } = useTooltipClosedByFrames();
   return (
     <Tooltip {...tooltip}>
       <TooltipTrigger asChild>
         <button
+          ref={trigger}
           type="button"
           data-builder-animates
           aria-pressed={pressed}
