@@ -107,7 +107,7 @@ export function useBeforeDocumentAction(handler: BeforeDocumentAction): void {
   });
   useEffect(() => {
     if (register === undefined) return undefined;
-    return register(action => latest.current(action));
+    return register((action, store) => latest.current(action, store));
   }, [register]);
 }
 

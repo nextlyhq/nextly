@@ -36,10 +36,18 @@ import {
   toast,
 } from "@nextlyhq/ui";
 import { Component, PanelsTopLeft, TriangleAlert } from "lucide-react";
-import { useEffect, useId, useRef, useState, type JSX } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type JSX,
+} from "react";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import {
+  MAX_PUBLISHED_DEPENDENCIES,
   PUBLISH_DEPENDENCIES_ROUTE_PATH,
   PUBLISH_READINESS_ROUTE_PATH,
   type PublishDependenciesRequest,
@@ -65,6 +73,11 @@ export interface PublishOfferInput {
   /** The Layout the page names, or null. */
   readonly layout: string | null;
   readonly subject: PublishSubject;
+  /**
+   * Whether this surface asks. False for every blocks field of a form but
+   * the one that asks for all of them (see `useFormPublishOffer`).
+   */
+  readonly enabled?: boolean;
 }
 
 /** The action ids that put the document live. */
@@ -86,9 +99,10 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     latest.current = input;
   });
 
-  useBeforeDocumentAction(async action => {
+  useBeforeDocumentAction(async (action, store) => {
     if (!PUBLISHING_ACTIONS.has(action)) return;
-    const { documents, layout, subject } = latest.current;
+    const { documents, layout, subject, enabled } = latest.current;
+    if (enabled === false) return;
     const readiness = await askReadiness({ documents: documents(), layout });
     if (
       readiness === null ||
@@ -104,6 +118,9 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
       throw new DOMException("Publishing was cancelled.", "AbortError");
     }
     if (choice.kind === "only") return;
+    // Nothing goes live for a store a failed write will refuse: the page
+    // would stay as it was while its parts went live without it.
+    if (!(await store.writesSettled())) return;
     const result = await publishChosen(choice.dependencies);
     reportLeftUnpublished(result, readiness, subject);
   });
@@ -147,25 +164,100 @@ export async function askReadiness(
 export async function publishChosen(
   dependencies: readonly UnpublishedDependency[]
 ): Promise<PublishDependenciesResult> {
-  try {
-    const answer = await writePluginRoute<{
-      item: PublishDependenciesResult;
-    }>({
-      plugin: PAGE_BUILDER_PLUGIN_NAME,
-      path: PUBLISH_DEPENDENCIES_ROUTE_PATH,
-      body: {
-        dependencies: dependencies.map(({ kind, id }) => ({ kind, id })),
-      } satisfies PublishDependenciesRequest,
-    });
-    return answer?.item ?? { published: [], refused: [] };
-  } catch (error) {
-    throw new Error(
-      `Nothing was published: ${
-        error instanceof Error ? error.message : "the request failed."
-      } Try again, or publish the page only.`,
-      { cause: error }
-    );
+  const published: PublishDependenciesResult["published"][number][] = [];
+  const refused: PublishDependenciesResult["refused"][number][] = [];
+  // In batches the route accepts, in order, so each still goes live after
+  // the parts it places.
+  for (let at = 0; at < dependencies.length; at += MAX_PUBLISHED_DEPENDENCIES) {
+    const batch = dependencies.slice(at, at + MAX_PUBLISHED_DEPENDENCIES);
+    let answer: { item: PublishDependenciesResult } | undefined;
+    try {
+      answer = await writePluginRoute<{ item: PublishDependenciesResult }>({
+        plugin: PAGE_BUILDER_PLUGIN_NAME,
+        path: PUBLISH_DEPENDENCIES_ROUTE_PATH,
+        body: {
+          dependencies: batch.map(({ kind, id }) => ({ kind, id })),
+        } satisfies PublishDependenciesRequest,
+      });
+    } catch (error) {
+      const why =
+        error instanceof Error ? error.message : "the request failed.";
+      throw new Error(
+        published.length === 0
+          ? `Nothing was published: ${why} Try again, or publish the page only.`
+          : `${String(published.length)} were published and the rest weren't: ${why} Try again to publish the rest, or publish the page only.`,
+        { cause: error }
+      );
+    }
+    published.push(...(answer?.item.published ?? []));
+    refused.push(...(answer?.item.refused ?? []));
   }
+  return { published, refused };
+}
+
+/**
+ * The blocks fields of each form, by name, each with a read of its value, so
+ * one Publish asks one question about all of them.
+ */
+interface FormFields {
+  readonly values: Map<string, () => unknown>;
+  readonly listeners: Set<() => void>;
+}
+
+const formFields = new WeakMap<object, FormFields>();
+
+function fieldsOf(form: object): FormFields {
+  let fields = formFields.get(form);
+  if (fields === undefined) {
+    fields = { values: new Map(), listeners: new Set() };
+    formFields.set(form, fields);
+  }
+  return fields;
+}
+
+/**
+ * The publish question for a blocks field on an entry form.
+ *
+ * A form may hold several blocks fields, and each mounts this. They register
+ * with their form, and the first registered asks, once, about all of their
+ * documents; the others render nothing and let the publish through. A
+ * question per field would show a part once per field, and cancelling a later
+ * one could leave parts an earlier one published live beside a draft.
+ */
+export function useFormPublishOffer(input: {
+  /** The form, the same object for every field on it (its `control`). */
+  readonly form: object;
+  readonly name: string;
+  readonly value: () => unknown;
+  readonly layout: string | null;
+  readonly subject: PublishSubject;
+}): JSX.Element {
+  const fields = fieldsOf(input.form);
+  const value = useRef(input.value);
+  useEffect(() => {
+    value.current = input.value;
+  });
+  useEffect(() => {
+    fields.values.set(input.name, () => value.current());
+    for (const listener of fields.listeners) listener();
+    return () => {
+      fields.values.delete(input.name);
+      for (const listener of fields.listeners) listener();
+    };
+  }, [fields, input.name]);
+  const asking = useSyncExternalStore(
+    listener => {
+      fields.listeners.add(listener);
+      return () => fields.listeners.delete(listener);
+    },
+    () => fields.values.keys().next().value === input.name
+  );
+  return usePublishOffer({
+    documents: () => [...fields.values.values()].map(read => read()),
+    layout: input.layout,
+    subject: input.subject,
+    enabled: asking,
+  });
 }
 
 /** Say which documents the author asked for stayed unpublished, and why. */

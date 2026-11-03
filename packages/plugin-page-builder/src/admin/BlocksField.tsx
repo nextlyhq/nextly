@@ -47,7 +47,7 @@ import { builderAddress } from "./editor/builder-address";
 import { documentFrom, PLUGIN_SOURCE } from "./editor/stored-document";
 import { PageLayoutPicker, usePageLayoutId } from "./page-layout";
 import { PageBuilderCard } from "./PageBuilderCard";
-import { usePublishOffer } from "./publish-offer";
+import { useFormPublishOffer } from "./publish-offer";
 import { useRestingPageRender } from "./use-resting-page-render";
 
 /*
@@ -184,8 +184,10 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
 
   // Asked before a publish from the form, as the editor asks before its own:
   // the components and Layout this document needs that are not live.
-  const publishOffer = usePublishOffer({
-    documents: () => [field.value],
+  const publishOffer = useFormPublishOffer({
+    form: control,
+    name,
+    value: () => field.value,
     layout: usePageLayoutId(control),
     subject: restingDocument.kind === "component" ? "component" : "page",
   });

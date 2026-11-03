@@ -23,6 +23,7 @@ import {
   useTrackedWrite,
 } from "../useDocumentActionHooks";
 import type {
+  BeforeDocumentAction,
   DocumentActionBindings,
   DocumentActionBindingsInput,
 } from "../useDocumentActionBindings";
@@ -55,7 +56,7 @@ interface Probe {
  */
 function renderHost(
   input: Partial<DocumentActionBindingsInput>,
-  before?: (action: string) => void | Promise<void>
+  before?: BeforeDocumentAction
 ) {
   const probe: Probe = {
     run: () => Promise.reject(new Error("not rendered")),
@@ -63,7 +64,7 @@ function renderHost(
     track: () => {},
   };
   function Editor(): null {
-    useBeforeDocumentAction(action => before?.(action));
+    useBeforeDocumentAction((action, store) => before?.(action, store));
     return null;
   }
   function Surface(): ReactElement {
@@ -322,6 +323,53 @@ describe("before a storing action", () => {
         "Site colours wasn't saved, so this page wasn't either: The server is unreachable.",
       beforeWrite: true,
     });
+  });
+
+  it("tells an editor's handler a tracked write failed, so it can hold off acting", async () => {
+    // A handler that acts on the server for the store, as publishing the
+    // parts a page needs does, asks first and must not act for a store that
+    // will be refused.
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    const answers: boolean[] = [];
+    const probe = renderHost({ onPublish }, async (_action, store) => {
+      answers.push(await store.writesSettled());
+    });
+    const write = deferred();
+    act(() => {
+      probe.track("Site colours", write.promise);
+    });
+    await act(async () => {
+      write.reject(new Error("The server is unreachable."));
+      await write.promise.catch(() => {});
+    });
+
+    const outcome = await runAction(probe, "publish");
+
+    expect(answers).toEqual([false]);
+    expect(onPublish).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, reason: "refused" });
+  });
+
+  it("tells it the writes landed once they have", async () => {
+    const onPublish = vi.fn(() => Promise.resolve(saved));
+    const answers: boolean[] = [];
+    const probe = renderHost({ onPublish }, async (_action, store) => {
+      answers.push(await store.writesSettled());
+    });
+    const write = deferred();
+    act(() => {
+      probe.track("Site colours", write.promise);
+    });
+    let outcome: Promise<unknown> = Promise.resolve();
+    act(() => {
+      outcome = probe.run("publish");
+    });
+    await act(async () => {
+      write.resolve();
+      await outcome;
+    });
+    expect(answers).toEqual([true]);
+    expect(onPublish).toHaveBeenCalledTimes(1);
   });
 
   it("stores again once the same change is written successfully", async () => {

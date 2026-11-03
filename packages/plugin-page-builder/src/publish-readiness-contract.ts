@@ -41,6 +41,7 @@ export type DependencyKind = "component" | "layout";
 /** One document the page needs that is not published. */
 export interface UnpublishedDependency {
   readonly kind: DependencyKind;
+  /** Its id, or an opaque key when the author may not read it. */
   readonly id: string;
   /** Its title, or `null` when the author may not read it. */
   readonly title: string | null;

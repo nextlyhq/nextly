@@ -22,6 +22,7 @@ import { MOVED_MESSAGE } from "./submit-outcome";
 import type {
   BeforeDocumentAction,
   DocumentActionOutcome,
+  StoreReadiness,
 } from "./useDocumentActionBindings";
 
 /** What the last storing action came to. */
@@ -153,31 +154,12 @@ export function useStoringGate(scope: string): StoringGate {
   }, []);
 
   /**
-   * Readies the editor's work for an action that stores it: every open edit
-   * committed, every tracked write settled and none failed. Answers with the
-   * refusal when it is not ready, or null when it is.
+   * Every tracked write settled, including one started while an earlier one
+   * was being waited for, and none failed: the refusal when one did, or null.
+   * Bounded, so writes that keep starting refuse the store rather than hold it
+   * forever.
    */
-  const readyToStore = async (
-    action: string
-  ): Promise<DocumentActionOutcome | null> => {
-    try {
-      for (const before of [...beforeActions.current]) await before(action);
-    } catch (error) {
-      // A handler that asked the author a question and was told no: the
-      // action is cancelled, not failed, so the save state is left as it was
-      // and nothing is announced. `AbortError` is the platform's own name for
-      // an operation its caller called off.
-      if (isAbort(error)) return BEFORE_CANCELLED;
-      return {
-        ok: false,
-        reason: "failed",
-        message: apiErrorMessage(error, "An open edit couldn't be committed."),
-        beforeWrite: true,
-      };
-    }
-    // Every write registered before the store is awaited, including one
-    // started while an earlier one was being waited for. Bounded, so writes
-    // that keep starting refuse the store rather than hold it forever.
+  const writesSettled = async (): Promise<DocumentActionOutcome | null> => {
     for (let pass = 0; writes.current.pending.size > 0; pass++) {
       if (pass === MAX_WRITE_PASSES) return stillWriting;
       await Promise.allSettled([...writes.current.pending.values()]);
@@ -191,6 +173,43 @@ export function useStoringGate(scope: string): StoringGate {
           message: `${failure.label} wasn't saved, so this page wasn't either: ${failure.message}`,
           beforeWrite: true,
         };
+  };
+
+  /**
+   * Readies the editor's work for an action that stores it: every open edit
+   * committed, every tracked write settled and none failed. Answers with the
+   * refusal when it is not ready, or null when it is.
+   *
+   * The handlers run first, so an open edit is committed at once, and the
+   * tracked writes are settled after them. A handler that acts on the server
+   * for the store (publishing what the document needs) waits for them itself,
+   * through `writesSettled`, and does not act when one failed: the store is
+   * then refused, and what it did would stand without it.
+   */
+  const readyToStore = async (
+    action: string
+  ): Promise<DocumentActionOutcome | null> => {
+    try {
+      const store: StoreReadiness = {
+        writesSettled: async () => (await writesSettled()) === null,
+      };
+      for (const before of [...beforeActions.current]) {
+        await before(action, store);
+      }
+    } catch (error) {
+      // A handler that asked the author a question and was told no: the
+      // action is cancelled, not failed, so the save state is left as it was
+      // and nothing is announced. `AbortError` is the platform's own name for
+      // an operation its caller called off.
+      if (isAbort(error)) return BEFORE_CANCELLED;
+      return {
+        ok: false,
+        reason: "failed",
+        message: apiErrorMessage(error, "An open edit couldn't be committed."),
+        beforeWrite: true,
+      };
+    }
+    return writesSettled();
   };
 
   /*

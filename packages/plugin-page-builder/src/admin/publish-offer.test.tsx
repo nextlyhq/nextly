@@ -24,17 +24,39 @@ import type {
   PublishReadinessResponse,
 } from "../publish-readiness-contract";
 
-let before: ((action: string) => Promise<void> | void) | null = null;
+/** Every mounted handler, in mount order, as the runner holds them. */
+const befores = new Set<(action: string) => Promise<void> | void>();
 const routes = vi.fn();
 const warnings = vi.fn();
+/** What the store's tracked writes come to, as the runner reports it. */
+let writesLand = true;
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  useBeforeDocumentAction: (handler: (action: string) => Promise<void>) => {
-    before = handler;
-  },
-  writePluginRoute: (args: { path: string; body: unknown }) =>
-    routes(args.path, args.body),
-}));
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => {
+  const React = await import("react");
+  return {
+    useBeforeDocumentAction: (
+      handler: (
+        action: string,
+        store: { writesSettled(): Promise<boolean> }
+      ) => Promise<void> | void
+    ) => {
+      const latest = React.useRef(handler);
+      React.useEffect(() => {
+        latest.current = handler;
+      });
+      React.useEffect(() => {
+        const run = (action: string) =>
+          latest.current(action, { writesSettled: async () => writesLand });
+        befores.add(run);
+        return () => {
+          befores.delete(run);
+        };
+      }, []);
+    },
+    writePluginRoute: (args: { path: string; body: unknown }) =>
+      routes(args.path, args.body),
+  };
+});
 
 vi.mock("@nextlyhq/ui", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
@@ -44,11 +66,14 @@ vi.mock("@nextlyhq/ui", async importOriginal => {
   };
 });
 
-const { usePublishOffer } = await import("./publish-offer");
+const { usePublishOffer, useFormPublishOffer } = await import(
+  "./publish-offer"
+);
 
 afterEach(() => {
   cleanup();
-  before = null;
+  befores.clear();
+  writesLand = true;
   routes.mockReset();
   warnings.mockReset();
 });
@@ -74,9 +99,9 @@ function server(
 }
 
 /** Start a publish as the runner would; the promise is what it awaits. */
-function publish(action = "publish"): Promise<void> {
-  if (before === null) throw new Error("no before-action handler");
-  return Promise.resolve(before(action));
+async function publish(action = "publish"): Promise<void> {
+  if (befores.size === 0) throw new Error("no before-action handler");
+  for (const run of [...befores]) await run(action);
 }
 
 const card = {
@@ -218,6 +243,62 @@ describe("before a publish", () => {
     });
   });
 
+  it("publishes more parts than one request carries, in batches, in order", async () => {
+    const many = Array.from({ length: 51 }, (_, i) => ({
+      kind: "component" as const,
+      id: `c${String(i)}`,
+      title: `Part ${String(i)}`,
+      mayPublish: true,
+    }));
+    server({ dependencies: many, missing: 0 });
+    render(<Harness />);
+    const running = publish();
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: "Publish all 52" }));
+    await running;
+    const batches = routes.mock.calls
+      .filter(([path]) => path === "/publish-dependencies")
+      .map(
+        ([, body]) => (body as { dependencies: { id: string }[] }).dependencies
+      );
+    expect(batches.map(batch => batch.length)).toEqual([50, 1]);
+    expect(batches.flat().map(entry => entry.id)).toEqual(
+      many.map(entry => entry.id)
+    );
+  });
+
+  it("asks once for a form with two blocks fields, about both", async () => {
+    server({ dependencies: [card], missing: 0 });
+    const form = {};
+    const second = { formatVersion: 1, kind: "page", nodes: [{ id: "x" }] };
+    function Field({ name, value }: { name: string; value: unknown }) {
+      return useFormPublishOffer({
+        form,
+        name,
+        value: () => value,
+        layout: null,
+        subject: "page",
+      });
+    }
+    render(
+      <>
+        <Field name="content" value={DOCUMENT} />
+        <Field name="sidebar" value={second} />
+      </>
+    );
+    const running = publish();
+    await screen.findByRole("alertdialog");
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Publish page only" }));
+    await running;
+    const asked = routes.mock.calls.filter(
+      ([path]) => path === "/publish-readiness"
+    );
+    expect(asked).toEqual([
+      ["/publish-readiness", { documents: [DOCUMENT, second], layout: null }],
+    ]);
+  });
+
   it("leaves out a component the author unticks", async () => {
     const second = { ...card, id: "c3", title: "Footer" };
     server({ dependencies: [card, second], missing: 0 });
@@ -258,6 +339,21 @@ describe("before a publish", () => {
         description: "Pricing card: You don't have permission to publish it.",
       })
     );
+  });
+
+  it("publishes no part for a store a failed tracked write will refuse", async () => {
+    // The runner refuses the store after the handlers when a tracked write
+    // failed; a part published before that would go live without its page.
+    writesLand = false;
+    server({ dependencies: [card], missing: 0 });
+    render(<Harness />);
+    const running = publish();
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: "Publish both" }));
+    await running;
+    expect(
+      routes.mock.calls.some(([path]) => path === "/publish-dependencies")
+    ).toBe(false);
   });
 
   it("refuses the publish when the components could not be published at all", async () => {

@@ -175,7 +175,10 @@ export { useReportUnsavedWork } from "@nextlyhq/admin";
  *   stores the editor's work, from any control, the shortcut or `run`, while
  *   the caller is mounted: commit work held outside the form there. Throwing
  *   refuses the action; throwing an `AbortError` cancels it instead, for a
- *   handler that asked the author and was told no.
+ *   handler that asked the author and was told no. Its second argument,
+ *   `store.writesSettled()`, waits for the tracked writes below and answers
+ *   whether they all landed: a handler that acts on the server for the store
+ *   asks it first, since the store is refused when one failed.
  * - `useTrackedWrite()` counts a write the document depends on but does not
  *   contain. Storing actions wait for it and are refused, naming it, while its
  *   latest attempt has failed.
@@ -195,6 +198,7 @@ export {
   type DocumentActionOutcome,
   type DocumentSaveState,
   type BeforeDocumentAction,
+  type StoreReadiness,
   type SubmitRefusal,
 } from "@nextlyhq/admin";
 

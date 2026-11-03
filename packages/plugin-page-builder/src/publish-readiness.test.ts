@@ -171,6 +171,50 @@ describe("what a publish would leave unpublished", () => {
     expect(plan).toEqual({ components: [], layout: null, missing: 0 });
   });
 
+  it("puts a component after one it places, when both are found together", async () => {
+    // The page places `child` then `parent`, and `parent` places `child`
+    // too: discovery meets them in one round, in the page's order, and only
+    // the placements say which must go live first.
+    const plan = await planPublishReadiness(
+      { documents: [page(["child", "parent"])], layout: null },
+      reads({
+        components: {
+          child: { live: false },
+          parent: { live: false, places: ["child"] },
+        },
+      })
+    );
+    expect(plan.components).toEqual(["child", "parent"]);
+
+    const reversed = await planPublishReadiness(
+      { documents: [page(["parent", "child"])], layout: null },
+      reads({
+        components: {
+          child: { live: false },
+          parent: { live: false, places: ["child"] },
+        },
+      })
+    );
+    expect(reversed.components).toEqual(["child", "parent"]);
+  });
+
+  it("still answers the Layout when components are not judged", async () => {
+    // A localized component store: no component is named, but the page's
+    // unpublished Layout still is.
+    const plan = await planPublishReadiness(
+      {
+        documents: [page(["card"])],
+        layout: "landing",
+        judgeComponents: false,
+      },
+      reads({
+        components: { card: { live: false }, header: { live: false } },
+        layouts: { landing: { live: false, areas: ["header"] } },
+      })
+    );
+    expect(plan).toEqual({ components: [], layout: "landing", missing: 0 });
+  });
+
   it("names a component placed in two documents once", async () => {
     const plan = await planPublishReadiness(
       { documents: [page(["card"]), page(["card"])], layout: null },

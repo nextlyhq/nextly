@@ -159,6 +159,8 @@ describe.each(getConfiguredTestDialects())(
     let pageAuthor = "";
     /** Publishes pages, components and Layouts. */
     let siteEditor = "";
+    /** Publishes pages and reads Layouts; may not read components at all. */
+    let blindAuthor = "";
     let card = "";
     let badge = "";
     let header = "";
@@ -225,6 +227,10 @@ describe.each(getConfiguredTestDialects())(
       );
       const reads = [COMPONENTS_SLUG, LAYOUTS_SLUG].map(slug => `read-${slug}`);
       pageAuthor = await keyHolding("page-author", [...pageGrants, ...reads]);
+      blindAuthor = await keyHolding("blind-author", [
+        ...pageGrants,
+        `read-${LAYOUTS_SLUG}`,
+      ]);
       siteEditor = await keyHolding("site-editor", [
         ...pageGrants,
         ...reads,
@@ -281,24 +287,40 @@ describe.each(getConfiguredTestDialects())(
     it("tells a page author what the page needs, and that they may publish none of it", async () => {
       const answer = await readiness(pageAuthor);
       expect(answer).toEqual({
+        // Each after what it places: the badge before the card placing it.
         dependencies: [
           { kind: "component", id: badge, title: "Badge", mayPublish: false },
-          {
-            kind: "component",
-            id: header,
-            title: "Site header",
-            mayPublish: false,
-          },
           {
             kind: "component",
             id: card,
             title: "Pricing card",
             mayPublish: false,
           },
+          {
+            kind: "component",
+            id: header,
+            title: "Site header",
+            mayPublish: false,
+          },
           { kind: "layout", id: landing, title: "Landing", mayPublish: false },
         ],
         missing: 0,
       });
+    });
+
+    it("answers an author who may not read components, naming none of them", async () => {
+      // Asked before any publish, so not refused for want of the component
+      // library; the components are counted under opaque keys, never by the
+      // ids a system read found.
+      const answer = await readiness(blindAuthor);
+      expect(answer.dependencies).toEqual([
+        { kind: "component", id: "hidden-1", title: null, mayPublish: false },
+        { kind: "component", id: "hidden-2", title: null, mayPublish: false },
+        { kind: "component", id: "hidden-3", title: null, mayPublish: false },
+        { kind: "layout", id: landing, title: "Landing", mayPublish: false },
+      ]);
+      const ids = new Set([badge, card, header]);
+      expect(answer.dependencies.some(entry => ids.has(entry.id))).toBe(false);
     });
 
     it("publishes none of it for that author, and still publishes their page", async () => {

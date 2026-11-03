@@ -34,7 +34,11 @@
  *
  * @module publish-readiness
  */
-import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
+import {
+  componentIdsIn,
+  type BlockDocument,
+  type DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 import {
   unsuppliedComponentIds,
   type ComponentSource,
@@ -58,10 +62,7 @@ import {
   type StoreSourceDirectApi,
   type SystemReading,
 } from "./component-store-source";
-import {
-  asCaller,
-  type CompositionRouteContext,
-} from "./composition-route-kit";
+import { asCaller } from "./composition-route-kit";
 import { areaComponentIds, layoutAreasDocument } from "./layout-areas-document";
 import { componentReadPermission, type ComponentStore } from "./library-route";
 import {
@@ -108,10 +109,21 @@ export interface ReadinessPlan {
 
 /** The components and Layout a publish of `documents` would leave unpublished. */
 export async function planPublishReadiness(
-  request: { documents: readonly BlockDocument[]; layout: string | null },
+  request: {
+    documents: readonly BlockDocument[];
+    layout: string | null;
+    /**
+     * False where components cannot be judged (a localized store publishes
+     * per language): the Layout's own state is still answered.
+     */
+    judgeComponents?: boolean;
+  },
   reads: ReadinessReads
 ): Promise<ReadinessPlan> {
   const named = await namedLayout(request.layout, reads);
+  if (request.judgeComponents === false) {
+    return { components: [], layout: named.unpublished, missing: 0 };
+  }
   const documents = [...request.documents, ...named.documents];
   const walk = await unpublishedComponents(documents, reads);
   return { ...walk, layout: named.unpublished };
@@ -164,7 +176,34 @@ async function unpublishedComponents(
       else gone.add(id);
     }
   }
-  return { components: [...planned.keys()].reverse(), missing: gone.size };
+  return { components: dependencyOrder(planned), missing: gone.size };
+}
+
+/**
+ * The planned components, each after every planned component it places, so
+ * publishing them in turn never puts one live naming one that is not.
+ *
+ * From the placements each stored form holds rather than from discovery
+ * order: two components found in the same round can place one another. A
+ * loop, which the publish itself refuses, is broken where it is met.
+ */
+function dependencyOrder(planned: ReadonlyMap<string, unknown>): string[] {
+  const ordered: string[] = [];
+  const done = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (id: string): void => {
+    if (done.has(id) || visiting.has(id)) return;
+    visiting.add(id);
+    const document = asDocument(planned.get(id));
+    for (const placed of componentIdsIn(document?.nodes ?? [])) {
+      if (planned.has(placed)) visit(placed);
+    }
+    visiting.delete(id);
+    done.add(id);
+    ordered.push(id);
+  };
+  for (const id of planned.keys()) visit(id);
+  return ordered;
 }
 
 /** The published definitions, with the planned ones supplied from storage. */
@@ -284,18 +323,25 @@ async function titlesAsCaller(
   const titles = new Map<string, string>();
   if (ids.length === 0) return titles;
   const identity = await ctx.caller?.identity();
-  const found = await nextly.find({
-    collection,
-    where: { id: { in: [...ids] } },
-    limit: ids.length,
-    status: "all",
-    depth: 0,
-    overrideAccess: false,
-    user: identity?.user,
-    ...(identity?.authenticatedScope === undefined
-      ? {}
-      : { actor: identity.authenticatedScope }),
-  });
+  let found: { items: unknown[] };
+  try {
+    found = await nextly.find({
+      collection,
+      where: { id: { in: [...ids] } },
+      limit: ids.length,
+      status: "all",
+      depth: 0,
+      overrideAccess: false,
+      user: identity?.user,
+      ...(identity?.authenticatedScope === undefined
+        ? {}
+        : { actor: identity.authenticatedScope }),
+    });
+  } catch (error) {
+    // A caller who may not read the collection at all reads none of it.
+    if (NextlyError.isForbidden(error)) return titles;
+    throw error;
+  }
   for (const item of found.items) {
     const row = item as Record<string, unknown>;
     if (typeof row.id !== "string") continue;
@@ -376,35 +422,28 @@ export interface PublishReadinessSetup {
 const NOTHING: PublishReadinessResponse = { dependencies: [], missing: 0 };
 
 /**
- * `POST /publish-readiness`. Gated on reading the component store, as the
- * component library is; the editor that asks has already read it.
+ * `POST /publish-readiness`.
+ *
+ * Authenticated, with no declared permission of its own: it is asked before
+ * any publish, including a site manager's choice of the default Layout, who
+ * need not read the component library. It writes nothing, names only what
+ * the caller may read (a part they may not is counted under an opaque key),
+ * and decides nothing: each publish is judged by core.
  */
 export function publishReadinessRoute(setup: PublishReadinessSetup): {
   method: "POST";
   path: string;
-  requiredPermission: (scope: PluginRoutePermissionScope) => string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: PUBLISH_READINESS_ROUTE_PATH,
-    requiredPermission: componentReadPermission(setup.store),
     handler: async (req, ctx) => {
       const body = await bodyOf(req, READINESS_BODY);
-      if (!setup.enabled) return Response.json(NOTHING);
-      const stores = storesOf(ctx, setup.store);
-      // A localized store publishes per language, and a published read
-      // answers for none in particular: the readiness notice says nothing
-      // there either, rather than naming live components as missing.
-      if (
-        await storeIsLocalized(
-          ctx.services.collections,
-          stores.components,
-          ctx.user
-        )
-      ) {
+      if (!setup.enabled || ctx.caller === null) {
         return Response.json(NOTHING);
       }
+      const stores = storesOf(ctx, setup.store);
       const nextly = requireNextly() as unknown as Reader;
       const plan = await planPublishReadiness(
         {
@@ -412,6 +451,15 @@ export function publishReadinessRoute(setup: PublishReadinessSetup): {
             .map(asDocument)
             .filter((document): document is BlockDocument => document !== null),
           layout: body.layout ?? null,
+          // A localized store publishes per language, and a published read
+          // answers for none in particular: components are not judged there,
+          // as the readiness notice does not judge them, rather than named
+          // as missing while live. The Layout's own state still is.
+          judgeComponents: !(await storeIsLocalized(
+            ctx.services.collections,
+            stores.components,
+            ctx.user
+          )),
         },
         systemReads(nextly, stores, setup.limits())
       );
@@ -434,14 +482,20 @@ async function describePlan(
     plan.components
   );
   const mayPublishComponents = await holds(ctx, ["publish"], stores.components);
+  // A component the author may not read is counted, never identified: its id
+  // came from a system read, and naming it would tell them what the
+  // access-enforced reads do not.
+  let hidden = 0;
   const dependencies: UnpublishedDependency[] = plan.components.map(id => {
     const title = componentTitles.get(id) ?? null;
-    return {
-      kind: "component",
-      id,
-      title,
-      mayPublish: mayPublishComponents && title !== null,
-    };
+    return title === null
+      ? {
+          kind: "component",
+          id: `hidden-${String((hidden += 1))}`,
+          title,
+          mayPublish: false,
+        }
+      : { kind: "component", id, title, mayPublish: mayPublishComponents };
   });
   if (plan.layout !== null) {
     const title =
@@ -457,7 +511,8 @@ async function describePlan(
     );
     dependencies.push({
       kind: "layout",
-      id: plan.layout,
+      // The page names this id itself, but its title is still the caller's.
+      id: title === null ? "hidden-layout" : plan.layout,
       title,
       mayPublish: mayPublishLayouts && title !== null,
     });
