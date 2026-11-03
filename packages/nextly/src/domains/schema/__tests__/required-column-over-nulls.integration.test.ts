@@ -222,7 +222,9 @@ const schemaVersionOf = async (
 const applyCollection = async (
   adapter: DrizzleAdapter,
   fields: Field[],
-  eventResolutions: unknown[] = []
+  eventResolutions: unknown[] = [],
+  // The admin dialog's answer to a drop the rename detector paired with an added field.
+  renameResolutions: unknown[] = []
 ) =>
   dispatchCollections(
     {} as ServiceContainer,
@@ -237,6 +239,7 @@ const applyCollection = async (
         "posts"
       ),
       eventResolutions,
+      renameResolutions,
     }
   );
 
@@ -337,6 +340,96 @@ for (const dialect of getConfiguredTestDialects()) {
         nulls: 0,
       });
     });
+
+    // A NEW required field on a table with rows, answered with a value: the column has to be added
+    // before the rows can be filled, so this fails if the fill runs ahead of the ADD COLUMN. Alone,
+    // the change takes PostgreSQL's in-memory DDL route; dropping a field in the same save sends
+    // PostgreSQL to drizzle-kit instead, the route SQLite and MySQL take for both.
+    it.each([
+      { variant: "alone", dropSummary: false },
+      { variant: "beside a dropped field", dropSummary: true },
+    ])(
+      "adds a new required field over existing rows when a value is chosen for them ($variant)",
+      async ({ dropSummary }) => {
+        const t = await boot();
+        const adapter = t.adapter as unknown as DrizzleAdapter;
+        await postsWithNulls(t);
+        const row = await registryRow(adapter, "dynamic_collections", "posts");
+        expect(
+          await columnsOf(adapter, dialect, "dc_posts")
+        ).not.toHaveProperty("headline");
+        const fields: Field[] = [
+          ...storedFields(row).filter(
+            f => !dropSummary || f.name !== "summary"
+          ),
+          { name: "headline", type: "text", required: true },
+        ];
+
+        await inDevelopment(async () => {
+          expect(
+            await outcomeOf(() =>
+              applyCollection(
+                adapter,
+                fields,
+                [
+                  {
+                    kind: "provide_default",
+                    eventId: "add_required_field_no_default:dc_posts.headline",
+                    value: "chosen",
+                  },
+                  // Answered whether or not the detector pairs the drop with the new field: an
+                  // answer to an event the apply does not raise is discarded.
+                  ...(dropSummary
+                    ? [
+                        {
+                          kind: "confirm_drop",
+                          eventId: "destructive_drop:dc_posts.summary",
+                        },
+                      ]
+                    : []),
+                ],
+                dropSummary
+                  ? [
+                      {
+                        tableName: "dc_posts",
+                        fromColumn: "summary",
+                        toColumn: "headline",
+                        choice: "drop_and_add",
+                      },
+                    ]
+                  : []
+              )
+            )
+          ).toEqual({ accepted: true });
+        });
+        expect(
+          Object.hasOwn(
+            await columnsOf(adapter, dialect, "dc_posts"),
+            "summary"
+          )
+        ).toBe(!dropSummary);
+        // The column is there and NOT NULL, and every existing row holds the chosen value.
+        expect((await columnsOf(adapter, dialect, "dc_posts")).headline).toBe(
+          false
+        );
+        const [chosen] = await adapter.executeQuery<{ n: number | string }>(
+          `SELECT COUNT(*) AS n FROM dc_posts WHERE headline = 'chosen'`
+        );
+        expect(Number(chosen?.n)).toBe(3);
+        expect(await nullsIn(adapter, "dc_posts", "headline")).toEqual({
+          rows: 3,
+          nulls: 0,
+        });
+        // The registry row carries the new field, required.
+        const stored = storedFields(
+          await registryRow(adapter, "dynamic_collections", "posts")
+        );
+        expect(stored.find(f => f.name === "headline")).toMatchObject({
+          type: "text",
+          required: true,
+        });
+      }
+    );
 
     it("refuses a Single's schema save and its Builder apply", async () => {
       const t = await boot();

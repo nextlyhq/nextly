@@ -2,10 +2,13 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-import type { NextlySchemaSnapshot } from "../../diff/types";
+import type { NextlySchemaSnapshot, Operation } from "../../diff/types";
 import { PromptCancelledError } from "../../prompt-dispatcher/errors";
 import type { ClassifierEvent, Resolution } from "../../resolution/types";
-import { RealPreCleanupExecutor } from "../executor";
+import {
+  RealPreCleanupExecutor,
+  withAddedColumnsLeftToTighten,
+} from "../executor";
 
 const baseSnapshot: NextlySchemaSnapshot = {
   tables: [
@@ -194,5 +197,149 @@ describe("RealPreCleanupExecutor", () => {
       dialect: "postgresql",
     });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  // A NEW required column (add_required_field_no_default) does not exist when pre-cleanup runs:
+  // the fill can only work once the column has been added, nullable, ahead of it.
+  describe("a required column this apply adds", () => {
+    const addedSnapshot: NextlySchemaSnapshot = {
+      tables: [
+        {
+          name: "dc_users",
+          columns: [
+            { name: "id", type: "text", nullable: false },
+            { name: "nickname", type: "text", nullable: false },
+          ],
+        },
+      ],
+    };
+    const addedEvent: ClassifierEvent = {
+      id: "add_required_field_no_default:dc_users.nickname",
+      kind: "add_required_field_no_default",
+      tableName: "dc_users",
+      columnName: "nickname",
+      tableRowCount: 3,
+      applicableResolutions: ["provide_default", "make_optional", "abort"],
+    };
+
+    /** Every statement `execute` received, rendered as PostgreSQL. */
+    async function rendered(execute: ReturnType<typeof vi.fn>) {
+      const { PgDialect } = await import("drizzle-orm/pg-core");
+      const pg = new PgDialect();
+      return execute.mock.calls.map(call => pg.sqlToQuery(call[0]).sql);
+    }
+
+    it.each([
+      [
+        "provide_default",
+        { kind: "provide_default", eventId: addedEvent.id, value: "anon" },
+        `UPDATE "dc_users" SET "nickname" = $1 WHERE "nickname" IS NULL`,
+      ],
+      [
+        "delete_nonconforming",
+        { kind: "delete_nonconforming", eventId: addedEvent.id },
+        `DELETE FROM "dc_users" WHERE "nickname" IS NULL`,
+      ],
+    ] as const)(
+      "%s: adds the column nullable before the statement that needs it",
+      async (_kind, resolution, fill) => {
+        const execute = vi.fn().mockResolvedValue({ rowCount: 3 });
+        await new RealPreCleanupExecutor().execute({
+          tx: { execute },
+          desiredSnapshot: addedSnapshot,
+          resolutions: [resolution as Resolution],
+          events: [addedEvent],
+          fields: [{ name: "nickname", type: "text" }],
+          dialect: "postgresql",
+        });
+        expect(await rendered(execute)).toEqual([
+          `ALTER TABLE "dc_users" ADD COLUMN "nickname" text`,
+          fill,
+        ]);
+      }
+    );
+
+    it("leaves a column already in the table alone: only the fill runs", async () => {
+      const execute = vi.fn().mockResolvedValue({ rowCount: 3 });
+      await new RealPreCleanupExecutor().execute({
+        tx: { execute },
+        desiredSnapshot: baseSnapshot,
+        resolutions: [
+          { kind: "provide_default", eventId: notNullEvent.id, value: "a@b.c" },
+        ],
+        events: [notNullEvent],
+        fields: [{ name: "email", type: "text" }],
+        dialect: "postgresql",
+      });
+      expect(await rendered(execute)).toEqual([
+        `UPDATE "dc_users" SET "email" = $1 WHERE "email" IS NULL`,
+      ]);
+    });
+
+    const addNickname: Operation = {
+      type: "add_column",
+      tableName: "dc_users",
+      column: { name: "nickname", type: "text", nullable: false },
+    };
+    const addBio: Operation = {
+      type: "add_column",
+      tableName: "dc_users",
+      column: { name: "bio", type: "text", nullable: true },
+    };
+
+    it("leaves the rest of the apply only the NOT NULL to add, for a column pre-cleanup adds", () => {
+      expect(
+        withAddedColumnsLeftToTighten(
+          [addNickname, addBio],
+          [{ kind: "provide_default", eventId: addedEvent.id, value: "anon" }],
+          [addedEvent]
+        )
+      ).toEqual([
+        {
+          type: "change_column_nullable",
+          tableName: "dc_users",
+          columnName: "nickname",
+          fromNullable: true,
+          toNullable: false,
+        },
+        addBio,
+      ]);
+    });
+
+    it("keeps the ADD COLUMN for a column pre-cleanup does not add", () => {
+      for (const resolution of [
+        { kind: "make_optional", eventId: addedEvent.id },
+        {
+          kind: "provide_default",
+          eventId: "add_required_field_no_default:dc_users.other",
+          value: "anon",
+        },
+      ] as Resolution[]) {
+        expect(
+          withAddedColumnsLeftToTighten(
+            [addNickname, addBio],
+            [resolution],
+            [addedEvent]
+          )
+        ).toEqual([addNickname, addBio]);
+      }
+    });
+
+    it("refuses a column the desired schema does not describe, before any statement", async () => {
+      const execute = vi.fn();
+      await expect(
+        new RealPreCleanupExecutor().execute({
+          tx: { execute },
+          desiredSnapshot: baseSnapshot,
+          resolutions: [
+            { kind: "provide_default", eventId: addedEvent.id, value: "anon" },
+          ],
+          events: [addedEvent],
+          fields: [{ name: "nickname", type: "text" }],
+          dialect: "postgresql",
+        })
+      ).rejects.toThrow();
+      expect(execute).not.toHaveBeenCalled();
+    });
   });
 });

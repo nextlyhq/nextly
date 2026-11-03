@@ -100,7 +100,10 @@ import {
   operationsToJudge,
   planCompanionMoves,
 } from "./moved-to-companion";
-import { assertPreCleanupAccepted } from "./pre-cleanup/executor";
+import {
+  assertPreCleanupAccepted,
+  withAddedColumnsLeftToTighten,
+} from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
@@ -898,8 +901,18 @@ export class PushSchemaPipeline {
       // their SQL from these ops, so an unpatched add_column would still say
       // NOT NULL despite the admin's resolution — failing the apply on a
       // populated table or landing the column as required.
-      const allResolvedOps = applyMakeOptionalToOperations(
-        renameResolvedOps,
+      //
+      // A NEW required column answered with a value (or with deleting the rows
+      // it leaves empty) is added, nullable, by pre-cleanup ahead of its fill,
+      // so every later phase plans only its NOT NULL instead of adding it
+      // again — read once here so routing, rebuild approval and the emitted
+      // DDL all see the same operations.
+      const allResolvedOps = withAddedColumnsLeftToTighten(
+        applyMakeOptionalToOperations(
+          renameResolvedOps,
+          dispatchResult.resolutions,
+          classificationResult.events
+        ),
         dispatchResult.resolutions,
         classificationResult.events
       );
