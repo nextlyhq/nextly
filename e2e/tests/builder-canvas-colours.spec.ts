@@ -453,8 +453,8 @@ test.describe("selecting a block", () => {
     );
 
     // The halo is measured onto the selected block: its box is the block's
-    // grown by the ring's distance, held to the page where the block meets
-    // its edge, and the band is drawn just inside that, as the ring is.
+    // grown by the ring's distance on every edge, and the band is drawn just
+    // inside that, as the ring is.
     const halo = rings(page);
     await expect(halo).toHaveCount(1);
     const block = await card.boundingBox();
@@ -468,7 +468,10 @@ test.describe("selecting a block", () => {
         bottom: band.y + band.height - (block.y + block.height),
       };
       for (const [edge, gap] of Object.entries(gaps)) {
-        expect(gap, `the halo's ${edge} holds the block`).toBeGreaterThan(-1);
+        expect(
+          gap,
+          `the halo's ${edge} stands outside the block`
+        ).toBeGreaterThan(RING_OUTSIDE - 1);
         expect(gap, `the halo's ${edge} is beside it`).toBeLessThan(
           RING_OUTSIDE + 1
         );

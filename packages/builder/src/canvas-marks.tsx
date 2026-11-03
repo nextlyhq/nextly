@@ -100,6 +100,11 @@ interface Mark {
   readonly clipped: boolean;
   /** The placement a component frame is drawn around, by its address. */
   readonly placement?: string;
+  /**
+   * A placement's tag is drawn inside its frame: the frame's top is too
+   * close to the top of what is on screen for a tag above it to show.
+   */
+  readonly placementTagInside?: boolean;
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -159,8 +164,8 @@ const RING_OUTSIDE = CHROME_BLEED;
 
 /**
  * The height of a placement's tag, drawn above its frame. A frame closer than
- * this to the top of the page has its tag drawn inside instead, where it is
- * still on the page.
+ * this to the top of what is on screen has its tag drawn inside instead,
+ * where it still shows.
  */
 const PLACEMENT_TAG_HEIGHT = 18;
 
@@ -177,6 +182,7 @@ function markKey(mark: Mark): string {
     tagInset,
     clipped,
     placement,
+    placementTagInside,
     radius,
     rect,
   } = mark;
@@ -192,6 +198,7 @@ function markKey(mark: Mark): string {
     tagInset.side,
     clipped,
     placement,
+    placementTagInside,
     radius,
     rect.x,
     rect.y,
@@ -357,6 +364,8 @@ function placementOutline(parts: readonly Outline[]): Outline {
 
 /** A selected placement's parts, gathered to draw one frame around them. */
 interface SelectedPlacement {
+  /** The placement's address, which its tag names. */
+  readonly placement: string;
   readonly parts: Outline[];
   readonly secondary: boolean;
   readonly locked: boolean;
@@ -395,16 +404,33 @@ function selectedMark(
   };
 }
 
-/** Add one selected part to its placement's gathered parts. */
+/**
+ * Add one selected part to its placement's gathered parts.
+ *
+ * Gathered per rendered COPY as well as per placement: a block that renders
+ * its slot more than once, as a loop does once per entry, draws a placement's
+ * parts once in each copy, all with the placement's address. A copy's parts
+ * are siblings, so their parent tells the copies apart; one frame around every
+ * copy would ring whatever lies between them.
+ */
 function gatherPlacement(
   placements: Map<string, SelectedPlacement>,
+  copies: Map<Element | null, number>,
+  marked: Element,
   placement: string,
   part: Outline,
   look: RingLook
 ): void {
-  const gathered = placements.get(placement);
+  const parent = marked.parentElement;
+  let copy = copies.get(parent);
+  if (copy === undefined) {
+    copy = copies.size;
+    copies.set(parent, copy);
+  }
+  const key = `${String(copy)}\u0000${placement}`;
+  const gathered = placements.get(key);
   if (gathered === undefined) {
-    placements.set(placement, { parts: [part], ...look });
+    placements.set(key, { placement, parts: [part], ...look });
   } else gathered.parts.push(part);
 }
 
@@ -496,6 +522,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const found: Mark[] = [];
   // In the order their first part is met, which is document order.
   const placements = new Map<string, SelectedPlacement>();
+  const copies = new Map<Element | null, number>();
   root
     .querySelectorAll(
       `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
@@ -528,7 +555,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
           hidden: address !== null && inputs.revealed.has(address),
         };
         if (placement !== "") {
-          gatherPlacement(placements, placement, outline, look);
+          gatherPlacement(placements, copies, marked, placement, outline, look);
         } else {
           found.push(selectedMark(ringOf(outline), look, placedTag));
         }
@@ -549,9 +576,14 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         found.push({ ...outline, ...plain, kind: "drop-refused" });
       }
     });
-  placements.forEach(({ parts, ...look }, placement) => {
+  placements.forEach(({ placement, parts, ...look }) => {
     const ring = ringOf(placementOutline(parts));
-    found.push(selectedMark(ring, look, placedTag, placement));
+    found.push({
+      ...selectedMark(ring, look, placedTag, placement),
+      // Measured from the top of what is on screen rather than of the page:
+      // a placement scrolled to the top keeps its tag in view.
+      placementTagInside: ring.rect.y - onScreen.y < PLACEMENT_TAG_HEIGHT,
+    });
   });
   const { hovered } = inputs;
   if (hovered !== null) {
@@ -672,9 +704,7 @@ export function CanvasMarks({
               : placementTag(mark.placement, nameOf)
           }
           data-placement-tag-inside={
-            mark.placement !== undefined && mark.rect.y < PLACEMENT_TAG_HEIGHT
-              ? ""
-              : undefined
+            mark.placementTagInside === true ? "" : undefined
           }
           style={markStyle(mark)}
         />

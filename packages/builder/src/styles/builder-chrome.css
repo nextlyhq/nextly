@@ -3124,11 +3124,13 @@
 /*
  * The parts of a selected component placement an author can edit: its exposed
  * values, dashed in the component colour, so they stand apart from the
- * component's own design around them.
+ * component's own design around them. Drawn just inside each part, so each
+ * reads as a box of its own inside the placement's frame, which is drawn
+ * outside the parts: outside, a full-width part's sides would run under it.
  */
 .nx-canvas-mark[data-mark="exposed"] {
   outline: 1px dashed var(--nx-builder-component);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .nx-canvas-mark[data-mark="drop-parent"] {

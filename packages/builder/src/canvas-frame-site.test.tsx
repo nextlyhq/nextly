@@ -24,7 +24,7 @@ import {
 } from "./canvas-frame";
 import { Canvas } from "./canvas";
 import { SITE_CHROME_ATTRIBUTE } from "./canvas-frame-sheet";
-import { CHROME_BLEED } from "./geometry-dom";
+import { CHROME_BLEED, framePaintedScale } from "./geometry-dom";
 
 afterEach(() => {
   cleanup();
@@ -246,7 +246,11 @@ describe("the canvas frame on a page the site serves", () => {
     act(() => {
       for (const watch of page) watch.changed();
     });
-    expect(Number.parseFloat(cue?.style.top ?? "0")).toBeGreaterThan(0);
+    // Over the footer, in the layer, which starts CHROME_BLEED up and left
+    // of the frame's viewport: placed past it by as much.
+    const scale = framePaintedScale(frame);
+    expect(cue?.style.top).toBe(`${String(500 * scale + CHROME_BLEED)}px`);
+    expect(cue?.style.left).toBe(`${String(CHROME_BLEED)}px`);
   });
 
   it("moves the editor's chrome with the canvas when the site's layout above it grows", async () => {

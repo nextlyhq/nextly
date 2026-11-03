@@ -121,6 +121,33 @@ beforeAll(() => {
             })
           ),
       },
+      {
+        // A block that draws a placement twice, as a loop draws its slot once
+        // per entry: each copy's parts sit in a wrapper of their own.
+        name: "acme/placed-twice",
+        version: 1,
+        description: "Two copies of one placement.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement(
+            "div",
+            { className },
+            ...["first", "second"].map(copy =>
+              createElement(
+                "div",
+                { key: copy, "data-copy": copy },
+                createElement("div", {
+                  [NODE_ID_ATTRIBUTE]: `${copy}-1`,
+                  [INSTANCE_ATTRIBUTE]: "place",
+                }),
+                createElement("div", {
+                  [NODE_ID_ATTRIBUTE]: `${copy}-2`,
+                  [INSTANCE_ATTRIBUTE]: "place",
+                })
+              )
+            )
+          ),
+      },
     ] as never,
     { source: "canvas-marks-test" }
   );
@@ -349,6 +376,76 @@ describe("selection marks", () => {
         container.querySelectorAll('.nx-canvas-mark[data-mark="exposed"]')
       ).toHaveLength(1)
     );
+  });
+
+  it("puts a placement's tag inside its frame at the top of what is on screen, wherever that is in the page", async () => {
+    // Scrolled 600px down: the screen shows the page from 600 on, and the
+    // placement sits just below the screen's top, far down the page.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        if (this.classList.contains("nx-canvas")) {
+          return new DOMRect(0, -600, 1000, 2000);
+        }
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "part-1") return new DOMRect(100, 10, 200, 50);
+        if (id === "part-2") return new DOMRect(100, 70, 200, 50);
+        return new DOMRect(0, -600, 1000, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={{
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "host", type: "acme/placed", version: 1, props: {} }],
+          }}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId="place"
+          overlay={<CanvasMarks />}
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(1));
+    // A tag above the frame would be above the screen, cut off.
+    expect(
+      halosIn(container)[0]?.hasAttribute("data-placement-tag-inside")
+    ).toBe(true);
+  });
+
+  it("draws each copy of a placement a block repeats in a frame of its own", async () => {
+    // One frame around both copies would ring whatever lies between them.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE) ?? "";
+        if (id.startsWith("first")) return new DOMRect(100, 100, 200, 50);
+        if (id.startsWith("second")) return new DOMRect(100, 600, 200, 50);
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "host", type: "acme/placed-twice", version: 1, props: {} },
+          ],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="place"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(2));
+    expect(
+      halosIn(container).map(mark => (mark as HTMLElement).style.top)
+    ).toEqual(["96px", "596px"]);
   });
 
   it("names a placement whose component has no name a component", async () => {

@@ -618,8 +618,8 @@ async function box(locator: Locator): Promise<Box> {
 
 /**
  * How far outside a block its selection ring is drawn, in screen pixels at any
- * zoom: the ring and its halo. Where the block meets the page's edge, the ring
- * is held to the page and the distance there is nothing.
+ * zoom: the ring and its halo, at the page's edge too, where the canvas's
+ * chrome draws past the frame for it.
  */
 const RING_OUTSIDE = 4;
 
@@ -633,10 +633,13 @@ function ringGaps(mark: Box, block: Box): Record<string, number> {
   };
 }
 
-/** Around the block on every edge, by the ring's distance at most. */
+/**
+ * Around the block on every edge, by the ring's distance: a ring drawn on the
+ * block's own edge, or held back at the page's, would leave a gap of none.
+ */
 function expectRinged(mark: Box, block: Box, what: string): void {
   for (const [edge, gap] of Object.entries(ringGaps(mark, block))) {
-    expect(gap, `${what}: ${edge}`).toBeGreaterThanOrEqual(-1);
+    expect(gap, `${what}: ${edge}`).toBeGreaterThanOrEqual(RING_OUTSIDE - 1);
     expect(gap, `${what}: ${edge}`).toBeLessThanOrEqual(RING_OUTSIDE + 1);
   }
 }
