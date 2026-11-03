@@ -120,12 +120,11 @@ export const PANEL_BOUNDS = {
 } as const;
 
 /**
- * The rail's fixed width in CSS pixels: wide enough for the longest label,
- * "Components", under its icon at the 12px the admin's text never goes below.
- * At the narrowest supported shell, with both panels open at their initial
- * widths, the canvas keeps 576px — above its own floor.
+ * The rail's fixed width in CSS pixels: a 36px icon square with 6px either
+ * side. The rail shows icons alone, each named by its tooltip, so it gives the
+ * canvas back the width a labelled rail took.
  */
-export const RAIL_WIDTH = 84;
+export const RAIL_WIDTH = 48;
 
 /**
  * The narrowest the canvas may become before a drag stops taking from it.
@@ -264,6 +263,17 @@ export interface ShellPreferences {
    * checking how the page really looks needs a way to take it away.
    */
   showEmptyElements: boolean;
+  /**
+   * Whether the rail's single-letter keys (A, L, P, C, D) open its panels.
+   *
+   * ON by default, and a preference because a key with no modifier can be
+   * set off by speech input or a stray press: WCAG 2.1.4 asks that such a
+   * shortcut can be turned off. Help holds the switch, beside the keys.
+   *
+   * Optional in this published type, so a host that builds preferences
+   * written before the switch still compiles; absent reads as on.
+   */
+  panelKeys?: boolean;
 }
 
 /**
@@ -339,6 +349,7 @@ export const DEFAULT_PREFERENCES: ShellPreferences = {
   editingBreakpoint: null,
   layouts: {},
   showEmptyElements: true,
+  panelKeys: true,
 };
 
 /**
@@ -526,6 +537,9 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
     // stored false, written while it did, is read as shown: otherwise an author
     // who once hid them would have no way to bring them back.
     showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
+    // On unless a stored false says otherwise, which covers every preference
+    // written before the keys could be turned off.
+    panelKeys: record.panelKeys !== false,
   };
 }
 
