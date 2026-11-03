@@ -27,6 +27,12 @@ export interface AsCallerFindArgs {
   readonly limit: number;
   /** Which page of `limit` rows, from 1; the first when absent. */
   readonly page?: number;
+  /**
+   * Rows to skip before the first one returned, instead of a page, for a read
+   * that resumes where an earlier one stopped mid-page (the pages search's
+   * cursor). Core refuses it together with `page`.
+   */
+  readonly offset?: number;
   /** The language to read in, when the request named one. */
   readonly locale?: string;
 }
@@ -59,6 +65,7 @@ export async function findAsCaller(
     ...(args.sort === undefined ? {} : { sort: [...args.sort] }),
     limit: args.limit,
     ...(args.page === undefined ? {} : { page: args.page }),
+    ...(args.offset === undefined ? {} : { offset: args.offset }),
     ...(args.locale === undefined ? {} : { locale: args.locale }),
   });
   return { items: result.items, meta: result.meta };

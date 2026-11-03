@@ -175,21 +175,35 @@ function withheldRows(items: unknown[], total = items.length) {
   };
 }
 
-/** Reads over these registry records, answering each read with `answer`. */
+/** Whether a read is one of the publishing-state reads, by core's reserved keys. */
+const isWorkflowRead = (args: PagesFindArgs): boolean =>
+  args.where !== undefined &&
+  (Object.hasOwn(args.where, "_pendingChange") ||
+    Object.hasOwn(args.where, "_inRelease"));
+
+/**
+ * Reads over these registry records, answering each search read with `answer`
+ * and each publishing-state read with `workflow` (none matching, unless
+ * given). The two are recorded apart, so `find` holds the search reads alone.
+ */
 function readsOver(
   records: unknown[],
   answer: (args: PagesFindArgs) => ReturnType<PagesSearchReads["find"]>,
-  stores: string[] = []
+  stores: string[] = [],
+  workflowAnswer: (
+    args: PagesFindArgs
+  ) => ReturnType<PagesSearchReads["find"]> = async () => rows([])
 ) {
   const find = vi.fn(answer);
+  const workflow = vi.fn(workflowAnswer);
   const warn = vi.fn();
   const reads: PagesSearchReads = {
     collections: async () => records,
     stores: () => new Set(stores),
-    find,
+    find: args => (isWorkflowRead(args) ? workflow(args) : find(args)),
     warn,
   };
-  return { reads, find, warn };
+  return { reads, find, workflow, warn };
 }
 
 const request = (
@@ -449,6 +463,8 @@ describe("the merged answer", () => {
         field: "content",
         title: "Beta",
         status: "draft",
+        // A page never published, as the admin's pill calls it.
+        state: "draft",
       },
       {
         id: "2",
@@ -465,6 +481,8 @@ describe("the merged answer", () => {
       totalPages: 2,
       hasNext: true,
       hasPrev: false,
+      // The cursor for the next page, there because there is one.
+      nextBefore: expect.any(String),
     });
   });
 
@@ -730,7 +748,7 @@ describe("rows whose Page Builder field is withheld row by row", () => {
 
   it("reads on past withheld rows, in the same order, until it has the limit", async () => {
     const { reads, find } = readsOver([record("pages")], async args =>
-      (args.page ?? 1) === 1
+      (args.offset ?? 0) === 0
         ? pageOf([shut("a"), shut("b")], 4, true)
         : pageOf([open("c"), open("d")], 4, false)
     );
@@ -738,11 +756,12 @@ describe("rows whose Page Builder field is withheld row by row", () => {
     const answer = await readPagesSearch(request({ limit: 2 }), reads);
 
     expect(answer.items.map(item => item.id)).toEqual(["c", "d"]);
-    // The next page repeats the first read, order included, one page on.
+    // The next read repeats the first, order included, from the row after
+    // the last one read.
     const [first, second] = find.mock.calls.map(
       call => call[0] as PagesFindArgs
     );
-    expect(second).toEqual({ ...first, page: 2 });
+    expect(second).toEqual({ ...first, offset: 2 });
     expect(answer.meta.total).toBe(2);
   });
 
@@ -763,7 +782,7 @@ describe("rows whose Page Builder field is withheld row by row", () => {
 
   it("counts the openable rows read plus the matches beyond them, once it has the limit", async () => {
     const { reads, find } = readsOver([record("pages")], async args =>
-      (args.page ?? 1) === 1
+      (args.offset ?? 0) === 0
         ? pageOf([shut("a"), open("b")], 10, true)
         : pageOf([open("c"), shut("d")], 10, true)
     );
@@ -832,5 +851,298 @@ describe("a Page Builder field inside a group", () => {
     const answer = await readPagesSearch(request(), reads);
 
     expect(answer.items.map(item => item.id)).toEqual(["l1"]);
+  });
+});
+
+/** A query's URL with the cursor `before`, and whatever else is asked. */
+const withCursor = (before: string, params: Record<string, string> = {}) =>
+  url({ ...params, before });
+
+describe("the cursor, parsed at the boundary", () => {
+  it("reads back the cursor an answer wrote, through the client's path", async () => {
+    const { reads } = readsOver([record("pages")], async () =>
+      rows(
+        [
+          { id: "a", title: "A" },
+          { id: "b", title: "B" },
+        ],
+        3
+      )
+    );
+    const first = await readPagesSearch(request({ limit: 2 }), reads);
+    const before = first.meta.nextBefore ?? "";
+    expect(before).not.toBe("");
+
+    const parsed = parsePagesSearchQuery(
+      `http://nextly.test${pagesSearchPath({ limit: 2, before })}`
+    );
+    expect(parsed.before).toEqual({ page: 2, at: { pages: 2 } });
+  });
+
+  it("refuses a value that is not a cursor the route wrote, without echoing it", () => {
+    const encode = (value: unknown) =>
+      Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+    for (const before of [
+      "not-a-cursor",
+      encode({ page: 1, at: {} }),
+      encode({ page: 2, at: { pages: -1 } }),
+      encode({ page: 2, at: { pages: 1.5 } }),
+      encode({ page: 2, at: {}, extra: true }),
+      "x".repeat(5000),
+    ]) {
+      const error = refusedQuery({ before });
+      expect(error.code).toBe("VALIDATION_ERROR");
+      expect(JSON.stringify(error.publicData)).toContain('"before');
+      expect(JSON.stringify(error.publicData)).not.toContain(before);
+    }
+  });
+});
+
+/**
+ * Reads over an in-memory table per collection, each already in its database
+ * order, answering `limit` rows from `offset` as core's read does.
+ */
+function readsOverTables(
+  tables: Record<string, Record<string, unknown>[]>,
+  status = false
+) {
+  return readsOver(
+    Object.keys(tables).map(slug => record(slug, { status })),
+    async args => {
+      const table = tables[args.collection] ?? [];
+      const from = args.offset ?? 0;
+      const items = table.slice(from, from + args.limit);
+      return {
+        items,
+        meta: {
+          total: table.length,
+          page: 1,
+          limit: args.limit,
+          totalPages: Math.ceil(table.length / args.limit),
+          hasNext: from + items.length < table.length,
+          hasPrev: from > 0,
+        },
+      };
+    }
+  );
+}
+
+/** Every page of a search, walked by its cursor, and the reads it made. */
+async function walk(
+  reads: PagesSearchReads,
+  limit: number
+): Promise<{ pages: string[][]; metas: PagesSearchResponseMeta[] }> {
+  const pages: string[][] = [];
+  const metas: PagesSearchResponseMeta[] = [];
+  let before: string | undefined;
+  for (let guard = 0; guard < 50; guard += 1) {
+    const parsed = parsePagesSearchQuery(
+      `http://nextly.test${pagesSearchPath({ limit, ...(before === undefined ? {} : { before }) })}`
+    );
+    const answer = await readPagesSearch(parsed, reads);
+    pages.push(answer.items.map(item => item.title));
+    metas.push(answer.meta);
+    if (!answer.meta.hasNext) break;
+    before = answer.meta.nextBefore;
+  }
+  return { pages, metas };
+}
+
+type PagesSearchResponseMeta = Awaited<
+  ReturnType<typeof readPagesSearch>
+>["meta"];
+
+/** A titled row whose Page Builder field the caller may read. */
+const titled = (id: string) => ({ id, title: id, content: null });
+
+describe("paging by cursor", () => {
+  it("continues each page exactly where the last ended, across collections, with nothing repeated or skipped", async () => {
+    const { reads } = readsOverTables({
+      landing: ["A1", "C1", "E1", "G1"].map(titled),
+      pages: ["B2", "D2", "F2"].map(titled),
+    });
+
+    const { pages, metas } = await walk(reads, 2);
+
+    expect(pages).toEqual([["A1", "B2"], ["C1", "D2"], ["E1", "F2"], ["G1"]]);
+    expect(metas.map(meta => [meta.page, meta.hasNext, meta.hasPrev])).toEqual([
+      [1, true, false],
+      [2, true, true],
+      [3, true, true],
+      [4, false, true],
+    ]);
+    // The last page names no next one.
+    expect(metas.at(-1)).not.toHaveProperty("nextBefore");
+  });
+
+  it("reads each collection from its position, never re-reading earlier rows", async () => {
+    const { reads, find } = readsOverTables({
+      landing: ["A1", "C1", "E1"].map(titled),
+      pages: ["B2", "D2"].map(titled),
+    });
+    const first = await readPagesSearch(request({ limit: 2 }), reads);
+    find.mockClear();
+
+    await readPagesSearch(
+      parsePagesSearchQuery(
+        withCursor(first.meta.nextBefore ?? "", { limit: "2" })
+      ),
+      reads
+    );
+
+    const offsets = Object.fromEntries(
+      find.mock.calls.map(call => {
+        const args = call[0] as PagesFindArgs;
+        return [args.collection, args.offset];
+      })
+    );
+    expect(offsets).toEqual({ landing: 1, pages: 1 });
+  });
+
+  it("stops a page where a collection's bounded read ran out, and the next page reads it on", async () => {
+    // Seven withheld rows ahead of "B": a limit of 2 reads three pages of two
+    // (six rows) and finds nothing, so "B" is not read on the first page.
+    const shut = (id: string) => ({ id, title: id });
+    const { reads } = readsOverTables({
+      landing: [
+        ...["A0", "A1", "A2", "A3", "A4", "A5", "A6"].map(shut),
+        titled("B"),
+      ],
+      pages: ["C", "D"].map(titled),
+    });
+
+    const { pages } = await walk(reads, 2);
+
+    // Without the stop, "C" and "D" would be listed ahead of "B".
+    expect(pages.flat()).toEqual(["B", "C", "D"]);
+  });
+
+  it("says there is no next page once every collection's matches are read and taken", async () => {
+    const { reads } = readsOverTables({ pages: ["A", "B"].map(titled) });
+
+    const answer = await readPagesSearch(request({ limit: 2 }), reads);
+
+    expect(answer.meta.hasNext).toBe(false);
+    expect(answer.meta).not.toHaveProperty("nextBefore");
+  });
+});
+
+describe("where each page stands in publishing", () => {
+  /** The ids a publishing-state read asked about. */
+  const askedIds = (args: PagesFindArgs) =>
+    ((args.where?.id as { in?: unknown } | undefined)?.in ?? []) as string[];
+
+  const lifecycleRows = async () =>
+    rows([
+      { id: "d", title: "Draft page", status: "draft" },
+      { id: "c", title: "Edited page", status: "published" },
+      { id: "p", title: "Plain page", status: "published" },
+      { id: "s", title: "Scheduled page", status: "published" },
+    ]);
+
+  it("calls a page draft, changed or scheduled by core's own workflow filters, and a plain published page nothing", async () => {
+    const { reads, workflow } = readsOver(
+      [record("pages", { status: true })],
+      lifecycleRows,
+      [],
+      async args =>
+        Object.hasOwn(args.where ?? {}, "_pendingChange")
+          ? rows(
+              askedIds(args)
+                .filter(id => id === "c" || id === "s")
+                .map(id => ({ id }))
+            )
+          : rows(
+              askedIds(args)
+                .filter(id => id === "s")
+                .map(id => ({ id }))
+            )
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(answer.items.map(item => [item.id, item.state])).toEqual([
+      ["d", "draft"],
+      ["c", "changed"],
+      ["p", undefined],
+      // A scheduled publish is what the author must know first.
+      ["s", "scheduled"],
+    ]);
+    expect(answer.items[2]).not.toHaveProperty("state");
+    // One read per filter, over the page's ids only, selecting only ids.
+    expect(workflow.mock.calls.map(call => call[0])).toEqual([
+      {
+        collection: "pages",
+        where: { id: { in: ["d", "c", "p", "s"] }, _pendingChange: true },
+        select: { id: true },
+        limit: 4,
+      },
+      {
+        collection: "pages",
+        where: { id: { in: ["d", "c", "p", "s"] }, _inRelease: true },
+        select: { id: true },
+        limit: 4,
+      },
+    ]);
+  });
+
+  it("reads nothing more, and says nothing, for a collection without the lifecycle", async () => {
+    const { reads, workflow } = readsOver([record("landing")], async () =>
+      rows([{ id: "l1", title: "Launch" }])
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(workflow).not.toHaveBeenCalled();
+    expect(answer.items[0]).not.toHaveProperty("state");
+  });
+
+  it("tells a caller core refuses releases nothing about them, and warns no one", async () => {
+    const { reads, warn } = readsOver(
+      [record("pages", { status: true })],
+      lifecycleRows,
+      [],
+      async args => {
+        if (Object.hasOwn(args.where ?? {}, "_inRelease")) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "where._inRelease",
+                code: "FILTER_UNKNOWN_FIELD",
+                message: "x",
+              },
+            ],
+          });
+        }
+        return rows([{ id: "c" }]);
+      }
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(answer.items.map(item => item.state)).toEqual([
+      "draft",
+      "changed",
+      undefined,
+      undefined,
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the list when a state read fails, and tells the operator", async () => {
+    const { reads, warn } = readsOver(
+      [record("pages", { status: true })],
+      lifecycleRows,
+      [],
+      async () => {
+        throw new Error("versions table missing");
+      }
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(answer.items).toHaveLength(4);
+    expect(answer.items[0]?.state).toBe("draft");
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
