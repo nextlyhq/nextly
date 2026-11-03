@@ -568,6 +568,38 @@ describe("the host can drive it", () => {
     expect(screen.queryByText("Move")).toBeNull();
   });
 
+  it("tells the host a new search before drawing it, so its old rows never show under it", () => {
+    // A host's own rows answer the search they came from. Told only after the
+    // new search is drawn, the host would leave them on screen under it for a
+    // render, where Enter could choose one. The bolded match shows which search
+    // the palette has drawn, so at the moment the host is told "zz" it must
+    // still be the old one.
+    const drawnWhenTold: Record<string, string | null> = {};
+    function Host(): React.JSX.Element {
+      const [found, setFound] = React.useState(false);
+      return (
+        <CommandPalette
+          groups={[{ name: "Pages", matched: true }]}
+          onSearchChange={query => {
+            drawnWhenTold[query] =
+              document.querySelector("mark")?.textContent ?? null;
+            setFound(query !== "");
+          }}
+          commands={
+            found
+              ? [{ id: "page", label: "hq zz", group: "Pages", run: noop }]
+              : []
+          }
+        />
+      );
+    }
+    mount(<Host />);
+    pressPaletteKey();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "hq" } });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "zz" } });
+    expect(drawnWhenTold.zz).toBe("hq");
+  });
+
   it("tells the host what is being searched for", () => {
     const searched: string[] = [];
     mount(

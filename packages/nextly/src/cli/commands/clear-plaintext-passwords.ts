@@ -44,10 +44,15 @@ import { passwordClearUnconfirmed } from "../errors/areas/commands";
 import type { CommandContext, GlobalOptions } from "../program";
 import { withAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 
-export const CLEAR_PLAINTEXT_PASSWORDS_COMMAND =
-  "users:clear-plaintext-passwords";
+import {
+  CLEAR_PLAINTEXT_PASSWORDS_COMMAND,
+  CONFIRM_DEFAULT_HASHER,
+} from "./clear-plaintext-passwords.command";
 
-const CONFIRM_DEFAULT_HASHER = "--confirm-default-hasher";
+export {
+  CLEAR_PLAINTEXT_PASSWORDS_COMMAND,
+  registerClearPlaintextPasswordsCommand,
+} from "./clear-plaintext-passwords.command";
 
 /** The warning every count carries, since a custom hasher is invisible here. */
 const CUSTOM_HASHER_WARNING =
@@ -117,39 +122,28 @@ export async function runClearPlaintextPasswords(
   );
 }
 
-export function registerClearPlaintextPasswordsCommand(
-  program: Command,
+/**
+ * The action of `nextly users:clear-plaintext-passwords`, loaded when it
+ * runs, building its context with the factory the program hands in.
+ */
+export function clearPlaintextPasswordsAction(
   createContext: (options: GlobalOptions) => CommandContext
-): void {
-  program
-    .command(CLEAR_PLAINTEXT_PASSWORDS_COMMAND)
-    .description(
-      "Find accounts holding a password stored as given, and with --apply clear it and end their sessions"
-    )
-    .option(
-      "--apply",
-      "Clear the values (without this, the command only previews)",
-      false
-    )
-    .option(
-      CONFIRM_DEFAULT_HASHER,
-      "With --apply: state that no stored password was written by a custom passwordHasher, now or earlier",
-      false
-    )
-    .action(
-      async (
-        cmdOptions: { apply?: boolean; confirmDefaultHasher?: boolean },
-        cmd: Command
-      ) => {
-        const context = createContext(cmd.optsWithGlobals());
-        // A refused apply wrote nothing, and says so with its exit status.
-        await runClearPlaintextPasswords(
-          cmdOptions.apply === true,
-          context,
-          cmdOptions.confirmDefaultHasher === true
-        ).catch((error: unknown) => {
-          exitWithError(context.logger, error);
-        });
-      }
-    );
+): (
+  cmdOptions: { apply?: boolean; confirmDefaultHasher?: boolean },
+  cmd: Command
+) => Promise<void> {
+  return async (
+    cmdOptions: { apply?: boolean; confirmDefaultHasher?: boolean },
+    cmd: Command
+  ) => {
+    const context = createContext(cmd.optsWithGlobals());
+    // A refused apply wrote nothing, and says so with its exit status.
+    await runClearPlaintextPasswords(
+      cmdOptions.apply === true,
+      context,
+      cmdOptions.confirmDefaultHasher === true
+    ).catch((error: unknown) => {
+      exitWithError(context.logger, error);
+    });
+  };
 }

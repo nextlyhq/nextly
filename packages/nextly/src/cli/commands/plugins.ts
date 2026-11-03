@@ -21,7 +21,6 @@
 import type { Command } from "commander";
 
 import type { NextlyServiceConfig } from "../../di/register";
-import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent";
 import { pluginAdminSlug } from "../../plugins/admin-meta";
 import { getCoreVersion } from "../../plugins/core-version";
 import {
@@ -38,6 +37,8 @@ import {
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import type { Logger } from "../utils/logger";
+
+export { registerPluginsCommand } from "./plugins.command";
 
 interface PluginsCommandOptions {
   config?: string;
@@ -194,133 +195,98 @@ export function installTarget(
   return name === undefined ? null : { name };
 }
 
-/** Register the `nextly plugins` command group (D48). */
-export function registerPluginsCommand(program: Command): void {
-  const plugins = program
-    .command("plugins")
-    .description("Inspect installed plugins and their contributions");
-
-  plugins
-    .command("list")
-    .description("List installed plugins and their contributions")
-    .action(async (_cmdOptions: unknown, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        await runPluginsListCommand(
-          { config: globalOpts.config, cwd: globalOpts.cwd },
-          context
-        );
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
-
-  plugins
-    .command("install [name]")
-    .description(
-      "Apply a plugin's migrations and run its onInstall hook, or every configured plugin's with --all"
-    )
-    .option(
-      "--all",
-      "Install every configured plugin, dependencies first",
-      false
-    )
-    .action(
-      async (
-        name: string | undefined,
-        cmdOptions: { all?: boolean },
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        // Exactly one of the two: a name with --all would leave which one was
-        // meant to the parser's reading of the line.
-        const target = installTarget(name, cmdOptions.all === true);
-        if (target === null) {
-          exitWithError(context.logger, installTargetUnclear(name));
-        }
-        try {
-          const options = { config: globalOpts.config, cwd: globalOpts.cwd };
-          const { runPluginInstall, runPluginInstallAll } = await import(
-            "./plugin-lifecycle-runner"
-          );
-          if (target === "all") await runPluginInstallAll(options, context);
-          else await runPluginInstall(target.name, options, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
+/** The action of `nextly plugins list`, loaded when it runs. */
+export async function pluginsListAction(
+  _cmdOptions: unknown,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runPluginsListCommand(
+      { config: globalOpts.config, cwd: globalOpts.cwd },
+      context
     );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
+}
 
-  plugins
-    .command("uninstall <name>")
-    .description("Undo a plugin's schema and run its onUninstall hook")
-    .option("--keep-data", "Leave the plugin's tables in place", false)
-    // A full uninstall drops the plugin's tables, which takes the data-loss
-    // consent; `--keep-data` drops nothing and needs none.
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    // Still accepted, so a script passing it is not refused as malformed, but
-    // it no longer consents to dropping tables: no `--yes` authorises
-    // deleting data, and the refusal says so.
-    .option(
-      "--yes",
-      "No longer consents to dropping tables; use --accept-data-loss",
-      false
-    )
-    .action(
-      async (
-        name: string,
-        cmdOptions: {
-          keepData?: boolean;
-          yes?: boolean;
-          acceptDataLoss?: AcceptDataLossOption;
-        },
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        try {
-          const consent = readDataLossConsent({
-            flag: cmdOptions.acceptDataLoss,
-            warn: message => context.logger.warn(message),
-          });
-          const { runPluginUninstall } = await import(
-            "./plugin-lifecycle-runner"
-          );
-          await runPluginUninstall(
-            name,
-            {
-              config: globalOpts.config,
-              cwd: globalOpts.cwd,
-              keepData: cmdOptions.keepData === true,
-              yes: cmdOptions.yes === true,
-              consent,
-            },
-            context
-          );
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
+/** The action of `nextly plugins install`, loaded when it runs. */
+export async function pluginsInstallAction(
+  name: string | undefined,
+  cmdOptions: { all?: boolean },
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  // Exactly one of the two: a name with --all would leave which one was
+  // meant to the parser's reading of the line.
+  const target = installTarget(name, cmdOptions.all === true);
+  if (target === null) {
+    exitWithError(context.logger, installTargetUnclear(name));
+  }
+  try {
+    const options = { config: globalOpts.config, cwd: globalOpts.cwd };
+    const { runPluginInstall, runPluginInstallAll } = await import(
+      "./plugin-lifecycle-runner"
     );
+    if (target === "all") await runPluginInstallAll(options, context);
+    else await runPluginInstall(target.name, options, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
+}
 
-  plugins
-    .command("info <name>")
-    .description(
-      "Show one plugin's details (collections, permissions, routes, admin)"
-    )
-    .action(async (name: string, _cmdOptions: unknown, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        await runPluginsInfoCommand(
-          name,
-          { config: globalOpts.config, cwd: globalOpts.cwd },
-          context
-        );
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
+/** The action of `nextly plugins uninstall`, loaded when it runs. */
+export async function pluginsUninstallAction(
+  name: string,
+  cmdOptions: {
+    keepData?: boolean;
+    yes?: boolean;
+    acceptDataLoss?: AcceptDataLossOption;
+  },
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    const consent = readDataLossConsent({
+      flag: cmdOptions.acceptDataLoss,
+      warn: message => context.logger.warn(message),
     });
+    const { runPluginUninstall } = await import("./plugin-lifecycle-runner");
+    await runPluginUninstall(
+      name,
+      {
+        config: globalOpts.config,
+        cwd: globalOpts.cwd,
+        keepData: cmdOptions.keepData === true,
+        yes: cmdOptions.yes === true,
+        consent,
+      },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
+}
+
+/** The action of `nextly plugins info`, loaded when it runs. */
+export async function pluginsInfoAction(
+  name: string,
+  _cmdOptions: unknown,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runPluginsInfoCommand(
+      name,
+      { config: globalOpts.config, cwd: globalOpts.cwd },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { Command } from "commander";
+import type { Command } from "commander";
 import { config as loadEnvFile } from "dotenv";
 
 import {
@@ -496,149 +496,122 @@ function otherUploaders(
   return others;
 }
 
-/**
- * `nextly media orphans [--apply]`: finds, and with --apply removes, the
- * upload-time thumbnails deletes before this release left in the media
- * storage, still publicly served. A dry run by default.
- *
- * `nextly media remove-sizes [--apply] [--drop]`: lists, and with --apply
- * removes, the image size files items stored before sizes were removed, then
- * clears each item's sizes; with --drop as well it then drops the column and
- * the table. A dry run by default.
- *
- * `nextly media reindex-usage`: rebuilds the record of where each media item
- * is used from the stored content, for an install whose content predates the
- * record and after a restore.
- */
-export function createMediaCommand(): Command {
-  const media = new Command("media").description(
-    "Work with the media library's stored files"
-  );
-  media
-    .command("orphans")
-    .description(
-      "List upload-time thumbnails no media item refers to; remove them with --apply"
-    )
-    .option("--apply", "Remove the thumbnails listed", false)
-    .action(async (cmdOptions: { apply?: boolean }, cmd: Command) => {
-      const apply = cmdOptions.apply === true;
-      await runMediaCommand(
-        cmd,
-        apply ? MEDIA_APPLY : null,
-        ({ context, drizzle, mediaStorage }) => {
-          const storage = mediaStorage.getAdapterForCollection("media");
-          const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
-          const others = otherUploaders(mediaStorage);
-          // One reader for the listing and every recheck after it, so the
-          // retired column's provenance is asked once for the whole run.
-          const readSizes = retiredSizesReader(
-            drizzle.getDrizzle(),
-            drizzle.dialect
-          );
-          return mediaOrphans({
-            storage,
-            prefix,
-            exclusive: mediaPlaceIsExclusive(
-              prefix,
-              others.map(other => other.prefix)
-            ),
-            sharedWith: collectionsSharingMediaPlace(prefix, others),
-            referenced: () =>
-              referencedStoredPaths(drizzle, { retiredSizes: readSizes }),
-            referencedNow: referencedNowIn(drizzle, storage, {
-              retiredSizes: readSizes,
-            }),
-            apply,
-            say: line => console.log(line),
-            // The run's failing code is its exit status, so the reason is printed in the error
-            // shape here and the exit keeps the code `mediaOrphans` answers.
-            fail: error => {
-              printCliError(context.logger, error);
-            },
-          });
-        }
+/** The action of `nextly media orphans`, loaded when it runs. */
+export async function mediaOrphansAction(
+  cmdOptions: { apply?: boolean },
+  cmd: Command
+): Promise<void> {
+  const apply = cmdOptions.apply === true;
+  await runMediaCommand(
+    cmd,
+    apply ? MEDIA_APPLY : null,
+    ({ context, drizzle, mediaStorage }) => {
+      const storage = mediaStorage.getAdapterForCollection("media");
+      const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
+      const others = otherUploaders(mediaStorage);
+      // One reader for the listing and every recheck after it, so the
+      // retired column's provenance is asked once for the whole run.
+      const readSizes = retiredSizesReader(
+        drizzle.getDrizzle(),
+        drizzle.dialect
       );
-    });
-  media
-    .command("remove-sizes")
-    .description(
-      "List the image size files stored before sizes were removed; remove them and clear each item's sizes with --apply; then drop the sizes column and the image_sizes table with --apply --drop"
-    )
-    .option("--apply", "Remove the size files listed", false)
-    .option(
-      "--drop",
-      "With --apply, once no item names a size file, drop the media table's sizes column and the image_sizes table",
-      false
-    )
-    .action(
-      async (cmdOptions: { apply?: boolean; drop?: boolean }, cmd: Command) => {
-        const apply = cmdOptions.apply === true;
-        await runMediaCommand(
-          cmd,
-          apply ? MEDIA_APPLY : null,
-          ({ drizzle, dialect, mediaStorage }) => {
-            const storage = mediaStorage.getAdapterForCollection("media");
-            return runRemoveSizes({
-              db: drizzle.getDrizzle(),
-              dialect,
-              storage,
-              apply,
-              drop: cmdOptions.drop === true,
-              // The question `media orphans` asks just before its removals,
-              // without the retired sizes: those are the files being removed.
-              referencedNow: referencedNowIn(drizzle, storage, {
-                withRetiredSizes: false,
-              }),
-              executeSql: statement => drizzle.executeQuery(statement),
-              dropUnderLock: dropSizesUnderSchemaLock(drizzle),
-              say: line => console.log(line),
-            });
-          }
-        );
-      }
+      return mediaOrphans({
+        storage,
+        prefix,
+        exclusive: mediaPlaceIsExclusive(
+          prefix,
+          others.map(other => other.prefix)
+        ),
+        sharedWith: collectionsSharingMediaPlace(prefix, others),
+        referenced: () =>
+          referencedStoredPaths(drizzle, { retiredSizes: readSizes }),
+        referencedNow: referencedNowIn(drizzle, storage, {
+          retiredSizes: readSizes,
+        }),
+        apply,
+        say: line => console.log(line),
+        // The run's failing code is its exit status, so the reason is printed in the error
+        // shape here and the exit keeps the code `mediaOrphans` answers.
+        fail: error => {
+          printCliError(context.logger, error);
+        },
+      });
+    }
+  );
+}
+
+/** The action of `nextly media remove-sizes`, loaded when it runs. */
+export async function mediaRemoveSizesAction(
+  cmdOptions: { apply?: boolean; drop?: boolean },
+  cmd: Command
+): Promise<void> {
+  const apply = cmdOptions.apply === true;
+  await runMediaCommand(
+    cmd,
+    apply ? MEDIA_APPLY : null,
+    ({ drizzle, dialect, mediaStorage }) => {
+      const storage = mediaStorage.getAdapterForCollection("media");
+      return runRemoveSizes({
+        db: drizzle.getDrizzle(),
+        dialect,
+        storage,
+        apply,
+        drop: cmdOptions.drop === true,
+        // The question `media orphans` asks just before its removals,
+        // without the retired sizes: those are the files being removed.
+        referencedNow: referencedNowIn(drizzle, storage, {
+          withRetiredSizes: false,
+        }),
+        executeSql: statement => drizzle.executeQuery(statement),
+        dropUnderLock: dropSizesUnderSchemaLock(drizzle),
+        say: line => console.log(line),
+      });
+    }
+  );
+}
+
+/** The action of `nextly media reindex-usage`, loaded when it runs. */
+export async function mediaReindexUsageAction(
+  _cmdOptions: unknown,
+  cmd: Command
+): Promise<void> {
+  const context = createContext(cmd.optsWithGlobals());
+  let adapter: CLIDatabaseAdapter | null = null;
+  try {
+    const cwd = path.resolve(context.cwd);
+    // It empties and rewrites the database's record from the config's
+    // collections, so both must be the project's, as for `--apply`.
+    const loaded = await projectConfig(
+      cwd,
+      context.configPath,
+      // From here it connects as `runMediaCommand` does, but keeps the whole
+      // loaded config and sets up no media storage, so the two stay separate.
+      // fallow-ignore-next-line code-duplication
+      REINDEX_USAGE,
+      context.logger
     );
-  media
-    .command("reindex-usage")
-    .description(
-      "Rebuild the record of where each media item is used, from the stored content"
-    )
-    .action(async (_cmdOptions: unknown, cmd: Command) => {
-      const context = createContext(cmd.optsWithGlobals());
-      let adapter: CLIDatabaseAdapter | null = null;
-      try {
-        const cwd = path.resolve(context.cwd);
-        // It empties and rewrites the database's record from the config's
-        // collections, so both must be the project's, as for `--apply`.
-        const loaded = await projectConfig(
-          cwd,
-          context.configPath,
-          REINDEX_USAGE,
-          context.logger
-        );
-        const db = databaseEnvOrThrow();
-        adapter = await createCliAdapter({
-          dialect: db.dialect,
-          databaseUrl: db.databaseUrl,
-          logger: context.options.verbose ? context.logger : undefined,
-        });
-        const drizzle = adapter as unknown as DrizzleAdapter;
-        installRegistryResolver(drizzle);
-        const result = await reindexUsageWithServices(
-          loaded,
-          drizzle,
-          context.logger
-        );
-        console.log(
-          `Read ${result.documents} document(s); the record holds ${result.rows} use(s) of media items.`
-        );
-        await adapter.disconnect();
-        process.exit(0);
-      } catch (error) {
-        if (adapter) await adapter.disconnect();
-        exitWithError(context.logger, error);
-      }
+    const db = databaseEnvOrThrow();
+    adapter = await createCliAdapter({
+      dialect: db.dialect,
+      databaseUrl: db.databaseUrl,
+      logger: context.options.verbose ? context.logger : undefined,
     });
-  return media;
+    const drizzle = adapter as unknown as DrizzleAdapter;
+    installRegistryResolver(drizzle);
+    const result = await reindexUsageWithServices(
+      loaded,
+      drizzle,
+      context.logger
+    );
+    console.log(
+      `Read ${result.documents} document(s); the record holds ${result.rows} use(s) of media items.`
+    );
+    await adapter.disconnect();
+    process.exit(0);
+  } catch (error) {
+    if (adapter) await adapter.disconnect();
+    exitWithError(context.logger, error);
+  }
 }
 
 /** What a `nextly media` command runs against, once the project is entered. */
