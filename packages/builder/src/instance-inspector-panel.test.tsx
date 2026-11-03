@@ -970,6 +970,18 @@ describe("a placement locked in Layers", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
+  it("holds the discard of a value no longer exposed as well", () => {
+    mount({
+      ...instance({ overrides: { subtitle: "Gone now" } }),
+      locked: true,
+    });
+    expect(
+      screen
+        .getByRole("button", { name: "Discard the stored value for subtitle" })
+        .closest("fieldset")?.disabled
+    ).toBe(true);
+  });
+
   it("leaves the rows editable when it is not locked", () => {
     mount(instance());
     expect(
@@ -1145,6 +1157,41 @@ describe("the variant a placement uses", () => {
       { id: "header", title: "Header", document: definition },
     ]);
     expect(screen.getByText(/Dark variant/)).toBeDefined();
+  });
+});
+
+describe("the selected placement's exposed parts on the canvas", () => {
+  it("are marked inside the canvas root the host names, and nowhere else", () => {
+    const page = pageOf(instance());
+    const lookup: ComponentLookup = new Map([["header", header()]]);
+    const composed = resolveComponentInstances(page, lookup, {
+      exposures: true,
+    }).document;
+    const headingId = composed.nodes[0]?.id ?? "";
+    const markup = `<h2 data-nx-node="${headingId}" data-nx-instance="i1" data-nx-prop="text">Site name</h2>`;
+    const canvas = document.createElement("div");
+    canvas.innerHTML = markup;
+    const elsewhere = document.createElement("div");
+    elsewhere.innerHTML = markup;
+    document.body.append(canvas, elsewhere);
+    const editor = { ...editorFor(page), composed: () => composed };
+
+    render(
+      <InspectorPanel
+        editor={editor}
+        componentLibrary={{ definitions: lookup, components: LIBRARY }}
+        canvasRoot={canvas}
+      />
+    );
+
+    expect(canvas.querySelector("h2")?.hasAttribute("data-nx-exposed")).toBe(
+      true
+    );
+    expect(elsewhere.querySelector("h2")?.hasAttribute("data-nx-exposed")).toBe(
+      false
+    );
+    canvas.remove();
+    elsewhere.remove();
   });
 });
 

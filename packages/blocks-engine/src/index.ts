@@ -383,6 +383,7 @@ export type {
   InstanceExposure,
   OverriddenBy,
   ResolveComponentOptions,
+  PropExposure,
   ResolvedBlockNode,
   ResolvedComposition,
   ResolvedDocument,

@@ -854,6 +854,18 @@
 }
 
 /*
+ * The parts of a selected component placement an author can edit: its exposed
+ * values, dashed in the component colour, so they stand apart from the
+ * component's own design around them. An element that is also the
+ * placement's selected root keeps the selection ring alone: one element draws
+ * one outline, and the ring says more there.
+ */
+.nx-canvas [data-nx-exposed]:not([data-nx-selected]) {
+  outline: 1px dashed var(--nx-builder-component);
+  outline-offset: 2px;
+}
+
+/*
  * A block that draws nothing still has to be selectable and visible when it is.
  * `core/spacer` is deliberate empty space and `core/divider` is a single rule,
  * so an outline is the only thing distinguishing "selected" from "not there" —
@@ -1757,9 +1769,11 @@
   color: var(--nx-muted-foreground);
 }
 
+/* The accent fill with its own foreground: a site's brand accent replaces the
+   fill, and the page's foreground on it can fail contrast in either mode. */
 .nx-style-inspector__more:hover,
 .nx-style-inspector__more:focus-visible {
-  color: var(--nx-foreground);
+  color: var(--nx-accent-foreground);
   background: var(--nx-accent);
 }
 

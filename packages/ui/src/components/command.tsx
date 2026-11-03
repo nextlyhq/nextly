@@ -411,9 +411,12 @@ const CommandItem: ForwardRefExoticComponent<
         "transition-all duration-200 ease-(--ease-premium)",
         // Hover state - shared dashboard hover treatment
         "hover-unified",
-        // Selected/focused state (keyboard navigation)
-        "aria-selected:bg-primary/5 aria-selected:text-primary",
-        "data-[selected=true]:bg-primary/5 data-[selected=true]:text-primary",
+        // Selected/focused state (keyboard navigation): the primary's tint
+        // marks it and the label stays the foreground colour, because the
+        // primary is a fill colour and a mid-tone brand primary falls short of
+        // AA as small text.
+        "aria-selected:bg-primary/5 aria-selected:text-foreground",
+        "data-[selected=true]:bg-primary/5 data-[selected=true]:text-foreground",
         // Disabled state
         "data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50",
         className
