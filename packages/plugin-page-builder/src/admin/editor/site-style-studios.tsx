@@ -811,6 +811,16 @@ function useFontFaceWriter(
         return `This site stores a font this version cannot read (${unreadableFonts.join(", ")}), and adding one would replace it. Repair or remove that entry first.`;
       }
 
+      /*
+       * Refused from the file's own first bytes BEFORE the upload: the media
+       * pipeline takes far more than fonts, and a file stored here that no
+       * face points at would stay in the media library. The type check after
+       * the upload stays, for what the pipeline settles on.
+       */
+      if (!(await beginsAsWebFont(request.file))) {
+        return NOT_A_FONT;
+      }
+
       const stored_ = await storeOnce(request.file, uploaded, uploadMedia);
       if (typeof stored_ === "string") return stored_;
       const media = stored_;
@@ -828,7 +838,7 @@ function useFontFaceWriter(
        */
       const format = fontFormatFor(media.mimeType);
       if (format === undefined) {
-        return "This file isn\u2019t a .woff2 or .woff font, so it wasn\u2019t added.";
+        return NOT_A_FONT;
       }
 
       const face: FontFaceDef = {
@@ -1056,6 +1066,31 @@ async function storeOnce(
       ? reason.message
       : "That file could not be uploaded.";
   }
+}
+
+const NOT_A_FONT =
+  "This file isn\u2019t a .woff2 or .woff font, so it wasn\u2019t added.";
+
+/**
+ * Whether a file begins with a web font's signature, read from the same table
+ * the upload gate checks the bytes against.
+ */
+async function beginsAsWebFont(file: File): Promise<boolean> {
+  // `FileReader` rather than `Blob.arrayBuffer()`, which not every DOM the
+  // admin runs in provides.
+  const head = await new Promise<Uint8Array>(resolve => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve(
+        reader.result instanceof ArrayBuffer
+          ? new Uint8Array(reader.result)
+          : new Uint8Array(0)
+      );
+    reader.onerror = () => resolve(new Uint8Array(0));
+    reader.readAsArrayBuffer(file.slice(0, 4));
+  });
+  const text = String.fromCharCode(...head);
+  return WEB_FONT_FORMATS.some(format => format.signature === text);
 }
 
 /**

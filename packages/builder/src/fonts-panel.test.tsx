@@ -529,6 +529,19 @@ describe("uploading a font file", () => {
     expect(
       screen.getByRole("button", { name: /^Weight/ }).textContent
     ).toContain("Regular 400");
+    // The rights are confirmed for each file, not once per open editor.
+    expect(
+      screen
+        .getByRole("checkbox", {
+          name: "I have the right to use this font on the web",
+        })
+        .getAttribute("aria-checked")
+    ).toBe("false");
+    await chooseFile(woff2("Inter-Bold.woff2"));
+    expect(
+      (screen.getByRole("button", { name: "Upload" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
   });
 
   it("offers the file types the host accepts", async () => {

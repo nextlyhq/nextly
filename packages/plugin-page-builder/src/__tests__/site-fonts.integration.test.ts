@@ -28,6 +28,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { ServiceContainer } from "nextly";
 import { createMediaHandlers } from "nextly/api/media-handlers";
 import { buildClaims, signAccessToken } from "nextly/auth";
@@ -137,6 +138,7 @@ class FakeCatalogue {
 
 const FILE_400 = "/fontsource/fonts/lora@5.2.1/latin-400-normal.woff2";
 const FILE_500 = "/fontsource/fonts/lora@5.2.1/latin-500-normal.woff2";
+const FILE_700 = "/fontsource/fonts/lora@5.2.1/latin-700-normal.woff2";
 
 const LORA_400_700 = {
   id: "lora",
@@ -336,6 +338,7 @@ describe.each(getConfiguredTestDialects())(
           id: "lora",
           licence: "OFL-1.1",
           category: "serif",
+          subset: "latin",
         });
       }
       const media = await t.nextly.media.find({
@@ -439,6 +442,116 @@ describe.each(getConfiguredTestDialects())(
       });
       expect((await add(cookie)).status).toBe(503);
       await expectNothingStored(t);
+    });
+
+    it("stops reading at the add's total rather than after the whole file", async () => {
+      const t = await boot();
+      const fonts = resolveFontOptions({
+        catalogue: { api: catalogue.origin, files: catalogue.origin },
+        limits: { bytesPerFile: 4096, bytesPerAdd: 1024, timeoutMs: 1500 },
+      });
+      if (fonts === false) throw new Error("the catalogue is on");
+      catalogue.font(FILE_400, woff2(800));
+      // The second file passes the total and then stalls past the add's time:
+      // only a read stopped at the total answers before that time runs out.
+      // Driven with a fetch that streams, as the host's own fetch hands over
+      // only a whole body, under the host's cap.
+      catalogue.on(FILE_700, (_req, res) => {
+        res.writeHead(200, { "content-type": "font/woff2" });
+        res.write(woff2(600));
+        setTimeout(() => res.end(woff2(600)), 3000).unref();
+      });
+      const [, addRoute] = siteFontRoutes({
+        fonts,
+        nextly: async () => t.nextly as unknown as SiteFontsDirectApi,
+      });
+      const added = addRoute?.handler(
+        new Request(`${ORIGIN}/x`, {
+          method: "POST",
+          body: JSON.stringify(LORA_400_700),
+        }),
+        {
+          self: { collections: {}, singles: {} },
+          user: null,
+          caller: { can: async () => true },
+          fetch: (input, init) => fetch(input, init),
+        }
+      );
+      const refusal: unknown = await added?.then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(NextlyError.isValidation(refusal)).toBe(true);
+      expect(
+        JSON.stringify(NextlyError.is(refusal) ? refusal.publicData : null)
+      ).toContain("larger than one add allows");
+      await expectNothingStored(t);
+    });
+
+    it("keeps both families when two adds write the site's fonts together", async () => {
+      const t = await boot();
+      catalogue.json("/v1/fonts/merriweather", {
+        ...LORA,
+        id: "merriweather",
+        family: "Merriweather",
+      });
+      for (const weight of [400, 700]) {
+        catalogue.font(
+          `/fontsource/fonts/merriweather@5.2.1/latin-${String(weight)}-normal.woff2`
+        );
+      }
+      const fonts = resolveFontOptions({
+        catalogue: { api: catalogue.origin, files: catalogue.origin },
+      });
+      if (fonts === false) throw new Error("the catalogue is on");
+      /*
+       * Each write of the site's fonts waits until a second one is waiting
+       * too, or half a second passes. Two adds that read before either
+       * writes are then made to write together, the overlap a busy site
+       * meets by chance; adds that take turns let the first through alone.
+       */
+      const real = t.nextly as unknown as SiteFontsDirectApi;
+      const waiting: Array<() => void> = [];
+      const together: SiteFontsDirectApi = {
+        ...real,
+        findSingle: args => real.findSingle(args),
+        media: real.media,
+        updateSingle: async args => {
+          await new Promise<void>(resolve => {
+            waiting.push(resolve);
+            if (waiting.length === 2) for (const go of waiting) go();
+            else setTimeout(resolve, 500).unref();
+          });
+          return real.updateSingle(args);
+        },
+      };
+      const [, addRoute] = siteFontRoutes({
+        fonts,
+        nextly: async () => together,
+      });
+      const request = (id: string) =>
+        addRoute?.handler(
+          new Request(`${ORIGIN}/x`, {
+            method: "POST",
+            body: JSON.stringify({ ...LORA_400_700, id }),
+          }),
+          {
+            self: { collections: {}, singles: {} },
+            user: null,
+            caller: { can: async () => true },
+            fetch: (input, init) => fetch(input, init),
+          }
+        );
+      const answers = await Promise.all([
+        request("lora"),
+        request("merriweather"),
+      ]);
+      expect(answers.map(answer => answer?.status)).toEqual([200, 200]);
+      const families = (
+        (await storedFonts(t)) as Array<{ family: string }>
+      ).map(face => face.family);
+      expect(families.filter(name => name === "Lora")).toHaveLength(2);
+      expect(families.filter(name => name === "Merriweather")).toHaveLength(2);
     });
 
     it("refuses an answer that is not a woff2 file, by its type or by its bytes", async () => {

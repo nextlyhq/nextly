@@ -426,7 +426,11 @@ function startingWeights(family: CatalogueFamilyView): Set<number> {
   return new Set(both.length > 0 ? both : first === undefined ? [] : [first]);
 }
 
-/** The styles the site already has of a family, as `weight|style`. */
+/**
+ * The styles the site already has of a family, as `weight|style|script`: the
+ * same cut in another script is another file, and still addable. A face that
+ * names no script is taken as the family's own.
+ */
 function presentStyles(
   family: CatalogueFamilyView,
   site: SiteFamily | undefined
@@ -435,7 +439,8 @@ function presentStyles(
   for (const face of site?.faces ?? []) {
     const style = face.style === "italic" ? "italic" : "normal";
     const weight = family.variable ? "variable" : (face.weight ?? "400").trim();
-    present.add(`${weight}|${style}`);
+    const subset = face.source?.subset ?? family.defSubset;
+    present.add(`${weight}|${style}|${subset}`);
   }
   return present;
 }
@@ -488,21 +493,31 @@ function AddEditor({
   const [busy, setBusy] = React.useState(false);
   const [issue, setIssue] = React.useState<string | null>(null);
 
+  // A family that comes only in italic starts from its italic; italics are a
+  // choice only where it has both.
+  const base: "normal" | "italic" = family.styles.includes("normal")
+    ? "normal"
+    : "italic";
+  const offersBoth = base === "normal" && family.styles.includes("italic");
   const styles: Array<"normal" | "italic"> = [
-    "normal",
-    ...(italics && family.styles.includes("italic")
-      ? (["italic"] as const)
-      : []),
+    base,
+    ...(italics && offersBoth ? (["italic"] as const) : []),
   ];
+  const chosenSubsets = family.subsets.filter(subset => subsets.has(subset));
+  /** Whether the site has a cut in every script chosen. */
+  const held = (cut: number | "variable", style: string): boolean =>
+    chosenSubsets.length > 0 &&
+    chosenSubsets.every(subset =>
+      present.has(`${String(cut)}|${style}|${subset}`)
+    );
   const cuts: Array<number | "variable"> = family.variable
     ? ["variable"]
     : family.weights.filter(
-        weight => weights.has(weight) || present.has(`${String(weight)}|normal`)
+        weight => weights.has(weight) || held(weight, base)
       );
-  const combos = cuts.flatMap(cut =>
-    styles.map(style => `${String(cut)}|${style}`)
-  );
-  const fresh = combos.filter(combo => !present.has(combo)).length;
+  const combos = cuts.flatMap(cut => styles.map(style => ({ cut, style })));
+  // A style counts as new when any chosen script of it is missing.
+  const fresh = combos.filter(combo => !held(combo.cut, combo.style)).length;
   const { label, ready } = addLabel(
     family.family,
     combos.length,
@@ -528,7 +543,7 @@ function AddEditor({
           ? "variable"
           : cuts.filter((cut): cut is number => cut !== "variable"),
         styles,
-        subsets: family.subsets.filter(subset => subsets.has(subset)),
+        subsets: chosenSubsets,
       });
       if (refusal !== undefined) {
         setIssue(refusal);
@@ -565,14 +580,14 @@ function AddEditor({
           <legend className="nx-vars-editor__label">Weights</legend>
           <div className="nx-fonts__weights">
             {family.weights.map(weight => {
-              const held = present.has(`${String(weight)}|normal`);
+              const have = held(weight, base);
               const id = `${ids}-w${String(weight)}`;
               return (
                 <div className="nx-fonts__check" key={weight}>
                   <Checkbox
                     id={id}
-                    checked={held || weights.has(weight)}
-                    disabled={busy || held}
+                    checked={have || weights.has(weight)}
+                    disabled={busy || have}
                     onCheckedChange={() =>
                       setWeights(current => toggle(current, weight))
                     }
@@ -593,7 +608,7 @@ function AddEditor({
         </fieldset>
       )}
 
-      {family.styles.includes("italic") ? (
+      {offersBoth ? (
         <div className="nx-fonts__check">
           <Checkbox
             id={`${ids}-italic`}

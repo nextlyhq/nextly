@@ -46,6 +46,11 @@ export interface CatalogueFetchRules {
   readonly signal?: AbortSignal;
   /** What a 404 means to this caller, when it means more than "no answer". */
   readonly notFound?: () => NextlyError;
+  /**
+   * What passing `maxBytes` means to this caller, when the cap is a share of
+   * a larger budget rather than the answer's own limit.
+   */
+  readonly tooLarge?: () => NextlyError;
 }
 
 /** The statuses that are a redirect, as `fetch` itself reads them. */
@@ -210,7 +215,7 @@ async function bodyOf(
   }
   const stated = Number(response.headers.get("content-length"));
   if (Number.isFinite(stated) && stated > rules.maxBytes) {
-    throw refused(rules, "too-large", url);
+    throw overCap(rules, url);
   }
   const bytes = await readCapped(response, url, signal, rules);
   if (
@@ -249,7 +254,7 @@ async function readCapped(
       const chunk = await Promise.race([reader.read(), aborted]);
       if (chunk.done) break;
       total += chunk.value.byteLength;
-      if (total > rules.maxBytes) throw refused(rules, "too-large", url);
+      if (total > rules.maxBytes) throw overCap(rules, url);
       chunks.push(chunk.value);
     }
   } catch (error) {
@@ -264,6 +269,11 @@ async function readCapped(
     at += chunk.byteLength;
   }
   return bytes;
+}
+
+/** An answer past its cap, in the caller's words when it gave some. */
+function overCap(rules: CatalogueFetchRules, url: URL): NextlyError {
+  return rules.tooLarge?.() ?? refused(rules, "too-large", url);
 }
 
 /** An answer refused for what it was. */

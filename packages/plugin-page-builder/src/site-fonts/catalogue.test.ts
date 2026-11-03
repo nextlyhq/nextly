@@ -78,6 +78,34 @@ describe("parseCatalogue", () => {
     expect(families[0]?.weights).toEqual([400]);
   });
 
+  it("offers no script the catalogue splits into numbered files, and starts from Latin instead", () => {
+    // Fontsource serves Japanese, Korean and Chinese as a hundred numbered
+    // files with no single range, which one add cannot download.
+    const notoJp = {
+      ...LIST[0],
+      id: "noto-sans-jp",
+      family: "Noto Sans JP",
+      subsets: ["cyrillic", "japanese", "latin", "latin-ext", "vietnamese"],
+      defSubset: "japanese",
+    };
+    const onlyKorean = {
+      ...LIST[0],
+      id: "nanum-myeongjo",
+      family: "Nanum Myeongjo",
+      subsets: ["korean"],
+      defSubset: "korean",
+    };
+    const { families } = parseCatalogue([notoJp, onlyKorean]);
+    expect(families.map(family => family.id)).toEqual(["noto-sans-jp"]);
+    expect(families[0]?.subsets).toEqual([
+      "cyrillic",
+      "latin",
+      "latin-ext",
+      "vietnamese",
+    ]);
+    expect(families[0]?.defSubset).toBe("latin");
+  });
+
   it("reads nothing from something that is not a list", () => {
     expect(parseCatalogue({ fonts: LIST })).toEqual({
       families: [],

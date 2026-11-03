@@ -35,6 +35,29 @@ const UNICODE_RANGE =
 
 const STYLE_ORDER: readonly FontStyleName[] = ["normal", "italic"];
 
+/**
+ * Scripts the catalogue serves as many numbered files (`[0]` to `[119]`)
+ * rather than one file with one range: Japanese, Korean and Chinese. One add
+ * downloads a few files, so these are not offered; a family keeps its other
+ * scripts.
+ */
+const SPLIT_SUBSETS: ReadonlySet<string> = new Set([
+  "japanese",
+  "korean",
+  "chinese-simplified",
+  "chinese-traditional",
+  "chinese-hongkong",
+]);
+
+/** The script a family starts from: its own, else Latin when it was split. */
+function startingSubset(
+  subsets: readonly string[],
+  preferred: string
+): string | undefined {
+  if (subsets.includes(preferred)) return preferred;
+  return subsets.includes("latin") ? "latin" : undefined;
+}
+
 const Entry = z.object({
   id: z.string().max(MAX_FONT_ID_LENGTH).regex(FONT_ID),
   family: z.string().min(1).max(200),
@@ -77,8 +100,11 @@ function isCategory(value: string): value is CatalogueFamily["category"] {
  */
 function familyOf(entry: Entry): CatalogueFamily | undefined {
   if (entry.type !== "google" || !isCategory(entry.category)) return undefined;
-  const subsets = entry.subsets.filter(subset => SUBSET_NAME.test(subset));
-  if (!subsets.includes(entry.defSubset)) return undefined;
+  const subsets = entry.subsets.filter(
+    subset => SUBSET_NAME.test(subset) && !SPLIT_SUBSETS.has(subset)
+  );
+  const defSubset = startingSubset(subsets, entry.defSubset);
+  if (defSubset === undefined) return undefined;
   const styles = STYLE_ORDER.filter(style => entry.styles.includes(style));
   const weights = entry.weights.filter(
     weight =>
@@ -95,7 +121,7 @@ function familyOf(entry: Entry): CatalogueFamily | undefined {
     weights: [...new Set(weights)].sort((a, b) => a - b),
     styles,
     subsets,
-    defSubset: entry.defSubset,
+    defSubset,
     variable: entry.variable,
     licence: entry.license,
   };

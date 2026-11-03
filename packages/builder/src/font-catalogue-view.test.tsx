@@ -417,4 +417,63 @@ describe("adding a family", () => {
       within(editor).getByRole("button", { name: "Already on this site" })
     ).toBeTruthy();
   });
+
+  it("adds a cut the site has in one script in another", async () => {
+    const add = vi.fn(async (_request: CatalogueAddRequest) => undefined);
+    const latin = (weight: string): FontFaceDef => ({
+      family: "Lora",
+      src: [{ url: `/api/media/${weight}/raw` }],
+      weight,
+      style: "normal",
+      source: { kind: "google", id: "lora", subset: "latin" },
+    });
+    view(catalogue({ add }), { onSite: [latin("400"), latin("700")] });
+    const editor = await openAdd(/^Lora/);
+    expect(
+      within(editor).getByRole("button", { name: "Already on this site" })
+    ).toBeTruthy();
+    fireEvent.click(within(editor).getByRole("checkbox", { name: "Cyrillic" }));
+    const more = within(editor).getByRole("button", {
+      name: "Add 2 more styles",
+    });
+    await act(async () => {
+      fireEvent.click(more);
+    });
+    expect(add).toHaveBeenCalledWith({
+      id: "lora",
+      weights: [400, 700],
+      styles: ["normal"],
+      subsets: ["cyrillic", "latin"],
+    });
+  });
+
+  it("adds a family that comes only in italic", async () => {
+    const add = vi.fn(async (_request: CatalogueAddRequest) => undefined);
+    const molle: CatalogueFamilyView = {
+      ...LORA,
+      id: "molle",
+      family: "Molle",
+      category: "handwriting",
+      weights: [400],
+      styles: ["italic"],
+      subsets: ["latin"],
+    };
+    view(catalogue({ add }, [molle]));
+    const editor = await openAdd(/^Molle/);
+    // Nothing to choose: its one style is the only one it has.
+    expect(
+      within(editor).queryByRole("checkbox", { name: "Include italics" })
+    ).toBeNull();
+    await act(async () => {
+      fireEvent.click(
+        within(editor).getByRole("button", { name: "Add Molle \u00b7 1 style" })
+      );
+    });
+    expect(add).toHaveBeenCalledWith({
+      id: "molle",
+      weights: [400],
+      styles: ["italic"],
+      subsets: ["latin"],
+    });
+  });
 });

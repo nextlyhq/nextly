@@ -120,6 +120,9 @@ describe("planFontAdd", () => {
         id: "lora",
         licence: "OFL-1.1",
         category: "serif",
+        // Which script the file covers, so the editor can tell a face the
+        // site has from the same cut in another language.
+        subset: "latin",
       },
     });
     expect(plan.files[0]?.fileName).toBe("lora-latin-400-normal.woff2");

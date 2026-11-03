@@ -210,6 +210,7 @@ export function planFontAdd(
         id: meta.id,
         licence: meta.licence,
         category: meta.category,
+        subset: want.subset,
       },
     };
     if (stored.some(each => sameFace(each, face))) {

@@ -126,7 +126,7 @@ function useUploadForm(
   const ready = file !== null && family.trim() !== "" && rights && !busy;
 
   /** Everything back to a fresh start; the cut too, or a kept `700 Italic`
-   *  would be applied to the next file by default. */
+   *  would be applied to the next file by default, and the rights. */
   const clear = (): void => {
     setFile(null);
     if (picker.current !== null) picker.current.value = "";
@@ -134,6 +134,8 @@ function useUploadForm(
     setFamilyAuthored(false);
     setWeight("400");
     setStyle("normal");
+    // The rights are the next file's to confirm, not carried from this one.
+    setRights(false);
   };
 
   const submit = async (): Promise<void> => {

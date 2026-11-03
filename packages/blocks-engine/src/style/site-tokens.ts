@@ -327,6 +327,11 @@ export interface FontFaceOrigin {
    * the name comes from it.
    */
   category?: string;
+  /**
+   * The catalogue's script the file covers, such as `latin`, so the editor
+   * can tell a face the site has from the same cut in another script.
+   */
+  subset?: string;
 }
 
 /** A `@font-face` a site self-hosts. */
@@ -1047,7 +1052,7 @@ const MAX_FONT_ORIGIN_LENGTH = 100;
 /** Whether a face's origin is one of the two kinds, with short words. */
 function usableOrigin(origin: FontFaceOrigin): boolean {
   if (origin.kind !== "google" && origin.kind !== "upload") return false;
-  return [origin.id, origin.licence, origin.category].every(
+  return [origin.id, origin.licence, origin.category, origin.subset].every(
     word =>
       word === undefined ||
       (typeof word === "string" && word.length <= MAX_FONT_ORIGIN_LENGTH)

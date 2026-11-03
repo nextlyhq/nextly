@@ -487,7 +487,8 @@ function readFontOrigin(
     (raw.kind !== "google" && raw.kind !== "upload") ||
     !optionalString(raw.id) ||
     !optionalString(raw.licence) ||
-    !optionalString(raw.category)
+    !optionalString(raw.category) ||
+    !optionalString(raw.subset)
   ) {
     return null;
   }
@@ -496,6 +497,7 @@ function readFontOrigin(
     ...(raw.id === undefined ? {} : { id: raw.id }),
     ...(raw.licence === undefined ? {} : { licence: raw.licence }),
     ...(raw.category === undefined ? {} : { category: raw.category }),
+    ...(raw.subset === undefined ? {} : { subset: raw.subset }),
   };
 }
 

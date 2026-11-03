@@ -222,6 +222,17 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
   };
 
   const adding = new Set<string>();
+  /*
+   * The read of the site's fonts and the write appending to it, one add at a
+   * time. Two adds may run at once, and two that both read before either
+   * writes would each write the list without the other's faces.
+   */
+  let appending: Promise<unknown> = Promise.resolve();
+  const inTurn = <T>(work: () => Promise<T>): Promise<T> => {
+    const turn = appending.then(work, work);
+    appending = turn.catch(() => undefined);
+    return turn;
+  };
 
   const addFont = async (
     req: Request,
@@ -288,7 +299,7 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
       );
     }
     const downloads = await downloadAll(fetch, plan.files, signal);
-    const added = await storeAll(api, slug, downloads, ctx.user);
+    const added = await storeAll(api, slug, downloads, ctx.user, inTurn);
     return respondMutation<AddSiteFontAnswer>(
       `${meta.family} was added to this site.`,
       { added, skipped: plan.skipped }
@@ -304,29 +315,23 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
     const downloads: Array<{ file: PlannedFile; bytes: Uint8Array }> = [];
     let total = 0;
     for (const file of files) {
+      // Each file may take what the add has left, so the read stops at the
+      // add's total rather than after a whole file past it.
+      const left = fonts.limits.bytesPerAdd - total;
       const bytes = await fetchFromCatalogue(
         fetch,
         file.url,
         rules({
           expect: "woff2",
-          maxBytes: fonts.limits.bytesPerFile,
+          maxBytes: Math.min(fonts.limits.bytesPerFile, left),
           messages: ADD_MESSAGES,
           signal,
+          ...(left < fonts.limits.bytesPerFile
+            ? { tooLarge: overAddTotal }
+            : {}),
         })
       );
       total += bytes.byteLength;
-      if (total > fonts.limits.bytesPerAdd) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "subsets",
-              code: "INVALID_VALUE",
-              message:
-                "These files are larger than one add allows. Choose fewer weights or languages.",
-            },
-          ],
-        });
-      }
       downloads.push({ file, bytes });
     }
     return downloads;
@@ -424,6 +429,20 @@ async function fontsFolder(
   }
 }
 
+/** The files of one add, together, are past what one add may download. */
+function overAddTotal(): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "subsets",
+        code: "INVALID_VALUE",
+        message:
+          "These files are larger than one add allows. Choose fewer weights or languages.",
+      },
+    ],
+  });
+}
+
 /**
  * Store each file in the site's media, then append its faces to the stored
  * fonts. All or nothing: a failure deletes every file this add stored.
@@ -436,7 +455,8 @@ async function storeAll(
   api: SiteFontsDirectApi,
   slug: string,
   downloads: ReadonlyArray<{ file: PlannedFile; bytes: Uint8Array }>,
-  user: { id: string } | null
+  user: { id: string } | null,
+  inTurn: <T>(work: () => Promise<T>) => Promise<T>
 ): Promise<FontFaceDef[]> {
   const asUser = user === null ? {} : { user: { id: user.id } };
   const folder = await fontsFolder(api, user);
@@ -463,13 +483,16 @@ async function storeAll(
       });
     }
     // Read again just before writing, and appended to rather than replaced,
-    // so a face another surface stored meanwhile is kept.
-    const { raw } = await storedFonts(api, slug);
-    await api.updateSingle({
-      slug,
-      data: { fonts: [...raw, ...added] },
-      overrideAccess: true,
-      ...asUser,
+    // so a face another surface stored meanwhile is kept; in turn with the
+    // other adds, so neither writes over the other's.
+    await inTurn(async () => {
+      const { raw } = await storedFonts(api, slug);
+      await api.updateSingle({
+        slug,
+        data: { fonts: [...raw, ...added] },
+        overrideAccess: true,
+        ...asUser,
+      });
     });
     return added;
   } catch (error) {

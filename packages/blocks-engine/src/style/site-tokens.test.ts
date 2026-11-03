@@ -867,6 +867,16 @@ describe("font faces", () => {
         "fonts[0]"
       );
       expect(issues).toHaveLength(1);
+      // The script name is held to the same bound as the other words.
+      const script = validateFontFace(
+        {
+          family: "Inter",
+          src: [local],
+          source: { kind: "google", subset: "x".repeat(200) },
+        },
+        "fonts[0]"
+      );
+      expect(script).toHaveLength(1);
     });
   });
 });

@@ -27,6 +27,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
@@ -338,6 +339,13 @@ describe("the fonts panel reaching an author", () => {
   });
 });
 
+/** A file's first bytes as its format writes them: what the panel reads. */
+function signatureOf(name: string): Uint8Array {
+  if (name.endsWith(".woff2")) return new Uint8Array([0x77, 0x4f, 0x46, 0x32]);
+  if (name.endsWith(".woff")) return new Uint8Array([0x77, 0x4f, 0x46, 0x46]);
+  return new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+}
+
 describe("adding a font file through the panel", () => {
   /** Open the upload editor from the group's add, once. */
   async function openUpload(): Promise<void> {
@@ -349,11 +357,6 @@ describe("adding a font file through the panel", () => {
       await screen.findByRole("menuitem", { name: "Upload a font file" })
     );
     await screen.findByRole("dialog", { name: "Upload a font file" });
-    fireEvent.click(
-      screen.getByRole("checkbox", {
-        name: "I have the right to use this font on the web",
-      })
-    );
   }
 
   /** Choose a file, as the picker hands one over. */
@@ -361,12 +364,17 @@ describe("adding a font file through the panel", () => {
     await openUpload();
     const input = screen.getByLabelText("Font file") as HTMLInputElement;
     Object.defineProperty(input, "files", {
-      value: [new File([new Uint8Array([0x77])], name, { type: "font/woff2" })],
+      value: [new File([signatureOf(name)], name, { type: "font/woff2" })],
       configurable: true,
     });
     await act(async () => {
       fireEvent.change(input);
     });
+    // The rights are confirmed for each file.
+    const rights = screen.getByRole("checkbox", {
+      name: "I have the right to use this font on the web",
+    });
+    if (rights.getAttribute("aria-checked") !== "true") fireEvent.click(rights);
   }
 
   /** Press Add. Separate from the pick, because a RETRY is a second press on
@@ -376,6 +384,13 @@ describe("adding a font file through the panel", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Upload" }));
     });
+    // The file's first bytes are read before the upload, which takes tasks of
+    // its own: the add is over once the button no longer says it is running.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Uploading\u2026" })
+      ).toBeNull()
+    );
   }
 
   async function addFace(name = "Inter-Regular.woff2"): Promise<void> {
@@ -536,6 +551,9 @@ describe("adding a font file through the panel", () => {
     await addFace("not-a-font.png");
 
     expect(saved).toHaveLength(0);
+    // Refused from its own first bytes, before anything is stored: a stored
+    // file no face points at would stay in the media library.
+    expect(uploads).toHaveLength(0);
     expect(screen.getByRole("alert").textContent).toContain("woff");
   });
 
