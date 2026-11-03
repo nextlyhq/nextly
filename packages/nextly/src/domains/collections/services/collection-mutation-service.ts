@@ -1141,6 +1141,15 @@ export class GoingLiveRelationsBatch {
   }
 
   /**
+   * Whether this batch holds `entryId` and nothing else: the row a
+   * transaction has locked, whose relations no other writer can change under
+   * it, so every judgement in that transaction may share the batch's reads.
+   */
+  holdsOnly(entryId: string): boolean {
+    return this.entryIds.length === 1 && this.entryIds[0] === entryId;
+  }
+
+  /**
    * A component's own fields, read once for the batch through `read`: a
    * batch writes documents, not definitions, so every document is judged
    * against the same ones. Unlike the relations, safe to share on a
@@ -5136,9 +5145,14 @@ export class CollectionMutationService extends BaseService {
       (await reachesLocalizedFieldGroup(args.fields, slug =>
         service.getComponentDefinition(slug, executor)
       ));
+    // On `tx`, a batch is shared only where it holds this row alone, which
+    // the transaction has locked: every language judged in it then reads the
+    // row's relations once.
+    const shared = args.relations.batch;
     const batch =
-      (args.tx === undefined ? args.relations.batch : undefined) ??
-      new GoingLiveRelationsBatch([args.entryId]);
+      (args.tx === undefined || shared?.holdsOnly(args.entryId) === true
+        ? shared
+        : undefined) ?? new GoingLiveRelationsBatch([args.entryId]);
     return batch.read(
       args.entryId,
       byLanguage ? args.language : undefined,
@@ -9856,6 +9870,11 @@ export class CollectionMutationService extends BaseService {
     // judged, since the change can rewrite the shared values beneath a
     // language already live; a language whose change was judged above is not
     // judged again.
+    const reads = await this.everyLanguageReadsOnTx(
+      tx,
+      args.collectionName,
+      args.entryId
+    );
     await this.assertLanguagesGoLiveValid({
       collectionName: args.collectionName,
       entryId: args.entryId,
@@ -9893,20 +9912,18 @@ export class CollectionMutationService extends BaseService {
       user: args.caller.user,
       tx,
       // Publishing every language takes no values of its own: each language's
-      // components and relationships go live as stored.
+      // components and relationships go live as stored, read once for every
+      // language through the locked row's own batch.
       relations: {
         tableName: args.tableName,
         manyToManyFields: args.manyToManyFields,
         componentFieldData: {},
         manyToManyData: {},
         componentSchemas: null,
+        batch: reads.relations,
       },
       // Every language's translations read once for the whole judgement.
-      reads: await this.everyLanguageReadsOnTx(
-        tx,
-        args.collectionName,
-        args.entryId
-      ),
+      reads,
     });
     return promotions;
   }
