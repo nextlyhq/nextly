@@ -70,16 +70,21 @@ import { withErrorHandler } from "./with-error-handler";
  * wide as the widest name, and the suffix makes a long name's label wider, so
  * uncut it failed the claim on PostgreSQL and MySQL while SQLite stored it.
  * Cut by code point, so no character is split in half.
+ *
+ * Names are trimmed first: a name of spaces is no name, and would otherwise
+ * read "'s API key" or a blank where the holder belongs.
  */
 async function holderLabel(auth: AuthContext): Promise<string> {
   if (auth.authMethod === "api-key") {
-    const maker = (await peopleById([auth.userId])).get(auth.userId)?.name;
+    const maker = (await peopleById([auth.userId]))
+      .get(auth.userId)
+      ?.name?.trim();
     if (!maker) return "An API key";
     const suffix = "'s API key";
     const room = OWNER_LABEL_LENGTH - suffix.length;
     return `${Array.from(maker).slice(0, room).join("")}${suffix}`;
   }
-  return auth.userName || auth.userEmail || "Someone";
+  return auth.userName?.trim() || auth.userEmail?.trim() || "Someone";
 }
 
 /**

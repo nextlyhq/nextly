@@ -164,6 +164,11 @@ describe("document lock route", () => {
       { userId: "u3", userName: "", userEmail: "noname@example.com" },
       "noname@example.com",
     ],
+    [
+      "a person whose name is only spaces by email",
+      { userId: "u3", userName: "   ", userEmail: "noname@example.com" },
+      "noname@example.com",
+    ],
     ["a caller nothing names as someone", { userId: "u4" }, "Someone"],
   ])("labels %s", async (_, caller, label) => {
     // The label is what the next editor reads: "<label> is editing this
@@ -219,6 +224,19 @@ describe("document lock route", () => {
       .ownerLabel;
     expect(Array.from(long)).toHaveLength(255);
     expect(long).toBe(`${"N".repeat(244)}😀's API key`);
+
+    // A maker whose name is only spaces is a maker with no name, not a label
+    // that reads "'s API key".
+    peopleById.mockResolvedValueOnce(
+      new Map([["maker", { kind: "person", id: "maker", name: "   " }]])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({ ownerLabel: "An API key" }),
+      expect.anything()
+    );
 
     // A maker with no name, or whose name could not be read.
     peopleById.mockResolvedValueOnce(
