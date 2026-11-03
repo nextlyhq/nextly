@@ -135,6 +135,34 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
             { name: "body", type: "probe" },
           ],
         } as unknown as CollectionConfig,
+        {
+          // The type's fields inside named groups, one inside another, and
+          // in a repeater's rows, which a read by path does not walk.
+          slug: "grouped",
+          status: true,
+          versions: { drafts: true },
+          fields: [
+            { name: "title", type: "text" },
+            {
+              name: "hero",
+              type: "group",
+              fields: [
+                { name: "body", type: "probe" },
+                { name: "caption", type: "text" },
+                {
+                  name: "inner",
+                  type: "group",
+                  fields: [{ name: "body", type: "probe" }],
+                },
+                {
+                  name: "rows",
+                  type: "repeater",
+                  fields: [{ name: "body", type: "probe" }],
+                },
+              ],
+            },
+          ],
+        } as unknown as CollectionConfig,
       ],
     },
   });
@@ -198,6 +226,19 @@ async function bootLanguages(dialect: TestDialect): Promise<TestNextly> {
       {
         slug: "flagged",
         fields: [{ name: "body", type: "probe", localized: true }],
+      } as unknown as CollectionConfig,
+      {
+        // A group kept per language, holding the type's field.
+        slug: "framed",
+        localized: true,
+        fields: [
+          {
+            name: "hero",
+            type: "group",
+            localized: true,
+            fields: [{ name: "body", type: "probe" }],
+          },
+        ],
       } as unknown as CollectionConfig,
       {
         slug: "staged",
@@ -401,6 +442,136 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       ).rejects.toThrow(/Only top-level "other" fields/);
     });
 
+    it("reads a field inside named groups by its path, at any depth", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "grouped", {
+        title: "a",
+        hero: { body: { v: "top" }, inner: { body: { v: "deep" } } },
+      });
+      const bare = await created(t, "grouped", { title: "b" });
+      const read = poolReader(t, "probe");
+      const at = (entry: string, field: string) =>
+        read({ collection: "grouped", id: entry, field, form: "published" });
+
+      expect(await at(id, "hero.body")).toEqual({
+        kind: "value",
+        value: { v: "top" },
+      });
+      expect(await at(id, "hero.inner.body")).toEqual({
+        kind: "value",
+        value: { v: "deep" },
+      });
+      // An entry whose group stores nothing holds nothing at the path.
+      expect(await at(bare, "hero.inner.body")).toEqual({ kind: "absent" });
+    });
+
+    it("reads a field inside a named group from the pending working draft as `draft`", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "grouped", {
+        title: "a",
+        hero: { body: { v: "live" }, inner: { body: { v: "live deep" } } },
+        status: "published",
+      });
+      // A status-less save of a published entry is held as a working draft.
+      await t.nextly.update({
+        collection: "grouped",
+        id,
+        data: {
+          hero: {
+            body: { v: "pending" },
+            inner: { body: { v: "pending deep" } },
+          },
+        },
+        overrideAccess: true,
+      });
+      const read = poolReader(t, "probe");
+      const at = (field: string, form: "published" | "draft") =>
+        read({ collection: "grouped", id, field, form });
+
+      expect(await at("hero.body", "published")).toEqual({
+        kind: "value",
+        value: { v: "live" },
+      });
+      expect(await at("hero.body", "draft")).toEqual({
+        kind: "value",
+        value: { v: "pending" },
+      });
+      expect(await at("hero.inner.body", "draft")).toEqual({
+        kind: "value",
+        value: { v: "pending deep" },
+      });
+    });
+
+    it("returns a string inside a named group as stored, even one that reads as JSON", async () => {
+      // The group's value is decoded once, as the group; a string inside it
+      // is the field's value, and decoding it again would turn "123" into a
+      // number and "null" into nothing.
+      const t = await boot(dialect);
+      const id = await created(t, "grouped", {
+        title: "a",
+        hero: { body: "123", inner: { body: "null" } },
+        status: "published",
+      });
+      const read = poolReader(t, "probe");
+      const at = (field: string, form: "published" | "draft") =>
+        read({ collection: "grouped", id, field, form });
+
+      expect(await at("hero.body", "published")).toEqual({
+        kind: "value",
+        value: "123",
+      });
+      expect(await at("hero.inner.body", "published")).toEqual({
+        kind: "value",
+        value: "null",
+      });
+
+      // The working draft's snapshot is walked the same way.
+      await t.nextly.update({
+        collection: "grouped",
+        id,
+        data: { hero: { body: "null", inner: { body: "123" } } },
+        overrideAccess: true,
+      });
+      expect(await at("hero.body", "draft")).toEqual({
+        kind: "value",
+        value: "null",
+      });
+      expect(await at("hero.inner.body", "draft")).toEqual({
+        kind: "value",
+        value: "123",
+      });
+    });
+
+    it("refuses, by name, a path through anything but named groups, or to a field of another type", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "grouped", {
+        title: "a",
+        hero: { body: { v: 1 }, rows: [{ body: { v: 2 } }] },
+      });
+      const read = poolReader(t, "probe");
+      const at = (field: string) =>
+        read({ collection: "grouped", id, field, form: "published" });
+
+      // A repeater's rows are not walked.
+      await expect(at("hero.rows[0].body")).rejects.toThrow(
+        /"grouped\.hero\.rows\[0\]\.body" cannot be read here: it is not inside named groups alone/
+      );
+      await expect(at("hero.rows.body")).rejects.toThrow(
+        /it is not inside named groups alone/
+      );
+      // A field that is not a group holds no fields.
+      await expect(at("title.body")).rejects.toThrow(
+        /it is not inside named groups alone/
+      );
+      // The type is still the leaf's own.
+      await expect(at("hero.caption")).rejects.toThrow(
+        /"grouped\.hero\.caption" cannot be read here: it is not a field of that type/
+      );
+      await expect(at("hero.missing")).rejects.toThrow(
+        /it is not a field of that type/
+      );
+    });
+
     it("refuses a collection that does not exist, by name", async () => {
       const t = await boot(dialect);
 
@@ -590,6 +761,23 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
           form: "published",
         })
       ).toEqual({ kind: "value", value: { said: "row" } });
+    });
+
+    it("refuses a field inside a group kept per language, by name", async () => {
+      const t = await bootLanguages(dialect);
+      const read = languagesReader(t, "probe");
+
+      // Refused from the definition alone, before any row is read.
+      await expect(
+        read({
+          collection: "framed",
+          id: "any",
+          field: "hero.body",
+          form: "published",
+        })
+      ).rejects.toThrow(
+        /"framed\.hero\.body" cannot be read here: it is inside a group kept per language/
+      );
     });
 
     it("tells a Single's validators the language the save is in", async () => {

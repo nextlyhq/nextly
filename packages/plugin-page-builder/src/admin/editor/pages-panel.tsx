@@ -138,7 +138,12 @@ function PagesPanel({
   });
 
   return (
-    <div className="flex h-full flex-col gap-3 p-3" aria-label="Pages">
+    // On the builder's panel surface and text, as Add, Layers and Components
+    // are, so it matches them in light and dark.
+    <div
+      className="bg-[color:var(--nx-builder-surface)] text-[color:var(--nx-builder-text)] flex h-full flex-col gap-3 p-3"
+      aria-label="Pages"
+    >
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Pages</h2>
         <NewPageButton
@@ -486,9 +491,11 @@ function PageRow({
   const [renaming, setRenaming] = React.useState(false);
   const title = page.title.trim() === "" ? "Untitled" : page.title;
   return (
+    // The raised surface on the panel's muted one, as Add marks its current
+    // tile, so the page being edited stands out in light and dark.
     <li
       className={`group flex h-8 min-w-0 items-center gap-2 rounded-md px-1.5 text-sm ${
-        editing ? "bg-muted" : "hover:bg-muted/60"
+        editing ? "bg-background" : "hover:bg-background/60"
       }`}
     >
       <FileText
@@ -588,30 +595,81 @@ function RowMenu({
         >
           Rename
         </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={unpublished}
-          title={unpublished ? "Publish it first to duplicate it." : undefined}
-          onSelect={() => void actions.duplicate(page)}
-        >
-          Duplicate
-        </DropdownMenuItem>
+        {unpublished ? (
+          <UnavailableItem reason="Publish it first to duplicate it.">
+            Duplicate
+          </UnavailableItem>
+        ) : (
+          <DropdownMenuItem onSelect={() => void actions.duplicate(page)}>
+            Duplicate
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={() => actions.settings(page)}>
           Settings
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
-          // Not the page being edited: deleting it under the editor would
-          // either leave the author on a page that no longer exists or, when
-          // its unsaved work asks first, delete a page they chose to keep.
-          disabled={editing}
-          title={editing ? "Open another page to delete this one." : undefined}
-          onSelect={() => actions.remove(page)}
-        >
-          Delete…
-        </DropdownMenuItem>
+        {/* Not the page being edited: deleting it under the editor would
+            either leave the author on a page that no longer exists or, when
+            its unsaved work asks first, delete a page they chose to keep. */}
+        {editing ? (
+          <UnavailableItem
+            reason="Open another page to delete this one."
+            className="text-destructive focus:text-destructive"
+          >
+            Delete…
+          </UnavailableItem>
+        ) : (
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            onSelect={() => actions.remove(page)}
+          >
+            Delete…
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * A menu item the author cannot use on this page, kept in the arrow-key order
+ * and described by its reason, so a keyboard or screen reader user reaches it
+ * and hears why. A `disabled` item is skipped without a word. The reason is
+ * also drawn as a muted second line, so a pointer user sees it too. Choosing
+ * it does nothing and leaves the menu open.
+ */
+function UnavailableItem({
+  reason,
+  className,
+  children,
+}: {
+  reason: string;
+  className?: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const reasonId = React.useId();
+  return (
+    <>
+      <DropdownMenuItem
+        aria-disabled="true"
+        aria-describedby={reasonId}
+        className={`items-start ${className ?? ""}`}
+        onSelect={event => event.preventDefault()}
+      >
+        <span className="flex flex-col gap-0.5">
+          <span className="opacity-50">{children}</span>
+          {/* Seen, not read: assistive technology hears the description, so
+              the item's name stays the action alone. */}
+          <span aria-hidden="true" className="text-xs text-muted-foreground">
+            {reason}
+          </span>
+        </span>
+      </DropdownMenuItem>
+      {/* Hidden, yet still read as the item's description. */}
+      <span id={reasonId} hidden>
+        {reason}
+      </span>
+    </>
   );
 }
 
