@@ -304,6 +304,32 @@ describe("useAutosaveRecovery", () => {
     );
   });
 
+  it("keeps a Not now pressed before the account is known, once it is", async () => {
+    // The recovery read can answer before the signed-in account does: the
+    // put-off waits for it rather than being stored under no one.
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    signedIn.id = "author-1";
+    first.rerender();
+    first.unmount();
+
+    // The editor loaded again, the account known from the start.
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(again.result.current.recovery.offer).toBeNull();
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },

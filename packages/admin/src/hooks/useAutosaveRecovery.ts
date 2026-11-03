@@ -11,7 +11,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
@@ -32,6 +32,39 @@ import {
  */
 function putOffKey(documentKey: string): string {
   return `nextly:recovery-not-now:${documentKey}`;
+}
+
+/**
+ * "Not now", kept for the signed-in author. Pressed before the account is
+ * known (the recovery read can answer first), it is held until it is, then
+ * stored under that account: stored under no one, the next load, by then
+ * knowing the account, would miss it and offer the point again.
+ */
+function usePutOff(
+  author: string | null,
+  documentKey: string
+): {
+  putOff: (identity: string) => void;
+  isPutOff: (identity: string) => boolean;
+} {
+  const [held, setHeld] = useState<string | null>(null);
+  const key = `${author ?? ""}|${documentKey}`;
+  useEffect(() => {
+    if (author === null || held === null) return;
+    rememberPutOff(key, held);
+    setHeld(null);
+  }, [author, held, key]);
+  return {
+    putOff: useCallback(
+      (identity: string) =>
+        author === null ? setHeld(identity) : rememberPutOff(key, identity),
+      [author, key]
+    ),
+    isPutOff: useCallback(
+      (identity: string) => author !== null && wasPutOff(key, identity),
+      [author, key]
+    ),
+  };
 }
 
 /**
@@ -220,11 +253,11 @@ export function useAutosaveRecovery({
     staleTime: Infinity,
   });
 
+  const { putOff, isPutOff } = usePutOff(author, documentKey);
   const dismiss = useCallback(() => {
     setDismissed(true);
-    if (data)
-      rememberPutOff(`${author ?? ""}|${documentKey}`, pointIdentity(data));
-  }, [data, documentKey, author]);
+    if (data) putOff(pointIdentity(data));
+  }, [data, putOff]);
 
   // The document as stored, which the form was loaded with.
   const stored = form.formState.defaultValues;
@@ -252,14 +285,13 @@ export function useAutosaveRecovery({
     const savedAt = new Date(data.updatedAt);
     if (Number.isNaN(savedAt.getTime())) return null;
     // Put off in this tab already: see `dismiss`.
-    if (wasPutOff(`${author ?? ""}|${documentKey}`, pointIdentity(data)))
-      return null;
+    if (isPutOff(pointIdentity(data))) return null;
     // A recovery point holding what the document already stores is no unsaved
     // work: an author who undid back to the saved document left one behind,
     // and offering it back on every load restores nothing.
     if (holdsStored(data, stored, locale)) return null;
     return { savedAt, snapshot: data.snapshot };
-  }, [dismissed, data, documentKey, stored, locale, author]);
+  }, [dismissed, data, stored, locale, isPutOff]);
 
   const restore = useCallback(() => {
     if (!offer) return;
