@@ -118,6 +118,54 @@ describe("a jump to another tier's value", () => {
   });
 });
 
+describe("a length field's unit", () => {
+  it("is a small suffix inside the field, the two one bordered control", () => {
+    const box = ruleBody(
+      ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit)"
+    );
+    expect(box).toContain("border: 1px solid var(--nx-input)");
+    expect(box).toContain("background: var(--nx-background)");
+    // The field inside gives its own border up to the box.
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit) > :first-child"
+      )
+    ).toContain("border: 0");
+    const unit = ruleBody(
+      ".nx-style-inspector__numeric .nx-style-inspector__unit"
+    );
+    expect(unit).toContain("border: 0");
+    expect(unit).toContain("color: var(--nx-muted-foreground)");
+    expect(unit).toContain("font-size: var(--text-xs)");
+  });
+
+  it("draws a refusal's border on the whole control", () => {
+    // The field gave its border up to the box, so the box shows the refusal.
+    expect(
+      ruleBody(
+        '.nx-style-inspector__numeric:has(> .nx-style-inspector__unit):has( [aria-invalid="true"] )'
+      )
+    ).toContain("border-color: var(--nx-destructive)");
+  });
+
+  it("keeps four characters of the number in view beside the unit", () => {
+    // A narrow control column used to cut "-0.035" to "-0.03" beside the menu.
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit) > :first-child"
+      )
+    ).toContain("min-width: calc(4ch + 1.5rem)");
+  });
+
+  it("draws the focus ring on the whole control, the field's own given up", () => {
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit):focus-within"
+      )
+    ).toContain("outline: 2px solid var(--nx-ring)");
+  });
+});
+
 describe("the Font control in a style row", () => {
   it("is as tall as the lists and fields beside it", () => {
     // The shared list trigger and text field are 40px (2.5rem); the font

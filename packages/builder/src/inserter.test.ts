@@ -46,6 +46,7 @@ import {
   PATTERN_ENTRY_PREFIX,
   COMPONENT_ENTRY_PREFIX,
   componentEntriesFrom,
+  unplaceableComponentEntries,
   compositionRefusal,
   nodeForComponentEntry,
   placementTypesOf,
@@ -1453,6 +1454,19 @@ describe("the component tier", () => {
       )
     );
   }
+
+  it("lists as unplaceable exactly the rows the built entries leave out", () => {
+    // Read off the entries already built, so the definitions are walked once:
+    // a row with no document has no entry, and is the one listed.
+    const placed = stored({ id: "placed" });
+    const empty = stored({ id: "empty", document: null });
+    const entries = componentEntriesFrom([placed, empty], lookupOf(placed));
+
+    const unplaceable = unplaceableComponentEntries([placed, empty], entries);
+
+    expect(unplaceable.map(entry => entry.componentId)).toEqual(["empty"]);
+    expect(unplaceable[0]?.roots).toEqual([]);
+  });
 
   it("keys a component out of the block namespace, and apart from patterns", () => {
     // A definition may be saved under any id. Its catalog key carries the

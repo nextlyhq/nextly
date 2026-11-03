@@ -10,11 +10,15 @@ import { createHash } from "node:crypto";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import type { DynamicCollectionInsert } from "../../schemas/dynamic-collections/types";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import { exitWithError } from "../errors";
-import { demoteCollectionNotFound } from "../errors/areas/sync";
+import {
+  demoteCollectionNotFound,
+  syncConfirmationRequired,
+} from "../errors/areas/sync";
 import type { CommandContext } from "../program";
 // F1 PR 4: switched from the deleted wrapper/config-loader (jiti-based,
 // took a positional cwd arg) to the canonical cli/utils/config-loader
@@ -23,7 +27,9 @@ import type { CommandContext } from "../program";
 // downstream code's expectation of `{ config, configPath, ... }`.
 import { loadConfig } from "../utils/config-loader";
 import type { Logger } from "../utils/logger";
+import { answered } from "../utils/prompt-cancelled";
 
+import { confirmationAnswered } from "./db-sync-promote";
 import {
   collectionChangedAfterConsent,
   openCollectionRegistry,
@@ -147,10 +153,13 @@ export async function demoteCollection(
 /** The terminal's confirmation for a demote: what will be written, then a yes or no. */
 async function askToDemote(slug: string, code: string): Promise<boolean> {
   p.note(code, `About to move '${slug}' to UI source`);
-  const confirm = await p.confirm({
-    message: "Write to dynamic_collections so the Schema Builder can edit it?",
-  });
-  return !p.isCancel(confirm) && confirm;
+  // Ctrl+C at the prompt ends the run with exit 130 (`answered`); a no is a declined demote.
+  return answered(
+    await p.confirm({
+      message:
+        "Write to dynamic_collections so the Schema Builder can edit it?",
+    })
+  );
 }
 
 export async function runDemote(
@@ -174,6 +183,12 @@ export async function runDemote(
     exitWithError(logger, demoteCollectionNotFound(slug));
   }
 
+  // Its confirmation cannot be asked and `--yes` did not answer it: stop
+  // before the database is opened, so nothing is changed.
+  if (!confirmationAnswered(context) && !canPrompt()) {
+    exitWithError(logger, syncConfirmationRequired("--demote", slug));
+  }
+
   // 2. Database wiring.
   const { registry, adapter } = await openCollectionRegistry(logger);
   try {
@@ -182,7 +197,11 @@ export async function runDemote(
       logger,
       registry,
       adapter,
-      confirm: code => askToDemote(slug, code),
+      // `--yes` answers the confirmation: write, without asking.
+      confirm: code =>
+        confirmationAnswered(context)
+          ? Promise.resolve(true)
+          : askToDemote(slug, code),
     });
   } finally {
     await adapter.disconnect();

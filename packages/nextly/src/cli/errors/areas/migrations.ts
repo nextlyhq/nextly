@@ -71,8 +71,9 @@ function lockRefusal(error: NextlyError): CliErrorParts {
 /**
  * A data-loss refusal, as its three parts, in the consent's own wording.
  *
- * The verdict's message is a header ("Deleting data needs consent, and no terminal is attached to
- * ask. This would delete:"), the deletions one per line, then "Nothing was changed. To consent:
+ * The verdict's message is a header ("Deleting data needs consent, and nobody can be asked (no
+ * terminal, CI, or --non-interactive). This would delete:"), the deletions one per line, then
+ * "Nothing was changed. To consent:
  * …". The header's first sentence is what happened, the list and "Nothing was changed." are why,
  * and the consent to give is next.
  */
@@ -442,7 +443,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   DATA_LOSS_CONSENT_REQUIRED: {
     cause:
-      "The command would delete data, no consent covers it, and no terminal is attached to ask.",
+      "The command would delete data, no consent covers it, and nobody can be asked (no terminal, CI, or --non-interactive).",
     from: [
       {
         code: "INVALID_INPUT",
@@ -472,6 +473,10 @@ export const MIGRATION_CODES = defineCodes({
         describe: planChangedParts,
       },
     ],
+  },
+  DATA_LOSS_DECLINED: {
+    cause:
+      "The prompt listing what the command would delete was answered no, so it changed nothing.",
   },
   DATA_LOSS_CONSENT_MALFORMED: {
     cause:
@@ -699,6 +704,10 @@ export const MIGRATION_CODES = defineCodes({
       },
     ],
   },
+  CORE_DESTRUCTIVE_NEEDS_TERMINAL: {
+    cause:
+      "`nextly upgrade --reconcile-core` has a destructive change to Nextly's own tables to confirm, and no terminal is attached to ask, so none was made.",
+  },
   CORE_SCHEMA_APPLY_FAILED: {
     cause: "The database refused a change to Nextly's own tables.",
     from: [
@@ -894,6 +903,23 @@ export function dataLossRefusal(
       context: { reason: `data-loss-${verdict.reason}` },
     }
   );
+}
+
+/**
+ * `nextly upgrade --reconcile-core` reached a destructive change to Nextly's own tables with no
+ * terminal to confirm it, so it stopped before making any.
+ */
+export function coreDestructiveNeedsTerminal(
+  reasons: readonly string[]
+): CliError {
+  return new CliError("CORE_DESTRUCTIVE_NEEDS_TERMINAL", {
+    what: "This confirmation needs a terminal, so nothing was changed.",
+    why: [
+      "`--reconcile-core` asks before each destructive change to Nextly's own tables, and no terminal is attached to ask (or `--non-interactive` was given, or `CI` is set). The changes it would make:",
+      ...reasons.map(reason => `- ${reason}`),
+    ].join("\n"),
+    next: "Run `nextly upgrade --reconcile-core` again at a terminal, and confirm each change once you have checked its data is not needed.",
+  });
 }
 
 /** `nextly migrate:resolve` was given none, or more than one, of its three modes. */

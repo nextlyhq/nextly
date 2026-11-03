@@ -4,7 +4,7 @@
  */
 import { basename } from "node:path";
 
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/typescript-config-defaults";
@@ -38,15 +38,18 @@ export function registerDbSyncCommand(program: Command): void {
       "--no-auto-sync",
       "Disable auto-sync of schema changes (use migrations instead)"
     )
-    // Deprecated no-op: the schema pipeline handles destructive ops via
-    // interactive prompts (or the data-loss consent, --accept-data-loss or
-    // NEXTLY_ACCEPT_DATA_LOSS, in non-interactive runs). Kept registered so
-    // existing scripts passing it keep working; the runtime emits a
-    // deprecation warning instead.
-    .option(
-      "-f, --force",
-      "(deprecated, no effect) Destructive ops are prompted; use --accept-data-loss for non-interactive runs",
-      false
+    // Retired: it never had an effect, since the schema pipeline asks before
+    // destructive changes (or reads the data-loss consent, --accept-data-loss
+    // or NEXTLY_ACCEPT_DATA_LOSS, where nobody can be asked). Still parsed, so
+    // a script passing it is refused with a notice naming --accept-data-loss
+    // rather than an unknown-option error; kept out of the help.
+    .addOption(
+      new Option(
+        "-f, --force",
+        "Retired: refused; use --accept-data-loss where nobody can be asked"
+      )
+        .default(false)
+        .hideHelp()
     )
     .option(
       "--remove-orphaned",
@@ -64,6 +67,7 @@ export function registerDbSyncCommand(program: Command): void {
       "--demote <slug>",
       "Move a code-owned collection to UI (writes to dynamic_collections)"
     )
+    .option("--yes", "Answer a confirmation that is not a data-loss consent")
     // The data-loss consent for the push's column drops, handed on as
     // NEXTLY_ACCEPT_DATA_LOSS (`exportDataLossConsent`). Only drops: renames
     // and type changes still need a terminal to answer their prompts.

@@ -335,12 +335,14 @@ describe("migrateDownCore", () => {
     expect(asked).toHaveLength(1);
     expect(yes.executed.length).toBe(1);
 
+    // A no stops the run, which exits 1 on it, naming the consent.
     const no = baseDeps({
       interactive: true,
       askToDelete: async () => false,
     });
-    await expect(migrateDownCore(no.deps)).resolves.toEqual({
-      rolledBack: [],
+    await expect(migrateDownCore(no.deps)).rejects.toMatchObject({
+      what: expect.stringContaining("the deletion was not confirmed"),
+      next: expect.stringContaining("--accept-data-loss"),
     });
     expect(no.executed).toEqual([]);
   });

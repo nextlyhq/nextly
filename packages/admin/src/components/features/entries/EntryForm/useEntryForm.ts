@@ -315,6 +315,8 @@ export function mapIntentToPayload(
 export interface UseEntryFormReturn {
   /** React Hook Form instance */
   form: UseFormReturn<Record<string, unknown>>;
+  /** What the form starts from for the entry on screen. */
+  defaultValues: Record<string, unknown>;
   /** Handle form submission. The optional `intent` arg names the user's
    *  action; payload shape is derived from intent. Omit for non-status
    *  collections (single Save button submits with whatever status the
@@ -943,6 +945,7 @@ export function useEntryForm({
 
   return {
     form,
+    defaultValues,
     handleSubmit,
     writeStatus,
     handleDelete,

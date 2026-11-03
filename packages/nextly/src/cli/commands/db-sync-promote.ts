@@ -10,11 +10,17 @@ import { appendFileSync, existsSync } from "node:fs";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
-import { promoteCollectionNotFound } from "../errors/areas/sync";
+import { exitWithError } from "../errors";
+import {
+  promoteCollectionNotFound,
+  syncConfirmationRequired,
+} from "../errors/areas/sync";
 import type { CommandContext } from "../program";
 import type { Logger } from "../utils/logger";
+import { answered } from "../utils/prompt-cancelled";
 
 import {
   collectionChangedAfterConsent,
@@ -22,6 +28,16 @@ import {
   sameCollectionRecord,
   withCollectionRegistryWrite,
 } from "./db-sync-registry";
+
+/**
+ * Whether `db:sync --yes` was given, answering the confirmation of
+ * `--promote` and `--demote` (neither is a data-loss consent). It arrives
+ * with the run's options, which the command's context carries.
+ */
+export function confirmationAnswered(context: CommandContext): boolean {
+  const options: Record<string, unknown> = { ...context.options };
+  return options.yes === true;
+}
 
 /** What a promote acts on, with its prompt and its lock wait as seams a test can stand in for. */
 export interface PromoteCollectionArgs {
@@ -119,21 +135,27 @@ export async function promoteCollection(
 
 /** The terminal's confirmation for a promote: a preview on request, then a yes or no. */
 async function askToPromote(slug: string, code: string): Promise<boolean> {
-  const action = await p.select({
-    message: `Preview generated code for '${slug}'. Action?`,
-    options: [
-      { value: "preview", label: "Show preview" },
-      { value: "accept", label: "Append to nextly.config.ts" },
-      { value: "decline", label: "Cancel" },
-    ],
-  });
-  if (p.isCancel(action) || action === "decline") return false;
+  // Ctrl+C at either prompt ends the run with exit 130 (`answered`); choosing Cancel, or a no,
+  // is a declined promote.
+  const action = await answered(
+    await p.select({
+      message: `Preview generated code for '${slug}'. Action?`,
+      options: [
+        { value: "preview", label: "Show preview" },
+        { value: "accept", label: "Append to nextly.config.ts" },
+        { value: "decline", label: "Cancel" },
+      ],
+    })
+  );
+  if (action === "decline") return false;
   if (action === "preview") {
     p.note(code, "Generated code");
-    const confirm = await p.confirm({
-      message: "Append this to nextly.config.ts and delete the UI record?",
-    });
-    if (p.isCancel(confirm) || !confirm) return false;
+    const confirm = await answered(
+      await p.confirm({
+        message: "Append this to nextly.config.ts and delete the UI record?",
+      })
+    );
+    if (!confirm) return false;
   }
   return true;
 }
@@ -142,6 +164,12 @@ export async function runPromote(
   slug: string,
   context: CommandContext
 ): Promise<void> {
+  // Its confirmation cannot be asked and `--yes` did not answer it: stop before the database is
+  // opened, so nothing is changed.
+  if (!confirmationAnswered(context) && !canPrompt()) {
+    exitWithError(context.logger, syncConfirmationRequired("--promote", slug));
+  }
+
   // Database wiring, shared with --demote, so a missing or unreachable database ends with the
   // same errors as the rest of db:sync.
   const { registry, adapter } = await openCollectionRegistry(context.logger);
@@ -152,7 +180,11 @@ export async function runPromote(
       cwd: context.cwd,
       registry,
       adapter,
-      confirm: code => askToPromote(slug, code),
+      // `--yes` answers the confirmation: append, without asking.
+      confirm: code =>
+        confirmationAnswered(context)
+          ? Promise.resolve(true)
+          : askToPromote(slug, code),
     });
   } finally {
     await adapter.disconnect();

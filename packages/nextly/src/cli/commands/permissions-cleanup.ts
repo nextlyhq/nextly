@@ -13,6 +13,11 @@ import { createContext } from "../program";
 import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import {
+  judgeDataLossWithGrace,
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 
 /**
  * Delete every orphaned permission, holding the schema lock throughout.
@@ -61,9 +66,13 @@ export async function cleanupOrphanedPermissionsUnderLock(args: {
   return outcome.value;
 }
 
-/** The action of `nextly permissions:cleanup`, loaded when it runs. */
+/**
+ * The action of `nextly permissions:cleanup`, loaded when it runs. It deletes
+ * permissions and their grants, so it takes the data-loss consent before it
+ * connects, with this release's grace for a run nobody can be asked in.
+ */
 export async function permissionsCleanupAction(
-  _cmdOptions: Record<string, unknown>,
+  cmdOptions: { acceptDataLoss?: AcceptDataLossOption },
   cmd: Command
 ): Promise<void> {
   const globalOpts = cmd.optsWithGlobals();
@@ -77,6 +86,20 @@ export async function permissionsCleanupAction(
 
     await loadConfig({
       configPath: context.configPath ?? "./nextly.config.ts",
+    });
+
+    await judgeDataLossWithGrace({
+      command: "permissions:cleanup",
+      deletions: [
+        { kind: "rows", table: "permissions" },
+        { kind: "rows", table: "role_permissions" },
+      ],
+      consent: readDataLossConsent({
+        flag: cmdOptions.acceptDataLoss,
+        warn: message => context.logger.warn(message),
+      }),
+      print: line => context.logger.info(line),
+      warn: message => context.logger.warn(message),
     });
 
     context.logger.info("Validating database environment...");

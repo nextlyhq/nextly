@@ -18,8 +18,8 @@ import type { I18nTransitionKind } from "./transition-state";
 
 /**
  * Runs a companion transition plan for a Schema Builder save: the archive made ready when the plan
- * writes to it, the plan's statements one by one, given a settings step the settings and then the
- * held drops (`settleThenDropLeavingFields`), and, when the plan dropped the companion, what was
+ * writes to it, the plan's statements one by one (`applyCompanionStatements`), given a settings step
+ * the settings and then the held drops (`dropHeldLeavingFields`), and, when the plan dropped the companion, what was
  * remembered about it forgotten. One function for the collection, Single and field-group paths,
  * so they cannot run a plan differently.
  *
@@ -46,22 +46,10 @@ export async function applyCompanionTransition(args: {
   tableName: string;
 }): Promise<void> {
   const { adapter, plan, settleLeaving } = args;
-  // A disable archives non-default translations, so the archive is made ready first: Builder
-  // entities have no `nextly migrate` step to provision it. Idempotent.
-  if (plan.needsArchive) {
-    await ensureI18nArchive(adapter, adapter.dialect);
-  }
-  // One at a time: `executeQuery` runs a single statement on some drivers, SQLite's among them.
-  for (const statement of plan.statements) {
-    await adapter.executeQuery(statement);
-  }
+  await applyCompanionStatements(adapter, plan);
   if (settleLeaving) {
-    await settleThenDropLeavingFields({
-      adapter,
-      plan,
-      settleLeaving,
-      entity: args.kind,
-    });
+    await settleLeaving();
+    await dropHeldLeavingFields(adapter, plan, args.kind);
   }
   // The transition record describes a companion that no longer exists, so it stops being true the
   // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale:
@@ -83,25 +71,41 @@ export async function applyCompanionTransition(args: {
 }
 
 /**
- * Runs `settleLeaving`, then the plan's `leavingDrops` whole: in one transaction on PostgreSQL and
- * SQLite, so each column's last archive and copy land with its drop or not at all; statement by
- * statement on MySQL, which commits each schema statement.
+ * A plan's statements, before any held drop: the archive made ready first when the plan writes to
+ * it, as an entity with no `nextly migrate` step has none provisioned (idempotent), then each
+ * statement. Apart, so a caller moving several entities' fields runs every entity's statements
+ * before any settings or drop (`moveFieldsLeavingOnReload`).
  */
-async function settleThenDropLeavingFields(args: {
-  adapter: DrizzleAdapter;
-  plan: Pick<CompanionTransitionPlan, "leavingDrops">;
-  /** Applies the settings, throwing when they are refused. */
-  settleLeaving: () => Promise<void>;
-  /** What the drops change, for the log. */
-  entity: string;
-}): Promise<void> {
-  await args.settleLeaving();
-  const drops = args.plan.leavingDrops ?? [];
+export async function applyCompanionStatements(
+  adapter: DrizzleAdapter,
+  plan: Pick<CompanionTransitionPlan, "needsArchive" | "statements">
+): Promise<void> {
+  if (plan.needsArchive) {
+    await ensureI18nArchive(adapter, adapter.dialect);
+  }
+  // One at a time: `executeQuery` runs a single statement on some drivers, SQLite's among them.
+  for (const statement of plan.statements) {
+    await adapter.executeQuery(statement);
+  }
+}
+
+/**
+ * The plan's `leavingDrops` whole, once the settings hold: in one transaction on PostgreSQL and
+ * SQLite, so each column's last archive and copy land with its drop or not at all; statement by
+ * statement on MySQL, which commits each schema statement. `entity` names what they change, for
+ * the log.
+ */
+export async function dropHeldLeavingFields(
+  adapter: DrizzleAdapter,
+  plan: Pick<CompanionTransitionPlan, "leavingDrops">,
+  entity: string
+): Promise<void> {
+  const drops = plan.leavingDrops ?? [];
   if (drops.length === 0) return;
   await applyMigrationWhole({
-    db: args.adapter.getDrizzle(),
-    dialect: args.adapter.getCapabilities().dialect,
+    db: adapter.getDrizzle(),
+    dialect: adapter.getCapabilities().dialect,
     migrationSQL: drops.join("\n--> statement-breakpoint\n"),
-    entity: args.entity,
+    entity,
   });
 }

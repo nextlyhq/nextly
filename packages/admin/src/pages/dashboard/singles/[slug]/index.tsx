@@ -231,6 +231,7 @@ export default function SingleEditPage({
     error: documentError,
     sourceDoc,
     isNonDefaultLocale,
+    latest,
   } = useSingleEditorDocument({
     slug,
     locale,
@@ -351,7 +352,8 @@ export default function SingleEditPage({
     );
   }
 
-  // Error state
+  // Error state: no Single to show. A failed re-read of the Single on screen
+  // keeps the editor, read-only until a read succeeds.
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
@@ -518,6 +520,7 @@ export default function SingleEditPage({
               navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))
             }
             documentView={singleDocumentView(params)}
+            latest={latest}
           />
         </MeasuredPageFrame>
       </QueryErrorBoundary>

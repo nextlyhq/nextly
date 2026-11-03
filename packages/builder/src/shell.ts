@@ -582,11 +582,20 @@ export type { ClassCreation, ClassSelectorProps } from "./class-selector";
  */
 export { useNoticeQueue } from "./builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./builder-notices";
-export { ClassManagerPanel } from "./class-manager-panel";
+export { SharedStylesPanel } from "./shared-styles-panel";
 export type {
-  ClassManagerPanelProps,
   ClassRenameOutcome,
-} from "./class-manager-panel";
+  PageClassBlocks,
+  SharedStylesAccess,
+  SharedStylesPanelProps,
+} from "./shared-styles-panel";
+export type {
+  SharedStyleKind,
+  SharedStyleReach,
+  SharedStylesUsage,
+  SharedStyleUse,
+  SharedStyleUsesPage,
+} from "./shared-style-library";
 export {
   classRows,
   filterClassRows,
