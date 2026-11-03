@@ -113,6 +113,9 @@ export function BlockCard({
           ) : (
             <h2
               className="nx-block-card__title"
+              // Cut short on screen like the description below, so the whole
+              // name is in its tooltip for a pointer.
+              title={wholeTitle(name, type)}
               onDoubleClick={
                 onRename === undefined ? undefined : () => setRenaming(true)
               }
@@ -322,6 +325,11 @@ function MenuItem({
       )}
     </DropdownMenuItem>
   );
+}
+
+/** The card's title as one line: the author's name and the type, or the type. */
+function wholeTitle(name: string, type: string): string {
+  return name === "" ? type : `${name} · ${type}`;
 }
 
 /**

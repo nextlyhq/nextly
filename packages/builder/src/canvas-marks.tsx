@@ -44,14 +44,17 @@ import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
+  canvasScroller,
   clippedByAncestor,
   overlaySpaceOf,
   renderedScale,
   usedRadiiOf,
   visiblePartOf,
+  visibleBandOf,
   type OverlaySpace,
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
+import { toolbarPlacement } from "./toolbar-actions";
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
@@ -72,6 +75,24 @@ interface Mark {
    * selected: hatched, and tagged as hidden.
    */
   readonly hidden: boolean;
+  /**
+   * Where a hidden block's tag sits: below the ring, above it when the ring
+   * ends at the bottom of what is on screen, where the canvas would cut a tag
+   * below it off, or inside it when neither fits, as on a block that fills
+   * the screen.
+   */
+  readonly tag: "below" | "above" | "inside";
+  /**
+   * For a tag inside the ring, how far in from the ring's bottom and side
+   * edges it sits, so it stays on screen when the ring runs past the screen.
+   */
+  readonly tagInset: { readonly bottom: number; readonly side: number };
+  /**
+   * Which of the ring's edges the tag lines up with: its right edge, so the
+   * tag runs leftwards, or its left edge when there is no room on screen for
+   * it to the left of the ring's right edge.
+   */
+  readonly tagEdge: "right" | "left";
   /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
   readonly rect: Rect;
@@ -82,6 +103,23 @@ interface Mark {
 const NO_MARKS: readonly Mark[] = [];
 
 const NO_IDS: readonly string[] = [];
+
+/** The height a hidden block's tag takes outside its ring, with its gap. */
+const TAG_ROOM = 24;
+
+/** The gap between a tag inside the ring and the ring's edges. */
+const TAG_GAP = 4;
+
+const NO_INSET = { bottom: TAG_GAP, side: TAG_GAP } as const;
+
+/**
+ * About how wide a tag of `label` is drawn: its 11px face runs under 7px a
+ * character, plus its padding. An estimate erring wide, since a tag judged to
+ * fit that does not is the one the canvas cuts off.
+ */
+function tagWidthOf(label: string): number {
+  return label.length * 7 + 12;
+}
 
 /** @experimental */
 export interface CanvasMarksProps {
@@ -101,14 +139,29 @@ export interface CanvasMarksProps {
 
 /** Everything that decides how a mark is drawn, as one comparable value. */
 function markKey(mark: Mark): string {
-  const { kind, secondary, component, locked, hidden, clipped, radius, rect } =
-    mark;
+  const {
+    kind,
+    secondary,
+    component,
+    locked,
+    hidden,
+    tag,
+    tagEdge,
+    tagInset,
+    clipped,
+    radius,
+    rect,
+  } = mark;
   return JSON.stringify([
     kind,
     secondary,
     component,
     locked,
     hidden,
+    tag,
+    tagEdge,
+    tagInset.bottom,
+    tagInset.side,
     clipped,
     radius,
     rect.x,
@@ -125,6 +178,30 @@ function sameMarks(a: readonly Mark[], b: readonly Mark[]): boolean {
     const other = b[index];
     return other !== undefined && markKey(mark) === markKey(other);
   });
+}
+
+/**
+ * A mark's box, and for a tag inside the ring the insets the stylesheet places
+ * it by: custom properties, read only under `data-tag="inside"`.
+ */
+function markStyle(mark: Mark): React.CSSProperties {
+  const box: React.CSSProperties = {
+    left: mark.rect.x,
+    top: mark.rect.y,
+    width: mark.rect.width,
+    height: mark.rect.height,
+    borderRadius: mark.radius,
+  };
+  if (!mark.hidden) return box;
+  return {
+    ...box,
+    // Every tag moves in from the side the screen cuts; only a tag inside the
+    // ring is placed from the bottom.
+    "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
+    ...(mark.tag === "inside"
+      ? { "--nx-tag-inset-bottom": `${String(mark.tagInset.bottom)}px` }
+      : {}),
+  } as React.CSSProperties;
 }
 
 /** Corner radii as the `border-radius` shorthand writes them, both axes. */
@@ -196,6 +273,8 @@ interface MarkInputs {
    * set: asked once per marked element, and a selection can hold thousands.
    */
   readonly revealed: ReadonlySet<string>;
+  /** About how wide a hidden block's tag is drawn, in the chrome's pixels. */
+  readonly tagWidth: number;
 }
 
 /** The marked elements of a canvas root, as the boxes to draw over them. */
@@ -203,6 +282,64 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
   if (space === null) return NO_MARKS;
   const { root } = space;
+  // What is on screen, in the chrome's coordinates: the part of the page the
+  // scroller shows, where the canvas cuts off anything drawn past it. The
+  // whole page where nothing scrolls it.
+  const scroller = canvasScroller(root, space.frame !== null);
+  const onScreen = space.place(
+    scroller === null
+      ? canvasContentRect(root, root)
+      : visibleBandOf(scroller, root)
+  );
+  const screenBottom = onScreen.y + onScreen.height;
+  const screenRight = onScreen.x + onScreen.width;
+  // From the ring's right edge as far as the screen shows it.
+  const roomLeft = (rect: Rect): boolean =>
+    Math.min(rect.x + rect.width, screenRight) - inputs.tagWidth >= onScreen.x;
+  // The block toolbar, drawn beside these marks over the same canvas, which
+  // takes the place above the primary block when it sits there.
+  const toolbar =
+    element.parentElement?.querySelector<HTMLElement>(".nx-block-toolbar");
+  const pageBox = space.place(canvasContentRect(root, root));
+  const toolbarAbove = (rect: Rect): boolean =>
+    toolbar !== null &&
+    toolbar !== undefined &&
+    toolbarPlacement(rect, space.sizeOf(toolbar), pageBox).side === "above";
+  // Below if it fits on screen, above if that does and the toolbar is not
+  // there, and otherwise inside the ring, which is always on screen.
+  const tagSide = (rect: Rect, primary: boolean): Mark["tag"] => {
+    if (rect.y + rect.height + TAG_ROOM <= screenBottom) return "below";
+    if (rect.y - TAG_ROOM >= onScreen.y && !(primary && toolbarAbove(rect))) {
+      return "above";
+    }
+    return "inside";
+  };
+  // A tag moves in as far as the ring runs past the screen, so it is never
+  // drawn where the canvas cuts it off; inside the ring it also keeps a small
+  // gap from the ring's edges.
+  const insetOf = (
+    rect: Rect,
+    edge: Mark["tagEdge"],
+    tag: Mark["tag"]
+  ): Mark["tagInset"] => {
+    const gap = tag === "inside" ? TAG_GAP : 0;
+    return {
+      bottom: gap + Math.max(0, rect.y + rect.height - screenBottom),
+      side:
+        gap +
+        (edge === "right"
+          ? Math.max(0, rect.x + rect.width - screenRight)
+          : Math.max(0, onScreen.x - rect.x)),
+    };
+  };
+  const placedTag = (
+    rect: Rect,
+    primary: boolean
+  ): Pick<Mark, "tag" | "tagEdge" | "tagInset"> => {
+    const tagEdge = roomLeft(rect) ? "right" : "left";
+    const tag = tagSide(rect, primary);
+    return { tag, tagEdge, tagInset: insetOf(rect, tagEdge, tag) };
+  };
   const found: Mark[] = [];
   root
     .querySelectorAll(
@@ -219,6 +356,9 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         component: false,
         locked: false,
         hidden: false,
+        tag: "below" as const,
+        tagEdge: "right" as const,
+        tagInset: NO_INSET,
       };
       const selected = marked.getAttribute(SELECTED_ATTRIBUTE);
       if (selected !== null) {
@@ -230,6 +370,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
           component: marked.hasAttribute(INSTANCE_ATTRIBUTE),
           locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
           hidden: address !== null && inputs.revealed.has(address),
+          ...placedTag(outline.rect, selected === "primary"),
         });
       }
       // An exposed part that is itself selected keeps its ring alone: one
@@ -266,6 +407,9 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         component: candidate.hasAttribute(INSTANCE_ATTRIBUTE),
         locked: false,
         hidden: false,
+        tag: "below",
+        tagEdge: "right",
+        tagInset: NO_INSET,
       });
     });
   }
@@ -308,9 +452,10 @@ export function CanvasMarks({
         : marksOf(element, {
             hovered,
             revealed: new Set(JSON.parse(revealedKey) as string[]),
+            tagWidth: tagWidthOf(hiddenLabel),
           });
     setMarks(current => (sameMarks(current, next) ? current : next));
-  }, [hovered, revealedKey]);
+  }, [hovered, revealedKey, hiddenLabel]);
 
   React.useLayoutEffect(() => {
     measure();
@@ -346,14 +491,10 @@ export function CanvasMarks({
           // from this attribute; the layer is hidden from assistive
           // technology, and Layers and the inspector say it in words.
           data-label={mark.hidden ? hiddenLabel : undefined}
+          data-tag={mark.hidden ? mark.tag : undefined}
+          data-tag-edge={mark.hidden ? mark.tagEdge : undefined}
           data-clipped={mark.clipped ? "" : undefined}
-          style={{
-            left: mark.rect.x,
-            top: mark.rect.y,
-            width: mark.rect.width,
-            height: mark.rect.height,
-            borderRadius: mark.radius,
-          }}
+          style={markStyle(mark)}
         />
       ))}
     </div>
