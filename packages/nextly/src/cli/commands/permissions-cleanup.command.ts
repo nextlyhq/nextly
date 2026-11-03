@@ -4,6 +4,7 @@
  */
 import { Command } from "commander";
 
+import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -14,6 +15,7 @@ import { lazyAction } from "../lazy-action";
 export function createPermissionsCleanupCommand(): Command {
   const command = new Command("permissions:cleanup")
     .description("Remove permissions for deleted collections and singles")
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     .action(
       lazyAction(
         async () =>
