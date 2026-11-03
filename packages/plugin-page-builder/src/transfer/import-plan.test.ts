@@ -190,14 +190,14 @@ describe("planImport", () => {
         entry.existingId,
       ])
     ).toEqual([
-      ["class", "c1", "x1"],
       ["token", "color.a", "color.a"],
+      ["class", "c1", "x1"],
     ]);
     expect(
       plan.preview.conflicts.map(entry => [entry.key, entry.renamedTo])
     ).toEqual([
-      ["class:c2", "hero-2"],
       ["token:color.b", "color.b-2"],
+      ["class:c2", "hero-2"],
     ]);
     expect(plan.classes.map.get("c1")).toBe("x1");
     expect(plan.classes.create.map(entry => [entry.id, entry.slug])).toEqual([
@@ -205,6 +205,32 @@ describe("planImport", () => {
     ]);
     expect(plan.tokens.map.get("color.b")).toBe("color.b-2");
     expect(plan.tokens.create.map(token => token.name)).toEqual(["color.b-2"]);
+  });
+
+  it("does not reuse a shared style whose variable the import renames", () => {
+    const styles = { base: { base: { color: { $token: "color.brand" } } } };
+    const plan = planImport(
+      file({
+        classes: [{ id: "c1", slug: "card", orderIndex: 0, styles }],
+        tokens: [
+          { name: "color.brand", kind: "color", values: { light: "#123456" } },
+        ],
+      }),
+      site({
+        classes: [{ id: "x1", slug: "card", orderIndex: 0, styles }],
+        tokens: [
+          { name: "color.brand", kind: "color", values: { light: "#000000" } },
+        ],
+      })
+    );
+    // The file's card draws the file's brand colour, renamed on the way in,
+    // so it is not the card this site holds.
+    expect(plan.preview.reused).toEqual([]);
+    expect(plan.preview.conflicts.map(entry => entry.key)).toEqual([
+      "token:color.brand",
+      "class:c1",
+    ]);
+    expect(plan.classes.map.get("c1")).toBe("c1");
   });
 
   it("reuses an identical media file and settles one with the same name", () => {

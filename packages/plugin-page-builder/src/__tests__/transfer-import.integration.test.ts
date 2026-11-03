@@ -1040,6 +1040,65 @@ describe.each(getConfiguredTestDialects())(
       expect(await snapshot(t)).toBe(before);
     });
 
+    it("compares breakpoints only for a caller who may read the site style", async () => {
+      const t = await boot();
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: { breakpoints: SOURCE_BREAKPOINTS },
+      });
+      const { cookie } = await holding(
+        t,
+        WRITES_EVERYTHING.filter(slug => slug !== "read-site-style")
+      );
+      const file = fileOf([{ id: "b", nodes: [heading("h")] }], {
+        breakpoints: [
+          { id: "tablet", label: "Tablet", axis: "viewport", maxWidth: 991 },
+        ],
+      });
+
+      const seen = await preview(cookie, file);
+
+      expect(seen.breakpoints.matched).toEqual([]);
+      expect(JSON.stringify(seen)).not.toContain('"to"');
+      expect(seen.problems).toContainEqual({
+        code: "NOT_GRANTED",
+        message: expect.stringContaining("read the site style"),
+      });
+    });
+
+    it("finds the identical image past the first page of same-named files", async () => {
+      const { file, site } = await exported("components", s => s.inner);
+      const t = await boot();
+      const identical = await t.nextly.media.upload({
+        file: {
+          data: PNG,
+          name: "dot.png",
+          mimetype: "image/png",
+          size: PNG.length,
+        },
+      });
+      for (let n = 0; n < 50; n += 1) {
+        await t.nextly.media.upload({
+          file: {
+            data: OTHER_PNG,
+            name: `dot-${String(n)}.png`,
+            mimetype: "image/png",
+            size: OTHER_PNG.length,
+          },
+        });
+      }
+      const { cookie } = await holding(t, WRITES_EVERYTHING);
+
+      const seen = await preview(cookie, file);
+
+      expect(seen.reused).toContainEqual({
+        kind: "media",
+        fileId: site.mediaId,
+        name: "dot.png",
+        existingId: identical.id,
+      });
+    });
+
     it("tells the hooks a write is judged, and commits without saying so", async () => {
       const t = await boot();
       const { cookie } = await holding(t, WRITES_EVERYTHING);

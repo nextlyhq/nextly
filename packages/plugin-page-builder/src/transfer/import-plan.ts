@@ -42,6 +42,7 @@ import {
   type SiteToken,
 } from "@nextlyhq/blocks-engine";
 
+import { rewriteClass, type ReferenceMaps } from "./import-rewrite";
 import {
   conflictKey,
   type ImportAddition,
@@ -234,9 +235,9 @@ export function planImport(
     });
   }
   const order = componentOrder(file, items.component, ledger.problems);
-  const classes = planClasses(file.classes, site.classes, ledger);
+  // Variables and breakpoints first: a shared style is the same as one here
+  // only once what its styles name is mapped as the import maps it.
   const tokens = planTokens(file.tokens, site.tokens, ledger);
-  const media = planMedia(file, site, ledger);
   const breakpoints = planBreakpoints(
     file,
     site,
@@ -244,6 +245,11 @@ export function planImport(
     references.counts,
     ledger.problems
   );
+  const classes = planClasses(file.classes, site.classes, ledger, {
+    tokens: tokens.map,
+    breakpoints: breakpoints.map,
+  });
+  const media = planMedia(file, site, ledger);
   const missingBlockTypes = [...references.blockTypes]
     .filter(type => !site.isRegistered(type))
     .sort();
@@ -357,15 +363,31 @@ function settle(
 function planClasses(
   listed: readonly NamedClass[],
   own: readonly NamedClass[],
-  ledger: Ledger
+  ledger: Ledger,
+  mapped: Pick<ReferenceMaps, "tokens" | "breakpoints">
 ): ImportPlan["classes"] {
+  const maps: ReferenceMaps = {
+    components: new Map(),
+    classes: new Map(),
+    media: new Map(),
+    ...mapped,
+  };
   const map = new Map<string, string>();
   const create: { from: NamedClass; id: string; slug: string }[] = [];
   const slugs = new Set(own.map(entry => entry.slug));
   const ids = new Set(own.map(entry => entry.id));
   for (const entry of listed) {
     const named = own.find(mine => mine.slug === entry.slug);
-    if (named !== undefined && sameJsonValue(named.styles, entry.styles)) {
+    // Compared as it would be written here: the same raw `$token` under a
+    // variable the import renames is not the same style.
+    const written = rewriteClass(
+      entry,
+      entry.id,
+      entry.slug,
+      entry.orderIndex,
+      maps
+    );
+    if (named !== undefined && sameJsonValue(named.styles, written.styles)) {
       map.set(entry.id, named.id);
       ledger.reused.push({
         kind: "class",

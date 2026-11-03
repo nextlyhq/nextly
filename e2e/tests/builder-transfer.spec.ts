@@ -137,6 +137,19 @@ function fileWith(
   });
 }
 
+/**
+ * The file with a 100 KB description on its component, so the import's
+ * request is larger than any small-body limit a route could be held to.
+ */
+function withLongDescription(contents: string): string {
+  const file = JSON.parse(contents) as {
+    components: { description?: string }[];
+  };
+  const [first] = file.components;
+  if (first !== undefined) first.description = "x".repeat(100_000);
+  return JSON.stringify(file);
+}
+
 test.describe("moving items between sites as files", () => {
   test("exports a component with its image, then imports it back as a renamed copy reusing the image", async ({
     page,
@@ -262,11 +275,13 @@ test.describe("moving items between sites as files", () => {
     await importFile(
       page,
       "breakpoint.json",
-      fileWith(tag, node, {
-        breakpoints: [
-          { id: "odd", label: "Odd", axis: "viewport", maxWidth: 333 },
-        ],
-      })
+      withLongDescription(
+        fileWith(tag, node, {
+          breakpoints: [
+            { id: "odd", label: "Odd", axis: "viewport", maxWidth: 333 },
+          ],
+        })
+      )
     );
 
     const dialog = page.getByRole("dialog", {

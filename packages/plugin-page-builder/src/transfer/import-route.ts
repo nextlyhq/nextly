@@ -138,6 +138,10 @@ const ImportBody = z.strictObject({
   expect: z.string().max(128).optional(),
 });
 
+/** How many media files one search page reads, and the most pages read. */
+const MEDIA_SEARCH_PAGE_SIZE = 50;
+const MEDIA_SEARCH_PAGES = 20;
+
 /** Thrown inside the judging transaction to roll it back once it has answered. */
 class JudgedAndRolledBack extends Error {}
 
@@ -274,10 +278,12 @@ async function readSite(
     // The whole set, its unbounded base row included: a file breakpoint
     // always has a width, so it never matches the base, and the base counts
     // toward an axis's room as the stored set's own check counts it.
-    breakpoints: {
-      viewport: [...(style.breakpoints?.viewport ?? [])],
-      container: [...(style.breakpoints?.container ?? [])],
-    },
+    breakpoints: readsStyle
+      ? {
+          viewport: [...(style.breakpoints?.viewport ?? [])],
+          container: [...(style.breakpoints?.container ?? [])],
+        }
+      : { viewport: [], container: [] },
     media: (await can("read", "media"))
       ? await existingMedia(ctx, file)
       : new Map(),
@@ -388,20 +394,27 @@ async function metMedia(
   const dot = entry.filename.lastIndexOf(".");
   const stem = dot > 0 ? entry.filename.slice(0, dot) : entry.filename;
   // As the caller: a file it may not read is neither reused nor offered.
-  const found = await requireNextly().media.find({
-    search: stem,
-    limit: 50,
-    ...(await readingAsUser(ctx)),
-  });
+  // Every page of matches, up to a bound, so the identical file is not
+  // missed for sitting past the first page.
   let sameName: ExistingMedia["sameName"];
-  for (const candidate of found.items as unknown as StoredMediaRecord[]) {
-    const named = candidate.originalFilename || candidate.filename;
-    if (await sameBytes(candidate, entry)) {
-      return { identical: { id: String(candidate.id), filename: named } };
+  for (let page = 1; page <= MEDIA_SEARCH_PAGES; page += 1) {
+    const found = await requireNextly().media.find({
+      search: stem,
+      limit: MEDIA_SEARCH_PAGE_SIZE,
+      page,
+      ...(await readingAsUser(ctx)),
+    });
+    const candidates = found.items as unknown as StoredMediaRecord[];
+    for (const candidate of candidates) {
+      const named = candidate.originalFilename || candidate.filename;
+      if (await sameBytes(candidate, entry)) {
+        return { identical: { id: String(candidate.id), filename: named } };
+      }
+      if (sameName === undefined && named === entry.filename) {
+        sameName = { id: String(candidate.id), filename: named };
+      }
     }
-    if (sameName === undefined && named === entry.filename) {
-      sameName = { id: String(candidate.id), filename: named };
-    }
+    if (candidates.length < MEDIA_SEARCH_PAGE_SIZE) break;
   }
   return sameName === undefined ? {} : { sameName };
 }
@@ -468,7 +481,9 @@ async function grantProblems(
     ],
     // Reusing what is here, and comparing with it, is reading it.
     [
-      file.classes.length > 0 || file.tokens.length > 0,
+      file.classes.length > 0 ||
+        file.tokens.length > 0 ||
+        file.breakpoints.length > 0,
       "read",
       slugs.siteStyle,
       "read the site style",
