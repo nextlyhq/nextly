@@ -8,7 +8,12 @@
  * @module tests/builder-alignment-icons.spec
  */
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import { block, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
@@ -141,12 +146,19 @@ async function openStyle(
 }
 
 /** Each icon of a group chosen by a click, each showing as chosen. */
-async function clickEach(page: Page, group: string): Promise<string> {
-  const radios = page
-    .getByRole("radiogroup", { name: group, exact: true })
-    .getByRole("radio");
+/**
+ * One property's icon group, found by the property's field rather than by
+ * the group's name, which takes the provenance dot's words ("Set here") once
+ * a value is stored.
+ */
+function groupOf(page: Page, property: string): Locator {
+  return page.locator(`[data-property="${property}"]`).getByRole("radiogroup");
+}
+
+async function clickEach(page: Page, property: string): Promise<string> {
+  const radios = groupOf(page, property).getByRole("radio");
   const count = await radios.count();
-  expect(count, `${group} has icons`).toBeGreaterThan(1);
+  expect(count, `${property} has icons`).toBeGreaterThan(1);
   for (let index = 0; index < count; index += 1) {
     await radios.nth(index).click();
     await expect(radios.nth(index)).toHaveAttribute("aria-checked", "true");
@@ -161,15 +173,17 @@ test.describe("alignment and direction icons", () => {
     const pageId = await createPage(page.request);
     await openStyle(page, pageId, SECTION, "Layout");
 
-    for (const group of ["Flex direction", "Flex wrap", "Justify", "Align"]) {
-      await clickEach(page, group);
+    for (const property of [
+      "flexDirection",
+      "flexWrap",
+      "justifyContent",
+      "alignItems",
+    ]) {
+      await clickEach(page, property);
     }
 
     // By keyboard: the group is one tab stop, and the arrows move the choice.
-    const justify = page.getByRole("radiogroup", {
-      name: "Justify",
-      exact: true,
-    });
+    const justify = groupOf(page, "justifyContent");
     await justify.getByRole("radio", { name: "Start" }).click();
     const reachable = justify.locator('[role="radio"][tabindex="0"]');
     await expect(reachable).toHaveCount(1);
@@ -211,9 +225,7 @@ test.describe("alignment and direction icons", () => {
   }) => {
     const pageId = await createPage(page.request);
     await openStyle(page, pageId, SECTION, "Layout");
-    await expect(
-      page.getByRole("radiogroup", { name: "Justify", exact: true })
-    ).toBeVisible();
+    await expect(groupOf(page, "justifyContent")).toBeVisible();
 
     const results = await new AxeBuilder({ page })
       .include(".nx-inspector")
