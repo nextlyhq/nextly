@@ -109,12 +109,12 @@ test("a type size picked for a heading is stored as a reference, and follows the
     }
     await expect(fontSize).toBeVisible();
 
-    // The ◇ is faded until the field is pointed at or focused, and Tab
-    // reaches it from the field even while faded.
+    // An empty field shows its ◇ at rest, the sign that a variable can be
+    // chosen, and Tab reaches it from the field.
     const choose = inspector.getByRole("button", {
       name: "Variables for Font size",
     });
-    await expect(choose).toHaveCSS("opacity", "0");
+    await expect(choose).toHaveCSS("opacity", "1");
     await fontSize.focus();
     for (let step = 0; step < 3; step += 1) {
       if (await choose.evaluate(element => element === document.activeElement))
