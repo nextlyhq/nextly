@@ -552,7 +552,9 @@ export function editorPanelRenderer({
           componentTitle={offered.titleOf}
         />
       ),
-      pages: pages.renderPagesPanel,
+      // Read when the panel is drawn, as every other entry reads its inputs,
+      // so drawing another panel never needs the Pages panel's mount.
+      pages: () => pages.renderPagesPanel(),
       design: () => (
         <DesignPanel
           view={view}
