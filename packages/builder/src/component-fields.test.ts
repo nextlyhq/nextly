@@ -187,7 +187,7 @@ describe("exposing a prop", () => {
     });
     expect(exposeOffer({ type: "number" })).toEqual({
       reason:
-        "Pages can’t set a number value, so this stays the same on every page.",
+        "Pages can’t set a number value, so this stays the same everywhere it is used.",
     });
   });
 

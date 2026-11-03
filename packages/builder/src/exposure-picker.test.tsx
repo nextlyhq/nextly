@@ -202,7 +202,7 @@ describe("the exposure picker", () => {
     expect(screen.getByLabelText("Title").getAttribute("disabled")).toBeNull();
   });
 
-  it("says when nothing in the selection can change from page to page", () => {
+  it("says when nothing in the selection can change from one use to another", () => {
     const seen = { value: [] as readonly RequestedProperty[] };
     const bare: BlockNode = {
       id: "x",
@@ -213,21 +213,21 @@ describe("the exposure picker", () => {
     render(<Harness document={page([bare])} selectedIds={["x"]} seen={seen} />);
 
     expect(
-      screen.getByText(/Nothing in this selection can change from page to page/)
+      screen.getByText(/Nothing in this selection can change from one use to another/)
     ).toBeTruthy();
   });
 
-  it("asks what each page can change, and says nothing of placements", () => {
+  it("asks what each use can change, and says nothing of placements", () => {
     const seen = { value: [] as readonly RequestedProperty[] };
     render(
       <Harness document={page([card("c1")])} selectedIds={["c1"]} seen={seen} />
     );
 
     const group = screen.getByRole("group", {
-      name: "What each page can change",
+      name: "What each use can change",
     });
     expect(group.textContent).toContain(
-      "Anything left unticked looks the same on every page."
+      "Anything left unticked looks the same everywhere it is used."
     );
     expect(group.textContent ?? "").not.toMatch(/placement|expos/i);
   });

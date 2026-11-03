@@ -162,12 +162,12 @@ export function ExposurePicker({
       disabled={disabled}
     >
       <legend className="nx-expose-picker__legend">
-        What each page can change
+        What each use can change
       </legend>
       <p id={hintId} className="nx-expose-picker__hint">
         {offered.length === 0
-          ? "Nothing in this selection can change from page to page, so the component looks the same on every page."
-          : "Anything left unticked looks the same on every page. You can change this later in the component’s own view."}
+          ? "Nothing in this selection can change from one use to another, so the component looks the same everywhere it is used."
+          : "Anything left unticked looks the same everywhere it is used. You can change this later in the component’s own view."}
       </p>
       {offered.length === 0 ? null : (
         <ul className="nx-expose-picker__blocks">

@@ -181,7 +181,7 @@ export function exposeOffer(
   const type = exposureTypeForProp(schema);
   if (type !== undefined) return { type };
   return {
-    reason: `Pages can’t set a ${String(schema.type)} value, so this stays the same on every page.`,
+    reason: `Pages can’t set a ${String(schema.type)} value, so this stays the same everywhere it is used.`,
   };
 }
 
@@ -192,7 +192,7 @@ const PROBLEM_SENTENCE: Readonly<Record<ExposureEditProblem, string>> = {
   "unknown-node": "That block is no longer in this component.",
   "unknown-prop": "That block no longer has this property.",
   "not-exposable":
-    "Pages have no control for this property, so it stays the same on every page.",
+    "Pages have no control for this property, so it stays the same everywhere it is used.",
   "content-only":
     "This block is in an area locked to its content, and this property isn’t content, so pages couldn’t change it. Loosen the lock to let each page change it.",
   "invalid-label": "Give the field a name.",
