@@ -180,6 +180,13 @@ export interface EntryWriteContext {
    */
   readonly defaultLocale?: string | null;
   readonly inTransaction: boolean;
+  /**
+   * The write's top-level payload, where it differs from the data being
+   * validated: a field-group instance is validated on its own, and a plugin
+   * validator inside it is still handed the write, as `PluginFieldValidateArgs.data`
+   * promises (its lifecycle `status` included). Absent, that is the data.
+   */
+  readonly payload?: Record<string, unknown>;
   readStored(
     allowedType: string,
     target: PluginStoredValueTarget
@@ -1089,7 +1096,7 @@ export async function validateEntryData(
   await validateFields(
     fields,
     data,
-    { data, mode: options.mode },
+    { data: options.write?.payload ?? data, mode: options.mode },
     "",
     options,
     issues

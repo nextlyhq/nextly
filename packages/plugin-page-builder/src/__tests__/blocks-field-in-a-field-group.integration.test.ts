@@ -126,16 +126,21 @@ function sealedCard(align: string): BlockNode {
   return card;
 }
 
-/** The validation issue codes a refused write carries, or none. */
+/**
+ * The validation issue codes a refused write carries, or none for a write
+ * that saved. Any other failure is rethrown, so a write that failed for
+ * another reason never reads as a save.
+ */
 async function refusalCodes(write: Promise<unknown>): Promise<string[]> {
   try {
     await write;
     return [];
   } catch (error) {
-    return (
-      (error as { publicData?: { errors?: Array<{ code: string }> } })
-        .publicData?.errors ?? []
-    ).map(issue => issue.code);
+    const errors = (
+      error as { publicData?: { errors?: Array<{ code: string }> } }
+    ).publicData?.errors;
+    if (errors === undefined) throw error;
+    return errors.map(issue => issue.code);
   }
 }
 
@@ -144,6 +149,7 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     let t: TestNextly;
     let deep = "";
+    let swing = "";
 
     beforeAll(async () => {
       t = await createTestNextly({
@@ -157,6 +163,15 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
         collections: [
+          defineCollection({
+            // With a lifecycle, so a save says whether it publishes.
+            slug: "posters",
+            status: true,
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "hero", component: "herobox" }),
+            ],
+          }),
           defineCollection({
             slug: "landings",
             fields: [
@@ -199,6 +214,35 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       deep = String(created.item.id);
+      // Published two deep, with a pending draft one deep: which form a save
+      // is judged against decides whether a page placing it fits.
+      const swinging = await t.nextly.create({
+        collection: COMPONENTS_SLUG,
+        data: {
+          title: "swing",
+          slug: "swing",
+          status: "published",
+          content: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [box("s1", [heading("s2")])],
+          },
+        },
+        overrideAccess: true,
+      });
+      swing = String(swinging.item.id);
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id: swing,
+        data: {
+          content: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [heading("s1")],
+          },
+        },
+        overrideAccess: true,
+      });
     });
 
     afterAll(async () => {
@@ -226,6 +270,23 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await refusalCodes(createLanding({ hero: { content: withinLimit() } }))
       ).toEqual([]);
+    });
+
+    it("judges a publish against the published forms of the components it places", async () => {
+      // Three boxes deep: the swing's published form (two deep) passes the
+      // limit, its pending draft (one deep) ends at it.
+      const page = () =>
+        pageOf([box("p1", [box("p2", [box("p3", [placing("i1", swing)])])])]);
+      const save = (status: string) =>
+        t.nextly.create({
+          collection: "posters" as never,
+          data: { title: "Poster", status, hero: { content: page() } } as never,
+          overrideAccess: true,
+        });
+
+      expect(await refusalCodes(save("published"))).toEqual(["depth-exceeded"]);
+      // CONTROL: a draft is judged against the drafts alone, and fits.
+      expect(await refusalCodes(save("draft"))).toEqual([]);
     });
 
     it("refuses the same on an update", async () => {

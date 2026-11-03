@@ -1249,15 +1249,21 @@ export class SinglePublishAllService extends BaseService {
       access,
       // The Single's write, on its transaction, so a field inside an instance
       // that reads the library judges it as the Single's own fields are.
-      write: entryWriteContext({
-        kind: "single",
-        slug: plan.slug,
-        connection: {
-          db: tx,
-          executor: tx.getDrizzle(),
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        },
-      }),
+      // In the language published, and as a publish: the payload names the
+      // status it leaves, so such a field judges the published form too.
+      write: {
+        ...entryWriteContext({
+          kind: "single",
+          slug: plan.slug,
+          ...(locale === null ? {} : { locale }),
+          connection: {
+            db: tx,
+            executor: tx.getDrizzle(),
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          },
+        }),
+        payload: { ...components, status: "published" },
+      },
     });
   }
 

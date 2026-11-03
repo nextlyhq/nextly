@@ -363,27 +363,29 @@ function resolveZoneInstances(
 
 /**
  * The host write's context as a field inside one of its field-group
- * instances sees it: the same entry, operation, connection and library
- * reads, except a read of the host entry itself.
+ * instances sees it: the same entry, operation, language, payload, connection
+ * and library reads, except a read of the host's own field named as one of
+ * the instance's.
  *
- * A stored read names a top-level field of the entry it reads, so from inside
- * an instance it would reach the host's own field of the same name: another
- * value, of another document, already written in this transaction. A lock
- * judged against that as its baseline could pass a change the instance's own
- * value never allowed. So that read answers that nothing is stored there,
- * which is true of the instance: a field reading its own baseline that way
- * judges against its starting value alone, failing closed. Refusing the read
- * instead would fail every save of a field group holding a locked block, since
- * a failed stored read fails the write.
+ * A stored read names a top-level field of the entry it reads, so a field of
+ * the instance reading its own baseline that way would reach the host's own
+ * field of the same name: another value, of another document, already written
+ * in this transaction. A lock judged against that could pass a change the
+ * instance's own value never allowed. So that read answers that nothing is
+ * stored, which is true of the instance: the field judges against its starting
+ * value alone, failing closed. Refusing the read instead would fail every save
+ * of a field group holding a locked block, since a failed stored read fails
+ * the write. A read of any other field of the host is the host's own read.
  */
-export function instanceWriteOf(host: EntryWriteContext): EntryWriteContext {
+export function instanceWriteOf(
+  host: EntryWriteContext,
+  /** The instance's own field names: the reads that would mistake the host's. */
+  ownFields: ReadonlySet<string>
+): EntryWriteContext {
   return {
-    kind: host.kind,
-    slug: host.slug,
-    ...(host.id === undefined ? {} : { id: host.id }),
-    inTransaction: host.inTransaction,
+    ...host,
     readStored: (allowedType, target) =>
-      readsTheHost(host, target)
+      ownFields.has(target.field) && readsTheHost(host, target)
         ? Promise.resolve({ kind: "absent" as const })
         : host.readStored(allowedType, target),
   };
@@ -2081,7 +2083,14 @@ export class FieldGroupMutationService extends BaseService {
           componentFields: nested,
           // A field type that reads the library judges this instance with the
           // host write's context, as it judges the host's own field.
-          ...(write === undefined ? {} : { write: instanceWriteOf(write) }),
+          ...(write === undefined
+            ? {}
+            : {
+                write: instanceWriteOf(
+                  write,
+                  new Set(componentFields.map(field => field.name))
+                ),
+              }),
         }
       )),
     ];

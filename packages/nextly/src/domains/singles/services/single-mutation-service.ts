@@ -3639,15 +3639,22 @@ export class SingleMutationService extends BaseService {
               access: fieldGroupWriteAccessOf(options, this.fieldRuleVisitor),
               // The Single's write, on its transaction, so a field inside an
               // instance that reads the library judges it as the Single's own.
-              write: entryWriteContext({
-                kind: "single",
-                slug,
-                connection: {
-                  db: tx,
-                  executor: tx.getDrizzle(),
-                  defaultLocale: this.localization?.defaultLocale ?? null,
-                },
-              }),
+              // Its language and top-level payload go with it, so such a field
+              // reads the same language's stored values and sees the save's
+              // status as the Single's own fields do.
+              write: {
+                ...entryWriteContext({
+                  kind: "single",
+                  slug,
+                  ...(writeLocale === undefined ? {} : { locale: writeLocale }),
+                  connection: {
+                    db: tx,
+                    executor: tx.getDrizzle(),
+                    defaultLocale: this.localization?.defaultLocale ?? null,
+                  },
+                }),
+                payload: currentData,
+              },
             });
             if (
               !holdEdit &&

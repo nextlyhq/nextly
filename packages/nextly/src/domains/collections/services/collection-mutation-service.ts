@@ -2502,10 +2502,13 @@ export class CollectionMutationService extends BaseService {
     slug: string,
     id: string | undefined,
     tx?: TransactionContext,
-    locale?: string
+    locale?: string,
+    // The write's top-level payload, for a field-group instance's validators,
+    // which are otherwise handed the instance; see `EntryWriteContext.payload`.
+    payload?: Record<string, unknown>
   ): EntryWriteContext {
     const defaultLocale = this.localization?.defaultLocale ?? null;
-    return entryWriteContext({
+    const write = entryWriteContext({
       kind: "collection",
       slug,
       ...(id === undefined ? {} : { id }),
@@ -2515,6 +2518,7 @@ export class CollectionMutationService extends BaseService {
           ? { db: this.adapter, executor: undefined, defaultLocale }
           : { db: tx, executor: tx.getDrizzle(), defaultLocale },
     });
+    return payload === undefined ? write : { ...write, payload };
   }
 
   /**
@@ -6769,7 +6773,9 @@ export class CollectionMutationService extends BaseService {
             write: this.validationWrite(
               params.collectionName,
               entry.id as string,
-              tx
+              tx,
+              params.locale,
+              finalData
             ),
           });
         }
@@ -11636,7 +11642,9 @@ export class CollectionMutationService extends BaseService {
                 write: this.validationWrite(
                   params.collectionName,
                   params.entryId,
-                  tx
+                  tx,
+                  params.locale,
+                  finalData
                 ),
               }
             );
@@ -15063,7 +15071,9 @@ export class CollectionMutationService extends BaseService {
           write: this.validationWrite(
             params.collectionName,
             (entry as { id: string }).id,
-            tx
+            tx,
+            localizedWrite?.writeLocale,
+            finalData
           ),
         });
         return entry;
@@ -16193,7 +16203,13 @@ export class CollectionMutationService extends BaseService {
           data: componentFieldData,
           user: params.user,
           access: this.fieldGroupAccess(params),
-          write: this.validationWrite(params.collectionName, entryId, tx),
+          write: this.validationWrite(
+            params.collectionName,
+            entryId,
+            tx,
+            localizedUpdate?.writeLocale,
+            finalData
+          ),
         });
         // Which media items the entry uses now, from what this update stored.
         // A held edit stored nothing, so it changes nothing here either.
