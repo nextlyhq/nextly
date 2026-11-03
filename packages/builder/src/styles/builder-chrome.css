@@ -274,13 +274,13 @@
  * the accent mixed into transparency, so it is a tint of whichever accent the
  * theme gives, in either mode, rather than a second colour to keep in step.
  */
+/* No background: the shell's panel region is the one surface panels sit on. */
 .nx-insert-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
   color: var(--nx-builder-text, var(--nx-foreground));
-  background: var(--nx-builder-surface, var(--nx-background));
 }
 
 /* The panel's name, as the other panels on the rail head theirs. */
@@ -656,13 +656,13 @@
  * carries "Edit", and its name and sentence are what tell two components of
  * one site apart.
  */
+/* No background: the shell's panel region is the one surface panels sit on. */
 .nx-components-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
   color: var(--nx-builder-text, var(--nx-foreground));
-  background: var(--nx-builder-surface, var(--nx-background));
 }
 
 .nx-components-panel__search {
