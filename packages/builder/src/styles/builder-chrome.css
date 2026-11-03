@@ -5099,7 +5099,7 @@ fieldset.nx-inspector__fields {
   position: absolute;
   inset-block-start: 0.25rem;
   inset-inline-start: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   line-height: 1;
   color: var(--nx-muted-foreground);
 }
@@ -5121,7 +5121,7 @@ fieldset.nx-inspector__fields {
 .nx-spacing-box .nx-inspector__field input {
   block-size: 1.75rem;
   padding-inline: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   text-align: center;
 }
 
@@ -5129,22 +5129,38 @@ fieldset.nx-inspector__fields {
   display: none;
 }
 
+/*
+ * A side's reset or jump action, and a refusal of what was typed, drawn over
+ * the box below the side rather than inside its 3.5rem: inside, a sentence
+ * turned into a tall column and pushed the rings apart. Bounded to a width the
+ * inspector holds, wrapping within it, and opened toward the inspector's
+ * middle from a side at its inline end, so neither runs off the panel.
+ */
 .nx-spacing-box
   .nx-inspector__field:focus-within
-  .nx-style-inspector__breakpoint-action {
+  .nx-style-inspector__breakpoint-action,
+.nx-spacing-box .nx-inspector__error {
   display: flex;
   position: absolute;
   z-index: 2;
   inset-block-start: 100%;
   inset-inline-start: 0;
-  margin-block-start: 0.25rem;
+  inline-size: max-content;
+  max-inline-size: 12rem;
+  margin: 0.25rem 0 0;
   padding: 0.25rem 0.5rem;
-  white-space: nowrap;
+  white-space: normal;
   border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-sm);
   background: var(--nx-popover);
   color: var(--nx-popover-foreground);
   box-shadow: var(--shadow-md);
+}
+
+.nx-spacing-box [data-side="inlineEnd"] .nx-style-inspector__breakpoint-action,
+.nx-spacing-box [data-side="inlineEnd"] .nx-inspector__error {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
 }
 
 @container nx-inspector-fields (max-width: 18rem) {
@@ -5161,6 +5177,24 @@ fieldset.nx-inspector__fields {
 
   .nx-spacing-box__caption {
     position: static;
+  }
+
+  /* Rows again, each with its label: the side takes the row's width, and
+     its action and any refusal sit in the row's flow below it. */
+  .nx-spacing-box .nx-inspector__field {
+    max-inline-size: none;
+  }
+
+  .nx-spacing-box .nx-style-inspector__breakpoint-action,
+  .nx-spacing-box .nx-inspector__error {
+    display: flex;
+    position: static;
+    inline-size: auto;
+    max-inline-size: none;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    padding: 0;
   }
 
   .nx-style-inspector__side-box .nx-style-inspector__field-label-text {

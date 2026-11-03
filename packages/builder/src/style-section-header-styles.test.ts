@@ -75,3 +75,31 @@ describe("a field's provenance dot", () => {
     ).toContain("opacity: 1");
   });
 });
+
+describe("the spacing box", () => {
+  it("draws a side's action and a refusal over the box, bounded to the inspector", () => {
+    // Inside a 3.5rem side, a sentence became a tall column and pushed the
+    // rings apart; unbounded, it ran past the panel's edge.
+    const overlay = ruleBody(
+      ".nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__breakpoint-action, .nx-spacing-box .nx-inspector__error"
+    );
+    expect(overlay).toContain("position: absolute");
+    expect(overlay).toContain("max-inline-size: 12rem");
+    expect(overlay).toContain("white-space: normal");
+    // A side at the inline end opens toward the middle of the inspector.
+    expect(
+      ruleBody(
+        '.nx-spacing-box [data-side="inlineEnd"] .nx-style-inspector__breakpoint-action, .nx-spacing-box [data-side="inlineEnd"] .nx-inspector__error'
+      )
+    ).toContain("inset-inline-end: 0");
+  });
+
+  it("gives a side its row's whole width when the narrow inspector draws rows", () => {
+    const narrow = FLAT.slice(
+      FLAT.indexOf("@container nx-inspector-fields (max-width: 18rem)")
+    );
+    expect(narrow).toMatch(
+      /\.nx-spacing-box \.nx-inspector__field \{ max-inline-size: none; \}/
+    );
+  });
+});
