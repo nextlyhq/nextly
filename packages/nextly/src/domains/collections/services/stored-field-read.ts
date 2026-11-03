@@ -193,9 +193,17 @@ export async function readStoredField(
   });
   const reached =
     shown === undefined ? undefined : valueWithin(shown.value, path.within);
-  return reached === undefined
-    ? { kind: "absent" }
-    : { kind: "value", value: decoded(reached.value, allowedType) };
+  if (reached === undefined) return { kind: "absent" };
+  // Only a column's own value is stored encoded. A value reached inside a
+  // group was decoded with the group, and decoding it again would turn a
+  // string holding JSON text ("123", "null") into what that text says.
+  return {
+    kind: "value",
+    value:
+      path.within.length === 0
+        ? decoded(reached.value, allowedType)
+        : reached.value,
+  };
 }
 
 /**
@@ -225,27 +233,68 @@ function storedFieldPath(
   target: StoredFieldTarget,
   allowedType: string
 ): StoredFieldPath {
+  const refuse = (why: string) => refused(target, allowedType, why);
   const names = target.field.split(".");
-  let fields: readonly FieldDefinition[] = entity.fields;
-  for (const [depth, name] of names.slice(0, -1).entries()) {
-    const holder = fields.find(entry => entry.name === name);
-    if (holder?.type !== "group" || !Array.isArray(holder.fields)) {
-      throw refused(target, allowedType, "is not inside named groups alone");
-    }
-    const perLanguage =
-      depth === 0
-        ? companionFieldOf(entity, name) !== undefined
-        : entity.localized && holder.localized === true;
-    if (perLanguage) {
-      throw refused(target, allowedType, "is inside a group kept per language");
-    }
-    fields = holder.fields;
-  }
+  const fields = innermostGroupFields(entity, names.slice(0, -1), refuse);
   const field = fields.find(entry => entry.name === names.at(-1));
-  if (field === undefined || field.type !== allowedType) {
-    throw refused(target, allowedType, "is not a field of that type");
+  if (field?.type !== allowedType) {
+    throw refuse("is not a field of that type");
   }
   return { column: names[0] ?? target.field, within: names.slice(1) };
+}
+
+/** A named group: a `group` field that declares fields of its own. */
+type NamedGroup = FieldDefinition & { fields: FieldDefinition[] };
+
+/**
+ * The fields of the innermost group `groups` names, walking from the entity's
+ * top level; the entity's own fields for a top-level read. Refused with
+ * `refuse`'s error where a name is not a named group, or names one kept per
+ * language.
+ */
+function innermostGroupFields(
+  entity: StoredEntity,
+  groups: readonly string[],
+  refuse: (why: string) => NextlyError
+): readonly FieldDefinition[] {
+  let fields: readonly FieldDefinition[] = entity.fields;
+  for (const [depth, name] of groups.entries()) {
+    const group = namedGroupIn(fields, name);
+    if (group === undefined) throw refuse("is not inside named groups alone");
+    if (groupKeptPerLanguage(entity, group, depth)) {
+      throw refuse("is inside a group kept per language");
+    }
+    fields = group.fields;
+  }
+  return fields;
+}
+
+/** The named group `name` among `fields`, or `undefined` where it is none. */
+function namedGroupIn(
+  fields: readonly FieldDefinition[],
+  name: string
+): NamedGroup | undefined {
+  return fields.find(
+    (entry): entry is NamedGroup =>
+      entry.name === name &&
+      entry.type === "group" &&
+      Array.isArray(entry.fields)
+  );
+}
+
+/**
+ * Whether a group on a read's path keeps its value per language: a top-level
+ * one by the companion schema every localized write is split by, and one
+ * below it by its own flag, in an entity kept per language.
+ */
+function groupKeptPerLanguage(
+  entity: StoredEntity,
+  group: NamedGroup,
+  depth: number
+): boolean {
+  return depth === 0
+    ? companionFieldOf(entity, group.name) !== undefined
+    : entity.localized && group.localized === true;
 }
 
 /**
