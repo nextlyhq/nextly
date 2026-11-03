@@ -362,6 +362,43 @@ describe("placing a component from the panel", () => {
   });
 });
 
+describe("a component with nothing in it to place", () => {
+  /** A published row saved without content, as the route may hand one. */
+  const EMPTY = { id: "empty", title: "Empty card", document: null };
+
+  it("is listed, says why it cannot be placed, and places nothing", () => {
+    registerText();
+    const editor = editorSpy(documentOf());
+    renderPanel({
+      editor,
+      components: [EMPTY],
+      componentDefinitions: new Map(),
+    });
+
+    const row = placeButton("Empty card");
+    expect(row.closest("li")?.getAttribute("data-refused")).toBe("true");
+    expect(described(row)).toBe("Nothing in it can be placed yet.");
+    expect(screen.queryByText("This site has no components yet.")).toBeNull();
+    fireEvent.click(row);
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("can still be opened, to be filled", () => {
+    registerText();
+    const onEditComponent = vi.fn();
+    renderPanel({
+      editor: editorSpy(documentOf()),
+      components: [EMPTY, PROMO],
+      componentDefinitions: lookupFor(PROMO),
+      onEditComponent,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Empty card" }));
+    expect(onEditComponent).toHaveBeenCalledWith("empty");
+    expect(rowNames()).toEqual(["Empty card", "Promo card"]);
+  });
+});
+
 describe("placing by keyboard", () => {
   it("moves from the search into the rows and between them with the arrows", () => {
     registerText();

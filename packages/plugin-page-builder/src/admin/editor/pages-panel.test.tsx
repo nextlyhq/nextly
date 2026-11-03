@@ -438,11 +438,48 @@ describe("a row's actions", () => {
       name: "Duplicate",
     });
     expect(duplicate.getAttribute("aria-disabled")).toBe("true");
-    expect(duplicate.getAttribute("title")).toBe(
-      "Publish it first to duplicate it."
-    );
+    // Shown to a pointer user as well as heard: the reason is on screen.
+    expect(
+      within(duplicate).getByText("Publish it first to duplicate it.")
+    ).toBeTruthy();
     await userEvent.click(duplicate);
     expect(client.duplicatePage).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unavailable item in the arrow-key order, described by its reason", async () => {
+    // A `disabled` item is skipped by the arrow keys, so a keyboard or screen
+    // reader user would never learn why Duplicate and Delete are missing.
+    identity = { kind: "collection", slug: "pages", documentId: "a" };
+    await mount([item("a", "Home", { status: "draft", state: "draft" })]);
+    await userEvent.click(
+      screen.getByRole("button", { name: "More for Home" })
+    );
+    await screen.findByRole("menu");
+    const reached = new Set<Element>();
+    for (let step = 0; step < 6; step += 1) {
+      await userEvent.keyboard("{ArrowDown}");
+      if (document.activeElement !== null) reached.add(document.activeElement);
+    }
+    expect(
+      reached.has(screen.getByRole("menuitem", { name: "Duplicate" }))
+    ).toBe(true);
+    expect(reached.has(screen.getByRole("menuitem", { name: "Delete…" }))).toBe(
+      true
+    );
+
+    const described = (name: string) => {
+      const entry = screen.getByRole("menuitem", { name });
+      const id = entry.getAttribute("aria-describedby") ?? "";
+      return document.getElementById(id)?.textContent;
+    };
+    expect(described("Duplicate")).toBe("Publish it first to duplicate it.");
+    expect(described("Delete…")).toBe("Open another page to delete this one.");
+
+    // Choosing one does nothing, and the menu stays open to say why.
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(client.deletePage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("renames in place: Enter keeps the title, and the list reads again", async () => {
@@ -539,9 +576,9 @@ describe("a row's actions", () => {
     );
     const remove = await screen.findByRole("menuitem", { name: "Delete…" });
     expect(remove.getAttribute("aria-disabled")).toBe("true");
-    expect(remove.getAttribute("title")).toBe(
-      "Open another page to delete this one."
-    );
+    expect(
+      within(remove).getByText("Open another page to delete this one.")
+    ).toBeTruthy();
     await userEvent.click(remove);
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(client.deletePage).not.toHaveBeenCalled();
