@@ -63,7 +63,7 @@ export interface PendingEntitiesOptions {
    * reading the base there names no slug, so the row is promoted while the
    * file that will really run is still outstanding.
    */
-  dialect?: SupportedDialect;
+  dialect: SupportedDialect;
   isApplied: IsAppliedFn;
   logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void };
 }
