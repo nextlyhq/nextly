@@ -993,41 +993,44 @@ describe("a placement locked in Layers", () => {
 });
 
 describe("a row a lock the component sets holds", () => {
+  /** The heading is locked in the component; a second heading is free. */
+  const lockedHeader = () =>
+    header({
+    nodes: [
+      {
+        id: "h1",
+        type: "acme/heading",
+        version: 1,
+        locked: true,
+        props: { text: "Site name" },
+      },
+      {
+        id: "h2",
+        type: "acme/heading",
+        version: 1,
+        props: { text: "Strap" },
+      },
+    ],
+    exposed: [
+      {
+        id: "title",
+        label: "Title",
+        nodeId: "h1",
+        propPath: "text",
+        type: "text",
+      },
+      {
+        id: "strap",
+        label: "Strap",
+        nodeId: "h2",
+        propPath: "text",
+        type: "text",
+      },
+    ],
+  } as Partial<ComponentDocument>);
+
   it("draws the reason under the field with a lock, and the label beside its field as a free row's", () => {
-    // The heading is locked in the component; a second heading is free.
-    const definition = header({
-      nodes: [
-        {
-          id: "h1",
-          type: "acme/heading",
-          version: 1,
-          locked: true,
-          props: { text: "Site name" },
-        },
-        {
-          id: "h2",
-          type: "acme/heading",
-          version: 1,
-          props: { text: "Strap" },
-        },
-      ],
-      exposed: [
-        {
-          id: "title",
-          label: "Title",
-          nodeId: "h1",
-          propPath: "text",
-          type: "text",
-        },
-        {
-          id: "strap",
-          label: "Strap",
-          nodeId: "h2",
-          propPath: "text",
-          type: "text",
-        },
-      ],
-    } as Partial<ComponentDocument>);
+    const definition = lockedHeader();
     const lookup: ComponentLookup = new Map([["header", definition]]);
     const document = pageOf(instance());
     const composed = resolveComponentInstances(document, lookup, {
@@ -1069,6 +1072,37 @@ describe("a row a lock the component sets holds", () => {
         ?.firstElementChild?.contains(screen.getByRole("textbox", { name }));
     expect(leads(heldRow, "Title")).toBe(true);
     expect(leads(free, "Strap")).toBe(true);
+  });
+
+  it("keeps Reset for a value the page gave before the component locked the block", () => {
+    // The save keeps such a value and lets the page drop it, so the way back
+    // stays open while the field itself is held.
+    const definition = lockedHeader();
+    const lookup: ComponentLookup = new Map([["header", definition]]);
+    const document = pageOf(instance({ overrides: { title: "Older name" } }));
+    const composed = resolveComponentInstances(document, lookup, {
+      exposures: true,
+    }).document;
+    const editor = { ...editorFor(document), composed: () => composed };
+    render(
+      <InspectorPanel
+        editor={editor}
+        componentLibrary={{
+          definitions: lookup,
+          components: [{ id: "header", title: "Header", document: definition }],
+        }}
+      />
+    );
+
+    expect(
+      screen.getByRole("textbox", { name: "Title" }).closest("fieldset")
+        ?.disabled
+    ).toBe(true);
+    const reset = screen.getByRole("button", {
+      name: "Reset Title to inherited value",
+    });
+    expect(reset.closest("fieldset[disabled]")).toBeNull();
+    expect((reset as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

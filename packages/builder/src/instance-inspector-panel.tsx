@@ -342,37 +342,42 @@ function ExposedField({
     >
       <Label {...(hasControl ? { htmlFor: id } : {})}>{row.label}</Label>
       <div className="nx-inspector__exposed">
+        {/*
+          Only the value is held. Reset stays live: a value the page gave
+          before the component locked the block is one the save keeps and
+          lets the page drop, so the way back is never closed.
+        */}
         <HeldByLock reasonId={row.heldBy === undefined ? undefined : reasonId}>
           <ExposedControl id={id} row={row} onSet={onSet} />
-          <div className="nx-inspector__provenance">
-            {/*
+        </HeldByLock>
+        <div className="nx-inspector__provenance">
+          {/*
             The badge is VISIBLE, and it is a badge rather than the label's
             styling: "Overridden" beside a value is what tells an author the
             reset below undoes their own edit rather than the component's
             design.
           */}
-            <span className="nx-inspector__source" data-source={state}>
-              <Icon aria-hidden="true" className="nx-inspector__source-icon" />
-              {sourceBadgeLabel(row)}
-            </span>
-            {overridden ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                // Named for the row, because six rows each offering "Reset"
-                // are six identical controls to a screen reader. "Inherited"
-                // rather than "the component's", because under a variant the
-                // value a reset returns to is the variant's.
-                aria-label={`Reset ${row.label} to inherited value`}
-                title="Reset to inherited value"
-                onClick={() => onReset(row.id)}
-              >
-                Reset
-              </Button>
-            ) : null}
-          </div>
-        </HeldByLock>
+          <span className="nx-inspector__source" data-source={state}>
+            <Icon aria-hidden="true" className="nx-inspector__source-icon" />
+            {sourceBadgeLabel(row)}
+          </span>
+          {overridden ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              // Named for the row, because six rows each offering "Reset"
+              // are six identical controls to a screen reader. "Inherited"
+              // rather than "the component's", because under a variant the
+              // value a reset returns to is the variant's.
+              aria-label={`Reset ${row.label} to inherited value`}
+              title="Reset to inherited value"
+              onClick={() => onReset(row.id)}
+            >
+              Reset
+            </Button>
+          ) : null}
+        </div>
         {/*
           Why the row is held, UNDER the field as its helper text, as the
           provenance note is: the field keeps its place beside its label, and
