@@ -68,9 +68,14 @@ function usePutOff(
           : rememberPutOff(key, identity),
       [author, documentKey, key]
     ),
+    // While the account is unknown, the put-off held for this document still
+    // counts: moving away and back must not offer the point again.
     isPutOff: useCallback(
-      (identity: string) => author !== null && wasPutOff(key, identity),
-      [author, key]
+      (identity: string) =>
+        author === null
+          ? held?.documentKey === documentKey && held.identity === identity
+          : wasPutOff(key, identity),
+      [author, held, documentKey, key]
     ),
   };
 }

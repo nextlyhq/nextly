@@ -366,6 +366,31 @@ describe("useAutosaveRecovery", () => {
     );
   });
 
+  it("keeps a held Not now while the account is still unknown, across a move and back", async () => {
+    const OTHER = { ...SCOPE, entryId: "e2" };
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const moving = renderHook(
+      ({ scope }: { scope: VersionScope }) => useRecoveryHarness(scope),
+      { wrapper, initialProps: { scope: SCOPE as VersionScope } }
+    );
+    await waitFor(() =>
+      expect(moving.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => moving.result.current.recovery.dismiss());
+    moving.rerender({ scope: OTHER });
+    moving.rerender({ scope: SCOPE });
+
+    await waitFor(() =>
+      expect(moving.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(moving.result.current.recovery.offer).toBeNull();
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },
