@@ -142,6 +142,15 @@ describe("a component's variants in its own view", () => {
       within(section()).getByRole("img", { name: "Set by this variant" })
     ).toBeTruthy();
     expect(section().textContent).toContain("1 change");
+    // The inspector's own row grid, the placement panel's, not a copy.
+    const row = value.closest(".nx-variants__value");
+    expect(row?.classList.contains("nx-inspector__field")).toBe(true);
+    // The dot sits with the label, in the label's cell.
+    expect(
+      row
+        ?.querySelector(".nx-variants__value-label")
+        ?.querySelector(".nx-variants__dot")
+    ).not.toBeNull();
     // Reset is an icon, named for its row.
     const reset = within(section()).getByRole("button", {
       name: "Reset Headline to the component’s default in Night",

@@ -80,3 +80,26 @@ describe("the expose icon beside a property", () => {
     );
   });
 });
+
+describe("a variant's value row", () => {
+  it("reuses the inspector's row grid rather than a copy of its own", () => {
+    // The row is an `.nx-inspector__field` (see the variants panel test), so
+    // its columns are that grid's; a template of its own here is the copy
+    // that drifted, with a wider label and a narrower value.
+    expect(ruleBody(".nx-variants__value")).not.toContain(
+      "grid-template-columns"
+    );
+    expect(ruleBody(".nx-inspector__field")).toContain(
+      "grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr);"
+    );
+  });
+
+  it("keeps its dot in the label column, and Reset in a 24px slot", () => {
+    const label = ruleBody(".nx-variants__value > .nx-variants__value-label");
+    expect(label).toContain("grid-column: 1;");
+    expect(label).toContain("grid-row: 1;");
+    const slot = ruleBody(".nx-variants__reset-slot");
+    expect(slot).toContain("flex: 0 0 1.5rem;");
+    expect(slot).toContain("width: 1.5rem;");
+  });
+});

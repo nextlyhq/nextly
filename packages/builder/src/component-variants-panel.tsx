@@ -406,8 +406,14 @@ function VariantValueRow({
     setProblem(outcome.applied ? undefined : outcome.reason);
   };
 
+  // The inspector's own row grid, the placement panel's: the label (and its
+  // dot) in the label column, and the value with its Reset slot filling the
+  // rest, so a variant's row lines up with a placement's.
   return (
-    <div className="nx-variants__value" data-set={set ? "" : undefined}>
+    <div
+      className="nx-inspector__field nx-variants__value"
+      data-set={set ? "" : undefined}
+    >
       <span className="nx-variants__value-label">
         {/* A dot in the component's hue marks a value this variant sets. */}
         {set ? (
@@ -419,27 +425,30 @@ function VariantValueRow({
         ) : null}
         <Label htmlFor={id}>{field.label}</Label>
       </span>
-      <VariantValueControl
-        id={id}
-        field={field}
-        value={shownValue(field, value)}
-        onCommit={commit}
-      />
-      {set ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="nx-variants__reset"
-          aria-label={`Reset ${field.label} to the component’s default in ${option.label}`}
-          title="Reset to the component’s value"
-          onClick={reset}
-        >
-          <RotateCcw size={14} aria-hidden="true" />
-        </Button>
-      ) : (
-        <span aria-hidden="true" />
-      )}
+      <span className="nx-variants__value-cell">
+        <VariantValueControl
+          id={id}
+          field={field}
+          value={shownValue(field, value)}
+          onCommit={commit}
+        />
+        {/* A fixed slot, empty when nothing is set, so values line up. */}
+        <span className="nx-variants__reset-slot">
+          {set ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="nx-variants__reset"
+              aria-label={`Reset ${field.label} to the component’s default in ${option.label}`}
+              title="Reset to the component’s value"
+              onClick={reset}
+            >
+              <RotateCcw size={14} aria-hidden="true" />
+            </Button>
+          ) : null}
+        </span>
+      </span>
       {problem === undefined ? null : (
         <p className="nx-variants__problem" role="alert">
           {problem}

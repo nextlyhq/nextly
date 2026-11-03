@@ -5897,27 +5897,61 @@ fieldset.nx-inspector__fields {
   color: var(--nx-muted-foreground);
 }
 
+/* Inset only a little, so the values keep the inspector's own widths. */
 .nx-variants__values {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  padding: 0.5rem 0.625rem 0.625rem;
+  padding: 0.5rem 0.25rem;
   border-top: 1px solid var(--nx-border);
 }
 
 /*
- * One value, label-left as the placement panel lays its fields out: the
- * label (with the dot when the variant sets it), the control, and the reset,
- * whose column stays even when there is none.
+ * One value. Its columns are the inspector's own row grid, the placement
+ * panel's (`.nx-inspector__field`), not a copy: only the height is its own.
  */
 .nx-variants__value {
-  display: grid;
-  grid-template-columns: minmax(4.5rem, 6rem) minmax(0, 1fr) 1.75rem;
-  align-items: center;
-  column-gap: 0.5rem;
-  row-gap: 0.25rem;
   min-height: 2.25rem;
+}
+
+/* The label with its dot, in the grid's label column. */
+.nx-variants__value > .nx-variants__value-label {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/* The value and its Reset slot, filling the value column. */
+.nx-variants__value-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   min-width: 0;
+}
+
+.nx-variants__value-cell > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * A text value's inset a little under the design system's, so a value of a
+ * usual length shows whole beside the Reset slot in the inspector's width.
+ */
+.nx-variants__value-cell input:not([type="checkbox"]) {
+  padding-inline: 0.375rem;
+}
+
+/* A fixed 24px slot for Reset, the smallest target WCAG 2.2 AA allows. */
+.nx-variants__reset-slot {
+  display: grid;
+  flex: 0 0 1.5rem;
+  place-items: center;
+  width: 1.5rem;
+}
+
+.nx-variants__reset-slot .nx-variants__reset {
+  width: 1.5rem;
+  height: 1.5rem;
 }
 
 .nx-variants__value-label {
