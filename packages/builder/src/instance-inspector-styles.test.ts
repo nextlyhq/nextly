@@ -69,7 +69,10 @@ describe("a placement's row on the inspector grid", () => {
     ).toContain(
       // 8rem, a rem wider than a Style row's label: the name column also
       // holds "From the component" under the label, which wrapped at 7rem.
-      "grid-template-columns: minmax(0, 8rem) minmax(min-content, 1fr) 1.5rem"
+      // Its control column may shrink: a placement row holds fields, selects
+      // and checkboxes, never an icon strip, and an input's own width at
+      // min-content squeezed the name column until its note wrapped.
+      "grid-template-columns: minmax(0, 8rem) minmax(0, 1fr) 1.5rem"
     );
     const name = ruleBody(
       ".nx-inspector__field--exposed > .nx-inspector__exposed-name"
