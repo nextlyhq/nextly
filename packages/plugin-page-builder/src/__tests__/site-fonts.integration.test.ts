@@ -19,6 +19,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
+import { resolve as resolvePath } from "node:path";
 
 import {
   createTestNextly,
@@ -150,7 +151,17 @@ describe.each(getConfiguredTestDialects())(
     const elsewhere = new FakeCatalogue();
     let current: TestNextly | undefined;
 
+    /*
+     * The harness stores media with the local adapter, which writes
+     * `./public/uploads` and a `.gitignore` beside it. Removed afterwards, but
+     * only when this suite is what created them.
+     */
+    const uploads = resolvePath("public");
+    const ignore = resolvePath(".gitignore");
+    let created = { uploads: false, ignore: false };
+
     beforeAll(async () => {
+      created = { uploads: !existsSync(uploads), ignore: !existsSync(ignore) };
       await catalogue.start();
       await elsewhere.start();
     });
@@ -158,6 +169,8 @@ describe.each(getConfiguredTestDialects())(
     afterAll(async () => {
       await catalogue.stop();
       await elsewhere.stop();
+      if (created.uploads) rmSync(uploads, { recursive: true, force: true });
+      if (created.ignore) rmSync(ignore, { force: true });
     });
 
     afterEach(async () => {

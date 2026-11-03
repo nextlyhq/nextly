@@ -117,6 +117,11 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
  * separately; until it is closed, a name the component starts importing has to
  * be added here by hand.
  */
+// A designer: the role that may change the site's fonts.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
@@ -162,6 +167,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    * that must still refuse when the transport could not describe why.
    */
   validationIssues: () => [],
+  // The catalogue's routes: never reached here, where no case opens it.
+  readPluginRoute: async () => undefined,
+  writePluginRoute: async () => undefined,
   useSingleDocument: () => storedRead,
   useUpdateSingleDocument: () => ({
     mutateAsync: async (value: Record<string, unknown>) => {
@@ -312,7 +320,9 @@ describe("the fonts panel reaching an author", () => {
     // `undefined`, and passing `[]` while pending is the plausible bug.
     storedRead = { data: undefined, isPending: true, error: null };
     openEditor();
-    expect(screen.getByTestId("panel").textContent).toContain("Loading fonts");
+    expect(screen.getByTestId("panel").textContent).toContain(
+      "Reading this site\u2019s fonts"
+    );
   });
 
   it("says a failed read failed", () => {
@@ -329,8 +339,26 @@ describe("the fonts panel reaching an author", () => {
 });
 
 describe("adding a font file through the panel", () => {
+  /** Open the upload editor from the group's add, once. */
+  async function openUpload(): Promise<void> {
+    if (screen.queryByLabelText("Font file") !== null) return;
+    fireEvent.keyDown(screen.getByRole("button", { name: "Add a font" }), {
+      key: "Enter",
+    });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Upload a font file" })
+    );
+    await screen.findByRole("dialog", { name: "Upload a font file" });
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "I have the right to use this font on the web",
+      })
+    );
+  }
+
   /** Choose a file, as the picker hands one over. */
   async function pickFile(name = "Inter-Regular.woff2"): Promise<void> {
+    await openUpload();
     const input = screen.getByLabelText("Font file") as HTMLInputElement;
     Object.defineProperty(input, "files", {
       value: [new File([new Uint8Array([0x77])], name, { type: "font/woff2" })],
@@ -346,7 +374,7 @@ describe("adding a font file through the panel", () => {
    *  hand over a different `File`, which is a different case entirely. */
   async function submitAdd(): Promise<void> {
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Upload" }));
     });
   }
 
@@ -488,7 +516,9 @@ describe("adding a font file through the panel", () => {
      * have not arrived. The writer refuses as well, which no test can drive
      * through this UI precisely because of this.
      */
-    expect(screen.getByTestId("panel").textContent).toContain("Loading fonts");
+    expect(screen.getByTestId("panel").textContent).toContain(
+      "Reading this site\u2019s fonts"
+    );
     expect(screen.queryByLabelText("Font file")).toBeNull();
     expect(saved).toHaveLength(0);
   });

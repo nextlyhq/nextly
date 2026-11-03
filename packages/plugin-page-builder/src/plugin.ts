@@ -1297,9 +1297,13 @@ export const pageBuilder = (
         ...(opts.remotePatterns !== undefined ||
         opts.checklist !== undefined ||
         opts.limits !== undefined ||
-        opts.siteStyle !== undefined
+        opts.siteStyle !== undefined ||
+        fonts === false
           ? {
               clientConfig: {
+                // The Fonts tab offers no catalogue when the host turned it
+                // off, rather than one whose routes do not exist.
+                ...(fonts === false ? { fontCatalogue: false } : {}),
                 ...(opts.remotePatterns === undefined
                   ? {}
                   : { remotePatterns: opts.remotePatterns }),
