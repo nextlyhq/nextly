@@ -74,10 +74,10 @@ describe("the typographic baseline", () => {
       "h6",
       "p",
       "blockquote",
-      "figure",
       "hr",
       "ol",
       "ul",
+      "pre",
     ] as const;
     for (const tag of tags) {
       expect(base(tag, "margin"), tag).toEqual({
@@ -85,6 +85,17 @@ describe("the typographic baseline", () => {
         blockEnd: "0",
       });
     }
+  });
+
+  it("clears a figure's inline margins too, so a captioned image sits as flush as one without", () => {
+    // A browser indents a figure by about 40px on each side; an image with
+    // no caption is a bare `img` and has no such inset.
+    expect(base("figure", "margin")).toEqual({
+      blockStart: "0",
+      blockEnd: "0",
+      inlineStart: "0",
+      inlineEnd: "0",
+    });
   });
 
   it("gives every element its own objects, so changing one changes no other", () => {
@@ -95,7 +106,7 @@ describe("the typographic baseline", () => {
     const values = entries.map(entry => entry?.base?.base);
     const margins = values.map(value => value?.margin);
     // Population: every element has values and a margin to compare.
-    expect(entries).toHaveLength(12);
+    expect(entries).toHaveLength(13);
     expect(margins.every(margin => typeof margin === "object")).toBe(true);
     expect(new Set(entries).size).toBe(entries.length);
     expect(new Set(values).size).toBe(values.length);

@@ -137,10 +137,20 @@ export const TYPOGRAPHY_DEFAULTS: NonNullable<
   // Rendered by List, Quote, Image and rich text, each with a browser margin
   // a host without a reset keeps.
   blockquote: flush(),
-  figure: flush(),
+  // Flush on every side: a browser also indents a figure inline, and an
+  // image with no caption is a bare `img` with no such inset.
+  figure: {
+    base: {
+      base: {
+        margin: { ...flushMargin(), inlineStart: "0", inlineEnd: "0" },
+      },
+    },
+  },
   hr: flush(),
   ol: flush(),
   ul: flush(),
+  // A code block in rich text, with the browser's block margins otherwise.
+  pre: flush(),
 };
 
 /**

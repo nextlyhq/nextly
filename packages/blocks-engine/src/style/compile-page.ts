@@ -417,6 +417,9 @@ export const TYPOGRAPHIC_ELEMENTS = [
   "hr",
   "ol",
   "ul",
+  // Last, so adding it moved no earlier element's rule: rich text renders a
+  // code block as one.
+  "pre",
 ] as const;
 
 /**

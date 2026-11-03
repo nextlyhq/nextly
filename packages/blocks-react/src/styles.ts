@@ -1077,6 +1077,15 @@ export interface ResolveStyleOptions {
    */
   fetchPolicyId?: string;
   /**
+   * The host-fetch predicate in force, as {@link effectiveCompile} derived it.
+   *
+   * Read only by a recompile with no compile context, which has nothing else to
+   * judge a URL by. When `fetchPolicyId` names a policy and this is absent, such
+   * a recompile is not made and the sheet is withheld, since compiling without
+   * the predicate would admit every URL the policy refuses.
+   */
+  mayFetchUrl?: MayFetchUrl;
+  /**
    * The tree the STORED artifact describes, when the caller narrowed the
    * document before calling this.
    *
@@ -1360,8 +1369,10 @@ const NO_SITE_BREAKPOINTS = { viewport: [], container: [] };
  * styles (the class library is site configuration). Those are left out, with
  * the compiler's own warnings, and the base styling of every node is kept.
  *
- * Not recompiled when the sheet was ALSO compiled under another fetch policy:
- * this read has no predicate to judge its URLs by, so it withholds as before.
+ * Not recompiled when the sheet was ALSO compiled under another fetch policy,
+ * or when a policy is in force and the read was not handed its predicate: a
+ * compile without the predicate would admit URLs the policy refuses, so it
+ * withholds as before. With the predicate, the recompile judges every URL by it.
  */
 function untrustedWithoutContext(
   document: BlockDocument,
@@ -1376,10 +1387,15 @@ function untrustedWithoutContext(
     styles: { ...normalizeStoredStyles(styles, document).styles, css: "" },
   };
   if (!underAnotherEncoding || underAnotherPolicy) return withheld;
+  const { mayFetchUrl } = options;
+  if (options.fetchPolicyId !== undefined && mayFetchUrl === undefined) {
+    return withheld;
+  }
   const context = compileContextFor(
     {
       breakpoints: NO_SITE_BREAKPOINTS,
       ...(styles.scope === undefined ? {} : { scope: styles.scope }),
+      ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
     },
     document,
     blocks,

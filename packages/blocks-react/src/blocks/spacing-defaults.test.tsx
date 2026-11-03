@@ -243,6 +243,62 @@ describe("a sheet stored by the compiler before this spacing", () => {
     expect(served.css).toBe(current.css);
   });
 
+  describe("under a fetch policy", () => {
+    const REFUSED = "https://cdn.other.test/a.png";
+    const POLICY = "allowed-only";
+    const mayFetchUrl = (url: string) =>
+      url.startsWith("https://cdn.allowed.test/");
+    const URL_DOC: BlockDocument = {
+      ...STORED_DOC,
+      nodes: [
+        {
+          id: "t",
+          type: "core/text",
+          version: 1,
+          props: { text: "T" },
+          styles: { base: { base: { background: { url: REFUSED } } } },
+        } as BlockNode,
+      ],
+    };
+
+    /** The same `v3` artifact, stamped with the policy in force now. */
+    function storedUnderPolicy(): PageStyles {
+      const current = resolvePageStyles(URL_DOC, undefined, context, resolver);
+      return {
+        ...current,
+        css: "",
+        sharedInputsId: current.sharedInputsId?.replace(/^v\d+:/, "v3:"),
+        fetchPolicyId: POLICY,
+      } as PageStyles;
+    }
+
+    it("judges its URLs by the policy in force when it recompiles", () => {
+      const served = resolvePageStyles(
+        URL_DOC,
+        storedUnderPolicy(),
+        undefined,
+        resolver,
+        false,
+        { fetchPolicyId: POLICY, mayFetchUrl }
+      );
+      expect(served.sharedInputsId?.startsWith("v4:")).toBe(true);
+      expect(served.css).not.toContain("cdn.other.test");
+    });
+
+    it("is withheld when the read names a policy without its predicate", () => {
+      const served = resolvePageStyles(
+        URL_DOC,
+        storedUnderPolicy(),
+        undefined,
+        resolver,
+        false,
+        { fetchPolicyId: POLICY }
+      );
+      expect(served.css).toBe("");
+      expect(Object.keys(served.classes)).toContain("t");
+    });
+  });
+
   it("is recompiled where a compile context exists", () => {
     const served = resolvePageStyles(
       STORED_DOC,
