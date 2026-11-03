@@ -26,6 +26,7 @@ import { runDetachedFromRequest } from "../../auth/caller-scope";
 import type { Nextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ListResult } from "../../direct-api/types/shared";
+import { filterShapeProblems } from "../../domains/collections/query/filter-shape";
 import { NextlyError } from "../../errors/nextly-error";
 
 /** The operators a list's filter row may use, each meaning the same on every database. */
@@ -183,8 +184,23 @@ function assertShape(query: object): void {
  * the read keeps its id order instead of reaching core with no order at all.
  */
 function sortKeys(sort: string | readonly string[] | undefined): string[] {
-  const parts = typeof sort === "string" ? sort.split(",") : [...(sort ?? [])];
-  return parts.map(key => key.trim()).filter(key => key !== "");
+  // Every element split on commas, as core splits each one, so the keys
+  // judged here are the keys core would order by.
+  const parts = (typeof sort === "string" ? [sort] : [...(sort ?? [])]).flatMap(
+    part => part.split(",")
+  );
+  const keys = parts.map(key => key.trim()).filter(key => key !== "");
+  // A sign with no field after it is a malformed key, not an absent one:
+  // core's parser would drop it, and the refusal of unknown keys never see it.
+  const signOnly = keys.filter(key => key.replace(/^-/, "").trim() === "");
+  if (signOnly.length > 0) {
+    refuse(
+      "sort-invalid",
+      'A sort key needs a field name after its sign, such as "-date".',
+      { keys: signOnly }
+    );
+  }
+  return keys;
 }
 
 const COUNT_KEYS: ReadonlySet<string> = new Set([
@@ -254,36 +270,6 @@ function assertFieldName(
   }
 }
 
-function isScalar(value: unknown): value is FilterScalar {
-  return (
-    typeof value === "string" ||
-    typeof value === "boolean" ||
-    (typeof value === "number" && Number.isFinite(value))
-  );
-}
-
-/**
- * Whether a row's value is the kind its operator takes. `in` needs a value
- * to match; an empty `not_in` excludes nothing and is a well-formed list.
- */
-function valueFits(op: PublicFilterOp, value: unknown): boolean {
-  if (op === "in" || op === "not_in") {
-    return (
-      Array.isArray(value) &&
-      value.every(isScalar) &&
-      (op === "not_in" || value.length > 0)
-    );
-  }
-  return op === "exists" ? typeof value === "boolean" : isScalar(value);
-}
-
-/** What {@link valueFits} wants, in words, for the refusal. */
-function expectedValue(op: PublicFilterOp): string {
-  if (op === "in") return "a list of at least one value";
-  if (op === "not_in") return "a list of values";
-  return op === "exists" ? "true or false" : "one value";
-}
-
 /** One filter row as core's `where`, refused when it is not well formed. */
 function toCondition(row: PublicFilter): Record<string, unknown> {
   assertFieldName(row.field, "A filter");
@@ -293,13 +279,17 @@ function toCondition(row: PublicFilter): Record<string, unknown> {
       `"${String(row.op)}" is not a filter operator. Use one of: ${PUBLIC_FILTER_OPS.join(", ")}.`
     );
   }
-  if (!valueFits(row.op, row.value)) {
+  const condition = { [row.field]: { [CORE_OP[row.op]]: row.value } };
+  // Judged by core's own table of what each operator takes, so the reader
+  // cannot accept a value that `find` then refuses, or refuse one it reads.
+  const [problem] = filterShapeProblems(condition);
+  if (problem !== undefined) {
     refuse(
       "value-invalid",
-      `The value for "${row.field}" ${row.op} must be ${expectedValue(row.op)}.`
+      `The value for "${row.field}" ${row.op} is not one it takes: ${problem.message}`
     );
   }
-  return { [row.field]: { [CORE_OP[row.op]]: row.value } };
+  return condition;
 }
 
 function toWhere(filters: readonly PublicFilter[] | undefined) {
