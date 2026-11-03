@@ -9,6 +9,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { importedSpecifiers } from "@nextlyhq/module-specifiers";
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import {
   act,
@@ -126,10 +127,10 @@ describe("ChromeTooltip", () => {
 });
 
 /**
- * Bounded, as every source scan is: it reads every way a module loads
- * `@nextlyhq/ui` (an import, a re-export, `export *`, a dynamic `import()`),
- * and a module that loads it some other way, through a variable holding the
- * specifier or a second package that re-exports it, walks past it. It catches the
+ * Bounded, as every source scan is: it takes every way a module loads
+ * `@nextlyhq/ui` from the repository's own specifier reader, and a module that
+ * loads it some other way, through a variable holding the specifier or a
+ * second package that re-exports the parts, walks past it. It catches the
  * import a new control reaches for without thinking, which is the one that
  * stuck over the canvas.
  */
@@ -144,55 +145,42 @@ describe("the builder's chrome tooltips", () => {
   }
 
   /**
-   * Every tooltip part a module reaches from `@nextlyhq/ui`: imported by name,
-   * re-exported by name, or reached wholesale by a namespace import, an
-   * `export *` or a dynamic `import()`, which a scan by name cannot follow and
-   * so counts as reaching them all.
+   * Every tooltip part a module reaches from `@nextlyhq/ui`. Named imports and
+   * named re-exports are read by name. Any other way the module loads it, as
+   * the repository's own reader finds them (a namespace import, `export *`,
+   * `import()`, `require()`, `import x = require()`, a JSDoc import), reaches
+   * the parts by property where no scan can follow, so it counts as reaching
+   * them all.
    */
   function partsImported(text: string, file: string): string[] {
     const found: string[] = [];
+    let byName = 0;
     walk(parseSource(text, file).program, (node: AstNode) => {
-      if (node.type === "ImportExpression") {
-        if (
-          node.source.type === "Literal" &&
-          node.source.value === "@nextlyhq/ui"
-        ) {
-          found.push("import()");
-        }
-        return;
-      }
-      if (node.type === "ExportAllDeclaration") {
-        if (node.source.value === "@nextlyhq/ui") found.push("export *");
-        return;
-      }
-      if (node.type === "ExportNamedDeclaration") {
-        if (node.source?.value !== "@nextlyhq/ui") return;
-        for (const specifier of node.specifiers) {
-          if (PARTS.has(nameOf(specifier.local))) {
-            found.push(nameOf(specifier.local));
-          }
-        }
-        return;
-      }
       if (
-        node.type !== "ImportDeclaration" ||
-        node.source.value !== "@nextlyhq/ui"
+        (node.type === "ImportDeclaration" ||
+          node.type === "ExportNamedDeclaration") &&
+        node.source?.value === "@nextlyhq/ui"
       ) {
-        return;
-      }
-      for (const specifier of node.specifiers ?? []) {
-        if (specifier.type === "ImportNamespaceSpecifier") {
-          found.push("* (namespace)");
-          continue;
+        const specifiers = node.specifiers ?? [];
+        if (specifiers.some(one => one.type === "ImportNamespaceSpecifier")) {
+          return;
         }
-        if (
-          specifier.type === "ImportSpecifier" &&
-          PARTS.has(nameOf(specifier.imported))
-        ) {
-          found.push(nameOf(specifier.imported));
+        byName += 1;
+        for (const specifier of specifiers) {
+          const name =
+            specifier.type === "ImportSpecifier"
+              ? nameOf(specifier.imported)
+              : specifier.type === "ExportSpecifier"
+                ? nameOf(specifier.local)
+                : "";
+          if (PARTS.has(name)) found.push(name);
         }
       }
     });
+    const loads = importedSpecifiers(text, file).filter(
+      specifier => specifier === "@nextlyhq/ui"
+    ).length;
+    if (loads > byName) found.push("loaded another way");
     return found;
   }
 
