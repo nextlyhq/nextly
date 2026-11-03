@@ -102,51 +102,33 @@ interface GenerateWidgetFlags {
   dryRun?: boolean;
 }
 
-export function registerGenerateWidgetCommand(program: Command): void {
-  program
-    .command("generate:widget [id]")
-    .description(
-      "Scaffold a dashboard widget, with its test, in this site or plugin"
-    )
-    .option(
-      "--view <kind>",
-      "figure, list, table, bars, series, or component (its own)"
-    )
-    .option("--collection", "Read from a collection the reader chooses")
-    .option("--no-collection", "Read no collection")
-    .option("--site", "Generate into the site, whatever is detected")
-    .option("--plugin", "Generate into the plugin, whatever is detected")
-    .option("--force", "Overwrite files that already exist")
-    .option("--dry-run", "Print the files and edits; write nothing")
-    .action(
-      async (
-        id: string | undefined,
-        flags: GenerateWidgetFlags,
-        cmd: Command
-      ) => {
-        const context = createContext(cmd.optsWithGlobals());
-        const options: GenerateWidgetOptions = {
-          id,
-          view: flags.view,
-          collection: flags.collection,
-          target: flags.site ? "site" : flags.plugin ? "plugin" : undefined,
-          force: flags.force,
-          dryRun: flags.dryRun,
-          // The root CLI's `-c, --config`, which names the site's config.
-          configPath: context.configPath,
-        };
-        try {
-          const result = await runGenerateWidget(
-            context.cwd,
-            options,
-            interactive() ? terminalPrompter : undefined
-          );
-          // A refusal of what it was given; the catch prints it as the CLI's error shape.
-          if (!result.ok) throw widgetNotGenerated(result.reason);
-          report(result, context);
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
+/** The action of `nextly generate:widget`, loaded when it runs. */
+export async function generateWidgetAction(
+  id: string | undefined,
+  flags: GenerateWidgetFlags,
+  cmd: Command
+) {
+  const context = createContext(cmd.optsWithGlobals());
+  const options: GenerateWidgetOptions = {
+    id,
+    view: flags.view,
+    collection: flags.collection,
+    target: flags.site ? "site" : flags.plugin ? "plugin" : undefined,
+    force: flags.force,
+    dryRun: flags.dryRun,
+    // The root CLI's `-c, --config`, which names the site's config.
+    configPath: context.configPath,
+  };
+  try {
+    const result = await runGenerateWidget(
+      context.cwd,
+      options,
+      interactive() ? terminalPrompter : undefined
     );
+    // A refusal of what it was given; the catch prints it as the CLI's error shape.
+    if (!result.ok) throw widgetNotGenerated(result.reason);
+    report(result, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

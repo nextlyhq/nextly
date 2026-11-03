@@ -53,7 +53,6 @@ import {
 } from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
-import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
 import { configDeclarationError, exitWithError } from "../errors/index";
@@ -681,52 +680,34 @@ function displayResults(
 }
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
-/**
- * Register the generate:types command with the program
- *
- * @param program - Commander program instance
- */
-export function registerGenerateTypesCommand(program: Command): void {
-  program
-    .command("generate:types")
-    .description(
-      "Generate TypeScript type definitions and Zod schemas from collections and singles"
-    )
-    // The help names the default from the value the config falls back to, so
-    // the two cannot disagree.
-    .option(
-      "-o, --output <path>",
-      `Output file path for TypeScript types (default: typescript.outputFile, or ${DEFAULT_TYPESCRIPT_CONFIG.outputFile})`
-    )
-    .option("--no-declare", "Skip module declaration/augmentation")
-    .option("--no-zod", "Skip Zod schema generation")
-    .option(
-      "--check",
-      "Only check that the committed component map agrees with the config, writing nothing (exit 1 when it does not, 2 when it cannot be checked)"
-    )
-    .action(async (cmdOptions: GenerateTypesCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+/** The action of `nextly generate:types`, loaded when it runs. */
+export async function generateTypesAction(
+  cmdOptions: GenerateTypesCommandOptions,
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      const resolvedOptions: ResolvedGenerateTypesOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
+  const resolvedOptions: ResolvedGenerateTypesOptions = {
+    ...cmdOptions,
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
 
-      // The check writes nothing and runs nothing else: it answers with its exit status alone.
-      if (cmdOptions.check === true) {
-        process.exit(await runComponentMapCheck(resolvedOptions, context));
-      }
-      try {
-        await runGenerateTypes(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  // The check writes nothing and runs nothing else: it answers with its exit status alone.
+  if (cmdOptions.check === true) {
+    process.exit(await runComponentMapCheck(resolvedOptions, context));
+  }
+  try {
+    await runGenerateTypes(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerGenerateTypesCommand } from "./generate-types.command";

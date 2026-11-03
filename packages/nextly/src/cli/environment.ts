@@ -13,8 +13,9 @@
  * configuration that branches on `NODE_ENV` declares, under `nextly migrate
  * --mode production`, the same schema `next build` evaluates it with.
  *
- * Nothing here imports an application module: the entry point runs this before
- * any of them is loaded, because they may read `process.env` as they load.
+ * Nothing here imports an application module: the program runs this before a
+ * command's work is loaded, because that code may read `process.env` as it
+ * loads.
  *
  * @module cli/environment
  */
@@ -23,6 +24,7 @@ import { createRequire } from "node:module";
 import { relative, resolve } from "node:path";
 
 import type * as NextEnv from "@next/env";
+import type { Command } from "commander";
 
 /** The modes a run can be in, as Next.js names them. */
 export const CLI_MODES = ["development", "production", "test"] as const;
@@ -50,29 +52,14 @@ function isMode(value: string | undefined): value is CliMode {
 }
 
 /**
- * The value `--mode` was given in `argv`, the last one when repeated as
- * Commander reads it, and nothing after `--`, which ends the options.
- */
-function modeArgument(argv: readonly string[]): string | undefined {
-  let given: string | undefined;
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") break;
-    if (arg === "--mode") given = argv[index + 1];
-    else if (arg.startsWith("--mode=")) given = arg.slice("--mode=".length);
-  }
-  return given;
-}
-
-/**
- * The mode `argv` and `nodeEnv` choose. A `--mode` value outside the three is
- * passed over here; Commander refuses it, naming them, before any command runs.
+ * The mode `--mode` and `nodeEnv` choose: `given` when it is one of the three
+ * (Commander has refused any other value before an action runs), else
+ * `NODE_ENV`'s `production` or `test`, else `development`.
  */
 export function readMode(
-  argv: readonly string[],
+  given: string | undefined,
   nodeEnv: string | undefined
 ): CliMode {
-  const given = modeArgument(argv);
   if (isMode(given)) return given;
   return nodeEnv === "production" || nodeEnv === "test"
     ? nodeEnv
@@ -80,15 +67,28 @@ export function readMode(
 }
 
 /**
- * Chooses the run's mode from `argv`, makes it `NODE_ENV`, and reads the
- * environment files of `folder` for it with Next.js's loader. Called once, by
- * the entry point, before any application module is imported.
+ * The environment step of a run, given the program Commander has parsed: the
+ * mode its `--mode` option holds, read from the one option definition, then
+ * `loadCliEnvironment`. The entry point runs it before any command's action,
+ * so an invocation that runs no action reads no file.
  */
-export function loadCliEnvironment(
-  argv: readonly string[],
+export function loadProgramEnvironment(
+  program: Command,
   folder: string = process.cwd()
 ): void {
-  const mode = readMode(argv, process.env.NODE_ENV);
+  loadCliEnvironment(program.opts<{ mode?: string }>().mode, folder);
+}
+
+/**
+ * Chooses the run's mode from `given` (`--mode`) and `NODE_ENV`, makes it
+ * `NODE_ENV`, and reads the environment files of `folder` for it with
+ * Next.js's loader. Runs before a command's work is imported.
+ */
+export function loadCliEnvironment(
+  given: string | undefined,
+  folder: string = process.cwd()
+): void {
+  const mode = readMode(given, process.env.NODE_ENV);
   // Next.js types `NODE_ENV` read-only, for app code; the CLI is what sets it
   // for the run, as `next build` and `next dev` do for theirs.
   Object.assign(process.env, { NODE_ENV: mode });

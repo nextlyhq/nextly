@@ -32,7 +32,6 @@ import {
   type TeardownI18nAdapter,
 } from "../../domains/i18n/migration/teardown-entity-i18n";
 import {
-  ACCEPT_DATA_LOSS_HELP,
   countDeletions,
   isInteractiveTerminal,
   judgeDataLoss,
@@ -57,6 +56,8 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
+
+export { registerPruneCommand } from "./prune.command";
 
 export interface PruneResult {
   /** Slugs detected as orphaned (in the registry, not in the config). */
@@ -454,30 +455,19 @@ export async function runPruneCommand(
   }
 }
 
-/** Register the `nextly prune` command. */
-export function registerPruneCommand(program: Command): void {
-  program
-    .command("prune")
-    .description(
-      "Drop orphaned plugin/code schema (retained by default — never auto-dropped)"
-    )
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    .option("--force", "Deprecated: use --accept-data-loss", false)
-    .action(
-      async (
-        cmdOptions: { acceptDataLoss?: AcceptDataLossOption; force?: boolean },
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        try {
-          await runPruneCommand(
-            { ...cmdOptions, config: globalOpts.config, cwd: globalOpts.cwd },
-            context
-          );
-        } catch (error) {
-          exitWithError(context.logger, error);
-        }
-      }
+/** The action of `nextly prune`, loaded when it runs. */
+export async function pruneAction(
+  cmdOptions: { acceptDataLoss?: AcceptDataLossOption; force?: boolean },
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runPruneCommand(
+      { ...cmdOptions, config: globalOpts.config, cwd: globalOpts.cwd },
+      context
     );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
