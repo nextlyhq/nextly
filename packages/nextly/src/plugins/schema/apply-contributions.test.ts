@@ -763,6 +763,48 @@ describe("applyPluginSchemaContributions (transforms — C11)", () => {
     });
   });
 
+  it("records which plugin added each field to an entity it does not own, a transform's included", () => {
+    // What a full uninstall of the plugin takes with it: the fold's ledgers
+    // are the one record of who declared a field a transform added.
+    const config = cfg({
+      collections: [collFields("posts", [field("title")])],
+    });
+    const plugins = [
+      plugin("fx", {
+        collections: [coll("fx-notes")],
+        transforms: [
+          {
+            target: "posts",
+            transform: entity => ({
+              ...entity,
+              fields: [
+                ...((entity.fields as FieldConfig[] | undefined) ?? []),
+                relField("fxNote", "fx-notes"),
+              ],
+            }),
+          },
+        ],
+      }),
+      plugin("sso", {
+        extend: [{ target: "posts", fields: [field("ssoId")] }],
+      }),
+    ];
+
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      config,
+      plugins
+    );
+
+    // CONTROL: the app's own field is nobody's to take.
+    expect(fieldsAddedByPlugins.get("posts")).toEqual(
+      new Map([
+        ["fxNote", "fx"],
+        ["ssoId", "sso"],
+      ])
+    );
+    expect(fieldsAddedByPlugins.has("fx-notes")).toBe(false);
+  });
+
   it("refuses a transform naming an entity nothing declares", () => {
     // Doing nothing silently means the plugin appears installed and simply
     // has no effect, which is the hardest kind of "working" to diagnose.
