@@ -68,6 +68,7 @@ import {
 import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
 import { walkNodes } from "./tree";
 import type { SlotDefaultSource } from "./tree";
+import { variantLabelIssues } from "./variant-labels";
 import { isConditionGated } from "./visibility";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
@@ -247,6 +248,8 @@ export const ISSUE_CODES = {
     "A variant names an exposed property or slot the definition does not expose.",
   "variant-empty":
     "A variant presets no value, so choosing it shows the component's defaults.",
+  "variant-label-clash":
+    "Two of a component's variants share one name, ignoring case and spaces.",
   "invalid-document": "The document is not an object.",
   "nodes-not-array": "The document nodes field is not an array.",
   "invalid-node": "A node is not an object.",
@@ -564,6 +567,10 @@ export function validateDocument(
       survey.limits.maxNodes,
       issues
     );
+    // Here rather than in the envelope check a planner's dry run asks: whether
+    // a clash is refused depends on the stored definition, which only a save
+    // brings, and no exposure edit can create one.
+    issues.push(...variantLabelIssues(envelope.doc.variants, ctx.stored));
   }
 
   const state = nodeCheckState(ctx, issues, knownBreakpoints, unknownSeverity, {
@@ -2951,7 +2958,8 @@ function checkVariants(
       path: "/variants",
       code: "component-envelope-invalid",
       severity: "error",
-      message: "A component's variants field must be an object keyed by name.",
+      message:
+        "A component's variants field must be an object keyed by variant id.",
     });
     return;
   }

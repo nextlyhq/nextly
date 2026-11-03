@@ -17,6 +17,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { deepActiveElement, isHTMLElement } from "@nextlyhq/builder";
 import {
+  type ComponentFieldsHost,
+  type ComponentVariantsHost,
   type NoticeQueue,
   type EditorState,
   type UseInlineEditingResult,
@@ -47,6 +49,7 @@ import { toast } from "@nextlyhq/ui";
 import { useCallback, useMemo, useState } from "react";
 
 import type { ComponentFromSelectionAction } from "../../library-contract";
+import { useEditedComponentFacts } from "../component-facts-client";
 import {
   useComponentLibrary,
   type ComponentLibraryRead,
@@ -59,6 +62,7 @@ import {
   useMayCreatePattern,
   useMayUpdatePattern,
 } from "../pattern-capability-client";
+import { useEditedComponentVariants } from "../variant-use-client";
 
 import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
@@ -297,6 +301,25 @@ function useInlineNotices(
 }
 
 /**
+ * What the editor asks the server about the author and the document as it
+ * mounts: whether the author may save a pattern, and, for a component, what
+ * its live definition holds and how many documents place it, and how many
+ * placements chose each of its variants, which its own document cannot say
+ * (nothing for a page).
+ */
+function useServerReads(initialDocument: BlockDocument): {
+  readonly mayCreatePattern: boolean;
+  readonly componentFacts: ComponentFieldsHost | undefined;
+  readonly componentVariants: ComponentVariantsHost | undefined;
+} {
+  return {
+    mayCreatePattern: useMayCreatePattern(),
+    componentFacts: useEditedComponentFacts(initialDocument),
+    componentVariants: useEditedComponentVariants(initialDocument),
+  };
+}
+
+/**
  * Everything the editor is mounted from, read once per opening.
  *
  * Called by the component that is mounted only while the editor is open, so
@@ -415,7 +438,8 @@ export function useEditorMount(
    * list, so the answer has to exist before any of them draws — and asking in
    * three places would be three requests answering one question.
    */
-  const mayCreatePattern = useMayCreatePattern();
+  const { mayCreatePattern, componentFacts, componentVariants } =
+    useServerReads(initialDocument);
   // The make-component verbs, and whether this author holds their grants.
   const makeComponent = useMakeComponentVerb(
     editor,
@@ -446,6 +470,8 @@ export function useEditorMount(
     makeComponent,
     componentVerbs: makeComponent.verbs,
     preferenceStore,
+    componentFacts,
+    componentVariants,
   };
 }
 
@@ -469,6 +495,10 @@ export type EditorMount = {
   componentVerbs: ComponentVerbsHost;
   /** Where the shell keeps the signed-in author's preferences. */
   preferenceStore: NonNullable<BuilderShellProps["store"]>;
+  /** What the inspector is told about the component being edited, if any. */
+  componentFacts: ComponentFieldsHost | undefined;
+  /** What the variants section is told about the component, if any. */
+  componentVariants: ComponentVariantsHost | undefined;
 };
 
 /**
