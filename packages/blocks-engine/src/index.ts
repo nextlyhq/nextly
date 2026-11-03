@@ -1059,6 +1059,7 @@ export {
 } from "./layers-lock-stored";
 export {
   variantLockChanges,
+  type VariantDrawing,
   type VariantLockChange,
 } from "./layers-lock-variants";
 export {

@@ -148,7 +148,9 @@ with `layers-lock-changed`, naming the block. A page cannot unlock it: remove th
 unlock the block in the component. A value a page already stores is kept, so locking a
 block after pages gave it values refuses only a new one. A component's variant is held
 the same way: a variant that sets a value on a block the component locks is refused when
-the component is saved, naming the block and the variant.
+the component is created or saved, naming the block and the variant, including a lock
+the same save adds and a block locked inside a component it places. A page that chooses a
+variant hiding or changing such a block is refused as a value would be.
 
 In the editor, the field that drives such a block is read-only on the placement, with "Set
 by the component" and its name, and where to change it. Double-clicking its text on the

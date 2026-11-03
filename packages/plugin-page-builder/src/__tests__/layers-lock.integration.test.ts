@@ -556,6 +556,141 @@ describe.each(getConfiguredTestDialects())(
         await expectRefusedNamingHero(withVariant({ title: "Changed" }));
       });
 
+      /** The promo's content, with `edit` applied, for a create or an update. */
+      function promoContent(
+        variants: Record<string, Record<string, string>>,
+        heroLocked = true
+      ) {
+        return {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component",
+          nodes: [
+            heading("hero", {
+              name: "Hero",
+              ...(heroLocked ? { locked: true } : {}),
+            }),
+            heading("sub"),
+          ],
+          exposed: [
+            {
+              id: "title",
+              label: "Title",
+              nodeId: "hero",
+              propPath: "text",
+              type: "text",
+            },
+            {
+              id: "subtitle",
+              label: "Subtitle",
+              nodeId: "sub",
+              propPath: "text",
+              type: "text",
+            },
+          ],
+          variants: Object.fromEntries(
+            Object.entries(variants).map(([name, overrides]) => [
+              name,
+              { label: name, overrides },
+            ])
+          ),
+        };
+      }
+
+      it("refuses creating a component whose variant sets a value on a block it locks", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const create = (slug: string, overrides: Record<string, string>) =>
+          t.nextly.create({
+            collection: COMPONENTS_SLUG,
+            data: {
+              title: slug,
+              slug,
+              content: promoContent({ dark: overrides }),
+              status: "published",
+            },
+            overrideAccess: true,
+          });
+
+        await expect(
+          create("free", { subtitle: "Sale" })
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(create("held", { title: "Changed" }));
+      });
+
+      it("refuses an update that locks a block an existing variant sets", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const created = await t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Promo",
+            slug: "promo",
+            content: promoContent({ dark: { title: "Changed" } }, false),
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+
+        await expectRefusedNamingHero(
+          t.nextly.update({
+            collection: COMPONENTS_SLUG,
+            id: String(created.item.id),
+            data: { content: promoContent({ dark: { title: "Changed" } }) },
+            overrideAccess: true,
+          })
+        );
+      });
+
+      it("refuses a variant reaching the locked block through a component it places", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        const inner = await promo(t);
+        const outer = (overrides: Record<string, string>, slug: string) =>
+          t.nextly.create({
+            collection: COMPONENTS_SLUG,
+            data: {
+              title: slug,
+              slug,
+              content: {
+                formatVersion: DOCUMENT_FORMAT_VERSION,
+                kind: "component",
+                nodes: [
+                  {
+                    id: "nested",
+                    type: COMPONENT_INSTANCE_TYPE,
+                    version: 1,
+                    props: { componentId: inner },
+                  },
+                ],
+                exposed: [
+                  {
+                    id: "headline",
+                    label: "Headline",
+                    nodeId: "nested",
+                    propPath: "overrides.title",
+                    type: "text",
+                  },
+                  {
+                    id: "strap",
+                    label: "Strap",
+                    nodeId: "nested",
+                    propPath: "overrides.subtitle",
+                    type: "text",
+                  },
+                ],
+                variants: { loud: { label: "Loud", overrides } },
+              },
+              status: "published",
+            },
+            overrideAccess: true,
+          });
+
+        await expect(
+          outer({ strap: "Sale" }, "free-banner")
+        ).resolves.toBeDefined();
+        await expectRefusedNamingHero(outer({ headline: "Changed" }, "banner"));
+      });
+
       it("refuses it on an update too", async () => {
         const { update } = await storedPage([heading("loose")]);
         const id = await promo(current!);

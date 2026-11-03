@@ -3,7 +3,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { DOCUMENT_FORMAT_VERSION, type BlockNode } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+  type BlockNode,
+} from "./document";
 import { variantLockChanges } from "./layers-lock-variants";
 
 const heading = (id: string, extra: Partial<BlockNode> = {}): BlockNode => ({
@@ -87,5 +91,54 @@ describe("variantLockChanges", () => {
         component()
       )
     ).toEqual([]);
+  });
+
+  it("refuses a lock this same write adds to a block an existing variant sets", () => {
+    const stored = component({ dark: { title: "Changed" } }, false);
+    expect(
+      variantLockChanges(component({ dark: { title: "Changed" } }), stored)
+    ).toEqual([expect.objectContaining({ label: "Hero", variant: "dark" })]);
+  });
+
+  it("judges a new component's variants against it drawn with none", () => {
+    expect(
+      variantLockChanges(component({ dark: { title: "Changed" } }), undefined)
+    ).toEqual([expect.objectContaining({ label: "Hero", variant: "dark" })]);
+    expect(
+      variantLockChanges(component({ dark: { subtitle: "Sale" } }), undefined)
+    ).toEqual([]);
+  });
+
+  it("reaches a block locked inside a component it places, through the library", () => {
+    // The outer component places the promo and relays the promo's `title`
+    // as its own `headline`; its variant sets that headline.
+    const outer = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "nested",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "promo" },
+        },
+      ],
+      exposed: [
+        {
+          id: "headline",
+          label: "Headline",
+          nodeId: "nested",
+          propPath: "overrides.title",
+          type: "text",
+        },
+      ],
+      variants: { loud: { label: "Loud", overrides: { headline: "Changed" } } },
+    };
+    const components = new Map([["promo", component() as never]]);
+
+    expect(variantLockChanges(outer, undefined)).toEqual([]);
+    expect(variantLockChanges(outer, undefined, { components })).toEqual([
+      expect.objectContaining({ label: "Hero", variant: "loud" }),
+    ]);
   });
 });

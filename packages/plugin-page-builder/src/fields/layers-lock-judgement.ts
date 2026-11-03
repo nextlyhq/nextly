@@ -18,9 +18,7 @@
  */
 import {
   layersLockChanges,
-  variantLockChanges,
   type LayersLockChange,
-  type VariantLockChange,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldIssue,
@@ -61,19 +59,6 @@ function layersLockIssuesFor(
     path,
     code: LAYERS_LOCK_CHANGED,
     message: `${label}${change.path}: ${pageLockMessage(change)}`,
-  }));
-}
-
-/** The issues each variant breaking a lock is refused with, naming the variant. */
-function variantLockIssuesFor(
-  changes: readonly VariantLockChange[],
-  path: string,
-  label: string
-): PluginFieldIssue[] {
-  return changes.map(change => ({
-    path,
-    code: LAYERS_LOCK_CHANGED,
-    message: `${label}, variant "${change.variant}": ${pageLockMessage(change)}`,
   }));
 }
 
@@ -121,23 +106,11 @@ export async function layersLockIssues(
   }
   const [newest] = stored.forms;
   if (newest === undefined) return [];
-  // A component's variants too: a preset that sets a value on a locked block
-  // changes it wherever the variant is chosen, which its nodes do not show.
-  // A block already reported for the nodes is not reported again.
-  // Drawn through a placement, a variant's blocks carry the placement's ids,
-  // so a block is matched to the nodes' report by its name.
-  const changes = layersLockChanges(value, newest);
-  const named = new Set(changes.map(change => change.label));
-  return [
-    ...layersLockIssuesFor(changes, args.path, label),
-    ...variantLockIssuesFor(
-      variantLockChanges(value, newest).filter(
-        change => !named.has(change.label)
-      ),
-      args.path,
-      label
-    ),
-  ];
+  return layersLockIssuesFor(
+    layersLockChanges(value, newest),
+    args.path,
+    label
+  );
 }
 
 /**
