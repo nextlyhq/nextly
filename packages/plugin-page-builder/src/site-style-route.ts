@@ -180,6 +180,8 @@ export async function readSiteStyleForEditor(
   return readStoredSiteStyle({
     nextly,
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+    // Past the Single's own permission: the caller was admitted above.
+    overrideAccess: true,
   });
 }
 

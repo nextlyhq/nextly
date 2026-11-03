@@ -386,23 +386,27 @@ function storedSiteStyleOf(doc: unknown): StoredSiteStyle {
 }
 
 /**
- * The stored site style, read past the Single's own read permission.
+ * The stored site style: the one server-side read of the document, which the
+ * published render layers over the defaults ({@link loadSiteStyle}) and the
+ * editor's route answers as it is.
  *
- * The one server-side read of the document: the published render layers it
- * over the defaults ({@link loadSiteStyle}) and the editor's route answers it
- * as it is. Past the permission because every published page already compiles
- * it into the CSS a visitor is served; who may ask for it through a route is
- * that route's decision, made before this runs.
+ * Read with whatever access posture the reader has, unless `overrideAccess` is
+ * set. Only the editor's route sets it, after deciding who may ask: every
+ * published page compiles these sections into the CSS a visitor is served.
+ * The published render does not, so a host handing it a reader that enforces
+ * access keeps that enforcement.
  */
 export async function readStoredSiteStyle(args: {
   nextly: SiteStyleReader;
   /** The Single's RESOLVED slug, where a host renamed it. */
   slug?: string;
+  /** Read past the Single's own read permission. */
+  overrideAccess?: true;
 }): Promise<StoredSiteStyle> {
   return storedSiteStyleOf(
     await args.nextly.findSingle({
       slug: args.slug ?? SITE_STYLE_SLUG,
-      overrideAccess: true,
+      ...(args.overrideAccess === true ? { overrideAccess: true } : {}),
     })
   );
 }
@@ -428,6 +432,13 @@ export async function loadSiteStyle(args: {
 }): Promise<SiteStyleData> {
   return resolveSiteStyle(
     args.defaults,
-    readSiteStyleRecord(await readStoredSiteStyle(args))
+    readSiteStyleRecord(
+      // The slug alone, never an access override: this is published, and
+      // its read keeps the posture of the reader it was handed.
+      await readStoredSiteStyle({
+        nextly: args.nextly,
+        ...(args.slug === undefined ? {} : { slug: args.slug }),
+      })
+    )
   );
 }
