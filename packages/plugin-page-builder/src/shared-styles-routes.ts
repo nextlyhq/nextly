@@ -73,7 +73,11 @@ import {
 } from "./site-style-storage";
 import { readStoredJson } from "./stored-json";
 import { documentCountOf, type DocumentsUsing } from "./usage-count";
-import { indexIsWhole, type UsageIndexHealth } from "./usage-index-health";
+import {
+  indexIsWhole,
+  indexStillCounting,
+  type UsageIndexHealth,
+} from "./usage-index-health";
 
 /** The permission that locks and unlocks shared styles, in its parts. */
 const LOCK_SHARED_STYLES = {
@@ -288,7 +292,13 @@ export async function readSharedStyleUsage(
       LOCK_SHARED_STYLES.action,
       LOCK_SHARED_STYLES.resource
     )) ?? false;
-  return { whole: indexIsWhole(health), mayLock, styles };
+  return {
+    whole: indexIsWhole(health),
+    // From the same health reading, so it cannot disagree with `whole`.
+    counting: indexStillCounting(health),
+    mayLock,
+    styles,
+  };
 }
 
 /** What a where-used read asks for: one style, and which page of its uses. */

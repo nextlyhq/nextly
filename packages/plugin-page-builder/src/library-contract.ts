@@ -774,6 +774,13 @@ export interface SharedStyleUsage {
 export interface SharedStylesUsageResponse {
   /** Whether the usage index covers the whole site, so counts can be exact. */
   readonly whole: boolean;
+  /**
+   * Whether counts that are not whole may still become whole: the site is
+   * still being counted. False when they are whole, and when something the
+   * index cannot reach keeps them floors for good, so there is nothing to
+   * read again for.
+   */
+  readonly counting: boolean;
   /** Whether this caller may lock and unlock shared styles. */
   readonly mayLock: boolean;
   /** Each style asked about, by id. */

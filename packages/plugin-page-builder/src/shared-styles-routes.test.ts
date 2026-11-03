@@ -282,6 +282,7 @@ describe("how widely shared styles are used", () => {
     );
     expect(answer).toEqual({
       whole: true,
+      counting: false,
       mayLock: true,
       styles: {
         "c-card": {
@@ -295,6 +296,21 @@ describe("how widely shared styles are used", () => {
           complete: true,
         },
       },
+    });
+  });
+
+  it("says whether the counts may still become whole", async () => {
+    const counting = usageOf({ ...NOT_WHOLE, backfillPending: true }).source;
+    const stuck = usageOf({ ...NOT_WHOLE, backfillPending: false }).source;
+    const ask = (source: SharedStyleUsageSource) =>
+      readSharedStyleUsage(usageRequest("c-card"), caller(false), source);
+    // A backfill still walking: the next read may be whole.
+    expect(await ask(counting)).toMatchObject({ whole: false, counting: true });
+    // Content the index can never reach: floors for good, nothing to wait for.
+    expect(await ask(stuck)).toMatchObject({ whole: false, counting: false });
+    expect(await ask(usageOf(WHOLE).source)).toMatchObject({
+      whole: true,
+      counting: false,
     });
   });
 
