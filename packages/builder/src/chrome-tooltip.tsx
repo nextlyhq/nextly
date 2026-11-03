@@ -60,8 +60,11 @@ function useClosedByFrames(): {
       if (trigger.current?.matches(":focus-visible") === true) return;
       setOpen(false);
     };
-    document.addEventListener("pointerover", intoFrame, true);
-    return () => document.removeEventListener("pointerover", intoFrame, true);
+    // The trigger's own document: the shell can be drawn inside a frame of
+    // its own, where the canvas frame's events never reach the outer one.
+    const at = trigger.current?.ownerDocument ?? document;
+    at.addEventListener("pointerover", intoFrame, true);
+    return () => at.removeEventListener("pointerover", intoFrame, true);
   }, [open]);
   return { open, onOpenChange: setOpen, trigger };
 }

@@ -64,6 +64,44 @@ describe("ChromeTooltip", () => {
     }
   });
 
+  it("closes when the pointer enters a frame inside the document its control is in", () => {
+    // The shell can itself be drawn in a frame: the canvas frame's events then
+    // reach that inner document, never the outer one.
+    const host = document.createElement("iframe");
+    document.body.append(host);
+    const inner = host.contentDocument;
+    if (inner === null) throw new Error("the host frame has no document");
+    const container = inner.createElement("div");
+    inner.body.append(container);
+    vi.useFakeTimers();
+    try {
+      render(
+        <TooltipProvider delayDuration={300}>
+          <ChromeTooltip content="Reset">
+            <button type="button">reset</button>
+          </ChromeTooltip>
+        </TooltipProvider>,
+        { container }
+      );
+      const button = inner.querySelector("button");
+      if (button === null) throw new Error("no trigger rendered");
+      fireEvent.pointerMove(button, { pointerType: "mouse" });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.queryByRole("tooltip")).not.toBeNull();
+
+      const canvas = inner.createElement("iframe");
+      inner.body.append(canvas);
+      fireEvent.pointerOver(canvas);
+
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      host.remove();
+    }
+  });
+
   it("keeps a keyboard-focused control's tooltip when the pointer moves into a frame", async () => {
     const button = renderTip();
     fireEvent.keyDown(document.body, { key: "Tab" });
@@ -89,7 +127,8 @@ describe("ChromeTooltip", () => {
 
 /**
  * Bounded, as every source scan is: it reads `@nextlyhq/ui` imports by name,
- * so a tooltip part reached any other way walks past it. It catches the
+ * and counts a namespace import as importing every part, so a tooltip part
+ * reached any other way (a re-export, a dynamic import) walks past it. It catches the
  * import a new control reaches for without thinking, which is the one that
  * stuck over the canvas.
  */
@@ -107,6 +146,12 @@ describe("the builder's chrome tooltips", () => {
         return;
       }
       for (const specifier of node.specifiers) {
+        // A namespace import reaches every part by property, which a scan by
+        // name cannot follow, so it counts as importing them all.
+        if (specifier.type === "ImportNamespaceSpecifier") {
+          found.push("* (namespace)");
+          continue;
+        }
         if (
           specifier.type === "ImportSpecifier" &&
           specifier.imported.type === "Identifier" &&
