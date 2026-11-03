@@ -45,8 +45,9 @@ export interface DocumentLockSurface extends DocumentLockAffordances {
   /** Ask again for the latest version of the document after it failed to load. */
   readonly retryLoad: () => void;
   /**
-   * Moves each time a load of the latest version reaches the document on
-   * screen, and at no other time. A view that reads its document once, as it
+   * Moves each time a load of the latest version of a gained document reaches
+   * the screen, and at no other time; trying again after a read failed with
+   * nothing gained leaves it. A view that reads its document once, as it
    * mounts, is keyed on it, so it starts again from the copy just loaded
    * rather than unlocking over the one it read before.
    */
@@ -89,6 +90,15 @@ interface GainLoad {
   readonly from: number | undefined;
   /** Which load this is, so a late answer to an earlier one changes nothing. */
   readonly attempt: number;
+  /**
+   * Which gain the load is for: a new one, or the one an earlier load had not
+   * yet brought onto the screen when this one tried again. Null for trying
+   * again after a read of a document this editor already had failed: the copy
+   * on screen is then theirs, and starting the editor again would lose it.
+   */
+  readonly gain: number | null;
+  /** The count `reloads` gave before this load reached the document. */
+  readonly reachedBefore: number;
 }
 
 /**
@@ -138,14 +148,24 @@ function useGainLoad(
   const [handled, setHandled] = useState(gains);
   const [load, setLoad] = useState<GainLoad | null>(null);
   const attempts = useRef(0);
+  const gainCount = useRef(0);
   const latestRef = useRef(latest);
   latestRef.current = latest;
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
-  const start = useCallback(() => {
+  const start = useCallback((gained: boolean) => {
     const reads = latestRef.current;
     if (reads === undefined) return;
     const attempt = (attempts.current += 1);
-    setLoad({ phase: "loading", from: reads.readAt, attempt });
+    const current = loadRef.current;
+    setLoad({
+      phase: "loading",
+      from: reads.readAt,
+      attempt,
+      gain: gained ? (gainCount.current += 1) : unreachedGain(reads, current),
+      reachedBefore: loadsReached(reads, current),
+    });
     const settle = (phase: GainLoad["phase"]) =>
       setLoad(current =>
         current?.attempt === attempt ? { ...current, phase } : current
@@ -159,7 +179,7 @@ function useGainLoad(
   useEffect(() => {
     if (gains === handled) return;
     setHandled(gains);
-    start();
+    start(true);
   }, [gains, handled, start]);
 
   // A new document is a new claim, and nothing loaded for the last one
@@ -170,21 +190,37 @@ function useGainLoad(
 
   return {
     load: latestLoad(latest, gains !== handled, load),
-    retry: start,
+    retry: () => start(false),
     reloads: loadsReached(latest, load),
   };
 }
 
+/** Whether a load reached the document: reads made since it was asked for are on screen. */
+function reached(latest: DocumentLatest | undefined, load: GainLoad): boolean {
+  return latest?.readAt !== load.from;
+}
+
 /**
- * How many loads have reached the document: the last one once reads made
- * since it was asked for are on screen, the one before it until then.
+ * Which gain `reloads` last counted onto the screen. A load counts once its
+ * reads are on screen, and only a load for a gain: trying again after a read
+ * failed with nothing gained leaves the count, and the editor, as they were.
  */
 function loadsReached(
   latest: DocumentLatest | undefined,
   load: GainLoad | null
 ): number {
   if (load === null) return 0;
-  return latest?.readAt !== load.from ? load.attempt : load.attempt - 1;
+  return load.gain !== null && reached(latest, load)
+    ? load.gain
+    : load.reachedBefore;
+}
+
+/** The gain a load that has not reached the document yet was for, if any. */
+function unreachedGain(
+  latest: DocumentLatest,
+  load: GainLoad | null
+): number | null {
+  return load !== null && !reached(latest, load) ? load.gain : null;
 }
 
 /** What someone who may only read the document is shown. */

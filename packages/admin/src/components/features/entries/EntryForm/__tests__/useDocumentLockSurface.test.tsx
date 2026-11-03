@@ -377,6 +377,25 @@ describe("loading the latest document before a gain unlocks the form", () => {
     expect(result.current.reloads).toBe(2);
   });
 
+  it("still counts a gain whose load failed once trying again brings it in", async () => {
+    const { reload, settles } = deferredReload();
+    const { result, rerender } = mount(reload);
+    useDocumentLock.mockReturnValue(gained(1));
+    rerender({ readAt: 1 });
+    await act(async () => {
+      settles[0].reject(new Error("offline"));
+    });
+    rerender({ readAt: 1, failed: true });
+    act(() => {
+      result.current.retryLoad();
+    });
+    await act(async () => {
+      settles[1].resolve();
+    });
+    rerender({ readAt: 2, failed: false });
+    expect(result.current.reloads).toBe(1);
+  });
+
   describe("a read of the document on screen that fails, with no gain", () => {
     // A refetch, or the read that follows a save, can fail while the editor
     // holds the document. Editable over that copy, their next save writes it.
@@ -410,6 +429,9 @@ describe("loading the latest document before a gain unlocks the form", () => {
       rerender({ readAt: 2, failed: false });
       expect(result.current.readOnly).toBe(false);
       expect(result.current.notice).toBeNull();
+      // Nothing was gained: the editor keeps the copy on screen and what they
+      // typed over it, so nothing that starts it again is told to.
+      expect(result.current.reloads).toBe(0);
     });
 
     it("says so again when trying again fails", async () => {

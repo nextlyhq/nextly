@@ -99,3 +99,39 @@ describe("EntryForm when it gains an entry", () => {
     await waitFor(() => expect(excerpt().value).toBe("Bob's second"));
   });
 });
+
+describe("EntryForm trying again after a read failed with nothing gained", () => {
+  it("keeps what the editor typed", async () => {
+    // The editor holds the entry throughout. Starting the form again here
+    // would lose the work the failed read kept on screen.
+    const reload = vi.fn(() => Promise.resolve());
+    const view = (readAt: number, failed: boolean) => (
+      <EntryForm
+        collection={collection}
+        entry={
+          {
+            id: "e1",
+            title: "Post",
+            excerpt: "Stored",
+            updatedAt: SAME_SECOND,
+          } as never
+        }
+        mode="edit"
+        latest={{ readAt, failed, reload }}
+      />
+    );
+    const excerpt = () => screen.getByLabelText("Excerpt") as HTMLInputElement;
+    const user = userEvent.setup();
+    useDocumentLock.mockReturnValue(holding(0));
+    const { rerender } = render(view(1, false));
+    await user.type(excerpt(), " and mine");
+
+    rerender(view(1, true));
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    rerender(view(2, false));
+
+    await waitFor(() => expect(excerpt().readOnly).toBe(false));
+    expect(excerpt().value).toBe("Stored and mine");
+  });
+});
