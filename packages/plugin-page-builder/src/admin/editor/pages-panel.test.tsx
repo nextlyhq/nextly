@@ -438,9 +438,10 @@ describe("a row's actions", () => {
       name: "Duplicate",
     });
     expect(duplicate.getAttribute("aria-disabled")).toBe("true");
-    expect(duplicate.getAttribute("title")).toBe(
-      "Publish it first to duplicate it."
-    );
+    // Shown to a pointer user as well as heard: the reason is on screen.
+    expect(
+      within(duplicate).getByText("Publish it first to duplicate it.")
+    ).toBeTruthy();
     await userEvent.click(duplicate);
     expect(client.duplicatePage).not.toHaveBeenCalled();
   });
@@ -454,15 +455,17 @@ describe("a row's actions", () => {
       screen.getByRole("button", { name: "More for Home" })
     );
     await screen.findByRole("menu");
-    const reached: string[] = [];
+    const reached = new Set<Element>();
     for (let step = 0; step < 6; step += 1) {
       await userEvent.keyboard("{ArrowDown}");
-      const focused = document.activeElement;
-      if (focused?.getAttribute("role") === "menuitem") {
-        reached.push(focused.textContent ?? "");
-      }
+      if (document.activeElement !== null) reached.add(document.activeElement);
     }
-    expect(reached).toEqual(expect.arrayContaining(["Duplicate", "Delete…"]));
+    expect(
+      reached.has(screen.getByRole("menuitem", { name: "Duplicate" }))
+    ).toBe(true);
+    expect(reached.has(screen.getByRole("menuitem", { name: "Delete…" }))).toBe(
+      true
+    );
 
     const described = (name: string) => {
       const entry = screen.getByRole("menuitem", { name });
@@ -573,9 +576,9 @@ describe("a row's actions", () => {
     );
     const remove = await screen.findByRole("menuitem", { name: "Delete…" });
     expect(remove.getAttribute("aria-disabled")).toBe("true");
-    expect(remove.getAttribute("title")).toBe(
-      "Open another page to delete this one."
-    );
+    expect(
+      within(remove).getByText("Open another page to delete this one.")
+    ).toBeTruthy();
     await userEvent.click(remove);
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(client.deletePage).not.toHaveBeenCalled();

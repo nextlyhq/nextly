@@ -634,8 +634,9 @@ function RowMenu({
 /**
  * A menu item the author cannot use on this page, kept in the arrow-key order
  * and described by its reason, so a keyboard or screen reader user reaches it
- * and hears why. A `disabled` item is skipped without a word. Choosing it does
- * nothing and leaves the menu open.
+ * and hears why. A `disabled` item is skipped without a word. The reason is
+ * also drawn as a muted second line, so a pointer user sees it too. Choosing
+ * it does nothing and leaves the menu open.
  */
 function UnavailableItem({
   reason,
@@ -652,11 +653,17 @@ function UnavailableItem({
       <DropdownMenuItem
         aria-disabled="true"
         aria-describedby={reasonId}
-        title={reason}
-        className={`opacity-50 ${className ?? ""}`}
+        className={`items-start ${className ?? ""}`}
         onSelect={event => event.preventDefault()}
       >
-        {children}
+        <span className="flex flex-col gap-0.5">
+          <span className="opacity-50">{children}</span>
+          {/* Seen, not read: assistive technology hears the description, so
+              the item's name stays the action alone. */}
+          <span aria-hidden="true" className="text-xs text-muted-foreground">
+            {reason}
+          </span>
+        </span>
       </DropdownMenuItem>
       {/* Hidden, yet still read as the item's description. */}
       <span id={reasonId} hidden>
