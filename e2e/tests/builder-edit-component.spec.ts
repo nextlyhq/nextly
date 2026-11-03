@@ -1,8 +1,8 @@
 /**
  * "Edit component": from a page's builder, the inspector of a placement and
  * the block toolbar open the component alone in its own view, with a banner
- * naming it and how many pages a change reaches, and Back returns to the page
- * with the placement selected. Unsaved page changes are asked about first, and
+ * naming it and how many pages a change reaches, and one Back, naming the
+ * page, returns to it with the placement selected. Unsaved page changes are asked about first, and
  * an author who may not update components is not offered it.
  *
  * Each test makes its own component and page through the admin API.
@@ -27,7 +27,12 @@ function tag(): string {
 /** A published component and a published page placing it; answers both ids. */
 async function seed(
   request: APIRequestContext
-): Promise<{ component: string; page: string; title: string }> {
+): Promise<{
+  component: string;
+  page: string;
+  title: string;
+  pageTitle: string;
+}> {
   const t = tag();
   const title = `Promo ${t}`;
   const component = await request.post(COMPONENTS, {
@@ -54,9 +59,10 @@ async function seed(
   );
   const componentId = ((await component.json()) as { item: { id: string } })
     .item.id;
+  const pageTitle = `Host ${t}`;
   const page = await request.post(PAGES, {
     data: {
-      title: `Host ${t}`,
+      title: pageTitle,
       slug: `host-${t}`,
       status: "published",
       content: {
@@ -81,7 +87,7 @@ async function seed(
   });
   expect(page.ok(), `creating the page: ${page.status()}`).toBe(true);
   const pageId = ((await page.json()) as { item: { id: string } }).item.id;
-  return { component: componentId, page: pageId, title };
+  return { component: componentId, page: pageId, title, pageTitle };
 }
 
 async function openPage(page: Page, id: string): Promise<void> {
@@ -114,9 +120,15 @@ test.describe("Edit component", () => {
       )
     );
     await expect(banner(page)).toContainText(seeded.title);
+    // Pages, and "at least" only while the usage index is still being filled.
     await expect(banner(page)).toContainText(
-      /Changes reach (at least )?the 1 document that places it\./
+      /Changes reach (at least )?1 page(?!s)/
     );
+    // One way back, in the banner, naming the page it returns to; the
+    // editor's own exit arrow is withheld while it is offered.
+    await expect(
+      page.getByRole("button", { name: "Exit editor" })
+    ).toHaveCount(0);
     // The component alone: its own blocks, none of the page's.
     await openLayers(page);
     await expect(layerRow(page, "promo-heading")).toBeVisible({
@@ -124,7 +136,9 @@ test.describe("Edit component", () => {
     });
     await expect(layerRow(page, "intro")).toHaveCount(0);
 
-    await banner(page).getByRole("button", { name: "Back" }).click();
+    await banner(page)
+      .getByRole("button", { name: `Back to ${seeded.pageTitle}` })
+      .click();
     await expect(page).toHaveURL(
       new RegExp(`/admin/collections/pages/${seeded.page}/builder\\?`)
     );

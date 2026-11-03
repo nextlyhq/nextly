@@ -881,6 +881,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentLibrary: mount.componentLibrary,
     fieldName: name,
     componentFacts: mount.componentFacts,
+    // Said by the banner's Back in the view a placement here opens.
+    here: page.title,
   });
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
@@ -926,7 +928,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     <EditorFrame banner={componentView.banner}>
       <BuilderShell
         notices={notices}
-        onExit={done}
+        onExit={shellExit(componentView, done)}
         // The signed-in author's own preferences, not the browser's.
         store={mount.preferenceStore}
         availablePanels={availablePanels}
@@ -1074,6 +1076,18 @@ function EditorBody<TFieldValues extends FieldValues>({
       </BuilderShell>
     </EditorFrame>
   );
+}
+
+/**
+ * The shell's exit arrow: withheld while the component banner offers its
+ * Back, so the view has one way back rather than two arrows going to two
+ * places. Leaving through search still commits, as the exit always did.
+ */
+function shellExit(
+  view: Pick<ComponentView, "offersBack">,
+  done: () => void
+): (() => void) | undefined {
+  return view.offersBack ? undefined : done;
 }
 
 /**

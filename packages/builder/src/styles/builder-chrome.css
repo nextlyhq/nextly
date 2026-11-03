@@ -1476,45 +1476,98 @@
 
 /*
  * The banner over a component's own view: Webflow's banner over a main
- * component, in the component's hue from the accepted editor mock, so the
- * author reads it as "this is the shared thing". A band rather than a toast,
- * because it holds for the whole view. Drawn above the shell, outside the
- * chrome's own tokens, so the hue falls back to the admin's purple there.
+ * component, a band tinted with the component's hue, so the author reads the
+ * whole view as "this is the shared thing". A band rather than a toast,
+ * because it holds for the whole view. It carries the builder's token class,
+ * so the hue resolves here above the shell.
+ *
+ * The tint is stronger on the dark ground: 8% of the purple over a near-black
+ * page is barely there, so dark takes 16% over the card surface, as the
+ * accepted proposal draws it.
  */
 .nx-component-banner {
+  --nx-component-banner-wash: color-mix(
+    in oklch,
+    var(--nx-builder-component) 8%,
+    var(--nx-background)
+  );
+  --nx-component-banner-line: color-mix(
+    in oklch,
+    var(--nx-builder-component) 35%,
+    var(--nx-background)
+  );
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem 0.5rem;
-  padding: 0.375rem 0.75rem;
-  border-bottom: 1px solid
-    color-mix(
-      in oklch,
-      var(--nx-builder-component, var(--nx-code-keyword)) 35%,
-      transparent
-    );
-  background: color-mix(
-    in oklch,
-    var(--nx-builder-component, var(--nx-code-keyword)) 8%,
-    var(--nx-background)
-  );
+  gap: 0.25rem 0.75rem;
+  min-height: 2.75rem;
+  padding: 0.25rem 1rem;
+  border-bottom: 1px solid var(--nx-component-banner-line);
+  background: var(--nx-component-banner-wash);
   color: var(--nx-foreground);
 }
 
-.nx-component-banner__glyph {
-  flex: 0 0 auto;
-  color: var(--nx-builder-component, var(--nx-code-keyword));
+.dark .nx-component-banner,
+.nx-component-banner.dark {
+  --nx-component-banner-wash: color-mix(
+    in oklch,
+    var(--nx-builder-component) 16%,
+    var(--nx-card)
+  );
+  --nx-component-banner-line: color-mix(
+    in oklch,
+    var(--nx-builder-component) 45%,
+    var(--nx-background)
+  );
+}
+
+/* The one way back: "Back", then where it goes in the quieter weight. */
+.nx-component-banner__back {
+  gap: 0.375rem;
+  font-weight: 500;
+}
+
+.nx-component-banner__to {
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--nx-muted-foreground);
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The rule between the way back and what is being edited. */
+.nx-component-banner__rule {
+  align-self: center;
+  width: 1px;
+  height: 1.25rem;
+  background: var(--nx-component-banner-line);
 }
 
 .nx-component-banner__text {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.25rem 0.5rem;
+  gap: 0.25rem 0.375rem;
   margin: 0;
   min-width: 0;
   font-size: 0.8125rem;
   line-height: 1.5;
+}
+
+/* "Editing component" in the component's hue, its mark beside it. */
+.nx-component-banner__editing {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 0.375rem;
+  font-weight: 600;
+  color: var(--nx-builder-component);
+}
+
+.nx-component-banner__glyph {
+  flex: 0 0 auto;
 }
 
 .nx-component-banner__name {

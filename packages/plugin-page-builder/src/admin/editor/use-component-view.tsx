@@ -2,8 +2,8 @@
 
 /**
  * The editor's part in "Edit component": the way into a placed component's
- * own view, and, in that view, the banner that names it, says how far a
- * change reaches and leads back.
+ * own view, and, in that view, the banner that names it, says how many pages
+ * a change reaches and leads back to the document it names.
  *
  * Gathered here so the editor asks one hook, and both halves read the same
  * answers: the author's grant, the component library and the component's
@@ -30,8 +30,12 @@ import {
   isStoreRow,
   openDocument,
   returnFromSearch,
+  returnLabelFromSearch,
   useEditComponent,
 } from "./edit-component";
+
+/** What Back says it returns to when the address names no document. */
+const UNNAMED_RETURN = "the page";
 
 /** What the editor draws and hands on for "Edit component". */
 export interface ComponentView {
@@ -44,6 +48,11 @@ export interface ComponentView {
     | undefined;
   /** The banner over a component's own view; nothing over a page. */
   readonly banner: JSX.Element | null;
+  /**
+   * Whether the banner offers the way back. While it does, the editor's own
+   * exit arrow is withheld, so the view has ONE Back.
+   */
+  readonly offersBack: boolean;
 }
 
 export function useComponentView({
@@ -52,6 +61,7 @@ export function useComponentView({
   componentLibrary,
   fieldName,
   componentFacts,
+  here,
 }: {
   initialDocument: BlockDocument;
   editor: EditorState;
@@ -63,12 +73,14 @@ export function useComponentView({
    * it, read by the mount for a component with a row; nothing for a page.
    */
   componentFacts: ComponentFieldsHost | undefined;
+  /** The open document's name, which Back from a component opened here says. */
+  here: string | undefined;
 }): ComponentView {
   const isSection = useCallback(
     (nodeId: string) => editor.document.nodes.some(node => node.id === nodeId),
     [editor.document]
   );
-  const onEditComponent = useEditComponent(isSection);
+  const onEditComponent = useEditComponent(isSection, here);
 
   const identity = useDocumentIdentity();
   // The component's row, when the document is a component that has one.
@@ -87,17 +99,32 @@ export function useComponentView({
       ? undefined
       : returnFromSearch(window.location.search)
   );
-  const banner =
-    componentId === undefined || !inStore ? null : (
-      <ComponentBanner
-        name={
-          componentLibrary.components.find(row => row.id === componentId)?.title
-        }
-        reach={componentFacts?.reach}
-        onBack={
-          returnTo === undefined ? undefined : () => openDocument(returnTo)
-        }
-      />
-    );
-  return { onEditComponent, banner };
+  // And the name it is said by, read with it: plain words, never a target.
+  const [returnLabel] = useState(() =>
+    typeof window === "undefined"
+      ? undefined
+      : returnLabelFromSearch(window.location.search)
+  );
+  const showsBanner = componentId !== undefined && inStore;
+  const back =
+    returnTo === undefined
+      ? undefined
+      : {
+          to: returnLabel ?? UNNAMED_RETURN,
+          onBack: () => openDocument(returnTo),
+        };
+  const banner = showsBanner ? (
+    <ComponentBanner
+      name={
+        componentLibrary.components.find(row => row.id === componentId)?.title
+      }
+      pages={componentFacts?.pages}
+      back={back}
+    />
+  ) : null;
+  return {
+    onEditComponent,
+    banner,
+    offersBack: showsBanner && back !== undefined,
+  };
 }
