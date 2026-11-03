@@ -5165,21 +5165,34 @@ label[data-named-above] .nx-style-inspector__field-label-text {
    neutral page with a border. The style's own colours are drawn on it, so a
    dark text or a white background shows as it would on a page. */
 .nx-shared-styles__tile {
+  position: relative;
   display: inline-flex;
   width: 22px;
   height: 22px;
-  overflow: hidden;
+  /* Visible, so the dark-mode flag can sit outside the corner, off the
+     glyph; the preview inside keeps to the rounded tile on its own. */
+  overflow: visible;
   color: var(--nx-foreground);
   background: var(--nx-page-background);
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-sm);
 }
 
+/* An "Aa" not shown to read on its background: an outline painted under its
+   fill, so it shows on any colour. The site's page colour overrides this
+   inline where the tab has it. */
+.nx-shared-styles__lead--outlined {
+  -webkit-text-stroke: 2px var(--nx-background);
+  paint-order: stroke fill;
+}
+
 .nx-shared-styles__lead {
   align-items: center;
   width: 100%;
   height: 100%;
+  overflow: hidden;
   font-size: var(--text-sm);
+  border-radius: calc(var(--radius-sm) - 1px);
 }
 
 /* The filters close the search block, so the search row keeps no rule of
@@ -5308,6 +5321,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   overflow-y: auto;
 }
 
+/* A rule under the pinned name, so rows scrolling up stop at a line rather
+   than running into the class name. Always drawn: telling a scrolled body
+   from one at its top would need a listener for one hairline. */
 .nx-shared-styles__details-head {
   position: sticky;
   top: 0;
@@ -5315,7 +5331,32 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  padding-bottom: 0.5rem;
   background: var(--nx-popover);
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/* "Show N more" and the tab's other text links get a 24px target here. The
+   class is the Variables and Fonts tabs' too, so it is raised in this tab
+   and its portalled editor only. */
+.nx-shared-styles .nx-vars__link,
+.nx-shared-styles__editor .nx-vars__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+/* The dark-mode flag on a tile drawn on the light page: a small moon over the
+   tile's top corner, outside the "Aa" so it covers no letter; the row's
+   tooltip says why. */
+.nx-shared-styles__dark-flag {
+  position: absolute;
+  inset-block-start: -5px;
+  inset-inline-end: -5px;
+  padding: 1px;
+  color: var(--nx-foreground);
+  background: var(--nx-background);
+  border-radius: 9999px;
 }
 
 /* Remove unused names each style over its class, wrapped rather than cut, so

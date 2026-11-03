@@ -33,6 +33,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/site-style-client
  */
 import {
+  apiErrorMessage,
   readPluginRoute,
   useUpdateSingleDocument,
   validationIssues,
@@ -192,15 +193,15 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
 }
 
 /**
- * A route's refusal in its own words: the per-field reasons when it named
- * any, else its message, else `fallback` for a rejection that said nothing.
+ * A route's refusal in its own words: every reason it gave, a field named or
+ * not, else its message, else `fallback` for a rejection that said nothing.
+ *
+ * The SDK's `apiErrorMessage`, the admin's one rule for this, rather than the
+ * per-section reading above: that one keys reasons by field and so drops one
+ * naming none, which left "Validation failed." where the reason belonged.
  */
 export function refusalWords(reason: unknown, fallback: string): string {
-  const named = Object.values(issuesFromRejection(reason));
-  if (named.length > 0) return named.join(" ");
-  return reason instanceof Error && reason.message !== ""
-    ? reason.message
-    : fallback;
+  return apiErrorMessage(reason, fallback);
 }
 
 /**
