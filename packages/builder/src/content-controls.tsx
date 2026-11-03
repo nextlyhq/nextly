@@ -488,6 +488,7 @@ function MediaControl({
  * the same way.
  */
 export function MediaChoice({
+  id,
   Picker,
   label,
   stored,
@@ -495,6 +496,8 @@ export function MediaChoice({
   disabled,
   onChoose,
 }: {
+  /** The button's id, for a field label that names it. */
+  id?: string;
   Picker: React.ComponentType<MediaPickerProps>;
   label: string;
   stored: string | null;
@@ -506,6 +509,7 @@ export function MediaChoice({
   return (
     <>
       <Button
+        {...(id === undefined ? {} : { id })}
         type="button"
         size="sm"
         variant="outline"
