@@ -1638,6 +1638,59 @@ describe.each(getConfiguredTestDialects())(
         });
       }
 
+      it("finishes a restore that stopped after its create, with one restored Layout and the default on it", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        /** The Layouts titled as the deleted one, other than the deleted id. */
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The process stops once the restored Layout is created: the next
+        // read of the settings, the one before the default is pointed at it,
+        // fails.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+
+        await expect(ensure(t)).rejects.toThrow();
+        expect(stopped).toBe(true);
+        await settleLayoutRemovals({
+          nextly: t.nextly,
+          slugs: SLUGS,
+          pagesSlug: PAGES_SLUG,
+          store: fence(),
+          warn: () => {},
+          now: () => new Date(Date.now() + 10 * 60_000),
+        });
+
+        const restored = await restoredOnes();
+        expect(restored).toHaveLength(1);
+        expect((await settingsOf(t)).defaultLayout).toBe(
+          relationId(restored[0])
+        );
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
       it("keeps the copy when every address a restore could take is taken, and restores once one is free", async () => {
         const t = await boot();
         const other = await layout(t, "Other", "other");

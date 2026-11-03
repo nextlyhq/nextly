@@ -31,8 +31,10 @@
  *   is settled as the request would have, an unpublish first looking for pages
  *   published onto it meanwhile ({@link undoUnpublishIfPagesNameIt});
  * - at `removed`, the check after the write is run;
- * - at `restoring`, a restore that stopped part-way cannot tell whether its
- *   Layout was created, so it is settled and logged rather than run twice.
+ * - at `restoring`, a restore whose row records the Layout it created is
+ *   finished on that Layout; one that stopped before recording it cannot tell
+ *   whether its Layout was created, so it is settled and logged rather than
+ *   run twice.
  *
  * A row is removed only while it is exactly as the sweep read it: the same
  * token, step and `updatedAt`. A removal that moved on after the read, or
@@ -61,6 +63,7 @@ import { clearPageReference, IN_FLIGHT_CLEARED } from "./page-reference-guard";
 import {
   republishFromCopy,
   restoreFromCopy,
+  resumeRestore,
   type RestoreDeps,
 } from "./restore";
 import { REMOVAL_LEASE_MS, type LayoutRemoval } from "./store";
@@ -288,6 +291,7 @@ async function sweepOne(
       await settleRemoval(deps, removal);
       return;
     case "restoring":
+      if (await resumeRestore(deps, removal)) return;
       deps.warn(
         "[page-builder] a Layout's restore stopped part-way; check the Layouts list for a restored copy",
         { layoutId: removal.layoutId }

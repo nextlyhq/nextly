@@ -203,6 +203,11 @@ async function createOrRelease(
  * Restore the Layout `removal` deleted, if the default still names it and the
  * row can be claimed. Answers the new id, or `null` when there was nothing to
  * restore here (no copy, another run claimed it, or the default moved on).
+ *
+ * The new id is recorded on the row (`copy.restoredAs`) as soon as the create
+ * succeeds, before anything else is written, so a restore that stops after
+ * the create is finished on that Layout ({@link resumeRestore}) rather than
+ * settled with the Layout left orphaned and the default on the deleted id.
  */
 export async function restoreFromCopy(
   deps: RestoreDeps,
@@ -221,6 +226,28 @@ export async function restoreFromCopy(
   if (!claimed) return null;
 
   const restored = await createOrRelease(deps, removal, copy);
+  const recorded: LayoutCopy = { ...copy, restoredAs: restored };
+  await deps.store.advance({
+    layoutId: removal.layoutId,
+    token: removal.token,
+    from: "restoring",
+    to: "restoring",
+    set: { copy: recorded },
+  });
+  return finishRestore(deps, removal, recorded, restored);
+}
+
+/**
+ * The rest of a restore once its Layout exists: the working draft saved onto
+ * it, the default pointed at it while it still names the deleted Layout, and
+ * the row settled. Each step can run again with the same result.
+ */
+async function finishRestore(
+  deps: RestoreDeps,
+  removal: LayoutRemoval,
+  copy: LayoutCopy,
+  restored: string
+): Promise<string> {
   if (copy.draft !== null) await restoreDraft(deps, restored, copy);
   // Re-read just before writing: a newer choice of default made meanwhile is
   // kept, and the restored Layout is then simply one more Layout.
@@ -237,6 +264,21 @@ export async function restoreFromCopy(
     { removedLayout: removal.layoutId, restoredLayout: restored }
   );
   return restored;
+}
+
+/**
+ * Finish a restore a request left at `restoring`, when its row records the
+ * Layout it created. Answers whether it did; a row without one cannot tell
+ * whether its create ran, and is the sweep's to settle.
+ */
+export async function resumeRestore(
+  deps: RestoreDeps,
+  removal: LayoutRemoval
+): Promise<boolean> {
+  const restored = removal.copy?.restoredAs;
+  if (removal.copy === null || restored === undefined) return false;
+  await finishRestore(deps, removal, removal.copy, restored);
+  return true;
 }
 
 /**

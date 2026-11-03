@@ -47,6 +47,12 @@ export type RemovalStep =
 export interface LayoutCopy {
   readonly live: Record<string, unknown>;
   readonly draft: Record<string, unknown> | null;
+  /**
+   * The id a restore created the Layout under, recorded as soon as the create
+   * succeeds, so a restore that stopped after it is finished on that Layout
+   * rather than settled without it.
+   */
+  readonly restoredAs?: string;
 }
 
 /** One stored removal. */
@@ -170,7 +176,11 @@ function copyOf(value: unknown): LayoutCopy | null {
     }
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  const { live, draft } = parsed as { live?: unknown; draft?: unknown };
+  const { live, draft, restoredAs } = parsed as {
+    live?: unknown;
+    draft?: unknown;
+    restoredAs?: unknown;
+  };
   if (typeof live !== "object" || live === null) return null;
   return {
     live: live as Record<string, unknown>,
@@ -178,6 +188,7 @@ function copyOf(value: unknown): LayoutCopy | null {
       typeof draft === "object" && draft !== null
         ? (draft as Record<string, unknown>)
         : null,
+    ...(typeof restoredAs === "string" ? { restoredAs } : {}),
   };
 }
 
