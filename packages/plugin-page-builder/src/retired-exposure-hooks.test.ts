@@ -221,9 +221,9 @@ describe("recording retired ids at publish", () => {
     ]);
   });
 
-  it("retires nothing on a working-draft save", async () => {
+  it("retires nothing on a working-draft save, and reads nothing first", async () => {
     const { store, retired } = memoryStore();
-    const { run } = harness({ store });
+    const { run, registryReads } = harness({ store });
 
     await run(
       "afterUpdate",
@@ -234,6 +234,9 @@ describe("recording retired ids at publish", () => {
     );
 
     expect(retired).toEqual([]);
+    // A draft saved inside a caller's transaction reaches this hook too, and
+    // a registry read on the pool there could wait on that transaction.
+    expect(registryReads).toEqual([]);
   });
 
   it("retires nothing when the write leaves the component a draft", async () => {
