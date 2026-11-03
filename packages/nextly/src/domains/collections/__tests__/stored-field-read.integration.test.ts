@@ -502,6 +502,46 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       });
     });
 
+    it("returns a string inside a named group as stored, even one that reads as JSON", async () => {
+      // The group's value is decoded once, as the group; a string inside it
+      // is the field's value, and decoding it again would turn "123" into a
+      // number and "null" into nothing.
+      const t = await boot(dialect);
+      const id = await created(t, "grouped", {
+        title: "a",
+        hero: { body: "123", inner: { body: "null" } },
+        status: "published",
+      });
+      const read = poolReader(t, "probe");
+      const at = (field: string, form: "published" | "draft") =>
+        read({ collection: "grouped", id, field, form });
+
+      expect(await at("hero.body", "published")).toEqual({
+        kind: "value",
+        value: "123",
+      });
+      expect(await at("hero.inner.body", "published")).toEqual({
+        kind: "value",
+        value: "null",
+      });
+
+      // The working draft's snapshot is walked the same way.
+      await t.nextly.update({
+        collection: "grouped",
+        id,
+        data: { hero: { body: "null", inner: { body: "123" } } },
+        overrideAccess: true,
+      });
+      expect(await at("hero.body", "draft")).toEqual({
+        kind: "value",
+        value: "null",
+      });
+      expect(await at("hero.inner.body", "draft")).toEqual({
+        kind: "value",
+        value: "123",
+      });
+    });
+
     it("refuses, by name, a path through anything but named groups, or to a field of another type", async () => {
       const t = await boot(dialect);
       const id = await created(t, "grouped", {
