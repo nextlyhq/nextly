@@ -58,12 +58,14 @@ import {
   depthMoveActions,
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
+  turnIntoChoice,
   type ComponentVerbsOffer,
   type DepthMoveAction,
   type MoveJudge,
   type MovePosition,
   type ToolbarAction,
   type ToolbarActionId,
+  type TurnIntoChoice,
 } from "./toolbar-actions";
 
 /**
@@ -204,12 +206,12 @@ export interface BlockActions {
    */
   readonly editComponent?: () => void;
   /**
-   * Begin saving the selection as a component, or converting it into one.
-   * Like `saveAsPattern`, these hand the gesture to the host, which owns the
-   * form and the write. Absent where the host offers no components.
+   * Begin turning the selection into a component: replacing it with a
+   * placement, or keeping it and saving a copy. Like `saveAsPattern`, this
+   * hands the gesture to the host, which owns the form and the write. Absent
+   * where the host offers no components.
    */
-  readonly saveAsComponent?: () => void;
-  readonly convertToComponent?: () => void;
+  readonly turnIntoComponent?: () => void;
   /** Detach the selected placement, duplicate its component, update a pattern. */
   readonly detachComponent?: () => void;
   readonly duplicateComponent?: () => void;
@@ -438,13 +440,17 @@ export interface BlockKeyboardActionsOptions {
 }
 
 /**
- * The host's side of "Save as component" and "Convert to component".
+ * The host's side of "Turn into component…".
  *
  * @experimental Settles when the composition API ships.
  */
 export interface ComponentVerbsHost extends ComponentVerbsOffer {
-  readonly onSaveAsComponent: () => void;
-  readonly onConvertToComponent: () => void;
+  /**
+   * Open the form, told which way is open: replacing the selection with a
+   * placement, keeping it and saving a copy, or both, with the reason for a
+   * way that is not.
+   */
+  readonly onTurnIntoComponent: (choice: TurnIntoChoice) => void;
   /** Detach the selected placement. Absent, with no definitions, Detach is not offered. */
   readonly onDetachComponent?: () => void;
   readonly onDuplicateComponent?: () => void;
@@ -454,8 +460,7 @@ export interface ComponentVerbsHost extends ComponentVerbsOffer {
 
 /** The verbs the host runs for the menu's component group. */
 type ComponentVerbId =
-  | "save-as-component"
-  | "convert-to-component"
+  | "turn-into-component"
   | "detach-component"
   | "duplicate-component"
   | "update-pattern";
@@ -463,11 +468,12 @@ type ComponentVerbId =
 /** The host's gesture for one component verb, if it offers it. */
 function componentVerbRunner(
   host: ComponentVerbsHost,
-  id: ComponentVerbId
+  id: ComponentVerbId,
+  /** Which way "Turn into component…" may go, asked when it was pressed. */
+  choice: () => TurnIntoChoice
 ): (() => void) | undefined {
   const runners: Record<ComponentVerbId, (() => void) | undefined> = {
-    "save-as-component": host.onSaveAsComponent,
-    "convert-to-component": host.onConvertToComponent,
+    "turn-into-component": () => host.onTurnIntoComponent(choice()),
     "detach-component": host.onDetachComponent,
     "duplicate-component": host.onDuplicateComponent,
     "update-pattern": host.onUpdatePattern,
@@ -1114,7 +1120,14 @@ export function useBlockKeyboardActions({
         if (offered.reason !== undefined) announce(offered.reason);
         return;
       }
-      componentVerbRunner(components, id)?.();
+      componentVerbRunner(components, id, () =>
+        turnIntoChoice(
+          editor.document,
+          editor.selection.ids,
+          nestingSource,
+          editor.lockRefusalFor
+        )
+      )?.();
     },
     [
       components,
@@ -1169,8 +1182,7 @@ export function useBlockKeyboardActions({
       selectParent,
       saveAsPattern: saveSelectionAsPattern,
       editComponent: editSelectedComponent,
-      saveAsComponent: () => runComponentVerb("save-as-component"),
-      convertToComponent: () => runComponentVerb("convert-to-component"),
+      turnIntoComponent: () => runComponentVerb("turn-into-component"),
       detachComponent: () => runComponentVerb("detach-component"),
       duplicateComponent: () => runComponentVerb("duplicate-component"),
       updatePattern: () => runComponentVerb("update-pattern"),

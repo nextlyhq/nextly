@@ -27,6 +27,7 @@ import {
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
 import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
+import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import {
@@ -65,8 +66,13 @@ import { componentActionRoutes } from "./component-actions-route";
 import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
+import {
+  componentPageReach,
+  sitePageReachSources,
+} from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
+import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
   defaultLayoutJob,
   type EnsureDefaultDeps,
@@ -129,6 +135,7 @@ import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { referableClassIds } from "./site-style-record";
+import { siteStyleRoute } from "./site-style-route";
 import {
   loadSiteStyle,
   SITE_STYLE_SLUG,
@@ -465,6 +472,31 @@ export interface PageBuilderOptions {
   pagePreviewPath?: string;
 
   /**
+   * Where this application serves the editor's canvas route: the path of a
+   * route whose page is `PageBuilderCanvas` from
+   * `@nextlyhq/plugin-page-builder/canvas`, inside the layouts the site's
+   * pages are published in.
+   *
+   * **Setting this is what draws the canvas inside the site's own layout**, so
+   * its global stylesheets, fonts, header and footer show around the page
+   * being edited exactly as they do around the published page. There is no
+   * default, for the reason `pagePreviewPath` has none: the plugin cannot add
+   * a route to the application, and a defaulted path would load a page that is
+   * not there. Without it, the canvas draws on a blank page of the editor's own
+   * and says so.
+   *
+   * A path on this site only, such as `"/page-builder-canvas"`: the editor
+   * draws into the frame's document, which a browser allows on its own origin
+   * alone.
+   *
+   * A site whose pages sit under their language writes `{locale}` where the
+   * code goes, as in `"/{locale}/page-builder-canvas"`: the editor loads the
+   * route for the language being edited, and for the default language leaves
+   * the segment out, as most localized sites serve it.
+   */
+  canvasPath?: string;
+
+  /**
    * The viewport widths the pages preview offers.
    *
    * Defaults to **this site's own breakpoints**, read from the `site-style`
@@ -495,6 +527,66 @@ export interface PageBuilderOptions {
    * false }` turns the catalogue off; uploading a font file still works.
    */
   fonts?: PageBuilderFontOptions;
+}
+
+/**
+ * What the plugin publishes to the editor in the browser, as the admin's
+ * `clientConfig`, or nothing when the host stated none of it.
+ *
+ * The canvas runs in the browser, where a server-side option cannot reach it,
+ * so what it needs travels with the rest of the admin metadata: the media
+ * allowlist, the checklist, the canvas route, the site style, the document
+ * limits and whether there is a font catalogue. All of it is plain data that
+ * survives the trip, and the serializer rejects a future addition that does
+ * not.
+ *
+ * Sent only when the host said something. An always-present `clientConfig`
+ * would make every future reader distinguish "the host set this" from "the
+ * default is showing", which is what the absent key already says. Each key is
+ * written only where the host stated it, so a config with no key is one the
+ * host said nothing in.
+ */
+function adminClientConfig(
+  opts: PageBuilderOptions,
+  {
+    configStyle,
+    canvasPath,
+    fontsOff,
+  }: {
+    configStyle: SiteStyleData;
+    canvasPath: string | undefined;
+    fontsOff: boolean;
+  }
+): { clientConfig?: Record<string, unknown> } {
+  const clientConfig: Record<string, unknown> = {
+    // The Fonts tab offers no catalogue when the host turned it off, rather
+    // than one whose routes do not exist.
+    ...(fontsOff ? { fontCatalogue: false } : {}),
+    ...(opts.remotePatterns === undefined
+      ? {}
+      : { remotePatterns: opts.remotePatterns }),
+    ...(opts.checklist === undefined ? {} : { checklist: opts.checklist }),
+    // The canvas route's path, which the editor loads its frame from. A path,
+    // never a secret: the route serves an empty page.
+    ...(canvasPath === undefined ? {} : { canvasPath }),
+    // The RESOLVED defaults tier rather than the raw option, so the canvas and
+    // the validator read one answer. Plain data: tokens, fonts, classes and
+    // breakpoints all serialize, and none of it is secret — a published page
+    // emits it as CSS.
+    ...(opts.siteStyle === undefined ? {} : { siteStyle: configStyle }),
+    /*
+     * The bounds the renderer draws under, so the admin asks the same question
+     * the page answers. The classes manager walks the open document to say
+     * which classes a page applies, and a walk under different limits selects
+     * different nodes — reporting a class as absent from a page that renders
+     * it. Plain numbers, and nothing secret: the published page is drawn under
+     * them.
+     */
+    ...(opts.limits === undefined
+      ? {}
+      : { limits: jsonSafeLimits(opts.limits) }),
+  };
+  return Object.keys(clientConfig).length === 0 ? {} : { clientConfig };
 }
 
 /**
@@ -619,46 +711,6 @@ function rowsHoldBlocks(
     if (survey.addressable.length > 0 || survey.unaddressable) return true;
   }
   return false;
-}
-
-/** The slugs the app's configuration still declares as Singles. */
-function declaredSingleSlugs(ctx: {
-  config?: { singles?: unknown };
-}): ReadonlySet<string> | undefined {
-  const singles = ctx.config?.singles;
-  // No list at all is not an empty list. A config shape this cannot read must
-  // not be treated as declaring nothing, which would make every registry row an
-  // orphan and hide real content from the completeness answer.
-  if (!Array.isArray(singles)) return undefined;
-  const slugs = new Set<string>();
-  for (const single of singles) {
-    const slug = (single as { slug?: unknown } | null)?.slug;
-    if (typeof slug === "string" && slug.length > 0) slugs.add(slug);
-  }
-  return slugs;
-}
-
-/**
- * Whether a registry row is a removed code-first Single rather than a live one.
- *
- * Only a `code` row can be one: a Builder-made Single exists nowhere else, so
- * its registry row IS the declaration and configuration says nothing about it.
- *
- * Anything this cannot read is NOT an orphan. A row with no readable slug, or a
- * configuration this could not enumerate, keeps the Single counted — the
- * direction that withholds completeness rather than the one that grants it over
- * content nobody looked at.
- */
-function isOrphanedSingle(
-  row: unknown,
-  declared: ReadonlySet<string> | undefined
-): boolean {
-  if (declared === undefined) return false;
-  const record = row as { source?: unknown; slug?: unknown } | null;
-  if (record?.source !== "code") return false;
-  const slug = record.slug;
-  if (typeof slug !== "string" || slug.length === 0) return false;
-  return !declared.has(slug);
 }
 
 /** How many registry rows one page of the collection listing asks for. */
@@ -903,6 +955,8 @@ export const pageBuilder = (
   // The font catalogue's hosts and caps, refused at boot when unusable, and
   // what it adds to the plugin.
   const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
+  // The canvas route's path, refused at boot when it names another origin.
+  const canvasPath = canvasPathOption(opts.canvasPath);
 
   // The usage indexes' reconciler for a write made in a transaction the
   // caller owns, which their hooks skip. Set by `init`, read per request.
@@ -1345,6 +1399,51 @@ export const pageBuilder = (
               ),
             });
           },
+          // How many pages a change reaches, for the banner over the view:
+          // through other components by the same index, and through the
+          // Layouts wrapping pages, read live, the site's default included.
+          countPages: ctx => async id => {
+            const index =
+              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+              COMPONENT_USAGE_INDEX_SLUG;
+            const host = requireInstalled();
+            const rows = usageRowReader(await host.nextly(), index);
+            const health = await usageHealthService(requireInstalled).read(
+              componentUsageIndex,
+              index
+            );
+            // Imported at call time, as the Layout choices route does, so the
+            // entry stays free of the runtime graph.
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            return componentPageReach(
+              id,
+              sitePageReachSources({
+                nextly: await getCachedNextly(),
+                slugs: {
+                  layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                  settings:
+                    ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+                    PAGE_BUILDER_SETTINGS_SLUG,
+                },
+                pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+                componentsCollection:
+                  componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                notPages: new Set([
+                  ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+                  ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                ]),
+                documentsUsingEach: componentIds =>
+                  listDocumentsUsingEach({
+                    index: componentUsageIndex,
+                    rows,
+                    referenceIds: componentIds,
+                    health,
+                  }),
+              })
+            );
+          },
           // The ids a published removal retired, from the store the write
           // hooks record them in. Where those hooks are not registered (the
           // host renders components from a source of its own), nothing is
@@ -1445,6 +1544,9 @@ export const pageBuilder = (
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
+        // The editor's read of the stored site style, for anyone who may
+        // edit something the builder opens: the canvas cannot draw without it.
+        siteStyleRoute(componentStoreOf(opts)),
         // Design → Fonts' catalogue: read it, and add a family to the site.
         ...fonts.routes,
         // The Design panel's shared styles: lock and unlock one, how widely
@@ -1521,51 +1623,13 @@ export const pageBuilder = (
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
       admin: {
-        // The canvas needs the allowlist and runs in the browser, so it
-        // travels with the rest of the admin metadata. `remotePatterns` is
-        // plain data and survives the trip; the serializer rejects it if a
-        // future addition here does not.
-        // Sent only when the host said something. An always-present
-        // `clientConfig` would make every future reader distinguish "the host
-        // set this" from "the default is showing", which is what the absent
-        // key already says.
-        ...(opts.remotePatterns !== undefined ||
-        opts.checklist !== undefined ||
-        opts.limits !== undefined ||
-        opts.siteStyle !== undefined ||
-        fonts.off
-          ? {
-              clientConfig: {
-                // The Fonts tab offers no catalogue when the host turned it
-                // off, rather than one whose routes do not exist.
-                ...(fonts.off ? { fontCatalogue: false } : {}),
-                ...(opts.remotePatterns === undefined
-                  ? {}
-                  : { remotePatterns: opts.remotePatterns }),
-                ...(opts.checklist === undefined
-                  ? {}
-                  : { checklist: opts.checklist }),
-                // The RESOLVED defaults tier rather than the raw option, so
-                // the canvas and the validator read one answer. Plain data:
-                // tokens, fonts, classes and breakpoints all serialize, and
-                // none of it is secret — a published page emits it as CSS.
-                ...(opts.siteStyle === undefined
-                  ? {}
-                  : { siteStyle: configStyle }),
-                /*
-                 * The bounds the renderer draws under, so the admin asks the
-                 * same question the page answers. The classes manager walks the
-                 * open document to say which classes a page applies, and a walk
-                 * under different limits selects different nodes — reporting a
-                 * class as absent from a page that renders it. Plain numbers,
-                 * and nothing secret: the published page is drawn under them.
-                 */
-                ...(opts.limits === undefined
-                  ? {}
-                  : { limits: jsonSafeLimits(opts.limits) }),
-              },
-            }
-          : {}),
+        // What the editor in the browser needs of the options: see
+        // `adminClientConfig`.
+        ...adminClientConfig(opts, {
+          configStyle,
+          canvasPath,
+          fontsOff: fonts.off,
+        }),
         // The three LIBRARIES, and no link to Pages.
         //
         // Pages is an ordinary collection that happens to declare a `blocks`

@@ -90,6 +90,8 @@ import {
   useHostedDocumentActions,
   useHostedRecoveryPoint,
 } from "../DocumentActionsContext";
+import { useDocumentRestore } from "../DocumentRestoreContext";
+import { DocumentSaveIndicator } from "../DocumentSurfaceControls";
 import { EntryForm } from "../EntryForm";
 import { useDocumentStatus } from "../EntryFormContext";
 import {
@@ -639,6 +641,158 @@ describe("EntryForm with a document view", () => {
       documentView: { component: STATUS_VIEW, onExit },
     });
     expect(screen.getByTestId("status")).toHaveTextContent("published");
+  });
+
+  it("makes the offer in the save chip of a view that draws one, and draws no banner", async () => {
+    // One save state: the chip says "Unsaved changes" and makes the offer,
+    // so a banner above the editor would say it a second time.
+    const CHIP_VIEW = "@acme/pb/admin#Chip";
+    function ChipView(): ReactElement {
+      useEffect(() => {
+        mounted();
+      }, []);
+      return <DocumentSaveIndicator />;
+    }
+    registerComponent(CHIP_VIEW, ChipView);
+    const restore = vi.fn();
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      restore,
+    };
+    renderView({ documentView: { component: CHIP_VIEW, onExit } });
+
+    expect(screen.queryByRole("status", { name: /recovery/i })).toBeNull();
+    expect(screen.queryByText(/you have unsaved changes from/i)).toBeNull();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
+    expect(
+      await screen.findByText(/you have unsaved changes from/i)
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    // The same restore the banner runs: the view goes, the values change,
+    // and a fresh view reads them.
+    expect(restore).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps the offer when the chip says Not now, and offers nothing more this session", async () => {
+    const CHIP_VIEW = "@acme/pb/admin#ChipDismiss";
+    registerComponent(CHIP_VIEW, () => <DocumentSaveIndicator />);
+    const dismiss = vi.fn();
+    const restore = vi.fn();
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      dismiss,
+      restore,
+    };
+    renderView({ documentView: { component: CHIP_VIEW, onExit } });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Not now" })
+    );
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  describe("a view that restores its own field", () => {
+    const titledLayout = {
+      name: "pages",
+      fields: [
+        { name: "title", type: "text", label: "Title" },
+        { name: "layout", type: "blocks" },
+      ],
+    } as never;
+    const stored = { id: "e1", title: "Hello", layout: { nodes: ["stored"] } };
+    const RESTORING_VIEW = "@acme/pb/admin#Restoring";
+    const applied = vi.fn<(value: unknown) => boolean>();
+    const snapshot = { title: "Recovered", layout: { nodes: ["recovered"] } };
+    /** The form, so the recovery's restore can do what the real one does. */
+    const formOf: { reset?: (values: unknown, options: object) => void } = {};
+
+    function RestoringView(): ReactElement {
+      useEffect(() => {
+        mounted();
+      }, []);
+      useDocumentRestore(value => applied(value));
+      const { watch, reset } = useFormContext();
+      formOf.reset = reset as never;
+      return (
+        <>
+          <p>title: {String(watch("title"))}</p>
+          <p>layout: {JSON.stringify(watch("layout"))}</p>
+        </>
+      );
+    }
+
+    function offerRecovery() {
+      // As the recovery's own restore does: the snapshot into the form, kept
+      // dirty against the stored defaults.
+      const restore = vi.fn(() => {
+        formOf.reset?.(snapshot, { keepDefaultValues: true });
+      });
+      recovery.current = {
+        ...recovery.current,
+        offer: { savedAt: new Date(), snapshot },
+        dismiss: vi.fn(),
+        restore,
+      };
+      return { restore };
+    }
+
+    function open() {
+      registerComponent(RESTORING_VIEW, RestoringView);
+      return renderView({
+        collection: titledLayout,
+        entry: stored as never,
+        documentView: {
+          component: RESTORING_VIEW,
+          onExit,
+          fieldType: "blocks",
+        },
+      });
+    }
+
+    it("hands the view its field's recovered value and resets the others, with no fresh draw", async () => {
+      // The view applies its own field as an edit it can undo; drawing it
+      // afresh would start its history again.
+      applied.mockReturnValue(true);
+      const { restore } = offerRecovery();
+      open();
+      expect(mounted).toHaveBeenCalledTimes(1);
+
+      await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+      expect(applied).toHaveBeenCalledWith({ nodes: ["recovered"] });
+      // The recovery's own restore, so the offer is accepted one way.
+      expect(restore).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("title: Recovered")).toBeInTheDocument();
+      // The view's field keeps what the view holds: its own edit writes it.
+      expect(
+        screen.getByText(`layout: ${JSON.stringify({ nodes: ["stored"] })}`)
+      ).toBeInTheDocument();
+      expect(mounted).toHaveBeenCalledTimes(1);
+    });
+
+    it("restores the old way when the view declines", async () => {
+      applied.mockReturnValue(false);
+      const { restore } = offerRecovery();
+      open();
+
+      await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+      expect(applied).toHaveBeenCalledTimes(1);
+      expect(restore).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+    });
   });
 
   it("hands the view the document's recovery point, so its save state reads it as the header's does", () => {

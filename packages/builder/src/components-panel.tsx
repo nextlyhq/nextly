@@ -487,8 +487,9 @@ function EmptyComponents({
       </p>
       {mayCreate ? (
         <p>
-          To make one, select blocks on the page and choose Save as component in
-          the block’s menu.
+          {/* The menu item's own name, so the author can find it. */}
+          To make one, select blocks on the page and choose Turn into component
+          in the block’s menu.
         </p>
       ) : null}
     </div>

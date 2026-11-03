@@ -122,6 +122,9 @@ async function search(
   return (await response.json()) as PagesSearchResponse;
 }
 
+/** How many roles this file has made, for names that stay short. */
+let rolesMade = 0;
+
 describe.each(getConfiguredTestDialects())(
   "the pages search's paging and state (%s)",
   (dialect: TestDialect) => {
@@ -154,6 +157,12 @@ describe.each(getConfiguredTestDialects())(
 
       /** A key whose role holds exactly the permissions named. */
       async function keyHolding(slugs: string[]): Promise<string> {
+        // Numbered rather than spelled from the permissions, so the role's
+        // name stays inside the roles table's length on Postgres and MySQL,
+        // which refuse a longer one (SQLite doesn't check). Tagged by file,
+        // so two files sharing a database never name the same role.
+        rolesMade += 1;
+        const roleTag = `pss-${rolesMade}`;
         const ids = slugs.map(slug => {
           const found = seeded.items.find(item => item.slug === slug);
           if (found === undefined) {
@@ -163,8 +172,8 @@ describe.each(getConfiguredTestDialects())(
         });
         const role = await direct.roles.create({
           data: {
-            name: `Role ${slugs.join(" ")}`,
-            slug: `r-${slugs.join("-")}`,
+            name: `Role ${roleTag}`,
+            slug: `r-${roleTag}`,
             permissionIds: ids,
           },
         });

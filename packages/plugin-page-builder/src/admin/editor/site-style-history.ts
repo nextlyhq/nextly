@@ -17,7 +17,6 @@
  *
  * @module admin/editor/site-style-history
  */
-import { useSingleDocument } from "@nextlyhq/plugin-sdk/admin";
 import { toast } from "@nextlyhq/ui";
 import {
   createContext,
@@ -33,7 +32,6 @@ import {
   type ReactNode,
 } from "react";
 
-import { SITE_STYLE_SLUG } from "../../site-style-storage";
 import {
   sameSection,
   storedSection,
@@ -42,6 +40,7 @@ import {
   type SiteStyleReplay,
   type SiteStyleSection,
 } from "../site-style-client";
+import { useStoredSiteStyle } from "../site-style-read";
 
 /**
  * How many style steps have been replayed and their values read back (the
@@ -112,7 +111,9 @@ function useReadBack(
   waitForRead: (replay: SiteStyleReplay) => void;
   settling: boolean;
 } {
-  const { data, refetch } = useSingleDocument(SITE_STYLE_SLUG);
+  // The same read the canvas draws from, so "caught up" means the canvas
+  // shows the replayed value.
+  const { data, refetch } = useStoredSiteStyle();
   const [replaying, setReplaying] = useState(0);
   const [awaiting, setAwaiting] = useState<SiteStyleReplay | null>(null);
   const caughtUp = useCallback(() => {
