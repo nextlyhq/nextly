@@ -3984,7 +3984,7 @@ fieldset.nx-inspector__fields {
  * ellipsis, its whole name still the field's accessible name.
  */
 .nx-style-inspector .nx-inspector__field {
-  grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr);
 }
 
 .nx-style-inspector .nx-style-inspector__field-label-text {
@@ -5731,7 +5731,8 @@ fieldset.nx-inspector__fields {
 
 /*
  * Alignment and direction as one segmented strip, the design's icon group:
- * each icon a 28px target (WCAG 2.2 asks for 24), the chosen one on the
+ * each icon a 24px target (WCAG 2.2's minimum, so five icons, More and a
+ * Clear fit beside a label), the chosen one on the
  * theme's accent surface in its own foreground, and the values without an
  * icon in the strip's last segment. The strip sits on the input surface, as
  * the panel's fields and lists do, in both schemes. A Clear follows it at the
@@ -5759,10 +5760,8 @@ fieldset.nx-inspector__fields {
 .nx-icon-choice .nx-icon-choice__more {
   display: inline-grid;
   place-items: center;
-  inline-size: 1.75rem;
-  block-size: 1.75rem;
-  min-inline-size: 1.5rem;
-  min-block-size: 1.5rem;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -5819,8 +5818,8 @@ fieldset.nx-inspector__fields {
   display: inline-grid;
   flex: none;
   place-items: center;
-  inline-size: 1.75rem;
-  block-size: 1.75rem;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
   border-radius: var(--radius-sm);
   color: var(--nx-muted-foreground);
 }
