@@ -20,10 +20,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
 } from "@nextlyhq/ui";
 import {
   AlignCenter,
@@ -63,6 +60,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { ChromeTooltip } from "./chrome-tooltip";
 import { InheritedValue } from "./inherited-value";
 import type { AlignmentGroup, AlignmentOption } from "./style-alignment-icons";
 
@@ -204,39 +202,38 @@ export function IconChoiceField({
               const stop = index === Math.max(chosen, 0);
               const Icon = ICONS[option.icon] ?? Circle;
               return (
-                <Tooltip key={option.value}>
-                  <TooltipTrigger asChild>
-                    <button
-                      ref={button => {
-                        buttons.current[index] = button;
-                      }}
-                      type="button"
-                      // The field label's `for` lands here: a label reaches
-                      // only a labelable element, and this is the group's
-                      // way in.
-                      {...(stop ? { id } : {})}
-                      role="radio"
-                      aria-checked={checked}
-                      {...inheritedMark(option, shownInherited)}
-                      aria-invalid={invalid}
-                      tabIndex={stop ? 0 : -1}
-                      data-icon={option.icon}
-                      className="nx-icon-choice__option"
-                      onClick={() => onCommit(checked ? null : option.value)}
-                      onKeyDown={event => onKeyDown(event, index)}
-                    >
-                      <Icon
-                        size={16}
-                        aria-hidden="true"
-                        style={iconStyle(option)}
-                        {...(iconClass(option) === undefined
-                          ? {}
-                          : { className: iconClass(option) })}
-                      />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>{option.label}</TooltipContent>
-                </Tooltip>
+                // Below the icons, over the next row: above, it covered the
+                // value of the row before.
+                <ChromeTooltip key={option.value} content={option.label}>
+                  <button
+                    ref={button => {
+                      buttons.current[index] = button;
+                    }}
+                    type="button"
+                    // The field label's `for` lands here: a label reaches
+                    // only a labelable element, and this is the group's
+                    // way in.
+                    {...(stop ? { id } : {})}
+                    role="radio"
+                    aria-checked={checked}
+                    {...inheritedMark(option, shownInherited)}
+                    aria-invalid={invalid}
+                    tabIndex={stop ? 0 : -1}
+                    data-icon={option.icon}
+                    className="nx-icon-choice__option"
+                    onClick={() => onCommit(checked ? null : option.value)}
+                    onKeyDown={event => onKeyDown(event, index)}
+                  >
+                    <Icon
+                      size={16}
+                      aria-hidden="true"
+                      style={iconStyle(option)}
+                      {...(iconClass(option) === undefined
+                        ? {}
+                        : { className: iconClass(option) })}
+                    />
+                  </button>
+                </ChromeTooltip>
               );
             })}
           </div>
