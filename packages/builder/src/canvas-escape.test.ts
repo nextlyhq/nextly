@@ -116,7 +116,7 @@ describe("escapeOutcome", () => {
      * it there, and the keystroke would reach the entry form's cancel and take
      * every uncommitted block edit with it.
      */
-    expect(escapeOutcome(document)).toBe("deselect");
+    expect(escapeOutcome(document)).toBe("navigate-selection");
   });
 
   it("prefers the modal over a field inside it", () => {

@@ -65,10 +65,31 @@ vi.mock("../../utils/config-loader", () => ({
   }),
 }));
 
+// What other owners built on the schema is its own question, tested where
+// it is answered; here nothing has been built, so the uninstall goes ahead.
+vi.mock("../../utils/registry-resolver", () => ({
+  installRegistryResolver: () => undefined,
+}));
+vi.mock("../../../domains/schema/ownership/uninstall-dependents", () => ({
+  findUninstallDependents: () => Promise.resolve([]),
+  pluginEntities: () =>
+    Promise.resolve({
+      collectionSlugs: [],
+      collectionSlugForTable: () => null,
+      single: [],
+      fieldGroup: [],
+      extendedFields: new Map(),
+    }),
+}));
+
 vi.mock("../../utils/adapter", () => ({
   createCliAdapter: async () => ({
     dialect: "sqlite",
-    getDrizzle: () => ({}),
+    // A full uninstall forgets the plugin with three deletes; nothing here
+    // reads what they leave.
+    getDrizzle: () => ({
+      delete: () => ({ where: () => Promise.resolve() }),
+    }),
     tableExists: async () => state.migrated,
     // Each read of SQLite's schema version, so the order of the
     // uninstall's reads around the boot and the hook can be told.
@@ -96,6 +117,9 @@ vi.mock("../../../domains/schema/events/schema-events-repository", () => ({
     insertEvent() {
       return Promise.resolve("event");
     }
+    deletePluginModuleRows() {
+      return Promise.resolve();
+    }
   },
 }));
 
@@ -106,6 +130,9 @@ vi.mock(
     SchemaOwnersRepository: class {
       read() {
         return Promise.resolve([]);
+      }
+      deletePluginOwner() {
+        return Promise.resolve();
       }
     },
   })

@@ -81,6 +81,7 @@ import { loadConfig } from "../utils/config-loader";
 import { readMigrationFolder } from "../utils/migration-discovery";
 
 import { maybeForceUnlock } from "./migrate";
+import { DEFAULT_BASELINE_NAME } from "./migrate-baseline.command";
 
 interface BaselineOptions {
   name?: string;
@@ -91,9 +92,6 @@ interface BaselineOptions {
   forceUnlock?: boolean;
   adoptUnknown?: boolean;
 }
-
-/** The migration name used when the operator supplies none. */
-const DEFAULT_BASELINE_NAME = "baseline";
 
 /**
  * The tables in the database, as the source of truth for what to adopt.
@@ -805,45 +803,31 @@ export async function runMigrateBaseline(
   }
 }
 
-export function registerMigrateBaselineCommand(program: Command): void {
-  program
-    .command("migrate:baseline")
-    .description(
-      "Adopt an existing database into the migration history (run once, when graduating from db:sync)"
-    )
-    .option(
-      "--name <name>",
-      `Migration name (default: "${DEFAULT_BASELINE_NAME}")`
-    )
-    .option("-c, --config <path>", "Path to nextly.config.ts")
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before taking it (use after a crashed run)"
-    )
-    .option(
-      "--adopt-unknown",
-      "Adopt translation tables holding columns your config no longer describes, rebuilding them from the database"
-    )
-    .action(async (opts: BaselineOptions, command: Command) => {
-      const globalOpts = command.parent?.opts() ?? {};
-      const context = createContext(globalOpts);
-      try {
-        await runMigrateBaseline(
-          {
-            ...opts,
-            // `nextly --config <path> migrate:baseline` is the documented
-            // global form, and it puts the path only on the parent. Taking the
-            // subcommand's alone would silently load the default config and
-            // write the baseline against a different `migrationsDir`.
-            config: opts.config ?? globalOpts.config,
-            verbose: globalOpts.verbose,
-            quiet: globalOpts.quiet,
-            cwd: globalOpts.cwd,
-          },
-          context
-        );
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+/**
+ * The action of `nextly migrate:baseline`, loaded when it runs.
+ */
+export async function migrateBaselineAction(
+  opts: BaselineOptions,
+  command: Command
+): Promise<void> {
+  const globalOpts = command.parent?.opts() ?? {};
+  const context = createContext(globalOpts);
+  try {
+    await runMigrateBaseline(
+      {
+        ...opts,
+        // `nextly --config <path> migrate:baseline` is the documented
+        // global form, and it puts the path only on the parent. Taking the
+        // subcommand's alone would silently load the default config and
+        // write the baseline against a different `migrationsDir`.
+        config: opts.config ?? globalOpts.config,
+        verbose: globalOpts.verbose,
+        quiet: globalOpts.quiet,
+        cwd: globalOpts.cwd,
+      },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

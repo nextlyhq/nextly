@@ -1043,6 +1043,10 @@ So, for every enabled plugin in your config, run the install command once on
 each database, after `nextly migrate`, before the first production boot that
 includes the plugin. Running it again is safe: it applies what is pending and
 calls `onInstall` again, which is why `onInstall` has to be idempotent.
+Each run also records which tables the plugin owns and which columns,
+indexes, keys and checks its modules added to other owners' tables, so an
+install run again after one that stopped part way records whatever that run
+did not.
 `nextly plugins install --all` runs it for every enabled plugin in your config,
 in dependency order, and stops at the first that fails; a disabled plugin is
 skipped and named.

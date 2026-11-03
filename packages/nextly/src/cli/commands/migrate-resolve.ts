@@ -34,7 +34,7 @@ import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-
 import { NextlyError } from "../../errors/index";
 import { exitWithError } from "../errors";
 import { resolveModeRequired } from "../errors/areas/migrations";
-import { createContext, type CommandContext } from "../program";
+import type { CommandContext } from "../program";
 import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
@@ -43,6 +43,7 @@ import {
   selectVariant,
 } from "../utils/migration-discovery";
 
+import { commandRun } from "./command-run";
 import { maybeForceUnlock } from "./migrate";
 
 interface ResolveCommandOptions {
@@ -312,51 +313,20 @@ export async function runMigrateResolve(
   }
 }
 
-export function registerMigrateResolveCommand(program: Command): void {
-  program
-    .command("migrate:resolve")
-    .description(
-      "Recover migration bookkeeping: mark a file applied/rolled-back, or clean up a failed or unfinished attempt"
-    )
-    .option(
-      "--applied <filename>",
-      "Mark <filename> as applied, or accept an edit to an applied one (verifies live == target snapshot unless --skip-verify)"
-    )
-    .option(
-      "--rolled-back <filename>",
-      "Record a rolled_back event so <filename> re-runs on next migrate"
-    )
-    .option(
-      "--failed-cleanup <filename>",
-      "Flip the stuck failed or unfinished attempts of <filename> to rolled_back (edit the .sql before retrying)"
-    )
-    .option(
-      "--skip-verify",
-      "With --applied, skip the live-vs-snapshot equivalence check",
-      false
-    )
-    // This command takes the shared migrate lock, and the lock-busy error
-    // tells operators to re-run with this flag — so every lock-taking
-    // command must register it. Same escape hatch as `nextly migrate`.
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
-    .action(async (cmdOptions: ResolveCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      const resolvedOptions: ResolvedOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
-      try {
-        await runMigrateResolve(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+/**
+ * The action of `nextly migrate:resolve`, loaded when it runs.
+ */
+export async function migrateResolveAction(
+  cmdOptions: ResolveCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedOptions = options;
+  try {
+    await runMigrateResolve(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateResolveCommand } from "./migrate-resolve.command";

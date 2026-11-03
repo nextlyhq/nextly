@@ -105,6 +105,7 @@ function editorSpy(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
   } as unknown as EditorState & {
     apply: ReturnType<typeof vi.fn>;
     applyAll: ReturnType<typeof vi.fn>;
@@ -116,13 +117,73 @@ function editorSpy(
  * The tile offering a block, addressed as the option it is.
  *
  * By ROLE and by an EXACT name, rather than by text. A text query matches the
- * tile and the description strip alike — the strip repeats the name of
- * whichever tile is current — and refuses on the ambiguity. The exact name is
- * available because the tile states its own: the block's sentence is its
- * description now, not part of what it is called.
+ * tile and the popover alike — the popover repeats the name of whichever tile
+ * is current — and refuses on the ambiguity. The exact name is available
+ * because the tile states its own: the block's sentence is its description,
+ * not part of what it is called.
  */
 function tile(name: string): HTMLElement {
   return screen.getByRole("option", { name });
+}
+
+/**
+ * Everything a tile's `aria-describedby` resolves to, read in order.
+ *
+ * Resolved rather than read off the attribute, because a reference to an id
+ * that does not exist is silently skipped by assistive technology: only the
+ * text the references actually reach is what a screen reader says.
+ */
+function describedBy(element: HTMLElement): string {
+  return (element.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .filter(id => id !== "")
+    .map(id => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
+/** The popover beside the panel, or null while none is open. */
+function popover(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".nx-insert-popover");
+}
+
+/** The name the open popover shows, or null while none is open. */
+function popoverName(): string | null {
+  return (
+    popover()?.querySelector(".nx-insert-popover__name")?.textContent ?? null
+  );
+}
+
+/** The sentence under the search that says where the next block goes. */
+function placementLine(): string | null {
+  return (
+    document.querySelector(".nx-insert-panel__placement")?.textContent ?? null
+  );
+}
+
+/**
+ * Switch the panel to one of its tabs, as a pointer does.
+ *
+ * `mouseDown` because that is what the tab primitive activates on; a `click`
+ * alone never reaches its handler.
+ */
+function openTab(name: "Blocks" | "Sections"): void {
+  fireEvent.mouseDown(screen.getByRole("tab", { name }), { button: 0 });
+}
+
+/**
+ * An editor with one block selected, stated the way the real editor states
+ * it: `selectedId` is `selection.primary`, so a fixture that set one and not
+ * the other would be a state the editor never produces.
+ */
+function selecting<TEditor extends EditorState>(
+  editor: TEditor,
+  id: string
+): TEditor {
+  return {
+    ...editor,
+    selectedId: id,
+    selection: { ids: [id], primary: id },
+  };
 }
 
 describe("InsertPanel", () => {
@@ -148,6 +209,44 @@ describe("InsertPanel", () => {
     expect(onInsert).toHaveBeenCalledWith(op.node);
   });
 
+  it("judges each block by its own insert where a lock answers by block", () => {
+    // A locked slot already missing its heading: inserting the heading repairs
+    // it, inserting anything else breaks it further. One block's answer is
+    // not every block's, whichever comes first in the list. The refused one
+    // stays in view, saying why, and its click inserts nothing.
+    registerBlocks(
+      [
+        { ...base, name: "acme/heading", editor: { label: "Heading" } },
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const editor = {
+      ...editorSpy(documentOf()),
+      lockRefusalFor: (ops: readonly { node?: { type: string } }[]) =>
+        ops[0]?.node?.type === "acme/heading"
+          ? undefined
+          : {
+              code: "locked-slot-altered" as const,
+              holderType: "acme/row",
+              lock: "all" as const,
+            },
+    } as unknown as ReturnType<typeof editorSpy>;
+    const apply = vi.fn(() => editor.document);
+    render(<InsertPanel editor={{ ...editor, apply }} />);
+
+    const text = tile("Text");
+    expect(text.getAttribute("data-refused")).toBe("true");
+    expect(describedBy(text)).toContain("This area of Row is locked");
+    fireEvent.click(text);
+    expect(apply).not.toHaveBeenCalled();
+
+    // The control: the block the lock lets in is offered as usual.
+    expect(tile("Heading").getAttribute("data-refused")).toBeNull();
+    fireEvent.click(tile("Heading"));
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
   it("offers a row as a drag, carrying the block it names", () => {
     // The panel is where a palette drag STARTS, and the node is built here
     // rather than inside the drag: these definitions are one snapshot taken per
@@ -161,7 +260,7 @@ describe("InsertPanel", () => {
     const beginInsertDrag = vi.fn();
     render(<InsertPanel editor={editor} beginInsertDrag={beginInsertDrag} />);
 
-    // The OPTION rather than its label text: the description strip repeats the
+    // The OPTION rather than its label text: the popover repeats the
     // name of whichever tile is current, so a text query matches two elements
     // and refuses on the ambiguity. This is also the element carrying the
     // handler, rather than a child it happens to bubble from.
@@ -179,6 +278,38 @@ describe("InsertPanel", () => {
     expect(entry.makeNode().type).toBe("acme/text");
     // And starting a drag must not itself edit the document — the insert
     // happens at the release, in the drag.
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("lets a block refused at every click place still be dragged, as its tile says", () => {
+    // "Drag this into one" has to be reachable: the click places refuse the
+    // Column, but a Columns on the canvas would take it, and judging a drop
+    // is the canvas's question, asked where the block lands.
+    registerBlocks(
+      [
+        { ...base, name: "acme/columns", editor: { label: "Columns" } },
+        {
+          ...base,
+          name: "acme/column",
+          parent: ["acme/columns"],
+          editor: { label: "Column" },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(documentOf());
+    const beginInsertDrag = vi.fn();
+    render(<InsertPanel editor={editor} beginInsertDrag={beginInsertDrag} />);
+
+    const column = tile("Column");
+    expect(column.getAttribute("data-refused")).toBe("true");
+    expect(describedBy(column)).toContain("drag this into one");
+    fireEvent.pointerDown(column, { button: 0, pointerId: 1 });
+
+    expect(beginInsertDrag).toHaveBeenCalledTimes(1);
+    expect(beginInsertDrag.mock.calls[0][1].blockName).toBe("acme/column");
+    // A click still adds nothing: no place it may use takes the block.
+    fireEvent.click(column);
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
@@ -409,9 +540,12 @@ describe("InsertPanel", () => {
     );
     render(<InsertPanel editor={editorSpy(documentOf())} />);
 
-    fireEvent.change(screen.getByPlaceholderText("Search blocks"), {
-      target: { value: "Picture" },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      {
+        target: { value: "Picture" },
+      }
+    );
 
     expect(tile("Picture")).toBeTruthy();
     expect(
@@ -426,17 +560,27 @@ describe("InsertPanel", () => {
     );
     render(<InsertPanel editor={editorSpy(documentOf())} />);
 
-    fireEvent.change(screen.getByPlaceholderText("Search blocks"), {
-      target: { value: "nonexistent" },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText("Search blocks and components"),
+      {
+        target: { value: "nonexistent" },
+      }
+    );
 
     expect(screen.getByText(/No blocks match/)).toBeTruthy();
   });
 
-  it("offers only what the target admits, and inserts none of the rest", () => {
-    // The rule reaches the rendered list, rather than being applied somewhere
-    // the panel then ignores. `acme/column` may only sit in `acme/columns`, and
-    // the position here is the document root.
+  it("keeps what the place refuses in view, says why, and inserts none of it", () => {
+    /*
+     * The rule reaches the rendered list, rather than being applied somewhere
+     * the panel then ignores. `acme/column` may only sit in `acme/columns`, and
+     * the position here is the document root.
+     *
+     * Kept in view rather than removed: an author who cannot see a block has
+     * no way to learn where it would go. Not cmdk's `disabled`, which takes an
+     * item out of keyboard navigation, so a keyboard author could never reach
+     * the reason — the ArrowUp below is what holds that.
+     */
     registerBlocks(
       [
         { ...base, name: "acme/columns", editor: { label: "Columns" } },
@@ -449,90 +593,377 @@ describe("InsertPanel", () => {
       ] as never,
       { source: "acme" }
     );
-    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    const editor = editorSpy(documentOf());
+    render(<InsertPanel editor={editor} />);
 
-    // Both halves: the refused entry is absent AND the permitted one is
-    // present. Asserting only the absence passes on a panel that renders
-    // nothing at all.
-    expect(tile("Columns")).toBeTruthy();
-    expect(screen.queryAllByRole("option", { name: /^Column\b/ })).toHaveLength(
-      0
+    const column = tile("Column");
+    expect(column.getAttribute("data-refused")).toBe("true");
+    // One plain instruction, generated from the rule's permitted parents.
+    expect(describedBy(column)).toContain(
+      "Goes inside a Columns. Select a Columns first, or drag this into one."
     );
+    fireEvent.click(column);
+    expect(editor.apply).not.toHaveBeenCalled();
+
+    // Reached by the keyboard, and read: down to Columns and back up again.
+    const search = screen.getByRole("combobox", { name: "Insert a block" });
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "ArrowUp" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(column.id);
+    expect(popoverName()).toBe("Column");
+    expect(popover()?.textContent).toContain(
+      "Goes inside a Columns. Select a Columns first, or drag this into one."
+    );
+    expect(popover()?.textContent).not.toContain("Click to add");
+
+    // The control: the block the root takes still inserts.
+    expect(tile("Columns").getAttribute("data-refused")).toBeNull();
+    fireEvent.click(tile("Columns"));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
   });
-});
 
-describe("the sentence that says where the next block lands", () => {
-  /*
-   * The one placement that differs from what selecting a block usually implies
-   * is "inside": an empty container takes the block rather than standing beside
-   * it. "Inside" is only meaningful if the author knows inside WHAT, and this
-   * paragraph is the polite live region that tells them — for a screen-reader
-   * author it is the whole answer to "where will this go".
-   *
-   * The container is named by `blockLabel`, the same rule the palette, the
-   * layers and the inspector read, so the sentence agrees with every other
-   * place the author has already met the block.
-   */
-
-  /**
-   * An editor with one block selected, stated the way the real editor states
-   * it: `selectedId` is `selection.primary`, so a fixture that set one and not
-   * the other would be a state the editor never produces.
-   */
-  function selecting(editor: EditorState, id: string): EditorState {
-    return {
-      ...editor,
-      selectedId: id,
-      selection: { ids: [id], primary: id },
-    };
-  }
-
-  function emptyContainer(id: string, type: string): EditorState {
-    return selecting(
-      editorSpy(documentOf([{ id, type, version: 1, props: {} }] as never)),
-      id
-    );
-  }
-
-  it("names the container the block will go inside", () => {
+  it("adds a block that only belongs inside the selected container inside it, as its refusal says", () => {
+    // "Select a Columns first" has to be true: with the Columns selected, a
+    // Column goes inside it, while a block that fits beside it still goes
+    // after it.
     registerBlocks(
       [
         {
           ...base,
-          name: "acme/section",
-          editor: { label: "Section" },
-          slots: { children: {} },
+          name: "acme/columns",
+          editor: { label: "Columns" },
+          slots: { children: { allow: ["acme/column"] } },
+        },
+        {
+          ...base,
+          name: "acme/column",
+          parent: ["acme/columns"],
+          editor: { label: "Column" },
+        },
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const editor = selecting(
+      editorSpy(
+        documentOf([
+          {
+            id: "cols",
+            type: "acme/columns",
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                { id: "c1", type: "acme/column", version: 1, props: {} },
+              ],
+            },
+          },
+        ] as never)
+      ),
+      "cols"
+    );
+    render(<InsertPanel editor={editor} />);
+
+    expect(placementLine()).toBe("Adding after Columns");
+    expect(tile("Column").getAttribute("data-refused")).toBeNull();
+    expect(describedBy(tile("Column"))).toContain("Goes inside Columns.");
+
+    // The line names where the highlighted tile goes, before the click.
+    const search = screen.getByRole("combobox", { name: "Insert a block" });
+    const live = () =>
+      document
+        .querySelector(".nx-insert-panel__placement")
+        ?.getAttribute("aria-live");
+    expect(live()).toBe("polite");
+    fireEvent.keyDown(search, { key: "Home" });
+    expect(popoverName()).toBe("Column");
+    expect(placementLine()).toBe("Adding inside Columns");
+    // The tile's own description says it; the line is not announced twice.
+    expect(live()).toBe("off");
+    for (let step = 0; step < 6 && popoverName() !== "Text"; step++) {
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+    }
+    expect(popoverName()).toBe("Text");
+    expect(placementLine()).toBe("Adding after Columns");
+
+    fireEvent.click(tile("Column"));
+    fireEvent.click(tile("Text"));
+
+    expect(editor.apply.mock.calls[0][0].at).toEqual({
+      parentId: "cols",
+      slot: "children",
+      index: 1,
+    });
+    // The control: a block the page takes goes after the selection.
+    expect(editor.apply.mock.calls[1][0].at).toEqual({ index: 1 });
+  });
+
+  it("inserts a block the selection's region refuses after the nearest block that takes it", () => {
+    /*
+     * The selection is a Text inside a Column inside Columns. The Column's
+     * region takes only Text, and Columns takes only Columns, so an Image
+     * climbs out to the page and lands after the Columns — while a Text, the
+     * control, still lands right after the selection.
+     */
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/columns",
+          editor: { label: "Columns" },
+          slots: { children: { allow: ["acme/column"] } },
+        },
+        {
+          ...base,
+          name: "acme/column",
+          editor: { label: "Column" },
+          slots: { children: { allow: ["acme/text"] } },
+        },
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+        { ...base, name: "acme/image", editor: { label: "Image" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const editor = selecting(
+      editorSpy(
+        documentOf([
+          {
+            id: "cols",
+            type: "acme/columns",
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                {
+                  id: "col",
+                  type: "acme/column",
+                  version: 1,
+                  props: {},
+                  slots: {
+                    children: [
+                      { id: "t", type: "acme/text", version: 1, props: {} },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ] as never)
+      ),
+      "t"
+    );
+    render(<InsertPanel editor={editor} />);
+
+    expect(placementLine()).toBe("Adding after Text");
+    // The line names the first place only, so a tile that goes further says
+    // where, to a screen reader and in its popover. The Text, the control,
+    // goes where the line says and adds nothing to it.
+    expect(describedBy(tile("Image"))).toContain("Goes after Columns.");
+    expect(describedBy(tile("Text"))).not.toContain("Goes");
+    const search = screen.getByRole("combobox", { name: "Insert a block" });
+    for (let step = 0; step < 8 && popoverName() !== "Image"; step++) {
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+    }
+    expect(popoverName()).toBe("Image");
+    expect(
+      popover()?.querySelector(".nx-insert-popover__place")?.textContent
+    ).toBe("Goes after Columns");
+    for (let step = 0; step < 8 && popoverName() !== "Text"; step++) {
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+    }
+    expect(popoverName()).toBe("Text");
+    expect(popover()?.querySelector(".nx-insert-popover__place")).toBeNull();
+
+    fireEvent.click(tile("Image"));
+    fireEvent.click(tile("Text"));
+
+    expect(editor.apply.mock.calls[0][0].at).toEqual({ index: 1 });
+    expect(editor.apply.mock.calls[1][0].at).toEqual({
+      parentId: "col",
+      slot: "children",
+      index: 1,
+    });
+  });
+});
+
+describe("the panel's frame", () => {
+  it("heads the panel Add and opens on the Blocks tab", () => {
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    expect(screen.getByRole("heading", { name: "Add" })).toBeTruthy();
+    expect(
+      screen.getByRole("tab", { name: "Blocks" }).getAttribute("aria-selected")
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("tab", { name: "Sections" })
+        .getAttribute("aria-selected")
+    ).toBe("false");
+  });
+
+  it("keeps the search's name and says what it searches", () => {
+    // Browser tests find the field by its name, and the placeholder now says
+    // that components are found here too.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    expect(
+      screen
+        .getByRole("combobox", { name: "Insert a block" })
+        .getAttribute("placeholder")
+    ).toBe("Search blocks and components");
+
+    // The Sections tab searches sections, and says so.
+    openTab("Sections");
+    expect(
+      screen
+        .getByRole("combobox", { name: "Insert a block" })
+        .getAttribute("placeholder")
+    ).toBe("Search sections");
+  });
+
+  it("draws the library's categories by name, a plugin's as written, and a block with none under More blocks", () => {
+    registerBlocks(
+      [
+        { ...base, name: "acme/aaa", editor: { label: "Aaa" } },
+        {
+          ...base,
+          name: "acme/chart",
+          editor: { label: "Chart", category: "Acme data" },
+        },
+        {
+          ...base,
+          name: "acme/text",
+          editor: { label: "Text", category: "content" },
+        },
+        {
+          ...base,
+          name: "acme/box",
+          editor: { label: "Box", category: "layout" },
         },
       ] as never,
       { source: "acme" }
     );
-    render(<InsertPanel editor={emptyContainer("s", "acme/section")} />);
-
-    const sentence = screen.getByText("Adds inside Section");
-    // The announcement is the point. A paragraph with the right words that is
-    // not a live region tells a sighted author and nobody else.
-    expect(sentence.getAttribute("aria-live")).toBe("polite");
-  });
-
-  it("calls an unlabelled container what the palette calls it", () => {
-    /*
-     * The control on the name: a container with no `editor.label` still reads
-     * as the humanised type every other surface shows, not as "the selected
-     * block" and not as its raw identity. A sentence that always said
-     * "Section" would fail here; one that kept a naming rule of its own would
-     * disagree with the tile the author just clicked.
-     */
-    registerBlocks(
-      [{ ...base, name: "acme/box", slots: { children: {} } }] as never,
-      { source: "acme" }
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        categoryOrder={["layout", "content"]}
+      />
     );
-    render(<InsertPanel editor={emptyContainer("b", "acme/box")} />);
 
-    expect(screen.getByText("Adds inside Box")).toBeTruthy();
+    expect(
+      [...document.querySelectorAll("[cmdk-group-heading]")].map(
+        heading => heading.textContent
+      )
+    ).toEqual(["Layout", "Text", "Acme data", "More blocks"]);
   });
 });
 
-describe("the grid, and the strip that describes it", () => {
+describe("the line that says where the next block goes", () => {
+  /*
+   * A polite live region under the search: for a screen-reader author it is
+   * the whole answer to "where will this go", and for everyone it is what
+   * makes a click predictable. The block is named as Layers names it, so the
+   * line agrees with the tree the author has just been reading.
+   */
+  const blocks = [
+    { ...base, name: "acme/heading", editor: { label: "Heading" } },
+    {
+      ...base,
+      name: "acme/section",
+      editor: { label: "Section" },
+      slots: { children: {} },
+    },
+  ];
+
+  it("says the end of the page when nothing is selected", () => {
+    registerBlocks(blocks as never, { source: "acme" });
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    expect(placementLine()).toBe("Adding at the end of the page");
+    expect(
+      document
+        .querySelector(".nx-insert-panel__placement")
+        ?.getAttribute("aria-live")
+    ).toBe("polite");
+  });
+
+  it("names the selected block as Layers does, an author's own name first", () => {
+    // The authored name is what separates `layerLabel` from the type's label:
+    // a line that read the type would say "Heading" here.
+    registerBlocks(blocks as never, { source: "acme" });
+    const editor = selecting(
+      editorSpy(
+        documentOf([
+          {
+            id: "h",
+            type: "acme/heading",
+            version: 1,
+            props: {},
+            name: "Hero title",
+          },
+        ] as never)
+      ),
+      "h"
+    );
+    render(<InsertPanel editor={editor} />);
+
+    expect(placementLine()).toBe("Adding after Hero title");
+    // Bold, as the name of a place rather than part of the sentence.
+    expect(
+      document.querySelector(".nx-insert-panel__placement b")?.textContent
+    ).toBe("Hero title");
+  });
+
+  it("adds after a selected EMPTY container rather than inside it", () => {
+    // Inside is the explicit "+" gesture's alone. Selecting an empty Section
+    // and adding still builds the page downward, beside it.
+    registerBlocks(blocks as never, { source: "acme" });
+    const editor = selecting(
+      editorSpy(
+        documentOf([
+          { id: "s", type: "acme/section", version: 1, props: {} },
+        ] as never)
+      ),
+      "s"
+    );
+    render(<InsertPanel editor={editor} />);
+
+    expect(placementLine()).toBe("Adding after Section");
+    fireEvent.click(tile("Heading"));
+    expect(editor.apply.mock.calls[0][0].at).toEqual({ index: 1 });
+  });
+
+  it("names the container a + chose to add inside, and inserts there", () => {
+    registerBlocks(blocks as never, { source: "acme" });
+    const editor = selecting(
+      editorSpy(
+        documentOf([
+          { id: "s", type: "acme/section", version: 1, props: {} },
+        ] as never)
+      ),
+      "s"
+    );
+    render(<InsertPanel editor={editor} inside="s" />);
+
+    expect(placementLine()).toBe("Adding inside Section");
+    fireEvent.click(tile("Heading"));
+    expect(editor.apply.mock.calls[0][0].at).toEqual({
+      parentId: "s",
+      slot: "children",
+      index: 0,
+    });
+  });
+});
+
+describe("the grid, and the popover that describes a tile", () => {
   /**
    * Seven blocks in one category, named so their position is readable.
    *
@@ -552,15 +983,8 @@ describe("the grid, and the strip that describes it", () => {
     );
   }
 
-  /** The strip's text, or null where it is not rendered at all. */
-  function strip(): string | null {
-    return (
-      document.querySelector(".nx-insert-panel__describes")?.textContent ?? null
-    );
-  }
-
   function search(): HTMLElement {
-    return screen.getByPlaceholderText("Search blocks");
+    return screen.getByRole("combobox", { name: "Insert a block" });
   }
 
   it("names a tile by its BLOCK and describes it with its sentence", () => {
@@ -626,14 +1050,93 @@ describe("the grid, and the strip that describes it", () => {
     );
   });
 
-  it("describes the tile the highlight is on, before anything is touched", () => {
-    // The strip is the only place a sighted author reads the sentence now, so
-    // a panel that opened with it blank would have removed the information
-    // rather than moved it.
+  it("highlights nothing and opens no popover until the author moves through the tiles", () => {
+    /*
+     * The palette's primitives mark their first item as current the moment
+     * the list draws, so a panel that painted that mark would open with a
+     * tile looking chosen that the author never touched — and a popover
+     * describing it. The panel paints the mark only once an arrow key or a
+     * pointer has moved through the tiles.
+     */
     sevenBlocks();
     render(<InsertPanel editor={editorSpy(documentOf())} />);
+    const panel = document.querySelector(".nx-insert-panel");
 
-    expect(strip()).toBe("B0 Block number 0.");
+    expect(panel?.getAttribute("data-highlight")).toBeNull();
+    expect(popover()).toBeNull();
+
+    fireEvent.keyDown(search(), { key: "ArrowDown" });
+
+    expect(panel?.getAttribute("data-highlight")).toBe("shown");
+    expect(popoverName()).toBe("B1");
+  });
+
+  it("paints the current tile only while the panel says a highlight is shown", () => {
+    /*
+     * Asserted against the stylesheet because the paint is all there is to
+     * see: the primitives set `data-selected` on their first item whatever
+     * the panel does, so a rule keyed on that alone would mark a tile at rest.
+     * Comments stripped, because a comment naming the selector would satisfy
+     * a search of the raw text.
+     */
+    const css = readFileSync(
+      join(process.cwd(), "src/styles/builder-chrome.css"),
+      "utf8"
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    const painted = css.match(
+      /([^{}]*)\[cmdk-item\]\[data-selected="true"\]\s*\{[^}]*border-color:\s*var\(--nx-primary\)/
+    );
+
+    // Population: the rule that paints the current tile exists at all.
+    expect(painted).not.toBeNull();
+    expect(painted?.[1]).toContain('[data-highlight="shown"]');
+  });
+
+  it("shows the pointed tile's preview, name, description and how to add it", () => {
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    const input = search();
+    input.focus();
+
+    fireEvent.pointerMove(tile("B2"));
+
+    const shown = popover();
+    expect(popoverName()).toBe("B2");
+    expect(
+      shown?.querySelector(".nx-insert-popover__description")?.textContent
+    ).toBe("Block number 2.");
+    expect(shown?.querySelector(".nx-insert-popover__hint")?.textContent).toBe(
+      "Click to add · drag to place"
+    );
+    // The block's mark stands in for a preview the host did not supply.
+    expect(
+      shown?.querySelector(".nx-insert-popover__preview .nx-block-icon svg")
+    ).not.toBeNull();
+    // Hidden from assistive technology, which reads the same sentence from
+    // the tile's own description, and never taking focus from the search.
+    expect(shown?.getAttribute("aria-hidden")).toBe("true");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("draws the host's preview of a tile when it supplies one", () => {
+    sevenBlocks();
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        renderPreview={entry => (
+          <span className="host-preview">{`${entry.label} drawn`}</span>
+        )}
+      />
+    );
+
+    fireEvent.pointerMove(tile("B3"));
+
+    expect(popover()?.querySelector(".host-preview")?.textContent).toBe(
+      "B3 drawn"
+    );
+    expect(
+      popover()?.querySelector(".nx-insert-popover__preview .nx-block-icon")
+    ).toBeNull();
   });
 
   it("never announces an option that has been FILTERED AWAY", () => {
@@ -661,7 +1164,7 @@ describe("the grid, and the strip that describes it", () => {
     const announced = input.getAttribute("aria-activedescendant");
     expect(announced).toBeTruthy();
     expect(document.getElementById(announced ?? "")).not.toBeNull();
-    expect(strip()).toBe("B4 Block number 4.");
+    expect(popoverName()).toBe("B4");
 
     fireEvent.change(input, { target: { value: "B0" } });
 
@@ -671,7 +1174,7 @@ describe("the grid, and the strip that describes it", () => {
     if (after !== null) {
       expect(document.getElementById(after)).not.toBeNull();
     }
-    expect(strip()).toBe("B0 Block number 0.");
+    expect(popoverName()).toBe("B0");
   });
 
   it("keeps a tile's token when the DEFINITIONS around it change", () => {
@@ -679,7 +1182,7 @@ describe("the grid, and the strip that describes it", () => {
      * A host may replace `definitions` while the panel is mounted. Tokens
      * taken from an entry's POSITION would then be reassigned — inserting one
      * definition shifts every entry after it — so the same string would name a
-     * different block while the palette is still holding it, and the strip
+     * different block while the palette is still holding it, and the popover
      * would describe, and Enter would insert, whichever block had inherited
      * the token.
      *
@@ -717,261 +1220,12 @@ describe("the grid, and the strip that describes it", () => {
     expect(tile("alpha").getAttribute("data-value")).not.toBe(before);
   });
 
-  it("returns the strip to the TOP when it changes subject", () => {
-    /*
-     * The strip is scrollable and React reuses the same element as the
-     * highlight moves, so a description that was scrolled leaves the next one
-     * opening partway through its own text — the block's name and first lines
-     * above the fold, the reader looking at the middle of a sentence about a
-     * block they have only just pointed at.
-     */
-    sevenBlocks();
-    render(<InsertPanel editor={editorSpy(documentOf())} />);
-
-    const body = document.querySelector(
-      ".nx-insert-panel__describes"
-    ) as HTMLElement;
-    expect(body).not.toBeNull();
-    body.scrollTop = 40;
-    // The control: jsdom computes no layout, so an element with no overflow
-    // refuses a non-zero scrollTop and the assertion below would pass on an
-    // element that was never scrolled.
-    expect(body.scrollTop).toBe(40);
-
-    fireEvent.pointerMove(tile("B4"));
-
-    expect(body.scrollTop).toBe(0);
-  });
-
-  it("becomes keyboard-reachable ONLY while it is hiding text", () => {
-    /*
-     * The strip is bounded and scrollable, so a description longer than the box
-     * has a tail a pointer can scroll to and a keyboard cannot — focus stays in
-     * the search field and nothing can direct a scroll here.
-     *
-     * Both states are asserted, and the not-clipped one is what stops this
-     * becoming an argument for a permanent tab stop. A stop between the search
-     * field and the tiles costs every author a keystroke on the way to what
-     * they came for, and buys nothing when the whole sentence is visible.
-     *
-     * Overflow is FORCED rather than produced by a long description, because
-     * jsdom lays nothing out: `scrollHeight` and `clientHeight` are both 0 for
-     * every element, so a real 400-character description overflows by exactly
-     * as much as a short one — that is, not at all. Defining the two
-     * properties is what puts the branch under test.
-     */
-    sevenBlocks();
-    render(<InsertPanel editor={editorSpy(documentOf())} />);
-
-    const body = document.querySelector(
-      ".nx-insert-panel__describes"
-    ) as HTMLElement;
-    expect(body).not.toBeNull();
-
-    // Not clipped: hidden from assistive technology and out of the tab order.
-    expect(body.getAttribute("aria-hidden")).toBe("true");
-    expect(body.getAttribute("tabindex")).toBeNull();
-
-    Object.defineProperty(body, "scrollHeight", {
-      value: 200,
-      configurable: true,
-    });
-    Object.defineProperty(body, "clientHeight", {
-      value: 80,
-      configurable: true,
-    });
-    fireEvent.pointerMove(tile("B4"));
-
-    const after = document.querySelector(
-      ".nx-insert-panel__describes"
-    ) as HTMLElement;
-    expect(after.getAttribute("tabindex")).toBe("0");
-    // A focusable element must not be hidden from the tree it is focusable in,
-    // and arriving somewhere unlabelled is its own defect.
-    expect(after.getAttribute("aria-hidden")).toBeNull();
-    expect(after.getAttribute("aria-label")).toBe("Block description");
-  });
-
-  /**
-   * Force the strip to report that its content overflows its box.
-   *
-   * jsdom lays nothing out, so `scrollHeight` and `clientHeight` are 0 on every
-   * element and a 400-character description overflows by exactly as much as a
-   * short one — which is to say not at all. Defining the two properties is what
-   * puts the branch under test at all.
-   */
-  function forceOverflow(element: HTMLElement, overflowing: boolean): void {
-    Object.defineProperty(element, "scrollHeight", {
-      value: overflowing ? 200 : 40,
-      configurable: true,
-    });
-    Object.defineProperty(element, "clientHeight", {
-      value: 80,
-      configurable: true,
-    });
-  }
-
-  /** Install a `ResizeObserver` whose callback the test can fire on demand. */
-  function drivableObserver(): { fire: () => void; restore: () => void } {
-    const previous = globalThis.ResizeObserver;
-    let callback: (() => void) | undefined;
-    globalThis.ResizeObserver = class {
-      constructor(fn: () => void) {
-        callback = fn;
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    } as unknown as typeof ResizeObserver;
-    return {
-      fire: () => {
-        callback?.();
-      },
-      restore: () => {
-        globalThis.ResizeObserver = previous;
-      },
-    };
-  }
-
-  it("re-measures when the STRIP RESIZES, with no change of subject", () => {
-    /*
-     * The panel is resizable, and browser zoom and font size move the box too.
-     * None of those re-render anything here, so a measurement taken only when
-     * the described block changes leaves a newly overflowing description out of
-     * the tab order with its tail unreachable — and leaves a dead focus stop
-     * behind when it stops overflowing.
-     *
-     * The subject deliberately never changes in this case. That is the whole
-     * property: a measurement keyed on the subject cannot see this.
-     */
-    const observer = drivableObserver();
-    try {
-      sevenBlocks();
-      render(<InsertPanel editor={editorSpy(documentOf())} />);
-      const body = document.querySelector(
-        ".nx-insert-panel__describes"
-      ) as HTMLElement;
-      expect(body.getAttribute("tabindex")).toBeNull();
-
-      forceOverflow(body, true);
-      act(() => {
-        observer.fire();
-      });
-
-      expect(
-        (
-          document.querySelector(".nx-insert-panel__describes") as HTMLElement
-        ).getAttribute("tabindex")
-      ).toBe("0");
-
-      // And back again, so this is not a one-way latch that accumulates focus
-      // stops as an author drags the panel about.
-      forceOverflow(body, false);
-      act(() => {
-        observer.fire();
-      });
-      expect(
-        (
-          document.querySelector(".nx-insert-panel__describes") as HTMLElement
-        ).getAttribute("tabindex")
-      ).toBeNull();
-    } finally {
-      observer.restore();
-    }
-  });
-
-  it("re-measures when the DESCRIPTION changes but the block does not", () => {
-    /*
-     * The other half, and a `ResizeObserver` cannot see it: a longer sentence
-     * inside a strip already at its bound grows `scrollHeight` while the border
-     * box stays exactly where it was, so the observer never fires. The entry's
-     * id is the BLOCK NAME, so replacing a definition's description leaves the
-     * subject unchanged too.
-     *
-     * A measurement keyed on the subject is therefore blind to this, which is
-     * why the effect carries no dependency list.
-     */
-    const defs = (description: string) =>
-      [
-        {
-          ...base,
-          name: "acme/solo",
-          description,
-          editor: { label: "Solo", category: "Layout" },
-        },
-      ] as never;
-
-    const view = render(
-      <InsertPanel
-        editor={editorSpy(documentOf())}
-        definitions={defs("Short.")}
-      />
-    );
-    const body = document.querySelector(
-      ".nx-insert-panel__describes"
-    ) as HTMLElement;
-    forceOverflow(body, false);
-    expect(body.getAttribute("tabindex")).toBeNull();
-
-    forceOverflow(body, true);
-    view.rerender(
-      <InsertPanel
-        editor={editorSpy(documentOf())}
-        definitions={defs("A much longer sentence about the very same block.")}
-      />
-    );
-
-    // Same block, same id, same box — only the text grew.
-    expect(
-      (
-        document.querySelector(".nx-insert-panel__describes") as HTMLElement
-      ).getAttribute("tabindex")
-    ).toBe("0");
-  });
-
-  it("bounds the strip, so a long description cannot eat the palette", () => {
-    /*
-     * Asserted against the stylesheet for the same reason the `touch-action`
-     * case above is: jsdom computes no layout, so every element reports zero
-     * height and a case driving a long description through the DOM would pass
-     * with the bound deleted.
-     *
-     * The failure is a valid input, not a malformed one. Nothing caps a
-     * `BlockDefinition.description`, and the command root is `h-full` with
-     * `overflow-hidden` — so an unshrinkable strip claims its full content
-     * height, squeezes the tile list toward zero, and then clips its own
-     * overflow with no way to scroll to it. One long-winded plugin hides every
-     * block in the palette and is itself unreadable.
-     */
-    const css = readFileSync(
-      join(process.cwd(), "src/styles/builder-chrome.css"),
-      "utf8"
-    );
-    const rule = css.slice(css.indexOf(".nx-insert-panel__describes {"));
-    // COMMENTS STRIPPED, because the block's own comment names the
-    // declaration it exists to forbid — searching the raw text finds the prose
-    // and reports a violation that is not there.
-    const block = rule
-      .slice(0, rule.indexOf("}"))
-      .replace(/\/\*[\s\S]*?\*\//g, "");
-
-    // Population first: a renamed selector leaves every assertion below
-    // reading an empty string, and "the forbidden value is absent" passes on
-    // nothing at all.
-    expect(block.length).toBeGreaterThan(0);
-    expect(block).toContain("max-height:");
-    expect(block).toContain("overflow-y: auto;");
-    // `flex: none` is the specific declaration that made it unshrinkable, and
-    // it is what a later edit would most naturally reintroduce.
-    expect(block).not.toContain("flex: none");
-  });
-
-  /** One definition with a description, so the strip and tiles both draw. */
+  /** One definition with a description, so the popover and tiles both draw. */
   const described = [
     {
       ...base,
       name: "acme/solo",
-      description: "A block with a description, so the strip renders.",
+      description: "A block with a description, so the popover has one.",
       editor: { label: "Solo", category: "Layout" },
     },
   ] as never;
@@ -1044,25 +1298,6 @@ describe("the grid, and the strip that describes it", () => {
     expect(hint?.textContent?.toLowerCase()).not.toContain("slide off");
   });
 
-  it("keeps the hint OUT of the scrollable strip", () => {
-    /*
-     * Structural, because the failure is positional: the strip is bounded and
-     * scrolls, so a line placed inside it leaves the viewport exactly when the
-     * description is long — and the authors reading the longest descriptions
-     * are the ones who most need to know what a lift does.
-     */
-    render(
-      <InsertPanel editor={editorSpy(documentOf())} definitions={described} />
-    );
-    pressTile("touch");
-
-    const strip = document.querySelector(".nx-insert-panel__describes");
-    const hint = document.querySelector(".nx-insert-panel__gesture-hint");
-    expect(strip).not.toBeNull();
-    expect(hint).not.toBeNull();
-    expect(strip?.contains(hint as Node)).toBe(false);
-  });
-
   it("keeps the hint out of the ACCESSIBLE tree", () => {
     /*
      * It describes a POINTER gesture. A screen reader on a touch device does
@@ -1112,7 +1347,7 @@ describe("the grid, and the strip that describes it", () => {
      *
      * Both halves are asserted. Describing the right one is the visible
      * symptom; inserting the right one is what the author actually loses, and
-     * a case checking only the strip would pass against a panel that describes
+     * a case checking only the popover would pass against a panel that describes
      * correctly and inserts the wrong block.
      */
     registerBlocks(
@@ -1143,7 +1378,10 @@ describe("the grid, and the strip that describes it", () => {
     // trimming happens. A press sets the value directly and would never reach
     // the collapse this case exists for.
     fireEvent.pointerMove(tile("Spacious"));
-    expect(strip()).toBe("Spacious A card.");
+    expect(popoverName()).toBe("Spacious");
+    expect(
+      popover()?.querySelector(".nx-insert-popover__description")?.textContent
+    ).toBe("A card.");
 
     fireEvent.click(tile("Spacious"));
     expect(editor.apply).toHaveBeenCalledTimes(1);
@@ -1158,9 +1396,9 @@ describe("the grid, and the strip that describes it", () => {
   it("describes a tile on the PRESS, so touch reads it before lifting", () => {
     /*
      * A touch screen produces no `pointermove` before contact, and hover is
-     * what the primitives report a highlight from — so on touch the strip
-     * would describe whatever was current when the panel opened, and the tap
-     * that finally moved it is the same tap that inserts.
+     * what the primitives report a highlight from — so on touch the popover
+     * would never open, and the tap that finally moved the highlight is the
+     * same tap that inserts.
      *
      * Driven with `pointerDown` and NOT `pointerMove`, because pointer-move is
      * the path that already worked: a case using it would pass against the
@@ -1168,11 +1406,11 @@ describe("the grid, and the strip that describes it", () => {
      */
     sevenBlocks();
     render(<InsertPanel editor={editorSpy(documentOf())} />);
-    expect(strip()).toBe("B0 Block number 0.");
+    expect(popover()).toBeNull();
 
     fireEvent.pointerDown(tile("B4"), { button: 0, pointerId: 1 });
 
-    expect(strip()).toBe("B4 Block number 4.");
+    expect(popoverName()).toBe("B4");
   });
 
   it("leaves ArrowDown to the primitives, moving by ONE tile", () => {
@@ -1191,7 +1429,7 @@ describe("the grid, and the strip that describes it", () => {
 
     fireEvent.keyDown(search(), { key: "ArrowDown" });
 
-    expect(strip()).toBe("B1 Block number 1.");
+    expect(popoverName()).toBe("B1");
   });
 
   it("leaves a horizontal arrow to the SEARCH FIELD entirely", () => {
@@ -1213,12 +1451,12 @@ describe("the grid, and the strip that describes it", () => {
     fireEvent.change(input, { target: { value: "b" } });
     (input as HTMLInputElement).setSelectionRange(1, 1);
     fireEvent.keyDown(input, { key: "ArrowRight" });
-    expect(strip()).toBe("B0 Block number 0.");
+    expect(popover()).toBeNull();
 
     // The control: the same panel, a key the primitives DO bind, and the
     // highlight moves. Without it an inert panel satisfies the assertion above.
     fireEvent.keyDown(input, { key: "ArrowDown" });
-    expect(strip()).toBe("B1 Block number 1.");
+    expect(popoverName()).toBe("B1");
   });
 
   it("leaves a MODIFIED arrow to the command primitives", () => {
@@ -1229,30 +1467,32 @@ describe("the grid, and the strip that describes it", () => {
 
     fireEvent.keyDown(search(), { key: "ArrowDown", metaKey: true });
 
-    expect(strip()).toBe("B6 Block number 6.");
+    expect(popoverName()).toBe("B6");
   });
 
   it("follows the POINTER as well as the keyboard, through one piece of state", () => {
     // The primitives highlight on pointer move and report it the same way they
-    // report an arrow key, which is what lets one value drive the strip. A
+    // report an arrow key, which is what lets one value drive the popover. A
     // panel tracking hover separately would hold a second answer.
     sevenBlocks();
     render(<InsertPanel editor={editorSpy(documentOf())} />);
 
     fireEvent.pointerMove(tile("B4"));
 
-    expect(strip()).toBe("B4 Block number 4.");
+    expect(popoverName()).toBe("B4");
   });
 
-  it("shows NO strip when nothing can be offered", () => {
-    // There is no tile to describe, and a strip left standing would describe
+  it("shows NO popover when nothing can be offered", () => {
+    // There is no tile to describe, and a popover left standing would describe
     // whichever block was current before the search emptied the list.
     sevenBlocks();
     render(<InsertPanel editor={editorSpy(documentOf())} />);
+    fireEvent.pointerMove(tile("B4"));
+    expect(popoverName()).toBe("B4");
 
     fireEvent.change(search(), { target: { value: "nothing matches this" } });
 
-    expect(strip()).toBeNull();
+    expect(popover()).toBeNull();
     expect(screen.getByText(/No blocks match/)).toBeTruthy();
   });
 });
@@ -1275,7 +1515,7 @@ describe("InsertPanel and the pattern tier", () => {
     };
   }
 
-  it("offers a supplied pattern beside the blocks", () => {
+  it("offers a supplied pattern under Sections, apart from the blocks", () => {
     registerBlocks(
       [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
       { source: "acme" }
@@ -1287,9 +1527,14 @@ describe("InsertPanel and the pattern tier", () => {
       />
     );
 
-    // Both tiers reachable from one list, which is what the panel draws.
+    // Blocks open first, with no pattern among them.
     expect(tile("Text")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Hero" })).toBeNull();
+
+    // Sections holds the patterns, and only them.
+    openTab("Sections");
     expect(tile("Hero")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Text" })).toBeNull();
   });
 
   it("places a chosen pattern as ONE edit, through the planner", () => {
@@ -1306,6 +1551,7 @@ describe("InsertPanel and the pattern tier", () => {
       />
     );
 
+    openTab("Sections");
     fireEvent.click(tile("Hero"));
 
     // `applyAll` and not `apply`: a pattern is a forest, and placing it as
@@ -1347,6 +1593,7 @@ describe("InsertPanel and the pattern tier", () => {
       />
     );
 
+    openTab("Sections");
     expect(tile("Hero")).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Broken" })).toBeNull();
   });
@@ -1377,7 +1624,7 @@ describe("the component tier", () => {
     return new Map(rows.map(row => [row.id, row.document]));
   }
 
-  it("withholds a PATTERN whose root is an instance the destination refuses", () => {
+  it("refuses a PATTERN whose root is an instance the destination refuses", () => {
     // A pattern is copied in as it stands, so a saved-from-a-component pattern
     // carries the instance node; judged by that node's own type it was offered
     // at the root while the component's own tile was refused there.
@@ -1422,8 +1669,10 @@ describe("the component tier", () => {
       />
     );
 
-    expect(screen.getByRole("option", { name: /Text/ })).toBeDefined();
-    expect(screen.queryByRole("option", { name: /Wrapped column/ })).toBeNull();
+    openTab("Sections");
+    const wrapped = tile("Wrapped column");
+    expect(wrapped.getAttribute("data-refused")).toBe("true");
+    expect(describedBy(wrapped)).toContain("A Column has to go inside");
   });
 
   it("PLACES a pattern whose nested instance draws what the slot admits", () => {
@@ -1487,6 +1736,7 @@ describe("the component tier", () => {
       />
     );
 
+    openTab("Sections");
     fireEvent.click(screen.getByRole("option", { name: /Row of one/ }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1512,7 +1762,53 @@ describe("the component tier", () => {
     expect(screen.queryByRole("option", { name: /Header/ })).toBeNull();
   });
 
-  it("offers a supplied component beside the blocks, marked as LINKED", () => {
+  it("offers the site's components together under Your components, after the library's categories", () => {
+    /*
+     * The row says "Sections", and a component still goes under the one
+     * components group, with the component mark: an author looks for the
+     * site's own pieces apart from the library's blocks. No tier badge and no
+     * tier sentence: the description is the component's own.
+     */
+    registerBlocks(
+      [
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+        {
+          ...base,
+          name: "acme/box",
+          editor: { label: "Box", category: "layout" },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        categoryOrder={["layout"]}
+        components={[{ ...headerComponent(), description: "The site header." }]}
+        componentDefinitions={lookupFor(headerComponent())}
+      />
+    );
+
+    const groups = [...document.querySelectorAll("[cmdk-group]")].map(
+      group => ({
+        heading: group.querySelector("[cmdk-group-heading]")?.textContent,
+        options: [...group.querySelectorAll("[role=option]")].map(option =>
+          option.getAttribute("aria-label")
+        ),
+      })
+    );
+    expect(groups).toEqual([
+      { heading: "Layout", options: ["Box"] },
+      { heading: "Your components", options: ["Header"] },
+      { heading: "More blocks", options: ["Text"] },
+    ]);
+    const header = tile("Header");
+    expect(header.querySelector(".nx-block-icon svg")).not.toBeNull();
+    expect(header.querySelector(".nx-insert-panel__tier")).toBeNull();
+    expect(describedBy(header)).toBe("The site header.");
+  });
+
+  it("finds a component by search, in the Blocks tab", () => {
     registerBlocks(
       [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
       { source: "acme" }
@@ -1525,22 +1821,12 @@ describe("the component tier", () => {
       />
     );
 
-    expect(tile("Text")).toBeTruthy();
-    const header = tile("Header");
-    // The visible badge, for a sighted author choosing between look-alikes.
-    expect(header.querySelector(".nx-insert-panel__tier")?.textContent).toBe(
-      "Linked"
-    );
-    // And the same promise where a screen reader hears it: in the description
-    // read after the name, NOT in the name — which stays exactly the visible
-    // label so a spoken command still matches what is written on the tile.
-    expect(header.getAttribute("aria-label")).toBe("Header");
-    const described = document.getElementById(
-      header.getAttribute("aria-describedby") ?? ""
-    );
-    expect(described?.textContent).toMatch(/^Placed as a link/);
-    // A block tile carries no such promise, visible or spoken.
-    expect(tile("Text").querySelector(".nx-insert-panel__tier")).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Insert a block" }), {
+      target: { value: "Head" },
+    });
+
+    expect(tile("Header")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Text" })).toBeNull();
   });
 
   it("places a chosen component as ONE instance node, copying nothing", () => {
@@ -1578,10 +1864,10 @@ describe("the component tier", () => {
     expect(onInsert).toHaveBeenCalledWith(op.node);
   });
 
-  it("offers nothing for a component the destination could not take", () => {
+  it("keeps a component the destination could not take in view, saying why", () => {
     // Judged by the definition's ROOT. A column may only live inside columns,
-    // and this page's insertion point is the root — so the tile is withheld
-    // rather than offered and refused on click.
+    // and this page's insertion point is the root — so the tile is refused,
+    // with the rule's reason, and its click inserts nothing.
     registerBlocks(
       [
         { ...base, name: "acme/text" },
@@ -1599,16 +1885,25 @@ describe("the component tier", () => {
         nodes: [{ id: "d1", type: "acme/column", version: 1, props: {} }],
       } as unknown as ComponentDocument,
     };
+    const editor = editorSpy(documentOf());
     render(
       <InsertPanel
-        editor={editorSpy(documentOf())}
+        editor={editor}
         components={[columnOnly, headerComponent()]}
         componentDefinitions={lookupFor(columnOnly, headerComponent())}
       />
     );
 
-    expect(screen.getByRole("option", { name: /Header/ })).toBeTruthy();
-    expect(screen.queryByRole("option", { name: /Column card/ })).toBeNull();
+    expect(tile("Header").getAttribute("data-refused")).toBeNull();
+    const card = tile("Column card");
+    expect(card.getAttribute("data-refused")).toBe("true");
+    // A component is not dragged, so the instruction offers only selecting.
+    expect(describedBy(card)).toContain(
+      "Goes inside a Columns. Select a Columns first."
+    );
+    expect(describedBy(card)).not.toContain("drag");
+    fireEvent.click(card);
+    expect(editor.apply).not.toHaveBeenCalled();
   });
 
   it("hands a placement to the editor's apply, which is what judges the page's room for it", () => {
@@ -1765,13 +2060,17 @@ describe("when the library was cut, or could not be read", () => {
         library={{ patterns: "cut" }}
       />
     );
+    // Patterns are offered on the Sections tab, so that is where it is said.
+    openTab("Sections");
 
     const [status] = notices();
     expect(status?.textContent).toContain("some patterns are not offered");
     expect(status?.textContent).not.toContain("could not be loaded");
   });
 
-  it("names both tiers in one sentence when both were cut", () => {
+  it("says each tier's state in the tab that offers it, and only there", () => {
+    // Components are among the blocks and patterns are sections, so a tab
+    // never reports content that could not appear in it.
     render(
       <InsertPanel
         editor={editorSpy(documentOf())}
@@ -1779,9 +2078,18 @@ describe("when the library was cut, or could not be read", () => {
       />
     );
 
+    expect(notices()).toHaveLength(1);
     expect(notices()[0]?.textContent).toContain(
-      "some patterns and components are not offered"
+      "some components are not offered"
     );
+    expect(notices()[0]?.textContent).not.toContain("patterns");
+
+    openTab("Sections");
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]?.textContent).toContain(
+      "some patterns are not offered"
+    );
+    expect(notices()[0]?.textContent).not.toContain("components");
   });
 
   it("says when a tier could not be read at all, apart from a cut one, and offers the retry", () => {
@@ -1796,13 +2104,16 @@ describe("when the library was cut, or could not be read", () => {
       />
     );
 
-    const [cut, unavailable] = notices();
-    expect(cut?.textContent).toContain("some patterns are not offered");
+    const [unavailable] = notices();
     expect(unavailable?.textContent).toContain(
       "components could not be loaded, so none are offered"
     );
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retry).toHaveBeenCalledTimes(1);
+
+    openTab("Sections");
+    const [cut] = notices();
+    expect(cut?.textContent).toContain("some patterns are not offered");
   });
 
   it("says when a tier could not be RE-read, apart from one never read, and offers the retry", () => {
@@ -1820,7 +2131,7 @@ describe("when the library was cut, or could not be read", () => {
 
     const [stale] = notices();
     expect(stale?.textContent).toContain(
-      "patterns and components could not be reloaded, so those offered may be out of date"
+      "components could not be reloaded, so those offered may be out of date"
     );
     expect(stale?.textContent).toContain("draws as it was");
     expect(stale?.textContent).not.toContain("none are offered");
@@ -1835,6 +2146,7 @@ describe("when the library was cut, or could not be read", () => {
         library={{ patterns: "stale" }}
       />
     );
+    openTab("Sections");
 
     expect(notices()[0]?.textContent).toContain(
       "patterns could not be reloaded"
@@ -1852,5 +2164,103 @@ describe("when the library was cut, or could not be read", () => {
 
     expect(notices()[0]?.textContent).toContain("could not be loaded");
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+});
+
+describe("the offer under the one placement rule", () => {
+  /** A card whose link makes it refuse anything clickable beneath it. */
+  const linkableCard = {
+    ...base,
+    name: "t/card",
+    editor: { label: "Card" },
+    slots: { children: {} },
+    contentModel: (props: { link?: string }) =>
+      props.link
+        ? { is: ["flow", "interactive"], accepts: { without: ["interactive"] } }
+        : { is: ["flow"] },
+  };
+  const button = {
+    ...base,
+    name: "t/button",
+    editor: { label: "Button" },
+    contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
+  };
+  const heading = { ...base, name: "t/heading", editor: { label: "Heading" } };
+  const linkedCard = {
+    id: "card",
+    type: "t/card",
+    version: 1,
+    props: { link: "/go" },
+  };
+
+  it("judges the point by the palette's own definitions, not the registry's", () => {
+    /*
+     * The registry holds a Card with no content model; the palette is handed
+     * the Card that refuses clickable blocks when linked. The catalog and the
+     * insert both read the palette's, so the placement rule must too: judged
+     * by the registry's Card, the Button is offered and its insert would build
+     * a link inside a link.
+     *
+     * Added INSIDE the card, through the + gesture's `inside`: after it, at the
+     * page's root, a Button is welcome whichever Card is read.
+     */
+    registerBlocks(
+      [
+        { ...base, name: "t/card", slots: { children: {} } },
+        button,
+        heading,
+      ] as never,
+      { source: "test" }
+    );
+    const editor = {
+      ...editorSpy(documentOf([linkedCard] as never)),
+      selectedId: "card",
+    } as unknown as ReturnType<typeof editorSpy>;
+    render(
+      <InsertPanel
+        editor={editor}
+        definitions={[linkableCard, button, heading] as never}
+        inside="card"
+      />
+    );
+
+    // The point is inside the card: the Heading is offered there, the Button
+    // refused.
+    expect(tile("Heading").getAttribute("data-refused")).toBeNull();
+    expect(tile("Button").getAttribute("data-refused")).toBe("true");
+  });
+
+  it("asks the placement rule nothing again while the author types", () => {
+    /*
+     * The verdict depends on the document, the point, the catalog and the
+     * rule's sources, none of which a keystroke changes. Counted through the
+     * nesting source every verdict reads: re-judging the catalog per keystroke
+     * reads it again for every entry.
+     */
+    registerBlocks([button, heading] as never, { source: "test" });
+    let asked = 0;
+    const nesting = {
+      parentsOf: () => {
+        asked += 1;
+        return undefined;
+      },
+      slotAllowOf: () => {
+        asked += 1;
+        return undefined;
+      },
+    };
+    render(<InsertPanel editor={editorSpy(documentOf())} nesting={nesting} />);
+    // The control: the first render did ask, so the count can move.
+    expect(asked).toBeGreaterThan(0);
+    const before = asked;
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "He" } });
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "Hea" },
+    });
+
+    // The query did narrow the rows, so the renders really happened.
+    expect(screen.queryByRole("option", { name: "Button" })).toBeNull();
+    expect(asked).toBe(before);
   });
 });

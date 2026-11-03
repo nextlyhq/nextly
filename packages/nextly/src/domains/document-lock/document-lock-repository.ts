@@ -41,6 +41,15 @@
  * requester who closed the tab stops nudging a holder they are no longer
  * waiting on.
  *
+ * ## A takeover is the one thing recorded
+ *
+ * Displacing a live holder writes one event to the document's history, on the
+ * same transaction that replaces the claim, so a takeover whose event cannot
+ * be written does not happen. Claims, renewals, requests, releases and lapses
+ * displace nobody and record nothing. The service is built on the adapter
+ * outside any caller's transaction, so the transaction here is the lock's
+ * own and the event joins it, not a request's.
+ *
  * ## No flush on takeover
  *
  * Taking a claim over does not move the ousted author's unsaved work anywhere.
@@ -62,6 +71,7 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import type { RequestActor } from "../../auth/request-actor";
 import {
   futureExpression,
   nowExpression,
@@ -86,6 +96,17 @@ import type {
 export interface DocumentLockClaimant {
   readonly ownerId: string;
   readonly ownerLabel?: string | null;
+  /**
+   * Who is acting, as the request resolved it: what a takeover's history
+   * event names. Separate from `ownerId`, which for an API key is the key
+   * maker's user id, so the event credits the key and not the person.
+   */
+  readonly actor: RequestActor;
+  /**
+   * The person's display name for that event. Never the label's email
+   * fallback: history names people by name only.
+   */
+  readonly personName?: string | null;
 }
 
 /**
@@ -275,6 +296,33 @@ function lockRowVanished(key: string): never {
   });
 }
 
+/**
+ * Record a takeover in the document's history when replacing `existing`
+ * displaced somebody: a live claim of another person, which only a takeover
+ * may replace. A lapsed claim, and the caller's own from another tab (one
+ * person is one holder), displace nobody and record nothing.
+ *
+ * 🔴 On `ctx`, the transaction that replaced the claim, never a second one:
+ * an event that cannot be written throws here and rolls the claim back with
+ * it, so the holder keeps the document and no takeover stands unrecorded.
+ */
+async function recordIfDisplaced(
+  ctx: TransactionContext,
+  adapter: DrizzleAdapter,
+  ref: DocumentRef,
+  claimant: DocumentLockClaimant,
+  existing: LockRow
+): Promise<void> {
+  if (!existing.live || existing.ownerId === claimant.ownerId) return;
+  // Loaded when a takeover happens, not with the repository: the service
+  // registry loads this repository at boot, and the event's kind sits beside
+  // the history reader that names the displaced holder, which reads the users
+  // table. Every boot and every lock claim would otherwise load both for an
+  // act that is rare.
+  const { recordTakeoverEvent } = await import("./takeover-event");
+  await recordTakeoverEvent(ctx, adapter, ref, claimant, existing.ownerId);
+}
+
 /** Whether this existing claim may be replaced by the caller's. */
 function isTakeable(
   existing: LockRow,
@@ -441,6 +489,7 @@ export async function acquireDocumentLock(
     if (after.claimToken !== claimToken || !after.usable) {
       return await refuse(ctx, dialect, key, after, requestAccess);
     }
+    await recordIfDisplaced(ctx, adapter, ref, claimant, existing);
     return { status: "acquired", holder: toHolder(after), claimToken };
   });
 }

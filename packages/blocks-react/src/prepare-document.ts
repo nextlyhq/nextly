@@ -543,3 +543,26 @@ export function prepareDocumentForRead(
   const stages = prepareDocumentReadStages(document, args);
   return stages === null ? null : readingViewOf(stages);
 }
+
+/**
+ * The tree the renderer WALKS: the reading pipeline up to and including address
+ * repair, with the nodes it draws as placeholders still in place.
+ *
+ * For a surface that lists a page's parts beside a picture of the page, such
+ * as an editor's outline under a preview. A block the renderer cannot draw —
+ * one nothing registers, a failed migration, an instance nothing could
+ * resolve — still takes a place on the page as a placeholder, so a list read
+ * from `prepareDocumentForRead`, which drops those, would leave a part out and
+ * number everything after it against the wrong part of the picture.
+ *
+ * Not for describing the page to readers: metadata and search indexes want the
+ * reading view, which is what a visitor is served.
+ *
+ * @returns the walked tree, or `null` for an unreadable envelope
+ */
+export function prepareDocumentAsDrawn(
+  document: BlockDocument,
+  args: PrepareDocumentArgs
+): BlockDocument | null {
+  return prepareDocumentReadStages(document, args)?.deduped ?? null;
+}

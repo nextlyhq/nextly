@@ -8,7 +8,8 @@ import {
 const blocks = (name: string) => ({ name, type: "blocks" });
 
 describe("nestedBlocksFields", () => {
-  it("names a blocks field inside a named group, by its path", () => {
+  it("leaves a blocks field inside named groups alone, at any depth", () => {
+    // The Page Builder opens a grouped field by its path (`hero.layout`).
     expect(
       nestedBlocksFields({
         collections: [
@@ -17,11 +18,18 @@ describe("nestedBlocksFields", () => {
             fields: [
               { name: "title", type: "text" },
               { name: "hero", type: "group", fields: [blocks("layout")] },
+              {
+                name: "outer",
+                type: "group",
+                fields: [
+                  { name: "inner", type: "group", fields: [blocks("deep")] },
+                ],
+              },
             ],
           },
         ],
       })
-    ).toEqual([{ kind: "collection", slug: "pages", path: "hero.layout" }]);
+    ).toEqual([]);
   });
 
   it("names one inside a repeater, and inside a Single", () => {
@@ -37,6 +45,39 @@ describe("nestedBlocksFields", () => {
         ],
       })
     ).toEqual([{ kind: "single", slug: "home", path: "sections.body" }]);
+  });
+
+  it("names one inside a repeater whatever the groups around it", () => {
+    // A group inside a repeater's row, and a repeater inside a group: either
+    // way the path runs through a row.
+    expect(
+      nestedBlocksFields({
+        collections: [
+          {
+            slug: "pages",
+            fields: [
+              {
+                name: "rows",
+                type: "repeater",
+                fields: [
+                  { name: "hero", type: "group", fields: [blocks("a")] },
+                ],
+              },
+              {
+                name: "page",
+                type: "group",
+                fields: [
+                  { name: "rows", type: "repeater", fields: [blocks("b")] },
+                ],
+              },
+            ],
+          },
+        ],
+      })
+    ).toEqual([
+      { kind: "collection", slug: "pages", path: "rows.hero.a" },
+      { kind: "collection", slug: "pages", path: "page.rows.b" },
+    ]);
   });
 
   it("leaves a top-level field, and one in an unnamed group, alone", () => {
@@ -79,6 +120,7 @@ describe("warnNestedBlocksFields", () => {
           fields: [
             { name: "hero", type: "group", fields: [blocks("layout")] },
             { name: "rows", type: "repeater", fields: [blocks("cell")] },
+            { name: "more", type: "repeater", fields: [blocks("cell")] },
           ],
         },
       ],
@@ -90,19 +132,31 @@ describe("warnNestedBlocksFields", () => {
     // say the first and drop the second.
     warnNestedBlocksFields(config, warn);
 
+    // The grouped field opens in the Page Builder, so it is not mentioned.
     expect(warn).toHaveBeenCalledTimes(2);
     const messages = warn.mock.calls.map(call => call[0] as string);
     expect(messages[0]).toContain('collection "pages"');
-    expect(messages[0]).toContain('"hero.layout"');
-    expect(messages[0]).toContain("top-level fields only");
-    expect(messages[0]).toContain("Move it to the top level");
-    expect(messages[1]).toContain('"rows.cell"');
+    expect(messages[0]).toContain('"rows.cell"');
+    expect(messages[0]).toContain("inside a repeater");
+    expect(messages[0]).toContain("Move it out of the repeater");
+    expect(messages[1]).toContain('"more.cell"');
+    expect(messages.join("\n")).not.toContain("hero.layout");
   });
 
-  it("says nothing when every blocks field is at the top level", () => {
+  it("says nothing when every blocks field is at the top level or in a group", () => {
     const warn = vi.fn();
     warnNestedBlocksFields(
-      { collections: [{ slug: "posts", fields: [blocks("content")] }] },
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              blocks("content"),
+              { name: "hero", type: "group", fields: [blocks("body")] },
+            ],
+          },
+        ],
+      },
       warn
     );
     expect(warn).not.toHaveBeenCalled();

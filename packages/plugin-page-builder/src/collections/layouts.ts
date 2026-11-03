@@ -46,16 +46,13 @@
  * should experience rather than a repair, and it belongs with the resolver
  * that will be the first thing to read these references.
  *
- * ## There is no `isDefault` field here yet
+ * ## The site's default is not stored here
  *
- * Which Layout a page ends up with is resolved through a chain — the site's
- * default, then the collection's, then the page's own override. None of that
- * chain is read by anything yet, and the site-default half needs a write path
- * rather than a flag: exactly one row may hold it, so setting it on one row has
- * to clear it from the others in the same transaction, the way a default email
- * provider is demoted. A boolean column with nothing enforcing that invariant
- * would let two rows both claim to be the default and leave whatever reads them
- * first to decide, so it lands with the resolver and the demotion, together.
+ * There is no `isDefault` field. The site's default Layout is one reference in
+ * the `page-builder-settings` Single, written only by the make-default route
+ * (and by the repair that seeds a default when none is usable), so exactly one
+ * Layout is the default by construction. A page names its own Layout, or none
+ * for the default; there is no per-collection default.
  *
  * @module collections/layouts
  */

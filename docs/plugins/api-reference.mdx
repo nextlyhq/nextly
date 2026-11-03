@@ -68,7 +68,7 @@ interface PluginContributions {
     pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
     settings?: { component: ComponentPath };
     views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, by collection slug
-    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a top-level field of one of this plugin's field types
+    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level or inside named groups
   };
 }
 ```
@@ -210,9 +210,11 @@ is still frozen and still typed readonly.
 ### Transactions
 
 ```ts
-ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>): Promise<T>;
+ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>, options?: { isolation?: "snapshot" }): Promise<T>;
 // PluginTransaction = PluginDatabase without `transaction`; calling one rejects (INVALID_INPUT, nested-plugin-transaction)
 // insert / insertReturning take PluginInsert<T>: InferInsert<T> with the col.id() key optional; ctx.db fills a UUIDv7
+// options.isolation "snapshot": read-only, every read sees one moment (REPEATABLE READ on PostgreSQL and MySQL;
+// SQLite's transactions are serial already); a write through tx rejects (INVALID_INPUT, write-in-snapshot-transaction)
 
 ctx.db.raw.transaction(work: (tx: DatabaseInstance) => Promise<T>): Promise<T>;
 // PluginRawDatabase: the fluent builder; the live Drizzle instance with rawSql granted
@@ -291,7 +293,8 @@ createTestNextly(opts: {
   dialect?: "sqlite" | "postgresql" | "mysql";  // default sqlite (in-memory)
   serverUrl?: string;                           // else TEST_POSTGRES_URL / TEST_MYSQL_URL
   pluginConsent?: { rawSql: readonly string[] }; // @experimental; the test's db.rawSqlPlugins
-}): Promise<{ nextly; getService; hooks; events; adapter; destroy }>;
+  basePath?: string;                            // where generated files go; else a temporary folder
+}): Promise<{ nextly; getService; hooks; events; adapter; basePath; destroy }>;
 
 getConfiguredTestDialects(): TestDialect[];  // sqlite, plus any whose server URL is set
 ```
@@ -314,6 +317,7 @@ interface PluginFieldType {
   surfaces?: FieldSurface[];       // where it may be offered; defaults to entries/singles only
   layout?: "takeover";
   validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;  // see below
+  validateEmpty?: boolean;         // experimental: hand `validate` an emptied value too
   validateOptions?: (field) => true | string | PluginFieldIssue[];              // see below
 }
 ```
@@ -379,6 +383,10 @@ For `json` that check is representability — a cycle or a `BigInt` is rejected
 before you see it — and nothing more, so the shape of the document is yours to
 define.
 
+_Experimental:_ a type that sets `validateEmpty: true` is also handed a value a write
+empties (`null` or `""`), for content a write must not drop unasked, such as the
+blocks an author locked. Its `required` issue is still reported as before.
+
 #### Judging a value against stored rows: `write.readStored`
 
 Some rules are about the rows around a value rather than the value alone — a
@@ -413,9 +421,11 @@ async validate(value, { write }) {
 - **As the system.** No read hooks and no access rules shape the answer: a
   value a hook hides from a reader is still what that reader's page is built
   from.
-- **Your type only.** A top-level field of your own type, in any collection.
-  Another field, a field of another type, or a localized field is refused with
-  an error naming it.
+- **Your type only.** A field of your own type, in any collection: a top-level
+  one, or one inside named groups, named by its path (`field: "hero.body"`).
+  Another field, a field of another type, a field in a repeater's rows or a
+  field-group instance, or a localized field is refused with an error naming
+  it.
 - **`form`.** `"published"` is the live row. `"draft"` is what an editor's
   preview reads: the pending working draft where one is shown, otherwise the
   live row.

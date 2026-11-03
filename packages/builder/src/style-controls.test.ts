@@ -697,3 +697,59 @@ describe("reading a composite's fields", () => {
     expect(set.controls).toHaveLength(4);
   });
 });
+
+describe("the Baseline gate, as the controls see it", () => {
+  const background = getStyleProperty("background");
+  const display = getStyleProperty("display");
+  const width = getStyleProperty("width");
+  if (
+    background === undefined ||
+    display === undefined ||
+    width === undefined
+  ) {
+    throw new Error("the catalog no longer ships background, display or width");
+  }
+  const at = (set: ReturnType<typeof styleControlsFor>, path: string) =>
+    set.controls.find(control => control.path.join(".") === path);
+
+  it("draws no control for a withheld property while nothing is stored there", () => {
+    const set = styleControlsFor(background);
+    // The positive control: the rest of the property is still drawn.
+    expect(at(set, "url")).toBeDefined();
+    expect(at(set, "attachment")).toBeUndefined();
+  });
+
+  it("keeps a stored value of a withheld property, marked withheld", () => {
+    const set = styleControlsFor(background, { attachment: "fixed" });
+    expect(at(set, "attachment")?.withheld).toBe(true);
+    expect(at(set, "url")?.withheld).toBe(false);
+  });
+
+  it("offers only the keywords Baseline marks widely available", () => {
+    const [control] = styleControlsFor(display).controls;
+    const values = control.leaf.kind === "keyword" ? control.leaf.values : [];
+    expect(values).toContain("flex");
+    expect(values).not.toContain("contents");
+    expect(values).not.toContain("ruby");
+    // Withheld because one of its words is.
+    expect(values).not.toContain("block ruby");
+    expect(control.withheld).toBe(false);
+  });
+
+  it("filters a dimension's keywords the same way", () => {
+    const [control] = styleControlsFor(width).controls;
+    const keywords =
+      control.leaf.kind === "dimension" ? (control.leaf.keywords ?? []) : [];
+    expect(keywords).toContain("auto");
+    expect(keywords).not.toContain("stretch");
+  });
+
+  it("marks a stored withheld keyword withheld, and an offered one not", () => {
+    expect(styleControlsFor(display, "contents").controls[0].withheld).toBe(
+      true
+    );
+    expect(styleControlsFor(display, "flex").controls[0].withheld).toBe(false);
+    expect(styleControlsFor(width, "stretch").controls[0].withheld).toBe(true);
+    expect(styleControlsFor(width, "50%").controls[0].withheld).toBe(false);
+  });
+});
