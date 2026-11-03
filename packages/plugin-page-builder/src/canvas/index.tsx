@@ -29,6 +29,9 @@ import { useLayoutEffect, useRef, type JSX } from "react";
 
 import { CANVAS_MOUNT_ATTRIBUTE, CANVAS_READY_ATTRIBUTE } from "./attributes";
 
+/** The mount point draws no box: see `PageBuilderCanvas`. */
+const MOUNT_RULE = `[${CANVAS_MOUNT_ATTRIBUTE}] { display: contents; }`;
+
 /**
  * The canvas route's page.
  *
@@ -53,6 +56,14 @@ export function PageBuilderCanvas(): JSX.Element {
   return (
     <>
       <meta name="robots" content="noindex, nofollow" />
+      {/*
+        No box of its own, so the page drawn in it sits in the site's layout
+        where the published page does: a flex or grid layout lays out what is
+        portalled in rather than an extra wrapper. A rule rather than an
+        inline style, keyed on the mount's own attribute, so nothing of the
+        site's is touched.
+      */}
+      <style>{MOUNT_RULE}</style>
       <div ref={mount} {...{ [CANVAS_MOUNT_ATTRIBUTE]: "" }} />
     </>
   );

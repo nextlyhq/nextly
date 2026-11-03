@@ -171,7 +171,9 @@ the editor. The route renders no content of its own and reads nothing, and it te
 engines not to index it.
 
 The path must be on the same site as the admin, since the editor draws into the page it
-loads. Without `canvasPath`, the canvas draws the page on a blank page of its own. It does
+loads. If your pages sit under their language, write `{locale}` where the code goes, as in
+`canvasPath: "/{locale}/page-builder-canvas"`. The editor then loads the route for the
+language being edited, and leaves the segment out for your default language. Without `canvasPath`, the canvas draws the page on a blank page of its own. It does
 the same when the route is set but not found or does not load, and then a note above the
 canvas says so, with a link to this section. On the blank page the page has its block
 styles and the site's shared styles, but not your app's own CSS files, such as a
@@ -179,6 +181,10 @@ styles and the site's shared styles, but not your app's own CSS files, such as a
 
 Pointing at your layout around the page shows that it is part of your site's layout, which
 is edited in your site's code rather than in the editor.
+
+The canvas wraps the page in an element of its own, which the editor needs. A layout rule
+that selects your page as a direct child, such as `main > .nx-pb-page`, doesn't match in
+the canvas.
 
 ## Breakpoints
 

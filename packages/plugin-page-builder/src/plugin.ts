@@ -467,6 +467,11 @@ export interface PageBuilderOptions {
    * A path on this site only, such as `"/page-builder-canvas"`: the editor
    * draws into the frame's document, which a browser allows on its own origin
    * alone.
+   *
+   * A site whose pages sit under their language writes `{locale}` where the
+   * code goes, as in `"/{locale}/page-builder-canvas"`: the editor loads the
+   * route for the language being edited, and for the default language leaves
+   * the segment out, as most localized sites serve it.
    */
   canvasPath?: string;
 

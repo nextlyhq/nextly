@@ -83,19 +83,41 @@ export interface SiteCanvas {
   readonly canvasDir: "ltr" | "rtl" | undefined;
 }
 
+/** Where a canvas path names the language being edited. */
+const LOCALE_PLACEHOLDER = "{locale}";
+
+/**
+ * The canvas route's path for the language being edited: `{locale}` replaced
+ * by its code, or by nothing for the site's default language, which most
+ * localized sites serve unprefixed. Repeated slashes the removal leaves are
+ * collapsed, so a path never starts with two, which a browser would read as
+ * another host.
+ */
+export function canvasPathFor(path: string, code: string | null): string {
+  if (!path.includes(LOCALE_PLACEHOLDER)) return path;
+  const filled = path
+    .split(LOCALE_PLACEHOLDER)
+    .join(code === null ? "" : encodeURIComponent(code));
+  return filled.replace(/\/{2,}/g, "/");
+}
+
 /** The canvas's source, its fallback and its direction, for the editor. */
 export function useSiteCanvas(
   clientConfig: Record<string, unknown> | undefined
 ): SiteCanvas {
-  const path = readCanvasPath(clientConfig);
-  // One source per path, so the frame loads the route once and holds a
-  // refusal against the source it was made for.
+  const locale = useDocumentLocale();
+  const configured = readCanvasPath(clientConfig);
+  const path =
+    configured === undefined
+      ? undefined
+      : canvasPathFor(configured, locale?.code ?? null);
+  // One source per path, so the frame loads the route once per language and
+  // holds a refusal against the source it was made for.
   const canvasSource = useMemo(
     () => (path === undefined ? undefined : siteCanvasSource(path)),
     [path]
   );
   const [refused, setRefused] = useState<CanvasFrameFallback | null>(null);
-  const locale = useDocumentLocale();
   return {
     canvasSource,
     canvasFallback: canvasSource === undefined ? null : refused,

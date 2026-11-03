@@ -19,15 +19,20 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-let locale: { rtl: boolean } | null = null;
+let locale: { rtl: boolean; code?: string | null } | null = null;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentLocale: () => locale,
 }));
 
 const { PageBuilderCanvas } = await import("../../canvas");
-const { readCanvasPath, siteCanvasSource, SiteLayoutNote, useSiteCanvas } =
-  await import("./site-canvas");
+const {
+  canvasPathFor,
+  readCanvasPath,
+  siteCanvasSource,
+  SiteLayoutNote,
+  useSiteCanvas,
+} = await import("./site-canvas");
 
 afterEach(() => {
   cleanup();
@@ -62,6 +67,12 @@ describe("the site's canvas route, as the editor reads it", () => {
     // It holds nothing of its own, so the site's React never touches what the
     // editor portals in.
     expect(mount?.childNodes).toHaveLength(0);
+    // And it draws no box of its own, so the page drawn in it sits in the
+    // site's layout where the published page does: a flex or grid layout lays
+    // out what is portalled in, not the mount.
+    expect(
+      mount === null ? "" : doc.defaultView?.getComputedStyle(mount).display
+    ).toBe("contents");
   });
 
   it("is not served by a page without the mount point", () => {
@@ -93,6 +104,42 @@ describe("the canvas route's path from the client config", () => {
     expect(readCanvasPath({ canvasPath: "" })).toBeUndefined();
     expect(readCanvasPath({ canvasPath: 7 })).toBeUndefined();
     expect(readCanvasPath(undefined)).toBeUndefined();
+  });
+});
+
+describe("the canvas route for the language being edited", () => {
+  it("puts the language's code where the path says {locale}", () => {
+    expect(canvasPathFor("/{locale}/page-builder-canvas", "ar")).toBe(
+      "/ar/page-builder-canvas"
+    );
+    expect(canvasPathFor("/page-builder-canvas/{locale}", "fr-CA")).toBe(
+      "/page-builder-canvas/fr-CA"
+    );
+  });
+
+  it("leaves the default language unprefixed, as most localized sites route it", () => {
+    expect(canvasPathFor("/{locale}/page-builder-canvas", null)).toBe(
+      "/page-builder-canvas"
+    );
+    // Never two slashes at the start: that would name another host.
+    expect(canvasPathFor("/{locale}", null)).toBe("/");
+  });
+
+  it("leaves a path without the placeholder as it is", () => {
+    expect(canvasPathFor("/page-builder-canvas", "ar")).toBe(
+      "/page-builder-canvas"
+    );
+  });
+
+  it("loads the route for the language being edited", () => {
+    locale = { rtl: true, code: "ar" };
+    const { result } = renderHook(() =>
+      useSiteCanvas({ canvasPath: "/{locale}/page-builder-canvas" })
+    );
+    const source = result.current.canvasSource;
+    expect(source !== undefined && "src" in source && source.src).toBe(
+      "/ar/page-builder-canvas"
+    );
   });
 });
 

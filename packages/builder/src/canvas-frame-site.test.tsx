@@ -297,6 +297,129 @@ describe("the canvas frame on a page the site serves", () => {
     expect(onSourceFallback).toHaveBeenLastCalledWith(null);
   });
 
+  it("keeps the theme the site's own page states, unless the editor names one", async () => {
+    const source = siteSource();
+    const { container, rerender } = render(
+      <CanvasFrame width={1280} title="Home" source={source}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    act(() => {
+      const doc = frameDocument(frame);
+      doc.replaceChildren(doc.createElement("html"));
+      // The site's layout sets its default mode on its own root.
+      doc.documentElement.setAttribute("data-nx-theme", "dark");
+      doc.documentElement.innerHTML = `<head></head><body>${SITE_PAGE}</body>`;
+      frame.dispatchEvent(new Event("load"));
+    });
+    await hydrate(frame);
+    const root = frameDocument(frame).documentElement;
+    expect(root.getAttribute("data-nx-theme")).toBe("dark");
+
+    rerender(
+      <CanvasFrame width={1280} title="Home" source={source} theme="light">
+        <Page />
+      </CanvasFrame>
+    );
+    expect(root.getAttribute("data-nx-theme")).toBe("light");
+
+    // Named no longer: the site's own value comes back.
+    rerender(
+      <CanvasFrame width={1280} title="Home" source={source}>
+        <Page />
+      </CanvasFrame>
+    );
+    expect(root.getAttribute("data-nx-theme")).toBe("dark");
+  });
+
+  it("falls back when the route never loads at all", () => {
+    vi.useFakeTimers();
+    const onSourceFallback =
+      vi.fn<(reason: CanvasFrameFallback | null) => void>();
+    render(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={siteSource()}
+        onSourceFallback={onSourceFallback}
+      />
+    );
+    // No response, so no load: the frame still holds the page it starts with.
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(onSourceFallback).toHaveBeenLastCalledWith("not-ready");
+  });
+
+  it("falls back when the site takes the mount point away and never brings it back", async () => {
+    const onSourceFallback =
+      vi.fn<(reason: CanvasFrameFallback | null) => void>();
+    const { container } = render(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={siteSource()}
+        onSourceFallback={onSourceFallback}
+      >
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    await hydrate(frame);
+    vi.useFakeTimers();
+    const mount = frameDocument(frame).querySelector(`[${MOUNT}]`);
+    await act(async () => {
+      mount?.removeAttribute(READY);
+      await Promise.resolve();
+    });
+    act(() => {
+      vi.advanceTimersByTime(19_000);
+    });
+    expect(onSourceFallback).toHaveBeenLastCalledWith(null);
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(onSourceFallback).toHaveBeenLastCalledWith("not-ready");
+  });
+
+  it("keeps the route when the site brings its mount point back in time", async () => {
+    const onSourceFallback =
+      vi.fn<(reason: CanvasFrameFallback | null) => void>();
+    const { container } = render(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={siteSource()}
+        onSourceFallback={onSourceFallback}
+      >
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    await hydrate(frame);
+    vi.useFakeTimers();
+    const mount = frameDocument(frame).querySelector(`[${MOUNT}]`);
+    await act(async () => {
+      mount?.removeAttribute(READY);
+      await Promise.resolve();
+    });
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    await act(async () => {
+      mount?.setAttribute(READY, "");
+      await Promise.resolve();
+    });
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(onSourceFallback).toHaveBeenLastCalledWith(null);
+    expect(mount?.querySelector(".nx-canvas")).not.toBeNull();
+  });
+
   it("stops drawing into a mount point the site takes away", async () => {
     const { container } = render(
       <CanvasFrame width={1280} title="Home" source={siteSource()}>

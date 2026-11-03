@@ -511,15 +511,15 @@ function useFramePage(
   const [reading, setReading] = React.useState<FramePageReading>(NO_PAGE);
   useIsomorphicLayoutEffect(() => {
     if (frame === null) return;
-    const view = frame.ownerDocument.defaultView;
     let unwatch: (() => void) | null = null;
-    let deadline: number | undefined;
-    const settle = (): void => {
-      unwatch?.();
-      unwatch = null;
-      if (deadline !== undefined) view?.clearTimeout(deadline);
-      deadline = undefined;
-    };
+    const wait = readinessDeadline(
+      frame.ownerDocument.defaultView,
+      () => {
+        const now = documentOf(frame);
+        return !("src" in source && now !== null && source.ready(now));
+      },
+      () => refuse("not-ready")
+    );
     const show = (doc: Document | null): void => {
       const mountPoint =
         doc !== null && source.ready(doc) ? source.mountPoint(doc) : null;
@@ -534,10 +534,13 @@ function useFramePage(
      * `loaded` is whether a `load` just reported this document. Read on mount
      * instead, a document that is not the route's may be the empty one every
      * frame starts with while the route is still on its way, so it is waited
-     * for rather than refused.
+     * for rather than refused — within the deadline, like everything else a
+     * site's page has to do before the canvas can be drawn in it.
      */
     const read = (loaded: boolean): void => {
-      settle();
+      unwatch?.();
+      unwatch = null;
+      if (loaded) wait.disarm();
       const doc = documentOf(frame);
       if (!("src" in source)) {
         show(doc);
@@ -545,26 +548,55 @@ function useFramePage(
       }
       if (doc === null || !source.served(doc)) {
         show(null);
-        if (loaded) refuse(doc === null ? "other-origin" : "not-served");
+        if (!loaded) wait.arm();
+        else refuse(doc === null ? "other-origin" : "not-served");
         return;
       }
-      unwatch = source.watch(doc, () => show(doc));
-      show(doc);
-      if (!source.ready(doc)) {
-        deadline = view?.setTimeout(() => {
-          if (!source.ready(doc)) refuse("not-ready");
-        }, SITE_PAGE_READY_WITHIN_MS);
-      }
+      // Ready, or waiting for readiness again: the site's root can take the
+      // mount point away without the frame loading anything.
+      const settle = (): void => {
+        show(doc);
+        if (source.ready(doc)) wait.disarm();
+        else wait.arm();
+      };
+      unwatch = source.watch(doc, settle);
+      settle();
     };
     const onLoad = (): void => read(true);
     read(false);
     frame.addEventListener("load", onLoad);
     return () => {
-      settle();
+      unwatch?.();
+      wait.disarm();
       frame.removeEventListener("load", onLoad);
     };
   }, [frame, source, refuse]);
   return reading;
+}
+
+/**
+ * The time a site's page has to be ready for the canvas, running while it is
+ * not: armed once and left running when armed again, so waiting that keeps
+ * being reported never pushes the deadline back.
+ */
+function readinessDeadline(
+  view: Window | null,
+  stillWaiting: () => boolean,
+  giveUp: () => void
+): { arm: () => void; disarm: () => void } {
+  let timer: number | undefined;
+  const disarm = (): void => {
+    if (timer !== undefined) view?.clearTimeout(timer);
+    timer = undefined;
+  };
+  const arm = (): void => {
+    if (timer !== undefined || view === null) return;
+    timer = view.setTimeout(() => {
+      timer = undefined;
+      if (stillWaiting()) giveUp();
+    }, SITE_PAGE_READY_WITHIN_MS);
+  };
+  return { arm, disarm };
 }
 
 /** Elements of a site's layout that draw nothing, and so are left alone. */
@@ -799,7 +831,11 @@ function usePageMarkers(
     if (root === undefined) return;
     const editorRoot = frame?.ownerDocument.documentElement;
     root.classList.add(BUILDER_CHROME_CLASS);
-    stateAttribute(root, "data-nx-theme", theme);
+    // Named, the editor's theme; otherwise whatever the page itself states,
+    // which on a page the site serves is the site's own default mode. Read
+    // before anything is written, whichever comes first.
+    const ownTheme = siteThemeOf(root);
+    stateAttribute(root, "data-nx-theme", theme ?? ownTheme);
     stateAttribute(
       root,
       EMPTY_ELEMENTS_ATTRIBUTE,
@@ -808,6 +844,20 @@ function usePageMarkers(
     stateAttribute(root, "lang", lang ?? editorRoot?.lang);
     stateAttribute(root, "dir", dir ?? editorRoot?.dir);
   }, [frame, page, theme, showEmptyElements, lang, dir]);
+}
+
+/**
+ * The theme a page's root stated before the editor first wrote one, read once
+ * per root and remembered, so a theme the editor stops naming gives back the
+ * page's own rather than none.
+ */
+const SITE_THEMES = new WeakMap<Element, string | undefined>();
+
+function siteThemeOf(root: Element): string | undefined {
+  if (!SITE_THEMES.has(root)) {
+    SITE_THEMES.set(root, root.getAttribute("data-nx-theme") ?? undefined);
+  }
+  return SITE_THEMES.get(root);
 }
 
 /** Set an attribute to a value, or remove it where there is none to state. */

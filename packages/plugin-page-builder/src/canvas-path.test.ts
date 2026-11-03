@@ -36,6 +36,12 @@ describe("the canvas route's path", () => {
     expect(() => canvasPathOption(path)).toThrow(/canvasPath/);
   });
 
+  it("takes a {locale} placeholder, for a site whose pages sit under their language", () => {
+    expect(canvasPathOption("/{locale}/page-builder-canvas")).toBe(
+      "/{locale}/page-builder-canvas"
+    );
+  });
+
   it("is refused when the plugin is configured, not when the editor opens", () => {
     expect(() => pageBuilder({ canvasPath: "https://example.com/c" })).toThrow(
       /canvasPath must be a path on this site/
