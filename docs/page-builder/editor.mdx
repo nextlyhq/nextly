@@ -11,11 +11,11 @@ Choosing a panel's item again closes it and gives the canvas the room back.
 
 The top bar runs across the editor in three parts.
 
-| Part   | What it holds                                                                                                                                                    |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Left   | The way back to the entry, the page's title, whether it's a draft or published, and **Undo** and **Redo**.                                                       |
-| Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                                     |
-| Right  | The buttons that hide or show the left panel and the inspector, **Search**, whether your work is saved, **Preview** where the admin offers one, and **Publish**. |
+| Part   | What it holds                                                                                                                                                     |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Left   | The way back to the entry, the page's title (choose it to switch to a recent page or to all pages), whether it's a draft or published, and **Undo** and **Redo**. |
+| Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                                      |
+| Right  | The buttons that hide or show the left panel and the inspector, **Search**, whether your work is saved, **Preview** where the admin offers one, and **Publish**.  |
 
 **Publish** is the entry's own leading action: **Publish**, **Publish changes** or
 **Save**, as on the entry's page. Its arrow holds **Save draft**, **Schedule publish…**
@@ -67,6 +67,7 @@ has no item at all, so nothing on the rail opens an empty panel.
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                  |
 | **Layers**   | The page as a tree. Select, expand and move blocks here as on the canvas.                                                                                                                                                                                                                                                  |
+| **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                 |
 | **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts**. A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. |
 | **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                       |
 | **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                |
@@ -77,6 +78,32 @@ The editor remembers the panel you left open, and on Design the tab you left on,
 next time you open it. It remembers them for you, not for the browser, so two people
 who share a browser each find their own.
 
+## Pages
+
+**Pages** in the rail lists the site's pages, grouped by the kind of page when the
+site has more than one, with a search. A page shows **Draft**, **Changed** (published,
+with changes not yet published) or **Scheduled** beside its title when it isn't
+simply published, and the page you're editing is marked **Editing**.
+
+Choose a page to open it in the editor. Each page's **⋯** menu offers:
+
+- **Open**.
+- **Rename**, in place: <kbd>Enter</kbd> keeps the new title, <kbd>Escape</kbd> leaves
+  it. Renaming a published page is a change like any other, published with the page.
+  For the page you're editing, **Rename** opens its Settings, where its title is.
+- **Duplicate**, which makes a draft copy, "Copy of …", and opens it. A draft can't be
+  duplicated yet: publish it first.
+- **Settings**, which opens that page's Settings.
+- **Delete…**, which asks first, naming the page. Deleting the page you're editing
+  opens the next page in the list.
+
+**New page** asks for a title, then opens the new draft.
+
+The page title in the top bar is a switcher too: it lists the pages you opened most
+recently, in this browser, and **All pages…** opens the Pages panel.
+
+Opening another page with work not yet saved asks first, as leaving the editor does.
+
 ## The bottom bar
 
 The bottom bar shows where you are: **Page**, then each block holding the selected
@@ -84,9 +111,10 @@ one, ending with the selected block. Choose any of them to select it; choose **P
 to clear the selection.
 
 On its right, a hint names the keys that work from there, such as
-<kbd>Enter</kbd> to edit the selected block's text, <kbd>Escape</kbd> to go up to the
-block holding it, and <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a Mac)
-for the command palette.
+
+<kbd>Enter</kbd> to edit the selected block's text, <kbd>Escape</kbd> to go up
+to the block holding it, and <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+
+<kbd>K</kbd> on a Mac) for the command palette.
 
 ## Settings
 
