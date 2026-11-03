@@ -344,7 +344,7 @@ test.describe("a component's variants", () => {
     await expect(dialog).toContainText(
       /Used (at least )?1 time in (at least )?1 document\./
     );
-    await expect(dialog).toContainText("keep their own changes");
+    await expect(dialog).toContainText("keep its own changes");
     await dialog.getByRole("button", { name: "Delete variant" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(variants(page)).toContainText("No variants yet");

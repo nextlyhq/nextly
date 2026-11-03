@@ -274,7 +274,7 @@ export function valuesSummary(option: VariantOption): string {
  */
 export function deleteSentence(use: VariantUse | null | undefined): string {
   const after =
-    "They will show the component’s defaults, and keep their own changes.";
+    "Each use of this variant will show the component’s defaults, and keep its own changes.";
   if (use === undefined) return "Counting where it is used…";
   if (use === null) {
     return `Where it is used could not be counted. ${after}`;

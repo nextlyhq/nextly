@@ -279,6 +279,19 @@ describe("the delete sentence", () => {
     ).toMatch(/^Used at least 1 time in at least 1 document\. /);
   });
 
+  it("names the uses that keep their changes, whatever the count says", () => {
+    // The consequence follows a count of times and documents, or none at all,
+    // so its subject is spelled out rather than left to a pronoun.
+    for (const use of [
+      { placements: 3, documents: 2, complete: true },
+      null,
+    ] as const) {
+      expect(deleteSentence(use)).toContain(
+        "Each use of this variant will show the component\u2019s defaults, and keep its own changes."
+      );
+    }
+  });
+
   it("never says none for a count it could not make", () => {
     expect(deleteSentence(null)).toContain("could not be counted");
     expect(deleteSentence(null)).not.toContain("Nothing uses");
