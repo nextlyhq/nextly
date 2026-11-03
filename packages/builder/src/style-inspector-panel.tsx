@@ -4774,12 +4774,7 @@ function NumericField({
   // a controlled select over it renders an EMPTY trigger above a value that is
   // doing something. Offered verbatim as its own item, which is what the
   // keyword select above already does for a value outside its vocabulary.
-  const extraUnit =
-    measurement !== undefined &&
-    measurement.unit !== "" &&
-    !units.includes(measurement.unit)
-      ? measurement.unit
-      : null;
+  const extraUnit = unlistedUnit(measurement, units);
 
   return (
     <div className="nx-style-inspector__numeric">
@@ -4870,6 +4865,18 @@ function NumericField({
       />
     </div>
   );
+}
+
+/**
+ * The unit a measurement carries that the menu does not list, or `null`.
+ * Its own function so the field reads as what it draws, not as the test.
+ */
+function unlistedUnit(
+  measurement: ReturnType<typeof measurementOfText>,
+  units: readonly string[]
+): string | null {
+  const unit = unitOf(measurement);
+  return unit !== undefined && !units.includes(unit) ? unit : null;
 }
 
 /**
