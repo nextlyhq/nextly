@@ -95,6 +95,16 @@ describe("a field's provenance dot", () => {
   });
 });
 
+describe("the Font control in a style row", () => {
+  it("is as tall as the lists and fields beside it", () => {
+    // The shared list trigger and text field are 40px (2.5rem); the font
+    // picker was 28px, the one short control in Typography.
+    expect(ruleBody(".nx-style-inspector .nx-font-pick__trigger")).toContain(
+      "height: 2.5rem"
+    );
+  });
+});
+
 describe("a field under its form toggle", () => {
   it("hides its label's words from sight only, the toggle's row saying them", () => {
     const words = ruleBody(

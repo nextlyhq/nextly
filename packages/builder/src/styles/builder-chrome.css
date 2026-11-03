@@ -4733,6 +4733,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   font-size: var(--text-sm);
 }
 
+/* In a style row, as tall as the lists and fields beside it. */
+.nx-style-inspector .nx-font-pick__trigger {
+  height: 2.5rem;
+}
+
 .nx-font-pick__trigger:focus-visible,
 .nx-font-pick__list:focus-visible {
   outline: 2px solid var(--nx-ring);
