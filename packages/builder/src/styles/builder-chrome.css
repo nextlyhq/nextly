@@ -4871,6 +4871,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
    neutral page with a border. The style's own colours are drawn on it, so a
    dark text or a white background shows as it would on a page. */
 .nx-shared-styles__tile {
+  position: relative;
   display: inline-flex;
   width: 22px;
   height: 22px;
@@ -5014,6 +5015,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   overflow-y: auto;
 }
 
+/* A rule under the pinned name, so rows scrolling up stop at a line rather
+   than running into the class name. Always drawn: telling a scrolled body
+   from one at its top would need a listener for one hairline. */
 .nx-shared-styles__details-head {
   position: sticky;
   top: 0;
@@ -5021,7 +5025,31 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  padding-bottom: 0.5rem;
   background: var(--nx-popover);
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/* "Show N more" and the tab's other text links get a 24px target here. The
+   class is the Variables and Fonts tabs' too, so it is raised in this tab
+   and its portalled editor only. */
+.nx-shared-styles .nx-vars__link,
+.nx-shared-styles__editor .nx-vars__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+/* The dark-mode flag on a tile drawn on the light page: a small moon in the
+   corner, the tile's tooltip saying why. */
+.nx-shared-styles__dark-flag {
+  position: absolute;
+  inset-block-end: 1px;
+  inset-inline-end: 1px;
+  padding: 1px;
+  color: var(--nx-foreground);
+  background: var(--nx-background);
+  border-radius: 9999px;
 }
 
 /* Remove unused names each style over its class, wrapped rather than cut, so

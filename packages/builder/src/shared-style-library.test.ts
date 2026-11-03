@@ -12,6 +12,7 @@ import {
   searchSharedStyles,
   sharedStyleDeclares,
   sharedStylePageTile,
+  sharedStyleTile,
   sharedStylePreview,
   sharedStyleReachChip,
   sharedStyleReachSentence,
@@ -22,6 +23,7 @@ import {
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
   type SharedStyleReach,
 } from "./shared-style-library";
+import { contrastOf } from "./style-colour";
 
 const card: NamedClass = {
   id: "c-card",
@@ -202,6 +204,57 @@ describe("the tile a row's preview is drawn on", () => {
 
   it("says nothing without the site's variables, so the neutral tile shows", () => {
     expect(sharedStylePageTile(undefined, "light")).toEqual({});
+  });
+});
+
+describe("a row's tile in dark mode", () => {
+  const tokens = { tokens: [] };
+  const LIGHT_PAGE = { backgroundColor: "#ffffff", color: "#111827" };
+  const DARK_PAGE = { backgroundColor: "#0b0f19", color: "#f9fafb" };
+  const ratio = (fg: string | undefined, bg: string | undefined) =>
+    contrastOf(fg, bg, undefined)?.ratio ?? 0;
+
+  it("falls back to the light page, marked, when the style's text is unreadable on the dark one", () => {
+    expect(sharedStyleTile(tokens, "dark", { color: "#112233" })).toEqual({
+      page: LIGHT_PAGE,
+      specimen: { color: "#112233" },
+      darkUnreadable: true,
+    });
+  });
+
+  it("keeps the dark page, unmarked, for a style that reads on it", () => {
+    expect(sharedStyleTile(tokens, "dark", { color: "#e5e7eb" })).toEqual({
+      page: DARK_PAGE,
+      specimen: { color: "#e5e7eb" },
+      darkUnreadable: false,
+    });
+    // Its own background keeps dark text readable on the dark page.
+    expect(
+      sharedStyleTile(tokens, "dark", {
+        color: "#112233",
+        backgroundColor: "#fef3c7",
+      }).darkUnreadable
+    ).toBe(false);
+  });
+
+  it("gives a white background with no text colour readable text, never a blank square", () => {
+    for (const mode of ["light", "dark"] as const) {
+      const tile = sharedStyleTile(tokens, mode, {
+        backgroundColor: "#ffffff",
+      });
+      expect(ratio(tile.specimen.color, "#ffffff")).toBeGreaterThanOrEqual(3);
+    }
+    // Without the site's variables too.
+    const plain = sharedStyleTile(undefined, "dark", {
+      backgroundColor: "#ffffff",
+    });
+    expect(ratio(plain.specimen.color, "#ffffff")).toBeGreaterThanOrEqual(3);
+  });
+
+  it("never marks a tile in light mode", () => {
+    expect(
+      sharedStyleTile(tokens, "light", { color: "#112233" }).darkUnreadable
+    ).toBe(false);
   });
 });
 

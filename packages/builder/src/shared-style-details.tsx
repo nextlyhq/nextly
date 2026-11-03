@@ -61,6 +61,8 @@ export interface SharedStyleDetailsProps {
   issue: string | null;
   onRename: (value: string) => void;
   onRemoved: () => void;
+  /** The server refused to remove it: it is still used somewhere. */
+  onRefused: () => void;
 }
 
 export function SharedStyleDetails(
@@ -112,6 +114,7 @@ export function SharedStyleDetails(
           access={access}
           heldBy={heldBy}
           onRemoved={props.onRemoved}
+          onRefused={props.onRefused}
         />
       )}
     </div>
@@ -476,10 +479,13 @@ function RemoveOne({
   access,
   heldBy,
   onRemoved,
+  onRefused,
 }: {
   id: string;
   name: string;
   access: SharedStylesAccess;
+  /** The server refused: it is still used, so Remove is not offered again. */
+  onRefused: () => void;
   /**
    * While a rename is stored: the id of the words saying Remove waits, since
    * it writes the whole list of styles too.
@@ -490,9 +496,19 @@ function RemoveOne({
   const [confirming, setConfirming] = React.useState(false);
   const { busy, refusal, run } = useRefusableWrite();
   const held = heldBy !== undefined;
+  // Refused once: the server found it used, so the confirmation saying
+  // nothing uses it goes, and only the server's words stay.
+  const [refusedOnce, setRefusedOnce] = React.useState(false);
   const remove = async (): Promise<void> => {
-    if (await run(() => access.remove([id]))) onRemoved();
+    if (await run(() => access.remove([id]))) {
+      onRemoved();
+      return;
+    }
+    setConfirming(false);
+    setRefusedOnce(true);
+    onRefused();
   };
+  if (refusedOnce) return <Refusal refusal={refusal} />;
   return (
     <>
       <Refusal refusal={refusal} />

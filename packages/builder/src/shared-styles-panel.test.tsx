@@ -213,6 +213,61 @@ describe("the row's preview", () => {
     expect(specimen?.style.color).toBe("rgb(17, 34, 51)");
   });
 
+  describe("in dark mode", () => {
+    afterEach(() => vi.unstubAllGlobals());
+    const prefersDark = () =>
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query.includes("dark"),
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }));
+    const LIGHT_TEXT: NamedClass = {
+      id: "c-light",
+      slug: "light-text",
+      label: "Light text",
+      orderIndex: 3,
+      styles: { base: { [BASE_BREAKPOINT]: { color: "#e5e7eb" } } },
+    };
+
+    it("draws a style unreadable on the dark page on the light one, and says so", async () => {
+      prefersDark();
+      await panel({ tokens: { tokens: [] }, library: [CARD, LIGHT_TEXT] });
+      const card = row(/^Card, \.nx-c-card/);
+      expect(card.getAttribute("aria-label")).toContain(
+        "Hard to read in dark mode"
+      );
+      const tile = card.querySelector<HTMLElement>(".nx-shared-styles__tile");
+      expect(tile?.style.backgroundColor).toBe("rgb(255, 255, 255)");
+      expect(tile?.getAttribute("title")).toBe("Hard to read in dark mode");
+      // CONTROL: a style that reads on the dark page keeps it, unmarked.
+      const light = row(/^Light text, \.nx-c-light-text/);
+      expect(light.getAttribute("aria-label")).not.toContain("dark mode");
+      expect(
+        light.querySelector<HTMLElement>(".nx-shared-styles__tile")?.style
+          .backgroundColor
+      ).toBe("rgb(11, 15, 25)");
+    });
+
+    it("gives a white style with no text colour readable text", async () => {
+      prefersDark();
+      const field: NamedClass = {
+        id: "c-field",
+        slug: "form-field",
+        label: "Form field",
+        orderIndex: 0,
+        styles: {
+          base: { [BASE_BREAKPOINT]: { backgroundColor: "#ffffff" } },
+        },
+      };
+      await panel({ tokens: { tokens: [] }, library: [field] });
+      const specimen =
+        row(/^Form field/).querySelector<HTMLElement>(".nx-vars__specimen");
+      expect(specimen?.style.backgroundColor).toBe("rgb(255, 255, 255)");
+      expect(specimen?.style.color).toBe("rgb(17, 24, 39)");
+    });
+  });
+
   it("keeps the neutral tile when the site's variables are not to hand", async () => {
     await panel();
     const tile = row(/^Card, \.nx-c-card/).querySelector<HTMLElement>(
@@ -808,6 +863,36 @@ describe("removing one style", () => {
       );
     });
     expect(access.remove).toHaveBeenCalledWith(["c-old"]);
+  });
+
+  it("drops the confirmation on a refusal, says why, and reads the style's usage again", async () => {
+    const refusal =
+      "Still used on Home and 2 more. Remove it from those pages first.";
+    const { access, usageReads } = accessOf({ remove: async () => refusal });
+    await panel({ access });
+    const details = await open(/^Old note/, "Old note");
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    usageReads.length = 0;
+    await act(async () => {
+      fireEvent.click(
+        within(details).getByRole("button", { name: "Remove Old note" })
+      );
+    });
+    expect(within(details).getByRole("alert").textContent).toBe(refusal);
+    // No confirmation left saying nothing uses it, and nothing to press.
+    expect(within(details).queryByText(/Nothing uses it/)).toBeNull();
+    expect(
+      within(details).queryByRole("button", { name: /^Remove/ })
+    ).toBeNull();
+    expect(usageReads).toEqual([["c-old"]]);
+    // The row is no longer offered as unused.
+    fireEvent.keyDown(details, { key: "Escape" });
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Show" })).getByRole("button", {
+        name: /^Unused/,
+      })
+    );
+    expect(screen.queryByRole("button", { name: /^Old note/ })).toBeNull();
   });
 
   it("offers no Remove for a style in use, and says why", async () => {

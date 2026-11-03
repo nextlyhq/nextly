@@ -26,7 +26,7 @@ import {
 } from "./class-library";
 import { EDITOR_WORDS } from "./editor-words";
 import type { TokenMode } from "./font-library";
-import { colourHexOf } from "./style-colour";
+import { colourHexOf, contrastOf } from "./style-colour";
 
 /** The kinds of document a shared style is counted on. */
 export type SharedStyleKind = "pages" | "components" | "patterns" | "layouts";
@@ -276,6 +276,93 @@ export function sharedStylePageTile(
     ...(color === undefined ? {} : { color }),
   };
 }
+
+/** The contrast under which a tile's text counts as hard to read. */
+const READABLE_RATIO = 3;
+
+/**
+ * The engine's own variables, for readable text when the site's are not to
+ * hand: a colour the tile can always fall back on.
+ */
+const ENGINE_TOKENS: SiteTokenSet = { tokens: [] };
+
+/** One row's tile: the page under the preview, the preview, and a dark-mode flag. */
+export interface SharedStyleTile {
+  /** The page the preview stands on; empty for the neutral tile. */
+  readonly page: { backgroundColor?: string; color?: string };
+  /** The "Aa": the style's own colours, with readable text where it sets none. */
+  readonly specimen: Readonly<Record<string, string>>;
+  /**
+   * The style's text is under 3:1 on the site's dark page, so the tile shows
+   * the light page instead and says so.
+   */
+  readonly darkUnreadable: boolean;
+}
+
+/**
+ * Whether text drawn with `fg` on `bg` reads, by the contrast verdict the
+ * colour field shows ({@link contrastOf}). A pair it cannot measure reads.
+ */
+function readable(fg: string | undefined, bg: string | undefined): boolean {
+  const verdict = contrastOf(fg, bg, undefined);
+  return verdict === undefined || verdict.ratio >= READABLE_RATIO;
+}
+
+/**
+ * Text that reads on a style's own background when it sets no colour: the
+ * page's, else the light or dark page's of the site or the engine, the first
+ * that reads.
+ */
+function readableText(
+  background: string,
+  page: { color?: string },
+  tokens: SiteTokenSet | undefined
+): string | undefined {
+  const candidates = [
+    page.color,
+    sharedStylePageTile(tokens ?? ENGINE_TOKENS, "light").color,
+    sharedStylePageTile(tokens ?? ENGINE_TOKENS, "dark").color,
+  ];
+  return candidates.find(
+    colour => colour !== undefined && readable(colour, background)
+  );
+}
+
+/**
+ * A row's tile in the mode the canvas shows. In dark mode a style whose text
+ * (its own, or the page's where it sets none) would be under 3:1 on its
+ * background (its own, or the dark page's) is drawn on the light page
+ * instead and marked, since on the site it is hard to read in dark mode. A
+ * style with a background and no text colour gets text that reads on that
+ * background, so it never draws as a blank square.
+ */
+export function sharedStyleTile(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode,
+  preview: Readonly<Record<string, string>>
+): SharedStyleTile {
+  const shown = sharedStylePageTile(tokens, mode);
+  const darkUnreadable =
+    mode === "dark" &&
+    !readable(
+      preview.color ?? shown.color,
+      preview.backgroundColor ?? shown.backgroundColor
+    );
+  const page = darkUnreadable ? sharedStylePageTile(tokens, "light") : shown;
+  const background = preview.backgroundColor;
+  const text =
+    background !== undefined && preview.color === undefined
+      ? readableText(background, page, tokens)
+      : undefined;
+  return {
+    page,
+    specimen: text === undefined ? preview : { ...preview, color: text },
+    darkUnreadable,
+  };
+}
+
+/** What a marked tile says, in its tooltip and the row's accessible name. */
+export const SHARED_STYLE_DARK_UNREADABLE = "Hard to read in dark mode";
 
 const KIND_WORDS: Record<SharedStyleKind, readonly [string, string]> = {
   pages: ["page", "pages"],

@@ -37,11 +37,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
-import { Lock, Search } from "lucide-react";
+import { Lock, Moon, Search } from "lucide-react";
 import * as React from "react";
 
 import { useSurvivingReport } from "./builder-notices";
 import { EDITOR_WORDS } from "./editor-words";
+import type { TokenMode } from "./font-library";
 import {
   KeepOrRemove,
   Refusal,
@@ -55,7 +56,8 @@ import {
   isUnused,
   renameSharedStyle,
   sharedStyleFilterEmpty,
-  sharedStylePageTile,
+  sharedStyleTile,
+  SHARED_STYLE_DARK_UNREADABLE,
   sharedStyleUse,
   SHARED_STYLE_FILTERS,
   searchSharedStyles,
@@ -73,6 +75,7 @@ import {
   type SharedStyleFilter,
   type SharedStyleReach,
   type SharedStyleRow,
+  type SharedStyleTile,
   type SharedStylesUsage,
   type SharedStyleUsesPage,
 } from "./shared-style-library";
@@ -226,7 +229,7 @@ export function SharedStylesPanel({
   currentRenameAttempt,
   pendingNames = NO_NAMES,
 }: SharedStylesPanelProps): React.JSX.Element {
-  const page = usePageTile(tokens);
+  const paint = usePaint(tokens);
   const [query, setQuery] = React.useState("");
   const [filter, setFilter] = React.useState<SharedStyleFilter>("all");
   const [pages, setPages] = React.useState(1);
@@ -245,8 +248,16 @@ export function SharedStylesPanel({
   // search puts first, then the rest, fifty to a read.
   const usage = useUsage(access, usageOrder(rows, found, pages));
   const exact = countsExact(usage, pageBlocks, rows);
+  // Styles the server refused to remove as still used: used, whatever the
+  // index has counted, until the tab is opened again.
+  const [refused, setRefused] = React.useState<ReadonlySet<string>>(new Set());
   const usageOf = (row: SharedStyleRow) =>
-    sharedStyleUse(pageBlocksOf(pageBlocks, row.id), usage.styles.get(row.id));
+    refused.has(row.id)
+      ? "used"
+      : sharedStyleUse(
+          pageBlocksOf(pageBlocks, row.id),
+          usage.styles.get(row.id)
+        );
   const filtered = found.filter(row =>
     inSharedStyleFilter(row, filter, usageOf(row))
   );
@@ -304,7 +315,8 @@ export function SharedStylesPanel({
           aria-labelledby="nx-shared-styles-all"
         >
           <RemoveUnusedHead
-            rows={rows}
+            // A style the server refused as still used is not offered again.
+            rows={rows.filter(row => !refused.has(row.id))}
             offered={!readOnly && access !== undefined}
             access={access}
             whole={usage.whole}
@@ -339,8 +351,12 @@ export function SharedStylesPanel({
                     setOpenId(null);
                     search.current?.focus();
                   },
+                  onRefused: () => {
+                    setRefused(current => new Set([...current, row.id]));
+                    usage.reread([row.id]);
+                  },
                 }}
-                page={page}
+                paint={paint}
                 open={openId === row.id}
                 onOpenChange={open => setOpenId(open ? row.id : null)}
               />
@@ -388,9 +404,15 @@ function SearchBox({
   );
 }
 
-/** The page each row's preview is drawn on, in the mode the canvas shows. */
-function usePageTile(tokens: SiteTokenSet | undefined): React.CSSProperties {
-  return sharedStylePageTile(tokens, activeTokenMode(usePrefersDark()));
+/** What each row's tile is drawn from: the site's variables, in the canvas's mode. */
+interface TilePaint {
+  readonly tokens: SiteTokenSet | undefined;
+  readonly mode: TokenMode;
+}
+
+/** The site's variables and the mode the canvas shows, for every row's tile. */
+function usePaint(tokens: SiteTokenSet | undefined): TilePaint {
+  return { tokens, mode: activeTokenMode(usePrefersDark()) };
 }
 
 /**
@@ -625,6 +647,8 @@ interface UsageState {
   readonly whole: boolean | undefined;
   readonly mayLock: boolean;
   readonly failed: boolean;
+  /** Ask about these styles again, as after a removal the server refused. */
+  readonly reread: (ids: readonly string[]) => void;
 }
 
 /** Whether the rows on screen are due another read on the recount timer. */
@@ -725,31 +749,55 @@ function useUsage(
       id => id !== "" && (again || !known.current.has(id))
     );
     if (unread.length === 0) return;
-    const controller = new AbortController();
-    readUsage(access, unread, controller.signal, read =>
-      setState(current => ({
-        styles: new Map([...current.styles, ...read.styles]),
-        readWhole: new Map([
-          ...current.readWhole,
-          ...[...read.styles.keys()].map(id => [id, read.whole] as const),
-        ]),
-        counting: read.counting,
-        mayLock: read.mayLock,
-        failed: false,
-      }))
-    ).catch(() => {
-      if (!controller.signal.aborted) {
-        setState(current => ({ ...current, failed: true }));
-      }
-    });
-    return () => controller.abort();
+    return readInto(access, unread, setState);
   }, [access, key, recount]);
+  // Styles asked about again on their own, after a write the server refused.
+  const [asked, reread] = React.useState<readonly string[]>([]);
+  React.useEffect(() => {
+    if (access === undefined || asked.length === 0) return;
+    return readInto(access, asked, setState);
+  }, [access, asked]);
   return {
     styles: state.styles,
     whole,
     mayLock: state.mayLock,
     failed: state.failed,
+    reread,
   };
+}
+
+/** One read's answer folded into what the reads kept. */
+function mergedReads(current: UsageReads, read: SharedStylesUsage): UsageReads {
+  return {
+    styles: new Map([...current.styles, ...read.styles]),
+    readWhole: new Map([
+      ...current.readWhole,
+      ...[...read.styles.keys()].map(id => [id, read.whole] as const),
+    ]),
+    counting: read.counting,
+    mayLock: read.mayLock,
+    failed: false,
+  };
+}
+
+/**
+ * Read some styles' usage into the kept reads, a failure marked; answers the
+ * effect's cleanup, which drops a read the effect no longer wants.
+ */
+function readInto(
+  access: SharedStylesAccess,
+  ids: readonly string[],
+  setState: React.Dispatch<React.SetStateAction<UsageReads>>
+): () => void {
+  const controller = new AbortController();
+  readUsage(access, ids, controller.signal, read =>
+    setState(current => mergedReads(current, read))
+  ).catch(() => {
+    if (!controller.signal.aborted) {
+      setState(current => ({ ...current, failed: true }));
+    }
+  });
+  return () => controller.abort();
 }
 
 /**
@@ -812,12 +860,18 @@ function useRename({
 }
 
 /** A row's accessible name: its name, class name, marks and reach in words. */
-function rowLabel(row: SharedStyleRow, name: string, sentence: string): string {
+function rowLabel(
+  row: SharedStyleRow,
+  name: string,
+  sentence: string,
+  tile: SharedStyleTile
+): string {
   return [
     name,
     row.className,
     ...(row.locked ? ["locked"] : []),
     ...(row.inCode ? ["set in your site’s code"] : []),
+    ...(tile.darkUnreadable ? [SHARED_STYLE_DARK_UNREADABLE] : []),
     ...(sentence === "" ? [] : [sentence]),
   ].join(", ");
 }
@@ -833,19 +887,24 @@ function StyleRow({
   row,
   name,
   details,
-  page,
+  paint,
   open,
   onOpenChange,
 }: {
   row: SharedStyleRow;
   name: string;
   details: RowDetails;
-  /** The site's page colours, which the row's preview is drawn on. */
-  page: React.CSSProperties;
+  /** What the row's preview tile is drawn from. */
+  paint: TilePaint;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const sentence = sharedStyleReachSentence(details.blocks, details.reach);
+  const tile = sharedStyleTile(
+    paint.tokens,
+    paint.mode,
+    sharedStylePreview(row.styles, details.styleContext)
+  );
   // A name that can't be changed is not focused, and so not selected, on
   // open: selected text reads as editable. The details take focus instead.
   const fixed = details.readOnly || row.locked || row.inCode;
@@ -857,7 +916,7 @@ function StyleRow({
           <button
             type="button"
             className="nx-vars__row nx-shared-styles__row"
-            aria-label={rowLabel(row, name, sentence)}
+            aria-label={rowLabel(row, name, sentence, tile)}
             title={sentence === "" ? undefined : sentence}
             data-shared-style={row.id}
           >
@@ -865,8 +924,7 @@ function StyleRow({
               row={row}
               name={name}
               reach={details.reach}
-              styleContext={details.styleContext}
-              page={page}
+              tile={tile}
             />
           </button>
         </PopoverTrigger>
@@ -903,25 +961,33 @@ function RowContent({
   row,
   name,
   reach,
-  styleContext,
-  page,
+  tile,
 }: {
   row: SharedStyleRow;
   name: string;
   reach: SharedStyleReach | undefined;
-  styleContext: StyleCompileContext | undefined;
-  page: React.CSSProperties;
+  tile: SharedStyleTile;
 }): React.JSX.Element {
   return (
     <>
-      {/* The page under the preview, so its colours read as on the site. */}
-      <span className="nx-shared-styles__tile" aria-hidden="true" style={page}>
+      {/* The page under the preview, so its colours read as on the site; the
+          light page, marked, where the style is hard to read on the dark. */}
+      <span
+        className="nx-shared-styles__tile"
+        aria-hidden="true"
+        style={tile.page}
+        title={tile.darkUnreadable ? SHARED_STYLE_DARK_UNREADABLE : undefined}
+        data-dark-unreadable={tile.darkUnreadable ? "" : undefined}
+      >
         <span
           className="nx-vars__specimen nx-shared-styles__lead"
-          style={sharedStylePreview(row.styles, styleContext)}
+          style={tile.specimen}
         >
           Aa
         </span>
+        {tile.darkUnreadable ? (
+          <Moon className="nx-shared-styles__dark-flag" size={8} />
+        ) : null}
       </span>
       <span className="nx-shared-styles__names">
         <span className="nx-vars__name" title={name}>
