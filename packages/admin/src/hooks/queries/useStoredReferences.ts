@@ -239,14 +239,21 @@ function useReconcileRetries(
   };
 }
 
-/** The error the editor shows, if any, for these reads. */
+/**
+ * The error the editor shows, if any, for these reads. One that ends the
+ * document comes first, from either read: a read out of reach says nothing
+ * about whether the other was refused.
+ */
 function readError(
   populated: UseQueryResult<unknown, Error>,
   stored: UseQueryResult<unknown, Error>,
   gaveUp: boolean
 ): Error | null {
-  if (populated.error) return populated.error;
-  if (stored.error) return stored.error;
+  const failed = [populated.error, stored.error].filter(
+    (error): error is Error => error !== null
+  );
+  const first = failed.find(endsDocument) ?? failed[0];
+  if (first !== undefined) return first;
   // Still apart after every retry: the document keeps changing under the
   // editor. Saying so beats a form merged from two versions, and beats the
   // previous merge, which a save would write back over the newer document.
@@ -346,8 +353,14 @@ export function useWithStoredReferences<T extends Doc>({
   if (agree && rememberMerge(last, pair, scope, readAt)) retries.reset();
 
   const failure = readError(populated, stored, retries.spent);
+  // Reads still apart after every retry drop the merge, since a save from it
+  // would write it back over the newer document; but not when a read failed.
+  // They are apart then because one could not be made, and the copy on screen
+  // stays, read-only, until a read succeeds.
+  const dropped =
+    retries.spent && populated.error === null && stored.error === null;
   const merged =
-    !retries.spent && last.current?.scope === scope
+    !dropped && last.current?.scope === scope
       ? last.current.document
       : undefined;
   // A read that fails after the document is on screen leaves the editor in

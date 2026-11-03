@@ -385,6 +385,94 @@ describe("useWithStoredReferences", () => {
       expect(result.current.latest.failed).toBe(true);
     });
 
+    it("keeps the document when the reads stay apart because one of them failed", () => {
+      // A colleague's save reaches the populated read, and the depth-0 read
+      // fails out of reach: the two describe different versions however often
+      // they are read again. The copy on screen stays, held read-only, rather
+      // than the editor being replaced with an error and its edits lost.
+      const unreachable = parseApiError(
+        { error: { code: "INTERNAL", message: "Down.", requestId: "r1" } },
+        503
+      );
+      const { result, rerender } = renderHook(
+        (props: { populated: never; stored: never }) =>
+          useWithStoredReferences({
+            fields: FIELDS,
+            documentKey: DOCUMENT,
+            ...props,
+            scope: "e",
+          }),
+        {
+          initialProps: {
+            populated: read(populatedV1),
+            stored: read(storedV1),
+          },
+        }
+      );
+      const onScreen = result.current.document;
+
+      const newer = { ...populatedV1, updatedAt: "v2" };
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        rerender({
+          populated: read(newer),
+          stored: read(storedV1, { error: unreachable }),
+        });
+        rerender({
+          populated: read(newer, { isFetching: true }),
+          stored: read(storedV1, { isFetching: true, error: unreachable }),
+        });
+      }
+      rerender({
+        populated: read(newer),
+        stored: read(storedV1, { error: unreachable }),
+      });
+      expect(result.current.document).toBe(onScreen);
+      expect(result.current.error).toBeNull();
+      expect(result.current.latest.failed).toBe(true);
+    });
+
+    it.each([
+      ["populated", "stored"],
+      ["stored", "populated"],
+    ])(
+      "ends the document when the %s read is refused, whatever the %s read says",
+      refusedRead => {
+        const refused = parseApiError(
+          { error: { code: "FORBIDDEN", message: "No.", requestId: "r1" } },
+          403
+        );
+        const unreachable = parseApiError(
+          { error: { code: "INTERNAL", message: "Down.", requestId: "r2" } },
+          503
+        );
+        const { result, rerender } = renderHook(
+          (props: { populated: never; stored: never }) =>
+            useWithStoredReferences({
+              fields: FIELDS,
+              documentKey: DOCUMENT,
+              ...props,
+              scope: "e",
+            }),
+          {
+            initialProps: {
+              populated: read(populatedV1),
+              stored: read(storedV1),
+            },
+          }
+        );
+        rerender({
+          populated: read(populatedV1, {
+            error: refusedRead === "populated" ? refused : unreachable,
+          }),
+          stored: read(storedV1, {
+            error: refusedRead === "stored" ? refused : unreachable,
+          }),
+        });
+        expect(result.current.document).toBeUndefined();
+        expect(result.current.error).toBe(refused);
+      }
+    );
+
     it("is the page's error when no document ever arrived", () => {
       const { result } = renderHook(() =>
         useWithStoredReferences({
