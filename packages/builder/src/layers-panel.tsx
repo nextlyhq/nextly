@@ -84,6 +84,7 @@ import {
   Input,
   TreeView,
   detectApplePlatform,
+  useShortcuts,
   type TreeNode,
 } from "@nextlyhq/ui";
 import { Eye, EyeOff, Lock, LockOpen, SlidersHorizontal } from "lucide-react";
@@ -192,6 +193,13 @@ export interface LayersPanelProps {
    * menu offers the row's own verbs alone.
    */
   verbs?: SharedBlockVerbs;
+  /**
+   * Whether the panel sits inside a shortcut provider, so the row keystrokes
+   * (F2, the eye's and the lock's chords) register with it and Help lists
+   * them. Owned by the host, as `moveHints` is. Without one, the panel reads
+   * the keys on its own rows.
+   */
+  shortcuts?: boolean;
 }
 
 /** One region of the page's Layout, as a read-only row in Layers. */
@@ -313,10 +321,13 @@ interface RowView {
 function RenameField({
   id,
   label,
+  name,
   onDone,
 }: {
   id: string;
   label: string;
+  /** The author's own name, which the field starts from; none, it is empty. */
+  name: string | undefined;
   onDone: (name: string | null) => void;
 }): React.JSX.Element {
   const field = React.useRef<HTMLInputElement | null>(null);
@@ -325,10 +336,12 @@ function RenameField({
     field.current?.focus();
     field.current?.select();
   }, []);
-  const finish = (name: string | null): void => {
+  // Nothing changed is nothing to write: an unchanged field, or one left
+  // empty on a block that had no name of its own.
+  const finish = (typed: string | null): void => {
     if (finished.current) return;
     finished.current = true;
-    onDone(name);
+    onDone(typed === null || typed.trim() === (name ?? "") ? null : typed);
   };
   const stop = (event: React.SyntheticEvent): void => event.stopPropagation();
   return (
@@ -337,7 +350,11 @@ function RenameField({
       className="nx-layer-row__rename"
       // The row's hook stays on what stands for the block while it is renamed.
       data-nx-layer={id}
-      defaultValue={label}
+      // The author's own name, as the inspector's rename starts from; the
+      // label it falls back to shows as the placeholder, never as a value a
+      // blur would store.
+      defaultValue={name ?? ""}
+      placeholder={label}
       aria-label={`Rename ${label}`}
       // A press inside the field is a caret, not a drag, a selection or the
       // tree's own click.
@@ -447,6 +464,7 @@ function LayerRow({
         <RenameField
           id={node.id}
           label={node.label}
+          name={node.name}
           onDone={name => view.onRenamed(node.id, name)}
         />
       ) : (
@@ -603,10 +621,13 @@ function rowBodyHandlers({
   hover,
   apple,
   act,
+  keys,
 }: {
   hover: (id: string | null) => void;
   apple: boolean;
   act: (id: string, action: RowKeyAction) => void;
+  /** Whether to read the row keystrokes here. */
+  keys: boolean;
 }): Pick<
   React.HTMLAttributes<HTMLDivElement>,
   "onPointerOver" | "onPointerLeave" | "onKeyDown" | "onDoubleClick"
@@ -615,6 +636,7 @@ function rowBodyHandlers({
     onPointerOver: event => hover(rowIdOf(event.target)),
     onPointerLeave: () => hover(null),
     onKeyDown: event => {
+      if (!keys) return;
       const action = rowKeyAction(event, apple);
       const id = action === null ? null : rowIdOf(event.target);
       if (action === null || id === null) return;
@@ -626,6 +648,63 @@ function rowBodyHandlers({
       if (id !== null) act(id, "rename");
     },
   };
+}
+
+/** What each row keystroke does, as Help lists it. */
+const ROW_KEY_DESCRIPTIONS: Readonly<Record<RowKeyAction, string>> = {
+  rename: "Rename the block of the focused Layers row",
+  "toggle-hidden":
+    "Hide or show the block of the focused Layers row on the device being edited",
+  "toggle-lock": "Lock or unlock the block of the focused Layers row",
+};
+
+const ROW_KEY_ACTIONS: readonly RowKeyAction[] = [
+  "rename",
+  "toggle-hidden",
+  "toggle-lock",
+];
+
+/**
+ * The row keystrokes, registered with the editor's shortcut manager so Help
+ * lists them with every other binding. Each acts on the row that has focus,
+ * and only while one of this panel's rows has it: the same keys elsewhere,
+ * or in a rename's field, are left alone.
+ */
+function RowShortcuts({
+  scope,
+  act,
+}: {
+  scope: React.RefObject<HTMLElement | null>;
+  act: (id: string, action: RowKeyAction) => void;
+}): null {
+  const focusedRow = (): string | null => {
+    const root = scope.current;
+    const active = root?.ownerDocument.activeElement;
+    if (
+      root === null ||
+      root === undefined ||
+      active === null ||
+      active === undefined ||
+      !root.contains(active) ||
+      active.getAttribute("role") !== "treeitem"
+    ) {
+      return null;
+    }
+    return rowIdOf(active);
+  };
+  useShortcuts(
+    ROW_KEY_ACTIONS.map(action => ({
+      keys: ROW_KEYS[action],
+      description: ROW_KEY_DESCRIPTIONS[action],
+      when: () => focusedRow() !== null,
+      run: () => {
+        const id = focusedRow();
+        if (id !== null) act(id, action);
+      },
+    })),
+    { name: "builder-layers-rows" }
+  );
+  return null;
 }
 
 /** Whether the block is hidden on the device being edited. */
@@ -668,12 +747,12 @@ function toggleLock(editor: EditorState, id: string): string | null {
 }
 
 /** Put focus back on a block's row, once a rename has ended. */
-function focusRow(id: string): void {
+function focusRow(scope: HTMLElement | null, id: string): void {
   requestAnimationFrame(() => {
-    const rows = document.querySelectorAll<HTMLElement>('[role="treeitem"]');
-    rows.forEach(row => {
-      if (rowIdOf(row) === id) row.focus();
-    });
+    // This panel's rows only: a second editor on the page holds the same ids.
+    const rows = scope?.querySelectorAll<HTMLElement>('[role="treeitem"]');
+    const row = Array.from(rows ?? []).find(each => rowIdOf(each) === id);
+    row?.focus();
   });
 }
 
@@ -695,7 +774,8 @@ interface RowVerbs {
  */
 function useRowVerbs(
   editor: EditorState,
-  device: LayersPanelProps["device"]
+  device: LayersPanelProps["device"],
+  scope: React.RefObject<HTMLElement | null>
 ): RowVerbs {
   const [renamingId, setRenamingId] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState("");
@@ -764,11 +844,11 @@ function useRowVerbs(
   const onRenamed = React.useCallback(
     (id: string, name: string | null): void => {
       setRenamingId(null);
-      focusRow(id);
+      focusRow(scope.current, id);
       if (name === null) return;
       latest.current.editor.apply(renameOp(id, name));
     },
-    []
+    [scope]
   );
 
   const menuItems = React.useCallback((): readonly RowMenuItem[] => {
@@ -819,6 +899,7 @@ export function LayersPanel({
   device,
   canvasRoot,
   verbs,
+  shortcuts = false,
 }: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
@@ -842,28 +923,29 @@ export function LayersPanel({
       ),
   });
 
-  const rows = useRowVerbs(editor, device);
+  // The tree's own element: where a rename's focus returns, and where the
+  // row keystrokes are scoped.
+  const body = React.useRef<HTMLDivElement | null>(null);
+  const rows = useRowVerbs(editor, device, body);
   const setHovered = useHoveredBlockSetter();
   // Nothing stays pointed at once the panel goes, or the canvas would keep
   // outlining a block no row is under.
   React.useEffect(() => () => setHovered(null), [setHovered]);
 
   /*
-   * A row chosen here scrolls the canvas to its block, once the selection has
-   * reached the canvas: a hidden block is drawn only once it is selected, so
-   * the scroll waits for the frame that draws it.
+   * A row chosen here scrolls the canvas to its block, on every choice: a row
+   * chosen again after the canvas was scrolled away scrolls back, though the
+   * selection did not change. A frame later, once the selection has reached
+   * the canvas: a hidden block is drawn only once it is selected.
    */
-  const chosenHere = React.useRef<string | null>(null);
-  React.useEffect(() => {
-    const id = editor.selectedId;
-    if (id === null || chosenHere.current !== id) return;
-    chosenHere.current = null;
-    if (canvasRoot === null || canvasRoot === undefined) return;
-    const frame = requestAnimationFrame(() => {
-      revealNode(canvasRoot, id);
+  const latestCanvas = React.useRef(canvasRoot);
+  latestCanvas.current = canvasRoot;
+  const revealChosen = React.useCallback((id: string) => {
+    requestAnimationFrame(() => {
+      const root = latestCanvas.current;
+      if (root !== null && root !== undefined) revealNode(root, id);
     });
-    return () => cancelAnimationFrame(frame);
-  }, [editor.selectedId, canvasRoot]);
+  }, []);
 
   // Recomputed each render rather than memoised. The tree is only valid against
   // the document it was read from, and every edit replaces that document — a
@@ -1020,6 +1102,7 @@ export function LayersPanel({
           apple={apple}
         >
           <div
+            ref={body}
             className="nx-layers-panel__body"
             data-nx-dragging={draggingState(drag)}
             {...drag.handlers}
@@ -1029,6 +1112,8 @@ export function LayersPanel({
                 setHovered(drag.draggingId === null ? id : null),
               apple: apple ?? false,
               act,
+              // Read by the shortcut manager instead where the host has one.
+              keys: !shortcuts,
             })}
           >
             <TreeView
@@ -1045,8 +1130,8 @@ export function LayersPanel({
               // decide what that does. A panel translating them itself would be a
               // second grammar to keep in step.
               onSelectedChange={(id, mode) => {
-                chosenHere.current = id;
                 editor.select(id, mode);
+                revealChosen(id);
               }}
               expandedIds={expandedIds}
               // The tree reports the whole next set, which during a search includes
@@ -1080,6 +1165,8 @@ export function LayersPanel({
       <div role="status" aria-live="polite" className="nx-sr-only">
         {drag.announcement}
       </div>
+
+      {shortcuts ? <RowShortcuts scope={body} act={act} /> : null}
 
       {/*
         What a row's verb did, or why it could not: on screen as well as read

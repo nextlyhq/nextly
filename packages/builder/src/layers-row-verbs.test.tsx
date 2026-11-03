@@ -21,6 +21,7 @@ import {
   type BlockNode,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
+import { ShortcutProvider, useActiveShortcuts } from "@nextlyhq/ui";
 import {
   act,
   cleanup,
@@ -176,6 +177,18 @@ describe("the eye", () => {
     expect(findNode(editor().document.nodes, "a")?.visibility).toBeUndefined();
   });
 
+  it("is not offered until the device's breakpoints are known", () => {
+    register();
+    function NoDevice(): React.JSX.Element {
+      const editorState = useEditorState({
+        initialDocument: page(node("a", "core/heading")),
+      });
+      return <LayersPanel editor={editorState} />;
+    }
+    render(<NoDevice />);
+    expect(action("a", "toggle-hidden")).toBeNull();
+  });
+
   it("is not offered on a block a lock holds", () => {
     register();
     render(
@@ -230,6 +243,43 @@ describe("renaming", () => {
     fireEvent.keyDown(field, { key: "Enter" });
     expect(findNode(editor().document.nodes, "a")?.name).toBe("Hero title");
     expect(screen.queryByRole("textbox", { name: /^Rename/ })).toBeNull();
+  });
+
+  it("starts from the author's own name, and writes nothing for an unnamed block left as it was", () => {
+    register();
+    render(<Host document={page(node("a", "core/heading"))} />);
+    fireEvent.keyDown(row("a"), { key: "F2" });
+    const field = screen.getByRole("textbox", { name: "Rename Heading" });
+    // The type's name is the placeholder, never the value a blur stores.
+    expect((field as HTMLInputElement).value).toBe("");
+    expect(field.getAttribute("placeholder")).toBe("Heading");
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(findNode(editor().document.nodes, "a")?.name).toBeUndefined();
+    expect(editor().canUndo).toBe(false);
+  });
+
+  it("returns focus to its own panel's row, with a second editor beside it", async () => {
+    register();
+    render(
+      <>
+        <Host document={page(node("a", "core/heading"))} />
+        <div data-testid="second">
+          <Host document={page(node("a", "core/heading"))} />
+        </div>
+      </>
+    );
+    const second = screen.getByTestId("second");
+    const secondRow = second.querySelector<HTMLElement>('[role="treeitem"]');
+    if (secondRow === null) throw new Error("no second row");
+    fireEvent.keyDown(secondRow, { key: "F2" });
+    const field = second.querySelector("input[aria-label^='Rename']");
+    if (field === null) throw new Error("no rename field");
+    fireEvent.change(field, { target: { value: "Second" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await act(
+      () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    );
+    expect(second.contains(document.activeElement)).toBe(true);
   });
 
   it("renames by double-click and keeps the old name on Escape", () => {
@@ -349,12 +399,54 @@ describe("choosing a row", () => {
       return <LayersPanel editor={editorState} canvasRoot={canvas} />;
     }
     render(<Chosen />);
+    const frame = () =>
+      act(
+        () =>
+          new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+      );
     fireEvent.click(row("a"));
-    await act(
-      () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-    );
-    expect(scrolled).toHaveBeenCalled();
+    await frame();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    // Chosen again, though the selection does not change: the author may
+    // have scrolled the canvas away since.
+    fireEvent.click(row("a"));
+    await frame();
+    expect(scrolled).toHaveBeenCalledTimes(2);
     canvas.remove();
+  });
+});
+
+describe("with the editor's shortcut manager", () => {
+  it("registers the row keys, so Help lists them, and runs them on the focused row", () => {
+    register();
+    let listed: readonly string[] = [];
+    function Listed(): null {
+      listed = useActiveShortcuts().map(binding => binding.keys);
+      return null;
+    }
+    function Managed(): React.JSX.Element {
+      const editorState = useEditorState({
+        initialDocument: page(node("a", "core/heading")),
+      });
+      editorRef = editorState;
+      return (
+        <ShortcutProvider>
+          <LayersPanel
+            editor={editorState}
+            device={{ breakpoints: SITE, id: "tablet" }}
+            shortcuts
+          />
+          <Listed />
+        </ShortcutProvider>
+      );
+    }
+    render(<Managed />);
+    expect(listed).toEqual(
+      expect.arrayContaining(["F2", "mod+shift+h", "mod+shift+l"])
+    );
+    act(() => row("a").focus());
+    fireEvent.keyDown(row("a"), { key: "H", ctrlKey: true, shiftKey: true });
+    expect(shown("a").tablet).toBe(false);
   });
 });
 

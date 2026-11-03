@@ -215,6 +215,13 @@ export interface InspectorPanelProps {
   /** The site's breakpoints, which decide which of those declarations are live. */
   breakpoints?: BreakpointSet;
   /**
+   * Whether `breakpoints` is the site's own set rather than the config's
+   * defaults standing in while the stored set is read. "Visible on" writes
+   * only once it is: a hide resolved against the wrong set is stored wrong.
+   * Defaults to `true`, for a host whose breakpoints are known up front.
+   */
+  breakpointsReady?: boolean;
+  /**
    * The container the canvas compiled its breakpoints against, when it is
    * previewing rather than rendering at the browser's own width.
    *
@@ -548,6 +555,7 @@ function SelectionInspector({
   inspectors,
   verbs,
   contentServices,
+  breakpointsReady = true,
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
 }: Omit<
@@ -711,6 +719,7 @@ function SelectionInspector({
             fields={fields}
             breakpoints={styleOnly.breakpoints}
             breakpoint={breakpoint ?? BASE_BREAKPOINT}
+            breakpointsReady={breakpointsReady}
           />
         </TabsContent>
 
@@ -748,6 +757,7 @@ function ContentTab({
   fields,
   breakpoints,
   breakpoint,
+  breakpointsReady,
 }: {
   block: BlockInspection;
   editor: EditorState;
@@ -765,6 +775,8 @@ function ContentTab({
   breakpoints: BreakpointSet | undefined;
   /** The device being edited. */
   breakpoint: BreakpointId;
+  /** Whether `breakpoints` is the site's own set yet. */
+  breakpointsReady: boolean;
 }): React.JSX.Element {
   // Whether the Advanced section is open, so the panel inside it can be told
   // when it stops being on screen and settle its draft.
@@ -797,6 +809,7 @@ function ContentTab({
         nodeId={block.nodeId}
         breakpoints={breakpoints}
         editing={breakpoint}
+        ready={breakpointsReady}
       />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*

@@ -87,6 +87,12 @@ export interface LayerNode {
   /** The instance name if the author gave one, otherwise the block's name. */
   readonly label: string;
   /**
+   * The name the author gave, when they gave one: what a rename starts from.
+   * The label falls back to the type or the component's title, which is not
+   * a name the author wrote and must not be stored as one by a rename.
+   */
+  readonly name?: string;
+  /**
    * The block is a component placement, so its row is marked as one: its label
    * may be the component's title, which would otherwise read as a block's own
    * name.
@@ -211,10 +217,12 @@ export function layersOf(
     nodes.map(node => {
       const label = layerLabel(node, undefined, componentTitle);
       const locked = node.locked === true;
+      const name = authoredName(node);
       return {
         id: node.id,
         type: node.type,
         label,
+        ...(name === undefined ? {} : { name }),
         component: isComponentInstance(node),
         locked,
         ...(locked || heldBy === undefined ? {} : { lockedBy: heldBy }),

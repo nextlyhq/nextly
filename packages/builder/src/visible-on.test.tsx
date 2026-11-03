@@ -35,11 +35,23 @@ const SITE: BreakpointSet = {
 
 let editorRef: EditorState | null = null;
 
-function Host({ document }: { document: BlockDocument }): React.JSX.Element {
+function Host({
+  document,
+  ready = true,
+}: {
+  document: BlockDocument;
+  ready?: boolean;
+}): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
   return (
-    <VisibleOn editor={editor} nodeId="a" breakpoints={SITE} editing="tablet" />
+    <VisibleOn
+      editor={editor}
+      nodeId="a"
+      breakpoints={SITE}
+      editing="tablet"
+      ready={ready}
+    />
   );
 }
 
@@ -107,6 +119,14 @@ describe("VisibleOn", () => {
         .getByRole("button", { name: "Tablet" })
         .hasAttribute("data-editing")
     ).toBe(true);
+  });
+
+  it("is held until the site's breakpoints are read", () => {
+    render(<Host document={withDevices(undefined)} ready={false} />);
+    expect(
+      screen.getByRole("button", { name: "Desktop" }).hasAttribute("disabled")
+    ).toBe(true);
+    expect(screen.getByText("Reading the site's breakpoints…")).toBeTruthy();
   });
 
   it("is held on a locked block", () => {

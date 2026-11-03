@@ -569,11 +569,21 @@ export function editorPanelRenderer({
           // the panel does not offer (the one being edited) is still named.
           componentTitle={offered.titleOf}
           // The device the eye hides on: the one being edited, against the
-          // breakpoints the canvas is compiled with.
-          device={{
-            breakpoints: canvasRender.styleContext.breakpoints,
-            id: editedBreakpoint,
-          }}
+          // breakpoints the canvas is compiled with. Withheld until the
+          // site's stored breakpoints have been read: until then the set in
+          // hand is the config's defaults, and a hide written against it
+          // could resolve differently against the site's own.
+          {...(siteStylePending || siteStyleError !== null
+            ? {}
+            : {
+                device: {
+                  breakpoints: canvasRender.styleContext.breakpoints,
+                  id: editedBreakpoint,
+                },
+              })}
+          // Inside the shell's shortcut provider, so the row keys register
+          // with it and Help lists them.
+          shortcuts
           // A row chosen there scrolls its block into view here.
           canvasRoot={canvasElement}
           {...(layerVerbs === undefined ? {} : { verbs: layerVerbs })}

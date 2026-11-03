@@ -11,10 +11,9 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/BlocksEditor
  */
 import {
-  findNode,
-  hiddenOnDevice,
   revealDeviceHidden,
   type BlockDocument,
+  type BreakpointSet,
   type DocumentKind,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -77,6 +76,7 @@ import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
+import { revealedHidden } from "./reveal-hidden";
 import { SettingsDialog } from "./settings-dialog";
 import {
   sharePreview,
@@ -146,24 +146,28 @@ interface Reveal {
 function useReveal(
   document: BlockDocument,
   selected: readonly string[],
-  breakpoints: Parameters<typeof hiddenOnDevice>[1],
+  breakpoints: BreakpointSet | undefined,
   device: string
 ): Reveal {
-  const ids = selected.filter(id => {
-    const node = findNode(document.nodes, id);
-    return (
-      node !== undefined && hiddenOnDevice(node.visibility, breakpoints, device)
-    );
-  });
-  const key = ids.join("\n");
-  return useMemo(
-    () => ({
-      document:
-        key === "" ? document : revealDeviceHidden(document, key.split("\n")),
-      ids: key === "" ? [] : key.split("\n"),
-    }),
-    [document, key]
+  const { lifted, shown } = revealedHidden(
+    document,
+    selected,
+    breakpoints,
+    device
   );
+  // Keyed by value, so a selection that lifts the same blocks keeps the
+  // document the canvas draws, and with it the canvas's rendered tree.
+  const key = `${lifted.join("\n")}\u0000${shown.join("\n")}`;
+  return useMemo(() => {
+    const [liftedKey = "", shownKey = ""] = key.split("\u0000");
+    return {
+      document:
+        liftedKey === ""
+          ? document
+          : revealDeviceHidden(document, liftedKey.split("\n")),
+      ids: shownKey === "" ? [] : shownKey.split("\n"),
+    };
+  }, [document, key]);
 }
 
 /**
@@ -503,6 +507,9 @@ function editorInspector(
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
+      // The set above is the config's defaults until the stored one is read,
+      // so a per-device hide waits for it.
+      breakpointsReady={!siteStylePending && siteStyleError === null}
       // Which tier the Style tab writes to, and which tiers are live: the
       // canvas's answer rather than the panel's, as the frame's width is
       // what the page's media queries answer for.

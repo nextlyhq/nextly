@@ -34,6 +34,11 @@ export interface VisibleOnProps {
   readonly breakpoints: BreakpointSet | undefined;
   /** The device being edited, marked among the others. */
   readonly editing: string;
+  /**
+   * Whether `breakpoints` is the site's own set. Until it is, the buttons
+   * are held: a change resolved against a stand-in set is stored wrong.
+   */
+  readonly ready?: boolean;
 }
 
 /** "Mobile", "Tablet and Mobile", "Desktop, Tablet and Mobile". */
@@ -47,6 +52,7 @@ export function VisibleOn({
   nodeId,
   breakpoints,
   editing,
+  ready = true,
 }: VisibleOnProps): React.JSX.Element | null {
   const labelId = React.useId();
   const node = findNode(editor.document.nodes, nodeId);
@@ -68,10 +74,12 @@ export function VisibleOn({
     id: devices[0]?.id ?? editing,
   });
   const held =
-    firstOp !== null && editor.lockRefusalFor([firstOp]) !== undefined;
+    !ready ||
+    (firstOp !== null && editor.lockRefusalFor([firstOp]) !== undefined);
   const hidden = devices.filter(device => !device.visible);
-  const summary =
-    hidden.length === 0
+  const summary = !ready
+    ? "Reading the site's breakpoints…"
+    : hidden.length === 0
       ? "Shown on every device."
       : hidden.length === devices.length
         ? "Hidden on every device."
