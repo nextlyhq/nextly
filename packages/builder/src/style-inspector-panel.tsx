@@ -1178,6 +1178,7 @@ function SectionFields({
         <StylePropertyFields
           key={`${surroundings.nodeId}:${property.property}`}
           property={property}
+          namesSection={property.property === sectionKey}
           {...surroundings}
         />
       ))}
@@ -1400,7 +1401,8 @@ function MoreProperties({
  * `margin` is four logical sides and `position` is a scheme, four offsets and a
  * stacking order, so a property is a GROUP of controls rather than a field. The
  * heading is drawn only when there is more than one, because a lone control
- * already carries the property's name.
+ * already carries the property's name, and not when the section is titled
+ * with it.
  */
 function StylePropertyFields({
   property,
@@ -1415,10 +1417,17 @@ function StylePropertyFields({
   provenanceOf,
   editing,
   onChooseForm,
+  namesSection,
 }: {
   property: InspectedStyleProperty;
+  /**
+   * Whether the property shares its section's name, as `border` does in the
+   * Border section: its heading would say the section's title again.
+   */
+  namesSection: boolean;
 } & StyleFieldSurroundings): React.JSX.Element {
   const many = property.controls.length > 1;
+  const headed = many && !namesSection;
   /*
    * Whether this property is drawn as a box, and in what order — one decision,
    * settled outside the component. Each side still keeps its own control, so it
@@ -1434,7 +1443,7 @@ function StylePropertyFields({
       className="nx-style-inspector__property"
       data-property={property.property}
     >
-      {many ? (
+      {headed ? (
         <p
           className="nx-style-inspector__property-label"
           title={property.summary}

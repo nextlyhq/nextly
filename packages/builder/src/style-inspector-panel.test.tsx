@@ -1805,6 +1805,28 @@ describe("what the arrow keys do and do not claim", () => {
   });
 });
 
+describe("a property named like its section", () => {
+  it("draws no heading of its own, which would repeat the section's", () => {
+    // "Border" over the border's sides, inside the section titled Border,
+    // said the same word twice in a row.
+    mount({ border: true });
+    const heading = document.querySelector(
+      '[data-property="border"] .nx-style-inspector__property-label'
+    );
+    expect(document.querySelector('[data-property="border"]')).not.toBeNull();
+    expect(heading).toBeNull();
+  });
+
+  it("keeps the heading of a property its section does not name", () => {
+    mount({ spacing: true });
+    // Padding's four sides, in the section titled Spacing.
+    const heading = document.querySelector(
+      '[data-property="padding"] .nx-style-inspector__property-label'
+    );
+    expect(heading?.textContent).toBe("Padding");
+  });
+});
+
 describe("where a control's value came from", () => {
   /** The dot for one property's single control. */
   const dotIn = (property: string) =>
