@@ -205,7 +205,7 @@ describe("a style field in the narrow inspector", () => {
     );
     expect(style).toBeGreaterThan(-1);
     // At 19rem, not the shared 18rem: a 7.5rem label and a set Align items
-    // row (five icons, More and Clear) need about 18.9rem side by side.
+    // row (five icons, More and the reset) need about 18.9rem side by side.
     const narrow = atRuleBodies(
       "@container nx-inspector-fields (max-width: 19rem)"
     ).filter(body =>
@@ -265,11 +265,9 @@ describe("a style row's reset", () => {
     expect(reset).toContain("grid-row: 1");
     expect(reset).toContain("inline-size: 1.5rem");
     // A jump or a refusal still reads under the control, across the row.
-    expect(
-      ruleBody(
-        '.nx-style-inspector .nx-inspector__field > [data-action="jump"], .nx-style-inspector .nx-inspector__field > .nx-inspector__error'
-      )
-    ).toContain("grid-column: 2 / -1");
+    expect(FLAT).toContain(
+      '.nx-style-inspector .nx-inspector__field > [data-action="jump"], .nx-style-inspector .nx-inspector__field > .nx-inspector__error { grid-column: 2 / -1; }'
+    );
   });
 
   it("follows its control onto the second row when the narrow inspector stacks", () => {
@@ -278,6 +276,49 @@ describe("a style row's reset", () => {
     ).join(" ");
     expect(narrow).toContain(
       '.nx-style-inspector .nx-inspector__field > .nx-style-inspector__breakpoint-action[data-action="reset"] { grid-column: 2; grid-row: 2; }'
+    );
+    // The control takes the wide column beside it. Left to the shared rule's
+    // column 2, it lands in the reset's narrow column and drops a row, so the
+    // reset reads as a line of its own above the control.
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field > * { grid-column: 1; }"
+    );
+    expect(narrow).toContain(
+      '.nx-style-inspector .nx-inspector__field > [data-action="jump"], .nx-style-inspector .nx-inspector__field > .nx-inspector__error { grid-column: 1 / -1; }'
+    );
+  });
+
+  it("leaves no column for itself on a row with nothing set", () => {
+    // An empty `auto` column still takes the column gap, which stopped an
+    // unset control short of the rows around it.
+    expect(FLAT).toContain(
+      '.nx-style-inspector .nx-inspector__field:not(:has(> [data-action="reset"])) { grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr); }'
+    );
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 19rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      '.nx-style-inspector .nx-inspector__field:not(:has(> [data-action="reset"])) { grid-template-columns: minmax(0, 1fr); }'
+    );
+  });
+
+  it("stays in a spacing side's focus overlay, hidden until the side has focus", () => {
+    // As specific as the row's reset, and after it, so the row's
+    // `inline-grid` does not draw it under every side of the box.
+    const row = FLAT.indexOf(
+      '.nx-style-inspector .nx-inspector__field > [data-action="reset"] {'
+    );
+    const hidden = FLAT.indexOf(
+      ".nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action { display: none; }"
+    );
+    expect(row).toBeGreaterThan(-1);
+    expect(hidden).toBeGreaterThan(row);
+    // Below 18rem the box is rows again, and the reset is shown in its row.
+    const rows = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 18rem)"
+    ).join(" ");
+    expect(rows).toContain(
+      ".nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action, .nx-spacing-box .nx-inspector__error { display: flex;"
     );
   });
 

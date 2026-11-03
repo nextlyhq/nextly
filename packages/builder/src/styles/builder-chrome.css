@@ -4009,6 +4009,15 @@ fieldset.nx-inspector__fields {
   grid-column: 2 / -1;
 }
 
+/*
+ * A row with nothing set has no reset and no column for one: an empty `auto`
+ * column still takes the column gap, which stopped an unset control short of
+ * the set rows around it.
+ */
+.nx-style-inspector .nx-inspector__field:not(:has(> [data-action="reset"])) {
+  grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr);
+}
+
 .nx-style-inspector .nx-style-inspector__field-label-text {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4019,11 +4028,20 @@ fieldset.nx-inspector__fields {
  * Narrow, a style field stacks like every other: the wider column above
  * outranks the shared narrow rule, so it is undone here, after it. At 19rem
  * rather than 18: a 7.5rem label beside a set Align items row (five icons,
- * More and Clear) needs about 18.9rem.
+ * More and the reset) needs about 18.9rem.
+ *
+ * Stacked, the label takes the first row and the control the second, with
+ * its reset at that row's end. The control is moved to the first column by
+ * name: between 18rem and 19rem the shared rule, which places every child in
+ * column 2, is still in force, and column 2 is now the reset's narrow one.
  */
 @container nx-inspector-fields (max-width: 19rem) {
   .nx-style-inspector .nx-inspector__field {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .nx-style-inspector .nx-inspector__field > * {
+    grid-column: 1;
   }
 
   .nx-style-inspector .nx-inspector__field > label {
@@ -4035,6 +4053,15 @@ fieldset.nx-inspector__fields {
     > .nx-style-inspector__breakpoint-action[data-action="reset"] {
     grid-column: 2;
     grid-row: 2;
+  }
+
+  .nx-style-inspector .nx-inspector__field > [data-action="jump"],
+  .nx-style-inspector .nx-inspector__field > .nx-inspector__error {
+    grid-column: 1 / -1;
+  }
+
+  .nx-style-inspector .nx-inspector__field:not(:has(> [data-action="reset"])) {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -5073,7 +5100,8 @@ fieldset.nx-inspector__fields {
   text-align: center;
 }
 
-.nx-spacing-box .nx-style-inspector__breakpoint-action {
+/* As specific as a style row's reset, which is drawn at the row's end. */
+.nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action {
   display: none;
 }
 
@@ -5181,7 +5209,7 @@ fieldset.nx-inspector__fields {
     box-shadow: none;
   }
 
-  .nx-spacing-box .nx-style-inspector__breakpoint-action,
+  .nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action,
   .nx-spacing-box .nx-inspector__error {
     display: flex;
     position: static;
