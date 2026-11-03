@@ -216,9 +216,7 @@ test.describe("a component's variants", () => {
       name: "Name of the variant Variant 1",
     });
     await expect(name).toBeFocused();
-    await expect(variantRow(page, "Variant 1")).toContainText(
-      "No changes yet"
-    );
+    await expect(variantRow(page, "Variant 1")).toContainText("No changes yet");
     await page.keyboard.type("Featured");
     await page.keyboard.press("Enter");
     const row = variantRow(page, "Featured");
@@ -229,7 +227,9 @@ test.describe("a component's variants", () => {
     await value.fill("Big news");
     await value.press("Enter");
     await expect(row).toContainText("1 change");
-    await expect(row.getByRole("img", { name: "Set by this variant" })).toBeVisible();
+    await expect(
+      row.getByRole("img", { name: "Set by this variant" })
+    ).toBeVisible();
     // The canvas previews the open variant, and a tag over it says so.
     await expect(await block(page, "card-heading")).toContainText("Big news");
     await expect(
@@ -239,9 +239,7 @@ test.describe("a component's variants", () => {
     await row
       .getByRole("button", { name: "Hide the values of Featured" })
       .click();
-    await expect(await block(page, "card-heading")).toContainText(
-      "Plain card"
-    );
+    await expect(await block(page, "card-heading")).toContainText("Plain card");
     await expect(
       page.getByRole("status").filter({ hasText: "Previewing" })
     ).toHaveCount(0);
@@ -271,9 +269,7 @@ test.describe("a component's variants", () => {
       timeout: 30_000,
     });
     await expect(variantRow(page, "Featured")).toContainText("1 change");
-    await expect(variantRow(page, "Variant 2")).toContainText(
-      "No changes yet"
-    );
+    await expect(variantRow(page, "Variant 2")).toContainText("No changes yet");
   });
 
   test("a placement picks a variant, overrides a field, and keeps it through a rename", async ({

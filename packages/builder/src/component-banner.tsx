@@ -95,8 +95,7 @@ export function ComponentBanner({
             onClick={back.onBack}
           >
             <ArrowLeft size={16} aria-hidden="true" />
-            Back{" "}
-            <span className="nx-component-banner__to">to {back.to}</span>
+            Back <span className="nx-component-banner__to">to {back.to}</span>
           </Button>
           <span className="nx-component-banner__rule" aria-hidden="true" />
         </>

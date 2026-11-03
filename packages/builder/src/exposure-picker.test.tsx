@@ -109,7 +109,11 @@ describe("the exposure picker", () => {
           ...base,
           name: "acme/box",
           props: {
-            as: { label: "HTML tag", type: "select", options: ["div", "aside"] },
+            as: {
+              label: "HTML tag",
+              type: "select",
+              options: ["div", "aside"],
+            },
           },
         },
       ] as never,

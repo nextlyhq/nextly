@@ -34,10 +34,7 @@
  *
  * @module component-page-reach
  */
-import {
-  MAX_COMPOSED_DEPTH,
-  resolvePageLayout,
-} from "@nextlyhq/blocks-engine";
+import { MAX_COMPOSED_DEPTH, resolvePageLayout } from "@nextlyhq/blocks-engine";
 
 import {
   readLayoutSettings,
@@ -283,7 +280,9 @@ export interface SitePageReachArgs {
  * a page can be drawn inside, the default the settings Single names, and the
  * pages' own Layout choices, each read a page at a time under a bound.
  */
-export function sitePageReachSources(args: SitePageReachArgs): PageReachSources {
+export function sitePageReachSources(
+  args: SitePageReachArgs
+): PageReachSources {
   const { nextly, slugs } = args;
   return {
     documentsUsingEach: args.documentsUsingEach,
@@ -321,7 +320,9 @@ export function sitePageReachSources(args: SitePageReachArgs): PageReachSources 
           // A page that falls back to the default may name no Layout or one
           // that is not published, so only without the default can the
           // database narrow the read to the Layouts asked about.
-          ...(includeDefault ? {} : { where: { layout: { in: [...layoutIds] } } }),
+          ...(includeDefault
+            ? {}
+            : { where: { layout: { in: [...layoutIds] } } }),
           // Every stored page, drafts too: a change reaches a page that is
           // published later, as the direct count counts it.
           status: "all",

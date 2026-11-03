@@ -483,7 +483,12 @@ describe("where a field comes from, in plain words", () => {
     expect(
       fieldSource(
         doc,
-        field({ nodeId: "p", propPath: "mediaId", type: "image", label: "Photo" })
+        field({
+          nodeId: "p",
+          propPath: "mediaId",
+          type: "image",
+          label: "Photo",
+        })
       )
     ).toBe("Image");
   });
@@ -507,9 +512,7 @@ describe("where a field comes from, in plain words", () => {
   });
 
   it("says a block is missing rather than naming an id", () => {
-    expect(fieldSource(doc, field({ nodeId: "gone" }))).toBe(
-      "A missing block"
-    );
+    expect(fieldSource(doc, field({ nodeId: "gone" }))).toBe("A missing block");
   });
 
   it("says what a placement does with an exposed slot", () => {
@@ -517,6 +520,8 @@ describe("where a field comes from, in plain words", () => {
       nodes,
       slots: { body: { label: "Body", nodeId: "b", slot: "inside" } },
     });
-    expect(slotSource(slotted, "body")).toBe("Button, filled on each placement");
+    expect(slotSource(slotted, "body")).toBe(
+      "Button, filled on each placement"
+    );
   });
 });

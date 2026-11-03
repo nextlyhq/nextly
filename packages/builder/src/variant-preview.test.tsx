@@ -13,7 +13,13 @@ import {
   type BlockDocument,
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
-import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { useVariantPreview, VariantPreviewTag } from "./variant-preview";

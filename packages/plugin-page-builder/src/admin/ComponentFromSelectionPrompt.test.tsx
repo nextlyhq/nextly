@@ -317,7 +317,9 @@ describe("one form for both ways", () => {
       request: {
         action: "save-as",
         document: PAGE,
-        choice: { replaceRefused: "A locked block can’t be taken off the page." },
+        choice: {
+          replaceRefused: "A locked block can’t be taken off the page.",
+        },
       },
     });
     expect(keep().getAttribute("aria-checked")).toBe("true");

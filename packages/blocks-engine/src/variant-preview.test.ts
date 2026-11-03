@@ -46,9 +46,27 @@ const component: ComponentDocument = {
     },
   ],
   exposed: [
-    { id: "headline", label: "Headline", nodeId: "title", propPath: "text", type: "text" },
-    { id: "level", label: "Level", nodeId: "title", propPath: "level", type: "select" },
-    { id: "show", label: "Show button", nodeId: "cta", propPath: "visibility", type: "visibility" },
+    {
+      id: "headline",
+      label: "Headline",
+      nodeId: "title",
+      propPath: "text",
+      type: "text",
+    },
+    {
+      id: "level",
+      label: "Level",
+      nodeId: "title",
+      propPath: "level",
+      type: "select",
+    },
+    {
+      id: "show",
+      label: "Show button",
+      nodeId: "cta",
+      propPath: "visibility",
+      type: "visibility",
+    },
   ],
   variants: {
     featured: {
@@ -110,7 +128,9 @@ describe("a variant's preview", () => {
     ).document;
     const previewed = variantPreview(component, "featured");
     // The same tree once the placement's scoped ids are set aside.
-    const shape = (nodes: readonly { type: string; props: unknown; slots?: unknown }[]): unknown =>
+    const shape = (
+      nodes: readonly { type: string; props: unknown; slots?: unknown }[]
+    ): unknown =>
       nodes.map(node => ({
         type: node.type,
         props: node.props,

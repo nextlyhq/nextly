@@ -186,9 +186,7 @@ describe("a component's variants in its own view", () => {
     fireEvent.click(within(section()).getByRole("combobox", { name: "Tone" }));
     fireEvent.click(screen.getByRole("option", { name: "Dark" }));
     // The placements' own checkbox, not a switch.
-    fireEvent.click(
-      within(section()).getByRole("checkbox", { name: "Shown" })
-    );
+    fireEvent.click(within(section()).getByRole("checkbox", { name: "Shown" }));
 
     expect(variantsOf(editor())?.a?.overrides).toEqual({
       tone: "dark",
@@ -393,7 +391,9 @@ describe("a component's variants in its own view", () => {
       within(section()).getByRole("textbox", { name: "Headline" })
     ).toBeTruthy();
     fireEvent.click(
-      within(section()).getByRole("button", { name: "Hide the values of Night" })
+      within(section()).getByRole("button", {
+        name: "Hide the values of Night",
+      })
     );
     expect(opened).toEqual(["a", undefined]);
   });

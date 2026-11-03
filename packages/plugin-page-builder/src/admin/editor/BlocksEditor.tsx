@@ -523,7 +523,6 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     siteStylePending,
     siteStyleError,
     editor,
-    inline,
     zoom,
     setAppliedScale,
     frameWidth,

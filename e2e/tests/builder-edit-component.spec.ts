@@ -25,9 +25,7 @@ function tag(): string {
 }
 
 /** A published component and a published page placing it; answers both ids. */
-async function seed(
-  request: APIRequestContext
-): Promise<{
+async function seed(request: APIRequestContext): Promise<{
   component: string;
   page: string;
   title: string;
@@ -126,9 +124,9 @@ test.describe("Edit component", () => {
     );
     // One way back, in the banner, naming the page it returns to; the
     // editor's own exit arrow is withheld while it is offered.
-    await expect(
-      page.getByRole("button", { name: "Exit editor" })
-    ).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Exit editor" })).toHaveCount(
+      0
+    );
     // The component alone: its own blocks, none of the page's.
     await openLayers(page);
     await expect(layerRow(page, "promo-heading")).toBeVisible({

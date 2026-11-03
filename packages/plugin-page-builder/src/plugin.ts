@@ -64,11 +64,11 @@ import { usageBackfillStateCollection } from "./collections/usage-backfill-state
 import { componentActionRoutes } from "./component-actions-route";
 import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
+import { indexHostFinder } from "./component-hosts";
 import {
   componentPageReach,
   sitePageReachSources,
 } from "./component-page-reach";
-import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
 import {

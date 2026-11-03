@@ -149,8 +149,8 @@ export function ComponentVariantsSection({
       </div>
       {fields.length === 0 ? (
         <p className="nx-inspector__note">
-          Add a field first. A variant is a named set of values for the
-          fields placements can change.
+          Add a field first. A variant is a named set of values for the fields
+          placements can change.
         </p>
       ) : options.length === 0 ? (
         <p className="nx-inspector__note">

@@ -469,9 +469,7 @@ export function slotSource(
   const slot = isPlainRecord(slots) ? slots[slotId] : undefined;
   const nodeId = isPlainRecord(slot) ? slot.nodeId : undefined;
   const node =
-    typeof nodeId === "string"
-      ? findNode(component.nodes, nodeId)
-      : undefined;
+    typeof nodeId === "string" ? findNode(component.nodes, nodeId) : undefined;
   if (node === undefined) return MISSING_BLOCK;
   return `${blockLabel(node.type)}, filled on each placement`;
 }
@@ -492,7 +490,11 @@ function propWord(type: string, propPath: string): string {
  */
 function inSentence(label: string): string {
   const second = label.charAt(1);
-  if (second !== "" && second === second.toUpperCase() && /[A-Z]/.test(second)) {
+  if (
+    second !== "" &&
+    second === second.toUpperCase() &&
+    /[A-Z]/.test(second)
+  ) {
     return label;
   }
   return label.charAt(0).toLowerCase() + label.slice(1);

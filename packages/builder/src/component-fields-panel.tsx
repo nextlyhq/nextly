@@ -497,7 +497,9 @@ function holdsSentence(fieldCount: number, variantCount: number): string {
       : `${fieldCount} ${fieldCount === 1 ? "field" : "fields"}`
   );
   if (variantCount > 0) {
-    parts.push(`${variantCount} ${variantCount === 1 ? "variant" : "variants"}`);
+    parts.push(
+      `${variantCount} ${variantCount === 1 ? "variant" : "variants"}`
+    );
   }
   return parts.join(" · ");
 }
