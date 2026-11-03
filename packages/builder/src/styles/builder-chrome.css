@@ -2965,7 +2965,7 @@
   content: attr(data-label);
   position: absolute;
   top: calc(100% + 4px);
-  right: 0;
+  right: var(--nx-tag-inset-side, 0);
   padding: 1px 6px;
   border-radius: 4px;
   background: var(--nx-builder-ink);
@@ -2987,7 +2987,7 @@
    on screen for it to run left from the ring's right edge. */
 .nx-canvas-mark[data-mark="selected"][data-hidden][data-tag-edge="left"]::after {
   right: auto;
-  left: 0;
+  left: var(--nx-tag-inset-side, 0);
 }
 
 /* Inside the ring, at its bottom corner, when neither side has room on

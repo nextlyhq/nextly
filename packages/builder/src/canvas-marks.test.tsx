@@ -547,6 +547,82 @@ describe("a selected block shown although the page hides it", () => {
     expect(insets).toEqual(["inside:304px", "inside:4px"]);
   });
 
+  it("moves an outside tag in from the screen's right edge when the ring runs past it", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "a") {
+          // 1500px wide on a 1000px screen: its right edge is 500px off it.
+          return new DOMRect(0, 100, 1500, 50);
+        }
+        return new DOMRect(0, 0, 1500, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId="a"
+          overlay={<CanvasMarks revealed={["a"]} />}
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(1));
+    const mark = halosIn(container)[0] as HTMLElement;
+    expect(mark.getAttribute("data-tag")).toBe("below");
+    expect(mark.getAttribute("data-tag-edge")).toBe("right");
+    expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("500px");
+  });
+
+  it("does not put the primary block's tag above it where the block toolbar sits", async () => {
+    // "c" ends at the bottom of the 500px screen, with room above it, where
+    // the toolbar is drawn for the primary block.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        if (this.classList.contains("nx-block-toolbar")) {
+          return new DOMRect(0, 0, 200, 30);
+        }
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "c") {
+          return new DOMRect(0, 450, 1000, 50);
+        }
+        return new DOMRect(0, 0, 1000, 2000);
+      }
+    );
+    const drawn = (toolbar: boolean) => (
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId="c"
+          overlay={
+            <>
+              <CanvasMarks revealed={["c"]} />
+              {toolbar ? <div className="nx-block-toolbar" /> : null}
+            </>
+          }
+        />
+      </div>
+    );
+    const first = render(drawn(false));
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(first.container)).toHaveLength(1));
+    expect(halosIn(first.container)[0]?.getAttribute("data-tag")).toBe("above");
+    cleanup();
+    const second = render(drawn(true));
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(second.container)).toHaveLength(1));
+    expect(halosIn(second.container)[0]?.getAttribute("data-tag")).toBe(
+      "inside"
+    );
+  });
+
   it("lines its tag up with the left edge of a narrow block at the left of the screen", async () => {
     onScreenGeometry();
     const { container } = render(

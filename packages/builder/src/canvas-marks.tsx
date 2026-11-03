@@ -54,6 +54,7 @@ import {
   type OverlaySpace,
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
+import { toolbarPlacement } from "./toolbar-actions";
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
@@ -191,11 +192,15 @@ function markStyle(mark: Mark): React.CSSProperties {
     height: mark.rect.height,
     borderRadius: mark.radius,
   };
-  if (!mark.hidden || mark.tag !== "inside") return box;
+  if (!mark.hidden) return box;
   return {
     ...box,
-    "--nx-tag-inset-bottom": `${String(mark.tagInset.bottom)}px`,
+    // Every tag moves in from the side the screen cuts; only a tag inside the
+    // ring is placed from the bottom.
     "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
+    ...(mark.tag === "inside"
+      ? { "--nx-tag-inset-bottom": `${String(mark.tagInset.bottom)}px` }
+      : {}),
   } as React.CSSProperties;
 }
 
@@ -288,30 +293,52 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   );
   const screenBottom = onScreen.y + onScreen.height;
   const screenRight = onScreen.x + onScreen.width;
+  // From the ring's right edge as far as the screen shows it.
   const roomLeft = (rect: Rect): boolean =>
-    rect.x + rect.width - inputs.tagWidth >= onScreen.x;
-  // Below if it fits on screen, above if that does, and otherwise inside the
-  // ring, which is the one place left that is always on screen.
-  const tagSide = (rect: Rect): Mark["tag"] => {
+    Math.min(rect.x + rect.width, screenRight) - inputs.tagWidth >= onScreen.x;
+  // The block toolbar, drawn beside these marks over the same canvas, which
+  // takes the place above the primary block when it sits there.
+  const toolbar =
+    element.parentElement?.querySelector<HTMLElement>(".nx-block-toolbar");
+  const pageBox = space.place(canvasContentRect(root, root));
+  const toolbarAbove = (rect: Rect): boolean =>
+    toolbar !== null &&
+    toolbar !== undefined &&
+    toolbarPlacement(rect, space.sizeOf(toolbar), pageBox).side === "above";
+  // Below if it fits on screen, above if that does and the toolbar is not
+  // there, and otherwise inside the ring, which is always on screen.
+  const tagSide = (rect: Rect, primary: boolean): Mark["tag"] => {
     if (rect.y + rect.height + TAG_ROOM <= screenBottom) return "below";
-    if (rect.y - TAG_ROOM >= onScreen.y) return "above";
+    if (rect.y - TAG_ROOM >= onScreen.y && !(primary && toolbarAbove(rect))) {
+      return "above";
+    }
     return "inside";
   };
-  // Inside, the tag keeps a small gap from the ring's edges, and moves in as
-  // far as the ring runs past the screen, so its corner is the screen's.
-  const insetOf = (rect: Rect, edge: Mark["tagEdge"]): Mark["tagInset"] => ({
-    bottom: TAG_GAP + Math.max(0, rect.y + rect.height - screenBottom),
-    side:
-      TAG_GAP +
-      (edge === "right"
-        ? Math.max(0, rect.x + rect.width - screenRight)
-        : Math.max(0, onScreen.x - rect.x)),
-  });
+  // A tag moves in as far as the ring runs past the screen, so it is never
+  // drawn where the canvas cuts it off; inside the ring it also keeps a small
+  // gap from the ring's edges.
+  const insetOf = (
+    rect: Rect,
+    edge: Mark["tagEdge"],
+    tag: Mark["tag"]
+  ): Mark["tagInset"] => {
+    const gap = tag === "inside" ? TAG_GAP : 0;
+    return {
+      bottom: gap + Math.max(0, rect.y + rect.height - screenBottom),
+      side:
+        gap +
+        (edge === "right"
+          ? Math.max(0, rect.x + rect.width - screenRight)
+          : Math.max(0, onScreen.x - rect.x)),
+    };
+  };
   const placedTag = (
-    rect: Rect
+    rect: Rect,
+    primary: boolean
   ): Pick<Mark, "tag" | "tagEdge" | "tagInset"> => {
     const tagEdge = roomLeft(rect) ? "right" : "left";
-    return { tag: tagSide(rect), tagEdge, tagInset: insetOf(rect, tagEdge) };
+    const tag = tagSide(rect, primary);
+    return { tag, tagEdge, tagInset: insetOf(rect, tagEdge, tag) };
   };
   const found: Mark[] = [];
   root
@@ -343,7 +370,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
           component: marked.hasAttribute(INSTANCE_ATTRIBUTE),
           locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
           hidden: address !== null && inputs.revealed.has(address),
-          ...placedTag(outline.rect),
+          ...placedTag(outline.rect, selected === "primary"),
         });
       }
       // An exposed part that is itself selected keeps its ring alone: one

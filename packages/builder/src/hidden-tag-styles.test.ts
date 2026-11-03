@@ -32,12 +32,13 @@ function ruleBody(selector: string): string {
 }
 
 describe("a hidden block's tag", () => {
-  it("is drawn below the ring at its right edge by default", () => {
+  it("is drawn below the ring at its right edge by default, inset from a cut edge", () => {
     const tag = ruleBody(`${TAG}::after`);
     expect(tag).toContain("content: attr(data-label);");
     expect(tag).toContain("position: absolute;");
     expect(tag).toContain("top: calc(100% + 4px);");
-    expect(tag).toContain("right: 0;");
+    // Moved in by as far as the ring runs past the screen's right edge.
+    expect(tag).toContain("right: var(--nx-tag-inset-side, 0);");
   });
 
   it("is drawn above the ring for data-tag=above", () => {
@@ -49,7 +50,7 @@ describe("a hidden block's tag", () => {
   it("lines up with the ring's left edge for data-tag-edge=left", () => {
     const left = ruleBody(`${TAG}[data-tag-edge="left"]::after`);
     expect(left).toContain("right: auto;");
-    expect(left).toContain("left: 0;");
+    expect(left).toContain("left: var(--nx-tag-inset-side, 0);");
   });
 
   it("is drawn inside the ring, at the insets the marks set, for data-tag=inside", () => {
