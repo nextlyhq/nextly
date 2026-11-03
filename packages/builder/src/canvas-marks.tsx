@@ -44,11 +44,13 @@ import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
+  canvasScroller,
   clippedByAncestor,
   overlaySpaceOf,
   renderedScale,
   usedRadiiOf,
   visiblePartOf,
+  visibleBandOf,
   type OverlaySpace,
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
@@ -74,9 +76,16 @@ interface Mark {
   readonly hidden: boolean;
   /**
    * Where a hidden block's tag sits: below the ring, or above it when the
-   * block ends at the bottom of the page, where a tag below would be cut off.
+   * ring ends at the bottom of what is on screen, where the canvas would cut
+   * a tag below it off.
    */
   readonly tag: "below" | "above";
+  /**
+   * Which of the ring's edges the tag lines up with: its right edge, so the
+   * tag runs leftwards, or its left edge when there is no room on screen for
+   * it to the left of the ring's right edge.
+   */
+  readonly tagEdge: "right" | "left";
   /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
   readonly rect: Rect;
@@ -90,6 +99,15 @@ const NO_IDS: readonly string[] = [];
 
 /** The height a hidden block's tag takes outside its ring, with its gap. */
 const TAG_ROOM = 24;
+
+/**
+ * About how wide a tag of `label` is drawn: its 11px face runs under 7px a
+ * character, plus its padding. An estimate erring wide, since a tag judged to
+ * fit that does not is the one the canvas cuts off.
+ */
+function tagWidthOf(label: string): number {
+  return label.length * 7 + 12;
+}
 
 /** @experimental */
 export interface CanvasMarksProps {
@@ -116,6 +134,7 @@ function markKey(mark: Mark): string {
     locked,
     hidden,
     tag,
+    tagEdge,
     clipped,
     radius,
     rect,
@@ -127,6 +146,7 @@ function markKey(mark: Mark): string {
     locked,
     hidden,
     tag,
+    tagEdge,
     clipped,
     radius,
     rect.x,
@@ -214,6 +234,8 @@ interface MarkInputs {
    * set: asked once per marked element, and a selection can hold thousands.
    */
   readonly revealed: ReadonlySet<string>;
+  /** About how wide a hidden block's tag is drawn, in the chrome's pixels. */
+  readonly tagWidth: number;
 }
 
 /** The marked elements of a canvas root, as the boxes to draw over them. */
@@ -221,11 +243,19 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
   if (space === null) return NO_MARKS;
   const { root } = space;
-  // The bottom of the page, in the chrome's coordinates: a tag below a block
-  // that ends there would be drawn past it, where the canvas cuts it off.
-  const pageBottom = space.place(canvasContentRect(root, root));
+  // What is on screen, in the chrome's coordinates: the part of the page the
+  // scroller shows, where the canvas cuts off anything drawn past it. The
+  // whole page where nothing scrolls it.
+  const scroller = canvasScroller(root, space.frame !== null);
+  const onScreen = space.place(
+    scroller === null
+      ? canvasContentRect(root, root)
+      : visibleBandOf(scroller, root)
+  );
   const roomBelow = (rect: Rect): boolean =>
-    rect.y + rect.height + TAG_ROOM <= pageBottom.y + pageBottom.height;
+    rect.y + rect.height + TAG_ROOM <= onScreen.y + onScreen.height;
+  const roomLeft = (rect: Rect): boolean =>
+    rect.x + rect.width - inputs.tagWidth >= onScreen.x;
   const found: Mark[] = [];
   root
     .querySelectorAll(
@@ -243,6 +273,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         locked: false,
         hidden: false,
         tag: "below" as const,
+        tagEdge: "right" as const,
       };
       const selected = marked.getAttribute(SELECTED_ATTRIBUTE);
       if (selected !== null) {
@@ -255,6 +286,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
           locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
           hidden: address !== null && inputs.revealed.has(address),
           tag: roomBelow(outline.rect) ? "below" : "above",
+          tagEdge: roomLeft(outline.rect) ? "right" : "left",
         });
       }
       // An exposed part that is itself selected keeps its ring alone: one
@@ -292,6 +324,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         locked: false,
         hidden: false,
         tag: "below",
+        tagEdge: "right",
       });
     });
   }
@@ -334,9 +367,10 @@ export function CanvasMarks({
         : marksOf(element, {
             hovered,
             revealed: new Set(JSON.parse(revealedKey) as string[]),
+            tagWidth: tagWidthOf(hiddenLabel),
           });
     setMarks(current => (sameMarks(current, next) ? current : next));
-  }, [hovered, revealedKey]);
+  }, [hovered, revealedKey, hiddenLabel]);
 
   React.useLayoutEffect(() => {
     measure();
@@ -373,6 +407,7 @@ export function CanvasMarks({
           // technology, and Layers and the inspector say it in words.
           data-label={mark.hidden ? hiddenLabel : undefined}
           data-tag={mark.hidden ? mark.tag : undefined}
+          data-tag-edge={mark.hidden ? mark.tagEdge : undefined}
           data-clipped={mark.clipped ? "" : undefined}
           style={{
             left: mark.rect.x,

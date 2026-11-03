@@ -462,4 +462,69 @@ describe("a selected block shown although the page hides it", () => {
     const tags = halosIn(container).map(mark => mark.getAttribute("data-tag"));
     expect(tags.sort()).toEqual(["above", "below"]);
   });
+
+  /**
+   * A 2000px page shown through a 500px scroller: "a" at the top, "c" ending
+   * at the bottom of what is on screen though far from the page's bottom, and
+   * "b" a narrow block flush with the left edge.
+   */
+  function onScreenGeometry(): void {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "a") return new DOMRect(0, 0, 1000, 50);
+        if (id === "b") return new DOMRect(0, 100, 40, 50);
+        if (id === "c") return new DOMRect(0, 450, 1000, 50);
+        return new DOMRect(0, 0, 1000, 2000);
+      }
+    );
+  }
+
+  function tagsOf(container: HTMLElement): string[] {
+    return halosIn(container)
+      .map(
+        mark =>
+          `${mark.getAttribute("data-tag")}:${mark.getAttribute("data-tag-edge")}`
+      )
+      .sort();
+  }
+
+  it("puts its tag above a ring that ends at the bottom of what is on screen, not only of the page", async () => {
+    onScreenGeometry();
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId="a"
+          selectedIds={["a", "c"]}
+          overlay={<CanvasMarks revealed={["a", "c"]} />}
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(2));
+    expect(tagsOf(container)).toEqual(["above:right", "below:right"]);
+  });
+
+  it("lines its tag up with the left edge of a narrow block at the left of the screen", async () => {
+    onScreenGeometry();
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId="a"
+          selectedIds={["a", "b"]}
+          overlay={<CanvasMarks revealed={["a", "b"]} />}
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(2));
+    expect(tagsOf(container)).toEqual(["below:left", "below:right"]);
+  });
 });
