@@ -29,6 +29,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -42,9 +43,8 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Switch,
 } from "@nextlyhq/ui";
-import { ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ChevronRight, Plus, RotateCcw, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { commitOnEnter } from "./commit-on-enter";
@@ -61,6 +61,7 @@ import {
   valuesSummary,
   type ComponentVariantsHost,
   type VariantEditContext,
+  type VariantPreviewBinding,
   type VariantUse,
 } from "./component-variants";
 import type { EditorState } from "./editor-state";
@@ -106,9 +107,10 @@ export function ComponentVariantsSection({
   const options = variantOptions(component);
   const fields = exposedFields(component);
   const headingId = React.useId();
-  // The variant whose values are open, and the one just added, whose name is
-  // selected so typing renames it.
-  const [open, setOpen] = React.useState<string | undefined>(undefined);
+  // The variant whose values are open, held by the host where it previews
+  // it on the canvas, and the one just added, whose name is selected so
+  // typing renames it.
+  const [open, setOpen] = useOpenVariant(host?.preview);
   const [fresh, setFresh] = React.useState<string | undefined>(undefined);
   const [deleting, setDeleting] = React.useState<VariantOption | null>(null);
   const [problem, setProblem] = React.useState<string | undefined>(undefined);
@@ -147,8 +149,8 @@ export function ComponentVariantsSection({
       </div>
       {fields.length === 0 ? (
         <p className="nx-inspector__note">
-          Expose a field first. A variant is a named set of values for the
-          fields placements can change.
+          Add a field first. A variant is a named set of values for the fields
+          placements can change.
         </p>
       ) : options.length === 0 ? (
         <p className="nx-inspector__note">
@@ -172,9 +174,7 @@ export function ComponentVariantsSection({
               open={open === option.id}
               selectName={fresh === option.id}
               onToggle={() =>
-                setOpen(current =>
-                  current === option.id ? undefined : option.id
-                )
+                setOpen(open === option.id ? undefined : option.id)
               }
               onNameSelected={() => setFresh(undefined)}
               onDelete={() => setDeleting(option)}
@@ -197,6 +197,17 @@ export function ComponentVariantsSection({
       )}
     </section>
   );
+}
+
+/**
+ * The open variant: the host's, where it previews it on the canvas, or the
+ * section's own otherwise.
+ */
+function useOpenVariant(
+  preview: VariantPreviewBinding | undefined
+): [string | undefined, (id: string | undefined) => void] {
+  const [own, setOwn] = React.useState<string | undefined>(undefined);
+  return preview === undefined ? [own, setOwn] : [preview.open, preview.onOpen];
 }
 
 /**
@@ -298,7 +309,7 @@ function VariantRow({
         <div id={valuesId} className="nx-variants__values">
           {fields.length === 0 ? (
             <p className="nx-inspector__note">
-              This component exposes no fields, so this variant presets nothing.
+              This component has no fields, so this variant presets nothing.
             </p>
           ) : null}
           {fields.map(field => (
@@ -352,6 +363,7 @@ function VariantName({
       <Input
         ref={inputRef}
         size="sm"
+        className="nx-variants__name-input"
         value={draft}
         aria-label={`Name of the variant ${option.label}`}
         aria-describedby={problem === undefined ? undefined : problemId}
@@ -394,32 +406,49 @@ function VariantValueRow({
     setProblem(outcome.applied ? undefined : outcome.reason);
   };
 
+  // The inspector's own row grid, the placement panel's: the label (and its
+  // dot) in the label column, and the value with its Reset slot filling the
+  // rest, so a variant's row lines up with a placement's.
   return (
-    <div className="nx-variants__value" data-set={set ? "" : undefined}>
-      <div className="nx-variants__value-head">
+    <div
+      className="nx-inspector__field nx-variants__value"
+      data-set={set ? "" : undefined}
+    >
+      <span className="nx-variants__value-label">
+        {/* A dot in the component's hue marks a value this variant sets. */}
+        {set ? (
+          <span
+            className="nx-variants__dot"
+            role="img"
+            aria-label="Set by this variant"
+          />
+        ) : null}
         <Label htmlFor={id}>{field.label}</Label>
-        <span className="nx-variants__source" data-set={set ? "" : undefined}>
-          {set ? "Set by variant" : "Default"}
+      </span>
+      <span className="nx-variants__value-cell">
+        <VariantValueControl
+          id={id}
+          field={field}
+          value={shownValue(field, value)}
+          onCommit={commit}
+        />
+        {/* A fixed slot, empty when nothing is set, so values line up. */}
+        <span className="nx-variants__reset-slot">
+          {set ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="nx-variants__reset"
+              aria-label={`Reset ${field.label} to the component’s default in ${option.label}`}
+              title="Reset to the component’s value"
+              onClick={reset}
+            >
+              <RotateCcw size={14} aria-hidden="true" />
+            </Button>
+          ) : null}
         </span>
-      </div>
-      <VariantValueControl
-        id={id}
-        field={field}
-        value={shownValue(field, value)}
-        onCommit={commit}
-      />
-      {set ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="nx-variants__reset"
-          aria-label={`Reset ${field.label} to the component’s default in ${option.label}`}
-          onClick={reset}
-        >
-          Reset to default
-        </Button>
-      ) : null}
+      </span>
       {problem === undefined ? null : (
         <p className="nx-variants__problem" role="alert">
           {problem}
@@ -468,15 +497,17 @@ function VariantValueControl({
       );
     default:
       return (
-        <p id={id} className="nx-inspector__note">
-          Set on each placement. A variant can’t preset{" "}
-          {field.type === "image" ? "an image" : "rich text"} yet.
+        <p id={id} className="nx-variants__hint">
+          Chosen on each placement
         </p>
       );
   }
 }
 
-/** Whether the variant shows a part, as a switch that says which. */
+/**
+ * Whether the variant shows a part: the placements' own checkbox, saying
+ * which, so a part reads the same in both panels.
+ */
 function ShownValue({
   id,
   value,
@@ -487,11 +518,11 @@ function ShownValue({
   onCommit: (next: OverrideValue) => void;
 }): React.JSX.Element {
   return (
-    <span className="nx-variants__switch">
-      <Switch
+    <span className="nx-variants__check">
+      <Checkbox
         id={id}
         checked={value !== false}
-        onCheckedChange={checked => onCommit(checked)}
+        onCheckedChange={checked => onCommit(checked === true)}
       />
       <span>{value === false ? "Hidden" : "Shown"}</span>
     </span>
