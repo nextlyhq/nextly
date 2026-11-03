@@ -623,6 +623,24 @@ describe("a type size's line height", () => {
     ).toBeNull();
     expect(field.getAttribute("aria-invalid")).toBeNull();
   });
+
+  it("keeps a refusal until that field is corrected, whatever else is committed", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const line = within(editor).getByLabelText("Line height, light");
+    enter(line, "tall");
+    // Another field committed successfully says nothing about this one.
+    enter(within(editor).getByLabelText("Size, light"), "18px");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(
+      within(editor).getByText(
+        "A line height is a number like 1.4, or a length like 24px."
+      )
+    ).toBeDefined();
+    expect(line).toHaveProperty("value", "tall");
+    expect(line.getAttribute("aria-invalid")).toBe("true");
+  });
 });
 
 describe("a variable added past the first page", () => {

@@ -66,9 +66,21 @@ export function VariableEditor({
   const token = tokens.tokens[row.at];
   const [nameIssue, setNameIssue] = React.useState<string | undefined>();
   const [name, setName] = useDraft(entry.label);
-  // The value last refused, with the field it was typed in, so that field is
-  // the one marked and the reason is said under the fields.
-  const [valueIssue, setValueIssue] = React.useState<RefusedValue>();
+  // Each field holding a refused value, with why: that field is marked and
+  // the reason said under the fields until THAT field is corrected, whatever
+  // else is committed meanwhile.
+  const [refusals, setRefusals] = React.useState<ReadonlyMap<string, string>>(
+    () => new Map()
+  );
+  const refuse = (at: number, mode: TokenMode, message?: string): void =>
+    setRefusals(current => {
+      const key = fieldKey(at, mode);
+      if (current.get(key) === message) return current;
+      const next = new Map(current);
+      if (message === undefined) next.delete(key);
+      else next.set(key, message);
+      return next;
+    });
 
   const commitName = (value: string): void => {
     if (readOnly || value.trim() === entry.label) {
@@ -88,27 +100,24 @@ export function VariableEditor({
   const writeValue: ValueWrite = (at, mode, value) => {
     const next = value.trim();
     if (tokens.tokens[at]?.values[mode] === next) {
-      setValueIssue(undefined);
+      refuse(at, mode);
       return;
     }
     const written = writeTokenValue(tokens, at, mode, next);
     if ("issue" in written) {
-      setValueIssue({ at, mode, message: written.issue });
+      refuse(at, mode, written.issue);
       return;
     }
-    setValueIssue(undefined);
+    refuse(at, mode);
     onChange(written.tokens);
   };
   const saidId = `${id}-said`;
-  const refused: Refused = {
-    at: valueIssue?.at,
-    mode: valueIssue?.mode,
-    describedBy: saidId,
-  };
+  const refused: Refused = { fields: refusals, describedBy: saidId };
 
   const said = [
     ...(nameIssue === undefined ? [] : [nameIssue]),
-    ...(valueIssue === undefined ? [] : [valueIssue.message]),
+    // Once each: two fields refused for the same reason say it once.
+    ...new Set(refusals.values()),
     ...row.issues,
     ...(lineHeight?.issues ?? []),
   ];
@@ -168,17 +177,14 @@ export function VariableEditor({
 /** Writes one variable's value for one mode, or says why it cannot. */
 type ValueWrite = (at: number, mode: TokenMode, value: string) => void;
 
-/** A value refused, the field it was typed in, and why. */
-interface RefusedValue {
-  at: number;
-  mode: TokenMode;
-  message: string;
+/** One value field: a stored variable's position and a mode. */
+function fieldKey(at: number, mode: TokenMode): string {
+  return `${String(at)}:${mode}`;
 }
 
-/** Which field holds a refused value, and the reason's element to point at. */
+/** The fields holding a refused value, and the reason's element to point at. */
 interface Refused {
-  at: number | undefined;
-  mode: TokenMode | undefined;
+  fields: ReadonlyMap<string, string>;
   describedBy: string;
 }
 
@@ -188,7 +194,7 @@ function refusalAt(
   at: number,
   mode: TokenMode
 ): string | undefined {
-  return refused.at === at && refused.mode === mode
+  return refused.fields.has(fieldKey(at, mode))
     ? refused.describedBy
     : undefined;
 }
