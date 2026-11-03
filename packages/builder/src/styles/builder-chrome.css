@@ -2543,7 +2543,9 @@
   height: var(--nx-builder-control-height);
   padding: 2px;
   gap: 2px;
-  border: 0;
+  /* Edged as the state switcher is: on the panel's muted surface a track
+     with no edge did not show. */
+  border: 1px solid var(--nx-border);
   border-radius: var(--radius);
   background: var(--nx-muted);
 }

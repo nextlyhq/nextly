@@ -590,7 +590,9 @@ describe("the inspector's Content and Style tabs", () => {
     const list = ruleBody(".nx-inspector__tablist");
     expect(list).toContain("height: var(--nx-builder-control-height)");
     expect(list).toContain("background: var(--nx-muted)");
-    expect(list).toContain("border: 0");
+    // Edged as the state switcher below it is: the panel's surface is the
+    // muted colour too, so a track with no edge did not show.
+    expect(list).toContain("border: 1px solid var(--nx-border)");
     const tab = ruleBody(".nx-inspector__tab");
     expect(tab).toContain("border: 0");
     expect(tab).toContain("background: transparent");
