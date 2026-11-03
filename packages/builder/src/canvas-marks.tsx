@@ -66,24 +66,29 @@ interface Mark {
 
 const NO_MARKS: readonly Mark[] = [];
 
+/** Everything that decides how a mark is drawn, as one comparable value. */
+function markKey(mark: Mark): string {
+  const { kind, secondary, component, locked, clipped, radius, rect } = mark;
+  return JSON.stringify([
+    kind,
+    secondary,
+    component,
+    locked,
+    clipped,
+    radius,
+    rect.x,
+    rect.y,
+    rect.width,
+    rect.height,
+  ]);
+}
+
 /** Whether two lists of marks would draw the same boxes. */
 function sameMarks(a: readonly Mark[], b: readonly Mark[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((mark, index) => {
     const other = b[index];
-    return (
-      other !== undefined &&
-      mark.kind === other.kind &&
-      mark.secondary === other.secondary &&
-      mark.component === other.component &&
-      mark.locked === other.locked &&
-      mark.clipped === other.clipped &&
-      mark.radius === other.radius &&
-      mark.rect.x === other.rect.x &&
-      mark.rect.y === other.rect.y &&
-      mark.rect.width === other.rect.width &&
-      mark.rect.height === other.rect.height
-    );
+    return other !== undefined && markKey(mark) === markKey(other);
   });
 }
 

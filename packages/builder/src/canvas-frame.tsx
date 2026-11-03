@@ -539,6 +539,37 @@ const PAGE_CHROME_TOKENS: readonly {
 /** Marks the frame's sheet that carries the handed tokens. */
 const PAGE_TOKENS_ATTRIBUTE = "data-nx-page-chrome-tokens";
 
+/** The page's sheet for the handed tokens, made the first time it is asked. */
+function tokenSheet(page: Document): CSSStyleSheet | null {
+  const found = page.head.querySelector<HTMLStyleElement>(
+    `style[${PAGE_TOKENS_ATTRIBUTE}]`
+  );
+  if (found !== null) return found.sheet;
+  const holder = page.createElement("style");
+  holder.setAttribute(PAGE_TOKENS_ATTRIBUTE, "");
+  page.head.append(holder);
+  return holder.sheet;
+}
+
+/**
+ * One rule of the token sheet: `selector`, declaring each of `tokens` that
+ * has a value where the frame sits.
+ */
+function writeTokenRule(
+  sheet: CSSStyleSheet,
+  from: CSSStyleDeclaration,
+  { selector, tokens }: (typeof PAGE_CHROME_TOKENS)[number]
+): void {
+  const rule = sheet.cssRules[
+    sheet.insertRule(`${selector} {}`, sheet.cssRules.length)
+  ] as CSSStyleRule | undefined;
+  if (rule?.style === undefined) return;
+  for (const token of tokens) {
+    const value = from.getPropertyValue(token).trim();
+    if (value !== "") rule.style.setProperty(token, value);
+  }
+}
+
 /**
  * Write each token's value where the frame sits onto the region chrome that
  * reads it, through the style rules of one sheet of the editor's own. Set
@@ -547,27 +578,11 @@ const PAGE_TOKENS_ATTRIBUTE = "data-nx-page-chrome-tokens";
  */
 function handTokens(frame: HTMLIFrameElement, page: Document): void {
   const view = frame.ownerDocument.defaultView;
-  if (view === null) return;
+  const sheet = tokenSheet(page);
+  if (view === null || sheet === null) return;
   const from = view.getComputedStyle(frame);
-  let holder = page.head.querySelector(`style[${PAGE_TOKENS_ATTRIBUTE}]`);
-  if (holder === null) {
-    holder = page.createElement("style");
-    holder.setAttribute(PAGE_TOKENS_ATTRIBUTE, "");
-    page.head.append(holder);
-  }
-  const sheet = (holder as HTMLStyleElement).sheet;
-  if (sheet === null) return;
   while (sheet.cssRules.length > 0) sheet.deleteRule(0);
-  for (const { selector, tokens } of PAGE_CHROME_TOKENS) {
-    const rule =
-      sheet.cssRules[sheet.insertRule(`${selector} {}`, sheet.cssRules.length)];
-    if (rule === undefined || !("style" in rule)) continue;
-    const declarations = (rule as CSSStyleRule).style;
-    for (const token of tokens) {
-      const value = from.getPropertyValue(token).trim();
-      if (value !== "") declarations.setProperty(token, value);
-    }
-  }
+  for (const scope of PAGE_CHROME_TOKENS) writeTokenRule(sheet, from, scope);
 }
 
 /**
@@ -616,6 +631,29 @@ function usePageTokens(
   }, [frame, page]);
 }
 
+/** What the layer placement needs, once every part of it exists. */
+interface LayerParts {
+  readonly frame: HTMLIFrameElement;
+  readonly box: HTMLDivElement;
+  readonly content: HTMLDivElement;
+  readonly mountPoint: HTMLElement;
+  readonly view: Window & typeof globalThis;
+}
+
+/** The layer placement's parts, or `null` while any is still missing. */
+function layerParts(
+  frame: HTMLIFrameElement | null,
+  page: Document | null,
+  mountPoint: HTMLElement | null,
+  box: HTMLDivElement | null,
+  content: HTMLDivElement | null
+): LayerParts | null {
+  const view = page?.defaultView ?? null;
+  if (frame === null || mountPoint === null || view === null) return null;
+  if (box === null || content === null) return null;
+  return { frame, box, content, mountPoint, view };
+}
+
 /**
  * Keep the chrome layer over the frame's viewport, and its content box over
  * the canvas root.
@@ -633,19 +671,15 @@ function useLayerPlacement(
   scale: number
 ): void {
   useIsomorphicLayoutEffect(() => {
-    const box = layer.current;
-    const content = layerContent.current;
-    const view = page?.defaultView;
-    if (
-      frame === null ||
-      box === null ||
-      content === null ||
-      mountPoint === null ||
-      view === null ||
-      view === undefined
-    ) {
-      return;
-    }
+    const parts = layerParts(
+      frame,
+      page,
+      mountPoint,
+      layer.current,
+      layerContent.current
+    );
+    if (parts === null) return;
+    const { box, content, view } = parts;
     let root: HTMLElement | null = null;
     let sizes: ResizeObserver | null = null;
     let restyled: MutationObserver | null = null;
@@ -656,13 +690,13 @@ function useLayerPlacement(
        * are the same number by construction, and the mapping every piece of
        * chrome uses reads the measured one.
        */
-      const painted = framePaintedScale(frame);
+      const painted = framePaintedScale(parts.frame);
       const origin = frameContentOrigin(
         { x: 0, y: 0 },
-        frameInsetOf(frame),
+        frameInsetOf(parts.frame),
         painted
       );
-      const viewport = frameViewportOf(frame);
+      const viewport = frameViewportOf(parts.frame);
       box.style.left = `${String(origin.x)}px`;
       box.style.top = `${String(origin.y)}px`;
       box.style.width = `${String((viewport?.width ?? 0) * painted)}px`;
@@ -689,7 +723,7 @@ function useLayerPlacement(
     };
 
     const find = (): void => {
-      const found = mountPoint.querySelector(`.${CANVAS_ROOT_CLASS}`);
+      const found = parts.mountPoint.querySelector(`.${CANVAS_ROOT_CLASS}`);
       const next = isHTMLElement(found) ? found : null;
       if (next !== root) {
         sizes?.disconnect();
@@ -718,7 +752,7 @@ function useLayerPlacement(
         : undefined;
     find();
     const arrivals = Mutations === undefined ? null : new Mutations(find);
-    arrivals?.observe(mountPoint, { childList: true });
+    arrivals?.observe(parts.mountPoint, { childList: true });
     // A site darkening with the system changes the page's scheme with nothing
     // else changing.
     const systemScheme = view.matchMedia?.("(prefers-color-scheme: dark)");
