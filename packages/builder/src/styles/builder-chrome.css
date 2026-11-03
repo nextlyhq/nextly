@@ -4032,6 +4032,22 @@ fieldset.nx-inspector__fields {
   grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr);
 }
 
+/*
+ * A single control under its form toggle: the toggle's row already names the
+ * property, so the control's own label is kept for assistive technology and
+ * clipped from sight rather than said twice.
+ */
+label[data-named-above] .nx-style-inspector__field-label-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .nx-style-inspector .nx-style-inspector__field-label-text {
   overflow: hidden;
   text-overflow: ellipsis;

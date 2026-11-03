@@ -44,7 +44,6 @@ import {
   type SiteTokenSet,
   type TokenMode,
   type StyleLeaf,
-  type StyleShape,
   type StyleOrigin,
   type StyleState,
   type StyleSubject,
@@ -102,6 +101,7 @@ import type { InspectorSectionKey } from "./inspector-sections";
 import { layerLabel } from "./layers";
 import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
+import { radioGroupStep } from "./roving-radios";
 import type { SideOrientation } from "./side-orientation";
 import { stateLabel } from "./state-switcher";
 import {
@@ -1234,6 +1234,13 @@ function spacingRings(
 const CompactSides = React.createContext(false);
 
 /**
+ * Whether this field's form toggle is drawn just above it. A single control
+ * there keeps its label for assistive technology and drops the visible copy:
+ * the toggle's row already says the name.
+ */
+const NamedAbove = React.createContext(false);
+
+/**
  * The spacing section as the design draws it: one box, margin the outer ring
  * and padding the inner, around the element.
  *
@@ -1427,7 +1434,21 @@ function StylePropertyFields({
   namesSection: boolean;
 } & StyleFieldSurroundings): React.JSX.Element {
   const many = property.controls.length > 1;
-  const headed = many && !namesSection;
+  const fold = property.offered
+    ? foldedControlFor(property.property)
+    : undefined;
+  const choices = (property.offered ? property.variants : [])
+    // A folded property's root form follows from its value; see
+    // `style-folded.ts`. Its other choices, if any, stay.
+    .filter(
+      variant =>
+        variant.count > 1 && (fold === undefined || variant.path.length > 0)
+    );
+  // A toggle at the root is drawn on a row named for the property, so the
+  // property needs no heading over it as well.
+  const headed =
+    many && !namesSection && !choices.some(choice => choice.path.length === 0);
+  const toggled = choices.map(choice => choice.path.join("."));
   /*
    * Whether this property is drawn as a box, and in what order — one decision,
    * settled outside the component. Each side still keeps its own control, so it
@@ -1435,9 +1456,6 @@ function StylePropertyFields({
    * only.
    */
   const box = sideBoxFor(property.controls, orientation);
-  const fold = property.offered
-    ? foldedControlFor(property.property)
-    : undefined;
   return (
     <div
       className="nx-style-inspector__property"
@@ -1467,26 +1485,19 @@ function StylePropertyFields({
         the value itself is the honest way to remove it, and it is already
         there.
       */}
-      {(property.offered ? property.variants : [])
-        // A folded property's root form follows from its value; see
-        // `style-folded.ts`. Its other choices, if any, stay.
-        .filter(
-          variant =>
-            variant.count > 1 && (fold === undefined || variant.path.length > 0)
-        )
-        .map(variant => (
-          <FormChoice
-            key={variant.path.join(".")}
-            property={property}
-            variant={variant}
-            nodeId={nodeId}
-            state={state}
-            breakpoint={breakpoint}
-            editor={editor}
-            policy={policy}
-            onChooseForm={onChooseForm}
-          />
-        ))}
+      {choices.map(variant => (
+        <FormChoice
+          key={variant.path.join(".")}
+          property={property}
+          variant={variant}
+          nodeId={nodeId}
+          state={state}
+          breakpoint={breakpoint}
+          editor={editor}
+          policy={policy}
+          onChooseForm={onChooseForm}
+        />
+      ))}
       {property.offered ? null : (
         <p className="nx-inspector__note" data-not-offered={property.property}>
           This block no longer offers {property.label}. The value is still on
@@ -1514,7 +1525,7 @@ function StylePropertyFields({
         >
           <SideBoxFrame box={box}>
             {box.controls.map(control => (
-              <StyleControlField
+              <NamedAbove.Provider
                 // The ADDRESS, not just the position: a host switching state or
                 // breakpoint leaves this field mounted, and where the old and new
                 // addresses hold the same value — both unset, most often — the
@@ -1526,26 +1537,30 @@ function StylePropertyFields({
                   property.property,
                   ...control.path,
                 ].join(".")}
-                control={control}
-                side={sideOf(box, control)}
-                label={
-                  many
-                    ? fieldLabel(control.path[control.path.length - 1] ?? "")
-                    : property.label
-                }
-                summary={many ? undefined : property.summary}
-                propertyLabel={property.label}
-                clearOnly={!property.offered || control.withheld}
-                nodeId={nodeId}
-                state={state}
-                breakpoint={breakpoint}
-                editor={editor}
-                policy={policy}
-                tokens={tokens}
-                prefersDark={prefersDark}
-                provenanceOf={provenanceOf}
-                editing={editing}
-              />
+                value={toggled.includes(control.path.join("."))}
+              >
+                <StyleControlField
+                  control={control}
+                  side={sideOf(box, control)}
+                  label={
+                    many
+                      ? fieldLabel(control.path[control.path.length - 1] ?? "")
+                      : property.label
+                  }
+                  summary={many ? undefined : property.summary}
+                  propertyLabel={property.label}
+                  clearOnly={!property.offered || control.withheld}
+                  nodeId={nodeId}
+                  state={state}
+                  breakpoint={breakpoint}
+                  editor={editor}
+                  policy={policy}
+                  tokens={tokens}
+                  prefersDark={prefersDark}
+                  provenanceOf={provenanceOf}
+                  editing={editing}
+                />
+              </NamedAbove.Provider>
             ))}
           </SideBoxFrame>
         </FoldedUnion.Provider>
@@ -1567,29 +1582,10 @@ function formKey(property: string, path: readonly string[]): string {
 }
 
 /**
- * What each form is called, from the arm's own shape kind.
- *
- * The catalog gives arms no names, so their shape kind is the most specific
- * thing it says about them — and "Form 1 / Form 2" tells an author nothing
- * about which is which. Partial for the same reason the placeholders are: this
- * is a label, so a kind this build has not learned about gets the kind itself
- * rather than a compile error.
- */
-const FORM_LABEL: Partial<Record<StyleShape["kind"], string>> = {
-  dimension: "Length",
-  number: "Number",
-  keyword: "Keyword",
-  color: "Colour",
-  cssValue: "Custom",
-  url: "URL",
-  logicalSides: "Per side",
-  logicalCorners: "Per corner",
-  object: "Fields",
-  union: "Mixed",
-};
-
-/**
- * The choice of form at one union position.
+ * The choice of form at one union position: a toggle of its forms, named in
+ * plain words ("All | Corners", "Number | Auto"), on a row named for the
+ * property, where a menu labelled "Border radius form" put an internal word in
+ * front of authors.
  *
  * Choosing a form while a value is stored CLEARS it. The two forms hold
  * different things — one radius is not four corners — so there is nothing to
@@ -1616,10 +1612,10 @@ function FormChoice({
   policy: StylePolicy | undefined;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
-  const id = React.useId();
-  const choose = (raw: string) => {
-    const arm = Number(raw);
-    if (!Number.isInteger(arm)) return;
+  const labelId = React.useId();
+  const radios = React.useRef<(HTMLButtonElement | null)[]>([]);
+  const choose = (arm: number) => {
+    if (arm === variant.active) return;
     onChooseForm(property.property, variant.path, arm);
     const current = findNode(editor.document.nodes, nodeId);
     if (current === undefined) return;
@@ -1642,33 +1638,55 @@ function FormChoice({
     const cleared = batchStyleClearOps([current], address, policy);
     if (cleared.ops.length > 0) editor.applyAll(cleared.ops);
   };
+  // As a radio group's arrow keys do: move and choose together, wrapping.
+  const step = (event: React.KeyboardEvent) => {
+    const delta = radioGroupStep(event.key);
+    if (delta === null) return;
+    event.preventDefault();
+    const next = (variant.active + delta + variant.count) % variant.count;
+    choose(next);
+    radios.current[next]?.focus();
+  };
 
   return (
     <div className="nx-inspector__field" data-form-choice={property.property}>
-      <Label htmlFor={id}>
-        {/*
-          The PROPERTY's name at the root, because a property whose shape is a
-          union at the top draws one control and therefore no heading — so
-          `fontWeight`, `lineHeight` and `fontStyle` would all offer a selector
-          called "Form". Below the root the heading is rendered, so the position
-          is enough to tell them apart.
-        */}
+      {/*
+        The PROPERTY's name at the root, and the position's below it, where the
+        heading names the property: a toggle called "Form" would tell a
+        screen-reader user nothing about which property it changes. Plain text
+        rather than a label, which would forward a click to a radio.
+      */}
+      <p className="nx-inspector__field-name" id={labelId}>
         {variant.path.length === 0
-          ? `${property.label} form`
-          : `${fieldLabel(variant.path[variant.path.length - 1] ?? "")} form`}
-      </Label>
-      <Select value={String(variant.active)} onValueChange={choose}>
-        <SelectTrigger id={id}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {variant.kinds.map((kind, index) => (
-            <SelectItem key={`${index}:${kind}`} value={String(index)}>
-              {FORM_LABEL[kind] ?? kind}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+          ? property.label
+          : fieldLabel(variant.path[variant.path.length - 1] ?? "")}
+      </p>
+      <div
+        className="nx-style-inspector__toggle"
+        role="radiogroup"
+        aria-labelledby={labelId}
+      >
+        {variant.names.map((name, index) => {
+          const checked = index === variant.active;
+          return (
+            <button
+              key={`${index}:${name}`}
+              ref={button => {
+                radios.current[index] = button;
+              }}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              // The group's one tab stop is the chosen form.
+              tabIndex={checked ? 0 : -1}
+              onClick={() => choose(index)}
+              onKeyDown={step}
+            >
+              {name}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1733,11 +1751,13 @@ function StyleFieldLabel({
   editing: EditedAddress;
   descendant: string | undefined;
 }): React.JSX.Element {
+  const namedAbove = React.useContext(NamedAbove);
   return (
     <Label
       id={id}
       htmlFor={readOnly || focusOnly ? undefined : htmlFor}
       title={title}
+      data-named-above={namedAbove ? "" : undefined}
       {...(focusOnly && !readOnly
         ? {
             onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
@@ -3269,8 +3289,13 @@ function briefSubject(origin: StyleOrigin, editing: EditedAddress): string {
     case "element":
       return `${origin.tag.toUpperCase()} defaults`;
     case "node":
-      return editing.nameOf?.(origin.id) ?? "an enclosing block";
+      return enclosingName(editing, origin.id);
   }
+}
+
+/** An enclosing block as the Layers panel names it, or in general words. */
+function enclosingName(editing: EditedAddress, nodeId: string): string {
+  return editing.nameOf?.(nodeId) ?? "an enclosing block";
 }
 
 /**
@@ -3314,9 +3339,8 @@ function originSubject(
     case "element":
       return `the ${origin.tag} typography baseline`;
     case "node":
-      if (origin.id !== editing.nodeId) {
-        return editing.nameOf?.(origin.id) ?? "an enclosing block";
-      }
+      if (origin.id !== editing.nodeId)
+        return enclosingName(editing, origin.id);
       return control ?? "this block";
   }
 }

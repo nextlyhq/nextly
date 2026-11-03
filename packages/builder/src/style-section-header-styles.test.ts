@@ -95,6 +95,19 @@ describe("a field's provenance dot", () => {
   });
 });
 
+describe("a field under its form toggle", () => {
+  it("hides its label's words from sight only, the toggle's row saying them", () => {
+    const words = ruleBody(
+      "label[data-named-above] .nx-style-inspector__field-label-text"
+    );
+    // Clipped, not removed: the control keeps its name for assistive
+    // technology, and `display: none` would take it away.
+    expect(words).toContain("clip-path: inset(50%)");
+    expect(words).toContain("position: absolute");
+    expect(words).not.toContain("display: none");
+  });
+});
+
 describe("an inherited value's icon", () => {
   it("is ringed, dashed and muted, never filled as a chosen one is", () => {
     const ring = ruleBody(".nx-icon-choice__option[data-inherited]");

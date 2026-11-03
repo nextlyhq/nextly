@@ -163,6 +163,9 @@ describe("a union, which stores one value in more than one form", () => {
         active: 0,
         count: 2,
         kinds: ["dimension", "logicalCorners"],
+        // In plain words: a length beside per-corner values is the value for
+        // all of them.
+        names: ["All", "Corners"],
       },
     ]);
   });

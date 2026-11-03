@@ -180,6 +180,12 @@ export interface StyleControlVariants {
    * most specific thing the catalog actually says about them.
    */
   readonly kinds: readonly StyleShape["kind"][];
+  /**
+   * Each arm in plain words, in the catalog's order: what the toggle offering
+   * the choice says. Derived from the arms here, once, so nothing else names
+   * a form its own way.
+   */
+  readonly names: readonly string[];
 }
 
 /**
@@ -374,6 +380,7 @@ function walk(
         active,
         count: shape.of.length,
         kinds: shape.of.map(arm => arm.kind),
+        names: shape.of.map(arm => formName(arm, shape.of)),
       });
       return walk(property, path, shape.of[active], value, options, variants);
     }
@@ -461,4 +468,45 @@ export function styleControlsFor(
     variants
   );
   return { property: property.property, controls, variants };
+}
+
+/**
+ * What each form is called, from the arm's own shape kind.
+ *
+ * The catalog gives arms no names, so their shape kind is the most specific
+ * thing it says about them, and "Form 1 / Form 2" tells an author nothing.
+ * Partial so a kind this build has not learned about gets the kind itself.
+ */
+const FORM_NAME: Partial<Record<StyleShape["kind"], string>> = {
+  dimension: "Length",
+  number: "Number",
+  keyword: "Keyword",
+  color: "Colour",
+  cssValue: "Custom",
+  url: "URL",
+  logicalSides: "Sides",
+  logicalCorners: "Corners",
+  object: "Fields",
+  union: "Mixed",
+};
+
+/**
+ * One arm's name beside the others. A keyword arm of one word is that word
+ * ("Auto"), and a length beside a per-corner or per-side arm is the value for
+ * all of them ("All | Corners").
+ */
+function formName(arm: StyleShape, arms: readonly StyleShape[]): string {
+  if (arm.kind === "keyword" && arm.values.length === 1) {
+    const word = arm.values[0] ?? "";
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }
+  if (
+    arm.kind === "dimension" &&
+    arms.some(
+      other => other.kind === "logicalCorners" || other.kind === "logicalSides"
+    )
+  ) {
+    return "All";
+  }
+  return FORM_NAME[arm.kind] ?? arm.kind;
 }

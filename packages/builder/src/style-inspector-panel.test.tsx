@@ -809,12 +809,20 @@ describe("controls", () => {
     // engine answers with the catalog's first arm when nothing is stored.
     mount({ border: { radius: true } });
 
-    const trigger = screen.getByLabelText("Border radius form");
-    fireEvent.click(trigger);
-    // Named from the arms' own shape kinds rather than numbered.
-    expect(screen.getByRole("option", { name: "Per corner" })).toBeDefined();
+    // A toggle on the property's own row, its forms named in plain words.
+    const forms = screen.getByRole("radiogroup", { name: "Border radius" });
+    expect(
+      within(forms)
+        .getAllByRole("radio")
+        .map(radio => radio.textContent)
+    ).toEqual(["All", "Corners"]);
+    expect(
+      within(forms)
+        .getByRole("radio", { name: "All" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
 
-    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+    fireEvent.click(within(forms).getByRole("radio", { name: "Corners" }));
 
     expect(
       fieldsOf("borderRadius").getByLabelText("Start start")
@@ -830,8 +838,7 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ border: { radius: true } }, styles);
 
-    fireEvent.click(screen.getByLabelText("Border radius form"));
-    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Corners" }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
@@ -853,8 +860,9 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ position: true }, styles);
 
-    fireEvent.click(screen.getByLabelText("Z index form"));
-    fireEvent.click(screen.getByRole("option", { name: "Keyword" }));
+    // A form of one keyword is named by it: "Auto", not "Keyword".
+    const forms = screen.getByRole("radiogroup", { name: "Z index" });
+    fireEvent.click(within(forms).getByRole("radio", { name: "Auto" }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
@@ -971,14 +979,41 @@ describe("controls", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
-  it("names a ROOT form selector for its own property", () => {
+  it("names a ROOT form toggle for its own property, without the word form", () => {
     // A property whose shape is a union at the top draws one control and so no
-    // heading, so a selector called "Form" would tell a screen-reader user
-    // nothing about which property it changes. Typography's unions draw no
-    // form selector at all: their one control takes either form.
+    // heading, so a toggle called "Form" would tell a screen-reader user
+    // nothing about which property it changes. "Border radius form" was an
+    // internal word in front of authors. Typography's unions draw no form
+    // choice at all: their one control takes either form.
     mount({ border: { radius: true } });
 
-    expect(screen.getByLabelText("Border radius form")).toBeDefined();
+    expect(
+      screen.getByRole("radiogroup", { name: "Border radius" })
+    ).toBeDefined();
+    expect(screen.queryByText(/ form$/)).toBeNull();
+  });
+
+  it("moves between forms with the arrow keys, the chosen one the tab stop", () => {
+    mount({ border: { radius: true } });
+    const all = screen.getByRole("radio", { name: "All" });
+    expect(all.tabIndex).toBe(0);
+    expect(screen.getByRole("radio", { name: "Corners" }).tabIndex).toBe(-1);
+
+    fireEvent.keyDown(all, { key: "ArrowRight" });
+
+    expect(
+      fieldsOf("borderRadius").getByLabelText("Start start")
+    ).toBeDefined();
+  });
+
+  it("says the property's name once, on the toggle's row", () => {
+    // The one control under the toggle keeps its label for assistive
+    // technology and drops the visible copy, which said "Border radius" twice.
+    mount({ border: { radius: true } });
+    const below = document.querySelector(
+      '[data-property="borderRadius"] .nx-inspector__field:not([data-form-choice]) label'
+    );
+    expect(below?.hasAttribute("data-named-above")).toBe(true);
   });
 
   it("offers font weight as ONE list of named weights, with no form to choose first", () => {
@@ -3428,7 +3463,10 @@ describe("a segmented keyword control behaves as a toggle", () => {
      */
     const editor = mountWith("italic");
 
-    fireEvent.click(fieldsOf("fontStyle").getByText("Font style"));
+    // The field's own label: the form toggle's row says the name as well.
+    fireEvent.click(
+      fieldsOf("fontStyle").getByText("Font style", { selector: "label *" })
+    );
 
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
