@@ -306,11 +306,12 @@ function editorTopBar(
           state opens towards the panel buttons rather than between it and
           what it describes. Reserved only where the bar has the room: below
           1400px it takes what it shows, as the device labels give way there,
-          so the end column never runs into the zoom. */}
+          so the end column never runs into the zoom. Set in the bar's own
+          text size, as Preview beside it is. */}
         {/* First in the group, as the agreed bar has it: one search for
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
-        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end @max-[1400px]/topbar:min-w-0" />
+        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end text-sm @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
         {/* Last, at the bar's far end where the header kept them: the
           document's leading action with its other ways to publish on its

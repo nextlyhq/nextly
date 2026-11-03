@@ -90,6 +90,7 @@ import {
   useHostedDocumentActions,
   useHostedRecoveryPoint,
 } from "../DocumentActionsContext";
+import { useDocumentRestore } from "../DocumentRestoreContext";
 import { DocumentSaveIndicator } from "../DocumentSurfaceControls";
 import { EntryForm } from "../EntryForm";
 import { useDocumentStatus } from "../EntryFormContext";
@@ -700,6 +701,92 @@ describe("EntryForm with a document view", () => {
     );
     expect(dismiss).toHaveBeenCalledTimes(1);
     expect(restore).not.toHaveBeenCalled();
+  });
+
+  describe("a view that restores its own field", () => {
+    const titledLayout = {
+      name: "pages",
+      fields: [
+        { name: "title", type: "text", label: "Title" },
+        { name: "layout", type: "blocks" },
+      ],
+    } as never;
+    const stored = { id: "e1", title: "Hello", layout: { nodes: ["stored"] } };
+    const RESTORING_VIEW = "@acme/pb/admin#Restoring";
+    const applied = vi.fn<(value: unknown) => boolean>();
+
+    function RestoringView(): ReactElement {
+      useEffect(() => {
+        mounted();
+      }, []);
+      useDocumentRestore(value => applied(value));
+      const { watch } = useFormContext();
+      return (
+        <>
+          <p>title: {String(watch("title"))}</p>
+          <p>layout: {JSON.stringify(watch("layout"))}</p>
+        </>
+      );
+    }
+
+    function offerRecovery(dismiss = vi.fn(), restore = vi.fn()) {
+      recovery.current = {
+        ...recovery.current,
+        offer: {
+          savedAt: new Date(),
+          snapshot: { title: "Recovered", layout: { nodes: ["recovered"] } },
+        },
+        dismiss,
+        restore,
+      };
+      return { dismiss, restore };
+    }
+
+    function open() {
+      registerComponent(RESTORING_VIEW, RestoringView);
+      return renderView({
+        collection: titledLayout,
+        entry: stored as never,
+        documentView: {
+          component: RESTORING_VIEW,
+          onExit,
+          fieldType: "blocks",
+        },
+      });
+    }
+
+    it("hands the view its field's recovered value and resets the others, with no fresh draw", async () => {
+      // The view applies its own field as an edit it can undo; drawing it
+      // afresh would start its history again.
+      applied.mockReturnValue(true);
+      const { dismiss, restore } = offerRecovery();
+      open();
+      expect(mounted).toHaveBeenCalledTimes(1);
+
+      await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+      expect(applied).toHaveBeenCalledWith({ nodes: ["recovered"] });
+      expect(screen.getByText("title: Recovered")).toBeInTheDocument();
+      // The view's field keeps what the view holds: its own edit writes it.
+      expect(
+        screen.getByText(`layout: ${JSON.stringify({ nodes: ["stored"] })}`)
+      ).toBeInTheDocument();
+      expect(dismiss).toHaveBeenCalledTimes(1);
+      expect(restore).not.toHaveBeenCalled();
+      expect(mounted).toHaveBeenCalledTimes(1);
+    });
+
+    it("restores the old way when the view declines", async () => {
+      applied.mockReturnValue(false);
+      const { restore } = offerRecovery();
+      open();
+
+      await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+      expect(applied).toHaveBeenCalledTimes(1);
+      expect(restore).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+    });
   });
 
   it("hands the view the document's recovery point, so its save state reads it as the header's does", () => {

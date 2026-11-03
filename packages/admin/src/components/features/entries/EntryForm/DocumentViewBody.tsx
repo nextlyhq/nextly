@@ -25,7 +25,7 @@
 
 import type { FieldConfig } from "nextly/config";
 import type { JSX, ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
@@ -52,6 +52,11 @@ import {
   type ViewFieldRefusal,
 } from "./document-view-field-gate";
 import { DocumentLockBanner } from "./DocumentLockBanner";
+import {
+  DocumentRestoreProvider,
+  type DocumentRestoreHandler,
+  type DocumentRestoreRegistry,
+} from "./DocumentRestoreContext";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { DocumentViewFieldRefused } from "./DocumentViewFieldRefused";
 import { FormErrorSummary } from "./FormErrorSummary";
@@ -154,7 +159,10 @@ function useFieldInAddress(
  * one. Gone first, its hand-over lands before the restore and is replaced by
  * it.
  */
-function useRestoreRemount(recovery: UseAutosaveRecoveryResult): {
+function useRestoreRemount(
+  recovery: UseAutosaveRecoveryResult,
+  restoreInView: () => boolean
+): {
   recovery: UseAutosaveRecoveryResult;
   generation: number;
   /** True for the one commit between the view leaving and the restore. */
@@ -170,10 +178,78 @@ function useRestoreRemount(recovery: UseAutosaveRecoveryResult): {
     setWithdrawn(false);
   }, [withdrawn, restore]);
   const offered = useMemo(
-    () => ({ ...recovery, restore: () => setWithdrawn(true) }),
-    [recovery]
+    () => ({
+      ...recovery,
+      // The view's own restore first, as an edit it can undo; drawn afresh
+      // only when it has none or declines.
+      restore: () => {
+        if (!restoreInView()) setWithdrawn(true);
+      },
+    }),
+    [recovery, restoreInView]
   );
   return { recovery: offered, generation, withdrawn };
+}
+
+/**
+ * How Restore reaches the view: through the handler the view registers, as an
+ * edit it can undo, and otherwise by drawing it afresh over the restored
+ * values. Returns the offer with that restore, and where the view registers.
+ */
+function useViewRestore(
+  recovery: UseAutosaveRecoveryResult,
+  form: UseFormReturn<Record<string, unknown>>,
+  fieldPath: string | undefined
+): ReturnType<typeof useRestoreRemount> & {
+  restoreRegistry: DocumentRestoreRegistry;
+} {
+  const restoreRegistry = useRef<DocumentRestoreHandler | null>(null);
+  const remount = useRestoreRemount(
+    recovery,
+    useRestoreInView(recovery, form, fieldPath, restoreRegistry)
+  );
+  return { ...remount, restoreRegistry };
+}
+
+/**
+ * Restore through the view's own handler: the view applies its field's
+ * recovered value as an edit it can undo, and every OTHER field is reset to
+ * the recovery point here. False when the view has no handler, there is no
+ * field or no offer, or the view declines; nothing has changed then.
+ */
+function useRestoreInView(
+  recovery: UseAutosaveRecoveryResult,
+  form: UseFormReturn<Record<string, unknown>>,
+  fieldPath: string | undefined,
+  registry: DocumentRestoreRegistry
+): () => boolean {
+  const { offer, dismiss } = recovery;
+  return useCallback(() => {
+    const handler = registry.current;
+    if (handler === null || offer === null || fieldPath === undefined) {
+      return false;
+    }
+    const snapshot = offer.snapshot as Record<string, unknown>;
+    if (!handler(valueAtPath(snapshot, fieldPath))) return false;
+    // The view's field keeps what the view holds; the view writes the
+    // restored value through its own edit. `keepDefaultValues`, so the form
+    // stays dirty: the recovered values are not what the server holds.
+    const held = form.getValues(fieldPath);
+    form.reset(snapshot, { keepDefaultValues: true });
+    form.setValue(fieldPath, held, { shouldDirty: true });
+    dismiss();
+    return true;
+  }, [registry, offer, fieldPath, form, dismiss]);
+}
+
+/** The value at a dotted form path (`hero.body`, `sections.0.body`), if any. */
+function valueAtPath(record: Record<string, unknown>, path: string): unknown {
+  let at: unknown = record;
+  for (const part of path.split(".")) {
+    if (typeof at !== "object" || at === null) return undefined;
+    at = (at as Record<string, unknown>)[part];
+  }
+  return at;
 }
 
 /** The offer the save chip may make, as the banner would make it. */
@@ -293,14 +369,17 @@ export function DocumentViewBody({
    * through whatever navigation came next, with the work still unsaved.
    */
   const exit = view.onExit;
-  const offered = useRestoreRemount(recovery);
+  const { editing, refusal } = useViewField(view.fieldType, fields, form);
+  const { restoreRegistry, ...offered } = useViewRestore(
+    recovery,
+    form,
+    editing.kind === "field" ? editing.name : undefined
+  );
   // Handed to the save chip the view draws, which makes the offer there; the
   // banner below is for a view that draws no chip.
   const recoveryOffer = useRecoveryOfferHost(
     useChipRecoveryOffer(offered.recovery, viewingVersion)
   );
-
-  const { editing, refusal } = useViewField(view.fieldType, fields, form);
 
   const { errors, submitCount } = form.formState;
   const viewProps: DocumentViewProps = {
@@ -352,14 +431,16 @@ export function DocumentViewBody({
             or `display: contents` still has an element taking the height. */}
         <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
           <RecoveryOfferProvider value={recoveryOffer.value}>
-            <ViewArea
-              editing={editing}
-              refusal={refusal}
-              withdrawn={offered.withdrawn}
-              generation={offered.generation}
-              component={view.component}
-              viewProps={viewProps}
-            />
+            <DocumentRestoreProvider registry={restoreRegistry}>
+              <ViewArea
+                editing={editing}
+                refusal={refusal}
+                withdrawn={offered.withdrawn}
+                generation={offered.generation}
+                component={view.component}
+                viewProps={viewProps}
+              />
+            </DocumentRestoreProvider>
           </RecoveryOfferProvider>
         </div>
       </div>
