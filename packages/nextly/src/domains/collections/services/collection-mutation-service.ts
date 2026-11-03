@@ -2500,6 +2500,34 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * A write's top-level payload as its caller sent it, for the validators of
+   * a field inside a field-group instance, which `PluginFieldValidateArgs.data`
+   * promises the write: the processed data with what the write lifted out of
+   * it put back, its relations and field groups (`lifted`) and, for a
+   * translation, the language's values and status, which the language split
+   * moves to the companion row.
+   */
+  private writtenPayload(
+    finalData: Record<string, unknown>,
+    lifted: ReadonlyArray<Record<string, unknown>>,
+    localized:
+      | {
+          localizedFieldValues: Record<string, unknown>;
+          companionData: Record<string, unknown>;
+        }
+      | null
+      | undefined
+  ): Record<string, unknown> {
+    const status = localized?.companionData._status;
+    return Object.assign(
+      { ...finalData },
+      localized?.localizedFieldValues,
+      typeof status === "string" ? { status } : {},
+      ...lifted
+    );
+  }
+
+  /**
    * The entry write a validation is for, reading on the connection this write
    * uses: `tx` inside a transaction, the pool before one opens.
    *
@@ -2512,10 +2540,13 @@ export class CollectionMutationService extends BaseService {
     slug: string,
     id: string | undefined,
     tx?: TransactionContext,
-    locale?: string
+    locale?: string,
+    // The write's top-level payload, for a field-group instance's validators,
+    // which are otherwise handed the instance; see `EntryWriteContext.payload`.
+    payload?: Record<string, unknown>
   ): EntryWriteContext {
     const defaultLocale = this.localization?.defaultLocale ?? null;
-    return entryWriteContext({
+    const write = entryWriteContext({
       kind: "collection",
       slug,
       ...(id === undefined ? {} : { id }),
@@ -2525,6 +2556,7 @@ export class CollectionMutationService extends BaseService {
           ? { db: this.adapter, executor: undefined, defaultLocale }
           : { db: tx, executor: tx.getDrizzle(), defaultLocale },
     });
+    return payload === undefined ? write : { ...write, payload };
   }
 
   /**
@@ -3309,6 +3341,11 @@ export class CollectionMutationService extends BaseService {
       user?: UserContext;
       /** Who the write is made as, for each instance's own field rules. */
       access: FieldGroupWriteAccess;
+      /**
+       * The host write's context, so a field inside an instance that reads the
+       * library (a blocks field's composition) judges it on this write.
+       */
+      write: EntryWriteContext;
     }
   ): Promise<void> {
     if (!this.fieldGroupDataService || Object.keys(args.data).length === 0) {
@@ -3324,6 +3361,7 @@ export class CollectionMutationService extends BaseService {
         req: args.user ? { user: args.user } : {},
         // Who the write is made as, for each instance's own field rules.
         access: args.access,
+        write: args.write,
       });
     } catch (error: unknown) {
       throw markWriteIntegrityFailure(error);
@@ -6912,6 +6950,20 @@ export class CollectionMutationService extends BaseService {
             // Who the write is made as, for each instance's own field rules: the
             // caller and trust the entry's own fields are judged with.
             access: this.fieldGroupAccess(params),
+            // The entry's write, so a field inside an instance that reads the
+            // library judges it on this transaction as the entry's own fields.
+            write: this.validationWrite(
+              params.collectionName,
+              entry.id as string,
+              tx,
+              params.locale,
+              // The payload as sent, with what the write lifted out of it put back.
+              this.writtenPayload(
+                finalData,
+                [manyToManyData, componentFieldData],
+                localizedWrite
+              )
+            ),
           });
         }
 
@@ -11794,6 +11846,20 @@ export class CollectionMutationService extends BaseService {
                 // Who the write is made as, for each instance's own field rules: the
                 // caller and trust the entry's own fields are judged with.
                 access: this.fieldGroupAccess(params),
+                // The entry's write, so a field inside an instance that reads
+                // the library judges it on this transaction.
+                write: this.validationWrite(
+                  params.collectionName,
+                  params.entryId,
+                  tx,
+                  params.locale,
+                  // The payload as sent, with what the write lifted out of it put back.
+                  this.writtenPayload(
+                    finalData,
+                    [manyToManyData, attemptComponentData],
+                    localizedUpdate
+                  )
+                ),
               }
             );
           }
@@ -15225,6 +15291,18 @@ export class CollectionMutationService extends BaseService {
           data: componentFieldData,
           user: params.user,
           access: this.fieldGroupAccess(params),
+          write: this.validationWrite(
+            params.collectionName,
+            (entry as { id: string }).id,
+            tx,
+            localizedWrite?.writeLocale,
+            // The payload as sent, with what the write lifted out of it put back.
+            this.writtenPayload(
+              finalData,
+              [manyToManyData, componentFieldData],
+              localizedWrite
+            )
+          ),
         });
         return entry;
       });
@@ -16357,6 +16435,18 @@ export class CollectionMutationService extends BaseService {
           data: componentFieldData,
           user: params.user,
           access: this.fieldGroupAccess(params),
+          write: this.validationWrite(
+            params.collectionName,
+            entryId,
+            tx,
+            localizedUpdate?.writeLocale,
+            // The payload as sent, with what the write lifted out of it put back.
+            this.writtenPayload(
+              finalData,
+              [manyToManyData, componentFieldData],
+              localizedUpdate
+            )
+          ),
         });
         // Which media items the entry uses now, from what this update stored.
         // A held edit stored nothing, so it changes nothing here either.

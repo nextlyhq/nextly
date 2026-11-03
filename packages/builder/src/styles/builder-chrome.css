@@ -1256,6 +1256,68 @@
 }
 
 /*
+ * The banner over a component's own view: Webflow's banner over a main
+ * component, in the component's hue from the accepted editor mock, so the
+ * author reads it as "this is the shared thing". A band rather than a toast,
+ * because it holds for the whole view. Drawn above the shell, outside the
+ * chrome's own tokens, so the hue falls back to the admin's purple there.
+ */
+.nx-component-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid
+    color-mix(
+      in oklch,
+      var(--nx-builder-component, var(--nx-code-keyword)) 35%,
+      transparent
+    );
+  background: color-mix(
+    in oklch,
+    var(--nx-builder-component, var(--nx-code-keyword)) 8%,
+    var(--nx-background)
+  );
+  color: var(--nx-foreground);
+}
+
+.nx-component-banner__glyph {
+  flex: 0 0 auto;
+  color: var(--nx-builder-component, var(--nx-code-keyword));
+}
+
+.nx-component-banner__text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.nx-component-banner__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.nx-component-banner__reach {
+  color: var(--nx-muted-foreground);
+}
+
+/* The placement inspector's way into the component's own view. */
+.nx-inspector__edit-component {
+  align-self: flex-start;
+  gap: 0.375rem;
+}
+
+.nx-inspector__edit-component svg {
+  color: var(--nx-builder-component, var(--nx-code-keyword));
+}
+
+/*
  * A container, so a field can answer for the RAIL's width rather than the
  * window's. The rail is resizable, so the width that decides whether a label
  * fits beside its control is not a property of the viewport.
