@@ -58,7 +58,7 @@ export { userPreferenceStore } from "./shell-state";
  * A pure function over a document, so it crosses this entry carrying no state
  * and no React.
  */
-export { selectionIsInspectable } from "./inspector";
+export { lockViewOf, selectionIsInspectable } from "./inspector";
 export { pageStyleTrace } from "./style-trace";
 
 /**

@@ -1228,6 +1228,42 @@
   min-width: 0;
 }
 
+/*
+ * An exposed row's label sits beside its CONTROL, not beside the whole cell:
+ * the cell stacks the control over its provenance and, for a held row, the
+ * reason, so a label centred on the cell drifts below the field it names.
+ * Top-aligned, and as tall as the control, so every row reads the same way.
+ */
+.nx-inspector__field.nx-inspector__field--exposed {
+  align-items: start;
+}
+
+.nx-inspector__field--exposed > label,
+.nx-inspector__field--exposed > .nx-inspector__field-name {
+  display: flex;
+  align-items: center;
+  min-height: 2.5rem;
+}
+
+/*
+ * Why a held row cannot change, under its field as helper text: the lock
+ * icon at the provenance badge's size, in the same muted tone.
+ */
+.nx-inspector__held-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+/* On the first line of a reason that wraps, not centred across all of it. */
+.nx-inspector__held-reason > .nx-inspector__source-icon {
+  margin-block-start: 0.1875rem;
+}
+
 .nx-inspector__provenance {
   display: flex;
   align-items: center;
@@ -1600,6 +1636,12 @@
   .nx-inspector__field > *,
   .nx-inspector__field > label {
     grid-column: 1;
+  }
+
+  /* Stacked, the label sits above its control and needs no control height. */
+  .nx-inspector__field--exposed > label,
+  .nx-inspector__field--exposed > .nx-inspector__field-name {
+    min-height: 0;
   }
 }
 

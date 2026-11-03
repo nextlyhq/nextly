@@ -50,6 +50,7 @@ import {
   registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
+  variantLockChanges,
   variantNamesIn,
   type BlockDocument,
   type BlockNode,
@@ -87,7 +88,11 @@ import {
 } from "../composition-reading";
 
 import { isForest } from "./blocks-document";
-import { LAYERS_LOCK_CHANGED, placedLockMessage } from "./layers-lock-wording";
+import {
+  LAYERS_LOCK_CHANGED,
+  placedLockMessage,
+  variantLockMessage,
+} from "./layers-lock-wording";
 import {
   composedFormsRead,
   lockBaselines,
@@ -285,6 +290,13 @@ export async function compositionIssues(
   const report = issueReport(args.path);
   if (savesComponent(write, args.path, setup.store)) {
     await judgeLockedExposures(document, write, setup, report);
+    await judgeVariantLocks({
+      document,
+      args,
+      setup,
+      read: documentReader(source, true),
+      report,
+    });
   }
   // ONE allowance for every composition this save performs, the loop check
   // included, so the bound is on the save rather than on each check.
@@ -366,6 +378,77 @@ function savesComponent(
     write.slug === store.collection &&
     path === store.field
   );
+}
+
+/**
+ * Refuse a component save whose variant changes a block the component locks
+ * in Layers (`variantLockChanges`), naming the block and the variant.
+ *
+ * Judged against the WRITTEN component's locks, so a lock this save adds holds
+ * over a variant already stored, and a create is judged as well as an update.
+ * Drawn with the library a full composition reads, surveyed through every
+ * component the written and stored forms place, so a variant reaching a block
+ * locked inside a nested component is seen. A variant the stored component
+ * already drew the same way is kept. A localized field whose language store
+ * is not ready is kept unjudged, as the page's own locks are.
+ */
+async function judgeVariantLocks(args: {
+  document: BlockDocument;
+  args: Pick<PluginFieldValidateArgs, "path" | "write"> &
+    Partial<Pick<PluginFieldValidateArgs, "field">>;
+  setup: CompositionSetup;
+  read: BoundedReader;
+  report: Report;
+}): Promise<void> {
+  const { document, setup, read, report } = args;
+  const { path, write, field } = args.args;
+  if ((variantNamesIn(document) ?? []).length === 0) return;
+  const stored = await readStoredForms(write, path, [true], isLocalized(field));
+  if (!stored.readable) return;
+  const [newest] = stored.forms;
+  const library = await placedLibrary(
+    [document, ...(newest === undefined ? [] : [newest])],
+    read,
+    setup.limits
+  );
+  const changes = variantLockChanges(document, newest, {
+    limits: setup.limits,
+    components: lookupOf(library),
+  });
+  const label = fieldLabel(field, path);
+  for (const change of changes) {
+    report.add(LAYERS_LOCK_CHANGED, `${label}: ${variantLockMessage(change)}`);
+  }
+}
+
+/** Whether a field is kept per language. */
+function isLocalized(
+  field: Partial<Pick<PluginFieldValidateArgs, "field">>["field"]
+): boolean {
+  return (field as { localized?: unknown } | undefined)?.localized === true;
+}
+
+/** A field's label for an issue, or its path where it has none. */
+function fieldLabel(
+  field: Partial<Pick<PluginFieldValidateArgs, "field">>["field"],
+  path: string
+): string {
+  return typeof field?.label === "string" && field.label !== ""
+    ? field.label
+    : path;
+}
+
+/** Every component the documents place, read into one library. */
+async function placedLibrary(
+  documents: readonly BlockDocument[],
+  read: BoundedReader,
+  limits: DocumentLimits
+): Promise<HeldLibrary> {
+  const library = heldLibrary();
+  for (const placing of documents) {
+    await readEveryPlacedDefinition(placing, library, read, limits);
+  }
+  return library;
 }
 
 /**
