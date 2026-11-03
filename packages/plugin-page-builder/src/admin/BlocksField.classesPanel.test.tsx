@@ -109,6 +109,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+/*
+ * A designer. The variables studio surrounds every Design tab, so it is drawn
+ * here too, and it asks whether the variables may be changed.
+ */
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
