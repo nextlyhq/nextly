@@ -1,4 +1,4 @@
-import { expect, type Frame, type Page } from "@playwright/test";
+import { expect, type Frame, type Locator, type Page } from "@playwright/test";
 
 import { CANVAS_FRAME, canvasFrame } from "../support/canvas-frame";
 import { test } from "../support/test";
@@ -1983,5 +1983,52 @@ test.describe("rounded geometry", () => {
     expect(ancestor.area).toBe(0);
 
     await expect(page.locator(BAND)).not.toHaveCount(0);
+  });
+});
+
+test.describe("the space a container puts between its children", () => {
+  /**
+   * Put an element before the section's only block, so that block is a child
+   * after the first and the section's gap rule reaches it. Plain markup, not a
+   * block: the gap rule is `> * + *` and counts any element.
+   */
+  async function secondChildOfSection(page: Page): Promise<Locator> {
+    await page.goto(ROUTE);
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
+      const text = document.querySelector('[data-nx-node="hx-nested-text"]');
+      text?.parentElement?.insertBefore(document.createElement("div"), text);
+    });
+    return target;
+  }
+
+  test("names the section a block's top space comes from", async ({ page }) => {
+    const target = await secondChildOfSection(page);
+    await target.click();
+    await expect(page.locator(band("margin", "top"))).toHaveText(
+      /^\d+(\.\d+)? · Gap · from Section$/
+    );
+  });
+
+  test("calls an author's margin the block's own, even when it reads the gap's own token", async ({
+    page,
+  }) => {
+    const target = await secondChildOfSection(page);
+    // At an author's weight (above the gap rule's single class), and the same
+    // length the gap gives, through the very token it reads.
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
+      const style = document.createElement("style");
+      style.textContent =
+        '.nx-pb-page.nx-pb-page [data-nx-node="hx-nested-text"] { margin-block-start: var(--site-space-stack); }';
+      document.head.append(style);
+    });
+    await target.click();
+    const margin = page.locator(band("margin", "top"));
+    await expect(margin).toHaveText(/^\d+(\.\d+)?$/);
   });
 });

@@ -8,28 +8,22 @@
  * labelled with the number alone tells the author the child carries spacing it
  * does not. The overlay names the container instead: "Gap · from Section".
  *
- * Asked of the rendered page, for the reason the bands are: the cascade decides
- * which value wins, and an author's margin on the child (a node value or a
- * named class) beats the gap at any breakpoint. So the question is answered by
- * taking the block's own classes away for one synchronous read and putting them
- * back: if the margin is unchanged, nothing the author set on the block is
- * producing it, and in a flow container that holds it after another block, it
- * is the container's gap. The attribute is restored inside the same task, so
- * nothing paints and the canvas's mutation watch sees no net change.
- *
- * A host stylesheet rule on the element itself (`.content p { margin… }`) would
- * also survive the class removal and read as the gap. The canvas is drawn in
- * the site's own layout, so that is possible; it is also the case where the
- * published page shows the same space, and the band's number is still right.
+ * Decided by which rule WINS, not by what the value is. The gap rule is keyed
+ * on the container's block-type class, so taking that class off the container
+ * for one synchronous read takes the gap rule out of the cascade and nothing
+ * else the child depends on: if the child's margin changes, the gap rule was
+ * the one applying. An author's margin on the child (a node value or a named
+ * class, either of which outranks the gap) survives the removal unchanged,
+ * even when it is the same length or reads the same token as the gap. The
+ * attribute is restored inside the same task, so nothing paints and the
+ * canvas's mutation watch sees no net change.
  *
  * @module spacing-gap
  */
 
 import {
+  BLOCK_TYPE_CLASS_PREFIX,
   findNode,
-  NAMED_CLASS_PREFIX,
-  NODE_CLASS_PREFIX,
-  CONTENT_WIDTH_CLASS,
   type AnyBlockDefinition,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
@@ -61,16 +55,6 @@ function marginOn(style: CSSStyleDeclaration, side: SpacingSide): string {
     case "left":
       return style.marginLeft;
   }
-}
-
-/**
- * Whether a class is one the author's own spacing reaches the block through:
- * its node class or a named class. The block-type class, part classes and the
- * content-width class are defaults and stay on.
- */
-function ownClass(name: string): boolean {
-  if (name.startsWith(NAMED_CLASS_PREFIX)) return true;
-  return name.startsWith(NODE_CLASS_PREFIX) && name !== CONTENT_WIDTH_CLASS;
 }
 
 /** Whether a computed `display` lays its children out with `gap`. */
@@ -109,20 +93,20 @@ export function gapOwnerOf(
   const style = view.getComputedStyle(block);
   const side = blockStartSide(style.writingMode);
   const shown = marginOn(style, side);
-  const classes = block.getAttribute("class");
+  const classes = parent.getAttribute("class");
   if (classes === null) return undefined;
-  block.setAttribute(
+  parent.setAttribute(
     "class",
     classes
       .split(/\s+/)
-      .filter(name => name !== "" && !ownClass(name))
+      .filter(name => name !== "" && !name.startsWith(BLOCK_TYPE_CLASS_PREFIX))
       .join(" ")
   );
-  let unset: string;
+  let withoutGap: string;
   try {
-    unset = marginOn(view.getComputedStyle(block), side);
+    withoutGap = marginOn(view.getComputedStyle(block), side);
   } finally {
-    block.setAttribute("class", classes);
+    parent.setAttribute("class", classes);
   }
-  return unset === shown ? layerLabel(container, lookup) : undefined;
+  return withoutGap === shown ? undefined : layerLabel(container, lookup);
 }

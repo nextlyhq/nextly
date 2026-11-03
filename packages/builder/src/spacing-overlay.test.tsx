@@ -963,14 +963,16 @@ describe("the space a container puts between its children", () => {
   }
 
   /**
-   * Computed styles per node, where a node's value may depend on whether the
-   * element still wears its own node class: removing it is how the overlay
-   * asks what the block's margin is with the author's own spacing taken away.
+   * Computed styles per node, modelling the cascade the overlay probes: whether
+   * the element wears its own node class (an author's value applies), and
+   * whether the container's gap rule reaches it (its parent wears the
+   * container's block-type class).
    */
   function stubByElement(
     styles: (
       id: string,
-      ownClass: boolean
+      ownClass: boolean,
+      gapRuleMatches: boolean
     ) => Partial<Record<string, string>> | undefined
   ) {
     vi.spyOn(window, "getComputedStyle").mockImplementation(((
@@ -981,8 +983,13 @@ describe("the space a container puts between its children", () => {
       const ownClass = Array.from(element.classList ?? []).some(
         name => name.startsWith("nx-pb-") && name !== "nx-pb-contained"
       );
+      const gapRuleMatches = Array.from(
+        element.parentElement?.classList ?? []
+      ).some(name => name.startsWith("nx-bt-"));
       const values =
-        id === null || id === undefined ? undefined : styles(id, ownClass);
+        id === null || id === undefined
+          ? undefined
+          : styles(id, ownClass, gapRuleMatches);
       return values === undefined
         ? REAL_COMPUTED_STYLE(element, pseudo)
         : styleOf(
@@ -1011,11 +1018,11 @@ describe("the space a container puts between its children", () => {
   }
 
   it("names the container a second child's top space comes from", () => {
-    stubByElement(id =>
+    stubByElement((id, _own, gap) =>
       id === "s"
         ? { display: "block" }
         : id === "b"
-          ? { marginTop: "18px" }
+          ? { marginTop: gap ? "18px" : "0px" }
           : undefined
     );
     const { container } = mountStacked("b");
@@ -1025,15 +1032,30 @@ describe("the space a container puts between its children", () => {
   it("calls an author's own margin on the child its own", () => {
     // 40px while the node wears its own class, 18px (the gap) without it: the
     // author's value is what is on screen, and it is theirs.
-    stubByElement((id, ownClass) =>
+    stubByElement((id, ownClass, gap) =>
       id === "s"
         ? { display: "block" }
         : id === "b"
-          ? { marginTop: ownClass ? "40px" : "18px" }
+          ? { marginTop: ownClass ? "40px" : gap ? "18px" : "0px" }
           : undefined
     );
     const { container } = mountStacked("b");
     expect(labels(container)).toEqual(["40"]);
+  });
+
+  it("calls an author's margin its own even when it equals the gap", () => {
+    // The author's class sets the same 18px the gap would: the gap rule loses
+    // to it, so taking the gap rule away changes nothing and the space is the
+    // block's own. Comparing values alone would call it the container's.
+    stubByElement((id, ownClass, gap) =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: ownClass ? "18px" : gap ? "18px" : "0px" }
+          : undefined
+    );
+    const { container } = mountStacked("b");
+    expect(labels(container)).toEqual(["18"]);
   });
 
   it("never calls the first child's space a gap", () => {
@@ -1077,11 +1099,11 @@ describe("the space a container puts between its children", () => {
       ...STACKED,
       nodes: [{ ...STACKED.nodes[0], type: "acme/private-stack" }],
     } as unknown as BlockDocument;
-    stubByElement(id =>
+    stubByElement((id, _own, gap) =>
       id === "s"
         ? { display: "block" }
         : id === "b"
-          ? { marginTop: "16px" }
+          ? { marginTop: gap ? "16px" : "0px" }
           : undefined
     );
     const editor = { ...editorOf("b"), document } as EditorState;
