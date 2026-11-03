@@ -46,7 +46,7 @@ export function reachSentence(
 }
 
 /** What the band says on hover and to a screen reader: when the change lands. */
-const BAND_HINT = "Every placement updates when you save.";
+const BAND_HINT = "Every page that uses it updates when you save.";
 
 /** @experimental Settles when the component editor ships. */
 export interface ComponentBannerProps {

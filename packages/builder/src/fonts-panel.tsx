@@ -52,6 +52,7 @@ import {
   type SiteFamily,
 } from "./font-library";
 import { FontUploadEditor, type FontFaceUpload } from "./font-upload-editor";
+import { KeepOrRemove, Refusal, useRefusableWrite } from "./panel-actions";
 
 export type { FontFaceUpload } from "./font-upload-editor";
 export type {
@@ -589,25 +590,10 @@ function RemoveFamily({
   onRemove: () => Promise<string | undefined>;
 }): React.JSX.Element {
   const [confirming, setConfirming] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
-  const [issue, setIssue] = React.useState<string | null>(null);
-  const remove = async (): Promise<void> => {
-    setBusy(true);
-    setIssue(null);
-    try {
-      const refusal = await onRemove();
-      if (refusal !== undefined) setIssue(refusal);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { busy, refusal, run } = useRefusableWrite();
   return (
     <>
-      {issue === null ? null : (
-        <p className="nx-vars-editor__issue" role="alert">
-          {issue}
-        </p>
-      )}
+      <Refusal refusal={refusal} />
       {confirming ? (
         <div
           className="nx-vars-editor__confirm"
@@ -626,28 +612,12 @@ function RemoveFamily({
               next font in its list. The files stay in your media library.
             </p>
           )}
-          <div className="nx-vars-editor__actions">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="nx-vars-editor__button"
-              disabled={busy}
-              onClick={() => setConfirming(false)}
-            >
-              Keep
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              className="nx-vars-editor__button"
-              disabled={busy}
-              onClick={() => void remove()}
-            >
-              Remove {family}
-            </Button>
-          </div>
+          <KeepOrRemove
+            busy={busy}
+            onKeep={() => setConfirming(false)}
+            onRemove={() => void run(onRemove)}
+            removeLabel={`Remove ${family}`}
+          />
         </div>
       ) : (
         <div className="nx-vars-editor__actions">

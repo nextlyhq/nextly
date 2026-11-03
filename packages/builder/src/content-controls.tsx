@@ -118,6 +118,16 @@ export interface ContentServices {
   readonly openPassages?: OpenPassages;
 }
 
+/**
+ * The host's content services for a surface below the inspector that is not
+ * a Content tab control, such as a component placement's exposed image, so
+ * it reaches the same media library without a prop threaded through every
+ * surface between.
+ */
+export const ContentServicesContext: React.Context<
+  ContentServices | undefined
+> = React.createContext<ContentServices | undefined>(undefined);
+
 /** What every content control is given. */
 export interface ContentControlProps {
   /** The id its field takes, which its label points at. Unique per mount. */
@@ -290,7 +300,13 @@ function SelectControl({
   const stored = typeof shown === "string" ? shown : undefined;
   // A stored value outside the options is shown by the menu, which can say
   // what it is; a row of buttons would show none chosen and replace it.
+  // A block can ask for a menu with `display: "menu"`, so one prop reads the
+  // same on every block whatever options each offers. Read through the
+  // schema's open option keys rather than a declared field, so a block
+  // already using `display` for something of its own keeps type-checking;
+  // only the value "menu" means anything here.
   const segmented =
+    prop.schema.display !== "menu" &&
     fitsSideBySide(labels, CONTENT_ROW) &&
     (stored === undefined || prop.options.includes(stored));
   if (segmented) {
@@ -466,8 +482,13 @@ function MediaControl({
   );
 }
 
-/** The button that opens the host's media picker, and the picker while open. */
-function MediaChoice({
+/**
+ * The button that opens the host's media picker, and the picker while open.
+ * Shared with a component placement's exposed image, so both choose a file
+ * the same way.
+ */
+export function MediaChoice({
+  id,
   Picker,
   label,
   stored,
@@ -475,6 +496,8 @@ function MediaChoice({
   disabled,
   onChoose,
 }: {
+  /** The button's id, for a field label that names it. */
+  id?: string;
   Picker: React.ComponentType<MediaPickerProps>;
   label: string;
   stored: string | null;
@@ -486,6 +509,7 @@ function MediaChoice({
   return (
     <>
       <Button
+        {...(id === undefined ? {} : { id })}
         type="button"
         size="sm"
         variant="outline"

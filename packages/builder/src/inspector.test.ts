@@ -19,6 +19,7 @@ import {
 
 import {
   designLockOf,
+  fieldLabel,
   inspectSelection,
   lockOp,
   propIsWritable,
@@ -780,5 +781,17 @@ describe("what the card shows", () => {
     const inspection = inspectSelection(withHeading(), "a");
     expect(inspection?.icon).toBeUndefined();
     expect(inspection?.description).toBe("A block.");
+  });
+});
+
+describe("a key as an author reads it", () => {
+  it("spells colour the one way the editor does", () => {
+    // "Color" beside "Colour for Color" and the Colour form: one word,
+    // spelled two ways in one panel.
+    expect(fieldLabel("color")).toBe("Colour");
+    expect(fieldLabel("backgroundColor")).toBe("Background colour");
+    expect(fieldLabel("linkColorHover")).toBe("Link colour hover");
+    // A word only containing the letters is left alone.
+    expect(fieldLabel("colorful")).toBe("Colorful");
   });
 });

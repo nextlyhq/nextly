@@ -126,7 +126,7 @@ test.describe("making a component from a selection", () => {
     await dialog.getByLabel("Name", { exact: true }).fill(`Launch hero ${tag}`);
     // The heading's text, offered to every placement, named for the author.
     await dialog.getByRole("checkbox", { name: "Text" }).click();
-    await dialog.getByLabel(/Name placements see for Text/).fill("Headline");
+    await dialog.getByLabel(/Name pages see for Text/).fill("Headline");
     await dialog.getByRole("button", { name: "Turn into component" }).click();
     await expect(dialog).toBeHidden({ timeout: 30_000 });
 

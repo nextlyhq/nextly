@@ -273,15 +273,28 @@ describe("the delete sentence", () => {
   it("counts, and says at least when the count is a floor", () => {
     expect(
       deleteSentence({ placements: 3, documents: 2, complete: true })
-    ).toMatch(/^Used by 3 placements in 2 documents\. /);
+    ).toMatch(/^Used 3 times in 2 documents\. /);
     expect(
       deleteSentence({ placements: 1, documents: 1, complete: false })
-    ).toMatch(/^Used by at least 1 placement in at least 1 document\. /);
+    ).toMatch(/^Used at least 1 time in at least 1 document\. /);
+  });
+
+  it("names the uses that keep their changes, whatever the count says", () => {
+    // The consequence follows a count of times and documents, or none at all,
+    // so its subject is spelled out rather than left to a pronoun.
+    for (const use of [
+      { placements: 3, documents: 2, complete: true },
+      null,
+    ] as const) {
+      expect(deleteSentence(use)).toContain(
+        "Each use of this variant will show the component\u2019s defaults, and keep its own changes."
+      );
+    }
   });
 
   it("never says none for a count it could not make", () => {
     expect(deleteSentence(null)).toContain("could not be counted");
-    expect(deleteSentence(null)).not.toContain("No placement");
+    expect(deleteSentence(null)).not.toContain("Nothing uses");
     expect(deleteSentence(undefined)).toContain("Counting");
   });
 });

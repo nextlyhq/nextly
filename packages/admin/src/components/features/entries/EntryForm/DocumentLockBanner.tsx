@@ -42,6 +42,8 @@ export interface DocumentLockBannerProps {
   onTakeOver: () => void;
   /** Leave word with the holder that this editor is waiting. Displaces nobody. */
   onRequestAccess: () => void;
+  /** Ask again for the latest version of a gained document that failed to load. */
+  onRetry?: () => void;
   className?: string;
 }
 
@@ -62,12 +64,17 @@ const TONE_SURFACE: Record<DocumentLockNotice["tone"], string> = {
   awaited: "border-border bg-muted/50",
   // Nothing was lost and nothing is asked of the reader: the quiet surface.
   reader: "border-border bg-muted/50",
+  // A moment's wait the reader asked for by gaining the document: quiet.
+  loading: "border-border bg-muted/50",
+  // The reader cannot edit a document they now hold, which is news.
+  unloaded: "border-primary bg-primary/5",
 };
 
 export function DocumentLockBanner({
   notice,
   onTakeOver,
   onRequestAccess,
+  onRetry,
   className,
 }: DocumentLockBannerProps): JSX.Element | null {
   // Answered here rather than at each call site: two editors mount this, and a
@@ -115,6 +122,11 @@ export function DocumentLockBanner({
           onClick={onRequestAccess}
         >
           {notice.accessRequest.label}
+        </Button>
+      ) : null}
+      {notice.retryLabel && onRetry ? (
+        <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+          {notice.retryLabel}
         </Button>
       ) : null}
       {notice.takeOverLabel ? (
