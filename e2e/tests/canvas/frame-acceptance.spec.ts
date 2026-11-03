@@ -215,11 +215,15 @@ test.describe("the page on the canvas behaves as on a device of that size", () =
       await openEditorWith(page, FIDELITY, "sized");
       for (const device of DEVICES) {
         await chooseDevice(page, device.name);
+        // The device's width; the height is the canvas window's, which fills
+        // the room the editor gives it, so the published page is read in a
+        // window of that same size.
         await expect
-          .poll(() => frameSize(page))
-          .toEqual({ width: device.width, height: device.height });
+          .poll(async () => (await frameSize(page)).width)
+          .toBe(device.width);
+        const window = await frameSize(page);
         const canvas = await readFidelity(canvasFrame(page));
-        const site = await published(page, device);
+        const site = await published(page, window);
         expect(
           canvas,
           `${String(device.name)} matches the published page`
@@ -237,28 +241,38 @@ test.describe("the page on the canvas behaves as on a device of that size", () =
     }
   });
 
-  test("vh does not change with the panels or the zoom", async ({ page }) => {
+  test("vh is the canvas window's height, whatever the panels or the zoom", async ({
+    page,
+  }) => {
     await storeBreakpoints(page, BREAKPOINTS);
     try {
       await page.setViewportSize({ width: 1440, height: 900 });
       await openEditorWith(page, FIDELITY, "sized");
       const sized = canvasBlock(page, "sized");
-      const heightOf = () =>
-        sized.evaluate(element => (element as HTMLElement).offsetHeight);
-      // Half of Desktop's 800px preview height.
-      await expect.poll(heightOf).toBe(400);
+      // The block is 50vh: half of the window the page is laid out in,
+      // which is the canvas frame's own height, as it is a browser window's
+      // for a visitor.
+      const halfTheWindow = async (): Promise<boolean> => {
+        const block = await sized.evaluate(
+          element => (element as HTMLElement).offsetHeight
+        );
+        const window = await frameSize(page);
+        return Math.abs(block - window.height / 2) <= 1;
+      };
+      await expect.poll(halfTheWindow).toBe(true);
 
-      // Both sides hidden, then shown again: the room changes, vh does not.
+      // Both sides hidden, then shown again, and at two zooms: the window
+      // changes with the room, and vh with it.
       await canvasBlock(page, "sized").click();
       await page.keyboard.press("Control+\\");
-      await expect.poll(heightOf).toBe(400);
+      await expect.poll(halfTheWindow).toBe(true);
       await page.keyboard.press("Control+\\");
-      await expect.poll(heightOf).toBe(400);
+      await expect.poll(halfTheWindow).toBe(true);
 
       for (const zoom of ["50%", "200%"]) {
         await chooseZoom(page, zoom);
         await expect(zoomTrigger(page)).toHaveText(zoom);
-        await expect.poll(heightOf).toBe(400);
+        await expect.poll(halfTheWindow).toBe(true);
       }
     } finally {
       await storeBreakpoints(page, null);

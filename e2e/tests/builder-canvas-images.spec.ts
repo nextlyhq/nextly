@@ -147,7 +147,9 @@ test.describe("the canvas's images and buttons", () => {
       requestAnimationFrame(look);
     });
 
-    for (const id of ["lead", "cta", "lead", "address", "lead"]) {
+    // The button is drawn as a link, which a press on the canvas does not
+    // select; it is watched while the blocks around it are.
+    for (const id of ["lead", "address", "lead", "library", "lead"]) {
       await canvasBlock(page, id).click();
       await expect(canvasBlock(page, id)).toHaveAttribute(
         "data-nx-selected",
