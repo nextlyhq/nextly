@@ -263,7 +263,11 @@ export function useInlineEditing(
         if (rich.commit().status === "refused") return;
         plain.commit();
         editor.select(composed.placementId);
-        onPartOf?.(composed.placementId, composed.heldExposureId);
+        if (composed.heldExposureId === undefined) {
+          onPartOf?.(composed.placementId);
+        } else {
+          onPartOf?.(composed.placementId, composed.heldExposureId);
+        }
         return;
       }
       const point =
