@@ -561,10 +561,15 @@ describe("the shared style target", () => {
       classes: ["c-card"],
       library: [{ ...card, locked: true } as typeof card],
     });
-    fireEvent.click(chip("Card"));
+    // The chip carries a lock, named in words.
+    fireEvent.click(chip("Card, locked"));
     expect(bar().textContent).toContain(
       "Card is locked. Its properties can't be changed."
     );
+    // Said once, in the bar, not again above the sections.
+    expect(
+      screen.getAllByText("Card is locked. Its properties can't be changed.")
+    ).toHaveLength(1);
     expect(
       (
         screen.getByRole("textbox", { name: "Opacity" }) as HTMLInputElement
@@ -581,6 +586,9 @@ describe("the shared style target", () => {
     });
     fireEvent.click(chip("Card"));
     expect(bar().textContent).toContain("You can't change this site's design.");
+    expect(
+      screen.getAllByText("You can't change this site's design.")
+    ).toHaveLength(1);
     const field = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(field, { target: { value: "0.9" } });
     fireEvent.blur(field);
@@ -606,6 +614,49 @@ describe("the shared style target", () => {
       patch: {},
       unset: ["styles"],
     });
+  });
+
+  it("never ends a line of the shared-style words on a separator", () => {
+    mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+    });
+    const line = document.querySelector('[data-shared-line="override"]');
+    const words = line?.querySelector("[data-shared-line-text]");
+    // The separator is held to the words on both sides, so a wrap falls
+    // between other words; the action sits on its own line, after them.
+    expect(words?.textContent).toBe(
+      "Set on this block\u00a0·\u00a0overrides Card"
+    );
+    const reset = within(line as HTMLElement).getByRole("button", {
+      name: /^Reset Opacity on this block/,
+    });
+    expect(words?.contains(reset)).toBe(false);
+
+    fireEvent.click(chip("Card"));
+    const move = document.querySelector('[data-shared-line="move"]');
+    expect(move?.querySelector("[data-shared-line-text]")?.textContent).toBe(
+      "Set on this block"
+    );
+    expect(
+      move
+        ?.querySelector("[data-shared-line-text]")
+        ?.contains(within(move as HTMLElement).getByRole("button"))
+    ).toBe(false);
+  });
+
+  it("quiets a field's provenance caption once a value is committed, until it is focused again", () => {
+    mountTarget({});
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    const row = field.closest(".nx-inspector__field");
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: "0.4" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    // Typing put focus there, so the caption would linger over the row above.
+    expect(row?.hasAttribute("data-provenance-quiet")).toBe(true);
+    fireEvent.blur(field);
+    fireEvent.focus(field);
+    expect(row?.hasAttribute("data-provenance-quiet")).toBe(false);
   });
 
   it("moves a block's value into its style, then clears it from the block", async () => {

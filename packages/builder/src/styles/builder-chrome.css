@@ -1320,6 +1320,36 @@
   content: ":";
 }
 
+/* The State menu's trigger: the state in words and a chevron, quiet text. */
+.nx-state-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.25rem;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nx-state-menu:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* A state with values: a dot in the colour of the words beside it. */
+.nx-state-menu__dot {
+  display: inline-block;
+  width: 0.375rem;
+  height: 0.375rem;
+  margin-inline-start: 0.25rem;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
 .nx-editing-bar__state {
   color: var(--nx-foreground);
   font-weight: 600;
@@ -4901,6 +4931,27 @@ fieldset.nx-inspector__fields {
 }
 
 /*
+ * Where a value stands between the block and its shared style: the words on
+ * one line and the action (Reset, Move to) on its own line under them, so no
+ * separator is left ending a line.
+ */
+.nx-style-inspector .nx-inspector__field > .nx-style-inspector__shared-line {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* The provenance caption held back after a commit, until the field is focused again. */
+.nx-inspector__field[data-provenance-quiet]:focus-within
+  .nx-style-inspector__provenance-text {
+  display: none;
+}
+
+/*
  * A jump to the tier a value comes from names that source ("From Desktop"),
  * so it sits where every other source is named: under the label, its words
  * starting where the label's do. The control and its reset span both lines
@@ -5130,10 +5181,34 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * child would take rows into it.
  */
 .nx-classes__option {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
   padding: 0.25rem 0.5rem;
   font-size: var(--text-xs);
-  font-family: var(--font-mono, monospace);
   cursor: pointer;
+}
+
+/*
+ * A style's name in the interface's own type, its class name in mono; each
+ * cut short with an ellipsis rather than broken mid-word, the whole of it in
+ * the row's tooltip. The name gives way first.
+ */
+.nx-classes__option-name,
+.nx-classes__option-class {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-classes__option-name {
+  flex: 1 1 auto;
+}
+
+.nx-classes__option-class {
+  flex: 0 1 auto;
 }
 
 /*

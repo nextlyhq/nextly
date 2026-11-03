@@ -35,11 +35,13 @@ import * as React from "react";
 
 import type { EditorState } from "./editor-state";
 import { lockViewOf } from "./inspector";
+import { Refusal } from "./panel-actions";
 import { sharedStyleSlug } from "./shared-style-library";
 import {
   newSharedStyleName,
   planSaveAsSharedStyle,
   sharedStyleMoveSummary,
+  sharedStyleMoveWhat,
   type SharedStyleOffer,
 } from "./shared-style-target";
 
@@ -137,8 +139,13 @@ export function SaveSharedStyleDialog({
           <DialogHeader>
             <DialogTitle>Save as shared style</DialogTitle>
             <DialogDescription>
-              {sharedStyleMoveSummary(node?.styles, name)} Other blocks can then
-              wear it, and a change to it reaches them all.
+              {/*
+               * While the name cannot be used (it is another style's), the
+               * summary must not read as a merge into that style.
+               */}
+              {nameIssue === undefined
+                ? `${sharedStyleMoveSummary(node?.styles, name)} Other blocks can then wear it, and a change to it reaches them all.`
+                : `Choose another name to move ${sharedStyleMoveWhat(node?.styles)}.`}
             </DialogDescription>
           </DialogHeader>
           <div className="nx-vars-editor__field">
@@ -168,11 +175,8 @@ export function SaveSharedStyleDialog({
               Name it for what it is, like Card or Primary button.
             </p>
           </div>
-          {shown === undefined ? null : (
-            <p className="nx-inspector__error" role="alert">
-              {shown}
-            </p>
-          )}
+          {/* In the field-error style the other Design editors use. */}
+          <Refusal refusal={shown ?? null} />
           <DialogFooter>
             <Button
               type="button"

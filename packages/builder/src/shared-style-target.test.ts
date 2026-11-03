@@ -157,7 +157,7 @@ describe("saving a block's look as a shared style", () => {
     );
     expect(plan).toEqual({
       ok: false,
-      reason: "“card” is already a shared style. Choose another name.",
+      reason: "“card!” is already a shared style. Choose another name.",
     });
     expect(newSharedStyleName("  ", [card])).toEqual({
       ok: false,

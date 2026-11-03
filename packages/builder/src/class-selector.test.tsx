@@ -80,7 +80,18 @@ describe("what it lists", () => {
     draw({ nodeClassIds: ["id-badge"] });
     expect(
       screen.getAllByRole("option").map(option => option.textContent)
-    ).toEqual(["hero .nx-c-hero", "Card .nx-c-card"]);
+    ).toEqual(["hero.nx-c-hero", "Card.nx-c-card"]);
+  });
+
+  it("cuts a long name or class name short rather than breaking it, the whole of it in a tooltip", () => {
+    draw();
+    const option = screen.getAllByRole("option")[2] as HTMLElement;
+    expect(
+      option.querySelector(".nx-classes__option-name")?.getAttribute("title")
+    ).toBe("Card");
+    expect(
+      option.querySelector(".nx-classes__option-class")?.getAttribute("title")
+    ).toBe(".nx-c-card");
   });
 
   it("never offers to make a new, empty style from what is typed", () => {

@@ -335,9 +335,17 @@ function OptionList({
           onMouseEnter={() => onHighlight(index)}
           onClick={() => onChoose(option)}
         >
-          {nameOf(option)}{" "}
-          {/* The class the page carries, as the Shared styles tab shows it. */}
-          <code className="nx-classes__option-class">
+          {/*
+           * The name in the interface's own type and the class name in mono, each
+           * cut short rather than broken mid-word, the whole of it in a tooltip.
+           */}
+          <span className="nx-classes__option-name" title={nameOf(option)}>
+            {nameOf(option)}
+          </span>
+          <code
+            className="nx-classes__option-class"
+            title={`.${option.choice.className}`}
+          >
             .{option.choice.className}
           </code>
         </li>

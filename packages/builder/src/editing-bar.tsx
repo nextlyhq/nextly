@@ -26,7 +26,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { ChevronDown, Monitor } from "lucide-react";
+import { ChevronDown, Lock, Monitor } from "lucide-react";
 import * as React from "react";
 
 import { stateLabel } from "./state-switcher";
@@ -52,6 +52,8 @@ export type EditTarget =
 export interface EditingBarChip {
   readonly id: string;
   readonly name: string;
+  /** Locked: its chip carries a lock mark, named in words. */
+  readonly locked?: boolean;
   /** The class the page carries for it, as developers read it: ".nx-c-card". */
   readonly className: string;
 }
@@ -77,6 +79,8 @@ export interface EditingBarProps {
   readonly sharedReadOnly?: string;
   /** The device being edited, by name: "Desktop", "Tablet". */
   readonly device: string;
+  /** The breakpoint tier the edit is stored under, as the site names it: "base". */
+  readonly tier?: string;
   /** The state being edited. */
   readonly state: StyleState;
   /**
@@ -103,6 +107,7 @@ export function EditingBar({
   actions,
   sharedReadOnly,
   device,
+  tier,
   state,
   stateControl,
 }: EditingBarProps): React.JSX.Element {
@@ -153,6 +158,7 @@ export function EditingBar({
                 id={chip.id}
                 name={chip.name}
                 className={chip.className}
+                locked={chip.locked === true}
                 tone="shared"
                 active={activeId === chip.id}
                 onSelect={onTargetChange}
@@ -182,24 +188,12 @@ export function EditingBar({
           }
         />
       ) : null}
-      <div className="nx-editing-bar__context">
-        <Monitor aria-hidden="true" size={14} />
-        <span data-edit-device="">{device}</span>
-        <span aria-hidden="true">·</span>
-        <span className="nx-editing-bar__state-label">State</span>
-        {stateControl ?? (
-          <span className="nx-editing-bar__state" data-edit-state={state}>
-            {stateLabel(state)}
-          </span>
-        )}
-        {stateControl === undefined ? null : (
-          // Named for the reader as well when the control draws it, so the
-          // bar always says the state in words.
-          <span className="nx-sr-only" data-edit-state={state}>
-            {stateLabel(state)}
-          </span>
-        )}
-      </div>
+      <BarContext
+        device={device}
+        tier={tier}
+        state={state}
+        stateControl={stateControl}
+      />
       <p className="nx-sr-only" role="status">
         {announced}
       </p>
@@ -221,6 +215,49 @@ function useSwitchAnnouncement(target: EditTarget): string {
     setSaid(targetAnnouncement(target));
   }, [key, target]);
   return said;
+}
+
+/**
+ * The bar's second line: the device, the breakpoint tier and the state, from
+ * the canvas, with the State menu when the host can act on a choice.
+ */
+function BarContext({
+  device,
+  tier,
+  state,
+  stateControl,
+}: Pick<
+  EditingBarProps,
+  "device" | "tier" | "state" | "stateControl"
+>): React.JSX.Element {
+  return (
+    <div className="nx-editing-bar__context">
+      <Monitor aria-hidden="true" size={14} />
+      <span data-edit-device="">{device}</span>
+      {tier === undefined ? null : (
+        <>
+          <span aria-hidden="true">·</span>
+          <span data-edit-tier="">{tier}</span>
+        </>
+      )}
+      <span aria-hidden="true">·</span>
+      <span className="nx-editing-bar__state-label" aria-hidden="true">
+        State
+      </span>
+      {stateControl ?? (
+        <span className="nx-editing-bar__state" data-edit-state={state}>
+          {stateLabel(state)}
+        </span>
+      )}
+      {stateControl === undefined ? null : (
+        // Named for the reader as well when the control draws it, so the
+        // bar always says the state in words.
+        <span className="nx-sr-only" data-edit-state={state}>
+          {stateLabel(state)}
+        </span>
+      )}
+    </div>
+  );
 }
 
 /** The chip buttons of a group, in order. */
@@ -268,6 +305,7 @@ function TargetChip({
   id,
   name,
   className,
+  locked = false,
   tone,
   active,
   onSelect,
@@ -276,6 +314,8 @@ function TargetChip({
   name: string;
   /** A shared style's class name, named in its tooltip. */
   className?: string;
+  /** A locked style's chip carries a lock, named ", locked" for a reader. */
+  locked?: boolean;
   tone: "local" | "shared";
   active: boolean;
   onSelect: ((id: string | null) => void) | undefined;
@@ -303,6 +343,12 @@ function TargetChip({
       }}
     >
       {name}
+      {locked ? (
+        <>
+          <Lock aria-hidden="true" size={11} />
+          <span className="nx-sr-only">, locked</span>
+        </>
+      ) : null}
     </button>
   );
 }
@@ -334,7 +380,8 @@ function ChipMenu({
           <ChevronDown aria-hidden="true" size={12} />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
+      {/* Kept clear of the window's edge. */}
+      <DropdownMenuContent align="start" collisionPadding={8}>
         {onDetach === undefined ? null : (
           <DropdownMenuItem
             disabled={held !== undefined}

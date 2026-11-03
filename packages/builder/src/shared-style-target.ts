@@ -35,6 +35,7 @@ import type { BuilderOp } from "./ops";
 import {
   renameSharedStyle,
   sharedStyleRows,
+  sharedStyleSlug,
   type SharedStyleRow,
 } from "./shared-style-library";
 import { stateLabel } from "./state-switcher";
@@ -149,8 +150,18 @@ export function newSharedStyleName(
   name: string,
   library: readonly NamedClass[]
 ): SharedStylePlan<{ label: string; slug: string }> {
-  // The rename rule with no style excluded: one rule for a name, so a name
-  // refused on rename is refused here in the same words.
+  // A name whose class name another style has is refused naming it as the
+  // author typed it, which is the name they will look for.
+  const typed = name.trim();
+  const slug = sharedStyleSlug(typed);
+  if (slug !== "" && library.some(entry => entry.slug === slug)) {
+    return {
+      ok: false,
+      reason: `“${typed}” is already a shared style. Choose another name.`,
+    };
+  }
+  // Otherwise the rename rule with no style excluded: one rule for a name, so
+  // a name refused on rename is refused here in the same words.
   const named = renameSharedStyle(name, "", library);
   if (!named.ok) return named;
   const room = newClassName(named.slug, library);
@@ -219,6 +230,16 @@ export function sharedStyleMoveSummary(
   styles: NodeStyles | undefined,
   name: string
 ): string {
+  const into = name.trim() === "" ? "the new shared style" : name.trim();
+  return `Moves ${sharedStyleMoveWhat(styles)} into ${into}.`;
+}
+
+/**
+ * What a save would move, in words: "this block's 6 values (2 devices,
+ * Hover)". The summary's subject, also said on its own while the name in
+ * the dialog cannot be used.
+ */
+export function sharedStyleMoveWhat(styles: NodeStyles | undefined): string {
   const { values, devices, states } = countValues(styles);
   const extras = [
     ...(devices > 1 ? [`${devices} devices`] : []),
@@ -226,8 +247,7 @@ export function sharedStyleMoveSummary(
   ];
   const what = `${values} ${values === 1 ? "value" : "values"}`;
   const detail = extras.length > 0 ? ` (${extras.join(", ")})` : "";
-  const into = name.trim() === "" ? "the new shared style" : name.trim();
-  return `Moves this block's ${what}${detail} into ${into}.`;
+  return `this block's ${what}${detail}`;
 }
 
 /**

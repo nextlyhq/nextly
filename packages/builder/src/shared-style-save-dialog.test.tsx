@@ -92,9 +92,19 @@ describe("naming the new shared style", () => {
   it("refuses a name whose class name another style has, before saving", () => {
     const { onAdd } = open();
     fireEvent.change(name(), { target: { value: "Card" } });
-    expect(screen.getByRole("alert").textContent).toBe(
-      "“card” is already a shared style. Choose another name."
+    // Named as typed, in the field-error style the other editors use.
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe(
+      "“Card” is already a shared style. Choose another name."
     );
+    expect(alert.className).toBe("nx-vars-editor__issue");
+    // Nothing reads as a merge into the style that already has the name.
+    expect(screen.queryByText(/into Card/)).toBeNull();
+    expect(
+      screen.getByText(
+        /^Choose another name to move this block's 3 values \(2 devices, Hover\)\./
+      )
+    ).toBeDefined();
     expect(
       (
         screen.getByRole("button", {

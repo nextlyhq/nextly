@@ -216,6 +216,8 @@ export interface StyleTargetBarProps {
   /** The shared block verbs, for "Save as shared style…". */
   readonly verbs: CardVerbs | undefined;
   readonly device: string;
+  /** The breakpoint tier the value is stored under. */
+  readonly tier?: string;
   readonly state: StyleState;
   readonly stateControl?: React.ReactNode;
 }
@@ -228,6 +230,43 @@ function applyPlan(
   if (plan.ok) editor.applyAll(plan.ops);
 }
 
+/**
+ * Each chip's menu actions, page edits through the editor: take the style off
+ * the block, or detach it (the block keeps the look the worn styles give it).
+ * None without a selected block.
+ */
+function chipActions(
+  editor: EditorState,
+  nodeId: string | null,
+  worn: readonly SharedStyleRow[]
+): {
+  onRemove?: (id: string) => void;
+  onDetach?: (id: string) => void;
+} {
+  if (nodeId === null) return {};
+  return {
+    onRemove: id =>
+      applyPlan(
+        editor,
+        planRemoveSharedStyle(editor.document, nodeId, id, lockViewOf(editor))
+      ),
+    onDetach: id => {
+      const style = worn.find(row => row.id === id);
+      if (style === undefined) return;
+      applyPlan(
+        editor,
+        planDetachSharedStyle(
+          editor.document,
+          nodeId,
+          style,
+          worn,
+          lockViewOf(editor)
+        )
+      );
+    },
+  };
+}
+
 /** The "what you're editing" bar, over the target this tab holds. */
 export function StyleTargetBar({
   editor,
@@ -238,6 +277,7 @@ export function StyleTargetBar({
   host,
   verbs,
   device,
+  tier,
   state,
   stateControl,
 }: StyleTargetBarProps): React.JSX.Element {
@@ -258,40 +298,10 @@ export function StyleTargetBar({
         id: row.id,
         name: row.name,
         className: row.className,
+        locked: row.locked,
       }))}
       onTargetChange={host === undefined ? undefined : onChoose}
-      onRemove={
-        nodeId === null
-          ? undefined
-          : id =>
-              applyPlan(
-                editor,
-                planRemoveSharedStyle(
-                  editor.document,
-                  nodeId,
-                  id,
-                  lockViewOf(editor)
-                )
-              )
-      }
-      onDetach={
-        nodeId === null
-          ? undefined
-          : id => {
-              const style = worn.find(row => row.id === id);
-              if (style === undefined) return;
-              applyPlan(
-                editor,
-                planDetachSharedStyle(
-                  editor.document,
-                  nodeId,
-                  style,
-                  worn,
-                  lockViewOf(editor)
-                )
-              );
-            }
-      }
+      {...chipActions(editor, nodeId, worn)}
       chipActionsHeld={held}
       sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
       actions={
@@ -306,6 +316,7 @@ export function StyleTargetBar({
         )
       }
       device={device}
+      tier={tier}
       state={state}
       stateControl={stateControl}
     />
@@ -348,6 +359,8 @@ function BarActions({
         <PopoverContent
           side="bottom"
           align="start"
+          // Kept clear of the window's edge.
+          collisionPadding={8}
           className="nx-vars-editor nx-shared-style-picker"
           aria-label="Apply shared style"
         >

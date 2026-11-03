@@ -677,11 +677,7 @@ function StyleInspectorBody({
   return (
     <StyleTargetContext.Provider value={target}>
       <div className="nx-style-inspector" data-style-target={target.kind}>
-        {readOnlyReason === undefined ? null : (
-          <p className="nx-inspector__note" data-read-only="style">
-            {readOnlyReason}
-          </p>
-        )}
+        <ReadOnlyNote target={target} reason={readOnlyReason} />
         <NoStyleProperties count={inspected.sections.length} />
         <Accordion
           type="single"
@@ -1860,6 +1856,7 @@ function StyleControlField({
       // Absent when this is not a side: React omits an `undefined` attribute, so
       // the value says whether the field is in a box without a branch here.
       data-side={side}
+      {...writes.caption}
     >
       <StyleFieldLabel
         id={labelId}
@@ -3128,6 +3125,26 @@ function targetReadOnly(
     : designReadOnlyReason(editor.document, nodeId, lockViewOf(editor));
 }
 
+/**
+ * Why the controls are read-only, above them, for the block. A shared
+ * target's reason (locked, or no right to change design) is said in the bar
+ * already, and once is enough.
+ */
+function ReadOnlyNote({
+  target,
+  reason,
+}: {
+  target: StyleTarget;
+  reason: string | undefined;
+}): React.JSX.Element | null {
+  if (reason === undefined || target.kind === "shared") return null;
+  return (
+    <p className="nx-inspector__note" data-read-only="style">
+      {reason}
+    </p>
+  );
+}
+
 /** The values a shared target shows, or `undefined` while the block is the target. */
 function targetStyles(target: StyleTarget): NodeStyles | undefined {
   return target.kind === "shared" ? target.style.styles : undefined;
@@ -3170,6 +3187,8 @@ function useFieldTarget({
   stored: StyleValue | undefined;
   issue: string | null;
   setIssue: (message: string | null) => void;
+  /** The field's caption hold, spread onto its row. */
+  caption: { "data-provenance-quiet": string | undefined; onFocus: () => void };
   commit: (value: StyleValue | null) => CommitOutcome;
   resetBlock: () => void;
   moveTo: (shared: Extract<StyleTarget, { kind: "shared" }>) => void;
@@ -3181,6 +3200,13 @@ function useFieldTarget({
   const { nodeStyles, styles } = fieldStyles(target, editor, nodeId);
   const stored = readStyleValue(styles, address);
   const [issue, setIssue] = React.useState<string | null>(null);
+  /*
+   * Whether the provenance caption is held back. It is revealed while the
+   * field has focus, and typing a value leaves focus there, so after a commit
+   * the caption would linger over the row above; it waits for the field to be
+   * focused again.
+   */
+  const [quiet, setQuiet] = React.useState(false);
   // A refusal describes the draft that produced it, so it stops describing
   // anything the moment the document holds a different value here. Clearing on
   // the stored value rather than only on the next commit is what covers an undo
@@ -3217,17 +3243,14 @@ function useFieldTarget({
     stored,
     issue,
     setIssue,
-    commit: value =>
-      target.kind === "shared"
-        ? writeSharedStyleValue({
-            target,
-            address,
-            policy,
-            value,
-            setIssue,
-            report: reportFor(target),
-          })
-        : writeBlock(value),
+    caption: {
+      "data-provenance-quiet": quiet ? "" : undefined,
+      onFocus: () => setQuiet(false),
+    },
+    commit: value => {
+      setQuiet(true);
+      return writeTarget(value);
+    },
     resetBlock: () => {
       writeBlock(null);
     },
@@ -3242,6 +3265,18 @@ function useFieldTarget({
         report: reportFor(shared),
       }),
   };
+  function writeTarget(value: StyleValue | null): CommitOutcome {
+    return target.kind === "shared"
+      ? writeSharedStyleValue({
+          target,
+          address,
+          policy,
+          value,
+          setIssue,
+          report: reportFor(target),
+        })
+      : writeBlock(value);
+  }
 }
 
 /**
@@ -3365,8 +3400,9 @@ function SharedValueLine({
   if (readStyleValue(nodeStyles, address) === undefined) return null;
   if (target.kind === "shared") {
     return (
-      <p className="nx-style-inspector__shared-line" data-shared-line="move">
-        Set on this block ·{" "}
+      <div className="nx-style-inspector__shared-line" data-shared-line="move">
+        <span data-shared-line-text="">Set on this block</span>
+        {/* The action on a line of its own, so no separator can end a line. */}
         <button
           type="button"
           className="nx-style-inspector__breakpoint-action"
@@ -3376,7 +3412,7 @@ function SharedValueLine({
         >
           Move to {target.style.name}
         </button>
-      </p>
+      </div>
     );
   }
   // The style that would show here without the block's value: the last one
@@ -3386,8 +3422,17 @@ function SharedValueLine({
     .find(row => readStyleValue(row.styles, address) !== undefined);
   if (under === undefined) return null;
   return (
-    <p className="nx-style-inspector__shared-line" data-shared-line="override">
-      Set on this block · overrides {under.name} ·{" "}
+    <div
+      className="nx-style-inspector__shared-line"
+      data-shared-line="override"
+    >
+      {/*
+       * The separator is held to the words on either side by no-break spaces,
+       * so a wrap falls between other words and never leaves it ending a line.
+       */}
+      <span data-shared-line-text="">
+        {`Set on this block\u00a0·\u00a0overrides ${under.name}`}
+      </span>
       <button
         type="button"
         className="nx-style-inspector__breakpoint-action"
@@ -3396,7 +3441,7 @@ function SharedValueLine({
       >
         Reset
       </button>
-    </p>
+    </div>
   );
 }
 

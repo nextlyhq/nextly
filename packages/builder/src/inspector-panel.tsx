@@ -32,6 +32,7 @@ import {
   type BreakpointSet,
   type ComponentLookup,
   type ComponentPath,
+  type NodeStyles,
   type SiteTokenSet,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -883,18 +884,35 @@ function ContentTab({
   );
 }
 
-/** The state switcher the bar carries, bound to the host's choice. */
+/**
+ * Where an edit lands, as the bar's second line says it: the device and the
+ * breakpoint tier the value is stored under.
+ */
+function barPlace(
+  breakpoints: BreakpointSet | undefined,
+  breakpoint: BreakpointId | undefined
+): { device: string; tier: string } {
+  const tier = breakpoint ?? BASE_BREAKPOINT;
+  return { device: editedDevice(breakpoints, tier), tier };
+}
+
+/**
+ * The State menu the bar carries, bound to the host's choice, or nothing when
+ * the host cannot act on one. Its dots read the TARGET's styles (the block's,
+ * or the shared style being edited), so a state is marked where the edit goes.
+ */
 function stateControlFor(
   state: StyleState,
   styleState: StyleStateBinding | undefined,
-  styleNode: ReturnType<typeof selectedNode>,
+  holder: { styles?: NodeStyles } | null,
   breakpoints: BreakpointSet | undefined
-): React.JSX.Element {
+): React.JSX.Element | undefined {
+  if (styleState?.onChange === undefined) return undefined;
   return (
     <StyleStateField
       state={state}
-      onSelect={styleState?.onChange}
-      node={styleNode}
+      onSelect={styleState.onChange}
+      node={holder}
       breakpoints={breakpoints}
     />
   );
@@ -966,12 +984,12 @@ function StyleTab({
         libraryAbsence={shared.classLibraryAbsence}
         host={shared.sharedStyles}
         verbs={shared.verbs}
-        device={editedDevice(breakpoints, breakpoint ?? BASE_BREAKPOINT)}
+        {...barPlace(breakpoints, breakpoint)}
         state={state}
         stateControl={stateControlFor(
           state,
           styleState,
-          styleNode,
+          target.kind === "shared" ? target.style : styleNode,
           breakpoints
         )}
       />

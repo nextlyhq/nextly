@@ -171,9 +171,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(
-      screen.getByRole("radiogroup", { name: "Interaction state" })
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: /^State: / })).toBeDefined();
   });
 
   it("withholds it from a host that cannot act on the choice", () => {
@@ -188,9 +186,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(
-      screen.queryByRole("radiogroup", { name: "Interaction state" })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /^State: / })).toBeNull();
   });
 
   it("marks the states the SELECTED NODE has styles for", () => {
@@ -224,12 +220,11 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
+    // The State menu's trigger names a state with values the canvas is not
+    // showing, and only that one.
     expect(
-      screen.getByRole("radio", { name: /Hover.*has styles/ })
+      screen.getByRole("button", { name: "State: Normal, Hover has values" })
     ).toBeDefined();
-    expect(screen.queryByRole("radio", { name: /Pressed.*has styles/ })).toBe(
-      null
-    );
   });
 
   it("edits BASE when a host supplies a state with no setter", () => {
@@ -256,9 +251,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(
-      screen.queryByRole("radiogroup", { name: "Interaction state" })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /^State: / })).toBeNull();
     expect(editedStyleState({ state: "hover" })).toBe("base");
     expect(editedStyleState({ state: "hover", onChange: vi.fn() })).toBe(
       "hover"
@@ -286,9 +279,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
       />
     );
 
-    expect(
-      screen.getByRole("radiogroup", { name: "Interaction state" })
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: /^State: / })).toBeDefined();
   });
 
   it("still opens on Content for an ordinary mount", () => {
@@ -305,9 +296,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
       />
     );
 
-    expect(
-      screen.queryByRole("radiogroup", { name: "Interaction state" })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /^State: / })).toBeNull();
   });
 
   it("reports the state the author chose", () => {
@@ -321,7 +310,11 @@ describe("what InspectorPanel forwards to the style tab", () => {
     );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    fireEvent.click(screen.getByRole("radio", { name: /^Hover/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /^State: / }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Hover" }));
 
     expect(onStyleStateChange).toHaveBeenCalledWith("hover");
   });

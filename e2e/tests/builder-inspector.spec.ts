@@ -246,7 +246,9 @@ test.describe("the inspector", () => {
       await expect(bar.locator("[data-edit-device]")).toHaveText(device);
     }
 
-    await bar.getByRole("radio", { name: /^Hover/ }).click();
+    // The state is a compact menu named State on the bar's second line.
+    await bar.getByRole("button", { name: /^State: / }).click();
+    await page.getByRole("menuitemradio", { name: /^Hover/ }).click();
     await expect(bar.locator("[data-edit-state]")).toHaveText("Hover");
   });
 
