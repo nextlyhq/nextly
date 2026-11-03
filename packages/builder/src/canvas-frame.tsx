@@ -48,7 +48,10 @@ import {
   useFrameRegistration,
   type CanvasFrame as CanvasFrameReading,
 } from "./canvas-frame-context";
-import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
+import {
+  CANVAS_FRAME_DEFAULTS,
+  CANVAS_FRAME_SHEET,
+} from "./canvas-frame-sheet";
 import { frameFitScale, previewHeight, type FrameSize } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { isHTMLElement } from "./dom-kind";
@@ -101,7 +104,9 @@ const FRAME_DOCUMENT_ATTRIBUTE = "data-nx-canvas-frame";
  * The doctype is what keeps the page out of quirks mode, where several layout
  * rules differ from the published page's. The page inherits the admin's base
  * URL, as every `srcdoc` document does, so a relative URL in the site's sheet
- * or a block resolves as it does on the admin's origin.
+ * or a block resolves as it does on the admin's origin. Its head opens with
+ * the frame's defaults, so their layer is the first the page declares and the
+ * lowest, beneath anything loaded into the frame after it.
  *
  * @experimental
  */
@@ -109,7 +114,8 @@ export const SRCDOC_FRAME_SOURCE: CanvasFrameSource = {
   srcDoc:
     "<!doctype html>" +
     `<html ${FRAME_DOCUMENT_ATTRIBUTE}="">` +
-    '<head><meta charset="utf-8"></head><body></body></html>',
+    `<head><meta charset="utf-8"><style>${CANVAS_FRAME_DEFAULTS}</style></head>` +
+    "<body></body></html>",
   ready: doc => doc.documentElement.hasAttribute(FRAME_DOCUMENT_ATTRIBUTE),
   mountPoint: doc => doc.body,
 };

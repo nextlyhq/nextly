@@ -29,6 +29,23 @@ import { CANVAS_ROOT_CLASS } from "./shell-state";
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
 /**
+ * Boxes size as border-box: the default most site resets set (Tailwind's
+ * preflight, modern-normalize), so a padded block at full width is as wide
+ * on the canvas as on most published pages.
+ *
+ * It stands in until the frame loads the site's own stylesheets, which will
+ * then decide. So it sits in a cascade layer of its own, declared before
+ * anything else in the frame: the lowest layer, which any site rule loaded
+ * later wins over, whether that rule is in a layer of the site's or in none.
+ * The rest of this sheet is not layered, and states what the editor needs
+ * whatever the site does.
+ *
+ * @internal
+ */
+export const CANVAS_FRAME_DEFAULTS =
+  "@layer nx-canvas-defaults { *, ::before, ::after { box-sizing: border-box; } }";
+
+/**
  * The rules, in the order they cascade.
  *
  * @internal

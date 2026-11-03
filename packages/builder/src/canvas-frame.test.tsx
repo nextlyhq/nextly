@@ -25,6 +25,7 @@ import {
   type CanvasFrameSource,
 } from "./canvas-frame";
 import { CanvasFrameProvider, useCanvasFrame } from "./canvas-frame-context";
+import { CANVAS_FRAME_DEFAULTS } from "./canvas-frame-sheet";
 import { FIT_ZOOM } from "./canvas-zoom";
 
 afterEach(() => {
@@ -249,5 +250,20 @@ describe("the editor's own page source", () => {
     expect(SRCDOC_FRAME_SOURCE.mountPoint(own)).toBe(own.body);
     // Standards mode: a page without the doctype is laid out in quirks mode.
     expect(own.compatMode).toBe("CSS1Compat");
+  });
+
+  it("declares its box-sizing default first, in a layer below anything a site loads later", () => {
+    const own = new DOMParser().parseFromString(
+      SRCDOC_FRAME_SOURCE.srcDoc,
+      "text/html"
+    );
+    // The first sheet in the page, ahead of anything appended to the head or
+    // drawn with the page, so its layer is the first declared and the lowest.
+    const first = own.querySelector("style");
+    expect(first?.parentElement).toBe(own.head);
+    expect(first?.textContent).toBe(CANVAS_FRAME_DEFAULTS);
+    expect(CANVAS_FRAME_DEFAULTS).toMatch(
+      /^@layer [\w-]+ \{ \*, ::before, ::after \{ box-sizing: border-box; \} \}$/
+    );
   });
 });

@@ -300,6 +300,71 @@ test.describe("the page on the canvas behaves as on a device of that size", () =
   });
 });
 
+/** A text block across the whole page, with padding inside that width. */
+const PADDED = text("padded", "A padded block", {
+  base: {
+    base: {
+      width: "100%",
+      padding: { inlineStart: "40px", inlineEnd: "40px" },
+    },
+  },
+});
+
+/** The padded block's border-box width beside the width of what holds it. */
+async function paddedWidths(
+  page: Page
+): Promise<{ block: number; container: number }> {
+  return canvasBlock(page, "padded").evaluate(element => ({
+    block: element.getBoundingClientRect().width,
+    container: element.parentElement?.getBoundingClientRect().width ?? 0,
+  }));
+}
+
+test.describe("boxes on the canvas size as most site resets size them", () => {
+  test("a padded block at full width is exactly as wide as what holds it", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openEditorWith(page, [PADDED], "padded");
+    const widths = await paddedWidths(page);
+    // Border-box: the padding is inside the 100%, not added to it.
+    expect(widths.container).toBeGreaterThan(0);
+    expect(widths.block).toBe(widths.container);
+  });
+
+  test("a site rule for box-sizing in the frame wins over the frame's default", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openEditorWith(page, [PADDED], "padded");
+    // The control: the frame's default alone.
+    const alone = await paddedWidths(page);
+    expect(alone.block).toBe(alone.container);
+
+    // A site sheet loaded into the frame's head after the frame's own page:
+    // plain rules, then rules in a layer of the site's own, as a site's reset
+    // ships them. Each wins, and the padding is added to the width again.
+    for (const rule of [
+      "*, ::before, ::after { box-sizing: content-box; }",
+      "@layer base { *, ::before, ::after { box-sizing: content-box; } }",
+    ]) {
+      await canvasFrame(page)
+        .locator("head")
+        .evaluate((head, css) => {
+          const style = head.ownerDocument.createElement("style");
+          style.dataset.e2eSiteSheet = "";
+          style.textContent = css;
+          head.append(style);
+        }, rule);
+      const widths = await paddedWidths(page);
+      expect(widths.block, rule).toBe(widths.container + 80);
+      await canvasFrame(page)
+        .locator("style[data-e2e-site-sheet]")
+        .evaluate(style => style.remove());
+    }
+  });
+});
+
 /** The colour a reader sees behind an element, walking up to a painted one. */
 async function groundBehind(target: Locator): Promise<string> {
   return target.evaluate(element => {
