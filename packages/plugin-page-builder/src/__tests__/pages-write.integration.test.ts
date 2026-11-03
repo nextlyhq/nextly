@@ -319,11 +319,10 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
-      it("answers not found for a page never published, as core's duplicate does for this caller", async () => {
-        // Core's duplicate reads its source for an untrusted caller at the
-        // default, published-only visibility, so a draft the caller can read
-        // and open is not one core will copy for them. Pinned so a change to
-        // core's rule is seen here, and nothing is copied meanwhile.
+      it("copies a page never published, as a draft of its own, when the caller may read it", async () => {
+        // Core's duplicate reads its source as the caller's own read of it, so
+        // a draft the caller can open is one it copies. The copy is a draft
+        // under its own slug, and the draft it came from is untouched.
         const draft = await written<PageItem>(
           await ask("POST", PAGES_ROUTE_PATH, editor, {
             collection: PAGES,
@@ -331,14 +330,26 @@ describe.each(getConfiguredTestDialects())(
           })
         );
 
-        const response = await ask(
-          "POST",
-          pageDuplicatePath({ collection: PAGES, id: draft.id }),
-          editor
+        const copy = await written<PageItem>(
+          await ask(
+            "POST",
+            pageDuplicatePath({ collection: PAGES, id: draft.id }),
+            editor
+          )
         );
 
-        expect(response.status).toBe(404);
-        expect(await searched("copy of unpublished", editor)).toEqual([]);
+        expect(copy).toMatchObject({
+          title: "Copy of Unpublished",
+          status: "draft",
+        });
+        expect(copy.id).not.toBe(draft.id);
+        expect((await stored(copy.id))?.slug).not.toBe(
+          (await stored(draft.id))?.slug
+        );
+        expect(await stored(draft.id)).toMatchObject({
+          title: "Unpublished",
+          status: "draft",
+        });
       });
     });
 
