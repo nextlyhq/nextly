@@ -11076,6 +11076,9 @@ export class CollectionMutationService extends BaseService {
       | undefined;
     return {
       companion,
+      // The one row this transaction has locked, so its relations cannot
+      // change under the judgement, as a batch's other rows could.
+      relations: new GoingLiveRelationsBatch([entryId]),
       languageStatuses: () => {
         statuses ??= this.storedLanguageStatuses(collectionName, entryId, tx);
         return statuses;
