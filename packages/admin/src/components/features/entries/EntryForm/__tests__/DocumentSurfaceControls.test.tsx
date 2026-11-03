@@ -26,12 +26,12 @@ let recovery: RecoveryPointState = {
   pendingOfferAt: null,
 };
 
-let storedAt: Date | null = null;
+let stored: { at: Date | null } | null = null;
 
 vi.mock("../DocumentActionsContext", () => ({
   useDocumentActionsContext: () => hosted,
   useHostedRecoveryPoint: () => recovery,
-  useHostedStoredAt: () => storedAt,
+  useHostedStored: () => stored,
 }));
 
 const { DocumentPrimaryAction, DocumentSaveIndicator } = await import(
@@ -57,7 +57,7 @@ function host(
 afterEach(() => {
   hosted = null;
   recovery = { enabled: false, storedAt: null, pendingOfferAt: null };
-  storedAt = null;
+  stored = null;
   run.mockClear();
 });
 
@@ -88,13 +88,25 @@ describe("DocumentSaveIndicator", () => {
   it("reports a stored document saved from the moment it opens, with when in the tooltip", async () => {
     // Nothing saved this session: the document's own stored time speaks.
     hosted = host({ saveState: { kind: "saved", at: null } });
-    storedAt = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    stored = { at: new Date(Date.now() - 3 * 60 * 60 * 1000) };
     render(<DocumentSaveIndicator />);
     const saved = screen.getByText("Saved");
     await userEvent.hover(saved);
     expect(
       (await screen.findAllByText("Saved 3 hours ago")).length
     ).toBeGreaterThan(0);
+  });
+
+  it("reports a working draft saved, without the published version's age", async () => {
+    // The row keeps the published time, so no age is better than a wrong one.
+    hosted = host({ saveState: { kind: "saved", at: null } });
+    stored = { at: null };
+    render(<DocumentSaveIndicator />);
+    await userEvent.hover(screen.getByText("Saved"));
+    expect(
+      (await screen.findAllByText("Changes saved as a draft")).length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/ ago$/)).toBeNull();
   });
 
   it("says nothing for a document with no stored time yet", () => {
@@ -105,7 +117,7 @@ describe("DocumentSaveIndicator", () => {
 
   it("never reports saved over edits held only in a recovery point, stored time or not", () => {
     hosted = host({ saveState: { kind: "saved", at: null } });
-    storedAt = new Date(Date.now() - 60 * 60 * 1000);
+    stored = { at: new Date(Date.now() - 60 * 60 * 1000) };
     recovery = {
       enabled: true,
       storedAt: new Date(),

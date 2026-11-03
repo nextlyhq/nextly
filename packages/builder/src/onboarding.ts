@@ -31,6 +31,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { inlineTargets } from "./inline-text";
+import { insertionProps } from "./inserter";
 
 /** One thing to do, and whether the page shows it has been done. */
 export interface ChecklistStep {
@@ -43,13 +44,13 @@ export interface ChecklistStep {
 }
 
 /**
- * The text a block starts with when it is placed, for one of its values: the
- * block's own default, which an author has not written.
+ * The text a block starts with when it is placed, for one of its values: what
+ * the inserter places it with, which an author has not written.
  */
 function startingText(node: BlockNode, prop: string): string {
-  const defaults = getBlock(node.type)?.defaultProps;
-  const value: unknown =
-    defaults === undefined ? undefined : Reflect.get(defaults, prop);
+  const definition = getBlock(node.type);
+  const value =
+    definition === undefined ? undefined : insertionProps(definition)[prop];
   return typeof value === "string" ? value.trim() : "";
 }
 

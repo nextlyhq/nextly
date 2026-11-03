@@ -70,14 +70,18 @@ export function RecoveryOfferProvider({
   );
 }
 
+/** The chip's side: the offer it may show. Null outside a document view. */
+export function useHostedRecoveryOffer(): HostedRecoveryOffer | null {
+  return useContext(RecoveryOfferContext)?.offer ?? null;
+}
+
 /**
- * The chip's side: the offer to show, claimed for as long as the chip is
- * mounted. Claimed in a layout effect, so the banner it replaces is gone
- * before the first paint. Null outside a document view.
+ * Claims the offer for as long as the caller is mounted: called by the control
+ * that actually makes the offer, not by the chip around it, so a chip showing
+ * something else (a failed save) leaves the banner in place. Claimed in a
+ * layout effect, so the banner is gone before the first paint.
  */
-export function useClaimedRecoveryOffer(): HostedRecoveryOffer | null {
-  const hosted = useContext(RecoveryOfferContext);
-  const claim = hosted?.claim;
+export function useClaimRecoveryOffer(): void {
+  const claim = useContext(RecoveryOfferContext)?.claim;
   useLayoutEffect(() => claim?.(), [claim]);
-  return hosted?.offer ?? null;
 }

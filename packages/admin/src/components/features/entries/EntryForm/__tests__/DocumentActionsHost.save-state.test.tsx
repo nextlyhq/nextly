@@ -253,6 +253,19 @@ describe("the stored time the host hands its surfaces", () => {
     expect(screen.getByText("Saved")).toBeTruthy();
   });
 
+  it("has no age for a pending working draft, whose row keeps the published time", async () => {
+    drawChip({
+      ...published,
+      _isWorkingDraft: true,
+      updatedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+    await userEvent.hover(screen.getByText("Saved"));
+    expect(
+      (await screen.findAllByText("Changes saved as a draft")).length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/days ago/)).toBeNull();
+  });
+
   it("is absent for a document with no readable updatedAt", () => {
     const { container } = drawChip({ ...draft, updatedAt: "not a time" });
     expect(screen.queryByText("Saved")).toBeNull();

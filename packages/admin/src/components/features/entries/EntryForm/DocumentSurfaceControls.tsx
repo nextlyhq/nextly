@@ -23,10 +23,10 @@ import {
 import {
   useDocumentActionsContext,
   useHostedRecoveryPoint,
-  useHostedStoredAt,
+  useHostedStored,
 } from "./DocumentActionsContext";
 import { DocumentStatusLive } from "./DocumentStatusLive";
-import { useClaimedRecoveryOffer } from "./RecoveryOfferContext";
+import { useHostedRecoveryOffer } from "./RecoveryOfferContext";
 import { SaveStateIndicator } from "./SaveStateIndicator";
 import type { DocumentActionBindings } from "./useDocumentActionBindings";
 
@@ -60,15 +60,16 @@ function HostedSaveIndicator({
   const recovery = useHostedRecoveryPoint();
   // The editor reports a stored document saved from the moment it opens, with
   // when in the tooltip; the entry form's own bar does not pass this.
-  const storedAt = useHostedStoredAt();
-  // The recovery offer, made in the chip; claiming it takes down the banner.
-  const offer = useClaimedRecoveryOffer();
+  const stored = useHostedStored();
+  // The recovery offer, made in the chip; its control claims it, which takes
+  // down the banner.
+  const offer = useHostedRecoveryOffer();
   return (
     <>
       <SaveStateIndicator
         saveState={hosted.saveState}
         recovery={recovery}
-        storedAt={storedAt}
+        stored={stored}
         offer={offer}
         {...(className === undefined ? {} : { className })}
       />

@@ -28,11 +28,12 @@ import {
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 
 import { DocumentActionConfirmations } from "./DocumentActionConfirmations";
+import { hasPendingWorkingDraft } from "./EntryFormContext";
 import {
   EntryFormProvider,
   type EntryFormProviderProps,
 } from "./EntryFormProvider";
-import type { RecoveryPointState } from "./SaveStateIndicator";
+import type { RecoveryPointState, StoredDocument } from "./SaveStateIndicator";
 import {
   useDocumentActionBindings,
   type DocumentActionBindings,
@@ -60,17 +61,25 @@ const RecoveryPointContext =
   createContext<RecoveryPointState>(NO_RECOVERY_POINT);
 
 /**
- * When the hosted document was last stored, so a surface can report it saved
+ * How the hosted document stands in storage, so a surface can report it saved
  * from the moment it opens. Null for a new document, or one with no readable
  * time.
  */
-const StoredAtContext = createContext<Date | null>(null);
+const StoredContext = createContext<StoredDocument | null>(null);
 
-/** The stored time a document's `updatedAt` names, or null when it names none. */
-function storedTimeOf(updatedAt: string | undefined): Date | null {
+/**
+ * How a document as read stands in storage. A pending working draft is stored,
+ * but its row's `updatedAt` is the published version's (a draft save leaves it
+ * frozen), so its time is unknown rather than wrong.
+ */
+function storedStateOf(
+  entry: DocumentActionBindingsInput["entry"]
+): StoredDocument | null {
+  const updatedAt = entry?.updatedAt;
   if (updatedAt === undefined) return null;
   const time = Date.parse(updatedAt);
-  return Number.isNaN(time) ? null : new Date(time);
+  if (Number.isNaN(time)) return null;
+  return { at: hasPendingWorkingDraft(entry) ? null : new Date(time) };
 }
 
 export function DocumentActionsHost({
@@ -84,15 +93,14 @@ export function DocumentActionsHost({
   children: ReactNode;
 }): JSX.Element {
   const documentActions = useDocumentActionBindings(input);
-  const updatedAt = input.entry?.updatedAt;
-  // Keyed on the string, so the same stored time is the same Date each render.
-  const storedAt = useMemo(() => storedTimeOf(updatedAt), [updatedAt]);
+  const { entry } = input;
+  const stored = useMemo(() => storedStateOf(entry), [entry]);
   return (
     <DocumentActionsContext.Provider value={documentActions}>
       <RecoveryPointContext.Provider value={recovery}>
-        <StoredAtContext.Provider value={storedAt}>
+        <StoredContext.Provider value={stored}>
           {children}
-        </StoredAtContext.Provider>
+        </StoredContext.Provider>
       </RecoveryPointContext.Provider>
       <DocumentActionConfirmations
         confirmations={documentActions.confirmations}
@@ -108,9 +116,9 @@ export function useHostedRecoveryPoint(): RecoveryPointState {
   return useContext(RecoveryPointContext);
 }
 
-/** When the hosted document was last stored, or null outside a host. */
-export function useHostedStoredAt(): Date | null {
-  return useContext(StoredAtContext);
+/** How the hosted document stands in storage, or null outside a host. */
+export function useHostedStored(): StoredDocument | null {
+  return useContext(StoredContext);
 }
 
 /**

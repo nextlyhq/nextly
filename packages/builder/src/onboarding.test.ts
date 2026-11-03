@@ -61,6 +61,15 @@ function register() {
         props: { text: { type: "text", inline: true } },
         defaultProps: { text: "Heading" },
       },
+      // Placed with its EXAMPLE's text over an empty default, as core/heading
+      // is: the inserter's starting props, not the default alone.
+      {
+        ...base,
+        name: "acme/exampled",
+        props: { text: { type: "text", inline: true } },
+        defaultProps: { text: "" },
+        example: { props: { text: "A section title" } },
+      },
     ] as never,
     { source: "onboarding-test" }
   );
@@ -133,6 +142,22 @@ describe("builderChecklist", () => {
       false
     );
     expect(step(documentOf([titled("Our story")]), "write-text")?.done).toBe(
+      true
+    );
+  });
+
+  it("does not count the text a block is placed with from its example", () => {
+    const exampled = (text: string) =>
+      ({
+        id: "e",
+        type: "acme/exampled",
+        version: 1,
+        props: { text },
+      }) as BlockNode;
+    expect(
+      step(documentOf([exampled("A section title")]), "write-text")?.done
+    ).toBe(false);
+    expect(step(documentOf([exampled("About us")]), "write-text")?.done).toBe(
       true
     );
   });

@@ -69,7 +69,8 @@ const STATE_WORDS: Readonly<Record<NonNullable<PageItem["state"]>, string>> = {
 /** The Pages panel as the editor mounts it, and its request to open Settings. */
 export interface PagesPanelMount {
   /** Draws the panel. */
-  renderPagesPanel: () => React.ReactNode;
+  /** Draws the panel; `unsavedWork` is whether the editor holds unsaved work. */
+  renderPagesPanel: (state: { unsavedWork: boolean }) => React.ReactNode;
   /** Sent to the shell, which opens Settings once per new count. */
   settingsRequest: { readonly count: number } | undefined;
   /** The page being edited, or null before it has been saved. */
@@ -102,8 +103,12 @@ export function usePagesPanel(
   return {
     currentPage,
     settingsRequest,
-    renderPagesPanel: () => (
-      <PagesPanel current={currentPage} onOpenSettings={openSettings} />
+    renderPagesPanel: ({ unsavedWork }) => (
+      <PagesPanel
+        current={currentPage}
+        unsavedWork={unsavedWork}
+        onOpenSettings={openSettings}
+      />
     ),
   };
 }
@@ -117,12 +122,15 @@ function arrivedForSettings(): boolean {
 interface PagesPanelProps {
   /** The page being edited, so its row is marked and its actions act here. */
   current: PageReference | null;
+  /** Whether the editor holds work not yet saved. */
+  unsavedWork: boolean;
   /** Opens this page's Settings dialog. */
   onOpenSettings: () => void;
 }
 
 function PagesPanel({
   current,
+  unsavedWork,
   onOpenSettings,
 }: PagesPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
@@ -177,6 +185,7 @@ function PagesPanel({
           list={list}
           query={query}
           current={current}
+          unsavedWork={unsavedWork}
           actions={{ ...act, remove: setDeleting }}
         />
       </div>
@@ -378,11 +387,13 @@ function PageList({
   list,
   query,
   current,
+  unsavedWork,
   actions,
 }: {
   list: PagesList;
   query: string;
   current: PageReference | null;
+  unsavedWork: boolean;
   actions: RowActions;
 }): React.JSX.Element {
   if (list.state === "failed") {
@@ -426,6 +437,7 @@ function PageList({
                 key={`${page.collection}:${page.id}`}
                 page={page}
                 editing={isCurrent(page, current)}
+                unsavedWork={unsavedWork}
                 actions={actions}
               />
             ))}
@@ -482,10 +494,13 @@ function Chip({ children }: { children: string }): React.JSX.Element {
 function PageRow({
   page,
   editing,
+  unsavedWork,
   actions,
 }: {
   page: PageItem;
   editing: boolean;
+  /** Whether the editor holds unsaved work, which only this page's row has. */
+  unsavedWork: boolean;
   actions: RowActions;
 }): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
@@ -533,6 +548,7 @@ function PageRow({
       <RowMenu
         page={page}
         editing={editing}
+        unsavedHere={editing && unsavedWork}
         actions={actions}
         onRename={() => (editing ? actions.settings(page) : setRenaming(true))}
       />
@@ -544,20 +560,29 @@ function PageRow({
 function RowMenu({
   page,
   editing,
+  unsavedHere,
   actions,
   onRename,
 }: {
   page: PageItem;
   editing: boolean;
+  /** Whether this is the page being edited, with work not yet saved. */
+  unsavedHere: boolean;
   actions: RowActions;
   onRename: () => void;
 }): React.JSX.Element {
   // A copy is made from the stored page: a never-published draft as it is,
   // and a published page as published, so newer unpublished changes are left
-  // behind. Said under Duplicate, so the author knows what the copy holds.
+  // behind; and never from the editor's unsaved work. Said under Duplicate,
+  // so the author knows what the copy holds.
   const copiesPublished =
     page.status !== "draft" &&
     (page.state === "changed" || page.pendingChange === true);
+  const copyNote = copiesPublished
+    ? "Copies the published version, without your unpublished changes."
+    : unsavedHere
+      ? "Copies the last saved version, without your unsaved changes."
+      : null;
   // Rename starts once the menu has CLOSED. Started while it closes, the
   // menu's focus return pulls focus out of the new field, whose blur then
   // ends the rename before anything was typed.
@@ -594,9 +619,9 @@ function RowMenu({
         >
           Rename
         </DropdownMenuItem>
-        {copiesPublished ? (
+        {copyNote !== null ? (
           <NotedItem
-            note="Copies the published version, without your unpublished changes."
+            note={copyNote}
             onSelect={() => void actions.duplicate(page)}
           >
             Duplicate

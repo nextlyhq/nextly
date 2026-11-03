@@ -117,6 +117,9 @@ function deferred<T>() {
 /** Whether the document being edited is a page; a component's is not. */
 let editingPage = true;
 
+/** Whether the editor holds unsaved work, as the editor tells the panel. */
+let unsavedWork = false;
+
 /** The editor's mount of the panel, and what it asks of Settings. */
 function Harness() {
   const mount = usePagesPanel(editingPage);
@@ -125,7 +128,7 @@ function Harness() {
       <output aria-label="Settings request">
         {mount.settingsRequest?.count ?? "none"}
       </output>
-      {mount.renderPagesPanel()}
+      {mount.renderPagesPanel({ unsavedWork })}
     </>
   );
 }
@@ -165,6 +168,7 @@ beforeEach(() => {
   for (const write of Object.values(client)) write.mockReset();
   identity = { kind: "collection", slug: "pages", documentId: "current" };
   editingPage = true;
+  unsavedWork = false;
   window.history.replaceState({}, "", "/");
 });
 afterEach(cleanup);
@@ -456,6 +460,28 @@ describe("a row's actions", () => {
     expect(entry.textContent).toBe("Duplicate");
     await userEvent.click(entry);
     expect(client.duplicatePage).toHaveBeenCalledWith(draft);
+  });
+
+  it("says Duplicate copies the last saved version of the page being edited with unsaved work", async () => {
+    // The copy is made on the server from what is stored, never from the
+    // editor's unsaved work, so the author is told before choosing it.
+    identity = { kind: "collection", slug: "pages", documentId: "a" };
+    unsavedWork = true;
+    const home = item("a", "Home", { status: "draft", state: "draft" });
+    const { entry, description } = await duplicateFor(home);
+    expect(description).toBe(
+      "Copies the last saved version, without your unsaved changes."
+    );
+    expect(entry.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("adds no note to another page's Duplicate while this one has unsaved work", async () => {
+    identity = { kind: "collection", slug: "pages", documentId: "elsewhere" };
+    unsavedWork = true;
+    const { description } = await duplicateFor(
+      item("a", "Home", { status: "draft", state: "draft" })
+    );
+    expect(description).toBeUndefined();
   });
 
   it("keeps an unavailable item in the arrow-key order, described by its reason", async () => {

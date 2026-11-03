@@ -36,7 +36,10 @@ import {
 } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
-import type { HostedRecoveryOffer } from "./RecoveryOfferContext";
+import {
+  useClaimRecoveryOffer,
+  type HostedRecoveryOffer,
+} from "./RecoveryOfferContext";
 import { formatTimeAgo } from "./time-ago";
 import type { DocumentSaveState } from "./useDocumentActionBindings";
 
@@ -52,6 +55,15 @@ export interface RecoveryPointState {
    * is not saved with them, whatever the form says.
    */
   pendingOfferAt: Date | null;
+}
+
+/**
+ * How the opened document stands in storage, for a surface that reports it
+ * saved from the moment it opens: when it was stored, or null when the time
+ * isn't known (a working draft, whose row keeps the published time).
+ */
+export interface StoredDocument {
+  at: Date | null;
 }
 
 /** What the indicator draws: one of the four states, or nothing to say. */
@@ -83,11 +95,11 @@ export function saveIndicatorView(
   saveState: DocumentSaveState,
   recovery: RecoveryPointState,
   /**
-   * When the opened document was last stored, for a surface that reports it
+   * How the opened document stands in storage, for a surface that reports it
    * as saved from the moment it opens. Absent, an opened document says nothing
    * until it is saved.
    */
-  storedAt: Date | null = null
+  stored: StoredDocument | null = null
 ): SaveIndicatorView {
   switch (saveState.kind) {
     case "failed":
@@ -117,12 +129,21 @@ export function saveIndicatorView(
       // Nothing stored this session and nothing pending: an opened document is
       // saved as of its stored time where the surface knows it, and otherwise
       // has nothing to report yet.
-      const savedAt = saveState.at ?? storedAt;
-      if (savedAt === null) return null;
+      const savedAt = saveState.at ?? stored?.at ?? null;
+      if (savedAt !== null) {
+        return {
+          tone: "saved",
+          label: "Saved",
+          detail: `Saved ${formatTimeAgo(savedAt)}`,
+        };
+      }
+      // Stored, at a time nothing here can tell: said without an age rather
+      // than with the wrong one.
+      if (stored === null) return null;
       return {
         tone: "saved",
         label: "Saved",
-        detail: `Saved ${formatTimeAgo(savedAt)}`,
+        detail: "Changes saved as a draft",
       };
     }
   }
@@ -235,6 +256,8 @@ function RecoveryOfferChip({
   label: string;
   offer: HostedRecoveryOffer;
 }): JSX.Element {
+  // Made here, so the banner a document view would draw stands down.
+  useClaimRecoveryOffer();
   const [open, setOpen] = useState(false);
   const answer = (choice: () => void) => () => {
     setOpen(false);
@@ -286,19 +309,19 @@ export interface SaveStateIndicatorProps {
    * surface that shows the save state in its own bar.
    */
   offer?: HostedRecoveryOffer | null;
-  /** When the opened document was last stored; see `saveIndicatorView`. */
-  storedAt?: Date | null;
+  /** How the opened document stands in storage; see `saveIndicatorView`. */
+  stored?: StoredDocument | null;
   className?: string;
 }
 
 export function SaveStateIndicator({
   saveState,
   recovery,
-  storedAt = null,
+  stored = null,
   offer = null,
   className,
 }: SaveStateIndicatorProps): JSX.Element {
-  const view = saveIndicatorView(saveState, recovery, storedAt);
+  const view = saveIndicatorView(saveState, recovery, stored);
 
   return (
     // The reserved width: the widest state, "Not saved" with its Retry, fits

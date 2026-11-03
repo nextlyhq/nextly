@@ -22,7 +22,7 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { cn } from "@nextlyhq/ui/utils";
 import { Check, X } from "lucide-react";
-import { type JSX, useCallback, useState } from "react";
+import { type JSX, useCallback, useMemo, useState } from "react";
 
 import {
   builderChecklist,
@@ -39,6 +39,12 @@ export interface UseBuilderChecklistOptions {
   /** The page being edited. Every step is derived from it. */
   document: BlockDocument;
   /**
+   * Which page this is, for an editor that can open another page without
+   * remounting: whether the page opened empty is read again when it changes.
+   * Absent, the first page read stands for the editor's life.
+   */
+  documentKey?: string;
+  /**
    * Whether the checklist may be shown at all. Defaults to true.
    *
    * The host's kill switch. A site that has taught its authors the editor
@@ -54,6 +60,9 @@ export interface UseBuilderChecklistOptions {
    * is per BROWSER, so two people sharing a profile share the dismissal. Per
    * user in the sense that matters — nobody dismisses it for anyone else's
    * machine — and not a claim about accounts.
+   *
+   * Keep the same store from render to render (memoise it): a new one is read
+   * afresh, which is how a store that arrives late is honoured.
    */
   store?: PreferenceStore;
 }
@@ -72,19 +81,28 @@ export interface UseBuilderChecklistResult {
  */
 export function useBuilderChecklist({
   document,
+  documentKey,
   enabled = true,
   store,
 }: UseBuilderChecklistOptions): UseBuilderChecklistResult {
-  // Read once on mount rather than on every render: the value only changes
-  // through `dismiss`, and reading storage during render makes the first
-  // client render disagree with the server's.
-  const [dismissed, setDismissed] = useState(() => {
-    const source = store ?? browserStore(CHECKLIST_STORAGE_KEY);
-    return source.read() === "true";
-  });
+  const source = useMemo(
+    () => store ?? browserStore(CHECKLIST_STORAGE_KEY),
+    [store]
+  );
+  // Read as a store arrives rather than once on mount: a host can hand its
+  // store over a render late (the author's id resolving after the editor
+  // opens), and the dismissal it holds is the one that counts.
+  const [dismissal, setDismissal] = useState(() => ({
+    source,
+    dismissed: readDismissed(source),
+  }));
+  let dismissed = dismissal.dismissed;
+  if (dismissal.source !== source) {
+    dismissed = readDismissed(source);
+    setDismissal({ source, dismissed });
+  }
 
   const dismiss = useCallback(() => {
-    const source = store ?? browserStore(CHECKLIST_STORAGE_KEY);
     // Written before the state changes, and a failure is swallowed: private
     // browsing refuses storage, and an author who cannot persist the dismissal
     // should still get the card off their screen for this session.
@@ -93,17 +111,35 @@ export function useBuilderChecklist({
     } catch {
       // Storage refused. The in-memory dismissal below still stands.
     }
-    setDismissed(true);
-  }, [store]);
+    setDismissal({ source, dismissed: true });
+  }, [source]);
 
   // A first-run card, for a page the author starts from nothing. A page that
   // opens with blocks was built already, by this author or another, and the
-  // card would only list steps nobody here just took. Read once, at open:
-  // emptying the page later doesn't make it a first run.
-  const [openedEmpty] = useState(() => document.nodes.length === 0);
+  // card would only list steps nobody here just took. Read as each page
+  // opens, keyed by its identity: emptying the page later doesn't make it a
+  // first run, and opening another page in the same editor asks again.
+  const [opening, setOpening] = useState(() => ({
+    key: documentKey,
+    empty: document.nodes.length === 0,
+  }));
+  let openedEmpty = opening.empty;
+  if (opening.key !== documentKey) {
+    openedEmpty = document.nodes.length === 0;
+    setOpening({ key: documentKey, empty: openedEmpty });
+  }
 
   const steps = builderChecklist(document);
   return { steps, visible: enabled && openedEmpty && !dismissed, dismiss };
+}
+
+/** Whether a store holds a dismissal; a store that can't be read holds none. */
+function readDismissed(source: PreferenceStore): boolean {
+  try {
+    return source.read() === "true";
+  } catch {
+    return false;
+  }
 }
 
 export interface OnboardingChecklistProps {
