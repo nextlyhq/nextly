@@ -73,17 +73,19 @@ describe("hidden fields in public reads", () => {
     [{ sort: ["title", "-adminOnly"] }],
     [{ sort: "adminOnly" }],
   ])(
-    "refuses a list that filters or sorts by a hidden field, before reading (%j)",
+    "refuses a list that filters or sorts by a hidden field, returning nothing it read (%j)",
     async asked => {
       const { reader, find } = readerOver([row()]);
       await expect(
         reader.find({ collection: "posts", ...asked })
       ).rejects.toThrow(/"adminOnly"/);
-      expect(find).not.toHaveBeenCalled();
+      // Read, since the schema is known only once the instance is booted,
+      // and refused before any row is returned.
+      expect(find).toHaveBeenCalledTimes(1);
     }
   );
 
-  it("refuses a count filtered by a hidden field, before reading", async () => {
+  it("refuses a count filtered by a hidden field, returning nothing it read", async () => {
     const { reader, find } = readerOver([row()]);
     await expect(
       reader.count({
@@ -91,7 +93,7 @@ describe("hidden fields in public reads", () => {
         filters: [{ field: "adminOnly", op: "exists", value: true }],
       })
     ).rejects.toThrow(/"adminOnly"/);
-    expect(find).not.toHaveBeenCalled();
+    expect(find).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a row whole when the source hides nothing", async () => {

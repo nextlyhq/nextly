@@ -19,6 +19,8 @@ import {
 import { withRuleLanguage } from "../../../auth/access/rule-language";
 import { runAsPrincipal } from "../../../auth/principal-scope";
 import { container } from "../../../di/container";
+import { isServicesRegistered } from "../../../di/service-access";
+import { NextlyError } from "../../../errors/nextly-error";
 import { writeFieldGroupType } from "../../../domains/field-groups/storage/field-group-type-key";
 import { makePrincipal } from "../../../plugins/principals/principal";
 import {
@@ -539,6 +541,77 @@ describe.each(getConfiguredTestDialects())(
           bindingFieldShapes({ collection: "pss_nowhere" })
         ).resolves.toBeUndefined();
       });
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a public reader before its instance is booted (%s)",
+  dialect => {
+    const LAZY = "pss_lazy";
+    let lazy: TestNextly | undefined;
+
+    afterAll(async () => {
+      await lazy?.destroy();
+    });
+
+    /** A reader that boots its instance on its first read, as a lazy route does. */
+    function lazyReader() {
+      const booted = async () => {
+        if (lazy !== undefined) return lazy.nextly;
+        lazy = await createTestNextly({
+          ...(dialect === "sqlite" ? {} : { dialect }),
+          seedPublic: true,
+          collections: [
+            defineCollection({
+              slug: LAZY,
+              status: true,
+              access: { read: () => true },
+              fields: [
+                text({ name: "title" }),
+                text({ name: "adminOnly", admin: { hidden: true } }),
+              ],
+            }),
+          ],
+        });
+        await lazy.nextly.create({
+          collection: LAZY,
+          data: {
+            title: "Lazy",
+            adminOnly: "lazy-hidden",
+            status: "published",
+          },
+        });
+        return lazy.nextly;
+      };
+      return createPublicReader({
+        find: async args => (await booted()).find(args),
+      });
+    }
+
+    it("refuses a read when no schema can be read, returning nothing", async () => {
+      // The control: nothing is registered before the first read.
+      expect(isServicesRegistered()).toBe(false);
+      const stand = createPublicReader({
+        find: async () => ({
+          items: [{ id: "1", adminOnly: "leak" }],
+          meta: { total: 1 },
+        }),
+      } as unknown as Parameters<typeof createPublicReader>[0]);
+      const outcome = await stand.find({ collection: LAZY }).then(
+        value => JSON.stringify(value),
+        (error: unknown) =>
+          NextlyError.isCode(error, "CONFIGURATION_ERROR") ? "refused" : error
+      );
+      expect(outcome).toBe("refused");
+    });
+
+    it("never returns a hidden field on its first read", async () => {
+      expect(isServicesRegistered()).toBe(false);
+      const { items } = await lazyReader().find({ collection: LAZY });
+      // The control: the first read reached the booted instance's row.
+      expect(items.map(item => item.title)).toEqual(["Lazy"]);
+      expect(JSON.stringify(items)).not.toContain("lazy-hidden");
     });
   }
 );

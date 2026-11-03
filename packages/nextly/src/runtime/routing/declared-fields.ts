@@ -25,6 +25,7 @@ import {
   sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "../../domains/webhooks/sensitive-fields";
+import { NextlyError } from "../../errors/nextly-error";
 
 /** A collection or a Single, by its slug. */
 export interface SourceEntity {
@@ -66,17 +67,24 @@ const NONE: ReadonlySet<string> = new Set();
 
 /**
  * The dotted paths of the source's hidden and password fields, inside its
- * components and dynamic zones too, by core's sensitive-field rule.
+ * components and dynamic zones too, by core's sensitive-field rule. None for
+ * a source the registry does not hold: the read itself answers for that.
  *
- * None when no services are registered. A Direct API reads through the
- * registered services, so a reader with none behind it is not reading this
- * site's content, and there is no declaration to consult. None, too, for a
- * source the registry does not hold: the read itself answers for that.
+ * Refused when no services are registered, because then which fields are
+ * hidden cannot be known, and a read must not answer as if none were. A
+ * reader over something other than this process's Nextly supplies the
+ * declarations itself.
  */
 export async function hiddenFieldPaths(
   source: SourceEntity
 ): Promise<ReadonlySet<string>> {
-  if (!isServicesRegistered()) return NONE;
+  if (!isServicesRegistered()) {
+    throw NextlyError.configuration({
+      logMessage:
+        "A public read cannot tell which fields are hidden: no Nextly services are registered in this process, so its schema cannot be read. Give the reader its declarations if it reads elsewhere.",
+      logContext: { reason: "public-read-schema-unavailable" },
+    });
+  }
   const fields = await expandedFields(source);
   return fields === undefined ? NONE : new Set(sensitiveFieldPaths(fields));
 }

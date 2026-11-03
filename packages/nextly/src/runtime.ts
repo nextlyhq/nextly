@@ -136,11 +136,13 @@ export type {
   PublicFilterOp,
   PublicReader,
   PublicReaderBinding,
+  PublicReaderDeclarations,
   PublicReaderSource,
   PublicReadQuery,
   PublicReadResult,
   PublicSingleQuery,
   PublicSingleResult,
+  PublicSource,
   PublicSourceReader,
 } from "./runtime/routing/public-reader";
 

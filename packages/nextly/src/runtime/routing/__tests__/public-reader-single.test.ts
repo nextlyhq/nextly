@@ -5,6 +5,14 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+// The registered schema stood in for as hiding nothing: these tests are about
+// what a read is built from and how it runs, not about hidden fields, which
+// `public-reader-hidden.test.ts` and the declarations' own tests cover.
+vi.mock("../declared-fields", async importOriginal => ({
+  ...(await importOriginal<typeof import("../declared-fields")>()),
+  hiddenFieldPaths: vi.fn(async () => new Set<string>()),
+}));
+
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import {
   currentCallerScope,

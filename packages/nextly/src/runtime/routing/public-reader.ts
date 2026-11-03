@@ -142,7 +142,38 @@ export interface PublicSourceReader extends PublicReader {
 export interface PublicReaderBinding {
   /** The route's language. Every read answers in it. */
   locale?: string;
+  /**
+   * Where the reader learns which fields each source declares hidden, for a
+   * reader over something other than this process's Nextly: a test's
+   * stand-in, or a source whose schema the registry does not hold. Absent,
+   * the registered schema answers, and a read whose schema cannot be read is
+   * refused rather than returned unstripped.
+   *
+   * @experimental
+   */
+  declarations?: PublicReaderDeclarations;
 }
+
+/** A collection's entries or one Single, by slug. */
+export interface PublicSource {
+  kind: "collection" | "single";
+  slug: string;
+}
+
+/**
+ * The hidden fields of each source a reader reads, as dotted paths (`secret`,
+ * `seo.apiKey`, `rows.token`); none is an empty list, which says the source
+ * hides nothing.
+ *
+ * @experimental
+ */
+export interface PublicReaderDeclarations {
+  hiddenFields(
+    source: PublicSource
+  ): readonly string[] | Promise<readonly string[]>;
+}
+
+const HIDDEN_PATHS = z.array(z.string());
 
 /**
  * The Direct API reads a public reader is made over. `findSingle` is
@@ -557,19 +588,39 @@ function selectedFrom(
   );
 }
 
-/** The hidden fields of a source, from the module that reads the registry. */
+/**
+ * The hidden fields of a source: from the declarations the route supplied,
+ * else from the registered schema, which refuses when it cannot be read.
+ *
+ * Asked after the read, never before it: a reader made lazily boots the
+ * instance on its first read, and asked earlier the registry would not be
+ * there to answer for that read.
+ */
 async function hiddenOf(
-  kind: "collection" | "single",
-  slug: string
+  binding: PublicReaderBinding,
+  source: PublicSource
 ): Promise<ReadonlySet<string>> {
+  if (binding.declarations !== undefined) {
+    const declared = HIDDEN_PATHS.safeParse(
+      await binding.declarations.hiddenFields(source)
+    );
+    if (!declared.success) {
+      throw NextlyError.configuration({
+        logMessage:
+          "A public reader's declarations answered hidden fields that are not a list of field paths.",
+        logContext: { reason: "public-read-declarations-invalid" },
+      });
+    }
+    return new Set(declared.data);
+  }
   const { hiddenFieldPaths } = await import("./declared-fields");
-  return hiddenFieldPaths({ kind, slug });
+  return hiddenFieldPaths(source);
 }
 
 /**
- * Refuse a filter or a sort naming a hidden field, before reading: the rows a
- * filter keeps, and the order a sort puts them in, would reveal the value
- * every row is stripped of.
+ * Refuse a filter or a sort naming a hidden field, before anything read is
+ * returned: the rows a filter keeps, and the order a sort puts them in, would
+ * reveal the value every row is stripped of.
  */
 function assertNotHidden(
   query: Pick<PublicReadQuery, "filters" | "sort">,
@@ -625,9 +676,14 @@ export function createPublicReader(
   return Object.freeze({
     async find(query: PublicReadQuery): Promise<PublicReadResult> {
       const args = toPublicFind(query, binding);
-      const hidden = await hiddenOf("collection", query.collection);
-      assertNotHidden(query, hidden);
       const result = await read(args);
+      // Judged once the read has booted the instance, and before any of its
+      // rows or its total is returned.
+      const hidden = await hiddenOf(binding, {
+        kind: "collection",
+        slug: query.collection,
+      });
+      assertNotHidden(query, hidden);
       return {
         items: await Promise.all(
           result.items.map(item => withoutHiddenFields(item, hidden))
@@ -643,8 +699,11 @@ export function createPublicReader(
         { ...query, limit: 1, select: ["id"] },
         binding
       );
-      assertNotHidden(query, await hiddenOf("collection", query.collection));
       const result = await read(args);
+      assertNotHidden(
+        query,
+        await hiddenOf(binding, { kind: "collection", slug: query.collection })
+      );
       return result.meta.total;
     },
     async findSingle(query: PublicSingleQuery): Promise<PublicSingleResult> {
@@ -657,12 +716,15 @@ export function createPublicReader(
           logContext: { reason: "public-read-single-unsupported" },
         });
       }
-      const hidden = await hiddenOf("single", query.slug);
       try {
         const document = await readAsVisitor(() =>
           findSingle.call(nextly, args)
         );
         if (document === null) return null;
+        const hidden = await hiddenOf(binding, {
+          kind: "single",
+          slug: query.slug,
+        });
         return selectedFrom(
           await withoutHiddenFields(document, hidden),
           query.select
