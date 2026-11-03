@@ -25,6 +25,7 @@ import {
   sharedStyleKindName,
   sharedStyleRemoval,
   sharedStyleSlug,
+  sharedStyleUse,
   SHARED_STYLE_NOT_WHOLE_NOTE,
   SHARED_STYLE_RENAME_PENDING,
   type BlocksOnThisPage,
@@ -110,7 +111,11 @@ export function SharedStyleDetails(
         heldBy={heldBy}
       />
       <Declares row={row} styleContext={props.styleContext} />
-      <WhereUsed id={row.id} sentence={props.sentence} access={access} />
+      <WhereUsed
+        id={row.id}
+        sentence={sentenceBeside(props, refused)}
+        access={access}
+      />
       {row.inCode ? (
         <p className="nx-shared-styles__meta">Set in your site&rsquo;s code</p>
       ) : null}
@@ -132,6 +137,19 @@ export function SharedStyleDetails(
       )}
     </div>
   );
+}
+
+/**
+ * The reach in words, unless the server has just refused a removal while the
+ * index counts no use: then "Not used anywhere" would sit over a refusal
+ * saying it is used, and the refusal is the truer statement.
+ */
+function sentenceBeside(
+  props: SharedStyleDetailsProps,
+  refused: string | null
+): string {
+  const counted = sharedStyleUse(props.blocks, props.reach) === "used";
+  return refused !== null && !counted ? "" : props.sentence;
 }
 
 /** Whether the popover shows a control a pending rename holds: Lock or Remove. */

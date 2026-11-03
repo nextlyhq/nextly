@@ -283,8 +283,11 @@ export function sharedStylePageTile(
   };
 }
 
-/** The contrast under which a tile's text counts as hard to read. */
-const READABLE_RATIO = 3;
+/**
+ * The contrast under which a tile's text counts as hard to read: WCAG AA for
+ * normal text, since the "Aa" is small, regular-weight text.
+ */
+const READABLE_RATIO = 4.5;
 
 /**
  * The engine's own variables, for readable text when the site's are not to
@@ -299,8 +302,8 @@ export interface SharedStyleTile {
   /** The "Aa": the style's own colours, with readable text where it sets none. */
   readonly specimen: Readonly<Record<string, string>>;
   /**
-   * The style's text is under 3:1 on the site's dark page, so the tile shows
-   * the light page instead and says so.
+   * The style's text is under 4.5:1 on the site's dark page, so the tile
+   * shows the light page instead and says so.
    */
   readonly darkUnreadable: boolean;
 }
@@ -339,7 +342,7 @@ function readableText(
 
 /**
  * A row's tile in the mode the canvas shows. In dark mode a style whose text
- * (its own, or the page's where it sets none) would be under 3:1 on its
+ * (its own, or the page's where it sets none) would be under 4.5:1 on its
  * background (its own, or the dark page's) is drawn on the light page
  * instead and marked, since on the site it is hard to read in dark mode. A
  * style with a background and no text colour gets text that reads on that
@@ -562,6 +565,13 @@ export const SHARED_STYLE_NOT_WHOLE_REMOVAL =
  */
 export const SHARED_STYLE_RENAME_PENDING =
   "Wait until the name change is saved.";
+
+/**
+ * The one note while the tab's counts are floors and Unused holds rows back:
+ * it covers the minimums, the withheld rows and Remove unused waiting.
+ */
+export const SHARED_STYLE_COUNTING_NOTE =
+  "Some pages are still being counted, so the numbers are minimums and no style can be called unused or removed yet.";
 
 /** What the Unused filter says in place of rows while counts are floors. */
 export const SHARED_STYLE_UNUSED_WHILE_COUNTING =

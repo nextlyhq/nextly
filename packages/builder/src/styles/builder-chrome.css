@@ -4875,7 +4875,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: inline-flex;
   width: 22px;
   height: 22px;
-  overflow: hidden;
+  /* Visible, so the dark-mode flag can sit outside the corner, off the
+     glyph; the preview inside keeps to the rounded tile on its own. */
+  overflow: visible;
   color: var(--nx-foreground);
   background: var(--nx-page-background);
   border: 1px solid var(--nx-border);
@@ -4886,7 +4888,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   align-items: center;
   width: 100%;
   height: 100%;
+  overflow: hidden;
   font-size: var(--text-sm);
+  border-radius: calc(var(--radius-sm) - 1px);
 }
 
 /* The filters close the search block, so the search row keeps no rule of
@@ -5040,12 +5044,13 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   min-height: 24px;
 }
 
-/* The dark-mode flag on a tile drawn on the light page: a small moon in the
-   corner, the tile's tooltip saying why. */
+/* The dark-mode flag on a tile drawn on the light page: a small moon over the
+   tile's top corner, outside the "Aa" so it covers no letter; the row's
+   tooltip says why. */
 .nx-shared-styles__dark-flag {
   position: absolute;
-  inset-block-end: 1px;
-  inset-inline-end: 1px;
+  inset-block-start: -5px;
+  inset-inline-end: -5px;
   padding: 1px;
   color: var(--nx-foreground);
   background: var(--nx-background);

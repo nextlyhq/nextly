@@ -36,6 +36,10 @@ import {
   PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@nextlyhq/ui";
 import { Lock, Moon, Search } from "lucide-react";
 import * as React from "react";
@@ -69,6 +73,7 @@ import {
   SHARED_STYLE_NOT_WHOLE_NOTE,
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
   SHARED_STYLE_RENAME_PENDING,
+  SHARED_STYLE_COUNTING_NOTE,
   SHARED_STYLE_UNUSED_WHILE_COUNTING,
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
@@ -256,8 +261,13 @@ export function SharedStylesPanel({
   // search puts first, then the rest, fifty to a read.
   const usage = useUsage(access, usageOrder(rows, found, pages));
   const exact = countsExact(usage, pageBlocks, rows);
+
   const usageOf = (row: SharedStyleRow) =>
     sharedStyleUse(pageBlocksOf(pageBlocks, row.id), usage.styles.get(row.id));
+  const notes = countingNotes(
+    unusedWithheld(filter, found, usageOf),
+    usage.whole
+  );
   const filtered = found.filter(row =>
     inSharedStyleFilter(row, filter, usageOf(row))
   );
@@ -320,6 +330,7 @@ export function SharedStylesPanel({
             access={access}
             whole={usage.whole}
             held={held}
+            saidInNote={notes.one}
             blocksOf={blocksOf}
             onRemoved={() => search.current?.focus()}
           />
@@ -328,7 +339,8 @@ export function SharedStylesPanel({
             found={filtered}
             filter={filter}
             query={query.trim()}
-            withheld={unusedWithheld(filter, found, usageOf)}
+            withheld={notes.withheld}
+            note={notes.note}
           >
             {shown.map(row => (
               <StyleRow
@@ -366,7 +378,8 @@ export function SharedStylesPanel({
             onMore={() => setPages(count => count + 1)}
           />
         </section>
-        <FloorNote whole={usage.whole} />
+        {/* Said by the one counting note when that is showing. */}
+        <FloorNote whole={notes.floorWhole} />
       </div>
     </div>
   );
@@ -569,6 +582,32 @@ function PanelNotes({
 }
 
 /**
+ * Which notes the tab says while counting. When Unused holds rows back and
+ * every count is a floor, ONE note says all three things (minimums, nothing
+ * certainly unused, nothing removable yet) rather than three paragraphs that
+ * each begin the same way.
+ */
+function countingNotes(
+  withheld: boolean,
+  whole: boolean | undefined
+): {
+  withheld: boolean;
+  one: boolean;
+  /** The one note's words, when it is showing. */
+  note: string | undefined;
+  /** What the floor note reads: nothing while the one note says it. */
+  floorWhole: boolean | undefined;
+} {
+  const one = withheld && whole === false;
+  return {
+    withheld,
+    one,
+    note: one ? SHARED_STYLE_COUNTING_NOTE : undefined,
+    floorWhole: one ? undefined : whole,
+  };
+}
+
+/**
  * Whether Unused is holding back a row the search found: one whose zero is
  * not counted in full yet, so it is neither used nor certainly unused.
  */
@@ -587,6 +626,7 @@ function StyleList({
   filter,
   query,
   withheld,
+  note,
   children,
 }: {
   rows: readonly SharedStyleRow[];
@@ -599,12 +639,22 @@ function StyleList({
    * rows proven unused are still listed, each judged on its own.
    */
   withheld: boolean;
+  /**
+   * The tab's one counting note, said here in place of the withheld rows'
+   * own; Remove unused points at it for why it waits.
+   */
+  note: string | undefined;
   children: React.ReactNode;
 }): React.JSX.Element {
   if (withheld && rows.length > 0) {
     return (
       <>
-        <p className="nx-vars__empty">{SHARED_STYLE_UNUSED_WHILE_COUNTING}</p>
+        <p
+          className="nx-vars__empty"
+          id={note === undefined ? undefined : "nx-shared-styles-withheld"}
+        >
+          {note ?? SHARED_STYLE_UNUSED_WHILE_COUNTING}
+        </p>
         {found.length === 0 ? null : (
           <ul className="nx-vars__list">{children}</ul>
         )}
@@ -972,22 +1022,24 @@ function StyleRow({
   return (
     <li>
       <Popover open={open} onOpenChange={onOpenChange} modal>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="nx-vars__row nx-shared-styles__row"
-            aria-label={rowLabel(row, name, sentence, tile)}
-            title={sentence === "" ? undefined : sentence}
-            data-shared-style={row.id}
-          >
-            <RowContent
-              row={row}
-              name={name}
-              reach={details.reach}
-              tile={tile}
-            />
-          </button>
-        </PopoverTrigger>
+        <DarkModeTip shown={tile.darkUnreadable}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="nx-vars__row nx-shared-styles__row"
+              aria-label={rowLabel(row, name, sentence, tile)}
+              title={sentence === "" ? undefined : sentence}
+              data-shared-style={row.id}
+            >
+              <RowContent
+                row={row}
+                name={name}
+                reach={details.reach}
+                tile={tile}
+              />
+            </button>
+          </PopoverTrigger>
+        </DarkModeTip>
         <PopoverContent
           side="right"
           align="start"
@@ -1016,6 +1068,32 @@ function StyleRow({
   );
 }
 
+/**
+ * The row's "Hard to read in dark mode" tooltip, shown when the row is
+ * hovered or focused, so keyboard and touch users meet it too; the row's
+ * accessible name says it as well. Nothing is added inside the row button,
+ * which is already the one control.
+ */
+function DarkModeTip({
+  shown,
+  children,
+}: {
+  shown: boolean;
+  children: React.ReactElement;
+}): React.JSX.Element {
+  if (!shown) return children;
+  return (
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>{children}</TooltipTrigger>
+        <TooltipContent side="right">
+          {SHARED_STYLE_DARK_UNREADABLE}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 /** A row's preview, name and class name, lock, and count. */
 function RowContent({
   row,
@@ -1036,7 +1114,6 @@ function RowContent({
         className="nx-shared-styles__tile"
         aria-hidden="true"
         style={tile.page}
-        title={tile.darkUnreadable ? SHARED_STYLE_DARK_UNREADABLE : undefined}
         data-dark-unreadable={tile.darkUnreadable ? "" : undefined}
       >
         <span
@@ -1103,6 +1180,7 @@ function RemoveUnusedHead({
   access,
   whole,
   held,
+  saidInNote,
   blocksOf,
   onRemoved,
 }: {
@@ -1113,6 +1191,11 @@ function RemoveUnusedHead({
   whole: boolean | undefined;
   /** A rename is being stored, so a removal, which writes the whole list, waits. */
   held: boolean;
+  /**
+   * The tab's one counting note already says why it waits, under the same
+   * id, so its own line is not drawn a second time.
+   */
+  saidInNote: boolean;
   blocksOf: (id: string) => BlocksOnThisPage;
   onRemoved: () => void;
 }): React.JSX.Element {
@@ -1144,7 +1227,7 @@ function RemoveUnusedHead({
           ) : null}
         </div>
       </PopoverAnchor>
-      {shown && wait !== undefined ? (
+      {shown && wait !== undefined && !saidInNote ? (
         <p className="nx-shared-styles__meta" id="nx-shared-styles-withheld">
           {wait}
         </p>

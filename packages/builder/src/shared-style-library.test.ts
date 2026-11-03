@@ -266,6 +266,13 @@ describe("a row's tile in dark mode", () => {
     expect(ratio(plain.specimen.color, "#ffffff")).toBeGreaterThanOrEqual(3);
   });
 
+  it("marks text that clears 3:1 but not 4.5:1, the bar for small text", () => {
+    // Muted grey: about 4:1 on the engine's dark page, faint for 14px text.
+    const tile = sharedStyleTile(tokens, "dark", { color: "#6b7280" });
+    expect(tile.darkUnreadable).toBe(true);
+    expect(tile.page).toEqual(LIGHT_PAGE);
+  });
+
   it("never marks a tile in light mode", () => {
     expect(
       sharedStyleTile(tokens, "light", { color: "#112233" }).darkUnreadable

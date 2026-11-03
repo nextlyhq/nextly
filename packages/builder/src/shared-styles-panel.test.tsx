@@ -240,7 +240,19 @@ describe("the row's preview", () => {
       );
       const tile = card.querySelector<HTMLElement>(".nx-shared-styles__tile");
       expect(tile?.style.backgroundColor).toBe("rgb(255, 255, 255)");
-      expect(tile?.getAttribute("title")).toBe("Hard to read in dark mode");
+      // Said where keyboard and touch users meet it too: the row's tooltip,
+      // shown when the row takes focus, not a title on a hidden element.
+      expect(tile?.hasAttribute("title")).toBe(false);
+      await act(async () => {
+        card.focus();
+      });
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "Hard to read in dark mode"
+      );
+      // The tooltip leaves the row the one control it was: it still opens.
+      fireEvent.click(card);
+      const opened = await screen.findByRole("dialog", { name: "Card" });
+      fireEvent.keyDown(opened, { key: "Escape" });
       // CONTROL: a style that reads on the dark page keeps it, unmarked.
       const light = row(/^Light text, \.nx-c-light-text/);
       expect(light.getAttribute("aria-label")).not.toContain("dark mode");
@@ -649,11 +661,17 @@ describe("the filters", () => {
     pick(/^Unused/);
     // HERO and OLD count zero so far, which is not unused yet.
     expect(shownRows()).toEqual([]);
-    expect(
-      screen.getByText(
-        "Some pages are still being counted, so no style can be called unused yet."
-      )
-    ).toBeTruthy();
+    // One note for the whole state, not one per thing it holds back.
+    const notes = screen
+      .getAllByText(/^Some pages are still being counted/)
+      .map(note => note.textContent);
+    expect(notes).toEqual([
+      "Some pages are still being counted, so the numbers are minimums and no style can be called unused or removed yet.",
+    ]);
+    // Remove unused still says why it waits, by pointing at that note.
+    const removeUnused = screen.getByRole("button", { name: "Remove unused…" });
+    const describedBy = removeUnused.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(describedBy)?.textContent).toBe(notes[0]);
     // A counted use is a use, counted in full or not.
     pick(/^Used/);
     expect(shownRows()).toEqual(["c-card"]);
@@ -1014,6 +1032,24 @@ describe("removing one style", () => {
       })
     );
     expect(screen.queryByRole("button", { name: /^Old note/ })).toBeNull();
+  });
+
+  it('does not say the index\'s "Not used anywhere" over a refusal that says it is used', async () => {
+    const refusal =
+      "Still used on Home and 2 more. Remove it from those pages first.";
+    const { access } = accessOf({ remove: async () => refusal });
+    await panel({ access });
+    const details = await open(/^Old note/, "Old note");
+    // CONTROL: before the refusal the index's sentence is there.
+    expect(within(details).getByText("Not used anywhere")).toBeTruthy();
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    await act(async () => {
+      fireEvent.click(
+        within(details).getByRole("button", { name: "Remove Old note" })
+      );
+    });
+    expect(within(details).getByRole("alert").textContent).toBe(refusal);
+    expect(within(details).queryByText("Not used anywhere")).toBeNull();
   });
 
   it("lets the read again decide a style refused for another reason, such as a lock", async () => {
