@@ -95,6 +95,16 @@ describe("a field's provenance dot", () => {
   });
 });
 
+describe("a jump to another tier's value", () => {
+  it("starts where its control does rather than centred under it", () => {
+    expect(
+      ruleBody(
+        '.nx-style-inspector .nx-inspector__field > [data-action="jump"]'
+      )
+    ).toContain("justify-self: start");
+  });
+});
+
 describe("the Font control in a style row", () => {
   it("is as tall as the lists and fields beside it", () => {
     // The shared list trigger and text field are 40px (2.5rem); the font

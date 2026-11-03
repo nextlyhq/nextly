@@ -1007,6 +1007,19 @@ describe("controls", () => {
     ).toBeDefined();
   });
 
+  it("draws a nested form's toggle just above its own control", () => {
+    // Position's z-index is the last of its controls: a toggle drawn above
+    // them all left the number field at the bottom with no visible name.
+    mount({ position: true });
+    const toggleRow = screen
+      .getByRole("radiogroup", { name: "Z index" })
+      .closest("[data-form-choice]");
+    const next = toggleRow?.nextElementSibling;
+    const label = next?.querySelector("label");
+    expect(label?.textContent).toContain("Z index");
+    expect(label?.hasAttribute("data-named-above")).toBe(true);
+  });
+
   it("says the property's name once, on the toggle's row", () => {
     // The one control under the toggle keeps its label for assistive
     // technology and drops the visible copy, which said "Border radius" twice.

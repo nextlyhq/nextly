@@ -1452,7 +1452,6 @@ function StylePropertyFields({
   // property needs no heading over it as well.
   const headed =
     many && !namesSection && !choices.some(choice => choice.path.length === 0);
-  const toggled = choices.map(choice => choice.path.join("."));
   /*
    * Whether this property is drawn as a box, and in what order — one decision,
    * settled outside the component. Each side still keeps its own control, so it
@@ -1460,6 +1459,20 @@ function StylePropertyFields({
    * only.
    */
   const box = sideBoxFor(property.controls, orientation);
+  const { above, before, toggled } = placeChoices(choices, box.boxed);
+  const toggle = (variant: StyleControlVariants) => (
+    <FormChoice
+      key={variant.path.join(".")}
+      property={property}
+      variant={variant}
+      nodeId={nodeId}
+      state={state}
+      breakpoint={breakpoint}
+      editor={editor}
+      policy={policy}
+      onChooseForm={onChooseForm}
+    />
+  );
   return (
     <div
       className="nx-style-inspector__property"
@@ -1489,19 +1502,7 @@ function StylePropertyFields({
         the value itself is the honest way to remove it, and it is already
         there.
       */}
-      {choices.map(variant => (
-        <FormChoice
-          key={variant.path.join(".")}
-          property={property}
-          variant={variant}
-          nodeId={nodeId}
-          state={state}
-          breakpoint={breakpoint}
-          editor={editor}
-          policy={policy}
-          onChooseForm={onChooseForm}
-        />
-      ))}
+      {above.map(toggle)}
       {property.offered ? null : (
         <p className="nx-inspector__note" data-not-offered={property.property}>
           This block no longer offers {property.label}. The value is still on
@@ -1529,7 +1530,7 @@ function StylePropertyFields({
         >
           <SideBoxFrame box={box}>
             {box.controls.map(control => (
-              <NamedAbove.Provider
+              <React.Fragment
                 // The ADDRESS, not just the position: a host switching state or
                 // breakpoint leaves this field mounted, and where the old and new
                 // addresses hold the same value — both unset, most often — the
@@ -1541,36 +1542,70 @@ function StylePropertyFields({
                   property.property,
                   ...control.path,
                 ].join(".")}
-                value={toggled.includes(control.path.join("."))}
               >
-                <StyleControlField
-                  control={control}
-                  side={sideOf(box, control)}
-                  label={
-                    many
-                      ? fieldLabel(control.path[control.path.length - 1] ?? "")
-                      : property.label
-                  }
-                  summary={many ? undefined : property.summary}
-                  propertyLabel={property.label}
-                  clearOnly={!property.offered || control.withheld}
-                  nodeId={nodeId}
-                  state={state}
-                  breakpoint={breakpoint}
-                  editor={editor}
-                  policy={policy}
-                  tokens={tokens}
-                  prefersDark={prefersDark}
-                  provenanceOf={provenanceOf}
-                  editing={editing}
-                />
-              </NamedAbove.Provider>
+                {before(control.path).map(toggle)}
+                <NamedAbove.Provider
+                  value={toggled.includes(control.path.join("."))}
+                >
+                  <StyleControlField
+                    control={control}
+                    side={sideOf(box, control)}
+                    label={
+                      many
+                        ? fieldLabel(
+                            control.path[control.path.length - 1] ?? ""
+                          )
+                        : property.label
+                    }
+                    summary={many ? undefined : property.summary}
+                    propertyLabel={property.label}
+                    clearOnly={!property.offered || control.withheld}
+                    nodeId={nodeId}
+                    state={state}
+                    breakpoint={breakpoint}
+                    editor={editor}
+                    policy={policy}
+                    tokens={tokens}
+                    prefersDark={prefersDark}
+                    provenanceOf={provenanceOf}
+                    editing={editing}
+                  />
+                </NamedAbove.Provider>
+              </React.Fragment>
             ))}
           </SideBoxFrame>
         </FoldedUnion.Provider>
       </AlignmentFlow.Provider>
     </div>
   );
+}
+
+/**
+ * Where each form toggle is drawn. A nested form's toggle sits just above its
+ * own control where the controls are a list; a box places its sides itself,
+ * so its toggles stay above it. Only a control with its toggle just above
+ * drops its own visible name (`toggled`, by path).
+ */
+function placeChoices(
+  choices: readonly StyleControlVariants[],
+  boxed: boolean
+): {
+  above: readonly StyleControlVariants[];
+  before: (path: readonly string[]) => readonly StyleControlVariants[];
+  toggled: readonly string[];
+} {
+  const inline = boxed ? [] : choices.filter(c => c.path.length > 0);
+  const above = choices.filter(choice => !inline.includes(choice));
+  const toggled = [
+    ...above.filter(choice => choice.path.length === 0),
+    ...inline,
+  ].map(choice => choice.path.join("."));
+  return {
+    above,
+    before: path =>
+      inline.filter(choice => choice.path.join(".") === path.join(".")),
+    toggled,
+  };
 }
 
 /** How an author says which form they mean to write a value in. */

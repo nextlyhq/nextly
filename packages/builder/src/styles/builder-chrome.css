@@ -4422,6 +4422,11 @@ fieldset.nx-inspector__fields {
   grid-column: 2 / -1;
 }
 
+/* The jump starts where its control does, rather than centred under it. */
+.nx-style-inspector .nx-inspector__field > [data-action="jump"] {
+  justify-self: start;
+}
+
 /*
  * A single control under its form toggle: the toggle's row already names the
  * property, so the control's own label is kept for assistive technology and
