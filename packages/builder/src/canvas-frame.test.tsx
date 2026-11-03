@@ -256,6 +256,64 @@ describe("the canvas frame", () => {
     vi.restoreAllMocks();
   });
 
+  it("follows a theme switched on the admin's own scope around the frame, not only its root", async () => {
+    let border = "rgb(1, 2, 3)";
+    const computed = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (element.tagName !== "IFRAME") return style;
+        return {
+          ...style,
+          getPropertyValue: (name: string) =>
+            name === "--nx-builder-border" ? border : "",
+        } as CSSStyleDeclaration;
+      }
+    );
+    // The admin's theme provider toggles `dark` on its own wrapper, which is
+    // neither the document's root nor its body.
+    const { container } = render(
+      <div className="nextly-admin">
+        <CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />
+      </div>
+    );
+    const scope = container.querySelector(".nextly-admin");
+    const frame = frameIn(container);
+    loadPage(frame);
+    const sheet = frame.contentDocument?.querySelector(
+      "style[data-nx-page-chrome-tokens]"
+    ) as HTMLStyleElement | null;
+    const borderNow = () =>
+      Array.from(sheet?.sheet?.cssRules ?? [])
+        .filter(rule => rule instanceof CSSStyleRule)
+        .map(rule => rule.style.getPropertyValue("--nx-builder-border"))
+        .find(value => value !== "");
+    expect(borderNow()).toBe("rgb(1, 2, 3)");
+
+    border = "rgb(4, 5, 6)";
+    await act(async () => {
+      scope?.classList.add("dark");
+    });
+    expect(borderNow()).toBe("rgb(4, 5, 6)");
+    vi.restoreAllMocks();
+  });
+
+  it("states the page's language on the frame's document", () => {
+    const { container, rerender } = render(
+      <CanvasFrame width={1280} title="Home" source={TEST_SOURCE} lang="de" />
+    );
+    const frame = frameIn(container);
+    loadPage(frame);
+    const root = frame.contentDocument?.documentElement;
+    expect(root?.getAttribute("lang")).toBe("de");
+
+    // With no language of its own, the editor document's is the nearest.
+    document.documentElement.lang = "fr";
+    rerender(<CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />);
+    expect(root?.getAttribute("lang")).toBe("fr");
+    document.documentElement.removeAttribute("lang");
+  });
+
   it("hands its frame to the provider above it, for the code around the canvas", () => {
     let seen: ReturnType<typeof useCanvasFrame> | null = null;
     function Beside(): null {

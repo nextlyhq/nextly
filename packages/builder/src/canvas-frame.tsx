@@ -158,6 +158,14 @@ export interface CanvasFrameProps {
   theme?: string;
   /** Whether empty containers draw their placeholder. Shown by default. */
   showEmptyElements?: boolean;
+  /**
+   * The language the page's content is written in, as `lang` on the frame's
+   * root element: a frame's document does not inherit the language of the
+   * document embedding it, so a screen reader would otherwise have none.
+   * Left out, the editor document's own language is the nearest statement
+   * there is, and the frame takes that.
+   */
+  lang?: string | undefined;
   /** The editor's chrome, drawn over the frame in the editor's document. */
   overlay?: React.ReactNode;
   /** The canvas, rendered inside the frame. */
@@ -201,12 +209,11 @@ function FramedCanvas({
   zoom = FIT_ZOOM,
   onScale,
   title,
-  theme,
-  showEmptyElements = true,
   overlay,
   children,
   source = SRCDOC_FRAME_SOURCE,
   className,
+  ...markers
 }: CanvasFrameProps): React.JSX.Element {
   const stage = React.useRef<HTMLDivElement | null>(null);
   const layer = React.useRef<HTMLDivElement | null>(null);
@@ -227,7 +234,7 @@ function FramedCanvas({
   const viewport = useFrameViewport(frame, page, width, height);
   useRegistered(frame, scale, viewport);
 
-  usePageMarkers(frame, page, theme, showEmptyElements);
+  usePageMarkers(frame, page, markers);
   useLayerPlacement(frame, page, mountPoint, layer, layerContent, scale);
 
   return (
@@ -462,12 +469,16 @@ function useFrameViewport(
  *   the one selector that decides whether an empty container shows its
  *   placeholder answers the same in the frame as in the editor's document.
  * - The admin's tokens the page's own chrome reads (see `usePageTokens`).
+ * - The page's language, or the editor document's where it states none.
  */
 function usePageMarkers(
   frame: HTMLIFrameElement | null,
   page: Document | null,
-  theme: string | undefined,
-  showEmptyElements: boolean
+  {
+    theme,
+    showEmptyElements = true,
+    lang,
+  }: Pick<CanvasFrameProps, "theme" | "showEmptyElements" | "lang">
 ): void {
   usePageTokens(frame, page);
   useIsomorphicLayoutEffect(() => {
@@ -478,7 +489,10 @@ function usePageMarkers(
     else root.setAttribute("data-nx-theme", theme);
     if (showEmptyElements) root.removeAttribute(EMPTY_ELEMENTS_ATTRIBUTE);
     else root.setAttribute(EMPTY_ELEMENTS_ATTRIBUTE, "hidden");
-  }, [page, theme, showEmptyElements]);
+    const language = lang ?? frame?.ownerDocument.documentElement.lang ?? "";
+    if (language === "") root.removeAttribute("lang");
+    else root.setAttribute("lang", language);
+  }, [frame, page, theme, showEmptyElements, lang]);
 }
 
 /**
@@ -559,7 +573,8 @@ function handTokens(frame: HTMLIFrameElement, page: Document): void {
 /**
  * Hand the page's region chrome the admin's tokens it reads, and again
  * whenever the admin's theme changes: the admin switches it by a class or an
- * attribute on its own root or body, or the system's contrast preference
+ * attribute on an element around the editor (its root, its body or its own
+ * wrapper), or the system's contrast preference
  * moves the border and muted text.
  */
 function usePageTokens(
@@ -573,7 +588,18 @@ function usePageTokens(
     const hand = () => handTokens(frame, page);
     hand();
     const watch = new view.MutationObserver(hand);
-    for (const target of [host.documentElement, host.body]) {
+    /*
+     * Every ancestor of the frame, because only an ancestor's class or style
+     * can change what the frame inherits, and the admin's theme provider
+     * switches it on its own wrapper rather than on the root or the body.
+     * Each is watched alone rather than the whole document's subtree, which
+     * would re-read the tokens for every class change anywhere in the admin.
+     */
+    for (
+      let target: Element | null = frame.parentElement;
+      target !== null;
+      target = target.parentElement
+    ) {
       watch.observe(target, {
         attributes: true,
         attributeFilter: ["class", "style", "data-theme"],

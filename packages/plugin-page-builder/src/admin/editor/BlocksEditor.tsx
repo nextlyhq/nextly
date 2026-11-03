@@ -447,6 +447,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     blocks,
     showEmptyElements,
     openInsertPanel,
+    locale,
   } = view;
   return (
     <>
@@ -508,6 +509,8 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             zoom={zoom}
             onScale={setAppliedScale}
             title={pageTitle}
+            // The language being edited, for a screen reader in the frame.
+            lang={locale}
             showEmptyElements={showEmptyElements}
             overlay={
               <>
