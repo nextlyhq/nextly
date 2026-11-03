@@ -243,6 +243,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // Nothing stored, read successfully — so `siteStylePending` and
   // `siteStyleError` both resolve to their "ready" values on the first
   // render, and the editor renders `Canvas` rather than its loading

@@ -173,6 +173,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
    * a rejection into per-field messages. Answering none exercises the branch
