@@ -19,7 +19,7 @@
  */
 
 /** The dialects the suite runs on. SQLite is the default. */
-export const E2E_DIALECTS = Object.freeze(["sqlite", "postgresql", "mysql"]);
+const E2E_DIALECTS = Object.freeze(["sqlite", "postgresql", "mysql"]);
 
 /**
  * The database servers a local run uses unless told otherwise: the test
@@ -42,7 +42,7 @@ export const E2E_DATABASE_NAME = /^nextly_e2e_\d+$/;
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {"sqlite" | "postgresql" | "mysql"}
  */
-export function e2eDialect(env = process.env) {
+function e2eDialect(env = process.env) {
   const value = env.E2E_DB_DIALECT ?? "sqlite";
   if (!E2E_DIALECTS.includes(value)) {
     throw new Error(
