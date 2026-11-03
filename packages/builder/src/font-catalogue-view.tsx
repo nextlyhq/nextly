@@ -93,8 +93,10 @@ const CATEGORIES = [
 
 type Category = (typeof CATEGORIES)[number][0];
 
+// "Popular first" rather than "Popular", which beside the category filter
+// could read as a filter for popular families only.
 const SORTS = [
-  ["popular", "Popular"],
+  ["popular", "Popular first"],
   ["name", "A–Z"],
 ] as const;
 

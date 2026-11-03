@@ -284,7 +284,9 @@ describe("ordering", () => {
   it("puts the most used families first, and names in order among equals", async () => {
     view(catalogue({}, ranked));
     await row(/^Inter/);
-    expect(screen.getByRole("button", { name: "Sort, Popular" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Sort, Popular first" })
+    ).toBeTruthy();
     expect(order()).toEqual(["inter", "lora", "zilla", "abel"]);
   });
 

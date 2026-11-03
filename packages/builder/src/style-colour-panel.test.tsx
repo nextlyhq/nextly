@@ -328,12 +328,18 @@ describe("the picker leads with the site's colour variables", () => {
     ).toBeDefined();
   });
 
-  it("says when the site has no colour variables, and still offers Custom colour", () => {
+  it("says the variables are still being read before they arrive, and still offers Custom colour", () => {
+    // No token set yet: the site's style has not arrived, which is not the
+    // same as a site with no variables, so the picker must not say there are
+    // none.
     mount(styles(), null);
     openPicker();
     expect(
-      screen.getByText("This site has no colour variables yet.")
+      screen.getByText("Reading this site’s colour variables…")
     ).toBeDefined();
+    expect(
+      screen.queryByText("This site has no colour variables yet.")
+    ).toBeNull();
     expect(
       screen.queryByRole("listbox", { name: "Colour variables" })
     ).toBeNull();

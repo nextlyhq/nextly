@@ -1852,6 +1852,13 @@
   min-height: 0;
 }
 
+/* A list long enough to search keeps its full height while a search narrows
+   it, so the popover does not shrink and jump to the trigger's other side
+   under the author's typing. */
+.nx-style-inspector__variables:has(.nx-font-pick__search) {
+  height: 16rem;
+}
+
 /* A variable as the Variables tab draws it: swatch, name, light and dark. */
 .nx-style-inspector__variable {
   display: grid;
@@ -4870,8 +4877,13 @@ fieldset.nx-inspector__fields {
   cursor: pointer;
 }
 
+/* The row Enter picks: a fill and an inner ring, since a fill alone is too
+   faint against the list to find by keyboard. An outline, so it sits beside
+   the current row's bar (a shadow) rather than replacing it. */
 .nx-font-pick__option[aria-selected="true"] {
   background: var(--nx-muted);
+  outline: 1px solid var(--nx-ring);
+  outline-offset: -1px;
 }
 
 .nx-font-pick__option[data-current] {

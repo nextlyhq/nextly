@@ -3623,6 +3623,7 @@ function ColourField({
         <ColourPicker
           shown={shown}
           choices={choices}
+          tokensRead={tokens !== undefined}
           reference={reference}
           referenceLabel={storedLabel}
           customFirst={writtenAsValue(stored)}
@@ -3709,6 +3710,7 @@ function ColourField({
 function ColourPicker({
   shown,
   choices,
+  tokensRead,
   reference,
   referenceLabel,
   customFirst,
@@ -3724,6 +3726,8 @@ function ColourPicker({
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
   shown: string | undefined;
   choices: readonly ColourToken[];
+  /** Whether the site's variables have arrived; until then the list waits. */
+  tokensRead: boolean;
   /** The identity the value refers to, or `null` for a value or none. */
   reference: string | null;
   /** What that reference is called, for the trigger. */
@@ -3826,6 +3830,7 @@ function ColourPicker({
       >
         <ColourVariables
           choices={choices}
+          read={tokensRead}
           current={reference}
           onPick={identity => {
             // One discrete choice, committed at once; the close that follows
@@ -3979,14 +3984,29 @@ interface ColourChoice {
  */
 function ColourVariables({
   choices,
+  read,
   current,
   onPick,
 }: {
   choices: readonly ColourToken[];
+  /** Whether the site's variables have arrived. */
+  read: boolean;
   /** The identity the value refers to, marked in the list. */
   current: string | null;
   onPick: (identity: string) => void;
 }): React.JSX.Element {
+  if (!read) {
+    // Not yet arrived is not the same as none: saying "no variables" while
+    // the site's style is still on its way would be wrong for a moment.
+    return (
+      <p
+        className="nx-vars__note nx-style-inspector__no-variables"
+        role="status"
+      >
+        Reading this site&rsquo;s colour variables&hellip;
+      </p>
+    );
+  }
   if (choices.length === 0) {
     return (
       <p className="nx-vars__note nx-style-inspector__no-variables">
