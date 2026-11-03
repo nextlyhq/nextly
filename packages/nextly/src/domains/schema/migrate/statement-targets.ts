@@ -72,3 +72,17 @@ export function tablesChangedIn(
   if (cursor.accept("DELETE", "FROM")) return oneTable(cursor);
   return undefined;
 }
+
+/**
+ * The tables `statement` drops when it is a DROP TABLE, lower-cased, or
+ * `undefined` for any other statement: what a drop-only file is held to.
+ */
+export function tablesDroppedBy(
+  statement: string,
+  dialect: SupportedDialect
+): string[] | undefined {
+  const cursor = cursorOf(statement, dialect);
+  if (!cursor.accept("DROP", "TABLE")) return undefined;
+  cursor.acceptCondition();
+  return nameList(cursor);
+}

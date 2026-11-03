@@ -230,3 +230,79 @@ describe("(a) the name", () => {
     ).toEqual({ kind: "ordinary" });
   });
 });
+
+// The drop files the old Builder wrote: one collection's, a field group's, a
+// bulk delete of several collections, and the user-field table's. Each is old
+// only when every statement is a DROP TABLE of tables the Builder owns.
+describe.each<Dialect>(["postgresql", "mysql"])("drop files on %s", dialect => {
+  const old = (name: string, content: string) =>
+    classifyMigrationFile(facts({ name, content, dialect }));
+  const drop = (...tables: string[]) =>
+    tables.map(t => `DROP TABLE IF EXISTS ${q(t, dialect)};`).join("\n");
+
+  it("recognises a bulk delete that drops only Builder collections' tables", () => {
+    expect(
+      old(
+        "1730000000007_drop_2_collections_0123456789ab.sql",
+        drop(
+          "dc_authors_dc_posts_tags",
+          "dc_posts_locales",
+          "dc_posts",
+          "dc_pages"
+        )
+      ).kind
+    ).toBe("old-builder");
+  });
+
+  it.each([
+    ["a table no collection owns", () => drop("dc_posts", "nextly_users")],
+    [
+      "a statement that is not a drop",
+      () =>
+        `${drop("dc_posts")}\nALTER TABLE ${q("dc_pages", dialect)} ADD COLUMN ${q("x", dialect)} text;`,
+    ],
+  ])("a bulk delete with %s is partial", (_name, content) => {
+    expect(
+      old("1730000000007_drop_2_collections_0123456789ab.sql", content())
+    ).toEqual({
+      kind: "partial",
+      lacks: ["scope"],
+    });
+  });
+
+  it("recognises the user-field table's drop, and only that table", () => {
+    expect(old("1730000000008_drop_user_ext.sql", drop("user_ext")).kind).toBe(
+      "old-builder"
+    );
+    expect(
+      old("1730000000008_drop_user_ext.sql", drop("user_ext", "dc_posts"))
+    ).toEqual({
+      kind: "partial",
+      lacks: ["scope"],
+    });
+  });
+
+  it.each([
+    ["a collection's", "1730000000004_drop_posts.sql", "dc_posts"],
+    ["a field group's", "1730000000005_drop_comp_hero.sql", "comp_hero"],
+  ])(
+    "%s drop file with a statement that is not a drop is partial",
+    (_n, name, table) => {
+      expect(
+        old(
+          name,
+          `${drop(table)}\nALTER TABLE ${q(table, dialect)} ADD COLUMN ${q("x", dialect)} text;`
+        )
+      ).toEqual({ kind: "partial", lacks: ["scope"] });
+    }
+  );
+
+  it("a field group's drop of another field group's table is partial", () => {
+    expect(
+      old("1730000000005_drop_comp_hero.sql", drop("comp_footer"))
+    ).toEqual({
+      kind: "partial",
+      lacks: ["scope"],
+    });
+  });
+});

@@ -4,7 +4,7 @@
 // must treat an unreadable statement as leaving them.
 import { describe, expect, it } from "vitest";
 
-import { tablesChangedIn } from "../statement-targets";
+import { tablesChangedIn, tablesDroppedBy } from "../statement-targets";
 
 describe.each(["postgresql", "mysql"] as const)(
   "tablesChangedIn on %s",
@@ -93,3 +93,26 @@ describe("DROP INDEX", () => {
     ).toBeUndefined();
   });
 });
+
+describe.each(["postgresql", "mysql"] as const)(
+  "tablesDroppedBy on %s",
+  dialect => {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    it("reads a DROP TABLE's list", () => {
+      expect(
+        tablesDroppedBy(
+          `DROP TABLE IF EXISTS ${q("dc_a")}, ${q("dc_b")};`,
+          dialect
+        )
+      ).toEqual(["dc_a", "dc_b"]);
+    });
+    it.each([
+      ["an ALTER", () => `ALTER TABLE ${q("dc_a")} DROP COLUMN ${q("x")}`],
+      ["a CREATE", () => `CREATE TABLE ${q("dc_a")} (${q("id")} text)`],
+      ["a DELETE", () => `DELETE FROM ${q("dc_a")}`],
+    ])("is undefined for %s, which drops no table", (_form, sql) => {
+      expect(tablesDroppedBy(sql(), dialect)).toBeUndefined();
+    });
+  }
+);
