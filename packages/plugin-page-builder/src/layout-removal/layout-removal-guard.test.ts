@@ -22,7 +22,7 @@ import {
   VERSION_MOVED,
 } from "./layout-removal-guard";
 import type { LayoutRemoval, LayoutRemovalStore } from "./store";
-import { REMOVE_LAYOUT_REFUSAL } from "./words";
+import { LAYOUT_EDIT_DURING_REMOVAL, REMOVE_LAYOUT_REFUSAL } from "./words";
 
 const LIVE = {
   id: "layout-1",
@@ -57,6 +57,9 @@ function guard(stored: LayoutRemoval | null) {
     removalOf,
     releaseTombstone,
   } as unknown as LayoutRemovalStore;
+  // The same fence, reached through a caller's transaction.
+  const txRemovalOf = vi.fn(async () => stored);
+  const txReleaseTombstone = vi.fn(async () => {});
   registerLayoutRemovalGuard({
     ctx: {
       hooks: {
@@ -67,6 +70,10 @@ function guard(stored: LayoutRemoval | null) {
     },
     layouts: "layouts",
     store: () => store,
+    inTransaction: executor =>
+      executor === TX
+        ? { removalOf: txRemovalOf, releaseTombstone: txReleaseTombstone }
+        : null,
     warn: () => {},
   });
   const run = (type: string, context: unknown) => {
@@ -74,8 +81,11 @@ function guard(stored: LayoutRemoval | null) {
     if (handler === undefined) throw new Error(`no ${type} handler`);
     return handler(context);
   };
-  return { run, removalOf, releaseTombstone };
+  return { run, removalOf, releaseTombstone, txRemovalOf, txReleaseTombstone };
 }
+
+/** A caller's transaction, as the hook context hands it over. */
+const TX = { transaction: "caller" };
 
 /** A Direct API answering the working-draft read with `draft`. */
 function reader(draft: Record<string, unknown> | null = null) {
@@ -213,15 +223,19 @@ describe("a Layout's unpublish", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("leaves every save that does not unpublish alone, without a read", async () => {
+  it("does not judge a save that leaves it published as an unpublish", async () => {
+    // Read as an edit instead: the fence is asked, and with no removal the
+    // save goes through.
     const { run, removalOf } = guard(null);
-    await run("beforeChange", {
-      operation: "update",
-      data: { title: "Renamed" },
-      originalData: { ...LIVE },
-      req: reader(),
-    });
-    expect(removalOf).not.toHaveBeenCalled();
+    await expect(
+      run("beforeChange", {
+        operation: "update",
+        data: { title: "Renamed" },
+        originalData: { ...LIVE },
+        req: reader(),
+      })
+    ).resolves.toBeUndefined();
+    expect(removalOf).toHaveBeenCalledWith(LIVE.id);
   });
 });
 
@@ -269,6 +283,81 @@ describe("publishing a Layout again", () => {
   it("leaves it for a save that keeps the Layout unpublished", async () => {
     const { run, releaseTombstone } = guard(null);
     await run("afterUpdate", { data: { ...LIVE, status: "draft" } });
+    expect(releaseTombstone).not.toHaveBeenCalled();
+  });
+});
+
+describe("a Layout edit while its removal runs", () => {
+  const edit = (extra: Record<string, unknown> = {}) => ({
+    operation: "update",
+    data: { title: "Renamed" },
+    originalData: { ...LIVE },
+    req: reader(),
+    ...extra,
+  });
+
+  it.each(["marked", "checked", "final"] as const)(
+    "is refused while the removal is at %s, saying to try again shortly",
+    async step => {
+      const { run } = guard(row({ step }));
+      const error = await refusal(run("beforeChange", edit()));
+      expect(NextlyError.isCode(error, "CONFLICT")).toBe(true);
+      expect((error as Error).message).toBe(LAYOUT_EDIT_DURING_REMOVAL);
+    }
+  );
+
+  it("is refused for a publish too, not only a status-less save", async () => {
+    const { run } = guard(row({ step: "checked" }));
+    const error = await refusal(
+      run("beforeChange", edit({ data: { status: "published" } }))
+    );
+    expect((error as Error).message).toBe(LAYOUT_EDIT_DURING_REMOVAL);
+  });
+
+  it("is let through once the removal settled, as an unpublish's tombstone", async () => {
+    const { run } = guard(
+      row({ step: "removed", action: "unpublish", settledAt: new Date() })
+    );
+    await expect(run("beforeChange", edit())).resolves.toBeUndefined();
+  });
+
+  it("is let through when the removal's row is older than its lease", async () => {
+    const { run } = guard(
+      row({ step: "checked", updatedAt: new Date(Date.now() - 6 * 60_000) })
+    );
+    await expect(run("beforeChange", edit())).resolves.toBeUndefined();
+  });
+
+  it("is let through with no removal at all", async () => {
+    const { run } = guard(null);
+    await expect(run("beforeChange", edit())).resolves.toBeUndefined();
+  });
+
+  it("is refused inside a caller's transaction, reading the fence through that transaction", async () => {
+    const { run, removalOf, txRemovalOf } = guard(row({ step: "checked" }));
+    const error = await refusal(run("beforeChange", edit({ executor: TX })));
+    expect((error as Error).message).toBe(LAYOUT_EDIT_DURING_REMOVAL);
+    expect(txRemovalOf).toHaveBeenCalledWith(LIVE.id);
+    expect(removalOf).not.toHaveBeenCalled();
+  });
+
+  it("is refused inside a transaction it cannot read through, failing closed", async () => {
+    const { run } = guard(null);
+    const error = await refusal(
+      run("beforeChange", edit({ executor: { unknown: true } }))
+    );
+    expect((error as Error).message).toBe(LAYOUT_EDIT_DURING_REMOVAL);
+  });
+});
+
+describe("publishing a Layout again inside a caller's transaction", () => {
+  it("drops the tombstone through that transaction", async () => {
+    const { run, releaseTombstone, txReleaseTombstone } = guard(null);
+    await run("afterUpdate", {
+      data: { ...LIVE, status: "published" },
+      executor: TX,
+    });
+    expect(txReleaseTombstone).toHaveBeenCalledWith(LIVE.id);
     expect(releaseTombstone).not.toHaveBeenCalled();
   });
 });

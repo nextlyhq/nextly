@@ -53,7 +53,7 @@ import "../styles/editor.css";
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
 import { PageBuilderView } from "./editor/PageBuilderView";
-import { RemoveLayoutAction } from "./RemoveLayoutAction";
+import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
 
 /**
  * The blocks field's editor-form control.
@@ -82,8 +82,8 @@ const COMPONENTS = {
   // The editor itself, drawn by the admin as a view of the document at the
   // address the blocks field's card links to.
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
-  // "Remove Layout…" under a Layout's edit form.
-  [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutAction,
+  // "Remove Layout…" in a Layout's document bar.
+  [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
 };
 
 // Eager registration on module load.
@@ -95,7 +95,7 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   return Promise.resolve();
 });
 
-export { BlocksField, BlocksSummary, PageBuilderView, RemoveLayoutAction };
+export { BlocksField, BlocksSummary, PageBuilderView, RemoveLayoutToolbarSlot };
 /**
  * Called by the app's generated component map to hand the editor the block
  * modules plugins declared (`editorEntry`, `editor.component`). Not for a

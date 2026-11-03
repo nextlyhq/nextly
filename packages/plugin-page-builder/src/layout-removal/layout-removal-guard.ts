@@ -30,6 +30,13 @@
  * writers hand their hooks an executor this plugin's reads cannot join, and a
  * read on a second connection can wait on the one the transaction holds.
  *
+ * ## Edits while a removal runs
+ *
+ * Every other update of the Layout, a publish included, is refused while its
+ * removal holds it (from the mark until the write, inside the lease), so an
+ * edit cannot land between the copy and the delete and be lost with it. A
+ * settled removal and one older than its lease hold nothing.
+ *
  * ## Publishing a Layout again
  *
  * An unpublish removal leaves its row as a tombstone, so the Layout cannot be
@@ -54,8 +61,13 @@ import {
 } from "../unpublish-write";
 
 import { versionOf, workingDraftOf, type CopyReads } from "./layout-copy";
-import type { LayoutRemoval, LayoutRemovalStore, RemovalAction } from "./store";
-import { REMOVE_LAYOUT_REFUSAL } from "./words";
+import {
+  holdsTheLayout,
+  type LayoutRemoval,
+  type LayoutRemovalStore,
+  type RemovalAction,
+} from "./store";
+import { LAYOUT_EDIT_DURING_REMOVAL, REMOVE_LAYOUT_REFUSAL } from "./words";
 
 /**
  * The hook-context key a removal's own write carries its token under.
@@ -84,14 +96,29 @@ interface LayoutHookContext extends UnpublishHookContext {
   req?: { nextly?: unknown };
 }
 
-/** Register the guard on the Layouts collection, by its RESOLVED slug. */
-export function registerLayoutRemovalGuard(args: {
+/** The fence reads the guard makes, on either connection. */
+export type FenceReads = Pick<
+  LayoutRemovalStore,
+  "removalOf" | "releaseTombstone"
+>;
+
+/** What the guard needs. */
+export interface LayoutRemovalGuardArgs {
   ctx: LayoutRemovalGuardContext;
   layouts: string;
   store: () => LayoutRemovalStore;
+  /**
+   * The fence, reached through a caller's transaction, or `null` when the
+   * executor it hands over is not one the fence can be read through.
+   */
+  inTransaction: (executor: unknown) => FenceReads | null;
   warn: (message: string, meta?: Record<string, unknown>) => void;
-}): void {
-  const { ctx, layouts, store, warn } = args;
+  now?: () => Date;
+}
+
+/** Register the guard on the Layouts collection, by its RESOLVED slug. */
+export function registerLayoutRemovalGuard(args: LayoutRemovalGuardArgs): void {
+  const { ctx, layouts, store } = args;
 
   ctx.hooks.on("beforeDelete", layouts, async context => {
     const hook = context as LayoutHookContext;
@@ -102,30 +129,98 @@ export function registerLayoutRemovalGuard(args: {
   // hook, so a status another hook sets is the status judged.
   ctx.hooks.on("beforeChange", layouts, async context => {
     const hook = context as LayoutHookContext;
-    if (!unpublishes(hook)) return;
-    await admitRemoval({ hook, layouts, store: store(), action: "unpublish" });
+    if (unpublishes(hook)) {
+      await admitRemoval({
+        hook,
+        layouts,
+        store: store(),
+        action: "unpublish",
+      });
+      return;
+    }
+    await refuseEditDuringRemoval(hook, args);
   });
 
   ctx.hooks.on("afterUpdate", layouts, async context => {
-    const hook = context as LayoutHookContext;
-    // No read inside a caller's transaction, and none for a save that leaves
-    // the Layout unpublished.
-    if (hook.executor !== undefined) return;
-    if (statusOf(hook.data) !== "published") return;
-    const id = relationId(hook.data) ?? relationId(hook.originalData);
-    if (id === null) return;
-    try {
-      await store().releaseTombstone(id);
-    } catch (error) {
-      warn(
-        "[page-builder] a published Layout's unpublish record could not be cleared; it cannot be made the default until it is",
-        {
-          layoutId: id,
-          error: error instanceof Error ? error.message : String(error),
-        }
-      );
-    }
+    await releaseOnPublish(context as LayoutHookContext, args);
   });
+}
+
+/** The fence as this hook may read it: its own connection, or the caller's transaction. */
+function fenceFor(
+  hook: LayoutHookContext,
+  args: LayoutRemovalGuardArgs
+): FenceReads | null {
+  return hook.executor === undefined
+    ? args.store()
+    : args.inTransaction(hook.executor);
+}
+
+/**
+ * Refuse any other update of a Layout while its removal holds it, so no edit
+ * lands between the removal's copy and its delete. The removal's own write,
+ * carrying its token, is let through. Inside a caller's transaction the fence
+ * is read through that transaction; one it cannot be read through is refused.
+ */
+async function refuseEditDuringRemoval(
+  hook: LayoutHookContext,
+  args: LayoutRemovalGuardArgs
+): Promise<void> {
+  const id = editedLayout(hook);
+  if (id === null) return;
+  const fence = fenceFor(hook, args);
+  if (fence === null) throw editRefusal("layout-edit-fence-unreadable", id);
+  const removal = await fence.removalOf(id);
+  if (removal === null || !holdsTheLayout(removal, nowOf(args))) return;
+  if (hook.context?.[LAYOUT_REMOVAL_CONTEXT_KEY] === removal.token) return;
+  throw editRefusal("layout-edit-during-removal", id);
+}
+
+/** The Layout an update edits, or null for any other write. */
+function editedLayout(hook: LayoutHookContext): string | null {
+  if (hook.operation !== undefined && hook.operation !== "update") return null;
+  return relationId(hook.originalData);
+}
+
+/** The time a check is judged at. */
+function nowOf(args: LayoutRemovalGuardArgs): Date {
+  return args.now === undefined ? new Date() : args.now();
+}
+
+/** The refusal a Layout edit meets while its removal runs. */
+function editRefusal(reason: string, layoutId: string): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    message: LAYOUT_EDIT_DURING_REMOVAL,
+    logContext: { reason, layoutId },
+  });
+}
+
+/**
+ * Publishing a Layout again drops an unpublish removal's tombstone, through
+ * the caller's transaction when the write ran in one, so it is dropped exactly
+ * when the publish commits. Never throws: the write already committed.
+ */
+async function releaseOnPublish(
+  hook: LayoutHookContext,
+  args: LayoutRemovalGuardArgs
+): Promise<void> {
+  if (statusOf(hook.data) !== "published") return;
+  const id = relationId(hook.data) ?? relationId(hook.originalData);
+  if (id === null) return;
+  const fence = fenceFor(hook, args);
+  try {
+    if (fence === null) throw new TypeError("no readable transaction");
+    await fence.releaseTombstone(id);
+  } catch (error) {
+    args.warn(
+      "[page-builder] a published Layout's unpublish record could not be cleared; it cannot be made the default until it is",
+      {
+        layoutId: id,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    );
+  }
 }
 
 /** The refusal every write that is not a removal's own meets. */

@@ -232,3 +232,37 @@ describe("what the picker writes", () => {
     });
   });
 });
+
+describe("a Layout behind Remove Layout's fence", () => {
+  const removing: LayoutChoice = { ...landing, removal: "removing" };
+  const takenDown: LayoutChoice = {
+    ...unfinished,
+    removal: "unpublished",
+  };
+
+  it("is offered no longer, and says why", () => {
+    const view = layoutPickerView(
+      page(),
+      ready({}, [main, removing, takenDown])
+    );
+    expect(view.options).toContainEqual({
+      value: layoutValue("landing"),
+      label: "Landing (being removed: choose another Layout)",
+      disabled: true,
+    });
+    expect(view.options).toContainEqual({
+      value: layoutValue("unfinished"),
+      label:
+        "Unfinished (unpublished with Remove Layout: it can be chosen once published again)",
+      disabled: true,
+    });
+  });
+
+  it("stays the page's own choice when the page already names it", () => {
+    const view = layoutPickerView(page("landing"), ready({}, [main, removing]));
+    expect(
+      view.options.find(option => option.value === layoutValue("landing"))
+        ?.disabled
+    ).toBe(false);
+  });
+});

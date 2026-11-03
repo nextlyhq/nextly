@@ -282,7 +282,7 @@ function Picker<T extends FieldValues>({
   disabled: boolean;
 }): JSX.Element {
   // Registered only here, once the form is known to hold both fields.
-  const { field: layoutField } = useController({
+  const { field: layoutField, fieldState } = useController({
     control,
     name: LAYOUT_FIELD as Path<T>,
   });
@@ -294,6 +294,12 @@ function Picker<T extends FieldValues>({
   const view = layoutPickerView(stored, state);
   const id = useId();
   const whyId = `${id}-why`;
+  const errorId = `${id}-error`;
+  // A save the server refused for this field, such as a Layout being removed.
+  // The `layout` field is hidden from the form, so this picker is the only
+  // place the reason can be shown.
+  const refused = fieldState.error?.message;
+  const describedBy = describedByOf(whyId, errorId, refused);
 
   const choose = (value: string) => {
     const next = storedFor(value, stored);
@@ -311,7 +317,7 @@ function Picker<T extends FieldValues>({
       {capped ? (
         <SearchingPicker
           id={id}
-          whyId={whyId}
+          whyId={describedBy}
           view={view}
           stored={stored}
           disabled={disabled || view.readOnly}
@@ -329,7 +335,8 @@ function Picker<T extends FieldValues>({
             the value element takes no class of its own. */}
           <SelectTrigger
             id={id}
-            aria-describedby={whyId}
+            aria-describedby={describedBy}
+            aria-invalid={invalidOf(refused)}
             className="[&>span]:min-w-0 [&>span]:truncate [&>span]:text-left"
           >
             <SelectValue
@@ -340,7 +347,11 @@ function Picker<T extends FieldValues>({
           </SelectTrigger>
           <SelectContent>
             {view.options.map(option => (
-              <SelectItem key={option.value} value={option.value}>
+              <SelectItem
+                key={option.value}
+                value={option.value}
+                disabled={option.disabled === true}
+              >
                 {option.label}
               </SelectItem>
             ))}
@@ -348,7 +359,38 @@ function Picker<T extends FieldValues>({
         </Select>
       )}
       <WhyLine id={whyId} view={view} state={state} retry={retry} />
+      <RefusedLine id={errorId} refused={refused} />
     </div>
+  );
+}
+
+/** The picker's description: why the Layout applies, and a refusal if any. */
+function describedByOf(
+  whyId: string,
+  errorId: string,
+  refused: string | undefined
+): string {
+  return refused === undefined ? whyId : `${whyId} ${errorId}`;
+}
+
+/** `aria-invalid` while a refusal stands. */
+function invalidOf(refused: string | undefined): true | undefined {
+  return refused === undefined ? undefined : true;
+}
+
+/** The server's reason a save was refused for this field, under the picker. */
+function RefusedLine({
+  id,
+  refused,
+}: {
+  id: string;
+  refused: string | undefined;
+}): JSX.Element | null {
+  if (refused === undefined) return null;
+  return (
+    <p id={id} role="alert" className="text-xs text-destructive">
+      {refused}
+    </p>
   );
 }
 
@@ -517,6 +559,7 @@ function SearchingPicker({
                 <CommandItem
                   key={option.value}
                   value={option.value}
+                  disabled={option.disabled === true}
                   onSelect={() => {
                     onChoose(option.value);
                     setOpen(false);

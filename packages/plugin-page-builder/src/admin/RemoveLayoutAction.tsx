@@ -17,12 +17,21 @@
  * A confirmed removal still runs every check again on the server; a refusal
  * it meets is shown in the dialog.
  *
- * Mounted under the Layout's edit form (`views.layouts.afterEdit`), as a
- * section of its own, apart from the fields an author edits every day.
+ * Drawn in the edit screen's document bar, beside History, through the
+ * plugin's entry-form toolbar slot (`RemoveLayoutToolbarSlot`). That slot is
+ * offered to every entry form, so it draws the button only on a saved Layout's
+ * own form. The document panel offers plugins no section of their own, and the
+ * slots above and below the form sit outside the document, the one above under
+ * the bar itself.
  *
  * @module admin/RemoveLayoutAction
  */
-import { navigateTo, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  navigateTo,
+  useDocumentIdentity,
+  useDocumentStatus,
+  writePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
   AlertDescription,
@@ -35,8 +44,9 @@ import {
   AlertDialogTitle,
   Button,
 } from "@nextlyhq/ui";
-import { useState, type JSX } from "react";
+import { useRef, useState, type JSX } from "react";
 
+import { LAYOUTS_DECLARED_SLUG } from "../layout-choices-contract";
 import type {
   RemovalCheck,
   RemoveResult,
@@ -44,12 +54,14 @@ import type {
 import { DEFAULT_LAYOUT_REFUSAL, PAGES_USE_IT } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
-/** What the admin hands a component mounted beside an edit form. */
+/** Which Layout the action removes, and how it stands. */
 export interface RemoveLayoutActionProps {
-  readonly collectionSlug?: string;
-  readonly entryId?: string;
-  readonly entry?: { readonly status?: unknown } | null;
-  readonly documentLock?: { readonly actionsDisabled?: boolean };
+  readonly collectionSlug: string;
+  readonly entryId: string | null;
+  /** Whether the Layout is published now, so an unpublish is offered. */
+  readonly published: boolean;
+  /** The document's writes are withheld (a past version on screen, say). */
+  readonly disabled?: boolean;
 }
 
 /** Where the dialog is. */
@@ -86,33 +98,74 @@ function reasonOf(error: unknown, fallback: string): string {
     : fallback;
 }
 
-/** The section under the form, and the dialog its button opens. */
+/**
+ * The entry-form toolbar slot: Remove Layout on a saved Layout's own form,
+ * nothing on any other. What the slot is handed (`context`, a controller
+ * field) is not needed; the form says which document it is.
+ */
+export function RemoveLayoutToolbarSlot(_props: {
+  readonly context?: "collection" | "single";
+}): JSX.Element | null {
+  const identity = useDocumentIdentity();
+  const status = useDocumentStatus();
+  if (
+    identity?.kind !== "collection" ||
+    identity.slug !== LAYOUTS_DECLARED_SLUG ||
+    identity.documentId === undefined
+  ) {
+    return null;
+  }
+  return (
+    <RemoveLayoutAction
+      collectionSlug={identity.slug}
+      entryId={identity.documentId}
+      published={status?.status === "published"}
+    />
+  );
+}
+
+/** The button, and the dialog it opens. */
 export function RemoveLayoutAction({
   collectionSlug,
   entryId,
-  entry,
-  documentLock,
+  published,
+  disabled = false,
 }: RemoveLayoutActionProps): JSX.Element | null {
   const [state, setState] = useState<DialogState>({ kind: "closed" });
+  // Each opening of the dialog, numbered: an answer that arrives for an
+  // earlier one, after the author closed it, changes nothing.
+  const opening = useRef(0);
   // Nothing to remove while a Layout is being created.
-  if (entryId === undefined || entryId === "" || entryId === "create") {
+  if (entryId === null || entryId === "" || entryId === "create") {
     return null;
   }
-  const published = entry?.status === "published";
+
+  /** Set the state, unless the dialog was closed since `asked`. */
+  const settle = (asked: number, next: DialogState): void => {
+    if (opening.current === asked) setState(next);
+  };
+
+  const close = (): void => {
+    opening.current += 1;
+    setState({ kind: "closed" });
+  };
 
   const open = (): void => {
+    opening.current += 1;
+    const asked = opening.current;
     setState({ kind: "checking" });
     callRemove(entryId, "delete", true).then(
       answer => {
         const check = answer?.item.check;
-        setState(
+        settle(
+          asked,
           check === undefined
             ? { kind: "failed", message: "The Layout could not be checked." }
             : { kind: "checked", check }
         );
       },
       (error: unknown) =>
-        setState({
+        settle(asked, {
           kind: "failed",
           message: reasonOf(error, "The Layout could not be checked."),
         })
@@ -120,19 +173,20 @@ export function RemoveLayoutAction({
   };
 
   const confirm = (check: RemovalCheck, action: "delete" | "unpublish") => {
+    const asked = opening.current;
     setState({ kind: "removing", check });
     callRemove(entryId, action, false).then(
       () => {
         if (action === "delete") {
-          navigateTo(`/admin/collections/${collectionSlug ?? "layouts"}`);
+          navigateTo(`/admin/collections/${collectionSlug}`);
         } else {
-          // The form below still holds the published Layout; reading it
-          // again shows it unpublished.
+          // The form still holds the published Layout; reading it again
+          // shows it unpublished.
           window.location.reload();
         }
       },
       (error: unknown) =>
-        setState({
+        settle(asked, {
           kind: "failed",
           message: reasonOf(error, "The Layout could not be removed."),
         })
@@ -140,25 +194,11 @@ export function RemoveLayoutAction({
   };
 
   return (
-    <section
-      aria-labelledby="remove-layout-heading"
-      className="mt-6 flex flex-col gap-3 rounded-md border border-border p-4 sm:flex-row sm:items-center sm:justify-between"
-    >
-      <div className="space-y-1">
-        <h2 id="remove-layout-heading" className="text-sm font-semibold">
-          Remove this Layout
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          {
-            "Unpublish or delete it once no page uses it and it isn't the site's default."
-          }
-        </p>
-      </div>
+    <>
       <Button
         type="button"
         variant="outline"
-        size="sm"
-        disabled={documentLock?.actionsDisabled === true}
+        disabled={disabled}
         onClick={open}
       >
         Remove Layout…
@@ -166,7 +206,7 @@ export function RemoveLayoutAction({
       <AlertDialog
         open={state.kind !== "closed"}
         onOpenChange={next => {
-          if (!next && state.kind !== "removing") setState({ kind: "closed" });
+          if (!next && state.kind !== "removing") close();
         }}
       >
         <AlertDialogContent>
@@ -191,7 +231,7 @@ export function RemoveLayoutAction({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </section>
+    </>
   );
 }
 

@@ -164,6 +164,7 @@ describe.each(getConfiguredTestDialects())(
       return ensureDefaultLayout({
         nextly: t.nextly,
         slugs: SLUGS,
+        pagesSlug: "pages",
         removals: probe.store,
         warn: () => {},
       });

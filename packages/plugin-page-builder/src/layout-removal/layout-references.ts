@@ -75,6 +75,52 @@ function isWorkingDraft(value: unknown): value is Record<string, unknown> {
   );
 }
 
+/**
+ * How many working drafts are read at once. A draft is read only by id, so a
+ * scan makes one read per published page; they go in batches this size rather
+ * than one after another, which bounds both the scan's time and the
+ * connections it holds at once.
+ */
+const DRAFT_READS_AT_ONCE = 10;
+
+/**
+ * Which of `pages` have a working draft naming `layoutId`, read in batches of
+ * {@link DRAFT_READS_AT_ONCE}.
+ */
+async function workingDraftsNaming(
+  nextly: ReferenceReads,
+  collection: string,
+  pages: readonly { id: string; title: string }[],
+  layoutId: string
+): Promise<{ id: string; title: string }[]> {
+  const naming: { id: string; title: string }[] = [];
+  for (let at = 0; at < pages.length; at += DRAFT_READS_AT_ONCE) {
+    const batch = pages.slice(at, at + DRAFT_READS_AT_ONCE);
+    const drafts = await Promise.all(
+      batch.map(page =>
+        nextly.findByID({
+          collection,
+          id: page.id,
+          draft: true,
+          depth: 0,
+          overrideAccess: true,
+        })
+      )
+    );
+    drafts.forEach((draft, index) => {
+      const page = batch[index];
+      if (
+        page !== undefined &&
+        isWorkingDraft(draft) &&
+        relationId(draft.layout) === layoutId
+      ) {
+        naming.push(page);
+      }
+    });
+  }
+  return naming;
+}
+
 /** Scan the pages collection for every page naming `layoutId`. */
 export async function scanLayoutReferences(args: {
   nextly: ReferenceReads;
@@ -138,26 +184,58 @@ export async function scanLayoutReferences(args: {
         overrideAccess: true,
       }),
     onPage: async items => {
+      const toRead: { id: string; title: string }[] = [];
       for (const row of items) {
-        if (spent >= budget) return "stop";
+        if (spent >= budget) break;
         spent += 1;
         const id = relationId(row);
-        if (id === null || found.has(id)) continue;
-        const draft = await nextly.findByID({
-          collection: pages,
-          id,
-          draft: true,
-          depth: 0,
-          overrideAccess: true,
-        });
-        if (isWorkingDraft(draft) && relationId(draft.layout) === layoutId) {
-          found.set(id, { id, title: textOf(row, "title"), place: "draft" });
+        if (id !== null && !found.has(id)) {
+          toRead.push({ id, title: textOf(row, "title") });
         }
       }
-      return undefined;
+      for (const draft of await workingDraftsNaming(
+        nextly,
+        pages,
+        toRead,
+        layoutId
+      )) {
+        found.set(draft.id, { ...draft, place: "draft" });
+      }
+      return spent >= budget ? "stop" : undefined;
     },
   });
   return { references: [...found.values()], complete: draftsDone };
+}
+
+/**
+ * How many ids one readable-pages lookup asks about: under the 500 rows a
+ * collection read answers, and well under SQLite's 999 bound parameters.
+ */
+const READABLE_CHUNK = 200;
+
+/** Which of `ids` the remover may read, as one query. */
+async function readableIn(
+  args: { nextly: Pick<Nextly, "find">; pages: string; asPerson: PersonReads },
+  ids: readonly string[]
+): Promise<string[]> {
+  try {
+    const answered = await args.nextly.find({
+      collection: args.pages,
+      where: { id: { in: [...ids] } },
+      status: "all",
+      limit: ids.length,
+      depth: 0,
+      select: { title: true },
+      ...args.asPerson,
+    });
+    return answered.items
+      .map(row => relationId(row))
+      .filter((id): id is string => id !== null);
+  } catch {
+    // A caller refused the collection outright reads none of them, and is
+    // told only how many there are.
+    return [];
+  }
 }
 
 /** How the remover reads: as themselves, never past their own access. */
@@ -179,25 +257,14 @@ export async function readableTitles(args: {
 }): Promise<{ readable: { id: string; title: string }[]; unreadable: number }> {
   const ids = args.references.map(reference => reference.id);
   if (ids.length === 0) return { readable: [], unreadable: 0 };
-  let seen = new Set<string>();
-  try {
-    const answered = await args.nextly.find({
-      collection: args.pages,
-      where: { id: { in: ids } },
-      status: "all",
-      limit: ids.length,
-      depth: 0,
-      select: { title: true },
-      ...args.asPerson,
-    });
-    seen = new Set(
-      answered.items
-        .map(row => relationId(row))
-        .filter((id): id is string => id !== null)
-    );
-  } catch {
-    // A caller refused the collection outright reads none of them, and is
-    // told only how many there are.
+  const seen = new Set<string>();
+  for (let at = 0; at < ids.length; at += READABLE_CHUNK) {
+    for (const id of await readableIn(
+      args,
+      ids.slice(at, at + READABLE_CHUNK)
+    )) {
+      seen.add(id);
+    }
   }
   const readable = args.references
     .filter(reference => seen.has(reference.id))

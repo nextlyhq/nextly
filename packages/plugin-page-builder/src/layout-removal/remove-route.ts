@@ -7,10 +7,11 @@
  *
  * ## Who may call it
  *
- * The route admits a caller who may read Layouts, then refuses one who may not
- * delete (or unpublish) them before anything is read or written. That early
- * refusal is a courtesy: the write itself runs as the caller through the
- * Direct API, so their own rights decide it whatever this route asked.
+ * The route admits a signed-in caller who may read Layouts. Whether they may
+ * delete or unpublish this one is decided once, by the write itself, made as
+ * the caller through the Direct API with their access enforced: a right
+ * expressed as a rule over the row is judged against the row. A caller it
+ * refuses changes nothing; the fence the removal put up comes down again.
  *
  * @module layout-removal/remove-route
  */
@@ -28,11 +29,7 @@ import { PAGES_SLUG } from "../collections/pages";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
 import { readingAsUser } from "../library-route";
 
-import {
-  removeLayout,
-  type RemoveRequest,
-  type RemoveResult,
-} from "./remove-layout";
+import { removeLayout, type RemoveResult } from "./remove-layout";
 import { layoutRemovalStore } from "./store";
 
 /** Where the route answers, under the plugin's namespace. */
@@ -69,18 +66,17 @@ async function readBody(req: Request): Promise<z.infer<typeof RemoveBody>> {
   });
 }
 
-/** The caller's user id, once they are shown to be allowed the action. */
-async function requireRemover(
-  ctx: PluginRouteContext,
-  layouts: string,
-  action: RemoveRequest["action"]
-): Promise<string> {
-  const { user, caller } = ctx;
-  if (user !== null && caller !== null && (await caller.can(action, layouts))) {
-    return user.id;
-  }
+/**
+ * The caller's user id. No permission is asked here: a delete or unpublish
+ * right can be a rule over the row, which a question with no row in it would
+ * answer "no" for a writer it admits. The write itself, made as the caller,
+ * is the one decision; the route's own gate admits only those who may read
+ * Layouts.
+ */
+function requireSignedIn(ctx: PluginRouteContext): string {
+  if (ctx.user !== null) return ctx.user.id;
   throw NextlyError.forbidden({
-    logContext: { reason: "layout-removal-needs-right", action },
+    logContext: { reason: "layout-removal-needs-a-person" },
   });
 }
 
@@ -96,9 +92,8 @@ async function handle(
       PAGE_BUILDER_SETTINGS_SLUG,
     pages: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
   };
+  const userId = requireSignedIn(ctx);
   const body = await readBody(req);
-  // Preconditions first, whatever they cost.
-  const userId = await requireRemover(ctx, slugs.layouts, body.action);
   const answer = await removeLayout(
     {
       nextly: await getCachedNextly(),

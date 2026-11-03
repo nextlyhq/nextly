@@ -18,6 +18,9 @@ let answer: (body: { dryRun: boolean }) => Promise<unknown> = async () =>
   undefined;
 const navigated: string[] = [];
 
+let identity: { kind: string; slug: string; documentId?: string } | null = null;
+let documentStatus: { status: string; hasWorkingDraft: boolean } | null = null;
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: (args: { body: { dryRun: boolean } }) => {
     calls.push(args);
@@ -26,9 +29,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   navigateTo: (to: string) => {
     navigated.push(to);
   },
+  useDocumentIdentity: () => identity,
+  useDocumentStatus: () => documentStatus,
 }));
 
-const { RemoveLayoutAction } = await import("./RemoveLayoutAction");
+const { RemoveLayoutAction, RemoveLayoutToolbarSlot } = await import(
+  "./RemoveLayoutAction"
+);
 
 function check(overrides: Partial<RemovalCheck> = {}): RemovalCheck {
   return {
@@ -53,7 +60,7 @@ function openDialog(status = "published") {
     <RemoveLayoutAction
       collectionSlug="layouts"
       entryId="landing"
-      entry={{ status }}
+      published={status === "published"}
     />
   );
   fireEvent.click(screen.getByRole("button", { name: "Remove Layout…" }));
@@ -67,7 +74,11 @@ beforeEach(() => {
 describe("Remove Layout…", () => {
   it("draws nothing while a Layout is being created", () => {
     const { container } = render(
-      <RemoveLayoutAction collectionSlug="layouts" entryId="create" />
+      <RemoveLayoutAction
+        collectionSlug="layouts"
+        entryId="create"
+        published={false}
+      />
     );
     expect(container.innerHTML).toBe("");
   });
@@ -158,5 +169,64 @@ describe("Remove Layout…", () => {
       await screen.findAllByText("This Layout is already being removed.")
     ).not.toHaveLength(0);
     expect(navigated).toEqual([]);
+  });
+});
+
+describe("a dry run that answers after the dialog closed", () => {
+  it("does not open the dialog again", async () => {
+    let finish: (value: unknown) => void = () => {};
+    answer = () =>
+      new Promise(resolve => {
+        finish = resolve;
+      });
+    openDialog();
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    finish({ message: "", item: { check: check() } });
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("does not show a failure either", async () => {
+    let fail: (reason: unknown) => void = () => {};
+    answer = () =>
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      });
+    openDialog();
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    fail(new Error("The Layout could not be checked."));
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+describe("in the document bar", () => {
+  it("offers Remove Layout on a Layout's edit screen", () => {
+    identity = { kind: "collection", slug: "layouts", documentId: "landing" };
+    documentStatus = { status: "published", hasWorkingDraft: false };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    expect(screen.getByRole("button", { name: "Remove Layout…" })).toBeTruthy();
+  });
+
+  it.each([
+    [
+      "another collection's form",
+      { kind: "collection", slug: "pages", documentId: "p1" },
+    ],
+    ["a Single's form", { kind: "single", slug: "layouts" }],
+    ["a Layout not saved yet", { kind: "collection", slug: "layouts" }],
+  ])("draws nothing on %s", (_label, form) => {
+    identity = form;
+    documentStatus = { status: "draft", hasWorkingDraft: false };
+    const { container } = render(
+      <RemoveLayoutToolbarSlot context="collection" />
+    );
+    expect(container.innerHTML).toBe("");
   });
 });

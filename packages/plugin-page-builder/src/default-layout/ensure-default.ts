@@ -80,6 +80,8 @@ const SEED_SLUG_ATTEMPTS = 5;
 export interface EnsureDefaultDeps {
   readonly nextly: DefaultLayoutDirectApi;
   readonly slugs: DefaultLayoutSlugs;
+  /** The RESOLVED pages slug, whose pages a removal's check after its write clears. */
+  readonly pagesSlug: string;
   readonly removals: LayoutRemovalStore;
   /** Where the repair says why it acted. Called only when it changed something. */
   readonly warn: (message: string, meta?: Record<string, unknown>) => void;
@@ -450,7 +452,10 @@ export function defaultLayoutJob(
     sweep: true,
     handler: async () => {
       const resolved = await deps();
-      await settleLayoutRemovals({ ...resolved, store: resolved.removals });
+      await settleLayoutRemovals({
+        ...resolved,
+        store: resolved.removals,
+      });
       await ensureDefaultLayout(resolved);
     },
   });

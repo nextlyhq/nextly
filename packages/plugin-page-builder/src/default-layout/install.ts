@@ -10,8 +10,10 @@
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
+import { PAGES_SLUG } from "../collections/pages";
 import { registerLayoutRemovalGuard } from "../layout-removal/layout-removal-guard";
-import { layoutRemovalStore } from "../layout-removal/store";
+import { registerPageReferenceGuard } from "../layout-removal/page-reference-guard";
+import { fenceOnExecutor, layoutRemovalStore } from "../layout-removal/store";
 
 import { registerDefaultLayoutGuard } from "./default-layout-guard";
 import { ensureDefaultLayout, type EnsureDefaultDeps } from "./ensure-default";
@@ -56,6 +58,7 @@ export function installDefaultLayout(ctx: InstallContext): DefaultLayoutSetup {
         ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
         PAGE_BUILDER_SETTINGS_SLUG,
     },
+    pagesSlug: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
     removals: layoutRemovalStore(ctx.db, ctx.dialect),
     warn: (message, meta) => ctx.logger.warn(message, meta),
   };
@@ -63,6 +66,14 @@ export function installDefaultLayout(ctx: InstallContext): DefaultLayoutSetup {
   registerLayoutRemovalGuard({
     ctx,
     layouts: setup.slugs.layouts,
+    store: () => setup.removals,
+    inTransaction: executor => fenceOnExecutor(ctx.db, executor),
+    warn: setup.warn,
+  });
+  // And the page side: no page write puts a page on a Layout being removed.
+  registerPageReferenceGuard({
+    ctx,
+    pages: setup.pagesSlug,
     store: () => setup.removals,
     warn: setup.warn,
   });

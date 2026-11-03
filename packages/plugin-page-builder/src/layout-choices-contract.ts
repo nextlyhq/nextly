@@ -9,8 +9,17 @@
  */
 import type { BlockDocument, LayoutRegion } from "@nextlyhq/blocks-engine";
 
+import type { FencedLayoutState } from "./layout-removal/words";
+
 /** Where the Layout choices are read, under this plugin's own namespace. */
 export const LAYOUT_CHOICES_ROUTE_PATH = "/layouts/choices";
+
+/**
+ * The slug the plugin declares its Layouts under, before any rename by the
+ * host. Kept here, a module the admin bundle may import, so the browser and
+ * the collection's own declaration (`collections/layouts`) name one value.
+ */
+export const LAYOUTS_DECLARED_SLUG = "layouts";
 
 /**
  * The query parameter naming the Layout the page has selected, by id.
@@ -106,6 +115,13 @@ export interface LayoutChoice {
    * Empty for a Layout that is not published, which no page is drawn inside.
    */
   readonly regions: readonly LayoutRegion[];
+  /**
+   * Where the Layout stands with Remove Layout, when it is behind its fence:
+   * being removed now, or unpublished by it and not published since. A page
+   * write naming it is refused, so the picker offers it no longer. Absent for
+   * every other Layout.
+   */
+  readonly removal?: FencedLayoutState;
 }
 
 /** What the editor needs to know about one region's component. */

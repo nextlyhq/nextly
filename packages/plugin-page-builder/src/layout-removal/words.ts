@@ -42,6 +42,35 @@ export const CHANGED_WHILE_REMOVING =
 export const NOT_PUBLISHED =
   "This Layout isn't published, so there is nothing to unpublish.";
 
+/**
+ * A Layout edit while its removal is running: the removal holds the Layout as
+ * its copy took it, and finishes or gives up within moments.
+ */
+export const LAYOUT_EDIT_DURING_REMOVAL =
+  "This Layout is being removed. Try again in a moment.";
+
+/** Where a Layout a page tried to choose stands with Remove Layout. */
+export type FencedLayoutState = "removing" | "unpublished" | "deleted";
+
+/** What a page write naming a Layout behind Remove Layout's fence is told. */
+export function pageLayoutRefusal(state: FencedLayoutState): string {
+  switch (state) {
+    case "removing":
+      return "This Layout is being removed, so pages can't choose it. Choose another Layout.";
+    case "unpublished":
+      return "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout.";
+    case "deleted":
+      return "This Layout was deleted, so pages can't choose it. Choose another Layout.";
+  }
+}
+
+/**
+ * What a page save that landed while its Layout was being removed is told,
+ * once its Layout choice was cleared.
+ */
+export const PAGE_LAYOUT_CLEARED =
+  "The Layout this page named was removed while the page was being saved, so the page now uses the site's default Layout.";
+
 /** Who stops a removal: the pages using the Layout, as the caller may see them. */
 export interface PagesInTheWay {
   /** The pages the caller may read, by title. */

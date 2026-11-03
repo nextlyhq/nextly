@@ -52,6 +52,8 @@ import {
 import {
   BEING_REMOVED_NOT_DEFAULT,
   KEPT_AS_DEFAULT,
+  LAYOUT_EDIT_DURING_REMOVAL,
+  pageLayoutRefusal,
   REMOVE_LAYOUT_REFUSAL,
 } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
@@ -127,6 +129,7 @@ describe.each(getConfiguredTestDialects())(
       return ensureDefaultLayout({
         nextly: t.nextly,
         slugs: SLUGS,
+        pagesSlug: "pages",
         removals: fence(),
         warn: () => {},
       });
@@ -399,7 +402,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await fence().removalOf(fallback)).toBeNull();
       });
 
-      it("refuses a person who may not delete Layouts before reading anything", async () => {
+      it("refuses a person who may not delete Layouts at the write itself, changing nothing", async () => {
         const t = await boot();
         await owner(t);
         const reader = await person(t, "reader");
@@ -427,6 +430,8 @@ describe.each(getConfiguredTestDialects())(
 
         expect(answer.status).toBe(403);
         expect(await layoutRow(t, other)).toBeDefined();
+        // The fence the request put up came down with the refusal.
+        expect(await fence().removalOf(other)).toBeNull();
       });
     });
 
@@ -791,6 +796,343 @@ describe.each(getConfiguredTestDialects())(
         expect((await layoutRow(t, other))?.status).toBe("draft");
         await ensure(t);
         expect((await settingsOf(t)).defaultLayout).toBe(seed);
+      });
+    });
+
+    /** Put a removal's fence up on `id`, as a removal still running holds it. */
+    async function fenced(
+      id: string,
+      step: "marked" | "checked" | "final" = "marked"
+    ) {
+      const token = "holding0-0000-4000-8000-000000000000";
+      await fence().mark({
+        layoutId: id,
+        action: "delete",
+        token,
+        startedBy: null,
+        now: new Date(),
+      });
+      if (step !== "marked") {
+        await fence().advance({
+          layoutId: id,
+          token,
+          from: "marked",
+          to: "checked",
+        });
+      }
+      if (step === "final") {
+        await fence().advance({
+          layoutId: id,
+          token,
+          from: "checked",
+          to: "final",
+        });
+      }
+      return token;
+    }
+
+    /** Core's batch writer, hooks run inside its own transaction or skipped. */
+    function entriesService(t: TestNextly) {
+      return (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): {
+            updateEntries(
+              params: { collectionName: string; overrideAccess?: boolean },
+              entries: { id: string; data: Record<string, unknown> }[],
+              options?: { skipHooks?: boolean }
+            ): Promise<{
+              successful: number;
+              failed: number;
+              errors: { error: string }[];
+            }>;
+          };
+        }
+      ).getEntryService();
+    }
+
+    async function pageLayout(t: TestNextly, id: string, draft = false) {
+      const page = await t.nextly.findByID({
+        collection: PAGES_SLUG,
+        id,
+        depth: 0,
+        overrideAccess: true,
+        ...(draft ? { draft: true } : {}),
+      });
+      return relationId(page?.layout);
+    }
+
+    /** PATCH a page over REST as the session's owner. */
+    async function patchPage(
+      cookie: string,
+      id: string,
+      data: Record<string, unknown>
+    ): Promise<Answer> {
+      const handlers = createDynamicHandlers();
+      const path = ["collections", PAGES_SLUG, "entries", id];
+      const response = await handlers.PATCH(
+        new Request(`${ORIGIN}/api/${path.join("/")}`, {
+          method: "PATCH",
+          headers: {
+            cookie: `${cookie}; nextly_csrf=${CSRF}`,
+            "x-csrf-token": CSRF,
+            origin: ORIGIN,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(data),
+        }),
+        { params: Promise.resolve({ params: path }) }
+      );
+      const text = await response.text();
+      return {
+        status: response.status,
+        body: (text === "" ? {} : JSON.parse(text)) as Record<string, unknown>,
+      };
+    }
+
+    describe("pages and a Layout being removed", () => {
+      it("refuses a page put on it, over REST and the Direct API, naming the reason on the field", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "draft" });
+        await fenced(other);
+
+        const created = await refusalOf(
+          t.nextly.create({
+            collection: PAGES_SLUG,
+            data: { title: "About", slug: "about", layout: other },
+            overrideAccess: true,
+          })
+        );
+        const patched = await patchPage(cookie, home, { layout: other });
+
+        expect(JSON.stringify(created)).toContain(
+          pageLayoutRefusal("removing")
+        );
+        expect(patched.status).toBe(400);
+        expect(JSON.stringify(patched.body)).toContain(
+          pageLayoutRefusal("removing")
+        );
+        expect(await pageLayout(t, home)).toBeNull();
+      });
+
+      it("keeps a page already on it through a title edit, and refuses a stale save re-adding it after its draft moved off", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", {
+          status: "published",
+          layout: other,
+        });
+        // The page's working draft moves off the Layout before the fence.
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: home,
+          data: { layout: null },
+          overrideAccess: true,
+        });
+        await fenced(other);
+
+        // A save that sends the draft's value along with a title keeps it.
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: home,
+          data: { title: "Home, renamed", layout: null },
+          overrideAccess: true,
+        });
+        // A stale copy naming the Layout again adds a reference: refused, and
+        // its other edits are not stored.
+        const stale = await refusalOf(
+          t.nextly.update({
+            collection: PAGES_SLUG,
+            id: home,
+            data: { title: "Stale", layout: other },
+            overrideAccess: true,
+          })
+        );
+
+        expect(JSON.stringify(stale)).toContain(pageLayoutRefusal("removing"));
+        const draft = await t.nextly.findByID({
+          collection: PAGES_SLUG,
+          id: home,
+          draft: true,
+          depth: 0,
+          overrideAccess: true,
+        });
+        expect(draft?.title).toBe("Home, renamed");
+        expect(await pageLayout(t, home)).toBe(other);
+      });
+
+      it("lets a title edit through on a page that sits on the Layout", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "draft", layout: other });
+        await fenced(other);
+
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: home,
+          data: { title: "Home, renamed", layout: other },
+          overrideAccess: true,
+        });
+
+        expect(await pageLayout(t, home)).toBe(other);
+      });
+
+      it("refuses a batch that skips hooks, through the field's floor, read from inside the batch's transaction", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "draft" });
+        // The control: with no fence the same batch goes through.
+        const free = await layout(t, "Free", "free");
+        const control = await entriesService(t).updateEntries(
+          { collectionName: PAGES_SLUG, overrideAccess: true },
+          [{ id: home, data: { layout: free } }],
+          { skipHooks: true }
+        );
+        expect(control.successful, JSON.stringify(control)).toBe(1);
+        await fenced(other);
+
+        const answer = await entriesService(t).updateEntries(
+          { collectionName: PAGES_SLUG, overrideAccess: true },
+          [{ id: home, data: { layout: other } }],
+          { skipHooks: true }
+        );
+
+        // A batch reports a validation refusal by its code; the field's
+        // sentence is the floor's, which only it returns for this value.
+        expect(answer.failed, JSON.stringify(answer)).toBe(1);
+        expect(JSON.stringify(answer.errors)).toContain("VALIDATION_ERROR");
+        expect(await pageLayout(t, home)).toBe(free);
+      });
+
+      it("clears a page whose save began before the fence and committed after the removal", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "draft" });
+        // The page save has passed its checks; the whole removal runs before
+        // it commits, so the removal's own scans never see it.
+        let removal: Answer | undefined;
+        let armed = true;
+        t.hooks.register("beforeChange", PAGES_SLUG, async context => {
+          const data = (context as { data?: Record<string, unknown> }).data;
+          if (!armed || relationId(data?.layout) !== other) return;
+          armed = false;
+          removal = await remove(cookie, other, "delete");
+        });
+
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: home,
+          data: { layout: other },
+          overrideAccess: true,
+        });
+
+        expect(removal?.status, JSON.stringify(removal?.body)).toBe(200);
+        expect(await layoutRow(t, other)).toBeUndefined();
+        // The page's own look after its commit found the removal done.
+        expect(await pageLayout(t, home)).toBeNull();
+      });
+
+      it("clears a page that a write committed onto the Layout after the removal's last scan", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "draft" });
+        const registry = t.getService(
+          "collectionRegistryService"
+        ) as unknown as {
+          getCollectionBySlug(
+            slug: string
+          ): Promise<{ tableName: string } | null>;
+        };
+        const table = (await registry.getCollectionBySlug(PAGES_SLUG))
+          ?.tableName;
+        if (table === undefined) throw new Error("no pages table");
+        // A write that passed its checks before the fence, committing between
+        // the removal's last scan and its delete, past every hook.
+        let armed = true;
+        t.hooks.register("beforeDelete", LAYOUTS_SLUG, async context => {
+          if (
+            !armed ||
+            relationId((context as { data?: unknown }).data) !== other
+          )
+            return;
+          armed = false;
+          await t.adapter.update(
+            table,
+            { layout: other },
+            { and: [{ column: "id", op: "=", value: home }] }
+          );
+        });
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+        expect(armed).toBe(false);
+        // The removal's own scan after its delete cleared it.
+        expect(await pageLayout(t, home)).toBeNull();
+      });
+    });
+
+    describe("a Layout edit while its removal runs", () => {
+      it("is refused, for a plain save and inside a batch's transaction, and goes through once the fence is down", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        const token = await fenced(other, "checked");
+
+        const plain = await refusalOf(
+          t.nextly.update({
+            collection: LAYOUTS_SLUG,
+            id: other,
+            data: { title: "Renamed" },
+            overrideAccess: true,
+          })
+        );
+        const batch = await entriesService(t).updateEntries(
+          { collectionName: LAYOUTS_SLUG, overrideAccess: true },
+          [{ id: other, data: { title: "Renamed in a batch" } }]
+        );
+
+        expect(messageOf(plain)).toBe(LAYOUT_EDIT_DURING_REMOVAL);
+        expect(batch.failed, JSON.stringify(batch)).toBe(1);
+        expect(JSON.stringify(batch.errors)).toContain(
+          LAYOUT_EDIT_DURING_REMOVAL
+        );
+        expect((await layoutRow(t, other))?.title).toBe("Other");
+
+        await fence().stop(other, token);
+        await t.nextly.update({
+          collection: LAYOUTS_SLUG,
+          id: other,
+          data: { title: "Renamed" },
+          overrideAccess: true,
+        });
+        // A save of a published Layout lands in its working draft.
+        const draft = await t.nextly.findByID({
+          collection: LAYOUTS_SLUG,
+          id: other,
+          draft: true,
+          depth: 0,
+          overrideAccess: true,
+        });
+        expect(draft?.title).toBe("Renamed");
+      });
+
+      it("drops an unpublish's tombstone when a batch publishes the Layout again", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        expect((await remove(cookie, other, "unpublish")).status).toBe(200);
+        expect(await fence().removalOf(other)).not.toBeNull();
+
+        const answer = await entriesService(t).updateEntries(
+          { collectionName: LAYOUTS_SLUG, overrideAccess: true },
+          [{ id: other, data: { status: "published" } }]
+        );
+
+        expect(answer.successful, JSON.stringify(answer)).toBe(1);
+        expect(await fence().removalOf(other)).toBeNull();
       });
     });
 

@@ -634,3 +634,33 @@ describe("the regions the editor draws from the choice", () => {
     ).toEqual([]);
   });
 });
+
+describe("a save refused for its Layout", () => {
+  it("shows the server's reason under the picker, tied to the control", async () => {
+    let setError: ((message: string) => void) | undefined;
+    function Refused() {
+      const form = useForm({
+        defaultValues: { layout: "landing", noHeaderFooter: false },
+      });
+      setError = message =>
+        form.setError("layout", { type: "server", message });
+      return <PageLayoutPicker control={form.control} />;
+    }
+    render(<Refused />);
+    await screen.findByRole("combobox", { name: "Layout" });
+
+    act(() =>
+      setError?.(
+        "This Layout is being removed, so pages can't choose it. Choose another Layout."
+      )
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "This Layout is being removed, so pages can't choose it. Choose another Layout."
+    );
+    const control = screen.getByRole("combobox", { name: "Layout" });
+    expect(control.getAttribute("aria-invalid")).toBe("true");
+    expect(control.getAttribute("aria-describedby")).toContain(alert.id);
+  });
+});

@@ -16,6 +16,10 @@
  * - otherwise the removal is settled: the copy is dropped, and the row stays
  *   as the record that the Layout was removed.
  *
+ * First, every page a write in flight left on the Layout (its unpublished row
+ * or its working draft) has the Layout cleared, so no page is left naming a
+ * Layout that is gone.
+ *
  * ## The sweep
  *
  * Runs with the default repair on every jobs pass. A removal is one request,
@@ -38,6 +42,8 @@ import {
   type DefaultLayoutDirectApi,
 } from "../default-layout/store";
 
+import { scanLayoutReferences } from "./layout-references";
+import { clearPageReference } from "./page-reference-guard";
 import { restoreFromCopy, type RestoreDeps } from "./restore";
 import { REMOVAL_LEASE_MS, type LayoutRemoval } from "./store";
 
@@ -52,11 +58,65 @@ export type SettleOutcome =
   /** Another run restored it, or the default moved on meanwhile. */
   | "moved-on";
 
+/** What the check after the write needs beyond a restore. */
+export type SettleDeps = RestoreDeps & {
+  readonly nextly: RestoreDeps["nextly"] &
+    Pick<DefaultLayoutDirectApi, "find" | "findByID">;
+  /** The RESOLVED pages slug. */
+  readonly pagesSlug: string;
+};
+
+/**
+ * Clear the Layout from every page a write in flight left on it: the scan
+ * once more, after the removal's own write, clearing each unpublished page and
+ * each working draft that names it (`clearPageReference`). A live row is left,
+ * since no write changes it without publishing its draft. Never throws: a page
+ * that cannot be cleared is logged, and the page's own after-write look, or the
+ * site default it draws, covers it.
+ */
+async function clearPagesLeftOnIt(
+  deps: SettleDeps,
+  removal: LayoutRemoval
+): Promise<void> {
+  try {
+    const scan = await scanLayoutReferences({
+      nextly: deps.nextly,
+      pages: deps.pagesSlug,
+      layoutId: removal.layoutId,
+    });
+    for (const reference of scan.references) {
+      if (reference.place === "live") continue;
+      if (
+        await clearPageReference(
+          deps.nextly,
+          deps.pagesSlug,
+          reference.id,
+          removal.layoutId
+        )
+      ) {
+        deps.warn(
+          "[page-builder] a page saved while its Layout was being removed named that Layout; its Layout was cleared",
+          { pageId: reference.id, layoutId: removal.layoutId }
+        );
+      }
+    }
+  } catch (error) {
+    deps.warn(
+      "[page-builder] the pages a Layout removal left could not all be checked",
+      {
+        layoutId: removal.layoutId,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    );
+  }
+}
+
 /** Run the check after the write for a removal whose write has committed. */
 export async function settleRemoval(
-  deps: RestoreDeps,
+  deps: SettleDeps,
   removal: LayoutRemoval
 ): Promise<SettleOutcome> {
+  await clearPagesLeftOnIt(deps, removal);
   const { defaultLayout } = await readLayoutSettings(deps.nextly, deps.slugs);
   if (defaultLayout === removal.layoutId) {
     if (removal.action === "delete") {
@@ -75,9 +135,8 @@ export async function settleRemoval(
   return "settled";
 }
 
-/** What the sweep needs beyond a restore. */
-export type SweepDeps = RestoreDeps & {
-  readonly nextly: Pick<DefaultLayoutDirectApi, "find">;
+/** What the sweep needs beyond the check after the write. */
+export type SweepDeps = SettleDeps & {
   readonly now?: () => Date;
 };
 
@@ -87,9 +146,9 @@ function isStale(removal: LayoutRemoval, now: Date): boolean {
 }
 
 /** Whether a removal's write landed: the Layout is gone, or unpublished. */
-async function writeLanded(
-  deps: SweepDeps,
-  removal: LayoutRemoval
+export async function writeLanded(
+  deps: Pick<SweepDeps, "nextly" | "slugs">,
+  removal: Pick<LayoutRemoval, "action" | "layoutId">
 ): Promise<boolean> {
   if (removal.action === "delete") {
     return !(await layoutExists(deps.nextly, deps.slugs, removal.layoutId));

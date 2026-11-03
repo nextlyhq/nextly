@@ -19,7 +19,8 @@
  * 6. **Remove**, as the person, through the Direct API, so their own rights
  *    decide. The write carries the row's token, which the guard requires.
  *    When the Layout changed since the copy, the guard refuses and the copy is
- *    taken again, a bounded number of times.
+ *    taken again, a bounded number of times. A write that rejects after it
+ *    committed is recognised by reading the Layout again, and settled.
  * 7. **Settle**: the check after the write (`settle.ts`).
  *
  * Every step change is a compare-and-set on the row's token, so a request a
@@ -47,7 +48,7 @@ import {
   VERSION_MOVED,
 } from "./layout-removal-guard";
 import type { RestoreDeps } from "./restore";
-import { settleRemoval } from "./settle";
+import { settleRemoval, writeLanded } from "./settle";
 import type { RemovalAction } from "./store";
 import {
   ALREADY_BEING_REMOVED,
@@ -287,6 +288,29 @@ function versionMoved(error: unknown): boolean {
   );
 }
 
+/**
+ * A rejected write can still have committed: a failure after the commit (a
+ * release re-check, say) reaches the caller as an error. So the Layout is read
+ * again, as the system. If the write took effect, the removal goes on to its
+ * check after the write, keeping its copy for a promotion that raced it; only
+ * when nothing changed is the error passed on, and the fence taken down.
+ */
+async function passOnUnlessItLanded(
+  deps: RemoveLayoutDeps,
+  request: RemoveRequest,
+  error: unknown
+): Promise<void> {
+  if (!(await writeLanded(deps, request))) throw error;
+  deps.warn(
+    "[page-builder] a Layout removal's write failed after it committed; the removal goes on to its check after the write",
+    {
+      layoutId: request.layoutId,
+      action: request.action,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  );
+}
+
 /** Steps 5 and 6: take the copy and write, again if the Layout moved. */
 async function copyThenRemove(
   deps: RemoveLayoutDeps,
@@ -313,7 +337,10 @@ async function copyThenRemove(
       await write(deps, request, token);
       return;
     } catch (error) {
-      if (!versionMoved(error)) throw error;
+      if (!versionMoved(error)) {
+        await passOnUnlessItLanded(deps, request, error);
+        return;
+      }
     }
   }
   throw conflict(
@@ -345,7 +372,10 @@ async function settle(
       layoutId
     );
   }
-  if ((await settleRemoval(deps, removal)) === "restored") {
+  if (
+    (await settleRemoval({ ...deps, pagesSlug: deps.slugs.pages }, removal)) ===
+    "restored"
+  ) {
     throw conflict(KEPT_AS_DEFAULT, "layout-removal-raced-promotion", layoutId);
   }
   return {

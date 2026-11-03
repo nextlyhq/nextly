@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DefaultLayoutDirectApi } from "../default-layout/store";
 
-import { scanLayoutReferences } from "./layout-references";
+import { readableTitles, scanLayoutReferences } from "./layout-references";
 import {
   LAYOUT_REMOVAL_CONTEXT_KEY,
   VERSION_MOVED,
@@ -119,6 +119,8 @@ interface Site {
   onLayoutWrite?: (args: Record<string, unknown>) => void;
   writes: Record<string, unknown>[];
   created: number;
+  /** A write that commits and then rejects, as a failure after the commit does. */
+  failAfterWrite?: boolean;
 }
 
 function site(): Site {
@@ -165,6 +167,20 @@ function filterBy(items: Row[], where: unknown): Row[] {
       (!Array.isArray(w.id?.in) || w.id.in.includes(item.id)) &&
       (w.layout?.equals === undefined || item.layout === w.layout.equals)
   );
+}
+
+/** A page write: into its working draft when it has one, else its row. */
+function updatePage(s: Site, id: string, data: Record<string, unknown>) {
+  const draft = s.pageDrafts.get(id);
+  if (draft !== undefined) {
+    s.pageDrafts.set(id, { ...draft, ...data });
+    return { item: { id } };
+  }
+  const index = s.pages.findIndex(page => page.id === id);
+  const current = s.pages[index];
+  if (current === undefined) throw NextlyError.notFound();
+  s.pages[index] = { ...current, ...data };
+  return { item: { id } };
 }
 
 /** The Direct API over `s`, as much of it as a removal calls. */
@@ -219,6 +235,7 @@ function directApi(s: Site): DefaultLayoutDirectApi {
     update: async (args: Record<string, unknown>) => {
       const id = String(args.id);
       const data = args.data as Record<string, unknown>;
+      if (args.collection === "pages") return updatePage(s, id, data);
       if (args.context !== undefined) {
         s.onLayoutWrite?.(args);
         s.writes.push(args);
@@ -230,12 +247,16 @@ function directApi(s: Site): DefaultLayoutDirectApi {
       } else {
         s.layouts.set(id, { ...live, ...data });
       }
+      if (s.failAfterWrite === true && args.context !== undefined) {
+        throw NextlyError.internal();
+      }
       return { item: { id } };
     },
     delete: async (args: Record<string, unknown>) => {
       s.onLayoutWrite?.(args);
       s.writes.push(args);
       s.layouts.delete(String(args.id));
+      if (s.failAfterWrite === true) throw NextlyError.internal();
       return { deleted: true };
     },
   };
@@ -458,6 +479,48 @@ describe("what stops a removal", () => {
   });
 });
 
+describe("a write that committed and then failed", () => {
+  it("settles the removal rather than dropping its fence, when the delete took effect", async () => {
+    const s = site();
+    s.failAfterWrite = true;
+    const d = deps(s);
+
+    const answer = await remove(d);
+
+    expect(answer.message).toBe("The Layout was deleted.");
+    expect(s.layouts.has("landing")).toBe(false);
+    expect(d.store.rows.get("landing")).toMatchObject({ step: "removed" });
+  });
+
+  it("keeps the copy for a promotion that raced it, and restores from it", async () => {
+    const s = site();
+    s.failAfterWrite = true;
+    s.onLayoutWrite = () => {
+      s.defaultLayout = "landing";
+    };
+    const d = deps(s);
+
+    const error = await refusal(remove(d));
+
+    expect((error as Error).message).toBe(KEPT_AS_DEFAULT);
+    expect(s.defaultLayout).toBe("restored-1");
+  });
+
+  it("settles an unpublish that took effect before its failure", async () => {
+    const s = site();
+    s.failAfterWrite = true;
+    const d = deps(s);
+
+    await remove(d, "unpublish");
+
+    expect(s.layouts.get("landing")?.status).toBe("draft");
+    expect(d.store.rows.get("landing")).toMatchObject({
+      step: "removed",
+      action: "unpublish",
+    });
+  });
+});
+
 describe("a Layout that changes while it is removed", () => {
   const moved = () =>
     NextlyError.conflict({ logContext: { reason: VERSION_MOVED } });
@@ -558,6 +621,32 @@ describe("a promotion landing between the last look at the default and the write
   });
 });
 
+describe("a page write in flight when the fence went up", () => {
+  it("is cleared after the delete when it left an unpublished page or a working draft on the Layout, and a live row is left", async () => {
+    const s = site();
+    // Committed after the final scan and before the delete: the pages name
+    // the Layout only once the scan has passed.
+    s.onLayoutWrite = () => {
+      s.pages.push(
+        { id: "u1", title: "Unpublished", status: "draft", layout: "landing" },
+        { id: "d1", title: "Drafted", status: "published", layout: null },
+        { id: "l1", title: "Live", status: "published", layout: "landing" }
+      );
+      s.pageDrafts.set("d1", { id: "d1", layout: "landing" });
+    };
+    const d = deps(s);
+
+    await remove(d);
+
+    expect(s.pages.find(page => page.id === "u1")?.layout).toBeNull();
+    expect(s.pageDrafts.get("d1")?.layout).toBeNull();
+    // A live row is never written without publishing its draft; it draws the
+    // site default once the Layout is gone.
+    expect(s.pages.find(page => page.id === "l1")?.layout).toBe("landing");
+    expect(s.pageDrafts.has("l1")).toBe(false);
+  });
+});
+
 describe("the scan", () => {
   it("counts a published page's working draft only when it is one", async () => {
     const s = site();
@@ -579,6 +668,88 @@ describe("the scan", () => {
       references: [{ id: "p1", title: "A", place: "draft" }],
       complete: true,
     });
+  });
+});
+
+describe("the scan's reads", () => {
+  it("reads working drafts in bounded batches, never one page at a time", async () => {
+    const s = site();
+    for (let i = 0; i < 45; i += 1) {
+      s.pages.push({
+        id: `p${String(i)}`,
+        title: "P",
+        status: "published",
+        layout: null,
+      });
+    }
+    const api = directApi(s);
+    let inFlight = 0;
+    let most = 0;
+    const findByID = api.findByID.bind(api);
+    const counted = Object.assign(Object.create(api) as object, {
+      findByID: async (args: Parameters<typeof api.findByID>[0]) => {
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        inFlight -= 1;
+        return findByID(args);
+      },
+    }) as typeof api;
+
+    await scanLayoutReferences({
+      nextly: counted,
+      pages: "pages",
+      layoutId: "landing",
+    });
+
+    expect(most).toBeGreaterThan(1);
+    expect(most).toBeLessThanOrEqual(10);
+  });
+
+  it("names every readable page however many use the Layout, asking in chunks under the database's limits", async () => {
+    const s = site();
+    const references = [];
+    for (let i = 0; i < 1200; i += 1) {
+      const id = `p${String(i)}`;
+      s.pages.push({
+        id,
+        title: `Page ${String(i)}`,
+        status: "draft",
+        layout: "landing",
+      });
+      references.push({
+        id,
+        title: `Page ${String(i)}`,
+        place: "unpublished" as const,
+      });
+    }
+    s.hidden.add("p7");
+    const api = directApi(s);
+    const asked: number[] = [];
+    const find = api.find.bind(api);
+    const counted = Object.assign(Object.create(api) as object, {
+      find: async (args: Parameters<typeof api.find>[0]) => {
+        const ids = (args.where as { id?: { in?: unknown[] } } | undefined)?.id
+          ?.in;
+        if (Array.isArray(ids)) asked.push(ids.length);
+        // A read answers at most 500 rows, as collection reads clamp it.
+        return find({
+          ...args,
+          limit: Math.min(Number(args.limit ?? 10), 500),
+        });
+      },
+    }) as typeof api;
+
+    const named = await readableTitles({
+      nextly: counted,
+      pages: "pages",
+      references,
+      asPerson: PERSON as never,
+    });
+
+    expect(named.readable).toHaveLength(1199);
+    expect(named.unreadable).toBe(1);
+    expect(Math.max(...asked)).toBeLessThanOrEqual(500);
   });
 });
 

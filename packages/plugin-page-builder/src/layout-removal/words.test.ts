@@ -6,7 +6,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { pagesUseItRefusal } from "./words";
+import {
+  LAYOUT_EDIT_DURING_REMOVAL,
+  pageLayoutRefusal,
+  pagesUseItRefusal,
+} from "./words";
 
 describe("the refusal when pages use the Layout", () => {
   it("names the readable pages and counts the rest", () => {
@@ -45,5 +49,31 @@ describe("the refusal when pages use the Layout", () => {
     });
     expect(told).toContain("more pages than one removal can check");
     expect(told).toContain("can't be removed yet");
+  });
+});
+
+describe("what a write meeting the fence is told", () => {
+  it("tells a Layout edit during a removal to try again shortly", () => {
+    expect(LAYOUT_EDIT_DURING_REMOVAL).toBe(
+      "This Layout is being removed. Try again in a moment."
+    );
+  });
+
+  it("tells a page choosing a Layout being removed to choose another", () => {
+    expect(pageLayoutRefusal("removing")).toBe(
+      "This Layout is being removed, so pages can't choose it. Choose another Layout."
+    );
+  });
+
+  it("tells a page choosing a Layout Remove Layout unpublished when it can again", () => {
+    expect(pageLayoutRefusal("unpublished")).toBe(
+      "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout."
+    );
+  });
+
+  it("tells a page choosing a deleted Layout to choose another", () => {
+    expect(pageLayoutRefusal("deleted")).toBe(
+      "This Layout was deleted, so pages can't choose it. Choose another Layout."
+    );
   });
 });

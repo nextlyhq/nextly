@@ -119,10 +119,10 @@ there is refused. Delete or unpublish it on its own instead.
 
 ## Removing a Layout
 
-Delete or unpublish a Layout with **Remove Layout…**, at the bottom of the Layout's edit
-screen. The Layout's own delete and unpublish are refused with "Use Remove Layout to take
-a Layout down safely.", from the admin and the API alike, and so is a scheduled release
-that would unpublish a Layout.
+Delete or unpublish a Layout with **Remove Layout…**, in the bar at the top of the Layout's
+edit screen, beside **History**. The Layout's own delete and unpublish are refused with "Use
+Remove Layout to take a Layout down safely.", from the admin's menu, the Layouts list and
+the API alike, and so is a scheduled release that would unpublish a Layout.
 
 Remove Layout first checks what stands in the way:
 
@@ -134,12 +134,23 @@ Remove Layout first checks what stands in the way:
 - **A site with many pages**: one removal checks up to 2,000 pages. Past that it says "at
   least" how many it found and refuses, rather than guessing that the rest are clear.
 
-With nothing in the way, choose **Unpublish** or **Delete Layout**. While a removal runs,
-the Layout can't be made the default. An unpublished Layout can't be made the default again
-until it is published again.
+With nothing in the way, choose **Unpublish** or **Delete Layout**.
 
-The same action is a route, for scripts and other tools. It runs as the caller, who needs
-**read** on Layouts plus **delete** (to delete) or **unpublish** (to unpublish):
+While a removal runs, which takes moments:
+
+- the Layout can't be made the default;
+- the Layout can't be edited ("This Layout is being removed. Try again in a moment.");
+- no page can be put on it ("This Layout is being removed, so pages can't choose it.
+  Choose another Layout."). A page that already uses it can still be saved.
+
+A Layout unpublished with Remove Layout can't be made the default, or chosen for a page,
+until it is published again. If a page save lands at the very moment its Layout is removed,
+the page's choice is cleared and it uses the site's default Layout; a published page's live
+version keeps its choice and draws the default until it is next published.
+
+The same action is a route, for scripts and other tools. It runs as the caller: the route
+admits anyone who may read Layouts, and the delete or unpublish itself is judged by the
+caller's own rights over that Layout:
 
 ```http
 POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/remove

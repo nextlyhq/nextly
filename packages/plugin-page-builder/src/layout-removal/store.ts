@@ -14,7 +14,7 @@
  * @module layout-removal/store
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
-import { and, eq, isNull } from "@nextlyhq/plugin-sdk/db";
+import { and, eq, inArray, isNull } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -112,6 +112,8 @@ export interface LayoutRemovalStore {
   releaseTombstone(layoutId: string): Promise<void>;
   /** Every row whose check after the write has not passed. */
   unsettled(): Promise<LayoutRemoval[]>;
+  /** The rows of `layoutIds` that have one, as one read. */
+  removalsOf(layoutIds: readonly string[]): Promise<LayoutRemoval[]>;
 }
 
 /** The database the plugin runs on, as `ctx.dialect` names it. */
@@ -199,6 +201,21 @@ function toRemoval(row: NonNullable<StoredRow>): LayoutRemoval {
 export function mayTakeOver(removal: LayoutRemoval, now: Date): boolean {
   if (removal.step === "removed" && removal.settledAt !== null) return true;
   return now.getTime() - removal.updatedAt.getTime() > REMOVAL_LEASE_MS;
+}
+
+/**
+ * Whether a removal still holds its Layout: it is between its mark and its
+ * write, and inside its lease. A settled one, one past its write, and one a
+ * stopped request left past the lease hold nothing.
+ */
+export function holdsTheLayout(removal: LayoutRemoval, now: Date): boolean {
+  const running =
+    removal.step === "marked" ||
+    removal.step === "checked" ||
+    removal.step === "final";
+  return (
+    running && now.getTime() - removal.updatedAt.getTime() <= REMOVAL_LEASE_MS
+  );
 }
 
 /** Both conditions, as one. `and` is typed as possibly empty; two never are. */
@@ -337,12 +354,82 @@ export function layoutRemovalStore(
         );
     },
 
+    removalsOf: async layoutIds => {
+      if (layoutIds.length === 0) return [];
+      const rows = await db
+        .select(layoutRemovals)
+        .where(inArray(t().layoutId, [...layoutIds]))
+        .all();
+      return rows.map(toRemoval);
+    },
+
     unsettled: async () => {
       const rows = await db
         .select(layoutRemovals)
         .where(isNull(t().settledAt))
         .all();
       return rows.map(toRemoval);
+    },
+  };
+}
+
+/** The parts of a Drizzle executor the fence reads use. */
+interface DrizzleExecutor {
+  select(): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): PromiseLike<unknown[]>;
+      };
+    };
+  };
+  delete(table: unknown): { where(condition: unknown): PromiseLike<unknown> };
+}
+
+/** Whether a hook's executor answers the Drizzle calls the fence reads make. */
+function isDrizzleExecutor(value: unknown): value is DrizzleExecutor {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { select?: unknown }).select === "function" &&
+    typeof (value as { delete?: unknown }).delete === "function"
+  );
+}
+
+/**
+ * The fence's reads and its tombstone release, run through a caller's
+ * transaction: the Drizzle executor core hands a hook inside one. The read
+ * then runs on the transaction's own connection, rather than taking a second
+ * one the open transaction can starve, and the release commits or rolls back
+ * with the write that caused it. `null` for an executor of another shape.
+ */
+export function fenceOnExecutor(
+  db: Pick<PluginDatabase, "table">,
+  executor: unknown
+): Pick<LayoutRemovalStore, "removalOf" | "releaseTombstone"> | null {
+  if (!isDrizzleExecutor(executor)) return null;
+  const table = db.table(layoutRemovals);
+  return {
+    removalOf: async layoutId => {
+      const rows = await executor
+        .select()
+        .from(table)
+        .where(eq(table.layoutId, layoutId))
+        .limit(1);
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : toRemoval(row as NonNullable<StoredRow>);
+    },
+    releaseTombstone: async layoutId => {
+      await executor
+        .delete(table)
+        .where(
+          both(
+            eq(table.layoutId, layoutId),
+            eq(table.step, "removed"),
+            eq(table.action, "unpublish")
+          )
+        );
     },
   };
 }

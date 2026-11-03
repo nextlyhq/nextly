@@ -52,6 +52,8 @@ export interface StoredLayoutChoice {
 export interface PickerOption {
   readonly value: string;
   readonly label: string;
+  /** Shown but not offered: a Layout behind Remove Layout's fence. */
+  readonly disabled?: boolean;
 }
 
 /** The Layout a page is drawn inside, as the editor shows it. */
@@ -86,6 +88,12 @@ export interface LayoutPickerView {
  * default where one is usable, and otherwise no header or footer.
  */
 function optionLabel(item: LayoutChoice, site: LayoutSite): string {
+  if (item.removal === "removing") {
+    return `${item.title} (being removed: choose another Layout)`;
+  }
+  if (item.removal !== undefined) {
+    return `${item.title} (unpublished with Remove Layout: it can be chosen once published again)`;
+  }
   if (item.published) return item.title;
   const meanwhile = resolvePageLayout(
     { layout: item.id, noHeaderFooter: false },
@@ -206,7 +214,7 @@ function viewFromList(
     isPublished: id =>
       id === UNREADABLE_DEFAULT || byId.get(id)?.published === true,
   };
-  const options = choiceOptions(items, meta, site);
+  const options = choiceOptions(items, meta, site, named);
   const resolution = resolvePageLayout(
     { layout: named, noHeaderFooter: switchedOff },
     site
@@ -227,11 +235,16 @@ function viewFromList(
 function choiceOptions(
   items: readonly LayoutChoice[],
   meta: LayoutChoicesResponse["meta"],
-  site: LayoutSite
+  site: LayoutSite,
+  selected: string | null = null
 ): PickerOption[] {
+  // A Layout behind Remove Layout's fence is shown, so the author sees why
+  // it is missing, and not offered: a save naming it is refused. The page's
+  // own choice stays selectable, since keeping it is allowed.
   const toOption = (item: LayoutChoice): PickerOption => ({
     value: layoutValue(item.id),
     label: optionLabel(item, site),
+    ...(item.removal === undefined ? {} : { disabled: item.id !== selected }),
   });
   return [
     { value: SITE_DEFAULT_VALUE, label: defaultLabel(meta, items) },
@@ -256,7 +269,7 @@ function unknownLayoutView(
     defaultLayout: meta.defaultLayout,
     isPublished: id => byId.get(id)?.published === true,
   };
-  const options = choiceOptions(items, meta, site);
+  const options = choiceOptions(items, meta, site, named);
   return {
     options: [
       ...options.slice(0, -1),
