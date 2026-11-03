@@ -298,6 +298,59 @@ describe("a routed page's bindings", () => {
     expect(html).toContain("Public");
   });
 
+  it("a binding on a node the page withholds or de-duplicates claims no read", async () => {
+    // A condition-gated heading and a later node reusing the list's address:
+    // neither reaches the page, so neither may spend the one claim the list
+    // needs.
+    const entryBound = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      type: "core/heading",
+      version: 1,
+      props: { text: "Own", level: "h1" },
+      bindings: { text: { $bind: "title" } },
+      ...extra,
+    });
+    const content = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          entryBound("gated", {
+            visibility: {
+              conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+            },
+          }),
+          {
+            id: "loop",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts", limit: 1 },
+            slots: {
+              children: [
+                {
+                  id: "item",
+                  type: "core/heading",
+                  version: 1,
+                  props: { text: "Own", level: "h2" },
+                  bindings: { text: { $bind: "title", source: "item" } },
+                },
+              ],
+            },
+          },
+          entryBound("loop"),
+        ],
+      })
+    ) as BlockDocument;
+    const nextly = instance(content);
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks, maxQueries: 1 },
+      nextly
+    );
+    expect(publicReads(nextly).map(args => args.collection)).toEqual(["posts"]);
+    expect(html).toContain("Public");
+  });
+
   it("a page with no binding reads nothing more and renders as it did", async () => {
     const nextly = instance({
       formatVersion: DOCUMENT_FORMAT_VERSION,

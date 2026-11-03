@@ -155,30 +155,49 @@ const CALENDAR_PARTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * What a time of day, and a month, are shown with when their format names no
- * options: `Intl` would otherwise show a full numeric date, and the date of a
- * time, like the day of a month, is a placeholder.
+ * What a time of day, and a month, are shown with when their format picks
+ * none of the parts that are theirs: `Intl` would otherwise fill in a full
+ * numeric date, and the date of a time, like the day of a month, is a
+ * placeholder. `parts` are the options that pick one of those parts.
  */
 const PLACEHOLDER_FREE_DEFAULTS: Readonly<
-  Partial<Record<DateGranularity, FormatOptions>>
+  Partial<
+    Record<
+      DateGranularity,
+      { readonly parts: ReadonlySet<string>; readonly defaults: FormatOptions }
+    >
+  >
 > = {
-  time: { hour: "numeric", minute: "2-digit" },
-  month: { year: "numeric", month: "long" },
+  time: {
+    parts: new Set([
+      "timeStyle",
+      "hour",
+      "minute",
+      "second",
+      "fractionalSecondDigits",
+      "dayPeriod",
+    ]),
+    defaults: { hour: "numeric", minute: "2-digit" },
+  },
+  month: {
+    parts: new Set(["year", "month"]),
+    defaults: { year: "numeric", month: "long" },
+  },
 };
 
 /**
  * A format's options with the parts its granularity shows by default, when the
- * format picks no part of its own. An hour style alone picks none, so it is
- * kept beside the defaults rather than leaving `Intl` to show a full date.
+ * format picks none of them. What it does set is kept beside the defaults: an
+ * hour style, a zone name, an era.
  */
 function withDefaultParts(
   options: FormatOptions,
   granularity: DateGranularity
 ): FormatOptions {
-  const defaults = PLACEHOLDER_FREE_DEFAULTS[granularity];
-  if (defaults === undefined) return options;
-  if (displayParts(Object.keys(options)).length > 0) return options;
-  return { ...defaults, ...options };
+  const own = PLACEHOLDER_FREE_DEFAULTS[granularity];
+  if (own === undefined) return options;
+  if (Object.keys(options).some(key => own.parts.has(key))) return options;
+  return { ...own.defaults, ...options };
 }
 
 /** The options every number format may set. */

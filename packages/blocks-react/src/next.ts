@@ -98,7 +98,7 @@ import { PageRenderer } from "./page-renderer";
 import {
   pageBindingRun,
   prepareDocumentForRead,
-  repairedDocuments,
+  prepareDocumentReadStages,
 } from "./prepare-document";
 import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
@@ -1791,16 +1791,48 @@ async function readPageBindings(args: {
 }
 
 /**
- * Every document a page draws, its own and each component it inlines, as the
- * read pipeline will repair them under this route's caps, so a node the repair
- * drops claims no read.
+ * One document as the read pipeline holds it just before it fills bindings:
+ * composed, migrated, gated and with its addresses made unique, under the same
+ * arguments the renderer passes. `undefined` for an envelope it cannot read.
+ */
+function stageBeforeBindings(
+  config: BlocksPageConfig,
+  document: BlockDocument,
+  definitions: DefinitionsById
+): BlockDocument | undefined {
+  const stages = prepareDocumentReadStages(document, {
+    resolver: config.blocks ?? registeredBlocks(),
+    ...(config.limits === undefined ? {} : { limits: config.limits }),
+    ...(config.styleContext === undefined
+      ? {}
+      : { styleContext: config.styleContext }),
+    ...(definitions.size === 0 ? {} : { definitions }),
+  });
+  return stages?.deduped;
+}
+
+/**
+ * Every document a page draws, the page and each region of its Layout, as the
+ * pipeline holds it before filling bindings, so a node it drops, gates or
+ * de-duplicates claims no read.
  */
 function documentsDrawn(
   config: BlocksPageConfig,
-  document: BlockDocument,
-  ...definitions: readonly DefinitionsById[]
+  page: { document: BlockDocument; definitions: DefinitionsById },
+  regions: readonly LayoutRegion[] = [],
+  regionDefinitions: DefinitionsById = EMPTY_DEFINITIONS
 ): BlockDocument[] {
-  return repairedDocuments(document, definitions, effectiveLimits(config));
+  const drawn = [
+    page,
+    ...regions.map(region => ({
+      document: regionDocument([region]),
+      definitions: regionDefinitions,
+    })),
+  ];
+  return drawn.flatMap(({ document, definitions }) => {
+    const stage = stageBeforeBindings(config, document, definitions);
+    return stage === undefined ? [] : [stage];
+  });
 }
 
 /**
@@ -1926,7 +1958,7 @@ function blocksRouteConfig(
               config,
               entry,
               context,
-              documents: documentsDrawn(config, document, definitions),
+              documents: documentsDrawn(config, { document, definitions }),
               entrySource,
               reader: publicReaderFor(config, context.locale, listWindow),
               budget,
@@ -2045,8 +2077,8 @@ function blocksRouteConfig(
         context,
         documents: documentsDrawn(
           config,
-          document,
-          definitions,
+          { document, definitions },
+          regions,
           regionDefinitions
         ),
         entrySource,

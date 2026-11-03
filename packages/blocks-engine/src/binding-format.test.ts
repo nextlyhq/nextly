@@ -239,6 +239,26 @@ describe("reading and formatting dates without the server's zone or a placeholde
     }
   });
 
+  it("keeps a time-only value's time when its format sets only a zone name", () => {
+    const opens: BindingFieldShape = {
+      name: "opensAt",
+      type: "date",
+      timeOnly: true,
+    };
+    const format = checked(
+      { type: "date", options: { timeZoneName: "short" } },
+      opens
+    );
+    expect(
+      text(
+        { locale: "en", timeZone: "UTC" },
+        "1970-01-01T21:30:00.000Z",
+        format,
+        opens
+      )
+    ).toBe("9:30 PM UTC");
+  });
+
   it("refuses a calendar date that does not exist, alone or inside a date-time", () => {
     expect(machineDate("2026-02-30")).toBeUndefined();
     expect(

@@ -3232,7 +3232,10 @@ function validateBindingAgainstSchema(
 ): void {
   const schema = ctx.bindingSchema;
   if (schema === undefined) return;
-  const props = ctx.definitions?.get(node.type)?.props;
+  // A definition found with no `props` declares none, so every binding on it
+  // names a prop it lacks; only a definition not found leaves props unjudged.
+  const definition = ctx.definitions?.get(node.type);
+  const props = definition === undefined ? undefined : (definition.props ?? {});
   const check = checkBinding({
     nodeId: node.id,
     prop,

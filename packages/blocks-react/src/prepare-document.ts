@@ -580,34 +580,6 @@ function isReadableEnvelope(definition: unknown): definition is BlockDocument {
   );
 }
 
-/**
- * Every document a page draws, repaired as the read pipeline repairs it: the
- * page under the site's caps, and each component through the same lookup the
- * composition reads. An envelope this build cannot read is left out, as the
- * pipeline reads nothing of it.
- *
- * For a question asked before the page renders, such as which fields its
- * bindings read: a node the repair drops is one the page never draws, so it
- * must not shape a read.
- */
-export function repairedDocuments(
-  document: BlockDocument,
-  definitions: readonly DefinitionsById[],
-  limits: DocumentLimits
-): BlockDocument[] {
-  const repaired = isReadableEnvelope(document)
-    ? [sanitizeDocument(document, limits)]
-    : [];
-  for (const map of definitions) {
-    const lookup = repairingLookup(map, limits);
-    for (const id of map.keys()) {
-      const definition = lookup.get(id);
-      if (definition !== undefined) repaired.push(definition);
-    }
-  }
-  return repaired;
-}
-
 /** Shared so a page with no bindings allocates no map at all. */
 const NO_BOUND_VALUES: ReadonlyMap<string, BoundValues> = new Map();
 

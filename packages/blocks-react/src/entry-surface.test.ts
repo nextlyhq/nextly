@@ -357,16 +357,14 @@ const SOURCE_MODULES: ReadonlyArray<{
     // to delete that second view, not to offer one: a consumer holding a
     // definitions map wants `prepareDocumentForRead`, which builds this itself.
     //
-    // `repairedDocuments` is the same repair, crossing to the route that asks
-    // which fields a page's bindings read before the page renders. It exists so
-    // that question is answered of the tree this pipeline will draw rather than
-    // of a second reading of the stored documents.
+    // `prepareDocumentReadStages` also crosses to the route, which asks which
+    // fields a page's bindings read of the stage just before they are filled,
+    // so the question is answered of the tree this pipeline will draw.
     internal: [
       "isUnresolvedInstance",
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
       "readingViewOf",
-      "repairedDocuments",
       "repairingLookup",
     ],
   },

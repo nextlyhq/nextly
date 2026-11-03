@@ -101,6 +101,16 @@ describe("validating bindings against the sources' schema", () => {
     expect(codes).toEqual([["1", "binding-field-missing"]]);
   });
 
+  it("judges a block whose definition declares no props as having none", () => {
+    const propless: ValidationContext = {
+      ...context,
+      definitions: {
+        get: type => (type === "core/heading" ? { version: 1 } : undefined),
+      },
+    };
+    expect(bindingCodes(propless)[0]).toEqual(["binding-prop-missing"]);
+  });
+
   it("checks shape only without a schema, as it always has", () => {
     const { bindingSchema: _schema, ...shapeOnly } = context;
     expect(bindingCodes(shapeOnly)).toEqual([[], [], []]);
