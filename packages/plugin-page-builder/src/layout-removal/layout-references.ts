@@ -152,7 +152,7 @@ export async function scanLayoutReferences(args: {
         select: { title: true, status: true },
         overrideAccess: true,
       }),
-    onPage: items => {
+    onPage: (items, { hasNext }) => {
       for (const row of items) {
         spent += 1;
         const id = relationId(row);
@@ -163,7 +163,9 @@ export async function scanLayoutReferences(args: {
           place: textOf(row, "status") === "published" ? "live" : "unpublished",
         });
       }
-      return spent >= budget ? "stop" : undefined;
+      // Stopped only when the budget is spent AND rows remain: a walk that
+      // ends exactly on its budget read every row.
+      return spent >= budget && hasNext ? "stop" : undefined;
     },
   });
   if (!rowsDone) return { references: [...found.values()], complete: false };
@@ -183,10 +185,14 @@ export async function scanLayoutReferences(args: {
         select: { title: true },
         overrideAccess: true,
       }),
-    onPage: async items => {
+    onPage: async (items, { hasNext }) => {
       const toRead: { id: string; title: string }[] = [];
+      let unread = 0;
       for (const row of items) {
-        if (spent >= budget) break;
+        if (spent >= budget) {
+          unread += 1;
+          continue;
+        }
         spent += 1;
         const id = relationId(row);
         if (id !== null && !found.has(id)) {
@@ -201,7 +207,9 @@ export async function scanLayoutReferences(args: {
       )) {
         found.set(draft.id, { ...draft, place: "draft" });
       }
-      return spent >= budget ? "stop" : undefined;
+      // Incomplete only when a row went unread: on this page past the budget,
+      // or on a page after it.
+      return unread > 0 || (spent >= budget && hasNext) ? "stop" : undefined;
     },
   });
   return { references: [...found.values()], complete: draftsDone };

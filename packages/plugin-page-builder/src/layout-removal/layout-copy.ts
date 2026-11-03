@@ -31,11 +31,11 @@ function textOf(row: Record<string, unknown>, key: string): string {
 }
 
 /**
- * The Layout's areas as `[area, component id]` pairs, whichever shape the read
- * handed them over in: an array, or JSON text as SQLite stores a repeater, each
- * component as its id or as its row.
+ * A Layout row's `areas` repeater as its rows, whichever shape the read handed
+ * it over in: an array, or JSON text as SQLite stores a repeater. Anything
+ * else reads as no rows.
  */
-function areasOf(row: Record<string, unknown>): [string, string][] {
+export function areaRows(row: Record<string, unknown>): unknown[] {
   let areas: unknown = row.areas;
   if (typeof areas === "string") {
     try {
@@ -44,8 +44,16 @@ function areasOf(row: Record<string, unknown>): [string, string][] {
       areas = [];
     }
   }
-  if (!Array.isArray(areas)) return [];
-  return areas.map(entry => {
+  return Array.isArray(areas) ? areas : [];
+}
+
+/**
+ * The Layout's areas as `[area, component id]` pairs, whichever shape the read
+ * handed them over in: an array, or JSON text as SQLite stores a repeater, each
+ * component as its id or as its row.
+ */
+function areasOf(row: Record<string, unknown>): [string, string][] {
+  return areaRows(row).map(entry => {
     const area = entry as { area?: unknown; component?: unknown } | null;
     return [
       typeof area?.area === "string" ? area.area : "",

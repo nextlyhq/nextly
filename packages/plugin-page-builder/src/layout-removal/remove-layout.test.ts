@@ -633,6 +633,26 @@ describe("a promotion landing between the last look at the default and the write
     });
   });
 
+  it("keeps the areas when the copy holds them as JSON text, as SQLite answers a repeater", async () => {
+    const s = site();
+    const landing = s.layouts.get("landing");
+    if (landing !== undefined) {
+      landing.areas = JSON.stringify([
+        { id: "row-1", area: "header", component: "c-1" },
+      ]);
+    }
+    s.onLayoutWrite = () => {
+      s.defaultLayout = "landing";
+    };
+    const d = deps(s);
+
+    await refusal(remove(d));
+
+    expect(s.layouts.get("restored-1")?.areas).toEqual([
+      { area: "header", component: "c-1" },
+    ]);
+  });
+
   it("restores the working draft's own address too", async () => {
     const s = site();
     s.layoutDrafts.set("landing", {
@@ -697,6 +717,48 @@ describe("a page write in flight when the fence went up", () => {
 });
 
 describe("the scan", () => {
+  it("is complete when it reads its whole budget and no page is left", async () => {
+    const s = site();
+    for (let i = 0; i < 3; i += 1) {
+      s.pages.push({
+        id: `p${String(i)}`,
+        title: "P",
+        status: "published",
+        layout: null,
+      });
+    }
+
+    const scan = await scanLayoutReferences({
+      nextly: directApi(s),
+      pages: "pages",
+      layoutId: "landing",
+      budget: 3,
+    });
+
+    expect(scan).toEqual({ references: [], complete: true });
+  });
+
+  it("is incomplete when the budget runs out with a page left", async () => {
+    const s = site();
+    for (let i = 0; i < 4; i += 1) {
+      s.pages.push({
+        id: `p${String(i)}`,
+        title: "P",
+        status: "published",
+        layout: null,
+      });
+    }
+
+    const scan = await scanLayoutReferences({
+      nextly: directApi(s),
+      pages: "pages",
+      layoutId: "landing",
+      budget: 3,
+    });
+
+    expect(scan.complete).toBe(false);
+  });
+
   it("counts a published page's working draft only when it is one", async () => {
     const s = site();
     s.pages.push(

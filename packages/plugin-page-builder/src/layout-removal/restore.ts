@@ -35,6 +35,7 @@ import {
   type DefaultLayoutSlugs,
 } from "../default-layout/store";
 
+import { areaRows } from "./layout-copy";
 import type { LayoutCopy, LayoutRemoval, LayoutRemovalStore } from "./store";
 
 /** How many addresses a restore tries when its own is taken. */
@@ -53,15 +54,15 @@ export interface RestoreDeps {
 
 /** The authored fields of a stored Layout row, as a write takes them. */
 function authored(row: Record<string, unknown>): Record<string, unknown> {
-  const areas = Array.isArray(row.areas)
-    ? row.areas.map(area => {
-        if (typeof area !== "object" || area === null) return area;
-        // A repeater row's own id belongs to the deleted Layout's rows.
-        const rest: Record<string, unknown> = { ...area };
-        delete rest.id;
-        return rest;
-      })
-    : [];
+  // Read through `areaRows`, so a copy holding the repeater as SQLite's JSON
+  // text keeps its areas as the other dialects' copies do.
+  const areas = areaRows(row).map(area => {
+    if (typeof area !== "object" || area === null) return area;
+    // A repeater row's own id belongs to the deleted Layout's rows.
+    const rest: Record<string, unknown> = { ...area };
+    delete rest.id;
+    return rest;
+  });
   return {
     title: row.title,
     ...(typeof row.description === "string"
