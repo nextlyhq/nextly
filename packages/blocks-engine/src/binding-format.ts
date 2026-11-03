@@ -125,6 +125,12 @@ const DATE_OPTIONS: Readonly<Record<string, OptionRule>> = {
 /** The two presets, which `Intl` refuses beside any single component. */
 const DATE_PRESETS: ReadonlySet<string> = new Set(["dateStyle", "timeStyle"]);
 
+/**
+ * Options that choose how a time is written rather than which parts are shown,
+ * which `Intl` accepts beside a preset.
+ */
+const HOUR_STYLE: ReadonlySet<string> = new Set(["hour12", "hourCycle"]);
+
 /** The options that show a time of day, which a calendar date does not have. */
 const TIME_OF_DAY: ReadonlySet<string> = new Set([
   "timeStyle",
@@ -149,10 +155,16 @@ const CALENDAR_PARTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * What a time of day is shown with when its format names no options: `Intl`
- * would otherwise show the date, and a time's date is a placeholder.
+ * What a time of day, and a month, are shown with when their format names no
+ * options: `Intl` would otherwise show a full numeric date, and the date of a
+ * time, like the day of a month, is a placeholder.
  */
-const TIME_DEFAULT: FormatOptions = { hour: "numeric", minute: "2-digit" };
+const PLACEHOLDER_FREE_DEFAULTS: Readonly<
+  Partial<Record<DateGranularity, FormatOptions>>
+> = {
+  time: { hour: "numeric", minute: "2-digit" },
+  month: { year: "numeric", month: "long" },
+};
 
 /** The options every number format may set. */
 const DIGIT_OPTIONS: Readonly<Record<string, OptionRule>> = {
@@ -341,28 +353,66 @@ export function checkFormat(
   return checkNumberFormat(format, known, field);
 }
 
+/** No part is missing from a date-time. */
+const NO_PARTS: ReadonlySet<string> = new Set();
+
+/** The options that show a day, which a month picked alone does not have. */
+const DAY_PARTS: ReadonlySet<string> = new Set([
+  ...TIME_OF_DAY,
+  "dateStyle",
+  "weekday",
+  "day",
+]);
+
+/**
+ * The options a field cannot show, because what it holds has no such part:
+ * a day has no time, a month no day, a time of day no date. Showing one would
+ * show the placeholder the value is stored on.
+ */
+function partsTheFieldLacks(field: BindingFieldShape | undefined): {
+  readonly parts: ReadonlySet<string>;
+  readonly message: string;
+} {
+  if (field?.monthOnly === true) {
+    return {
+      parts: DAY_PARTS,
+      message:
+        "This field holds a month and year, so its format cannot show a day or a time.",
+    };
+  }
+  if (field?.dateOnly === true) {
+    return {
+      parts: TIME_OF_DAY,
+      message:
+        "This field holds a calendar date with no time of day, so its format cannot show one.",
+    };
+  }
+  if (field?.timeOnly === true) {
+    return {
+      parts: CALENDAR_PARTS,
+      message:
+        "This field holds a time of day with no date, so its format cannot show one.",
+    };
+  }
+  return { parts: NO_PARTS, message: "" };
+}
+
 /** Why a date format's options cannot be used together, or for this field. */
 function dateOptionProblem(
   keys: readonly string[],
   field: BindingFieldShape | undefined
 ): FormatCheck | undefined {
   const presets = keys.filter(key => DATE_PRESETS.has(key));
-  if (presets.length > 0 && presets.length < keys.length) {
+  const components = keys.filter(
+    key => !DATE_PRESETS.has(key) && !HOUR_STYLE.has(key)
+  );
+  if (presets.length > 0 && components.length > 0) {
     return invalid(
       "A date format uses either dateStyle and timeStyle, or single parts such as month and day, not both."
     );
   }
-  const calendarDate = field?.dateOnly === true || field?.monthOnly === true;
-  if (calendarDate && keys.some(key => TIME_OF_DAY.has(key))) {
-    return misfit(
-      "This field holds a calendar date with no time of day, so its format cannot show one."
-    );
-  }
-  if (field?.timeOnly === true && keys.some(key => CALENDAR_PARTS.has(key))) {
-    return misfit(
-      "This field holds a time of day with no date, so its format cannot show one."
-    );
-  }
+  const hidden = partsTheFieldLacks(field);
+  if (keys.some(key => hidden.parts.has(key))) return misfit(hidden.message);
   return undefined;
 }
 
@@ -451,8 +501,13 @@ export function safeTimeZone(zone: unknown): {
 
 /** A calendar date as stored by a date picked as a day: `2026-03-29`. */
 const DAY_STRING = /^\d{4}-\d{2}-\d{2}$/;
-/** An ISO 8601 date-time, the only text read as an instant. */
-const INSTANT_STRING = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+/**
+ * An ISO 8601 date-time with its offset, the only text read as an instant.
+ * Without a `Z` or an offset, `Date` would read it in the server's own zone,
+ * so one stored value would be a different instant on each host.
+ */
+const INSTANT_STRING =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/;
 
 /** How much of a date a value means. */
 type DateGranularity = "day" | "month" | "time" | "dateTime";
@@ -634,8 +689,8 @@ export function createBindingFormatter(env: FormatEnv): BindingFormatter {
     // site's zone.
     const timeZone = date.granularity === "dateTime" ? env.timeZone : "UTC";
     const options =
-      date.granularity === "time" && Object.keys(format.options).length === 0
-        ? TIME_DEFAULT
+      Object.keys(format.options).length === 0
+        ? (PLACEHOLDER_FREE_DEFAULTS[date.granularity] ?? format.options)
         : format.options;
     const formatter = buildOnce(
       dates,

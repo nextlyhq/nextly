@@ -44,6 +44,8 @@ import {
   type BlockDocument,
   type BlockNode,
 } from "./document";
+import { walkForest } from "./forest-walk";
+import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 
@@ -319,6 +321,25 @@ function inScope(binding: unknown, scope: BindingScope): boolean {
   return scope.phase === "item" ? source === "item" : source !== "item";
 }
 
+/**
+ * Whether a node holds a binding to the list item it is drawn for, which can
+ * only be filled once the list draws it.
+ *
+ * A reader deciding from the page's pass what a node will draw has to leave
+ * such a node standing: its props still hold their own values there.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function hasItemBindings(node: BlockNode): boolean {
+  const bindings: unknown = node.bindings;
+  if (!isPlainRecord(bindings)) return false;
+  return ownKeys(bindings).some(prop =>
+    inScope(ownEntry(bindings, prop), ITEM_SCOPE)
+  );
+}
+
+const ITEM_SCOPE: BindingScope = { phase: "item" };
+
 /** The fill one binding gives, or nothing to leave the prop's own value. */
 type Fill = { readonly value: unknown; readonly bound: BoundValue } | undefined;
 
@@ -578,10 +599,17 @@ export interface BindingDemand {
  * Only well-formed paths are listed, so a malformed binding cannot shape a
  * read; it falls back when the pass meets it.
  *
+ * Asked of stored documents before the read pipeline has repaired them, so
+ * the walk holds itself to the same caps the pipeline will: it is iterative,
+ * it reads no deeper than `limits.maxDepth` and no more than `limits.maxNodes`
+ * entries per document, and a node past either is one the pipeline drops, so
+ * nothing past them is read for.
+ *
  * @experimental Settles with the editor's binding controls.
  */
 export function bindingDemand(
-  documents: Iterable<BlockDocument>
+  documents: Iterable<BlockDocument>,
+  limits: DocumentLimits = DEFAULT_LIMITS
 ): BindingDemand {
   const demand: DemandSoFar = {
     any: false,
@@ -590,7 +618,7 @@ export function bindingDemand(
     site: false,
   };
   for (const document of documents) {
-    if (isPlainRecord(document)) visitNodes(document.nodes, demand);
+    if (isPlainRecord(document)) visitForest(document.nodes, limits, demand);
   }
   return {
     any: demand.any,
@@ -649,22 +677,37 @@ function addSingleField(
   demand.singles.set(key, (demand.singles.get(key) ?? new Set()).add(field));
 }
 
-/** Add every binding in one node, then in each of its stored slots. */
-function visitNode(node: unknown, demand: DemandSoFar): void {
-  if (!isPlainRecord(node)) return;
+/** Add every binding one node holds. */
+function visitNode(
+  node: Readonly<Record<string, unknown>>,
+  demand: DemandSoFar
+): void {
   const bindings = node.bindings;
   if (bindings !== undefined) demand.any = true;
-  if (isPlainRecord(bindings)) {
-    for (const prop of ownKeys(bindings)) {
-      visitBinding(ownEntry(bindings, prop), demand);
-    }
+  if (!isPlainRecord(bindings)) return;
+  for (const prop of ownKeys(bindings)) {
+    visitBinding(ownEntry(bindings, prop), demand);
   }
-  const slots = node.slots;
-  if (!isPlainRecord(slots)) return;
-  for (const name of ownKeys(slots)) visitNodes(ownEntry(slots, name), demand);
 }
 
-function visitNodes(nodes: unknown, demand: DemandSoFar): void {
+/**
+ * Every node of one stored forest, through the engine's own iterative walk,
+ * within the caps the read pipeline holds the document to.
+ */
+function visitForest(
+  nodes: unknown,
+  limits: DocumentLimits,
+  demand: DemandSoFar
+): void {
   if (!Array.isArray(nodes)) return;
-  for (const node of nodes as unknown[]) visitNode(node, demand);
+  let seen = 0;
+  walkForest(nodes, entry => {
+    seen += 1;
+    if (seen > limits.maxNodes) return "stop";
+    if (entry.depth > limits.maxDepth || !isPlainRecord(entry.node)) {
+      return "skip";
+    }
+    visitNode(entry.node, demand);
+    return "descend";
+  });
 }

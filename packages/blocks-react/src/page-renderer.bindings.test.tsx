@@ -76,10 +76,25 @@ const when = defineEngineBlock<{ label?: string }>({
   },
 });
 
+/** A label that draws nothing while it is empty. */
+const badge = defineBlock<{ label?: string }>({
+  name: "test/badge",
+  version: 1,
+  description: "Shows a label, or nothing while it has none.",
+  example: { props: {} },
+  props: { label: { type: "text" } },
+  rendersNothing: props =>
+    typeof props.label !== "string" || props.label === "",
+  render: ({ props, className }) => (
+    <span className={className}>{props.label}</span>
+  ),
+});
+
 const resolver = createBlockResolver([
   ...coreBlocks,
   stat as AnyBlockDefinition,
   when as AnyBlockDefinition,
+  badge as AnyBlockDefinition,
 ]);
 
 function page(...nodes: BlockNode[]): BlockDocument {
@@ -284,6 +299,61 @@ describe("filling bound props on a published page", () => {
     );
     expect(html).toContain('data-datetime="2026-03-29T18:30:00.000Z"');
     expect(html).toContain("Mar 29, 2026");
+  });
+
+  it("keeps the styles of a block bound to its list item, which draws once the item fills it", async () => {
+    // Empty as stored, so a save holds its rules back as drawless; the list
+    // fills its label per item.
+    const document = page({
+      id: "loop",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts", limit: 1 },
+      slots: {
+        children: [
+          {
+            id: "badge",
+            type: "test/badge",
+            version: 1,
+            props: { label: "" },
+            bindings: { label: { $bind: "title", source: "item" } },
+            styles: { base: { base: { color: "teal" } } },
+          },
+        ],
+      },
+    });
+    // A sheet stored while the block was not yet bound: its rules are held
+    // apart, as the rules of a node that draws nothing. Same ids, same styles.
+    const unbound = JSON.parse(
+      JSON.stringify(document).replace(
+        /"bindings":\{"label":\{"\$bind":"title","source":"item"\}\},/,
+        ""
+      )
+    ) as BlockDocument;
+    expect(JSON.stringify(unbound)).not.toContain("bindings");
+    const styles = resolvePageStyles(
+      unbound,
+      undefined,
+      { breakpoints: { viewport: [], container: [] } },
+      resolver
+    );
+    // The control: that sheet holds the node's rules apart.
+    expect(JSON.stringify(styles.gated ?? {})).toContain("teal");
+    expect(styles.css).not.toContain("teal");
+    const html = await render(
+      document,
+      {},
+      {
+        styles,
+        context: createStandaloneContext({
+          data: {
+            find: () => Promise.resolve({ items: [{ id: "1", title: "New" }] }),
+          },
+        }),
+      }
+    );
+    expect(html).toContain(">New</span>");
+    expect(html).toContain("teal");
   });
 
   it("binding does not withhold a stored stylesheet", async () => {

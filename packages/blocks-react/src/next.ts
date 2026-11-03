@@ -1765,7 +1765,9 @@ async function readPageBindings(args: {
   reader: BlocksPublicReader;
   budget: QueryBudget;
 }): Promise<PageBindings | undefined> {
-  const demand = bindingDemand(args.documents);
+  // Held to the caps the read pipeline applies, since these documents are
+  // read before it repairs them.
+  const demand = bindingDemand(args.documents, effectiveLimits(args.config));
   if (!demand.any) return undefined;
   const entryRef: BlocksFieldShapeRef =
     args.entrySource === "single"

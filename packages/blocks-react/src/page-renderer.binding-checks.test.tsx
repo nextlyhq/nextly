@@ -176,6 +176,36 @@ describe("checking every binding at render", () => {
     }
   );
 
+  it.each([
+    ["a malformed path", { $bind: "bad path", fallback: "Unavailable" }],
+    [
+      "an unknown source",
+      { $bind: "title", source: "nowhere", fallback: "Unavailable" },
+    ],
+    [
+      "a Single with no key",
+      { $bind: "title", source: "single", fallback: "Unavailable" },
+    ],
+  ])(
+    "a binding with %s still renders its valid fallback and is reported",
+    async (_name, binding) => {
+      const { html, issues } = await renderChecked(
+        pageWith(binding),
+        withSchema
+      );
+      expect(headingText(html)).toBe("Unavailable");
+      expect(issues.map(issue => issue.code)).toEqual(["binding-malformed"]);
+    }
+  );
+
+  it("a malformed binding with a fallback the prop cannot hold renders the prop's own value", async () => {
+    const { html } = await renderChecked(
+      pageWith({ $bind: "bad path", fallback: 7 }),
+      withSchema
+    );
+    expect(headingText(html)).toBe("Own");
+  });
+
   it("a list item binding outside a list renders its fallback and is reported once", async () => {
     const { html, issues } = await renderChecked(
       pageWith({ $bind: "title", source: "item", fallback: "Fallback" }),

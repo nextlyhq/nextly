@@ -1191,6 +1191,7 @@ export {
   bindingDemand,
   createBindingRun,
   DEFAULT_BINDING_LOCALE,
+  hasItemBindings,
   resolveNodeBindings,
 } from "./resolve-bindings";
 export type {

@@ -202,6 +202,86 @@ describe("formatting a bound value for the reader", () => {
   });
 });
 
+describe("reading and formatting dates without the server's zone or a placeholder", () => {
+  it("reads a date-time only with its offset, never in the server's zone", () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    expect(new Intl.DateTimeFormat().resolvedOptions().timeZone).toBe(
+      "America/Los_Angeles"
+    );
+    expect(machineDate("2026-03-29T18:30")).toBeUndefined();
+    expect(machineDate("2026-03-29T18:30:00", DATE_TIME_FIELD)).toBeUndefined();
+    const format = checked({ type: "date", options: { dateStyle: "long" } });
+    expect(
+      createBindingFormatter({ locale: "en", timeZone: "UTC" }).format(
+        "2026-03-29T18:30",
+        format,
+        DATE_TIME_FIELD
+      )
+    ).toEqual({ ok: false, reason: "value" });
+    expect(machineDate("2026-03-29T20:30:00+02:00", DATE_TIME_FIELD)).toEqual({
+      datetime: "2026-03-29T18:30:00.000Z",
+      dateOnly: false,
+    });
+  });
+
+  it("allows hour12 and hourCycle beside a preset", () => {
+    const short = checked(
+      { type: "date", options: { timeStyle: "short", hour12: false } },
+      DATE_TIME_FIELD
+    );
+    expect(
+      text(
+        { locale: "en", timeZone: "UTC" },
+        "2026-03-29T18:30:00.000Z",
+        short,
+        DATE_TIME_FIELD
+      )
+    ).toBe("18:30");
+    expect(
+      checkFormat(
+        {
+          type: "date",
+          options: {
+            dateStyle: "medium",
+            timeStyle: "short",
+            hourCycle: "h23",
+          },
+        },
+        "text",
+        DATE_TIME_FIELD
+      ).ok
+    ).toBe(true);
+  });
+
+  it("shows a month-only value as its month and year, never its placeholder day", () => {
+    const env = { locale: "en", timeZone: "UTC" };
+    const issue = "2026-03-01T00:00:00.000Z";
+    expect(
+      text(env, issue, checked({ type: "date" }, MONTH_FIELD), MONTH_FIELD)
+    ).toBe("March 2026");
+    expect(
+      text(
+        env,
+        issue,
+        checked(
+          { type: "date", options: { year: "numeric", month: "short" } },
+          MONTH_FIELD
+        ),
+        MONTH_FIELD
+      )
+    ).toBe("Mar 2026");
+    for (const options of [
+      { day: "numeric" },
+      { weekday: "long" },
+      { dateStyle: "long" },
+    ]) {
+      expect(
+        checkFormat({ type: "date", options }, "text", MONTH_FIELD)
+      ).toMatchObject({ ok: false, code: "binding-format-misfit" });
+    }
+  });
+});
+
 describe("checking a stored format before anything is built from it", () => {
   it.each([
     ["an unknown currency", { type: "currency", currency: "XYZ" }],

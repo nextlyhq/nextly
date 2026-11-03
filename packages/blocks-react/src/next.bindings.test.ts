@@ -223,6 +223,35 @@ describe("a routed page's bindings", () => {
     expect(title).toBe("Public");
   });
 
+  it("a page whose slots nest deeper than the call stack still renders", async () => {
+    // Stored content that bypassed validation: a chain far past the caps the
+    // read pipeline repairs to, holding a binding at the top.
+    let chain: Record<string, unknown> = {
+      id: "leaf",
+      type: "core/text",
+      version: 1,
+      props: { text: "Deep" },
+    };
+    for (let depth = 0; depth < 50_000; depth += 1) {
+      chain = {
+        id: `box-${String(depth)}`,
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: { children: [chain] },
+      };
+    }
+    const document = boundPage({ $bind: "title" });
+    const content = { ...document, nodes: [...document.nodes, chain] };
+    const nextly = instance(content as BlockDocument);
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      nextly
+    );
+    expect(html).toContain("Public");
+  });
+
   it("a page with no binding reads nothing more and renders as it did", async () => {
     const nextly = instance({
       formatVersion: DOCUMENT_FORMAT_VERSION,

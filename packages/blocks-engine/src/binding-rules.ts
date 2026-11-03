@@ -697,6 +697,38 @@ function checkProp(
   return { ok: true, kind, schema };
 }
 
+/**
+ * A binding whose path or source cannot be read. Its fallback is still read on
+ * its own, since a fallback is what such a binding is for: when it is a valid
+ * value of a prop the block has, it is shown.
+ */
+function malformed(input: BindingCheckInput): BindingCheck {
+  const issues = [
+    issueOf(
+      input,
+      "",
+      "binding-malformed",
+      "This binding is not a field path with a known source."
+    ),
+  ];
+  const binding = input.binding;
+  const schema =
+    input.props === undefined ? undefined : ownEntry(input.props, input.prop);
+  const kind = bindablePropKind(schema);
+  const fallback = isPlainRecord(binding)
+    ? ownEntry(binding, "fallback")
+    : undefined;
+  if (
+    fallback === undefined ||
+    schema === undefined ||
+    kind === undefined ||
+    !isValidPropValue(kind, schema, fallback)
+  ) {
+    return { outcome: "fallback", issues };
+  }
+  return { outcome: "fallback", fallback: { value: fallback }, issues };
+}
+
 /** The prop check's answer for a binding that goes on to be read. */
 type PropFit = Extract<ReturnType<typeof checkProp>, { ok: true }>;
 
@@ -761,19 +793,7 @@ function checkedBinding(
  */
 export function checkBinding(input: BindingCheckInput): BindingCheck {
   const stored = readStoredBinding(input.binding);
-  if (stored === undefined) {
-    return {
-      outcome: "fallback",
-      issues: [
-        issueOf(
-          input,
-          "",
-          "binding-malformed",
-          "This binding is not a field path with a known source."
-        ),
-      ],
-    };
-  }
+  if (stored === undefined) return malformed(input);
   const prop = checkProp(input, stored.path);
   if (!prop.ok) return prop.check;
 
