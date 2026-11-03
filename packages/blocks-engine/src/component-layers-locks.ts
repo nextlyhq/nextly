@@ -240,7 +240,9 @@ function placedLocksOnly(
       const kept =
         isPlacedLock(node) &&
         (placements === undefined ||
-          placements.has(String((node as { instanceOf?: unknown }).instanceOf)));
+          placements.has(
+            String((node as { instanceOf?: unknown }).instanceOf)
+          ));
       if (!kept) delete (node as { locked?: unknown }).locked;
     },
     { maxNodes: limits.maxNodes }

@@ -49,7 +49,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { CircleSlash, Layers, Link2, Lock, PenLine } from "lucide-react";
+import {
+  CircleSlash,
+  Layers,
+  Link2,
+  Lock,
+  PenLine,
+  SquarePen,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
@@ -228,6 +235,7 @@ export function InstanceInspectorPanel({
         onLock={locked => editor.apply(lockOp(inspection.nodeId, locked))}
         verbs={verbs}
       />
+      <EditComponentButton verbs={verbs} />
 
       {/*
         Said once, above everything the Layers lock holds: the rows and the
@@ -716,5 +724,34 @@ function OrphanedOverrides({
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * "Edit component", where the host offers it for this placement: the verb the
+ * toolbar and the palette run, drawn here as the panel's first action because
+ * an author looking at a placement's fields is the one most likely to want the
+ * component's own design next.
+ */
+function EditComponentButton({
+  verbs,
+}: {
+  verbs: CardVerbs | undefined;
+}): React.JSX.Element | null {
+  const offered = verbs?.actions.some(
+    action => action.id === "edit-component" && action.enabled
+  );
+  if (verbs === undefined || offered !== true) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="nx-inspector__edit-component"
+      onClick={() => verbs.run("edit-component")}
+    >
+      <SquarePen size={14} aria-hidden="true" />
+      Edit component
+    </Button>
   );
 }

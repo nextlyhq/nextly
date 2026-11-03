@@ -229,6 +229,20 @@ export function inspectInstance(
 }
 
 /**
+ * The component a placement places, or `undefined` for a node that is not a
+ * placement or names no component: what "Edit component" opens.
+ */
+export function placedComponentId(
+  document: BlockDocument,
+  nodeId: string
+): string | undefined {
+  const node = findNode(document.nodes, nodeId);
+  if (node === undefined || !isComponentInstance(node)) return undefined;
+  const id = storedComponentId(node);
+  return id === "" ? undefined : id;
+}
+
+/**
  * What an author is told after double-clicking text a component does not
  * expose: whose it is, with the variant the placement uses, and where its
  * editable fields are. The placement is selected, so the panel beside it is
