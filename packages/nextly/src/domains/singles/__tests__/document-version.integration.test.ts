@@ -29,6 +29,8 @@ afterEach(async () => {
 const PREFS = "prefs";
 /** No lifecycle and no languages. */
 const PLAIN = "plain";
+/** Translated, but with no translated field, so with no translation table. */
+const UNTRANSLATED = "untranslated_single";
 
 const OPEN = {
   read: () => true,
@@ -56,6 +58,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: PLAIN,
         access: OPEN,
         fields: [text({ name: "notice" })],
+      }),
+      defineSingle({
+        slug: UNTRANSLATED,
+        localized: true,
+        access: OPEN,
+        fields: [text({ name: "code", localized: false })],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -230,6 +238,61 @@ describe.each(getConfiguredTestDialects())(
       expect(after.contact).toBe("c");
       expect(String(after.updated_at)).toBe(String(before.updated_at));
       expect(revOf(held)).toBe(await readRev(t, PREFS, "en"));
+
+      // Discarding it changes what a reader of the draft sees.
+      await singlesOf(t).discardWorkingDraft({ slug: PREFS, locale: "en" });
+      expect(Number((await mainRow(t, PREFS))._revision)).toBe(
+        Number(after._revision) + 1
+      );
+    });
+
+    it("gives a translated Single with no translation table a version that names no language", async () => {
+      const t = await boot(dialect);
+      expect(await readRev(t, UNTRANSLATED, "en")).toBe("1");
+      const saved = await singlesOf(t).update(
+        UNTRANSLATED,
+        { code: "b" },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(revOf(saved)).toBe("2");
+      expect(await readRev(t, UNTRANSLATED, "*")).toBe("2");
+    });
+
+    it("keeps the version and the last changer out of every recorded version", async () => {
+      const t = await boot(dialect);
+      await singlesOf(t).update(
+        PREFS,
+        { siteName: "Site", contact: "c", status: "published" },
+        {
+          locale: "en",
+          overrideAccess: true,
+          actor: { type: "user", id: "writer" },
+        }
+      );
+      await singlesOf(t).update(
+        PREFS,
+        { contact: "held" },
+        {
+          locale: "en",
+          overrideAccess: true,
+          actor: { type: "user", id: "writer" },
+        }
+      );
+      await singlesOf(t).publishAllLocales(PREFS, { overrideAccess: true });
+      const rows = await t.adapter.select<{ snapshot?: unknown }>(
+        "nextly_versions",
+        {}
+      );
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        const snapshot =
+          typeof row.snapshot === "string"
+            ? row.snapshot
+            : JSON.stringify(row.snapshot);
+        expect(snapshot).not.toContain("_changed_by");
+        expect(snapshot).not.toContain("_revision");
+        expect(snapshot).not.toContain('"_rev"');
+      }
     });
 
     it("publish all changes the version and returns the all-languages form", async () => {

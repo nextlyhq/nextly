@@ -5227,6 +5227,14 @@ export class CollectionMutationService extends BaseService {
         await releaseSharedBase(tx, discardedRef, draftLocale);
         // In the document's history only when there was a draft to discard.
         if (removed > 0) {
+          // A reader of the pending change now sees the live entry, so the
+          // version they hold no longer describes what they would read.
+          await bumpDocumentRevision(
+            tx,
+            tableName,
+            { id: params.entryId },
+            actorForWrite(params.actor, params.user)
+          );
           await this.recordHistoryEvent(
             tx,
             params.collectionName,
@@ -5472,6 +5480,15 @@ export class CollectionMutationService extends BaseService {
         ),
     });
     // A save of the pending change, in its history like any other.
+    // What a reader of the pending change sees moved, so its version moves.
+    if (took.taken.length > 0) {
+      await bumpDocumentRevision(
+        tx,
+        tableName,
+        { id: params.entryId },
+        actorForWrite(params.actor, params.user)
+      );
+    }
     await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
       actor: actorForWrite(params.actor, params.user),
       personName: params.user?.name ?? null,
@@ -6995,7 +7012,7 @@ export class CollectionMutationService extends BaseService {
           dialect: this.dialect,
           table: tableName,
           id: String(entry.id),
-          localized: (collection as { localized?: boolean }).localized === true,
+          languagesTable: localizedWrite?.companionTableName ?? null,
           localization: this.localization,
           locale: localizedWrite?.writeLocale ?? params.locale,
         });
@@ -7884,12 +7901,17 @@ export class CollectionMutationService extends BaseService {
       const companion = await this.fileManager.loadCompanionSchema(
         params.collectionName
       );
+      // Whether the translation table is there to read and move, asked once,
+      // before the transaction: the question takes a pooled connection.
+      const companionReady =
+        !!companion &&
+        (await isCompanionReady(this.adapter, companion.companionTableName));
       const companionPublishable =
         !!companion &&
         companion.hasStatus &&
         // Only `ready` matters: a companion that is not there has no per-locale publish
         // lifecycle, and why it is not there changes nothing about that.
-        (await isCompanionReady(this.adapter, companion.companionTableName));
+        companionReady;
 
       if (!hasMainStatus && !companionPublishable) {
         // Nothing to publish — the collection has no status concept. Returned
@@ -8276,8 +8298,8 @@ export class CollectionMutationService extends BaseService {
             dialect: this.dialect,
             table: tableName,
             id: params.entryId,
-            localized:
-              (publishCollection as { localized?: boolean }).localized === true,
+            languagesTable:
+              companion && companionReady ? companion.companionTableName : null,
             localization: this.localization,
             locale: EVERY_LOCALE,
           });
@@ -12729,10 +12751,12 @@ export class CollectionMutationService extends BaseService {
             dialect: this.dialect,
             table: tableName,
             id: params.entryId,
-            localized:
-              (collection as { localized?: boolean }).localized === true,
+            // The split found the translation table there to write to;
+            // without it the translated values are on the entry's own row.
+            languagesTable: localizedUpdate?.companionTableName ?? null,
             localization: this.localization,
-            locale: params.locale,
+            // A wildcard write moved every language, and answers for them all.
+            locale: sweepAllLocales ? EVERY_LOCALE : params.locale,
           });
         })
       );
@@ -15589,7 +15613,7 @@ export class CollectionMutationService extends BaseService {
           dialect: this.dialect,
           table: tableName,
           id: (entry as { id: string }).id,
-          localized: (collection as { localized?: boolean }).localized === true,
+          languagesTable: localizedWrite?.companionTableName ?? null,
           localization: this.localization,
           locale: localizedWrite?.writeLocale,
         });
@@ -16978,7 +17002,7 @@ export class CollectionMutationService extends BaseService {
         dialect: this.dialect,
         table: tableName,
         id: entryId,
-        localized: (collection as { localized?: boolean }).localized === true,
+        languagesTable: localizedUpdate?.companionTableName ?? null,
         localization: this.localization,
         locale: localizedUpdate?.writeLocale,
       });

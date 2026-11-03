@@ -162,7 +162,6 @@ import { captureInTx } from "../../versions/capture-in-tx";
 import {
   attachDocumentVersions,
   storedRevisionsOf,
-  versionLanguagesFor,
 } from "../../versions/document-revision";
 import {
   draftDocumentFacts,
@@ -1389,12 +1388,19 @@ export class SingleQueryService extends BaseService {
         run: (statement, values) =>
           this.adapter.executeQuery<Record<string, unknown>>(statement, values),
         dialect: this.adapter.dialect,
-        table: singleMeta.tableName,
-        locales: versionLanguagesFor({
-          localized: singleMeta.localized === true,
-          localization: this.localization,
-          locale: options.locale,
-        }),
+        // A translated Single whose table is not there yet keeps its
+        // translated values on its own row, and its version names none.
+        languagesTable:
+          this.localization &&
+          singleMeta.localized === true &&
+          (await isCompanionReady(
+            this.adapter,
+            `${singleMeta.tableName}_locales`
+          ))
+            ? `${singleMeta.tableName}_locales`
+            : null,
+        localization: this.localization,
+        locale: options.locale,
       });
 
       return {

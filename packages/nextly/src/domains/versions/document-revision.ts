@@ -174,20 +174,15 @@ export async function readDocumentRevisions(
     /** The translation table and the languages to report, when any. */
     languages?: { table: string; locales: readonly string[] };
   }
-): Promise<{ main: number; languages?: Record<string, number> }> {
+): Promise<{ main: number; languages?: Record<string, number> } | undefined> {
   const [row] = await tx.select<Record<string, unknown>>(args.table, {
     columns: [DOCUMENT_REVISION_COLUMN],
     where: { and: [{ column: "id", op: "=", value: args.id }] },
     limit: 1,
   });
-  if (!row) {
-    throw NextlyError.internal({
-      logContext: {
-        reason: "document-revision-row-missing",
-        table: args.table,
-      },
-    });
-  }
+  // The document is gone — deleted while this write waited for its lock. The
+  // write answers that itself; there is no version to report.
+  if (!row) return undefined;
   const main = revisionOf(row[DOCUMENT_REVISION_COLUMN]);
   if (!args.languages || args.languages.locales.length === 0) return { main };
   const byDocument = await readLanguageRevisions(
@@ -275,10 +270,11 @@ export function versionLanguagesFor(args: {
 }
 
 /**
- * The version a document holds on `tx`, spelled for `locale`.
+ * The version a document holds on `tx`, spelled for `locale`, or undefined
+ * when the document is gone.
  *
- * The one way a version is read for a response, so a write's answer and a
- * read's answer cannot be built two ways.
+ * The one way a version is read for a write's response, spelled from the
+ * same languages as a read's (`attachDocumentVersions`).
  */
 export async function documentVersionOn(
   tx: Pick<TransactionContext, "select" | "execute">,
@@ -286,20 +282,30 @@ export async function documentVersionOn(
     dialect: SupportedDialect;
     table: string;
     id: string;
-    localized: boolean;
+    /**
+     * The document's translation table when it has one to read, else null:
+     * an entity that keeps no translations, or a translated one whose table
+     * is not there yet, whose translated values still live on its own row.
+     */
+    languagesTable: string | null;
     localization: SanitizedLocalizationConfig | undefined;
     locale: string | undefined;
   }
-): Promise<string> {
-  const locales = versionLanguagesFor(args);
+): Promise<string | undefined> {
+  const locales = versionLanguagesFor({
+    localized: args.languagesTable !== null,
+    localization: args.localization,
+    locale: args.locale,
+  });
   const revisions = await readDocumentRevisions(tx, {
     dialect: args.dialect,
     table: args.table,
     id: args.id,
-    ...(locales
-      ? { languages: { table: `${args.table}_locales`, locales } }
+    ...(locales && args.languagesTable !== null
+      ? { languages: { table: args.languagesTable, locales } }
       : {}),
   });
+  if (!revisions) return undefined;
   return encodeDocumentVersion(revisions.main, revisions.languages);
 }
 
@@ -371,30 +377,35 @@ export async function attachDocumentVersions(
     stored: ReadonlyMap<string, unknown>;
     run: RunStatement;
     dialect: SupportedDialect;
-    table: string;
-    /** The languages each version names (`versionLanguagesFor`). */
-    locales: readonly string[] | undefined;
+    /** The documents' translation table, or null (`documentVersionOn`). */
+    languagesTable: string | null;
+    localization: SanitizedLocalizationConfig | undefined;
+    locale: string | undefined;
   }
 ): Promise<void> {
+  const locales = versionLanguagesFor({
+    localized: args.languagesTable !== null,
+    localization: args.localization,
+    locale: args.locale,
+  });
   const ids = rows
     .map(documentIdOf)
     .filter((id): id is string => id !== undefined && args.stored.has(id));
   if (ids.length === 0) return;
-  const languages = args.locales
-    ? await readLanguageRevisions(args.run, {
-        dialect: args.dialect,
-        table: `${args.table}_locales`,
-        ids,
-      })
-    : undefined;
+  const languages =
+    locales && args.languagesTable !== null
+      ? await readLanguageRevisions(args.run, {
+          dialect: args.dialect,
+          table: args.languagesTable,
+          ids,
+        })
+      : undefined;
   for (const row of rows) {
     const id = documentIdOf(row);
     if (id === undefined || !args.stored.has(id)) continue;
     row[DOCUMENT_VERSION_KEY] = encodeDocumentVersion(
       revisionOf(args.stored.get(id)),
-      args.locales
-        ? languageCounters(languages?.get(id), args.locales)
-        : undefined
+      locales ? languageCounters(languages?.get(id), locales) : undefined
     );
   }
 }

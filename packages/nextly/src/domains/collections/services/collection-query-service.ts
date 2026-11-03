@@ -170,6 +170,7 @@ import {
 } from "../../i18n/localization-source";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
+  isCompanionReady,
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
@@ -193,8 +194,8 @@ import {
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   attachDocumentVersions,
+  DOCUMENT_REVISION_COLUMN,
   storedRevisionsOf,
-  versionLanguagesFor,
 } from "../../versions/document-revision";
 import {
   draftDocumentFacts,
@@ -2891,12 +2892,16 @@ export class CollectionQueryService extends BaseService {
       run: (statement, values) =>
         this.adapter.executeQuery<Record<string, unknown>>(statement, values),
       dialect: this.dialect,
-      table: tableName,
-      locales: versionLanguagesFor({
-        localized: params.localized,
-        localization: this.localization,
-        locale: params.locale,
-      }),
+      // A translated collection whose table is not there yet keeps its
+      // translated values on its own row, and its versions name none.
+      languagesTable:
+        params.localized &&
+        this.localization &&
+        (await isCompanionReady(this.adapter, `${tableName}_locales`))
+          ? `${tableName}_locales`
+          : null,
+      localization: this.localization,
+      locale: params.locale,
     });
 
     return finalData;
@@ -5430,6 +5435,12 @@ export class CollectionQueryService extends BaseService {
             declaredFields,
             draftComponentSchemas
           );
+          // The version is the live row's: a held draft moved the live row's
+          // counter when it was saved, and a snapshot never holds one.
+          if (DOCUMENT_REVISION_COLUMN in expandedEntry) {
+            draftEntry[DOCUMENT_REVISION_COLUMN] =
+              expandedEntry[DOCUMENT_REVISION_COLUMN];
+          }
           expandedEntry = draftEntry;
           draftOverlaid = true;
         }

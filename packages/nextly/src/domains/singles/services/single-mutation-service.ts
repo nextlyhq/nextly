@@ -681,6 +681,15 @@ export class SingleMutationService extends BaseService {
             })
         ),
     });
+    // What a reader of the pending change sees moved, so its version moves.
+    if (took.taken.length > 0) {
+      await bumpDocumentRevision(
+        tx,
+        singleMeta.tableName,
+        { id: ref.entryId },
+        actorForWrite(params.actor ?? null, params.user)
+      );
+    }
     // A save of the pending change, in its history like any other.
     await this.recordSingleSave(
       tx,
@@ -885,6 +894,14 @@ export class SingleMutationService extends BaseService {
         await releaseSharedBase(tx, discardedRef, draftLocale);
         // In the Single's history only when there was a draft to discard.
         if (removed > 0) {
+          // A reader of the pending change now sees the live document, so the
+          // version they hold no longer describes what they would read.
+          await bumpDocumentRevision(
+            tx,
+            singleMeta.tableName,
+            { id: entryId },
+            actorForWrite(params.actor ?? null, params.user)
+          );
           await recordWriteEvent(
             tx,
             { adapter: this.adapter },
@@ -4820,9 +4837,15 @@ export class SingleMutationService extends BaseService {
                 dialect: this.adapter.dialect,
                 table: singleMeta.tableName,
                 id: existingDoc.id,
-                localized: singleMeta.localized === true,
+                // Readiness decided before the transaction; without the table
+                // the translated values are on the Single's own row.
+                languagesTable:
+                  companion && companionPhysicallyExists
+                    ? companion.companionTableName
+                    : null,
                 localization: this.localization,
-                locale: options.locale,
+                // A wildcard write moved every language, and answers for them all.
+                locale: sweepAllLocales ? EVERY_LOCALE : options.locale,
               });
             }
 

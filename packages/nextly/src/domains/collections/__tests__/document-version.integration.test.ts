@@ -31,6 +31,11 @@ afterEach(async () => {
 const DOCS = "docs";
 /** No lifecycle and no languages: the plainest entry there is. */
 const NOTES = "notes";
+/**
+ * Translated, but with no translated field, so it has no translation table:
+ * its values live on its own row, and its version names no language.
+ */
+const UNTRANSLATED = "untranslated";
 
 const OPEN = {
   read: () => true,
@@ -55,6 +60,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "title", localized: true }),
           text({ name: "note", localized: false }),
         ],
+      }),
+      defineCollection({
+        slug: UNTRANSLATED,
+        localized: true,
+        access: OPEN,
+        fields: [text({ name: "code", localized: false })],
       }),
       defineCollection({
         slug: NOTES,
@@ -142,6 +153,19 @@ async function languageRow(
 
 const languageCounter = async (t: TestNextly, id: string, locale: string) =>
   Number((await languageRow(t, id, locale))._revision);
+
+/** Every version snapshot recorded, as stored. */
+async function recordedSnapshots(t: TestNextly): Promise<string[]> {
+  const rows = await t.adapter.select<{ snapshot?: unknown }>(
+    "nextly_versions",
+    {}
+  );
+  return rows.map(row =>
+    typeof row.snapshot === "string"
+      ? row.snapshot
+      : JSON.stringify(row.snapshot)
+  );
+}
 
 async function readRev(
   t: TestNextly,
@@ -362,6 +386,105 @@ describe.each(getConfiguredTestDialects())(
       // copied from the draft's snapshot.
       expect(revOf(held)).toBe(`${String(after._revision)}.en:1`);
       expect(await readRev(t, DOCS, id, "en")).toBe(revOf(held));
+      // The read an editor makes of the held draft, which overlays it on the
+      // live row, carries the same version.
+      const draftRead = (await t.nextly.findByID({
+        collection: DOCS as never,
+        id,
+        locale: "en",
+        draft: true,
+        overrideAccess: true,
+      } as never)) as Record<string, unknown>;
+      expect(draftRead.note).toBe("held edit");
+      expect(draftRead._rev).toBe(revOf(held));
+
+      // Discarding the held draft changes what that read shows, so the
+      // version changes with it.
+      await handlerOf(t).getEntryService().discardWorkingDraft({
+        collectionName: DOCS,
+        entryId: id,
+        locale: "en",
+      });
+      expect(await mainCounter(t, DOCS, id)).toBe(Number(after._revision) + 1);
+    });
+
+    it("gives a translated collection with no translation table a version that names no language", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: UNTRANSLATED, overrideAccess: true, locale: "en" },
+        { code: "a" }
+      );
+      expect(revOf(created)).toBe("1");
+      const id = idOf(created);
+      const saved = await handlerOf(t).updateEntry(
+        {
+          collectionName: UNTRANSLATED,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { code: "b" }
+      );
+      expect(revOf(saved)).toBe("2");
+      expect(await readRev(t, UNTRANSLATED, id, "en")).toBe("2");
+      expect(await readRev(t, UNTRANSLATED, id, "*")).toBe("2");
+    });
+
+    it("a wildcard save answers with every language's version", async () => {
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { title: "hello", note: "n" }
+        )
+      );
+      const swept = await handlerOf(t).updateEntry(
+        {
+          collectionName: DOCS,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+      expect(revOf(swept)).toBe(await readRev(t, DOCS, id, "*"));
+    });
+
+    it("keeps the version and the last changer out of every recorded version", async () => {
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          {
+            collectionName: DOCS,
+            overrideAccess: true,
+            locale: "en",
+            actor: { type: "user", id: "writer" },
+          },
+          { title: "hello", note: "n", status: "published" }
+        )
+      );
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DOCS,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+          actor: { type: "user", id: "writer" },
+        },
+        { note: "held" }
+      );
+      await handlerOf(t).publishAllLocales({
+        collectionName: DOCS,
+        entryId: id,
+        overrideAccess: true,
+      });
+      const snapshots = await recordedSnapshots(t);
+      expect(snapshots.length).toBeGreaterThan(0);
+      for (const snapshot of snapshots) {
+        expect(snapshot).not.toContain("_changed_by");
+        expect(snapshot).not.toContain("_revision");
+        expect(snapshot).not.toContain('"_rev"');
+      }
     });
 
     it("publish all and unpublish all change every language's version and return the all-languages form", async () => {

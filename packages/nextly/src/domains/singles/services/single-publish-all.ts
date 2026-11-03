@@ -187,6 +187,8 @@ interface PublishPlan {
   companion: CompanionSchema | null;
   /** Whether the companion exists AND carries a per-locale `_status`. */
   companionPublishable: boolean;
+  /** Whether the translation table is there to read. */
+  companionReady: boolean;
   fieldConfigs: FieldConfig[];
   recordingEnabled: boolean;
   /**
@@ -469,7 +471,7 @@ export class SinglePublishAllService extends BaseService {
         : null;
     if (refused) return { result: refused };
 
-    const { hasMainStatus, companion, companionPublishable } =
+    const { hasMainStatus, companion, companionPublishable, companionReady } =
       await this.resolveLifecycle(slug, singleMeta);
 
     if (!hasMainStatus && !companionPublishable) {
@@ -507,6 +509,7 @@ export class SinglePublishAllService extends BaseService {
         hasMainStatus,
         companion,
         companionPublishable,
+        companionReady,
         fieldConfigs: singleMeta.fields ?? [],
         recordingEnabled: isOutboxRecordingActive("single", slug),
         actor: actorForWrite(options.actor ?? null, options.user),
@@ -541,6 +544,8 @@ export class SinglePublishAllService extends BaseService {
     hasMainStatus: boolean;
     companion: CompanionSchema | null;
     companionPublishable: boolean;
+    /** Whether the translation table is there to read. */
+    companionReady: boolean;
   }> {
     const hasMainStatus = singleMeta.status === true;
     const companion =
@@ -556,11 +561,12 @@ export class SinglePublishAllService extends BaseService {
     // Only `ready` matters here: a companion that is not there has no
     // per-locale publish lifecycle, and why it is not there changes nothing
     // about that.
-    const companionPublishable =
+    const companionReady =
       !!companion &&
-      companion.hasStatus &&
       (await isCompanionReady(this.adapter, companion.companionTableName));
-    return { hasMainStatus, companion, companionPublishable };
+    const companionPublishable =
+      !!companion && companion.hasStatus && companionReady;
+    return { hasMainStatus, companion, companionPublishable, companionReady };
   }
 
   /**
@@ -952,7 +958,10 @@ export class SinglePublishAllService extends BaseService {
         dialect: this.adapter.dialect,
         table: singleMeta.tableName,
         id: existingDoc.id,
-        localized: singleMeta.localized === true,
+        languagesTable:
+          plan.companion && plan.companionReady
+            ? plan.companion.companionTableName
+            : null,
         localization: this.localization,
         locale: EVERY_LOCALE,
       }),
