@@ -404,25 +404,106 @@ function editableNode(
 }
 
 /**
- * "Detach": keep the look on this block only. The style's values are copied
- * onto the block, under the block's own, and the style is taken off it. A
- * page edit, so a locked style may be detached; the block's own lock refuses.
+ * One value with what another sets at the same place removed: a composite
+ * keeps the sides the other leaves alone; anything else is gone once the
+ * other sets it.
+ */
+function uncoveredValue(
+  under: StyleValue,
+  over: StyleValue | undefined
+): StyleValue | undefined {
+  if (over === undefined) return under;
+  if (!isComposite(under) || !isComposite(over)) return undefined;
+  let left: Record<string, StyleValue> = {};
+  for (const [key, value] of ownEntries<StyleValue>(under)) {
+    const kept = uncoveredValue(
+      value,
+      Object.hasOwn(over, key) ? over[key] : undefined
+    );
+    if (kept !== undefined) left = withKey(left, key, kept);
+  }
+  return Object.keys(left).length > 0 ? left : undefined;
+}
+
+/** A record's own entry at a key, or an empty one, `__proto__` included. */
+function ownRecord<T>(record: object, key: string): Record<string, T> {
+  return Object.hasOwn(record, key)
+    ? (record as Record<string, Record<string, T>>)[key]
+    : {};
+}
+
+/** One breakpoint's values with what another sets taken out, property by property. */
+function uncoveredValues(
+  under: object,
+  over: Record<string, StyleValue>
+): Record<string, StyleValue> {
+  let left: Record<string, StyleValue> = {};
+  for (const [property, value] of ownEntries<StyleValue>(under)) {
+    const kept = uncoveredValue(
+      value,
+      Object.hasOwn(over, property) ? over[property] : undefined
+    );
+    if (kept !== undefined) left = withKey(left, property, kept);
+  }
+  return left;
+}
+
+/**
+ * An envelope with every value another envelope sets at the same state,
+ * breakpoint and property taken out: what `under` still shows once `over`,
+ * coming after it, has applied.
+ */
+function uncoveredStyles(under: NodeStyles, over: NodeStyles): NodeStyles {
+  let left: Record<string, Record<string, Record<string, StyleValue>>> = {};
+  for (const [state, byBreakpoint] of ownEntries<object>(under)) {
+    const overBreakpoints = ownRecord<Record<string, StyleValue>>(over, state);
+    for (const [breakpoint, values] of ownEntries<object>(byBreakpoint)) {
+      const set = uncoveredValues(
+        values,
+        ownRecord<StyleValue>(overBreakpoints, breakpoint)
+      );
+      if (Object.keys(set).length === 0) continue;
+      left = withKey(
+        left,
+        state,
+        withKey(ownRecord(left, state), breakpoint, set)
+      );
+    }
+  }
+  return left;
+}
+
+/**
+ * "Detach": keep the look on this block only. The style is taken off the
+ * block, and the values it gives the block today are copied onto it, under
+ * the block's own. A value a style later in library order sets at the same
+ * place is not the detached style's to give (that style wins it now), so it is
+ * left out, and the block looks the same after. A page edit, so a locked style
+ * may be detached; the block's own lock refuses.
+ *
+ * @param worn - every shared style the block wears, in library order
  */
 export function planDetachSharedStyle(
   document: BlockDocument,
   nodeId: string,
   style: Pick<NamedClass, "id" | "styles">,
+  worn: readonly Pick<NamedClass, "id" | "styles">[],
   view?: LockView
 ): SharedStylePlan<{ ops: BuilderOp[] }> {
   const held = editableNode(document, nodeId, view);
   if (!held.ok) return held;
   const node = held.node;
+  const later = worn.slice(worn.findIndex(row => row.id === style.id) + 1);
+  const winning = later.reduce(
+    (left, row) => uncoveredStyles(left, row.styles),
+    style.styles
+  );
   return {
     ok: true,
     ops: [
       nodeStylesAndClassesOp(
         nodeId,
-        overlaidStyles(style.styles, node.styles),
+        overlaidStyles(winning, node.styles),
         withClassRemoved(node.classes ?? [], style.id)
       ),
     ],
@@ -448,6 +529,22 @@ export function planRemoveSharedStyle(
         : { kind: "update", id: nodeId, patch: {}, unset: ["classes"] },
     ],
   };
+}
+
+/**
+ * One edit to a shared style, applied to whatever its styles are when the
+ * host stores it: an edit is a change at one address, never a whole envelope,
+ * so two edits made before the first is stored both survive.
+ */
+export type SharedStyleChange = (styles: NodeStyles) => SharedStyleWrite;
+
+/** The change that sets (or with `null`, clears) one control's value. */
+export function sharedStyleChange(
+  address: StyleAddress,
+  value: StyleValue | null,
+  policy?: StylePolicy
+): SharedStyleChange {
+  return styles => sharedStyleWrite(styles, address, value, policy);
 }
 
 /** A style write's answer: the styles to store, no change, or the refusal. */
@@ -495,25 +592,25 @@ export function sharedStyleWrite(
 /**
  * "Move to Card": the block's value at one control written into the style
  * and cleared from the block. Two writes (the style, then the page), so the
- * style is stored first and the op applied after it lands.
+ * style is stored first and the op applied after it lands. The style's part
+ * is a change at that address, applied to the style as it is when stored.
  */
 export function planMoveToSharedStyle(
   node: Pick<BlockNode, "id" | "styles">,
   style: Pick<NamedClass, "styles">,
   address: StyleAddress,
   policy?: StylePolicy
-): SharedStylePlan<{ styles: NodeStyles; ops: BuilderOp[] }> {
+): SharedStylePlan<{ change: SharedStyleChange; ops: BuilderOp[] }> {
   const value = readStyleValue(node.styles, address);
   if (value === undefined) {
     return { ok: false, reason: "This block sets no value here to move." };
   }
-  const write = sharedStyleWrite(style.styles, address, value, policy);
+  const change = sharedStyleChange(address, value, policy);
+  // Judged now against the styles in hand, so a value the style may not hold
+  // is refused before anything is stored.
+  const write = change(style.styles);
   if (write.kind === "refused") return { ok: false, reason: write.reason };
   const cleared = styleClearOp(node.id, node.styles, address, policy);
   const ops = cleared.ok && cleared.op !== null ? [cleared.op] : [];
-  return {
-    ok: true,
-    styles: write.kind === "write" ? write.styles : style.styles,
-    ops,
-  };
+  return { ok: true, change, ops };
 }

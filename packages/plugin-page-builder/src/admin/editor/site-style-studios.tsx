@@ -16,7 +16,6 @@ import {
   type BreakpointSet,
   type FontFaceDef,
   type NamedClass,
-  type NodeStyles,
   type SiteTokenSet,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
@@ -27,6 +26,7 @@ import {
   TokensPanel,
   withoutFamily,
   type ClassRenameOutcome,
+  type SharedStyleChange,
   type FontCatalogue,
   type FontFaceUpload,
   type FontsPanelProps,
@@ -432,12 +432,13 @@ export type ClassSurface = {
    */
   add: (entry: NamedClass) => Promise<string | undefined>;
   /**
-   * Store one shared style's styles, whole, while it is the Style tab's
-   * target. Resolves to the refusal in words, or `undefined` once stored.
+   * Apply one change to a shared style's styles, while it is the Style tab's
+   * target, and store them. Resolves to the refusal in words, or `undefined`
+   * once stored.
    */
   writeStyles: (
     classId: string,
-    styles: NodeStyles
+    change: SharedStyleChange
   ) => Promise<string | undefined>;
   /** The name each class is heading for while its rename is open. */
   pendingNames: Record<string, string>;
@@ -686,7 +687,10 @@ function useWriteClassStyles(
 ) {
   const { save: saveSection } = useSaveSiteStyle();
   return useCallback(
-    async (classId: string, styles: NodeStyles): Promise<string | undefined> =>
+    async (
+      classId: string,
+      change: SharedStyleChange
+    ): Promise<string | undefined> =>
       writes.run<string | undefined>(async existing => {
         if (existing === undefined) {
           return {
@@ -694,11 +698,22 @@ function useWriteClassStyles(
               "This site's shared styles could not be read, so this one can't be changed.",
           };
         }
-        if (!existing.some(entry => entry.id === classId)) {
+        const entry = existing.find(each => each.id === classId);
+        if (entry === undefined) {
           return { result: "This shared style is no longer on the site." };
         }
-        const next = existing.map(entry =>
-          entry.id === classId ? { ...entry, styles } : entry
+        /*
+         * The change applied to the styles as they stand after every write
+         * queued before it, rather than an envelope the editor composed from
+         * the last read: two edits made before the first is stored would
+         * otherwise each carry the read's styles, and the second would undo
+         * the first.
+         */
+        const changed = change(entry.styles);
+        if (changed.kind === "refused") return { result: changed.reason };
+        if (changed.kind === "unchanged") return { result: undefined };
+        const next = existing.map(each =>
+          each.id === classId ? { ...each, styles: changed.styles } : each
         );
         const result = await saveSection(
           "classes",

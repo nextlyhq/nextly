@@ -297,6 +297,27 @@ function openEditor(): void {
   render(<Host />);
 }
 
+/** Styles as the tests write them: a state, a breakpoint, its values. */
+type Styles = { base?: { base?: Record<string, unknown> } };
+/** A change the Style tab hands the host: applied to the latest styles. */
+type Change = (
+  styles: Styles
+) => { kind: "write"; styles: Styles } | { kind: "unchanged" };
+
+/** A change that sets one base value, keeping every other. */
+const setting =
+  (property: string, value: unknown): Change =>
+  styles => ({
+    kind: "write",
+    styles: {
+      ...styles,
+      base: {
+        ...styles.base,
+        base: { ...styles.base?.base, [property]: value },
+      },
+    },
+  });
+
 /** What the inspector was handed for the class surface. */
 function classProps(): {
   classLibrary?: readonly { id: string; slug: string }[];
@@ -305,7 +326,7 @@ function classProps(): {
     mayChange: boolean;
     writeStyles: (
       classId: string,
-      styles: Record<string, unknown>
+      change: Change
     ) => Promise<string | undefined>;
   };
 } {
@@ -498,18 +519,48 @@ describe("writing a shared style's styles while it is the target", () => {
     const styles = { base: { base: { color: "#222222" } } };
     let refused: string | undefined = "unset";
     await act(async () => {
-      refused = await classProps().sharedStyles?.writeStyles("c-card", styles);
+      refused = await classProps().sharedStyles?.writeStyles(
+        "c-card",
+        setting("color", "#222222")
+      );
     });
 
     expect(refused).toBeUndefined();
     expect(saved.at(-1)).toEqual({ classes: [{ ...stored, styles }] });
   });
 
+  it("applies each change to what the one before it stored, so two quick edits both survive", async () => {
+    const { locked: _unlocked, ...stored } = card;
+    storedRead = { data: { classes: [stored] }, isPending: false, error: null };
+    openEditor();
+
+    // Both made before the first is stored or read back.
+    await act(async () => {
+      const write = classProps().sharedStyles?.writeStyles;
+      await Promise.all([
+        write?.("c-card", setting("opacity", 0.5)),
+        write?.("c-card", setting("color", "#222222")),
+      ]);
+    });
+
+    expect(saved.at(-1)).toEqual({
+      classes: [
+        {
+          ...stored,
+          styles: { base: { base: { color: "#222222", opacity: 0.5 } } },
+        },
+      ],
+    });
+  });
+
   it("refuses a style the site no longer has, and writes nothing", async () => {
     openEditor();
     let refused: string | undefined;
     await act(async () => {
-      refused = await classProps().sharedStyles?.writeStyles("gone", {});
+      refused = await classProps().sharedStyles?.writeStyles(
+        "gone",
+        setting("color", "#222222")
+      );
     });
     expect(refused).toBe("This shared style is no longer on the site.");
     expect(saved).toHaveLength(0);
@@ -521,9 +572,10 @@ describe("writing a shared style's styles while it is the target", () => {
     openEditor();
 
     await act(async () => {
-      await classProps().sharedStyles?.writeStyles("c-card", {
-        base: { base: { color: "#222222" } },
-      });
+      await classProps().sharedStyles?.writeStyles(
+        "c-card",
+        setting("color", "#222222")
+      );
     });
     expect(recorded).toHaveLength(1);
     await act(async () => {

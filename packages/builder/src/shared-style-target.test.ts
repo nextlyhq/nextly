@@ -278,7 +278,8 @@ describe("detaching and removing a block's style", () => {
         styles: { base: { base: { padding: { blockStart: "24px" } } } },
       }),
       "a",
-      style
+      style,
+      [style]
     );
     expect(plan).toEqual({
       ok: true,
@@ -302,12 +303,55 @@ describe("detaching and removing a block's style", () => {
     });
   });
 
+  it("copies only what the detached style wins, so a later style keeps its values", () => {
+    // Earlier in library order, so the later style's colour wins today.
+    const earlier = {
+      id: "c-early",
+      styles: {
+        base: {
+          base: {
+            color: "#aa0000",
+            padding: { blockStart: "8px", inlineStart: "4px" },
+          },
+        },
+      } as NodeStyles,
+    };
+    const later = {
+      id: "c-late",
+      styles: {
+        base: { base: { color: "#0000aa", padding: { blockStart: "2px" } } },
+      } as NodeStyles,
+    };
+    const plan = planDetachSharedStyle(
+      page({ classes: ["c-early", "c-late"] }),
+      "a",
+      earlier,
+      [earlier, later]
+    );
+    expect(plan).toEqual({
+      ok: true,
+      ops: [
+        {
+          kind: "update",
+          id: "a",
+          // The colour and the block-start side stay the later style's; only
+          // the inline-start side was the detached style's to give.
+          patch: {
+            styles: { base: { base: { padding: { inlineStart: "4px" } } } },
+            classes: ["c-late"],
+          },
+        },
+      ],
+    });
+  });
+
   it("refuses on a block whose design is locked", () => {
     expect(
       planDetachSharedStyle(
         page({ classes: ["c-card"], locked: true }),
         "a",
-        card
+        card,
+        [card]
       ).ok
     ).toBe(false);
   });
@@ -352,17 +396,22 @@ describe("Move to", () => {
       card,
       address
     );
-    expect(plan).toEqual({
-      ok: true,
-      styles: { base: { base: { color: "#000001" } } },
-      ops: [
-        {
-          kind: "update",
-          id: "a",
-          patch: { styles: { base: { base: { margin: "4px" } } } },
-        },
-      ],
+    if (!plan.ok) throw new Error(plan.reason);
+    // A change applied to the style as it is when stored, so an edit stored
+    // in the meantime is kept.
+    expect(
+      plan.change({ base: { base: { color: "#445566", opacity: 0.5 } } })
+    ).toEqual({
+      kind: "write",
+      styles: { base: { base: { color: "#000001", opacity: 0.5 } } },
     });
+    expect(plan.ops).toEqual([
+      {
+        kind: "update",
+        id: "a",
+        patch: { styles: { base: { base: { margin: "4px" } } } },
+      },
+    ]);
   });
 
   it("refuses when the block sets nothing there", () => {

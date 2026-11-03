@@ -18,11 +18,7 @@
  * @module style-target
  */
 
-import type {
-  NamedClass,
-  NodeStyles,
-  StyleState,
-} from "@nextlyhq/blocks-engine";
+import type { NamedClass, StyleState } from "@nextlyhq/blocks-engine";
 import { findNode } from "@nextlyhq/blocks-engine";
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
@@ -43,6 +39,7 @@ import {
   planDetachSharedStyle,
   planRemoveSharedStyle,
   NO_DESIGN_RIGHT,
+  type SharedStyleChange,
 } from "./shared-style-target";
 import type {
   PageClassBlocks,
@@ -58,12 +55,14 @@ export interface SharedStylesHost {
   /** Whether the author may change the site's design (`update-site-style`). */
   readonly mayChange: boolean;
   /**
-   * Store a shared style's styles, whole. Resolves to the refusal in words,
-   * or `undefined` once stored.
+   * Apply one change to a shared style's styles and store them. The host
+   * applies it to the styles as they stand after every write it has queued,
+   * so two edits made before the first is stored both survive. Resolves to the
+   * refusal in words, or `undefined` once stored (or when nothing changed).
    */
   readonly writeStyles: (
     classId: string,
-    styles: NodeStyles
+    change: SharedStyleChange
   ) => Promise<string | undefined>;
   /** How widely styles are used across the site, for the target's reach. */
   readonly usage?: SharedStylesAccess["usage"];
@@ -85,8 +84,10 @@ export type StyleTarget =
       readonly style: SharedStyleRow;
       /** Why its values can't be changed, when they can't. */
       readonly readOnly: string | undefined;
-      /** Store its styles; resolves to the refusal, or nothing. */
-      readonly write: (styles: NodeStyles) => Promise<string | undefined>;
+      /** Apply a change to its styles and store it; resolves to the refusal, or nothing. */
+      readonly write: (
+        change: SharedStyleChange
+      ) => Promise<string | undefined>;
     };
 
 /** The words for a locked shared style's values. */
@@ -144,7 +145,7 @@ export function useStyleTarget(
         : style.locked
           ? lockedStyleReason(style.name)
           : undefined,
-      write: styles => host.writeStyles(style.id, styles),
+      write: change => host.writeStyles(style.id, change),
     },
     choose,
   };
@@ -285,6 +286,7 @@ export function StyleTargetBar({
                   editor.document,
                   nodeId,
                   style,
+                  worn,
                   lockViewOf(editor)
                 )
               );

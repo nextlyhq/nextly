@@ -572,7 +572,10 @@ export type { ClassSelectorProps } from "./class-selector";
 export { SaveSharedStyleDialog } from "./shared-style-save-dialog";
 export type { SaveSharedStyleDialogProps } from "./shared-style-save-dialog";
 export type { SharedStylesHost } from "./style-target";
-export type { SharedStyleOffer } from "./shared-style-target";
+export type {
+  SharedStyleChange,
+  SharedStyleOffer,
+} from "./shared-style-target";
 /*
  * The notice QUEUE is published; the region is not.
  *

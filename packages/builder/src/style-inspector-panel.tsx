@@ -106,7 +106,11 @@ import type { InspectorSectionKey } from "./inspector-sections";
 import { layerLabel } from "./layers";
 import { usePrefersDark } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
-import { planMoveToSharedStyle, sharedStyleWrite } from "./shared-style-target";
+import {
+  planMoveToSharedStyle,
+  sharedStyleChange,
+  sharedStyleWrite,
+} from "./shared-style-target";
 import type { SideOrientation } from "./side-orientation";
 import { stateLabel } from "./state-switcher";
 import {
@@ -3144,6 +3148,11 @@ function fieldStyles(
  * the value it shows, its refusal, and the writes it makes: a value (into the block, or into
  * the shared style), the block's Reset of an override, and Move to.
  */
+/** Which target a write was made for: the block, or one shared style. */
+function targetKey(target: StyleTarget): string {
+  return target.kind === "shared" ? `shared:${target.style.id}` : "block";
+}
+
 function useFieldTarget({
   editor,
   nodeId,
@@ -3181,13 +3190,24 @@ function useFieldTarget({
     setIssue(null);
   }, [stored]);
   const survive = useSurvivingReport();
-  // A refusal of a write that answers later: said beside the field while it
-  // is still on screen, and through the shell once it is not.
-  const report = (reason: string): void =>
-    survive(reason, () => {
-      setIssue(reason);
-      return true;
-    });
+  // The target as it is now, for a write that answers after a switch.
+  const current = React.useRef(target);
+  current.current = target;
+  /*
+   * A refusal of a write that answers later, for the target that made it:
+   * said beside the field while the field is on screen AND still edits that
+   * target, and through the shell otherwise. The field stays mounted across a
+   * switch of target, and a refusal shown there would describe a write the new
+   * target never made.
+   */
+  const reportFor =
+    (submitted: StyleTarget) =>
+    (reason: string): void =>
+      survive(reason, () => {
+        if (targetKey(current.current) !== targetKey(submitted)) return false;
+        setIssue(reason);
+        return true;
+      });
   const writeBlock = (value: StyleValue | null): CommitOutcome =>
     writeStyleValue({ editor, nodeId, address, policy, value, setIssue });
   return {
@@ -3205,7 +3225,7 @@ function useFieldTarget({
             policy,
             value,
             setIssue,
-            report,
+            report: reportFor(target),
           })
         : writeBlock(value),
     resetBlock: () => {
@@ -3219,7 +3239,7 @@ function useFieldTarget({
         address,
         policy,
         setIssue,
-        report,
+        report: reportFor(shared),
       }),
   };
 }
@@ -3260,7 +3280,9 @@ function writeSharedStyleValue({
   }
   setIssue(null);
   if (write.kind === "unchanged") return "unchanged";
-  void target.write(write.styles).then(refused => {
+  // The change, not the styles just computed: the host applies it to the
+  // style as it stands after any edit still on its way, so none is lost.
+  void target.write(sharedStyleChange(address, value, policy)).then(refused => {
     if (refused !== undefined) report(refused);
   });
   return "applied";
@@ -3304,7 +3326,7 @@ function moveToSharedStyle({
     return;
   }
   setIssue(null);
-  void target.write(plan.styles).then(refused => {
+  void target.write(plan.change).then(refused => {
     if (refused !== undefined) {
       report(refused);
       return;

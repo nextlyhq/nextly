@@ -23,6 +23,7 @@ import {
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -34,6 +35,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp } from "./ops";
+import { NoticeSinkProvider } from "./builder-notices";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
@@ -251,12 +253,15 @@ describe("the shared style target", () => {
       mayChange?: boolean;
       writeStyles?: (
         classId: string,
-        styles: NodeStyles
+        change: never
       ) => Promise<string | undefined>;
       usage?: NonNullable<SharedStylesHost["usage"]>;
+      supports?: Record<string, boolean>;
+      /** Where a refusal that outlives its field is raised. */
+      raise?: (message: string) => void;
     } = {}
   ) {
-    register({ effects: true });
+    register(options.supports ?? { effects: true });
     const document = {
       formatVersion: 1,
       kind: "page",
@@ -277,20 +282,83 @@ describe("the shared style target", () => {
     const writeStyles = vi.fn(
       options.writeStyles ?? (async () => undefined as string | undefined)
     );
-    render(
+    const panel = (
       <InspectorPanel
         editor={editor}
         classLibrary={options.library ?? [hero, card, promo]}
         sharedStyles={{
           mayChange: options.mayChange ?? true,
-          writeStyles,
+          writeStyles:
+            writeStyles as unknown as SharedStylesHost["writeStyles"],
           pageBlocks: { counts: new Map([["c-card", 3]]), complete: true },
           ...(options.usage === undefined ? {} : { usage: options.usage }),
         }}
       />
     );
+    render(
+      options.raise === undefined ? (
+        panel
+      ) : (
+        <NoticeSinkProvider raise={options.raise}>{panel}</NoticeSinkProvider>
+      )
+    );
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
     return { editor, writeStyles };
+  }
+
+  /**
+   * What the first write to Card stores, over the styles it started from: a
+   * change applied to them, or a whole envelope.
+   */
+  function writtenTo(
+    writeStyles: ReturnType<typeof vi.fn>,
+    from: NodeStyles
+  ): unknown {
+    const [id, change] = writeStyles.mock.calls[0] ?? [];
+    expect(id).toBe("c-card");
+    if (typeof change !== "function") return change;
+    const out = (
+      change as (styles: NodeStyles) => { kind: string; styles?: NodeStyles }
+    )(from);
+    return out.kind === "write" ? out.styles : from;
+  }
+
+  /**
+   * A host that stores Card's styles as the site does: one write at a time,
+   * each answered when the test says, each applied to what the last one left.
+   */
+  function queuedHost() {
+    let stored: NodeStyles = card.styles;
+    const pending: (() => void)[] = [];
+    const writeStyles = (_id: string, change: unknown) =>
+      new Promise<string | undefined>(resolve => {
+        pending.push(() => {
+          if (typeof change === "function") {
+            const out = (
+              change as (styles: NodeStyles) => {
+                kind: string;
+                styles?: NodeStyles;
+              }
+            )(stored);
+            if (out.kind === "write" && out.styles !== undefined)
+              stored = out.styles;
+          } else {
+            stored = change as NodeStyles;
+          }
+          resolve(undefined);
+        });
+      });
+    return {
+      writeStyles,
+      stored: () => stored,
+      settle: async () => {
+        while (pending.length > 0) {
+          await act(async () => {
+            pending.shift()?.();
+          });
+        }
+      },
+    };
   }
 
   const bar = () => screen.getByRole("region", { name: "What you're editing" });
@@ -417,10 +485,63 @@ describe("the shared style target", () => {
     fireEvent.change(field, { target: { value: "0.8" } });
     fireEvent.blur(field);
 
-    expect(writeStyles).toHaveBeenCalledWith("c-card", {
+    expect(writtenTo(writeStyles, card.styles)).toEqual({
       base: { [BASE_BREAKPOINT]: { opacity: 0.8 } },
     });
     expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps both of two quick edits to the style, the second built on the first", async () => {
+    const host = queuedHost();
+    mountTarget({
+      classes: ["c-card"],
+      supports: { effects: true, spacing: true },
+      writeStyles: host.writeStyles as never,
+    });
+    fireEvent.click(chip("Card"));
+    const side = fieldsOf("padding").getByLabelText("Block start");
+    fireEvent.change(side, { target: { value: "12px" } });
+    fireEvent.blur(side);
+    // The second edit is made before the first has been stored and read back.
+    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    const opacity = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(opacity, { target: { value: "0.8" } });
+    fireEvent.blur(opacity);
+
+    await host.settle();
+
+    expect(host.stored()).toEqual({
+      base: {
+        [BASE_BREAKPOINT]: { opacity: 0.8, padding: { blockStart: "12px" } },
+      },
+    });
+  });
+
+  it("raises a refusal through the shell once the author has switched target", async () => {
+    let refuse: (reason: string) => void = () => {};
+    const raise = vi.fn();
+    mountTarget({
+      classes: ["c-card"],
+      raise,
+      writeStyles: () =>
+        new Promise<string | undefined>(resolve => {
+          refuse = resolve;
+        }),
+    });
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.blur(field);
+    // The author goes back to this block while Card's write is on its way.
+    fireEvent.click(chip("This block"));
+
+    await act(async () => {
+      refuse("Card is locked.");
+    });
+
+    // Not beside a field that now edits the block, which never asked.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(raise).toHaveBeenCalledWith("Card is locked.");
   });
 
   it("says a later refusal of the style's write beside the field", async () => {
@@ -496,7 +617,7 @@ describe("the shared style target", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
-    expect(writeStyles).toHaveBeenCalledWith("c-card", {
+    expect(writtenTo(writeStyles, card.styles)).toEqual({
       base: { [BASE_BREAKPOINT]: { opacity: 0.2 } },
     });
     await vi.waitFor(() => expect(editor.applyAll).toHaveBeenCalledTimes(1));
