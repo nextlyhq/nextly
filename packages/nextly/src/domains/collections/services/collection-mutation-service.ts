@@ -254,6 +254,7 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
   sharedComparison,
   type SharedComparison,
@@ -2875,6 +2876,25 @@ export class CollectionMutationService extends BaseService {
    * for new content is invisible. Both create paths call this, so they cannot
    * come to disagree about what a new translation carries.
    */
+  /**
+   * A translated collection's translation table when it is there, read on the
+   * caller's transaction; null for a collection that keeps no translations or
+   * whose table is not there yet. Asked of the catalog rather than taken from
+   * the write, which writes no translation row for a held edit, so the
+   * version a write answers with names the languages a read's will.
+   */
+  private async translationTableOnTx(
+    tx: TransactionContext,
+    collection: unknown,
+    tableName: string
+  ): Promise<string | null> {
+    if ((collection as { localized?: boolean }).localized !== true) return null;
+    if (!this.localization) return null;
+    const table = `${tableName}_locales`;
+    const live = await liveColumnNames(tx.getDrizzle(), this.dialect, [table]);
+    return live.has(table.toLowerCase()) ? table : null;
+  }
+
   private async insertCompanionRow(
     tx: TransactionContext,
     localizedWrite: {
@@ -15609,7 +15629,11 @@ export class CollectionMutationService extends BaseService {
           dialect: this.dialect,
           table: tableName,
           id: (entry as { id: string }).id,
-          languagesTable: translationTableOf(localizedWrite),
+          languagesTable: await this.translationTableOnTx(
+            tx,
+            collection,
+            tableName
+          ),
           localization: this.localization,
           locale: localizedWrite?.writeLocale,
         })
@@ -17002,7 +17026,13 @@ export class CollectionMutationService extends BaseService {
           dialect: this.dialect,
           table: tableName,
           id: entryId,
-          languagesTable: translationTableOf(localizedUpdate),
+          // From the collection, not from this write: a held edit writes no
+          // translation row, yet the version a read gives names its language.
+          languagesTable: await this.translationTableOnTx(
+            tx,
+            collection,
+            tableName
+          ),
           localization: this.localization,
           locale: localizedUpdate?.writeLocale,
         })

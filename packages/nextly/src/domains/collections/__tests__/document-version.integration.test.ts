@@ -606,6 +606,42 @@ describe.each(getConfiguredTestDialects())(
       expect(created).toMatchObject({ success: true });
     });
 
+    it("a bulk update and an update inside the caller's transaction of a published translated entry return the next read's version", async () => {
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { title: "live", note: "n", status: "published" }
+        )
+      );
+
+      // Inside the caller's own transaction: a status-less edit of a
+      // published entry is held, writing no translation row, and still names
+      // the language a read does.
+      const inTransaction = await t.adapter.transaction(tx =>
+        serviceOf(t).updateEntryInTransaction(
+          tx,
+          DOCS,
+          id,
+          { note: "held in a transaction" },
+          { overrideAccess: true } as never
+        )
+      );
+      expect(inTransaction._rev).toBe(await readRev(t, DOCS, id, "en"));
+
+      const bulk = (await handlerOf(t).bulkUpdateEntries({
+        collectionName: DOCS,
+        ids: [id],
+        data: { note: "held in bulk" },
+        overrideAccess: true,
+      })) as unknown as {
+        data?: { successes?: Record<string, unknown>[] };
+        successes?: Record<string, unknown>[];
+      };
+      const [saved] = bulk.data?.successes ?? bulk.successes ?? [];
+      expect(saved?._rev).toBe(await readRev(t, DOCS, id, "en"));
+    });
+
     it("bulk updates by ids and by query give each entry a new version", async () => {
       const t = await boot(dialect);
       const a = idOf(await createNote(t, { title: "a", code: "a" }));
