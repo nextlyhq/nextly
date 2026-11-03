@@ -1191,45 +1191,17 @@ function planCompanionMigrations(
       status: c.status === true, // i18n M6: companion gets a per-locale `_status` column
     });
 
-    // the DISABLE transition (localized `true → false`).
-    // Detection is gated on the previous snapshot's explicit `localized: true` marker rather
-    // than inferred from column shape: a shape-only heuristic cannot tell "this collection
-    // was localized" apart from "someone added fields to a non-localized collection", and
-    // false-positively archiving + dropping a table is far worse than not automating a rare
-    // disable. A pre-marker snapshot records no marker, so it reads as unknown and no
-    // transition is emitted — that self-heals as soon as one migrate:create runs while the
-    // entity is still localized.
+    // the DISABLE transition (localized `true → false`), planned by `disableEntryFor`.
     if (c.localized !== true) {
-      const prevMain = previousSnapshot.tables.find(
-        t => t.name === (spec?.mainTable ?? c.tableName)
-      );
-      if (prevMain?.localized !== true) continue;
-      // The snapshot's recorded column list is the AUTHORITATIVE description of what the
-      // companion actually holds; the current config is not, because the same edit that
-      // flipped the switch may also have added or unflagged fields. Restoring exactly the
-      // recorded columns keeps the transition correct in both directions:
-      //   - a field whose `localized: true` was removed alongside the switch is still brought
-      //     home (it is in the recorded list even though it no longer classifies);
-      //   - a translatable field ADDED in the same edit is left to the normal diff, instead of
-      //     being restored from a companion that never had that column (which emitted SQL that
-      //     failed on apply).
-      const disableSpec = buildDisableSpec(
+      const disable = disableEntryFor(
         c,
         entityKind,
-        prevMain,
+        spec?.mainTable ?? c.tableName,
+        previousSnapshot,
         dialect,
         defaultLocale
       );
-      if (!disableSpec) continue;
-      const plan = planCompanionMigration({
-        spec: disableSpec,
-        prevMainColumnNames: [],
-        companionExisted: false,
-        localized: false,
-        previouslyLocalized: true,
-      });
-      if (plan.kind !== "none")
-        entries.push({ spec: disableSpec, plan, entity: entityKind });
+      if (disable) entries.push(disable);
       continue;
     }
 
@@ -1284,6 +1256,56 @@ function planCompanionMigrations(
     if (adds) entries.push(adds);
   }
   return entries;
+}
+
+/**
+ * The `disable` file of an entity whose translation is turned off (localized `true → false`).
+ *
+ * Detection is gated on the previous snapshot's explicit `localized: true` marker rather
+ * than inferred from column shape: a shape-only heuristic cannot tell "this collection
+ * was localized" apart from "someone added fields to a non-localized collection", and
+ * false-positively archiving + dropping a table is far worse than not automating a rare
+ * disable. A pre-marker snapshot records no marker, so it reads as unknown and no
+ * transition is emitted — that self-heals as soon as one migrate:create runs while the
+ * entity is still localized.
+ */
+function disableEntryFor(
+  c: MinimalConfigEntity,
+  entityKind: I18nTransitionKind,
+  mainTable: string,
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): CompanionPlanEntry | undefined {
+  const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
+  if (prevMain?.localized !== true) return undefined;
+  // The snapshot's recorded column list is the AUTHORITATIVE description of what the
+  // companion actually holds; the current config is not, because the same edit that
+  // flipped the switch may also have added or unflagged fields. Restoring exactly the
+  // recorded columns keeps the transition correct in both directions:
+  //   - a field whose `localized: true` was removed alongside the switch is still brought
+  //     home (it is in the recorded list even though it no longer classifies);
+  //   - a translatable field ADDED in the same edit is left to the normal diff, instead of
+  //     being restored from a companion that never had that column (which emitted SQL that
+  //     failed on apply).
+  const disableSpec = buildDisableSpec(
+    c,
+    entityKind,
+    prevMain,
+    dialect,
+    defaultLocale
+  );
+  if (!disableSpec) return undefined;
+  const plan = planCompanionMigration({
+    spec: disableSpec,
+    prevMainColumnNames: [],
+    companionExisted: false,
+    localized: false,
+    previouslyLocalized: true,
+  });
+  return plan.kind === "none"
+    ? undefined
+    : { spec: disableSpec, plan, entity: entityKind };
 }
 
 /**
