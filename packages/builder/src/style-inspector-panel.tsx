@@ -4780,8 +4780,10 @@ const FIXED_PLACEHOLDER: Partial<Record<StyleLeaf["kind"], string>> = {
   // literal here would also be a hardcoded colour, which this repository bans
   // outright — the rule reads source, not intent, and it is right to: a hex in
   // a placeholder is one copy away from a hex in a style.
-  // Short enough to read inside the field rather than cut off mid-word.
-  color: "Name, hex or rgb()",
+  // Short enough to read inside the field beside its swatch at the default
+  // panel width, where "Name, hex or rgb()" was cut off mid-word. rgb() and
+  // the other forms stay valid to type.
+  color: "Name or hex",
   url: "https://…",
 };
 

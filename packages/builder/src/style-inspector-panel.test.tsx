@@ -1096,9 +1096,7 @@ describe("controls", () => {
     expect(
       (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
     ).toBe("16px or 50%");
-    expect(
-      fieldsOf("color").getByPlaceholderText("Name, hex or rgb()")
-    ).toBeDefined();
+    expect(fieldsOf("color").getByPlaceholderText("Name or hex")).toBeDefined();
   });
 
   it("sets alignment with icons that follow the container's direction", () => {
