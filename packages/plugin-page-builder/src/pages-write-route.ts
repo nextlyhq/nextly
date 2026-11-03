@@ -164,6 +164,13 @@ async function pageSource(
   return source;
 }
 
+/** A write this collection's pages cannot take, said plainly. */
+function cannot(message: string): NextlyError {
+  return NextlyError.validation({
+    errors: [{ path: "collection", code: "INVALID", message }],
+  });
+}
+
 /** Title field types that take any words an author types. */
 const FREE_TEXT_TITLE_TYPES: ReadonlySet<string> = new Set([
   "text",
@@ -308,6 +315,13 @@ export async function createPage(
   writes: PagesWrites
 ): Promise<PageItem> {
   const source = await pageSource(writes, request.collection);
+  // Refused before writing, in words the panel can show: core would refuse
+  // the create anyway, for a value only the entry's own form can supply.
+  if (source.needsMore !== undefined) {
+    throw cannot(
+      "Pages of this kind need more than a title. Add one from its own list in the admin."
+    );
+  }
   const titleName = textTitleOf(source);
   const row = await writeWithSlug(source, request.title, writes, slug =>
     writes.create(source.slug, {
@@ -347,6 +361,12 @@ export async function duplicatePage(
     throw NextlyError.notFound({
       logContext: { route: PAGE_DUPLICATE_ROUTE_PATH, collection: source.slug },
     });
+  }
+  // After the read, so a page this caller cannot see is still not found.
+  if (source.uncopyable === true) {
+    throw cannot(
+      "Pages of this kind hold a value that must be unique, so they can't be copied here."
+    );
   }
   const copy = `${COPY_PREFIX}${original.title}`.slice(0, PAGE_TITLE_MAX);
   const row = await writeWithSlug(source, copy, writes, slug =>

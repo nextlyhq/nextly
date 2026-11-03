@@ -26,6 +26,7 @@ import {
   type PagesFindArgs,
   type PagesSearchReads,
   type PagesSearchRequest,
+  findPageCollection,
 } from "./pages-search-route";
 
 const BASE = `http://nextly.test/plugins/x${PAGES_SEARCH_ROUTE_PATH}`;
@@ -1171,5 +1172,52 @@ describe("where each page stands in publishing", () => {
     expect(answer.items).toHaveLength(4);
     expect(answer.items[0]?.state).toBe("draft");
     expect(warn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("what a page write cannot supply", () => {
+  /** A context whose registry holds just these records. */
+  function over(records: Record<string, unknown>[]) {
+    return {
+      self: { collections: {} },
+      services: {
+        collections: {
+          listCollections: async () => ({
+            data: records,
+            pagination: { hasMore: false },
+          }),
+        },
+      },
+    };
+  }
+
+  it("names the other required fields without a default, and an extra unique one", async () => {
+    const fields = [
+      { name: "title", type: "text", required: true },
+      { name: "slug", type: "text", unique: true, required: true },
+      { name: "content", type: "blocks" },
+      { name: "seoTitle", type: "text", required: true },
+      { name: "theme", type: "text", required: true, defaultValue: "light" },
+      { name: "code", type: "text", unique: true },
+    ];
+    const found = await findPageCollection(
+      over([record("pages", { fields })]),
+      {},
+      "pages"
+    );
+    // The title, slug and page field are what a write fills; a default fills
+    // the theme. Only the SEO title is left for the entry's own form.
+    expect(found?.needsMore).toEqual(["seoTitle"]);
+    expect(found?.uncopyable).toBe(true);
+  });
+
+  it("finds nothing missing where a title, a slug and the page are enough", async () => {
+    const found = await findPageCollection(
+      over([record("pages")]),
+      {},
+      "pages"
+    );
+    expect(found?.needsMore).toBeUndefined();
+    expect(found?.uncopyable).toBeUndefined();
   });
 });

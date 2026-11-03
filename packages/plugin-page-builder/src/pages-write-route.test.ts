@@ -372,6 +372,28 @@ describe("renaming a page", () => {
     expect(item).toMatchObject({ id: "p1", title: "New name" });
   });
 
+  it("refuses, writing nothing, a new page a title alone cannot make", async () => {
+    // A required field with no default: only the entry's own form can fill it.
+    const writes = writesOver([{ ...PAGES, needsMore: ["seoTitle"] }]);
+    const error = await refused(() =>
+      createPage({ collection: "pages", title: "About" }, writes)
+    );
+    expect(error.code).toBe("VALIDATION_ERROR");
+    expect(JSON.stringify(error)).toContain("need more than a title");
+    expect(writes.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses, writing nothing, to copy a page that holds another unique value", async () => {
+    // The page is there and readable: the refusal is the collection's.
+    const find = vi.fn(async () => page([{ id: "p1", title: "About" }]));
+    const writes = writesOver([{ ...PAGES, uncopyable: true }], { find });
+    const error = await refused(() =>
+      duplicatePage({ collection: "pages", id: "p1" }, writes)
+    );
+    expect(error.code).toBe("VALIDATION_ERROR");
+    expect(writes.duplicate).not.toHaveBeenCalled();
+  });
+
   it("leaves a constrained title alone: an email title takes no page title", async () => {
     // Searched as text, but "A" is no email address, and core would refuse it.
     const writes = writesOver([

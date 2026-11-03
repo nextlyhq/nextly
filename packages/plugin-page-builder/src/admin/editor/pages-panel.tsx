@@ -14,6 +14,7 @@
  */
 
 import {
+  apiErrorMessage,
   navigateTo,
   readPluginRoute,
   useDocumentIdentity,
@@ -308,9 +309,9 @@ function useActions({
     try {
       await work();
     } catch (error) {
-      report(
-        `Couldn't ${what}. ${error instanceof Error ? error.message : ""}`.trim()
-      );
+      // The route's own reason where it gives one (a validation issue's
+      // words), not only the envelope's generic message.
+      report(`Couldn't ${what}. ${apiErrorMessage(error, "")}`.trim());
     }
   };
   return {

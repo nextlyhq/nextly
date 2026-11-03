@@ -32,6 +32,9 @@ let identity: {
 } | null = null;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The SDK's reading of an error: its message, or the fallback.
+  apiErrorMessage: (error: unknown, fallback: string) =>
+    error instanceof Error ? error.message : fallback,
   navigateTo: (href: string) => navigateTo(href),
   readPluginRoute: (read: Read) => {
     reads.push(read);

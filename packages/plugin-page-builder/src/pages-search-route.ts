@@ -254,6 +254,17 @@ export interface PageCollection {
    * whether its values must be unique.
    */
   readonly slugField?: { readonly name: string; readonly unique: boolean };
+  /**
+   * Required top-level fields a new page would leave empty: not the title, the
+   * slug, the Page Builder field or the status, and with no default. Where any
+   * exist, a page cannot be made from a title alone.
+   */
+  readonly needsMore?: readonly string[];
+  /**
+   * Whether another top-level field must be unique. A copy carries its value
+   * over, which core then refuses, so such pages cannot be copied as they are.
+   */
+  readonly uncopyable?: true;
 }
 
 /**
@@ -309,6 +320,7 @@ function pageCollectionOf(
     // switch only when it is a real boolean.
     lifecycle: resolvedCollectionView(record).status === true,
     ...declaredFacts(record, field.declaration),
+    ...writeLimits(record, field.path, titleFieldIn(record)?.name),
   };
 }
 
@@ -328,6 +340,50 @@ function declaredFacts(
     ...(title === undefined ? {} : { title }),
     ...(kinds === undefined ? {} : { kinds }),
     ...(slugField === undefined ? {} : { slugField }),
+  };
+}
+
+/** A top-level field as a registry record declares it, as far as writes care. */
+interface DeclaredField {
+  name?: unknown;
+  required?: unknown;
+  unique?: unknown;
+  defaultValue?: unknown;
+}
+
+/**
+ * What a page write cannot supply on its own: the other required fields with
+ * no default, and whether another field must be unique. Top-level fields only,
+ * the ones a create body names; the fields a write does fill are left out.
+ */
+function writeLimits(
+  record: Record<string, unknown>,
+  pageField: string,
+  titleName: string | undefined
+): Pick<PageCollection, "needsMore" | "uncopyable"> {
+  const filled = new Set([
+    pageField.split(".")[0] ?? pageField,
+    SLUG_FIELD,
+    "status",
+    ...(titleName === undefined ? [] : [titleName]),
+  ]);
+  const fields = (Array.isArray(record.fields) ? record.fields : []).filter(
+    (value): value is DeclaredField & { name: string } =>
+      typeof value === "object" &&
+      value !== null &&
+      typeof (value as DeclaredField).name === "string" &&
+      !filled.has((value as { name: string }).name)
+  );
+  const needsMore = fields
+    .filter(
+      field => field.required === true && field.defaultValue === undefined
+    )
+    .map(field => field.name);
+  return {
+    ...(needsMore.length === 0 ? {} : { needsMore }),
+    ...(fields.some(field => field.unique === true)
+      ? { uncopyable: true }
+      : {}),
   };
 }
 
