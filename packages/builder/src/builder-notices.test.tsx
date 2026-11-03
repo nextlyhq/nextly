@@ -22,6 +22,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,8 +32,8 @@ import {
   NoticeSinkProvider,
   useNoticeQueue,
 } from "./builder-notices";
-import { ClassManagerPanel } from "./class-manager-panel";
 import { ClassSelector } from "./class-selector";
+import { SharedStylesPanel } from "./shared-styles-panel";
 import { ShellActiveContext } from "./shell-active";
 
 afterEach(cleanup);
@@ -283,12 +284,18 @@ describe("the queue", () => {
 });
 
 describe("a rename refused after the panel is gone", () => {
+  type Outcome = { ok: true } | { ok: false; reason: string };
+  type Rename = (
+    classId: string,
+    name: { label: string; slug: string }
+  ) => Promise<Outcome>;
+
   /**
-   * The manager in the shell's arrangement: the region above, and the panel
-   * mounted only while its own rail item is the open one.
+   * The Shared styles tab in the shell's arrangement: the region above, and
+   * the panel mounted only while its own rail item is the open one.
    *
    * `BuilderShell` keys its content by the open panel, so switching away
-   * unmounts the whole manager — which is a coarser unmount than the class
+   * unmounts the whole tab — which is a coarser unmount than the class
    * selector's per-node key and reaches the same dead `setState`.
    */
   function Manager({
@@ -297,7 +304,7 @@ describe("a rename refused after the panel is gone", () => {
     currentRenameAttempt = () => 1,
   }: {
     open: boolean;
-    onRename: (classId: string, slug: string) => unknown;
+    onRename: Rename;
     currentRenameAttempt?: (classId: string) => number;
   }): React.ReactElement {
     const notices = useNoticeQueue();
@@ -309,12 +316,11 @@ describe("a rename refused after the panel is gone", () => {
         />
         <NoticeSinkProvider raise={notices.raise}>
           {open ? (
-            <ClassManagerPanel
-              documentClassIds={[]}
+            <SharedStylesPanel
               library={LIBRARY}
+              pageBlocks={{ counts: new Map(), complete: true }}
               onRename={onRename}
               currentRenameAttempt={currentRenameAttempt}
-              usage={{}}
             />
           ) : null}
         </NoticeSinkProvider>
@@ -322,17 +328,24 @@ describe("a rename refused after the panel is gone", () => {
     );
   }
 
+  /** Open hero's details and commit a new name in them. */
+  async function renameTo(value: string): Promise<void> {
+    fireEvent.click(screen.getByRole("button", { name: /^hero, \.hero/ }));
+    const details = await screen.findByRole("dialog", { name: "hero" });
+    const field = within(details).getByLabelText("Name");
+    fireEvent.change(field, { target: { value } });
+    fireEvent.keyDown(field, { key: "Enter" });
+  }
+
   it("is still reported, from the surface the switch did not unmount", async () => {
-    let settle: ((v: { ok: false; reason: string }) => void) | undefined;
-    const pending = new Promise<{ ok: false; reason: string }>(resolve => {
+    let settle: ((v: Outcome) => void) | undefined;
+    const pending = new Promise<Outcome>(resolve => {
       settle = resolve;
     });
-    const onRename = vi.fn(() => pending);
+    const onRename = vi.fn<Rename>(() => pending);
 
     const view = render(<Manager onRename={onRename} open />);
-    const field = screen.getByLabelText("Name of hero");
-    fireEvent.change(field, { target: { value: "promo" } });
-    fireEvent.blur(field);
+    await renameTo("promo");
     expect(onRename).toHaveBeenCalled();
 
     // The author switches panels while the write is still on the network.
@@ -348,30 +361,23 @@ describe("a rename refused after the panel is gone", () => {
 
   it("does not raise a refusal the author has already renamed past", async () => {
     /*
-     * The panel switch is what makes this reachable, and it is also what used to
-     * hide it. A rename identity kept inside the field is destroyed by the
-     * unmount, so on the way back the counter starts again at zero and the
-     * FIRST attempt's number matches the second's — its refusal then passes as
-     * current and is raised from the shell, naming a rename the author has
-     * already replaced.
-     *
-     * Asserted through the notice region because that is where a refusal goes
-     * once the row that would have shown it is gone. Asserting on the row alone
-     * cannot see this: the unmounted field's own `setRefused` reaches nothing
-     * either way, so both the defect and the fix look identical there.
+     * A late answer to the FIRST rename, arriving after a second one began,
+     * describes a name the author has already replaced. The identity is the
+     * host's, so it survives the panel being unmounted in between; asserted
+     * through the notice region, where a refusal goes once the panel is gone.
      */
-    let settleFirst: ((v: { ok: false; reason: string }) => void) | undefined;
-    const first = new Promise<{ ok: false; reason: string }>(resolve => {
+    let settleFirst: ((v: Outcome) => void) | undefined;
+    const first = new Promise<Outcome>(resolve => {
       settleFirst = resolve;
     });
     const answers = vi
-      .fn()
+      .fn<Rename>()
       .mockReturnValueOnce(first)
-      .mockResolvedValueOnce({ ok: true as const });
+      .mockResolvedValueOnce({ ok: true });
     const attempts = new Map<string, number>();
-    const onRename = vi.fn((classId: string, slug: string) => {
+    const onRename = vi.fn<Rename>((classId, name) => {
       attempts.set(classId, (attempts.get(classId) ?? 0) + 1);
-      return answers(classId, slug);
+      return answers(classId, name);
     });
     const currentRenameAttempt = (classId: string): number =>
       attempts.get(classId) ?? 0;
@@ -383,12 +389,9 @@ describe("a rename refused after the panel is gone", () => {
         open
       />
     );
-    fireEvent.change(screen.getByLabelText("Name of hero"), {
-      target: { value: "promo" },
-    });
-    fireEvent.blur(screen.getByLabelText("Name of hero"));
+    await renameTo("promo");
 
-    // Away and back: the field is destroyed and built again.
+    // Away and back: the panel is destroyed and built again.
     view.rerender(
       <Manager
         currentRenameAttempt={currentRenameAttempt}
@@ -405,30 +408,25 @@ describe("a rename refused after the panel is gone", () => {
     );
 
     // A second rename, which is the one the author is now waiting on.
-    fireEvent.change(screen.getByLabelText("Name of hero"), {
-      target: { value: "banner" },
-    });
-    fireEvent.blur(screen.getByLabelText("Name of hero"));
-    await vi.waitFor(() => expect(onRename).toHaveBeenCalledTimes(2));
+    await renameTo("banner");
+    expect(onRename).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       settleFirst?.({ ok: false, reason: "The first one was refused." });
-      await first.catch(() => undefined);
+      await first;
     });
 
     expect(screen.queryByText("The first one was refused.")).toBeNull();
   });
 
-  it("stays inline while the panel is still open", async () => {
-    // One refusal, one place to read it — the row can speak for itself here.
-    const onRename = vi.fn(async () => ({
-      ok: false as const,
+  it("stays in the details while the panel is still open", async () => {
+    // One refusal, one place to read it — the details can speak for themselves.
+    const onRename = vi.fn<Rename>(async () => ({
+      ok: false,
       reason: "The site style is locked.",
     }));
     render(<Manager onRename={onRename} open />);
-    const field = screen.getByLabelText("Name of hero");
-    fireEvent.change(field, { target: { value: "promo" } });
-    fireEvent.blur(field);
+    await renameTo("promo");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();

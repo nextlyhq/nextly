@@ -18,7 +18,6 @@ import {
 } from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
-  ClassManagerPanel,
   ComponentsPanel,
   InsertPanel,
   LayersPanel,
@@ -61,6 +60,7 @@ import {
   offerableFaces,
   offerableTokens,
   renderedTokens,
+  SharedStylesStudio,
   TokensStudio,
 } from "./site-style-studios";
 import type { ComponentView } from "./use-component-view";
@@ -69,7 +69,7 @@ import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
 /**
  * Every left panel the editor can fill today: Add, Layers, Pages, the site's
- * Components, and Design with the site's variables, classes and fonts.
+ * Components, and Design with the site's variables, shared styles and fonts.
  *
  * The shell offers only what is listed, so the rail never holds an item that
  * opens a region with nothing in it. Listing a panel here that renders nothing
@@ -452,7 +452,7 @@ export function editorPanelRenderer({
   storedSiteStyle,
   unreadableStoredFonts,
   classes,
-  documentClasses,
+  pageClassBlocks,
   classSummaryContext,
   requestPanel,
   insertInside,
@@ -472,7 +472,7 @@ export function editorPanelRenderer({
     | "unreadableStoredFonts"
     | "classes"
   > &
-  Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
+  Pick<CanvasInputs, "drag" | "pageClassBlocks" | "classSummaryContext"> &
   Pick<
     EditorPanels,
     "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
@@ -571,29 +571,10 @@ export function editorPanelRenderer({
               />
             ),
             classes: () => (
-              <ClassManagerPanel
-                absence={classes.absence}
-                pendingSlugs={classes.pendingSlugs}
-                documentClassIds={documentClasses.ids}
-                /*
-                      Whether that walk reached the whole document. It stops at the
-                      node ceiling, and a class applied past it is missing from the
-                      list — which the panel must not read as "not on this page".
-                    */
-                documentScan={documentClasses.complete ? "complete" : "partial"}
-                library={classes.library}
+              <SharedStylesStudio
+                classes={classes}
+                pageBlocks={pageClassBlocks}
                 styleContext={classSummaryContext}
-                onRename={classes.rename}
-                currentRenameAttempt={classes.currentRenameAttempt}
-                /*
-                      No `usage`, and no `onDelete`. The usage index is a
-                      collection and this surface has no read for one, so the panel
-                      reports that nothing was read rather than reporting an empty
-                      index — which would say every class is unused. Deleting needs
-                      that same reach plus a write stripping the class from every
-                      document holding it, so it is withheld entirely rather than
-                      offered as a control that cannot keep its promise.
-                    */
                 suppliedClassIds={configSiteStyle?.classes?.map(
                   entry => entry.id
                 )}

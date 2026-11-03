@@ -4,7 +4,11 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import type { SharedStyleUsageKind } from "./library-contract";
+import {
+  sharedStyleUsagePath,
+  sharedStyleWhereUsedPath,
+  type SharedStyleUsageKind,
+} from "./library-contract";
 import { pageBuilder } from "./plugin";
 import {
   LOCK_SHARED_STYLES_PERMISSION,
@@ -313,6 +317,40 @@ describe("how widely shared styles are used", () => {
         )
       ).toMatchObject({ code: "VALIDATION_ERROR" });
     }
+  });
+});
+
+describe("the paths the browser asks on", () => {
+  // Built by the contract and read by the routes, so the editor's reads
+  // cannot drift from what the routes parse.
+  it("asks the usage route about every id it names, awkward ones included", async () => {
+    const ids = ["c-card", "a&b=c", "__proto__"];
+    const { source, asked } = usageOf(WHOLE);
+    const answer = await readSharedStyleUsage(
+      new Request(`http://local${sharedStyleUsagePath(ids)}`),
+      { caller: { can: async () => false } as never },
+      source
+    );
+    expect(asked).toEqual(ids);
+    expect(Object.keys(answer.styles)).toEqual(ids);
+  });
+
+  it("asks the where-used route for one style and the page named", async () => {
+    const documents = Array.from({ length: 25 }, (_, n) => `p${n}`);
+    const { source } = usageOf(WHOLE, {
+      "a&b": [{ collection: "pages", documents }],
+    });
+    const response = await readSharedStyleUses(
+      new Request(`http://local${sharedStyleWhereUsedPath("a&b", 2)}`),
+      source,
+      async (_c, ids) => ids.map(id => ({ id, title: id }))
+    );
+    const body = (await response.json()) as {
+      items: { id: string }[];
+      meta: { page: number };
+    };
+    expect(body.meta.page).toBe(2);
+    expect(body.items.map(item => item.id)).toEqual(documents.slice(20));
   });
 });
 
