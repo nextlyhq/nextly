@@ -7,13 +7,17 @@ description: "A migration file the Schema Builder wrote has no snapshot beside i
 
 A migration file the Schema Builder wrote has no snapshot beside it, so `nextly migrate` does not apply it.
 
-A Schema Builder save writes a migration file with no snapshot beside it. Without the snapshot nothing says what the database should look like once the file has run, so `nextly migrate` refuses it, and `nextly migrate:check` reports it before a deploy does.
+An earlier version's Schema Builder save wrote a migration file with no snapshot beside it, and earlier versions of `nextly migrate` refused such a file. Current versions no longer raise this error: a file carrying the whole signature an earlier Builder left (its name, no snapshot, none of the lines `migrate:create` writes, and statements on its own entity's tables only) is ignored by every command, which names it with "ignored: written by an earlier Schema Builder". A file with only part of that signature is checked like any migration with no snapshot, and `nextly migrate:check` names the part it lacks.
 
 ## Fix
+
+If an earlier version shows this error:
 
 - Delete the file the Why line names.
 - Run `nextly migrate:create --name=<name>`, which writes the same change as a migration with its snapshot.
 - Commit the `.sql` file and its snapshot from `meta/`, then run `nextly migrate`.
+
+After upgrading, keep old Builder files in the folder until the first `nextly migrate` of the new version has run: that run records which ledger rows are theirs. They may be deleted after it.
 
 See [Production migrations](/docs/guides/production-migrations).
 

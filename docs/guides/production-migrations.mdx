@@ -509,10 +509,14 @@ entity exists, and a Builder change missing from the commit cannot appear in any
 
 Two things to know before relying on it:
 
-- **The Builder's own `.sql` file is unpaired.** Saving a Collection writes a timestamped migration
-  but no `meta/*.snapshot.json`, and `nextly migrate:check` reports an unpaired `.sql` as
-  `MISSING_SNAPSHOT`. Run `nextly migrate:create` to regenerate the pair, and commit the `.sql` and
-  its snapshot together rather than committing the Builder's file as-is.
+- **The Builder's own `.sql` file is ignored.** Saving a Collection writes a timestamped migration
+  but no `meta/*.snapshot.json`. Every command ignores such a file, naming it with "ignored:
+  written by an earlier Schema Builder", so run `nextly migrate:create` to write the change as a
+  migration with its snapshot, and commit that pair. Only a file with the whole signature is
+  ignored: one that also changes another entity's tables, or carries the lines `migrate:create`
+  writes, is checked like any migration with no snapshot, and `nextly migrate:check` names the
+  part of the signature it lacks. Keep such files until the first `nextly migrate` after upgrading
+  has run, which records the ledger rows that name them.
 - **A collection created with a starting field is mirrored without it.** The create call writes the
   manifest entry with an empty field list, so the fields arrive only on the next save. Open the new
   collection and save it once before generating the migration.

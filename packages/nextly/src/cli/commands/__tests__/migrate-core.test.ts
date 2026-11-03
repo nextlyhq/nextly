@@ -27,6 +27,7 @@ function deps(over: Record<string, unknown> = {}) {
     runFileMigrationsFn: vi.fn(async () => 0),
     refuseUnresolvedAttemptsFn: vi.fn(async () => {}),
     assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
+    markOldBuilderFilesFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
       collectionsRegistered: 0,
@@ -571,11 +572,48 @@ describe("an applied file edited since it ran", () => {
     // The code the guide documents, so a deploy script can tell it apart.
     expect(migrateExitCode(refusal)).toBe(2);
     expect(migrateExitCode(new Error("anything else"))).toBe(1);
+    // An applied migration the folder lacks ends with the code R-6 gives it.
     expect(
       migrateExitCode(
         new CliError("MIGRATION_MISSING", { what: "x", why: "x", next: "x" })
       )
-    ).toBe(1);
+    ).toBe(3);
+  });
+});
+
+describe("the marks of old Schema Builder files", () => {
+  it("are written after the core reconcile, the run's first write", async () => {
+    const order: string[] = [];
+    const d = deps({
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+      markOldBuilderFilesFn: vi.fn(async () => {
+        order.push("marks");
+      }),
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 0;
+      }),
+    });
+    await migrateCore(d as never);
+    expect(order.slice(0, 2)).toEqual(["core", "marks"]);
+  });
+
+  it("are never written when a history check refuses", async () => {
+    const refusal = new CliError("MIGRATION_TAMPERED", {
+      what: "edited",
+      why: "edited",
+      next: "restore it",
+    });
+    const d = deps({
+      assertAppliedFilesUnchangedFn: vi.fn(async () => {
+        throw refusal;
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    expect(d.markOldBuilderFilesFn).not.toHaveBeenCalled();
   });
 });
 

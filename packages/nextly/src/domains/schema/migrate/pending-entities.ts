@@ -170,7 +170,7 @@ export async function readPendingEntities(
   const { migrationsDir, dialect, isApplied, logger } = options;
   const pending = noPendingEntities();
 
-  const groups = await discoverMigrationGroups(migrationsDir);
+  const groups = await discoverMigrationGroups(migrationsDir, dialect);
 
   for (const [baseName, group] of groups) {
     if (await isApplied(`${baseName}.sql`)) continue;

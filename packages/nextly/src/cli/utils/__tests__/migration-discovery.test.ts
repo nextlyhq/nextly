@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import {
   discoverMigrationGroups,
+  readMigrationFolder,
   selectVariant,
   getSortedBaseNames,
 } from "../migration-discovery";
@@ -58,7 +59,7 @@ describe("migration-discovery", () => {
     it("should group base file only", async () => {
       await createMigrationFile("0001_000000_init.sql");
 
-      const groups = await discoverMigrationGroups(testDir);
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
 
       expect(groups.size).toBe(1);
       expect(groups.has("0001_000000_init")).toBe(true);
@@ -73,7 +74,7 @@ describe("migration-discovery", () => {
       await createMigrationFile("0001_000000_blog_schema.mysql.sql");
       await createMigrationFile("0001_000000_blog_schema.sqlite.sql");
 
-      const groups = await discoverMigrationGroups(testDir);
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
 
       expect(groups.size).toBe(1);
       expect(groups.has("0001_000000_blog_schema")).toBe(true);
@@ -94,7 +95,7 @@ describe("migration-discovery", () => {
       await createMigrationFile("0002_000000_posts.sql");
       await createMigrationFile("0002_000000_posts.mysql.sql");
 
-      const groups = await discoverMigrationGroups(testDir);
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
 
       expect(groups.size).toBe(2);
       expect(groups.has("0001_000000_init")).toBe(true);
@@ -158,7 +159,7 @@ describe("migration-discovery", () => {
       await createMigrationFile("0001_000000_blog_schema.mysql.sql");
       await createMigrationFile("0001_000000_blog_schema.sqlite.sql");
 
-      const groups = await discoverMigrationGroups(testDir);
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
 
       // Should group 3 files into 1 logical migration
       expect(groups.size).toBe(1);
@@ -181,6 +182,61 @@ describe("migration-discovery", () => {
 
       const baseVariant = selectVariant(groups.get(baseName)!.variants);
       expect(baseVariant).toBe("0001_000000_blog_schema.sql");
+    });
+  });
+
+  // Every reader reads the folder through this, so an old Schema Builder file
+  // is taken out here once. One folder holds a file of each kind; each
+  // assertion is the one a reader that skipped the classification fails.
+  describe("readMigrationFolder", () => {
+    const OLD = "1730000000000_create_posts.sql";
+    const HAND = "1730000000001_create_notes.sql";
+    const OLD_CONTENT = `CREATE TABLE "dc_posts" ("id" text PRIMARY KEY);`;
+
+    beforeEach(async () => {
+      await createMigrationFile("20260101_000000_000_init.sql");
+      await createMigrationFile(OLD, OLD_CONTENT);
+      // The Builder's name, but a statement on another entity's table.
+      await createMigrationFile(
+        HAND,
+        `ALTER TABLE "dc_posts" ADD COLUMN "x" text;`
+      );
+    });
+
+    it("takes an old Builder file out of the migrations and lists it apart", async () => {
+      const folder = await readMigrationFolder(testDir, "postgresql");
+      expect([...folder.groups.keys()].sort()).toEqual([
+        "1730000000001_create_notes",
+        "20260101_000000_000_init",
+      ]);
+      expect(folder.oldBuilderFiles).toEqual([
+        { file: OLD, entity: "posts", checksum: expect.any(String) },
+      ]);
+    });
+
+    it("keeps a file with only part of the signature, naming what it lacks", async () => {
+      const folder = await readMigrationFolder(testDir, "postgresql");
+      expect(folder.partialBuilderFiles).toEqual([
+        { file: HAND, lacks: ["scope"], checksum: expect.any(String) },
+      ]);
+    });
+
+    it("keeps an old Builder name with a snapshot beside it", async () => {
+      await fs.mkdir(path.join(testDir, "meta"));
+      await fs.writeFile(
+        path.join(testDir, "meta", "1730000000000_create_posts.snapshot.json"),
+        "{}"
+      );
+      const folder = await readMigrationFolder(testDir, "postgresql");
+      expect(folder.groups.has("1730000000000_create_posts")).toBe(true);
+      expect(folder.oldBuilderFiles).toEqual([]);
+      expect(folder.partialBuilderFiles.map(f => f.file)).toContain(OLD);
+    });
+
+    it("discoverMigrationGroups reads the same migrations", async () => {
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
+      expect(groups.has("1730000000000_create_posts")).toBe(false);
+      expect(groups.has("1730000000001_create_notes")).toBe(true);
     });
   });
 });

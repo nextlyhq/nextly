@@ -9,10 +9,17 @@
  * @module cli/utils/migration-discovery
  */
 
-import { readdir } from "node:fs/promises";
-import { basename } from "node:path";
+import { access, readdir, readFile } from "node:fs/promises";
+import { basename, resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
+import {
+  classifyMigrationFile,
+  hasOldBuilderName,
+  type OldBuilderSignaturePart,
+} from "../../domains/schema/migrate/old-builder-files";
 
 /**
  * A migration file variant with its dialect (if any)
@@ -34,8 +41,129 @@ export interface MigrationGroup {
   variants: MigrationVariant[];
 }
 
+/** A file an earlier Schema Builder wrote, which every reader treats as absent. */
+export interface OldBuilderFile {
+  /** The file name, `.sql` included, as a ledger row names it. */
+  file: string;
+  /** The entity its name gives. */
+  entity: string;
+  /** Its checksum (`checksumOf`), as a mark records it. */
+  checksum: string;
+}
+
 /**
- * Discover migration files from the migrations directory and group dialect variants.
+ * A file with an earlier Schema Builder's name that lacks another part of
+ * its signature, so it is read as any migration with no snapshot.
+ */
+export interface PartialBuilderFile {
+  file: string;
+  lacks: readonly OldBuilderSignaturePart[];
+  checksum: string;
+}
+
+/** The migrations folder as every reader reads it (`readMigrationFolder`). */
+export interface MigrationFolder {
+  /** The migrations, old Builder files taken out. */
+  groups: Map<string, MigrationGroup>;
+  oldBuilderFiles: OldBuilderFile[];
+  partialBuilderFiles: PartialBuilderFile[];
+}
+
+/**
+ * The migrations folder as every reader of it reads it: the migrations,
+ * grouped by base name, with each old Schema Builder file
+ * (`classifyMigrationFile`) taken out and listed apart, and each file
+ * carrying only part of that signature listed with what it lacks. The one
+ * reading, so no reader can apply, list, count or compare a file another
+ * reader ignores. Classifying reads statements, hence the dialect.
+ */
+export async function readMigrationFolder(
+  migrationsDir: string,
+  dialect: SupportedDialect
+): Promise<MigrationFolder> {
+  const folder: MigrationFolder = {
+    groups: new Map(),
+    oldBuilderFiles: [],
+    partialBuilderFiles: [],
+  };
+  let files: string[];
+  try {
+    files = await readdir(migrationsDir);
+  } catch {
+    return folder;
+  }
+  const kept: string[] = [];
+  for (const file of files.filter(f => f.endsWith(".sql"))) {
+    if (!hasOldBuilderName(file)) {
+      kept.push(file);
+      continue;
+    }
+    const content = await readFile(resolve(migrationsDir, file), "utf-8");
+    const snapshot = resolve(
+      migrationsDir,
+      "meta",
+      `${basename(file, ".sql")}.snapshot.json`
+    );
+    const kind = classifyMigrationFile({
+      name: file,
+      content,
+      hasSnapshot: await exists(snapshot),
+      dialect,
+    });
+    const checksum = checksumOf(content);
+    if (kind.kind === "old-builder") {
+      folder.oldBuilderFiles.push({ file, entity: kind.entity, checksum });
+      continue;
+    }
+    if (kind.kind === "partial") {
+      folder.partialBuilderFiles.push({ file, lacks: kind.lacks, checksum });
+    }
+    kept.push(file);
+  }
+  folder.groups = groupMigrationFiles(kept);
+  return folder;
+}
+
+/**
+ * The informational line naming an ignored old Builder file, in the words
+ * every reader that names one uses. Information, never a warning: the file
+ * changes nothing a command does.
+ */
+export function oldBuilderFileLine(file: OldBuilderFile): string {
+  return `${file.file}: ignored: written by an earlier Schema Builder`;
+}
+
+/** What each part of the signature a file lacks says about it. */
+const LACKS: Record<OldBuilderSignaturePart, string> = {
+  snapshot: "has a snapshot beside it",
+  header: "holds a line `migrate:create` writes",
+  scope:
+    "has a statement on a table that is not its own entity's, or one that cannot be read",
+};
+
+/**
+ * The line naming a file that has an earlier Schema Builder's name but not
+ * the rest of its signature, so it is checked as any migration: the parts it
+ * lacks say why it is not ignored.
+ */
+export function partialBuilderFileLine(file: PartialBuilderFile): string {
+  const lacks = file.lacks.map(part => LACKS[part]).join("; it ");
+  return `${file.file} has the name of an earlier Schema Builder's file but is checked as a migration: it ${lacks}.`;
+}
+
+/** Whether a path exists; any failure to reach it reads as absent. */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The migrations in the folder, grouped with their dialect variants, old
+ * Schema Builder files left out (`readMigrationFolder`).
  *
  * Groups files by base name (without dialect suffix) so that:
  * - 0001_000000_blog_schema.sql
@@ -45,22 +173,21 @@ export interface MigrationGroup {
  * Are treated as ONE logical migration named "0001_000000_blog_schema".
  *
  * @param migrationsDir - Path to the migrations directory
+ * @param dialect - The dialect the files run on, which classifying reads
  * @returns Map of base migration names to their variants
  */
 export async function discoverMigrationGroups(
-  migrationsDir: string
+  migrationsDir: string,
+  dialect: SupportedDialect
 ): Promise<Map<string, MigrationGroup>> {
-  let files: string[];
+  return (await readMigrationFolder(migrationsDir, dialect)).groups;
+}
 
-  try {
-    files = await readdir(migrationsDir);
-  } catch {
-    return new Map();
-  }
-
-  const sqlFiles = files
-    .filter(f => f.endsWith(".sql"))
-    .sort((a, b) => a.localeCompare(b));
+/** `files` grouped by base name, each group with its dialect variants. */
+function groupMigrationFiles(
+  files: readonly string[]
+): Map<string, MigrationGroup> {
+  const sqlFiles = [...files].sort((a, b) => a.localeCompare(b));
 
   const migrationGroups = new Map<string, MigrationGroup>();
 
@@ -152,25 +279,6 @@ export function getSortedBaseNames(
 export function compareMigrationBaseNames(a: string, b: string): number {
   if (a === b) return 0;
   return a < b ? -1 : 1;
-}
-
-/** The base name of a file a Schema Builder save writes (`isBuilderWrittenMigration`). */
-const BUILDER_MIGRATION_NAME_PATTERN =
-  /^\d{13}_(?:create|update|drop|i18n|status)_./;
-
-/**
- * A migration file the Schema Builder wrote, by its base name.
- *
- * A Builder save names its file `<epoch milliseconds>_<create|update|drop|i18n|status>_<slug>`
- * (`DynamicCollectionService`, `CollectionFileManager.saveMigration`), and writes no snapshot
- * beside it. Nothing else names one so: `migrate:create`, `--blank` and the
- * localisation companions start `YYYYMMDD_HHMMSS_mmm_`, and a template's
- * files start with a sequence number and a time (`0001_000000_`). Thirteen
- * digits is every epoch-millisecond count from September 2001 to the year
- * 2286.
- */
-export function isBuilderWrittenMigration(baseName: string): boolean {
-  return BUILDER_MIGRATION_NAME_PATTERN.test(baseName);
 }
 
 /**

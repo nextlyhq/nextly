@@ -132,7 +132,7 @@ async function migrationDrops(
   migrationsDir: string,
   dialect: SupportedDialect
 ): Promise<{ file: string; dropped: ReadonlySet<string> }[]> {
-  const groups = await discoverMigrationGroups(migrationsDir);
+  const groups = await discoverMigrationGroups(migrationsDir, dialect);
   if (groups.size === 0) return [];
   const [
     { parseSqlSections },

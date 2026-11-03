@@ -112,7 +112,6 @@ import {
   exitWithError,
 } from "../errors";
 import {
-  builderSnapshotMissing,
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
@@ -130,7 +129,9 @@ import {
 import {
   discoverMigrationGroups,
   getSortedBaseNames,
-  isBuilderWrittenMigration,
+  oldBuilderFileLine,
+  partialBuilderFileLine,
+  readMigrationFolder,
   selectVariant,
 } from "../utils/migration-discovery";
 
@@ -344,6 +345,21 @@ export async function runChecks(args: {
   } catch {
     sqlFiles = [];
   }
+  // The folder as every reader reads it: an old Builder file is named and
+  // checked no further, and a file with only part of its signature is named
+  // with what it lacks and checked as any migration. Classifying reads
+  // statements, so without a dialect no file is set aside.
+  if (args.dialect !== undefined) {
+    const folder = await readMigrationFolder(migrationsDir, args.dialect);
+    const ignored = new Set(folder.oldBuilderFiles.map(f => f.file));
+    for (const file of folder.oldBuilderFiles) {
+      logger.info(oldBuilderFileLine(file));
+    }
+    for (const file of folder.partialBuilderFiles) {
+      logger.warn(partialBuilderFileLine(file));
+    }
+    sqlFiles = sqlFiles.filter(f => !ignored.has(f));
+  }
 
   let snapshotFiles: string[];
   try {
@@ -379,18 +395,6 @@ export async function runChecks(args: {
       throw err;
     }
     if (!result.ok && result.expected === undefined) {
-      // A Builder save writes no snapshot. Its remedy is the file
-      // `migrate:create` writes for the change, which `nextly migrate` also
-      // asks for before it refuses to apply this one.
-      if (isBuilderWrittenMigration(sqlName.replace(/\.sql$/, ""))) {
-        return exitWithError(
-          logger,
-          builderSnapshotMissing(
-            "`nextly migrate:check` found a Schema Builder migration file with no snapshot, which `nextly migrate` does not apply.",
-            [sqlName]
-          )
-        );
-      }
       return exitWithError(logger, migrationSnapshotMissing(sqlName, metaDir));
     }
     if (!result.ok) {
@@ -545,7 +549,7 @@ export async function judgeStatements(
 }> {
   const outsideTransaction: string[] = [];
   const refused: { file: string; message: string }[] = [];
-  const groups = await discoverMigrationGroups(migrationsDir);
+  const groups = await discoverMigrationGroups(migrationsDir, dialect);
   for (const baseName of getSortedBaseNames(groups)) {
     const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
     if (file === undefined) continue;

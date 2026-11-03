@@ -57,6 +57,7 @@ import {
   runMigrationStatements,
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
+import { readOldBuilderLedger } from "../../domains/schema/migrate/old-builder-ledger";
 import {
   compareModuleNames,
   qualifiedFilename,
@@ -102,7 +103,10 @@ import {
 } from "../utils/data-loss-consent";
 import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
-import { refuseUnresolvedAppAttempts } from "./migrate";
+import {
+  refuseChangedOldBuilderFiles,
+  refuseUnresolvedAppAttempts,
+} from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,
@@ -1003,6 +1007,12 @@ export async function downDatabaseDeps(args: {
   };
   /** The command a failed DOWN's ledger note names; `migrate:down` if absent. */
   command?: string;
+  /**
+   * The app's migrations folder. Given, with no plugin, the rows of its old
+   * Schema Builder files are no migration to roll back, as every reader
+   * leaves them out (`readOldBuilderLedger`).
+   */
+  migrationsDir?: string;
 }): Promise<
   Pick<
     MigrateDownCoreDeps,
@@ -1054,7 +1064,18 @@ export async function downDatabaseDeps(args: {
     readLiveElements: lists => readLiveElements(db, dialect, lists),
     readLiveTables: lists => readLiveTables(db, dialect, lists),
     readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
-    listFileApplies: () => repo.listFileApplies(),
+    listFileApplies: async () => {
+      const rows = await repo.listFileApplies();
+      if (plugin !== undefined || args.migrationsDir === undefined) return rows;
+      const { ignoredRows } = await readOldBuilderLedger(
+        { migrationsDir: args.migrationsDir, dialect },
+        repo,
+        rows
+      );
+      return rows.filter(
+        row => row.filename === null || !ignoredRows.has(row.filename)
+      );
+    },
     execDown: (statements, unit, after) =>
       runMigrationStatements(adapter, statements, unit, handle =>
         after(handle)
@@ -1238,6 +1259,7 @@ export async function runMigrateDown(
         adapter: adapter as unknown as DrizzleAdapter,
         dialect,
         plugin: pluginModules(configResult.config.plugins, plugin),
+        migrationsDir,
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,
@@ -1253,15 +1275,20 @@ export async function runMigrateDown(
       withLock: withMigrateLock,
       ...(plugin === undefined
         ? {
-            refuseUnresolvedAttempts: () =>
-              refuseUnresolvedAppAttempts({
+            // Under the lock, before the first write: an unresolved attempt,
+            // then a marked old Builder file that changed since it was marked.
+            refuseUnresolvedAttempts: async () => {
+              const history = {
                 adapter,
                 db,
                 dialect,
                 migrationsDir,
                 logger,
                 command: "nextly migrate:down",
-              }),
+              };
+              await refuseUnresolvedAppAttempts(history);
+              await refuseChangedOldBuilderFiles(history);
+            },
           }
         : {}),
       interactive: isInteractiveTerminal(),

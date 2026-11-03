@@ -234,6 +234,14 @@ function staysInEntity(
   });
 }
 
+/**
+ * Whether a file name is one an earlier Schema Builder gave, part (a) of the
+ * signature: the files worth reading to classify.
+ */
+export function hasOldBuilderName(name: string): boolean {
+  return BUILDER_FILE_NAME.test(name);
+}
+
 /** Classify one file of the migrations folder by the Builder's signature. */
 export function classifyMigrationFile(
   file: MigrationFileFacts

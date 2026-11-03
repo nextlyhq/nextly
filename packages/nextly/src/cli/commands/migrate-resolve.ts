@@ -94,7 +94,7 @@ export async function migrationFileIn(
   dialect: SupportedDialect
 ): Promise<string | undefined> {
   const base = filename.replace(/\.sql$/i, "");
-  const group = (await discoverMigrationGroups(dir)).get(base);
+  const group = (await discoverMigrationGroups(dir, dialect)).get(base);
   const file = group && selectVariant(group.variants, dialect);
   return file === undefined ? undefined : resolve(dir, file);
 }

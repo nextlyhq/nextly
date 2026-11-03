@@ -923,10 +923,10 @@ async function checkMigrationStatus(
  */
 async function discoverMigrations(
   migrationsDir: string,
-  dialect?: SupportedDialect
+  dialect: SupportedDialect
 ): Promise<ParsedMigration[]> {
   // Use shared migration discovery to group dialect variants
-  const groups = await discoverMigrationGroups(migrationsDir);
+  const groups = await discoverMigrationGroups(migrationsDir, dialect);
   const migrations: ParsedMigration[] = [];
 
   // Process each migration group in sorted order

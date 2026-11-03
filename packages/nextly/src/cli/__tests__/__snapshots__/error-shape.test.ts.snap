@@ -1025,6 +1025,13 @@ exports[`each code, as a command ends with it > NO_TRANSACTION_NEEDS_BLANK 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/no-transaction-needs-blank  (NO_TRANSACTION_NEEDS_BLANK)"
 `;
 
+exports[`each code, as a command ends with it > OLD_BUILDER_FILE_SNAPSHOT_ADDED 1`] = `
+"✗ \`1761732000000_create_posts.sql\` has a snapshot beside it (\`meta/1761732000000_create_posts.snapshot.json\`) since it was recognised as a file an earlier Schema Builder wrote, so \`nextly migrate\` ran nothing.
+  Why:  A ledger row marks the file as an old Schema Builder file, which every command ignores, and it no longer carries the whole signature that recognised it, so it would be read as a migration.
+  Next: Put the file back as it was, or remove the snapshot, and it is ignored again; delete it, and its ledger rows stay ignored; or accept it as it now stands with \`nextly migrate:resolve --applied <file>\`, after which it is checked as any migration.
+  Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-snapshot-added  (OLD_BUILDER_FILE_SNAPSHOT_ADDED)"
+`;
+
 exports[`each code, as a command ends with it > OWNERSHIP_TAKEOVER_REFUSED 1`] = `
 "✗ The table "seo_redirects" is recorded as belonging to "@acme/seo", so "@acme/redirects" cannot take it over.
   Why:  Each table and element has one owner, recorded in \`nextly_schema_owners\`, so no plugin or app takes over another's.

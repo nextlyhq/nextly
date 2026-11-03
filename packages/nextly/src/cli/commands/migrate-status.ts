@@ -49,6 +49,10 @@ import {
   isRecordedChecksum,
 } from "../../domains/schema/migrate/applied-checksums";
 import {
+  readOldBuilderLedger,
+  type ChangedOldBuilderFile,
+} from "../../domains/schema/migrate/old-builder-ledger";
+import {
   migrationChecksum,
   compareModuleNames,
   orderedMigrations,
@@ -80,6 +84,8 @@ import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatCount } from "../utils/logger";
 import {
   discoverMigrationGroups,
+  oldBuilderFileLine,
+  readMigrationFolder,
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
@@ -220,6 +226,8 @@ interface MigrateStatusResult {
    * not; `registry` is then null.
    */
   registryError?: string;
+  /** The old Schema Builder files in the folder, which every reader ignores. */
+  ignoredOldBuilderFiles: string[];
   summary: {
     applied: number;
     pending: number;
@@ -337,8 +345,27 @@ export async function runMigrateStatus(
     const ledger = await readStatusLedger(
       adapter as unknown as DrizzleAdapter,
       dialect,
-      options.plugin
+      options.plugin,
+      migrationsDir
     );
+    // The old Schema Builder files every reader ignores, and the marked ones
+    // that changed since, each named with a line: on standard error under
+    // `--json`, so standard output holds only the document.
+    const folder =
+      options.plugin === undefined
+        ? await readMigrationFolder(migrationsDir, dialect)
+        : undefined;
+    const ignoredOldBuilderFiles = (folder?.oldBuilderFiles ?? []).map(
+      f => f.file
+    );
+    const oldBuilderLines = [
+      ...(folder?.oldBuilderFiles ?? []).map(oldBuilderFileLine),
+      ...(ledger.changedOldBuilderFiles ?? []).map(changedOldBuilderFileLine),
+    ];
+    for (const line of oldBuilderLines) {
+      if (options.json) process.stderr.write(`${line}\n`);
+      else logger.info(line);
+    }
     const appliedMigrations = ledger.applied;
     logger.debug(`${appliedMigrations.length} migration(s) in database`);
 
@@ -389,6 +416,7 @@ export async function runMigrateStatus(
         collections: pendingCollections,
         registry,
         ...(registryError !== undefined ? { registryError } : {}),
+        ignoredOldBuilderFiles,
         summary,
       };
       console.log(JSON.stringify(result, null, 2));
@@ -410,6 +438,16 @@ export async function runMigrateStatus(
  * app's directory, so they are read from there; a module no run has applied
  * yet then reads as pending, as an app file without a ledger row does.
  */
+/**
+ * The line naming a marked old Builder file that no longer carries the
+ * signature, and the part it lacks: every history check refuses it.
+ */
+function changedOldBuilderFileLine(file: ChangedOldBuilderFile): string {
+  const change =
+    file.change === "content" ? "has changed" : "has a snapshot beside it";
+  return `${file.file} ${change} since it was recognised as a file an earlier Schema Builder wrote, and lacks: ${file.lacks.join(", ")}. \`nextly migrate\` refuses it until it is restored, deleted or accepted with \`nextly migrate:resolve --applied ${file.file}\`.`;
+}
+
 export async function migrationEntries(args: {
   plugin?: string;
   plugins: readonly PluginDefinition[];
@@ -423,10 +461,10 @@ export async function migrationEntries(args: {
 
 async function discoverMigrations(
   migrationsDir: string,
-  dialect?: SupportedDialect
+  dialect: SupportedDialect
 ): Promise<ParsedMigration[]> {
   // Use shared migration discovery to group dialect variants
-  const groups = await discoverMigrationGroups(migrationsDir);
+  const groups = await discoverMigrationGroups(migrationsDir, dialect);
   const migrations: ParsedMigration[] = [];
 
   // Process each migration group in sorted order
@@ -489,15 +527,40 @@ function parseMigrationFile(
 export async function readStatusLedger(
   adapter: Pick<DrizzleAdapter, "getDrizzle" | "tableExists">,
   dialect: SupportedDialect,
-  plugin?: string
-): Promise<{ applied: MigrationRecord[]; rollbacks: SchemaEventRow[] }> {
+  plugin?: string,
+  /**
+   * The app's migrations folder. Given, the rows of its old Schema Builder
+   * files are left out, as every reader leaves them out, and the marked files
+   * that changed since are named in `changedOldBuilderFiles`.
+   */
+  migrationsDir?: string
+): Promise<{
+  applied: MigrationRecord[];
+  rollbacks: SchemaEventRow[];
+  changedOldBuilderFiles?: ChangedOldBuilderFile[];
+}> {
   if (!(await adapter.tableExists("nextly_schema_events"))) {
     return { applied: [], rollbacks: [] };
   }
   const repo = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+  const fileApplies = await repo.listFileApplies();
+  const rollbacks = await repo.listFailedRollbacks();
+  if (plugin !== undefined || migrationsDir === undefined) {
+    return { applied: ledgerRecords(fileApplies, plugin), rollbacks };
+  }
+  const oldBuilder = await readOldBuilderLedger(
+    { migrationsDir, dialect },
+    repo,
+    [...fileApplies, ...rollbacks]
+  );
+  const kept = (rows: SchemaEventRow[]) =>
+    rows.filter(
+      row => row.filename === null || !oldBuilder.ignoredRows.has(row.filename)
+    );
   return {
-    applied: ledgerRecords(await repo.listFileApplies(), plugin),
-    rollbacks: await repo.listFailedRollbacks(),
+    applied: ledgerRecords(kept(fileApplies)),
+    rollbacks: kept(rollbacks),
+    changedOldBuilderFiles: oldBuilder.changed,
   };
 }
 
