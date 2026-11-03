@@ -121,12 +121,33 @@ type SingleApiType = {
   readonly updateDocument: (
     slug: string,
     data: Record<string, unknown>,
-    options?: { locale?: string }
+    options?: { locale?: string; keepalive?: boolean }
   ) => Promise<SingleDocument>;
   readonly publishAllLocales: (
     slug: string
   ) => Promise<{ id: string; status?: string }>;
 };
+
+/**
+ * The largest body a request sent with `keepalive` may carry. Browsers refuse
+ * a larger one outright, so such an update is sent as an ordinary request.
+ */
+export const KEEPALIVE_BODY_LIMIT: number = 64 * 1024;
+
+/**
+ * The request options an update is sent with: `keepalive` when asked for and
+ * the body fits, so the browser finishes it after the page is hidden or
+ * closed. Over the limit it goes as an ordinary request, which a closing page
+ * may cut short, rather than as one the browser refuses before sending.
+ */
+function updateRequestOptions(
+  data: Record<string, unknown>,
+  keepalive: boolean | undefined
+): RequestInit {
+  if (keepalive !== true) return {};
+  const bytes = new TextEncoder().encode(JSON.stringify(data)).byteLength;
+  return bytes <= KEEPALIVE_BODY_LIMIT ? { keepalive: true } : {};
+}
 
 /**
  * Single API client object with all operations.
@@ -324,14 +345,16 @@ export const singleApi: SingleApiType = {
     data: Record<string, unknown>,
     // i18n: `?locale=de` stores the translatable values for German only (the shared
     // columns are still updated). Omitted for non-localized singles.
-    options?: { locale?: string }
+    // `keepalive` asks for an update that outlives the page; see above.
+    options?: { locale?: string; keepalive?: boolean }
   ): Promise<SingleDocument> => {
     const query = new URLSearchParams();
     if (options?.locale) query.set("locale", options.locale);
     const qs = query.toString();
     const result = await protectedApi.patch<MutationResponse<SingleDocument>>(
       `/singles/${slug}${qs ? `?${qs}` : ""}`,
-      data
+      data,
+      updateRequestOptions(data, options?.keepalive)
     );
     return result.item;
   },
