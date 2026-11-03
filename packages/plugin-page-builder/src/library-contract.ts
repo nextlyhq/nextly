@@ -766,6 +766,15 @@ export interface SharedStyleUsage {
 }
 
 /**
+ * The code the remove route's issue carries when a stored document still uses
+ * a style, so the editor can tell that refusal from one for a lock or a count
+ * no longer whole.
+ *
+ * @experimental Settles when the Shared styles tab ships.
+ */
+export const SHARED_STYLE_IN_USE_CODE = "IN_USE";
+
+/**
  * What the usage read answers: the index's health once for the screen, what
  * this caller may do, and the usage of each style asked about.
  *
@@ -774,6 +783,13 @@ export interface SharedStyleUsage {
 export interface SharedStylesUsageResponse {
   /** Whether the usage index covers the whole site, so counts can be exact. */
   readonly whole: boolean;
+  /**
+   * Whether counts that are not whole may still become whole: the site is
+   * still being counted. False when they are whole, and when something the
+   * index cannot reach keeps them floors for good, so there is nothing to
+   * read again for.
+   */
+  readonly counting: boolean;
   /** Whether this caller may lock and unlock shared styles. */
   readonly mayLock: boolean;
   /** Each style asked about, by id. */
@@ -802,6 +818,25 @@ export const SHARED_STYLE_PAGE_PARAM = "page";
  * listing can name, twenty to a page.
  */
 export const SHARED_STYLE_WHERE_USED_PAGES_MAX = 250;
+
+/**
+ * The usage route's path for some shared styles, each named by its own `id`
+ * parameter, so the browser asks in the shape the route reads.
+ */
+export function sharedStyleUsagePath(ids: readonly string[]): string {
+  const params = new URLSearchParams();
+  for (const id of ids) params.append(SHARED_STYLE_ID_PARAM, id);
+  return `${SHARED_STYLE_USAGE_ROUTE_PATH}?${params.toString()}`;
+}
+
+/** The where-used route's path for one shared style and one page, from 1. */
+export function sharedStyleWhereUsedPath(id: string, page: number): string {
+  const params = new URLSearchParams({
+    [SHARED_STYLE_ID_PARAM]: id,
+    [SHARED_STYLE_PAGE_PARAM]: String(page),
+  });
+  return `${SHARED_STYLE_WHERE_USED_ROUTE_PATH}?${params.toString()}`;
+}
 
 /** One document a shared style is used on, as the where-used list names it. */
 export interface SharedStyleUseItem {

@@ -35,6 +35,7 @@ import {
   useCanvasDrag,
   type CanvasDrag,
   type CanvasZoom,
+  type PageClassBlocks,
   type SpacingScrubContext,
 } from "@nextlyhq/builder/shell";
 import {
@@ -47,7 +48,7 @@ import {
   type Dispatch,
 } from "react";
 
-import { classUsageOf, type ClassUsage } from "../../class-usage";
+import { classUsageOf } from "../../class-usage";
 import {
   hostFetchPolicy,
   readRemotePatterns,
@@ -58,6 +59,7 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 
+import { useCanvasPageContext } from "./canvas-page-context";
 import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
   useBreakpointWriter,
@@ -307,9 +309,12 @@ function useCanvasRender({
    * edited, and a surface showing the page as published must not have one.
    */
 
+  // The canvas's own page context, one object for the editor's life: see
+  // `canvas-page-context.ts`.
+  const canvasContext = useCanvasPageContext();
   const canvasRender = useMemo(
-    () =>
-      pageRenderInputs({
+    () => ({
+      ...pageRenderInputs({
         siteStyle: canvasSiteStyle,
         clientConfig,
         // None: the canvas is a frame at the previewed device's size, so the
@@ -322,16 +327,19 @@ function useCanvasRender({
         // keystroke.
         definitions: componentLibrary.definitions,
       }),
+      context: canvasContext,
+    }),
     [
       canvasSiteStyle,
       clientConfig,
       documentLimits,
       componentLibrary.definitions,
+      canvasContext,
     ]
   );
 
   /*
-   * What the classes manager compiles each class's summary with, so the summary
+   * What the Shared styles tab compiles each style's summary with, so the summary
    * describes the stylesheet the page gets.
    *
    * The canvas's context supplies the breakpoints: without them only the base
@@ -596,10 +604,11 @@ function useCanvasWiring({
 type StyleReadings = {
   spacingScrub: SpacingScrubContext;
   styleCascade: PageStyleCascade | undefined;
-  documentClasses: ClassUsage;
+  /** The blocks on the page as stored that carry each class, for Shared styles. */
+  pageClassBlocks: PageClassBlocks;
 };
 
-/** What the spacing handles, the inspector and the classes manager read. */
+/** What the spacing handles, the inspector and the Shared styles tab read. */
 function useStyleReadings({
   editor,
   documentLimits,
@@ -741,39 +750,17 @@ function useStyleReadings({
   );
 
   /*
-   * Which classes the OPEN document renders, for the manager's on-this-page
-   * filter.
-   *
-   * `classUsageOf` rather than a walk written here: it is the same traversal
-   * the style compiler and the usage index already share, and two walks with
-   * equal limits reached by different routes select different nodes — a class
-   * on a node one walk reaches and the other does not would be reported as
-   * absent from a page that renders it.
-   * Composed through the SAME map the canvas draws with, because the stored
-   * document holds one instance node where the canvas draws a definition: a
-   * class applied inside that definition is on the page as rendered, and a
-   * walk over the stored nodes alone would leave it out of the filter. The
-   * usage record asks a different question of the same walk — what this
-   * document itself references — and passes no map.
-   *
-   *
-   * `complete` is deliberately unread. It says whether the walk hit the
-   * document's node ceiling, which bounds what this could CLAIM about usage —
-   * and this claims nothing about usage. It answers one question, "does the
-   * open page apply this class", and a truncated walk answers that for fewer
-   * nodes rather than answering it wrongly.
+   * How many blocks on this page carry each class, for the Shared styles
+   * tab's "3 blocks on this page". The same walk, asked of the page as
+   * stored: a block inside a component's definition belongs to that
+   * component, which the site's index counts as a component of its own.
    */
-  const documentClasses = useMemo(
-    // The HOST's limits, not the engine's defaults. A site that raised or
-    // lowered them renders under those, and a walk here under different bounds
-    // selects different nodes — which would report a class as absent from a
-    // page that renders it, or present on one that does not.
-    () =>
-      classUsageOf(editor.document, documentLimits, canvasRender.definitions),
-    [editor.document, documentLimits, canvasRender.definitions]
-  );
+  const pageClassBlocks = useMemo((): PageClassBlocks => {
+    const usage = classUsageOf(editor.document, documentLimits);
+    return { counts: usage.blocks, complete: usage.complete };
+  }, [editor.document, documentLimits]);
 
-  return { spacingScrub, styleCascade, documentClasses };
+  return { spacingScrub, styleCascade, pageClassBlocks };
 }
 
 /**

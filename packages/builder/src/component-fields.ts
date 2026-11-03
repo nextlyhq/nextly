@@ -181,20 +181,20 @@ export function exposeOffer(
   const type = exposureTypeForProp(schema);
   if (type !== undefined) return { type };
   return {
-    reason: `Placements can’t set a ${String(schema.type)} value, so it can’t be exposed.`,
+    reason: `Pages can’t set a ${String(schema.type)} value, so this stays the same everywhere it is used.`,
   };
 }
 
 /** Why the engine refused an edit, as an author reads it. */
 const PROBLEM_SENTENCE: Readonly<Record<ExposureEditProblem, string>> = {
-  "not-a-component": "Only a component’s own view can expose fields.",
+  "not-a-component": "Fields can only be added in a component’s own view.",
   "unknown-exposure": "That field is no longer on this component.",
   "unknown-node": "That block is no longer in this component.",
   "unknown-prop": "That block no longer has this property.",
   "not-exposable":
-    "Placements have no control for this property, so it can’t be exposed.",
+    "Pages have no control for this property, so it stays the same everywhere it is used.",
   "content-only":
-    "This block is in an area locked to its content, and this property isn’t content. Placements couldn’t change it, so it can’t be exposed. Loosen the lock to expose it.",
+    "This block is in an area locked to its content, and this property isn’t content, so pages couldn’t change it. Loosen the lock to let each page change it.",
   "invalid-label": "Give the field a name.",
   "invalid-exposure":
     "This component’s fields are stored in a shape that can’t be edited here. Remove the broken field first.",
@@ -422,8 +422,8 @@ export function removalSentences(
         : ` This component is placed directly in ${where}.`;
   const placements =
     removing.kind === "field"
-      ? `When you publish this component, every placement that set this field loses its value.${pages}`
-      : `When you publish this component, the content placements put in this slot is removed.${pages}`;
+      ? `When you publish this component, every use of it that set this field loses its value.${pages}`
+      : `When you publish this component, the blocks each use of it added here are removed.${pages}`;
   const variants = edit.prunedVariants.map(variant => ({
     variant: variant.variant,
     sentence: variant.emptied
@@ -471,7 +471,7 @@ export function slotSource(
   const node =
     typeof nodeId === "string" ? findNode(component.nodes, nodeId) : undefined;
   if (node === undefined) return MISSING_BLOCK;
-  return `${blockLabel(node.type)}, filled on each placement`;
+  return `${blockLabel(node.type)}, filled by each use`;
 }
 
 /**

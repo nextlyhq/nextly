@@ -190,7 +190,7 @@ test.describe("blocks a plugin contributes", () => {
     // Colour sits in Typography, its first and only section here.
     const color = page
       .getByRole("region", { name: /^Typography/ })
-      .getByRole("textbox", { name: "Color", exact: true });
+      .getByRole("textbox", { name: "Colour", exact: true });
     await color.fill("#1155cc");
     await color.press("Enter");
 

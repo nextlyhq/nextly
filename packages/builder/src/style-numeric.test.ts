@@ -18,6 +18,7 @@ import {
   toggleOptionsFor,
   toggleShows,
   unitChoicesFor,
+  withDefaultUnit,
   withUnit,
 } from "./style-numeric";
 
@@ -383,5 +384,30 @@ describe("a toggle is a projection of a keyword leaf", () => {
     expect(toggleShows(options, undefined)).toBe(true);
     expect(toggleShows(options, "inherit")).toBe(false);
     expect(toggleShows(options, { $token: "x.y" })).toBe(false);
+  });
+});
+
+describe("a bare number typed into a length field", () => {
+  it("takes the unit the field shows, px unless another is chosen", () => {
+    // "24" was refused as "not a length": the field now reads it as the
+    // author meant it, in the unit beside it.
+    expect(withDefaultUnit(PADDING, "24", "px")).toBe("24px");
+    expect(withDefaultUnit(PADDING, " 1.5 ", "rem")).toBe("1.5rem");
+  });
+
+  it("leaves a value that says its own unit, or is a keyword, as typed", () => {
+    expect(withDefaultUnit(PADDING, "50%", "px")).toBe("50%");
+    expect(withDefaultUnit(MARGIN, "auto", "px")).toBe("auto");
+    expect(withDefaultUnit(PADDING, null, "px")).toBeNull();
+  });
+
+  it("leaves a number the property would refuse with the unit as typed", () => {
+    // A negative padding is refused either way; adding a unit must not turn
+    // a refusal into a different, quieter one.
+    expect(withDefaultUnit(PADDING, "-4", "px")).toBe("-4");
+  });
+
+  it("leaves a unitless property's number alone", () => {
+    expect(withDefaultUnit(OPACITY, "0.5", "px")).toBe("0.5");
   });
 });

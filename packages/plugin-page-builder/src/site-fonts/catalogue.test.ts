@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   parseCatalogue,
+  parseCatalogueStats,
   parseFontMetadata,
   parseVariableVersion,
+  withPopularity,
 } from "./catalogue";
 
 /** Entries as Fontsource's list answers them, trimmed to three. */
@@ -166,5 +168,116 @@ describe("parseVariableVersion", () => {
       parseVariableVersion({ latestVariable: "../5.2.6" })
     ).toBeUndefined();
     expect(parseVariableVersion("5.2.6")).toBeUndefined();
+  });
+});
+
+describe("parseCatalogueStats", () => {
+  /** Two families as Fontsource's stats answer them, trimmed. */
+  const STATS = {
+    inter: {
+      total: { npmDownloadMonthly: 2_400_000, npmDownloadTotal: 9 },
+      static: { npmDownloadMonthly: 1_000_000 },
+      variable: { npmDownloadMonthly: 1_400_000 },
+    },
+    lora: { total: { npmDownloadMonthly: 52_000 } },
+  };
+
+  it("reads each family's total monthly downloads, by its id", () => {
+    const stats = parseCatalogueStats(STATS);
+    expect(stats?.get("inter")).toBe(2_400_000);
+    expect(stats?.get("lora")).toBe(52_000);
+  });
+
+  it("counts a family whose figure is missing or unreadable as 0, without losing the others", () => {
+    const stats = parseCatalogueStats({
+      ...STATS,
+      quiet: { static: { npmDownloadMonthly: 5 } },
+      garbled: { total: { npmDownloadMonthly: "lots" } },
+      negative: { total: { npmDownloadMonthly: -3 } },
+      odd: "not an entry",
+    });
+    expect(stats?.get("quiet")).toBe(0);
+    expect(stats?.get("garbled")).toBe(0);
+    expect(stats?.get("negative")).toBe(0);
+    expect(stats?.get("odd")).toBe(0);
+    expect(stats?.get("inter")).toBe(2_400_000);
+  });
+
+  it("reads the total from two families exactly as GET /v1/stats answered them", () => {
+    // Copied verbatim from https://api.fontsource.org/v1/stats on 2026-11-03,
+    // whose whole answer (about 590 KB) keys 2,123 families by id. The
+    // static, variable and total figures all differ, so a read of the wrong
+    // one, or of a field the answer does not have, gives another number.
+    const live = {
+      inter: {
+        static: {
+          npmDownloadMonthly: 7209595,
+          npmDownloadTotal: 79537744,
+          jsDelivrHitsMonthly: 149841880,
+          jsDelivrHitsTotal: 266676192,
+        },
+        variable: {
+          npmDownloadMonthly: 7871827,
+          npmDownloadTotal: 35765761,
+          jsDelivrHitsMonthly: 349284410,
+          jsDelivrHitsTotal: 352746729,
+        },
+        total: {
+          npmDownloadMonthly: 15081422,
+          npmDownloadTotal: 115303505,
+          jsDelivrHitsMonthly: 499126290,
+          jsDelivrHitsTotal: 619422921,
+        },
+      },
+      lora: {
+        static: {
+          npmDownloadMonthly: 242453,
+          npmDownloadTotal: 2593672,
+          jsDelivrHitsMonthly: 13270057,
+          jsDelivrHitsTotal: 14541573,
+        },
+        variable: {
+          npmDownloadMonthly: 174844,
+          npmDownloadTotal: 546155,
+          jsDelivrHitsMonthly: 9268536,
+          jsDelivrHitsTotal: 9299429,
+        },
+        total: {
+          npmDownloadMonthly: 417297,
+          npmDownloadTotal: 3139827,
+          jsDelivrHitsMonthly: 22538593,
+          jsDelivrHitsTotal: 23841002,
+        },
+      },
+    };
+    const stats = parseCatalogueStats(live);
+    expect(stats?.get("inter")).toBe(15081422);
+    expect(stats?.get("lora")).toBe(417297);
+  });
+
+  it("reads nothing from an answer that is not an object of families", () => {
+    expect(parseCatalogueStats([STATS])).toBeUndefined();
+    expect(parseCatalogueStats("2400000")).toBeUndefined();
+    expect(parseCatalogueStats(null)).toBeUndefined();
+  });
+});
+
+describe("withPopularity", () => {
+  it("gives every family its figure, and 0 to one the stats do not name", () => {
+    const { families } = parseCatalogue([
+      LIST[0],
+      { ...LIST[0], id: "lora", family: "Lora" },
+    ]);
+    const ranked = withPopularity(families, new Map([["inter", 7]]));
+    expect(ranked.map(family => [family.id, family.popularity])).toEqual([
+      ["inter", 7],
+      ["lora", 0],
+    ]);
+  });
+
+  it("leaves the families without a figure when there are no stats", () => {
+    const { families } = parseCatalogue([LIST[0]]);
+    const ranked = withPopularity(families, undefined);
+    expect(ranked[0]).not.toHaveProperty("popularity");
   });
 });

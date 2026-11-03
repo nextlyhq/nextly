@@ -109,3 +109,19 @@ describe("core block editor metadata", () => {
     }
   });
 });
+
+describe("where a link opens, as its choices read", () => {
+  it("says This tab and New tab, short enough to share one line", () => {
+    // "A new tab" wrapped onto two lines in the inspector's segmented control.
+    for (const name of ["core/button", "core/heading"]) {
+      const block = coreBlocks.find(each => each.name === name);
+      const target = (
+        block?.props as Record<string, { optionLabels?: unknown }>
+      ).target;
+      expect(target?.optionLabels).toEqual({
+        _self: "This tab",
+        _blank: "New tab",
+      });
+    }
+  });
+});

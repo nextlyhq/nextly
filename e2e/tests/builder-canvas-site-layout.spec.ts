@@ -174,14 +174,13 @@ test.describe("the canvas in the site's own layout", () => {
     // once the page is up, as a layout drawing part of itself late would.
     await frame.evaluate(() => {
       const header = document.createElement("header");
-      // Marked by an attribute of the test's own rather than an id, which a
-      // hidden copy of a page the router keeps could also carry.
-      header.setAttribute("data-e2e-site-header", "");
+      header.id = "site-header";
       header.innerHTML =
         '<a href="/elsewhere">Site link</a><form action="/search"><input name="q" aria-label="Site search"></form>';
       document.body.prepend(header);
     });
-    const header = canvasFrame(page).locator("[data-e2e-site-header]");
+    // Held to the visible header: an id alone would also match one in a hidden copy of a page.
+    const header = canvasFrame(page).locator("#site-header:visible");
     await expect(header).toHaveAttribute("inert", "");
     await expect(header).toHaveAttribute("data-nx-site-chrome", "");
 
@@ -212,9 +211,8 @@ test.describe("the canvas in the site's own layout", () => {
     await expect(page).toHaveURL(BUILDER_URL);
     expect(
       await frame.evaluate(() => {
-        const field = document.querySelector<HTMLInputElement>(
-          "[data-e2e-site-header] input"
-        );
+        const field =
+          document.querySelector<HTMLInputElement>("#site-header input");
         field?.focus();
         return document.activeElement === field;
       })
