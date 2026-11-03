@@ -75,6 +75,10 @@ export function SiteChromeCues({
     const Sizes = view.ResizeObserver;
     const sizes = typeof Sizes === "function" ? new Sizes(place) : null;
     for (const element of elements) sizes?.observe(element);
+    // A part can MOVE without changing size — a footer pushed down as the
+    // page above it grows — and only the page's own size says so.
+    sizes?.observe(page.documentElement);
+    if (page.body !== null) sizes?.observe(page.body);
     // A viewport's scroll is dispatched at its document.
     page.addEventListener("scroll", place, { passive: true });
     view.addEventListener("resize", place);

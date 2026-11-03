@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CanvasFrame,
+  isPageAt,
   type CanvasFrameFallback,
   type SiteFrameSource,
 } from "./canvas-frame";
@@ -200,6 +201,47 @@ describe("the canvas frame on a page the site serves", () => {
       await Promise.resolve();
     });
     expect(cues()).toHaveLength(5);
+  });
+
+  it("moves a cue when the part it covers moves without resizing", async () => {
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={siteSource()}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    const doc = frameDocument(frame);
+    // What each size watch in the frame observes, and how to tell it a size
+    // changed: jsdom lays nothing out, so the test says when.
+    const watches: { targets: Element[]; changed: () => void }[] = [];
+    class Sizes {
+      private readonly targets: Element[] = [];
+      constructor(changed: () => void) {
+        watches.push({ targets: this.targets, changed });
+      }
+      observe(target: Element): void {
+        this.targets.push(target);
+      }
+      disconnect(): void {}
+    }
+    Object.defineProperty(doc.defaultView, "ResizeObserver", {
+      value: Sizes,
+      configurable: true,
+    });
+    await hydrate(frame);
+    const footer = doc.getElementById("site-footer");
+    if (footer === null) throw new Error("no footer");
+    const cue = Array.from(
+      container.querySelectorAll<HTMLElement>(".nx-site-chrome-cue")
+    )[3];
+    // The page above the footer grows: the footer moves down, its own size
+    // the same, and the page's body is what changes size.
+    footer.getBoundingClientRect = () => new DOMRect(0, 500, 1280, 40);
+    const body = watches.find(watch => watch.targets.includes(doc.body));
+    expect(body, "the page's body is watched").toBeDefined();
+    act(() => body?.changed());
+    expect(Number.parseFloat(cue?.style.top ?? "0")).toBeGreaterThan(0);
   });
 
   it("falls back to the blank page, and says why, when the page loaded is not the route", () => {
@@ -420,6 +462,79 @@ describe("the canvas frame on a page the site serves", () => {
     expect(mount?.querySelector(".nx-canvas")).not.toBeNull();
   });
 
+  it("leaves the site's own theme as it is now, when the editor names none", async () => {
+    const source = siteSource();
+    const { container, rerender } = render(
+      <CanvasFrame width={1280} title="Home" source={source}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    act(() => {
+      const doc = frameDocument(frame);
+      doc.replaceChildren(doc.createElement("html"));
+      doc.documentElement.setAttribute("data-nx-theme", "dark");
+      doc.documentElement.innerHTML = `<head></head><body>${SITE_PAGE}</body>`;
+      frame.dispatchEvent(new Event("load"));
+    });
+    await hydrate(frame);
+    const root = frameDocument(frame).documentElement;
+    // The site switches its own mode after hydrating, from a preference.
+    root.setAttribute("data-nx-theme", "light");
+    // An unrelated change re-runs the editor's markers.
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={source}
+        showEmptyElements={false}
+      >
+        <Page />
+      </CanvasFrame>
+    );
+    expect(root.getAttribute("data-nx-theme")).toBe("light");
+  });
+
+  it("waits for a new route rather than drawing into the page the last one left", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const onSourceFallback =
+      vi.fn<(reason: CanvasFrameFallback | null) => void>();
+    const { container, rerender } = render(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={siteSource("/canvas")}
+        onSourceFallback={onSourceFallback}
+      >
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    await hydrate(frame);
+    const mount = frameDocument(frame).querySelector(`[${MOUNT}]`);
+    expect(mount?.querySelector(".nx-canvas")).not.toBeNull();
+
+    // Another language's route: the frame still holds the last page, ready,
+    // until the new one loads.
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={siteSource("/ar/canvas")}
+        onSourceFallback={onSourceFallback}
+      >
+        <Page />
+      </CanvasFrame>
+    );
+    expect(mount?.querySelector(".nx-canvas")).toBeNull();
+    // And a new route that never loads falls back like any other.
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(onSourceFallback).toHaveBeenLastCalledWith("not-ready");
+  });
+
   it("stops drawing into a mount point the site takes away", async () => {
     const { container } = render(
       <CanvasFrame width={1280} title="Home" source={siteSource()}>
@@ -439,5 +554,20 @@ describe("the canvas frame on a page the site serves", () => {
       await Promise.resolve();
     });
     expect(mount?.querySelector(".nx-canvas")).toBeNull();
+  });
+});
+
+describe("which page a frame holds", () => {
+  const SITE = "http://localhost:3000/";
+
+  it("is the route's page at the route's address, whatever its fragment", () => {
+    expect(isPageAt(`${SITE}canvas`, SITE, "/canvas")).toBe(true);
+    expect(isPageAt(`${SITE}canvas#top`, SITE, "/canvas")).toBe(true);
+  });
+
+  it("is not the page another route left behind", () => {
+    // The frame still holds the last language's route while the next loads.
+    expect(isPageAt(`${SITE}canvas`, SITE, "/ar/canvas")).toBe(false);
+    expect(isPageAt("about:blank", SITE, "/canvas")).toBe(false);
   });
 });

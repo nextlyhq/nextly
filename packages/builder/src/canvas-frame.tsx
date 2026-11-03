@@ -546,6 +546,18 @@ function useFramePage(
         show(doc);
         return;
       }
+      // Read on mount, a page at another address is the one an earlier source
+      // left behind while this one's request is on its way: never this
+      // source's, however ready it looks.
+      if (
+        !loaded &&
+        doc !== null &&
+        !isPageAt(doc.URL, doc.baseURI, source.src)
+      ) {
+        show(null);
+        wait.arm();
+        return;
+      }
       if (doc === null || !source.served(doc)) {
         show(null);
         if (!loaded) wait.arm();
@@ -572,6 +584,28 @@ function useFramePage(
     };
   }, [frame, source, refuse]);
   return reading;
+}
+
+/**
+ * Whether a frame's document, at `address`, is the page `src` names: the same
+ * address, whatever its fragment, `src` read against the document's `base`
+ * when it is relative. The frame's starting page is at no address, so it never
+ * is.
+ *
+ * @internal
+ */
+export function isPageAt(address: string, base: string, src: string): boolean {
+  try {
+    const want = new URL(src, base);
+    const have = new URL(address);
+    return (
+      have.origin === want.origin &&
+      have.pathname === want.pathname &&
+      have.search === want.search
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -832,10 +866,8 @@ function usePageMarkers(
     const editorRoot = frame?.ownerDocument.documentElement;
     root.classList.add(BUILDER_CHROME_CLASS);
     // Named, the editor's theme; otherwise whatever the page itself states,
-    // which on a page the site serves is the site's own default mode. Read
-    // before anything is written, whichever comes first.
-    const ownTheme = siteThemeOf(root);
-    stateAttribute(root, "data-nx-theme", theme ?? ownTheme);
+    // which on a page the site serves is the site's own, live mode.
+    stateTheme(root, theme);
     stateAttribute(
       root,
       EMPTY_ELEMENTS_ATTRIBUTE,
@@ -847,17 +879,30 @@ function usePageMarkers(
 }
 
 /**
- * The theme a page's root stated before the editor first wrote one, read once
- * per root and remembered, so a theme the editor stops naming gives back the
- * page's own rather than none.
+ * The theme a page's root stated when the editor began naming one, held only
+ * while the editor names one, so naming none again gives the page's own back.
  */
 const SITE_THEMES = new WeakMap<Element, string | undefined>();
 
-function siteThemeOf(root: Element): string | undefined {
-  if (!SITE_THEMES.has(root)) {
-    SITE_THEMES.set(root, root.getAttribute("data-nx-theme") ?? undefined);
+/**
+ * State the editor's theme on a page's root, or leave the page's own.
+ *
+ * Only an override is written. With none named, the attribute is left alone,
+ * so a site that switches its own mode after hydrating keeps it, unless the
+ * editor had been naming one: then the page's value from before that comes
+ * back, once.
+ */
+function stateTheme(root: Element, theme: string | undefined): void {
+  if (theme !== undefined) {
+    if (!SITE_THEMES.has(root)) {
+      SITE_THEMES.set(root, root.getAttribute("data-nx-theme") ?? undefined);
+    }
+    root.setAttribute("data-nx-theme", theme);
+    return;
   }
-  return SITE_THEMES.get(root);
+  if (!SITE_THEMES.has(root)) return;
+  stateAttribute(root, "data-nx-theme", SITE_THEMES.get(root));
+  SITE_THEMES.delete(root);
 }
 
 /** Set an attribute to a value, or remove it where there is none to state. */
