@@ -375,11 +375,11 @@ describe("selection marks", () => {
     ).toBe(true);
   });
 
-  it("draws the ring outside the block, kept inside the page at its edge", async () => {
+  it("draws the ring outside the block, at the page's edge too", async () => {
     /*
      * Drawn inside, the ring covered the first glyph of a heading set flush
-     * with its box. Outside, it would leave the page for a block flush with
-     * the page's edge, so there it is held to the page.
+     * with its box. Outside, for a block flush with the page's edge, it runs
+     * past the page, into the room the layer keeps past the frame for it.
      */
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
       function boxOf(this: Element) {
@@ -405,7 +405,7 @@ describe("selection marks", () => {
       return { left, top, width, height };
     });
     expect(boxes).toEqual([
-      { left: "0px", top: "0px", width: "104px", height: "54px" },
+      { left: "-4px", top: "-4px", width: "108px", height: "58px" },
       { left: "96px", top: "96px", width: "208px", height: "58px" },
     ]);
   });
@@ -714,7 +714,9 @@ describe("a selected block shown although the page hides it", () => {
     const mark = halosIn(container)[0] as HTMLElement;
     expect(mark.getAttribute("data-tag")).toBe("below");
     expect(mark.getAttribute("data-tag-edge")).toBe("right");
-    expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("500px");
+    // The ring stands 4px outside the 1500px block, so it runs 504px past
+    // the 1000px screen, and the tag moves in by as much.
+    expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("504px");
   });
 
   it("does not put the primary block's tag above it where the block toolbar sits", async () => {

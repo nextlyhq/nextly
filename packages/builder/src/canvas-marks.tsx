@@ -45,6 +45,7 @@ import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
+  CHROME_BLEED,
   canvasScroller,
   clippedByAncestor,
   overlaySpaceOf,
@@ -150,9 +151,11 @@ export interface CanvasMarksProps {
 /**
  * How far outside a block its selection ring is drawn: the ring and the halo
  * band inside it, each 2px. Outside, so the ring never covers the block's own
- * content, the first glyph of a heading set flush with its box.
+ * content, the first glyph of a heading set flush with its box. The layer
+ * reaches as far past the frame (`CHROME_BLEED`), so the ring of a block
+ * flush with the page's edge is drawn too.
  */
-const RING_OUTSIDE = 4;
+const RING_OUTSIDE = CHROME_BLEED;
 
 /**
  * The height of a placement's tag, drawn above its frame. A frame closer than
@@ -301,38 +304,26 @@ function outlineOf(
   };
 }
 
-/** The intersection of two rectangles, or `null` where they do not meet. */
-function intersection(a: Rect, b: Rect): Rect | null {
-  const x = Math.max(a.x, b.x);
-  const y = Math.max(a.y, b.y);
-  const right = Math.min(a.x + a.width, b.x + b.width);
-  const bottom = Math.min(a.y + a.height, b.y + b.height);
-  if (right <= x || bottom <= y) return null;
-  return { x, y, width: right - x, height: bottom - y };
-}
-
 /**
  * Where a selection ring is drawn for an outline: outside the block by
- * {@link RING_OUTSIDE}, with its rounded corners grown to stay concentric,
- * but held inside the page where the block is flush with its edge, so the ring
- * never runs off the page there.
+ * {@link RING_OUTSIDE}, with its rounded corners grown to stay concentric.
+ * The layer reaches as far past the frame, so a block flush with the page's
+ * edge keeps its ring there too.
  *
  * A clipped outline is drawn where it is: the page shows nothing past the
  * clip, so a ring outside it would ring what the reader cannot see.
  */
-function ringOf(outline: Outline, page: Rect): Outline {
+function ringOf(outline: Outline): Outline {
   if (outline.clipped) return outline;
   const { x, y, width, height } = outline.rect;
-  const grown = {
-    x: x - RING_OUTSIDE,
-    y: y - RING_OUTSIDE,
-    width: width + 2 * RING_OUTSIDE,
-    height: height + 2 * RING_OUTSIDE,
-  };
   const radii = outsetCornerRadii(outline.radii, RING_OUTSIDE);
-  // A block wholly off the page keeps its own box rather than none.
   return {
-    rect: intersection(grown, page) ?? outline.rect,
+    rect: {
+      x: x - RING_OUTSIDE,
+      y: y - RING_OUTSIDE,
+      width: width + 2 * RING_OUTSIDE,
+      height: height + 2 * RING_OUTSIDE,
+    },
     radius: borderRadiusOf(radii),
     radii,
     clipped: false,
@@ -539,7 +530,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         if (placement !== "") {
           gatherPlacement(placements, placement, outline, look);
         } else {
-          found.push(selectedMark(ringOf(outline, pageBox), look, placedTag));
+          found.push(selectedMark(ringOf(outline), look, placedTag));
         }
       }
       // An exposed part keeps its dash inside its placement's frame. A block
@@ -559,7 +550,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       }
     });
   placements.forEach(({ parts, ...look }, placement) => {
-    const ring = ringOf(placementOutline(parts), pageBox);
+    const ring = ringOf(placementOutline(parts));
     found.push(selectedMark(ring, look, placedTag, placement));
   });
   const { hovered } = inputs;

@@ -24,6 +24,7 @@ import {
 } from "./canvas-frame";
 import { Canvas } from "./canvas";
 import { SITE_CHROME_ATTRIBUTE } from "./canvas-frame-sheet";
+import { CHROME_BLEED } from "./geometry-dom";
 
 afterEach(() => {
   cleanup();
@@ -286,7 +287,10 @@ describe("the canvas frame on a page the site serves", () => {
     act(() => {
       for (const watch of page) watch.changed();
     });
-    expect(content.style.transform).toContain("300px");
+    // Moved with the canvas, past the layer's bleed (`CHROME_BLEED`).
+    expect(content.style.transform).toBe(
+      `translate(${String(CHROME_BLEED)}px, ${String(300 + CHROME_BLEED)}px)`
+    );
   });
 
   it("takes a cue away with the part the site's layout removes", async () => {

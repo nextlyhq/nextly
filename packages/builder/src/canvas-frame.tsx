@@ -70,6 +70,7 @@ import { frameContentOrigin, pointToHost } from "./geometry";
 import {
   CANVAS_FRAME_BOX_ATTRIBUTE,
   CANVAS_LAYER_ATTRIBUTE,
+  CHROME_BLEED,
   frameInsetOf,
   framePaintedScale,
   frameViewportOf,
@@ -1269,10 +1270,13 @@ function useLayerPlacement(
         painted
       );
       const viewport = frameViewportOf(parts.frame);
-      box.style.left = `${String(origin.x)}px`;
-      box.style.top = `${String(origin.y)}px`;
-      box.style.width = `${String((viewport?.width ?? 0) * painted)}px`;
-      box.style.height = `${String((viewport?.height ?? 0) * painted)}px`;
+      // The viewport, and CHROME_BLEED past it on every side, where a ring
+      // outside a block flush with the page's edge is drawn; the content is
+      // moved back by as much, so nothing drawn in it moves.
+      box.style.left = `${String(origin.x - CHROME_BLEED)}px`;
+      box.style.top = `${String(origin.y - CHROME_BLEED)}px`;
+      box.style.width = `${String((viewport?.width ?? 0) * painted + 2 * CHROME_BLEED)}px`;
+      box.style.height = `${String((viewport?.height ?? 0) * painted + 2 * CHROME_BLEED)}px`;
       if (root === null) {
         content.hidden = true;
         return;
@@ -1289,7 +1293,7 @@ function useLayerPlacement(
         origin: { x: 0, y: 0 },
         scale: painted,
       });
-      content.style.transform = `translate(${String(at.x)}px, ${String(at.y)}px)`;
+      content.style.transform = `translate(${String(at.x + CHROME_BLEED)}px, ${String(at.y + CHROME_BLEED)}px)`;
       content.style.width = `${String(root.offsetWidth * painted)}px`;
       content.style.height = `${String(root.offsetHeight * painted)}px`;
     };

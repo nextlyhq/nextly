@@ -39,6 +39,7 @@ import { CanvasMarks } from "./canvas-marks";
 import { useEditorState, type EditorState } from "./editor-state";
 import {
   framePointInHost,
+  frameViewportOf,
   hostPointInFrame,
   overlaySpaceOf,
 } from "./geometry-dom";
@@ -217,6 +218,38 @@ describe("chrome drawn over a frame lines up with the page", () => {
     expect(ring.style.width).toBe("208px");
     expect(ring.style.height).toBe("58px");
     expect(ring.hasAttribute("data-secondary")).toBe(false);
+  });
+
+  it("draws its layer a ring's distance past the frame on every side, the chrome where it was", async () => {
+    // A selection ring stands just outside its block, so for a block flush
+    // with the page's edge it runs past the frame: the layer reaches that far
+    // and moves its content back, so everything drawn in it stays put.
+    const { container, frame } = framed(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={TEST_SOURCE}
+        overlay={<CanvasMarks />}
+      >
+        <Canvas document={PAGE} siteStyles={false} selectedId="box" />
+      </CanvasFrame>
+    );
+    await act(async () => undefined);
+    // The viewport as the layer reads it, painted at the frame's half scale.
+    const viewport = frameViewportOf(frame);
+    const painted = (length: number | undefined): string =>
+      `${String((length ?? 0) * (FRAME_BOX.width / FRAME_LAYOUT.width) + 8)}px`;
+    const layer = container.querySelector<HTMLElement>(
+      "[data-nx-canvas-layer]"
+    );
+    const content = container.querySelector<HTMLElement>(
+      ".nx-canvas-layer__content"
+    );
+    expect(layer?.style.left).toBe("-4px");
+    expect(layer?.style.top).toBe("-4px");
+    expect(layer?.style.width).toBe(painted(viewport?.width));
+    expect(layer?.style.height).toBe(painted(viewport?.height));
+    expect(content?.style.transform).toMatch(/^translate\(4px, 4px\)/);
   });
 
   it("draws the drop line at the frame's scale", () => {

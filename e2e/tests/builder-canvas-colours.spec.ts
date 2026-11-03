@@ -646,25 +646,25 @@ test.describe("the selection halo", () => {
     test.slow();
     const card = await selectCardWith(
       page,
-      ".nx-pb-page p[data-nx-node='card'] { position: relative; z-index: 5; background: #2563eb; }"
+      ".nx-pb-page { background: #111827; } .nx-pb-page p[data-nx-node='card'] { position: relative; z-index: 5; background: #2563eb; }"
     );
     await expect(rings(page)).toHaveCount(1);
     const box = await card.boundingBox();
     expect(box, "the card is measurable").not.toBeNull();
     if (box === null) return;
-    // A short column across the top edge: ring, then band, then the card.
-    // Near the left end rather than the middle, where the spacing overlay's
-    // value chip sits over the edge.
+    // A short column across the ring, which stands just outside the card's
+    // top edge: ring, then band, then the card. Near the left end rather than
+    // the middle, where the spacing overlay's value chip sits over the edge.
     const column = await pixelsIn(page, {
       x: Math.round(box.x + box.width / 4),
-      y: Math.floor(box.y),
+      y: Math.floor(box.y) - 6,
       width: 1,
-      height: 6,
+      height: 8,
     });
     /*
-     * Near white rather than pure: the spacing overlay's padding band, which
-     * the editor draws over the selected block, tints everything under it. The
-     * card itself is a saturated blue, so a light pixel can only be the band.
+     * Near white rather than pure: the spacing overlay's band tints what is
+     * under it. The page's ground is near black and the card a saturated blue,
+     * so a light pixel there can only be the halo band.
      */
     expect(
       column.some(([r, g, b]) => Math.min(r, g, b) > 180),
