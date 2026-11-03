@@ -102,6 +102,14 @@ export interface BreakpointIssue {
 }
 
 /**
+ * The base tier's name wherever the editor names a device. The device
+ * switcher calls it Desktop whatever the site's settings label it, so the
+ * inspector, saying where a value came from or what a reset reveals, uses the
+ * same word rather than a second name for the tier on the same screen.
+ */
+export const BASE_DEVICE_LABEL = "Desktop";
+
+/**
  * How many definitions an axis may hold in STORED settings.
  *
  * The viewport axis is one lower than the declared limit because its

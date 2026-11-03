@@ -809,12 +809,20 @@ describe("controls", () => {
     // engine answers with the catalog's first arm when nothing is stored.
     mount({ border: { radius: true } });
 
-    const trigger = screen.getByLabelText("Border radius form");
-    fireEvent.click(trigger);
-    // Named from the arms' own shape kinds rather than numbered.
-    expect(screen.getByRole("option", { name: "Per corner" })).toBeDefined();
+    // A toggle on the property's own row, its forms named in plain words.
+    const forms = screen.getByRole("radiogroup", { name: "Border radius" });
+    expect(
+      within(forms)
+        .getAllByRole("radio")
+        .map(radio => radio.textContent)
+    ).toEqual(["All", "Corners"]);
+    expect(
+      within(forms)
+        .getByRole("radio", { name: "All" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
 
-    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+    fireEvent.click(within(forms).getByRole("radio", { name: "Corners" }));
 
     expect(
       fieldsOf("borderRadius").getByLabelText("Start start")
@@ -830,8 +838,7 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ border: { radius: true } }, styles);
 
-    fireEvent.click(screen.getByLabelText("Border radius form"));
-    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Corners" }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
@@ -853,8 +860,9 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ position: true }, styles);
 
-    fireEvent.click(screen.getByLabelText("Z index form"));
-    fireEvent.click(screen.getByRole("option", { name: "Keyword" }));
+    // A form of one keyword is named by it: "Auto", not "Keyword".
+    const forms = screen.getByRole("radiogroup", { name: "Z index" });
+    fireEvent.click(within(forms).getByRole("radio", { name: "Auto" }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
@@ -866,15 +874,16 @@ describe("controls", () => {
     });
   });
 
-  it("lets a keyword selection be cleared, which a select cannot offer as an item", () => {
+  it("lets a keyword selection be reset, which a select cannot offer as an item", () => {
     const styles = {
       base: { [BASE_BREAKPOINT]: { mixBlendMode: "multiply" } },
     } as NodeStyles;
     const editor = mount({ effects: true }, styles);
 
+    // From the row's reset: a select cannot offer "unset" as an item.
     fireEvent.click(
       fieldsOf("mixBlendMode").getByRole("button", {
-        name: "Clear Mix blend mode",
+        name: /^Reset Mix blend mode/,
       })
     );
 
@@ -971,14 +980,54 @@ describe("controls", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
-  it("names a ROOT form selector for its own property", () => {
+  it("names a ROOT form toggle for its own property, without the word form", () => {
     // A property whose shape is a union at the top draws one control and so no
-    // heading, so a selector called "Form" would tell a screen-reader user
-    // nothing about which property it changes. Typography's unions draw no
-    // form selector at all: their one control takes either form.
+    // heading, so a toggle called "Form" would tell a screen-reader user
+    // nothing about which property it changes. "Border radius form" was an
+    // internal word in front of authors. Typography's unions draw no form
+    // choice at all: their one control takes either form.
     mount({ border: { radius: true } });
 
-    expect(screen.getByLabelText("Border radius form")).toBeDefined();
+    expect(
+      screen.getByRole("radiogroup", { name: "Border radius" })
+    ).toBeDefined();
+    expect(screen.queryByText(/ form$/)).toBeNull();
+  });
+
+  it("moves between forms with the arrow keys, the chosen one the tab stop", () => {
+    mount({ border: { radius: true } });
+    const all = screen.getByRole("radio", { name: "All" });
+    expect(all.tabIndex).toBe(0);
+    expect(screen.getByRole("radio", { name: "Corners" }).tabIndex).toBe(-1);
+
+    fireEvent.keyDown(all, { key: "ArrowRight" });
+
+    expect(
+      fieldsOf("borderRadius").getByLabelText("Start start")
+    ).toBeDefined();
+  });
+
+  it("draws a nested form's toggle just above its own control", () => {
+    // Position's z-index is the last of its controls: a toggle drawn above
+    // them all left the number field at the bottom with no visible name.
+    mount({ position: true });
+    const toggleRow = screen
+      .getByRole("radiogroup", { name: "Z index" })
+      .closest("[data-form-choice]");
+    const next = toggleRow?.nextElementSibling;
+    const label = next?.querySelector("label");
+    expect(label?.textContent).toContain("Z index");
+    expect(label?.hasAttribute("data-named-above")).toBe(true);
+  });
+
+  it("says the property's name once, on the toggle's row", () => {
+    // The one control under the toggle keeps its label for assistive
+    // technology and drops the visible copy, which said "Border radius" twice.
+    mount({ border: { radius: true } });
+    const below = document.querySelector(
+      '[data-property="borderRadius"] .nx-inspector__field:not([data-form-choice]) label'
+    );
+    expect(below?.hasAttribute("data-named-above")).toBe(true);
   });
 
   it("offers font weight as ONE list of named weights, with no form to choose first", () => {
@@ -1061,9 +1110,7 @@ describe("controls", () => {
     expect(
       (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
     ).toBe("16px or 50%");
-    expect(
-      fieldsOf("color").getByPlaceholderText("Name, hex or rgb()")
-    ).toBeDefined();
+    expect(fieldsOf("color").getByPlaceholderText("Name or hex")).toBeDefined();
   });
 
   it("sets alignment with icons that follow the container's direction", () => {
@@ -1075,7 +1122,12 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
-    const group = screen.getByRole("radiogroup", { name: "Justify content" });
+    // "Justify", its CSS name in the label's tooltip: "Justify content" was cut
+    // short in the 7rem label column.
+    const group = screen.getByRole("radiogroup", { name: "Justify" });
+    expect(screen.getByText("Justify").closest("label")?.title).toMatch(
+      /^Justify content/
+    );
     const start = within(group).getByRole("radio", { name: "Start" });
     expect(start.getAttribute("data-icon")).toBe("AlignVerticalJustifyStart");
 
@@ -1093,11 +1145,44 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
-    fireEvent.click(screen.getByText("Justify content"));
+    fireEvent.click(screen.getByText("Justify"));
 
     expect(document.activeElement?.getAttribute("role")).toBe("radio");
     expect(document.activeElement?.getAttribute("aria-label")).toBe("End");
     expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("resets a value set here from one icon at the row's end, even with no cascade", () => {
+    // One way to reset a row, whatever its control: no Clear beside a list
+    // and a Reset line under it besides, and none at all where the panel was
+    // mounted without a cascade to say where values come from.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+    } as NodeStyles;
+    const editor = mount({ layout: true }, styles);
+
+    const field = document.querySelector(
+      '[data-property="display"]'
+    ) as HTMLElement;
+    expect(
+      within(field).queryByRole("button", { name: "Clear Display" })
+    ).toBeNull();
+    const reset = within(field).getByRole("button", { name: /^Reset Display/ });
+    expect(reset.textContent).toBe("");
+    fireEvent.click(reset);
+    // The only value goes, and with it the node's styles.
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
+      "flex"
+    );
+  });
+
+  it("offers no reset for a value that is not set here", () => {
+    mount({ layout: true });
+
+    expect(
+      document.querySelector('[data-property="display"] [data-action="reset"]')
+    ).toBeNull();
   });
 
   it("leaves a trailing decimal point for the catalog, rather than reading it as a number", () => {
@@ -1159,7 +1244,7 @@ describe("controls", () => {
     ).toBeDefined();
   });
 
-  it("names every keyword clear action for its own property", () => {
+  it("names every reset for its own property", () => {
     // Two keyword properties set at once would otherwise offer two buttons
     // both called "Clear", and a screen-reader user cannot tell which
     // declaration each removes.
@@ -1172,8 +1257,9 @@ describe("controls", () => {
     mount({ effects: true }, styles);
 
     expect(
-      screen.getByRole("button", { name: "Clear Mix blend mode" })
+      screen.getByRole("button", { name: /^Reset Mix blend mode/ })
     ).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Reset Filter/ })).toBeDefined();
   });
 
   it("does not read NBSP-only text as an empty field, which would DELETE the value", () => {
@@ -1805,6 +1891,120 @@ describe("what the arrow keys do and do not claim", () => {
   });
 });
 
+describe("a side or a corner, in plain words", () => {
+  const LTR = { writingMode: "horizontal-tb", direction: "ltr" };
+  /** The visible names of one property's controls, on an element whose axes are known or not. */
+  function sideLabels(
+    property: string,
+    supports: Record<string, boolean | Record<string, boolean>>,
+    orientation: { writingMode: string; direction: string } | undefined,
+    styles?: NodeStyles
+  ): (string | null)[] {
+    register(supports);
+    render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf(styles))}
+        {...(orientation === undefined ? {} : { sideOrientation: orientation })}
+      />
+    );
+    return Array.from(
+      document.querySelectorAll(
+        `[data-property="${property}"] .nx-style-inspector__field-label-text`
+      )
+    ).map(label => label.textContent);
+  }
+
+  it("names a border's sides Top, Bottom, Left and Right", () => {
+    // "Top" and "Right" are CSS's logical words, not an
+    // author's. Named for a left-to-right horizontal element unless the
+    // canvas says otherwise.
+    const labels = sideLabels("border", { border: true }, LTR);
+    expect(labels.slice(0, 4)).toEqual(["Top", "Bottom", "Left", "Right"]);
+  });
+
+  it("names them from the element's direction, Right first on a right-to-left page", () => {
+    const labels = sideLabels(
+      "border",
+      { border: true },
+      {
+        writingMode: "horizontal-tb",
+        direction: "rtl",
+      }
+    );
+    expect(labels.slice(0, 4)).toEqual(["Top", "Bottom", "Right", "Left"]);
+  });
+
+  it("keeps the logical words until the canvas has said which way the element runs", () => {
+    // A guessed "Left" is wrong on a right-to-left or vertical page; the
+    // logical word is true on every page.
+    const labels = sideLabels("border", { border: true }, undefined);
+    expect(labels.slice(0, 4)).toEqual([
+      "Block start",
+      "Block end",
+      "Inline start",
+      "Inline end",
+    ]);
+  });
+
+  it("hints at a border's width as a border is drawn, not as a length in general", () => {
+    // "16px" read as a heavy frame where a border is usually a hairline.
+    mount({ border: true });
+    const top = document.querySelector<HTMLInputElement>(
+      '[data-property="border"] input'
+    );
+    expect(top?.placeholder).toBe("1px");
+  });
+
+  it("names a radius's corners Top left and the rest", () => {
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: {
+          borderRadius: {
+            startStart: "1px",
+            startEnd: "2px",
+            endStart: "3px",
+            endEnd: "4px",
+          },
+        },
+      },
+    } as NodeStyles;
+    const labels = sideLabels(
+      "borderRadius",
+      { border: { radius: true } },
+      LTR,
+      styles
+    );
+    expect(labels).toEqual([
+      "Top left",
+      "Top right",
+      "Bottom left",
+      "Bottom right",
+    ]);
+  });
+});
+
+describe("a property named like its section", () => {
+  it("draws no heading of its own, which would repeat the section's", () => {
+    // "Border" over the border's sides, inside the section titled Border,
+    // said the same word twice in a row.
+    mount({ border: true });
+    const heading = document.querySelector(
+      '[data-property="border"] .nx-style-inspector__property-label'
+    );
+    expect(document.querySelector('[data-property="border"]')).not.toBeNull();
+    expect(heading).toBeNull();
+  });
+
+  it("keeps the heading of a property its section does not name", () => {
+    mount({ spacing: true });
+    // Padding's four sides, in the section titled Spacing.
+    const heading = document.querySelector(
+      '[data-property="padding"] .nx-style-inspector__property-label'
+    );
+    expect(heading?.textContent).toBe("Padding");
+  });
+});
+
 describe("where a control's value came from", () => {
   /** The dot for one property's single control. */
   const dotIn = (property: string) =>
@@ -1855,6 +2055,164 @@ describe("where a control's value came from", () => {
     );
     return editor;
   }
+
+  /** A box carrying `.card` and nothing stored, so every value it shows is inherited. */
+  function mountCarded(
+    entries: readonly unknown[],
+    supports: Record<string, boolean | Record<string, boolean>>
+  ): void {
+    register(supports);
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={{ nodes: editor.document.nodes, entries } as never}
+      />
+    );
+  }
+  const fromCard = (over: Record<string, unknown>) =>
+    entry({ origin: { kind: "class", id: "cls-1", slug: "card" }, ...over });
+  const sourceIn = (property: string) =>
+    document.querySelector(
+      `[data-property="${property}"] .nx-style-inspector__provenance-source`
+    )?.textContent;
+
+  it("shows an inherited value in its field, and where it came from beside the label", () => {
+    // The value an author sees on the canvas, where a generic hint said
+    // nothing about it. Shown as the placeholder, so it reads as not set here
+    // and nothing is written by looking at it.
+    mountCarded([fromCard({ value: "#123456" })], { color: true });
+    const input = document.querySelector<HTMLInputElement>(
+      '[data-property="color"] input'
+    );
+    expect(input?.getAttribute("placeholder")).toBe("#123456");
+    expect(input?.value).toBe("");
+    expect(sourceIn("color")).toBe("From .card");
+  });
+
+  it("leaves the swatch unpainted for an inherited colour it cannot resolve here", () => {
+    // A site variable or currentcolor resolves against the canvas, not this
+    // panel: painted raw, it showed the admin's colour or none.
+    mountCarded([fromCard({ value: "var(--site-color-primary)" })], {
+      color: true,
+    });
+    const swatch = document.querySelector<HTMLElement>(
+      '[data-property="color"] .nx-style-inspector__swatch'
+    );
+    expect(swatch?.style.getPropertyValue("--nx-swatch")).toBe("");
+    expect(swatch?.hasAttribute("data-empty")).toBe(true);
+  });
+
+  it("opens the picker on the inherited colour it paints", () => {
+    // From the fallback, a small adjustment committed an unrelated colour.
+    mountCarded([fromCard({ value: "#336699" })], { color: true });
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
+    // The raw picker sits under Custom colour, after the site's variables.
+    fireEvent.click(screen.getByRole("button", { name: "Custom colour" }));
+    const picker = document.querySelector<HTMLElement>(
+      ".nx-style-inspector__picker"
+    );
+    const hex =
+      picker === null ? undefined : within(picker).getAllByRole("textbox")[0];
+    expect(
+      (hex as HTMLInputElement | undefined)?.value.toLowerCase()
+    ).toContain("336699");
+  });
+
+  it("paints an inherited colour in its swatch, marked as inherited", () => {
+    mountCarded([fromCard({ value: "#123456" })], { color: true });
+    const swatch = document.querySelector<HTMLElement>(
+      '[data-property="color"] .nx-style-inspector__swatch'
+    );
+    expect(swatch?.style.getPropertyValue("--nx-swatch")).toBe("#123456");
+    expect(swatch?.hasAttribute("data-inherited")).toBe(true);
+    expect(swatch?.hasAttribute("data-empty")).toBe(false);
+  });
+
+  it("shows an inherited keyword in its list in place of Not set", () => {
+    mountCarded([fromCard({ property: "display", value: "flex" })], {
+      layout: true,
+    });
+    // By the label's start: the label also holds the source caption.
+    const trigger = screen.getByLabelText(/^Display/);
+    expect(trigger.textContent).toBe("flex");
+    expect(trigger.textContent).not.toContain("Not set");
+    expect(sourceIn("display")).toBe("From .card");
+  });
+
+  it("shows an inherited weight by its name, not Not set", () => {
+    // The audit's case: a bold heading read its weight as "Not set".
+    mountCarded([fromCard({ property: "font-weight", value: "700" })], {
+      typography: true,
+    });
+    expect(screen.getByLabelText(/^Font weight/).textContent).toBe("Bold 700");
+    expect(sourceIn("fontWeight")).toBe("From .card");
+  });
+
+  it("names the enclosing block an inherited colour comes from, as Layers does", () => {
+    // CSS inheritance: the box inside a "Hero" with a colour of its own takes
+    // the Hero's colour, and says so by the name the Layers panel shows.
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "acme/box",
+          version: 1,
+          name: "Hero",
+          props: {},
+          styles: { base: { [BASE_BREAKPOINT]: { color: "#123456" } } },
+          slots: {
+            children: [{ id: "a", type: "acme/box", version: 1, props: {} }],
+          },
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              entry({
+                origin: { kind: "node", id: "outer" },
+                value: "#123456",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(sourceIn("color")).toBe("From Hero");
+    expect(dotIn("color")?.getAttribute("aria-label")).toBe(
+      "Inherited from Hero"
+    );
+    expect(
+      document
+        .querySelector('[data-property="color"] input')
+        ?.getAttribute("placeholder")
+    ).toBe("#123456");
+  });
+
+  it("draws no source beside a value set here", () => {
+    mountWithTrace([entry()]);
+    expect(sourceIn("color")).toBeUndefined();
+  });
 
   it("marks a value the author set on THIS block as set here", () => {
     mountWithTrace([entry()]);
@@ -2045,17 +2403,39 @@ describe("where a control's value came from", () => {
       />
     );
 
-    const text = document.querySelector(
-      '[data-property="color"] .nx-style-inspector__provenance-text'
+    // An inherited value's source is shown without focus, in brief, with the
+    // dot's whole sentence on the caption for a pointer.
+    const source = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-source'
     );
 
     // The POPULATION first. Both sides of the comparison below read through
     // `?.`, so a query that found nothing would compare `undefined` with
     // `undefined` and pass while nothing was rendered at all.
     expect(dotIn("color")).not.toBeNull();
-    expect(text).not.toBeNull();
+    expect(source).not.toBeNull();
+    expect(source?.getAttribute("title")).toBe(
+      dotIn("color")?.getAttribute("aria-label")
+    );
+    expect(source?.textContent).toBe("From .card");
+    expect(source?.getAttribute("aria-hidden")).toBe("true");
+    // And the whole sentence in text for a keyboard user, as for "Set here":
+    // the caption is brief and may be cut short.
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
     expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
-    expect(text?.textContent).not.toBe("");
+    expect(text?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("puts 'Set here' in TEXT too, revealed when the field has focus", () => {
+    mountWithTrace([entry()]);
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
+    expect(dotIn("color")).not.toBeNull();
+    expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
+    expect(text?.textContent).toBe("Set here");
     expect(text?.getAttribute("aria-hidden")).toBe("true");
   });
 
@@ -2279,7 +2659,7 @@ describe("where a control's value came from", () => {
      */
     mountWithTrace(undefined);
     expect(dotIn("color")).toBeNull();
-    expect(fieldsOf("color").getByLabelText("Color")).toBeTruthy();
+    expect(fieldsOf("color").getByLabelText("Colour")).toBeTruthy();
   });
 
   it("draws nothing when the trace cannot say WHICH control wrote it", () => {
@@ -2578,7 +2958,7 @@ describe("naming the place a value came from", () => {
         editing as never,
         "a:hover"
       )?.text
-    ).toBe("Inherited from the Link color control");
+    ).toBe("Inherited from the Link colour control");
   });
 
   it("still says 'this block' when the control's OWN rule won", () => {
@@ -2612,6 +2992,92 @@ describe("naming the place a value came from", () => {
       )
     ).toBeNull();
     expect(describeProvenance(undefined, editing as never)).toBeNull();
+  });
+
+  describe("in brief, as the caption shown beside an inherited value", () => {
+    const sourceFor = (
+      origin: unknown,
+      entry = at(),
+      descendant?: string
+    ): string | undefined => {
+      const described = describeProvenance(
+        { kind: "inherited", entry, from: origin } as never,
+        editing as never,
+        descendant
+      );
+      return described?.kind === "inherited" ? described.source : undefined;
+    };
+
+    it("names only what differs when the value is this block's own", () => {
+      // "From this block at Medium" spends the row on the one part the author
+      // already knows: they selected this block.
+      expect(
+        sourceFor({ kind: "node", id: "a" }, at({ breakpoint: "md" }))
+      ).toBe("From Medium");
+      expect(sourceFor({ kind: "node", id: "a" }, at({ state: "hover" }))).toBe(
+        "From Hover"
+      );
+      expect(
+        sourceFor(
+          { kind: "node", id: "a" },
+          at({ breakpoint: "md", state: "hover" })
+        )
+      ).toBe("From Medium · Hover");
+    });
+
+    it("names the tier it came from, with what differs after it", () => {
+      expect(sourceFor({ kind: "class", id: "cls-1", slug: "card" })).toBe(
+        "From .card"
+      );
+      expect(
+        sourceFor(
+          { kind: "class", id: "cls-1", slug: "card" },
+          at({ breakpoint: "md" })
+        )
+      ).toBe("From .card · Medium");
+      expect(sourceFor({ kind: "page" })).toBe("From the page");
+      expect(sourceFor({ kind: "node", id: "outer" })).toBe(
+        "From an enclosing block"
+      );
+    });
+
+    it("calls a block's defaults and the typography baseline defaults", () => {
+      expect(sourceFor({ kind: "blockType", type: "acme/box" })).toBe(
+        "From block defaults"
+      );
+      expect(sourceFor({ kind: "blockType", type: "acme/section" })).toBe(
+        "From enclosing block defaults"
+      );
+      // A heading's weight from the h2 baseline: the element an author sees
+      // in the HTML tag control, not the tier's internal name.
+      expect(sourceFor({ kind: "element", tag: "h2" })).toBe(
+        "From H2 defaults"
+      );
+    });
+
+    it("names no breakpoint after defaults, which no breakpoint edits", () => {
+      // "From H2 defaults · Desktop" sends an author to a tier where the value
+      // is not, since defaults are no tier's to edit.
+      expect(
+        sourceFor({ kind: "element", tag: "h2" }, at({ breakpoint: "md" }))
+      ).toBe("From H2 defaults");
+      expect(
+        sourceFor(
+          { kind: "blockType", type: "acme/box" },
+          at({ breakpoint: "md" })
+        )
+      ).toBe("From block defaults");
+    });
+
+    it("names the control a descendant rule came from by its label alone", () => {
+      expect(
+        sourceFor(
+          { kind: "node", id: "a" },
+          at({ property: "color", descendant: " a" }),
+          "a:hover"
+        )
+      ).toBe("From Link colour");
+    });
   });
 });
 
@@ -2693,7 +3159,10 @@ describe("the action a control's breakpoint provenance earns", () => {
      * rather than a load-bearing one, and this case does not pretend to cover
      * it.
      */
-    mount({ stored: BASE_BREAKPOINT, entries: [], onJump: () => {} });
+    // Stored at another tier and nowhere in the trace, so the address being
+    // edited holds nothing: a value stored HERE earns a reset however the
+    // cascade reads it.
+    mount({ stored: "tablet", entries: [], onJump: () => {} });
 
     expect(action("reset")).toBeNull();
     expect(action("jump")).toBeNull();
@@ -2731,15 +3200,63 @@ describe("the action a control's breakpoint provenance earns", () => {
      * Block start" and a screen-reader user could not tell which style each
      * removes — the same reason the panel computes an action name for `Clear`.
      */
-    expect(label).toContain("Color");
+    expect(label).toContain("Colour");
     /*
      * The tier a reset falls back to is NAMED, not left to be guessed. The
-     * unconditional tier has no authored definition to take a label from, so it
-     * is called by its id here — the same name every other sentence in this
-     * panel gives it, which is the point: one naming, not a second one invented
-     * for this button.
+     * unconditional tier is called what the device switcher calls it — the
+     * same name every other sentence in this panel gives it, which is the
+     * point: one naming, not a second one invented for this button.
      */
-    expect(label).toContain("from base");
+    expect(label).toContain("from Desktop");
+  });
+
+  it("keeps the reset for a value stored at a tier the canvas is not showing", () => {
+    /*
+     * The panel can edit a tier the preview is not at. The cascade then reads
+     * the control as unset, which is true of what is DISPLAYED, while a value
+     * is stored at the address being edited. A list has no Clear of its own,
+     * so this reset is the one way to remove that value.
+     */
+    register({ layout: true });
+    const editor = editorFor(
+      documentOf({ base: { tablet: { display: "flex" } } } as NodeStyles)
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={SITE}
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT] as never}
+        cascade={
+          {
+            entries: [
+              {
+                origin: { kind: "node", id: "a" },
+                property: "display",
+                value: "flex",
+                state: "base",
+                breakpoint: "tablet",
+              },
+            ],
+            nodes: editor.document.nodes,
+          } as never
+        }
+      />
+    );
+
+    const reset = document.querySelector<HTMLElement>(
+      '[data-property="display"] [data-action="reset"]'
+    );
+    expect(reset).not.toBeNull();
+    // Named without saying what shows through: the cascade did not rank this
+    // tier, so "leaving it unset" could be false.
+    expect(reset?.getAttribute("aria-label")).toBe("Reset Display at Tablet");
+    fireEvent.click(reset as HTMLElement);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
+      "flex"
+    );
   });
 
   it("names the action by its PROPERTY, not by the leaf alone", () => {
@@ -2872,6 +3389,45 @@ describe("the action a control's breakpoint provenance earns", () => {
     });
 
     expect(action("jump")).not.toBeNull();
+  });
+
+  it("names the source on the jump itself, and once", () => {
+    // The jump says where the value comes from and goes there: a caption
+    // beside the label saying "From Tablet" as well said it twice.
+    mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")?.textContent).toBe("From Tablet");
+    expect(action("jump")?.getAttribute("aria-label")).toMatch(
+      /^Edit Colour at Tablet/
+    );
+    expect(
+      document.querySelector(
+        '[data-property="color"] .nx-style-inspector__provenance-source'
+      )
+    ).toBeNull();
+  });
+
+  it("keeps the reset beside the jump when a value stored here is shadowed", () => {
+    /*
+     * Editing base while a live tablet declaration wins: the row's value
+     * comes from tablet, so it earns the jump, and base still stores a value
+     * the author can only remove from here. A list or an icon group has no
+     * Clear of its own, so without this reset that value is stuck.
+     */
+    const editor = mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt(BASE_BREAKPOINT), entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")).not.toBeNull();
+    expect(action("reset")).not.toBeNull();
+    fireEvent.click(action("reset") as HTMLElement);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("withholds the jump for a tier the canvas cannot be taken to", () => {
@@ -3177,7 +3733,10 @@ describe("a segmented keyword control behaves as a toggle", () => {
      */
     const editor = mountWith("italic");
 
-    fireEvent.click(fieldsOf("fontStyle").getByText("Font style"));
+    // The field's own label: the form toggle's row says the name as well.
+    fireEvent.click(
+      fieldsOf("fontStyle").getByText("Font style", { selector: "label *" })
+    );
 
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
@@ -3250,7 +3809,7 @@ describe("a per-side property is drawn as a box", () => {
   });
 
   it("names each side in plain words for the element's axes", () => {
-    // "Margin top" rather than "Block start": the box is drawn because the
+    // "Margin top" rather than "Top": the box is drawn because the
     // element's axes are known, and in them the sides have physical names.
     const { box } = mountSpacingBox(LTR);
     const within_ = within(box as HTMLElement);
@@ -3568,6 +4127,25 @@ describe("the Font control", () => {
     );
     return editor;
   }
+
+  it("removes a family the site does not have through the row's one reset", () => {
+    register({ typography: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { fontFamily: "Comic Sans MS, cursive" } },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        fonts={{ faces: [INTER], fromCode: [] }}
+      />
+    );
+    const field = fieldsOf("fontFamily");
+    expect(field.queryByRole("button", { name: "Clear Font" })).toBeNull();
+    fireEvent.click(field.getByRole("button", { name: /^Reset Font/ }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
 
   it("is a list of the site's fonts, with no box to type a family into", () => {
     mountFonts();

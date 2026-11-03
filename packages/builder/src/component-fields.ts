@@ -18,6 +18,8 @@
 import {
   EXPOSED_PROPERTY_TYPES,
   exposureTypeForProp,
+  findNode,
+  getBlock,
   isComponentDocument,
   isPlainRecord,
   planExposeProperty,
@@ -38,6 +40,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
+import { blockLabel } from "./inserter";
+import { fieldLabel, propLabel } from "./inspector";
 import type { BuilderOp } from "./ops";
 
 /**
@@ -66,6 +70,15 @@ export interface ComponentFieldsHost {
    * component are not counted, so it is never said as a count of pages.
    */
   readonly reach?: { readonly count: number; readonly complete: boolean };
+  /**
+   * How many distinct pages and Singles a change to the component reaches:
+   * placed on them directly, inside another component, or in a Layout that
+   * wraps them. What the banner over the view says; `complete` false makes
+   * it a floor, said as "at least". Absent while the host has no count.
+   */
+  readonly pages?: { readonly count: number; readonly complete: boolean };
+  /** The component's name, for the card heading its own view. */
+  readonly name?: string;
 }
 
 /** Why the ids a new field must avoid are not known, said to the author. */
@@ -168,20 +181,20 @@ export function exposeOffer(
   const type = exposureTypeForProp(schema);
   if (type !== undefined) return { type };
   return {
-    reason: `Placements can’t set a ${String(schema.type)} value, so it can’t be exposed.`,
+    reason: `Pages can’t set a ${String(schema.type)} value, so this stays the same everywhere it is used.`,
   };
 }
 
 /** Why the engine refused an edit, as an author reads it. */
 const PROBLEM_SENTENCE: Readonly<Record<ExposureEditProblem, string>> = {
-  "not-a-component": "Only a component’s own view can expose fields.",
+  "not-a-component": "Fields can only be added in a component’s own view.",
   "unknown-exposure": "That field is no longer on this component.",
   "unknown-node": "That block is no longer in this component.",
   "unknown-prop": "That block no longer has this property.",
   "not-exposable":
-    "Placements have no control for this property, so it can’t be exposed.",
+    "Pages have no control for this property, so it stays the same everywhere it is used.",
   "content-only":
-    "This block is in an area locked to its content, and this property isn’t content. Placements couldn’t change it, so it can’t be exposed. Loosen the lock to expose it.",
+    "This block is in an area locked to its content, and this property isn’t content, so pages couldn’t change it. Loosen the lock to let each page change it.",
   "invalid-label": "Give the field a name.",
   "invalid-exposure":
     "This component’s fields are stored in a shape that can’t be edited here. Remove the broken field first.",
@@ -409,8 +422,8 @@ export function removalSentences(
         : ` This component is placed directly in ${where}.`;
   const placements =
     removing.kind === "field"
-      ? `When you publish this component, every placement that set this field loses its value.${pages}`
-      : `When you publish this component, the content placements put in this slot is removed.${pages}`;
+      ? `When you publish this component, every use of it that set this field loses its value.${pages}`
+      : `When you publish this component, the blocks each use of it added here are removed.${pages}`;
   const variants = edit.prunedVariants.map(variant => ({
     variant: variant.variant,
     sentence: variant.emptied
@@ -418,4 +431,71 @@ export function removalSentences(
       : `${variant.label}: loses its value`,
   }));
   return { placements, variants };
+}
+
+/** What a field's source line says of a block that is no longer there. */
+const MISSING_BLOCK = "A missing block";
+
+/**
+ * Where a field comes from, in the words an author reads: the block and the
+ * property, by the names the block gives them, never a stored prop name or an
+ * id. "Heading text", "Button link"; the block alone where the property is
+ * named as the block is ("Image"); and "Heading · level" where the plain line
+ * would only repeat the field's own name. A visibility field says what it
+ * does instead, since it drives no property.
+ */
+export function fieldSource(
+  document: BlockDocument,
+  field: ExposedProperty
+): string {
+  const node = findNode(document.nodes, field.nodeId);
+  if (node === undefined) return MISSING_BLOCK;
+  const block = blockLabel(node.type);
+  if (field.type === "visibility") return `${block}, shown or hidden`;
+  const prop = inSentence(propWord(node.type, field.propPath));
+  if (prop.toLowerCase() === block.toLowerCase()) return block;
+  const line = `${block} ${prop}`;
+  return line.toLowerCase() === field.label.trim().toLowerCase()
+    ? `${block} · ${prop}`
+    : line;
+}
+
+/** Where an exposed slot sits, and what each placement does with it. */
+export function slotSource(
+  component: ComponentDocument,
+  slotId: string
+): string {
+  const slots: unknown = component.slots;
+  const slot = isPlainRecord(slots) ? slots[slotId] : undefined;
+  const nodeId = isPlainRecord(slot) ? slot.nodeId : undefined;
+  const node =
+    typeof nodeId === "string" ? findNode(component.nodes, nodeId) : undefined;
+  if (node === undefined) return MISSING_BLOCK;
+  return `${blockLabel(node.type)}, filled by each use`;
+}
+
+/**
+ * What the block calls the property a path starts at: its own label, or the
+ * name spaced when it gives none.
+ */
+function propWord(type: string, propPath: string): string {
+  const head = propPath.split(".", 1)[0] ?? propPath;
+  const schema = getBlock(type)?.props?.[head];
+  return schema === undefined ? fieldLabel(head) : propLabel(head, schema);
+}
+
+/**
+ * A label as it reads mid-sentence: its first letter lowered, unless the
+ * label opens with an acronym ("URL"), which keeps its capitals.
+ */
+function inSentence(label: string): string {
+  const second = label.charAt(1);
+  if (
+    second !== "" &&
+    second === second.toUpperCase() &&
+    /[A-Z]/.test(second)
+  ) {
+    return label;
+  }
+  return label.charAt(0).toLowerCase() + label.slice(1);
 }

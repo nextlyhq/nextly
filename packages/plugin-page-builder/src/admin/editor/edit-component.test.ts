@@ -17,6 +17,7 @@ import {
   isStoreRow,
   openDocument,
   returnFromSearch,
+  returnLabelFromSearch,
 } from "./edit-component";
 
 describe("the component's own view", () => {
@@ -45,6 +46,44 @@ describe("the component's own view", () => {
       "/admin/collections/components/c1/builder"
     );
     expect(returnFromSearch("")).toBeUndefined();
+  });
+});
+
+describe("where Back says it goes", () => {
+  it("is the name of the document left, carried beside the address", () => {
+    const address = componentEditorAddress(
+      "components",
+      "c1",
+      "/admin/collections/pages/p1/builder",
+      "content",
+      "Home page"
+    );
+    expect(address).toBe(
+      "/admin/collections/components/c1/builder?field=content&return=%2Fadmin%2Fcollections%2Fpages%2Fp1%2Fbuilder&from=Home+page"
+    );
+    expect(returnLabelFromSearch(address.slice(address.indexOf("?")))).toBe(
+      "Home page"
+    );
+  });
+
+  it("is not carried without a way back, or with a blank name", () => {
+    expect(
+      componentEditorAddress("components", "c1", undefined, undefined, "Home")
+    ).toBe("/admin/collections/components/c1/builder");
+    expect(
+      componentEditorAddress("components", "c1", "/admin/x", undefined, "  ")
+    ).toBe("/admin/collections/components/c1/builder?return=%2Fadmin%2Fx");
+  });
+
+  it("is read as plain words: trimmed, one line, and bounded", () => {
+    expect(returnLabelFromSearch("?from=%20%20About%0A%0Aus%20")).toBe(
+      "About us"
+    );
+    expect(returnLabelFromSearch("?from=")).toBeUndefined();
+    expect(returnLabelFromSearch("")).toBeUndefined();
+    const long = returnLabelFromSearch(`?from=${"a".repeat(200)}`);
+    expect(long?.length).toBeLessThanOrEqual(80);
+    expect(long?.endsWith("…")).toBe(true);
   });
 });
 
