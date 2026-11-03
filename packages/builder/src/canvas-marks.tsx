@@ -115,13 +115,14 @@ function borderRadiusOf(radii: CornerRadii): string {
  * A block an ancestor clips (`overflow: hidden` or `clip`) is marked over the
  * part left visible, square and `clipped`: the page draws nothing of it past
  * the clip, and a ring drawn there would mark what the reader cannot see.
- * Where the clip cannot be described, the whole box keeps a square ring.
+ * A block the clip hides entirely has no outline (`null`), and where the clip
+ * cannot be described, the whole box keeps a square ring.
  */
 function outlineOf(
   marked: Element,
   root: HTMLElement,
   space: OverlaySpace
-): { rect: Rect; radius: string; clipped: boolean } {
+): { rect: Rect; radius: string; clipped: boolean } | null {
   const own = canvasContentRect(marked, root);
   const style = marked.ownerDocument.defaultView?.getComputedStyle(marked);
   const scale = renderedScale(marked, root);
@@ -136,6 +137,7 @@ function outlineOf(
       : scaleCornerRadii(radii, { x: scale.x, y: scale.y });
   if (clippedByAncestor(marked, root, inRoot)) {
     const visible = visiblePartOf(marked, root) ?? own;
+    if (visible === "hidden") return null;
     return {
       rect: space.place(visible),
       radius: borderRadiusOf(SQUARE_CORNERS),
@@ -164,6 +166,8 @@ function marksOf(element: HTMLElement): readonly Mark[] {
       // A canvas rendered inside a block of this one marks its own elements.
       if (marked.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
       const outline = outlineOf(marked, root, space);
+      // Wholly cut away by a clipping ancestor: the page shows none of it.
+      if (outline === null) return;
       const plain = { secondary: false, component: false, locked: false };
       const selected = marked.getAttribute(SELECTED_ATTRIBUTE);
       if (selected !== null) {

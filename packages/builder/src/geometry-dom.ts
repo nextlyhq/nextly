@@ -1348,9 +1348,11 @@ export function clippedByAncestor(
 /**
  * The part of `element`'s box its clipping ancestors leave visible, in the
  * canvas's content coordinates: the box cut to every ancestor's clip, on each
- * axis that ancestor clips. `null` when nothing of it is left, or when a clip
- * cannot be described (an ancestor not aligned with the axes), which leaves
- * the caller its own fallback.
+ * axis that ancestor clips. `"hidden"` when nothing of it is left, and
+ * `null` when a clip cannot be described (an ancestor not aligned with the
+ * axes), which leaves the caller its own fallback. Two answers, because "the
+ * page shows none of it" and "it cannot be said what the page shows" call for
+ * different marks.
  *
  * Read from the same per-ancestor answer {@link clippedByAncestor} reads, so
  * the box that is said to be cut and the part said to be visible come from
@@ -1359,7 +1361,7 @@ export function clippedByAncestor(
 export function visiblePartOf(
   element: Element,
   root: HTMLElement
-): Rect | null {
+): Rect | "hidden" | null {
   const view = element.ownerDocument.defaultView;
   if (view === null) return null;
   const box = element.getBoundingClientRect();
@@ -1375,9 +1377,8 @@ export function visiblePartOf(
     if (context.kind === "clips") narrowTo(edges, context);
     return false;
   });
-  if (!described || edges.right <= edges.left || edges.bottom <= edges.top) {
-    return null;
-  }
+  if (!described) return null;
+  if (edges.right <= edges.left || edges.bottom <= edges.top) return "hidden";
   return clientRectInCanvas(
     {
       x: edges.left,

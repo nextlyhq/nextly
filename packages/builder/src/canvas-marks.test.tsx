@@ -314,4 +314,42 @@ describe("selection marks", () => {
     // Cut by the clip, so the halo band is not drawn along the cut edges.
     expect(mark.hasAttribute("data-clipped")).toBe(true);
   });
+
+  it("draws no mark for a block its clipping ancestor hides entirely", async () => {
+    /*
+     * Selected from Layers, a block can sit wholly outside the container that
+     * clips it. The page shows none of it, so a ring there would mark an area
+     * the reader cannot see; a clip that cannot be described is a different
+     * case, which keeps a square ring.
+     */
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-clip")) return new DOMRect(0, 0, 100, 50);
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "inner") {
+          return new DOMRect(200, 120, 100, 100);
+        }
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "clip", type: "acme/clip", version: 1, props: {} },
+            { id: "other", type: "acme/leaf", version: 1, props: {} },
+          ],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedIds={["inner", "other"]}
+        selectedId="other"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    // The visible block's mark is drawn, so the canvas has measured.
+    await waitFor(() => expect(halosIn(container).length).toBeGreaterThan(0));
+    expect(halosIn(container)).toHaveLength(1);
+  });
 });

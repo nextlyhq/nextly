@@ -161,6 +161,10 @@ describe("Enter on a selected block, on a canvas in a frame", () => {
       result.current.onDoubleClick({ target: pressed });
     });
     expect(pressed?.getAttribute("contenteditable")).toBe("plaintext-only");
+    // Typing the edit has not committed yet.
+    if (pressed !== null && pressed !== undefined) {
+      pressed.textContent = "Typed, not yet saved";
+    }
 
     // The frame's page is replaced, as a reload does: the same block, drawn
     // again in a new document.
@@ -170,5 +174,7 @@ describe("Enter on a selected block, on a canvas in a frame", () => {
 
     const redrawn = second.inside.querySelector('[data-nx-prop="caption"]');
     expect(redrawn?.getAttribute("contenteditable")).toBe("plaintext-only");
+    // The typing goes with the edit rather than being lost with the old page.
+    expect(redrawn?.textContent).toBe("Typed, not yet saved");
   });
 });

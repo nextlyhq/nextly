@@ -344,6 +344,11 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
       setEditing(null);
       return;
     }
+    // The page it was typed into is gone, but the typing is not committed:
+    // it goes on in the new page's element rather than being lost with it.
+    if (held !== null && held !== element) {
+      element.textContent = held.textContent;
+    }
     elementRef.current = element;
 
     element.setAttribute("contenteditable", "plaintext-only");
