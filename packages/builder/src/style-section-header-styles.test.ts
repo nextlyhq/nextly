@@ -535,8 +535,10 @@ describe("a section opening and closing", () => {
   });
 
   it("does not move at all for an author who asks for less motion", () => {
+    // As weighty as the open and closed rules, and after them, so it wins:
+    // a lighter selector lost to them and the section still moved.
     expect(FLAT).toContain(
-      '@media (prefers-reduced-motion: reduce) { .nx-inspector [data-slot="accordion-content"] { animation: none; } }'
+      '@media (prefers-reduced-motion: reduce) { .nx-inspector [data-slot="accordion-content"][data-state] { animation: none; } }'
     );
   });
 });

@@ -2578,9 +2578,12 @@
   }
 }
 
-/* An author who asks for less motion gets the section at once. */
+/*
+ * An author who asks for less motion gets the section at once. As weighty as
+ * the open and closed rules above, and after them, so it wins over both.
+ */
 @media (prefers-reduced-motion: reduce) {
-  .nx-inspector [data-slot="accordion-content"] {
+  .nx-inspector [data-slot="accordion-content"][data-state] {
     animation: none;
   }
 }
