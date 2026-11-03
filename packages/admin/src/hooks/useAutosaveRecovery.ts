@@ -14,7 +14,35 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import { canonicalJson } from "@admin/lib/canonical-json";
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
+
+/**
+ * Where "Not now" is remembered: this browser tab's session storage, keyed by
+ * the document, holding the time of the recovery point put off.
+ */
+function putOffKey(documentKey: string): string {
+  return `nextly:recovery-not-now:${documentKey}`;
+}
+
+/** Whether this tab already put off the recovery point stored at `at`. */
+function wasPutOff(documentKey: string, at: string): boolean {
+  try {
+    return window.sessionStorage.getItem(putOffKey(documentKey)) === at;
+  } catch {
+    // Storage refused (a private window, blocked site data): offer again.
+    return false;
+  }
+}
+
+/** Remember that this tab put off the recovery point stored at `at`. */
+function rememberPutOff(documentKey: string, at: string): void {
+  try {
+    window.sessionStorage.setItem(putOffKey(documentKey), at);
+  } catch {
+    // Storage refused: "Not now" lasts for this editor, as it did before.
+  }
+}
 
 export interface UseAutosaveRecoveryOptions {
   /** The document to read a recovery point for, or `null` when there is none. */
@@ -60,12 +88,13 @@ export interface UseAutosaveRecoveryResult {
    */
   isResolved: boolean;
   /**
-   * Stop offering for the rest of this editing session.
+   * "Not now": stop offering this recovery point for the rest of this browser
+   * tab's session, reloads included.
    *
-   * Local to the component, deliberately: it does NOT delete the stored
-   * recovery point. Dismissing means "not now", and a reader who dismisses and
-   * then reloads should still be offered the work rather than discovering it is
-   * gone because they closed a banner.
+   * It does NOT delete the stored recovery point, deliberately: a newer one,
+   * from edits made after, is offered again, and so is this one in a new tab,
+   * so an author never discovers work gone because they closed an offer. What
+   * it ends is the same offer returning on every load of the editor.
    */
   dismiss: () => void;
   /**
@@ -120,7 +149,13 @@ export function useAutosaveRecovery({
     staleTime: Infinity,
   });
 
-  const dismiss = useCallback(() => setDismissed(true), []);
+  const dismiss = useCallback(() => {
+    setDismissed(true);
+    if (data) rememberPutOff(documentKey, data.updatedAt);
+  }, [data, documentKey]);
+
+  // The document as stored, which the form was loaded with.
+  const stored = form.formState.defaultValues;
 
   // A document with no address is answered without asking: there is nothing to
   // read, and that is a final answer rather than a pending one.
@@ -144,8 +179,14 @@ export function useAutosaveRecovery({
     if (dismissed || !data) return null;
     const savedAt = new Date(data.updatedAt);
     if (Number.isNaN(savedAt.getTime())) return null;
+    // Put off in this tab already: see `dismiss`.
+    if (wasPutOff(documentKey, data.updatedAt)) return null;
+    // A recovery point holding what the document already stores is no unsaved
+    // work: an author who undid back to the saved document left one behind,
+    // and offering it back on every load restores nothing.
+    if (canonicalJson(data.snapshot) === canonicalJson(stored)) return null;
     return { savedAt, snapshot: data.snapshot };
-  }, [dismissed, data]);
+  }, [dismissed, data, documentKey, stored]);
 
   const restore = useCallback(() => {
     if (!offer) return;
@@ -157,8 +198,9 @@ export function useAutosaveRecovery({
     form.reset(offer.snapshot as Record<string, unknown>, {
       keepDefaultValues: true,
     });
-    dismiss();
-  }, [offer, form, dismiss]);
+    // Taken, not put off: the form holds the work now, so nothing is offered.
+    setDismissed(true);
+  }, [offer, form]);
 
   return { offer, isResolved, dismiss, restore };
 }

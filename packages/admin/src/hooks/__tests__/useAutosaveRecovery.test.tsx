@@ -64,6 +64,8 @@ function renderRecovery(scope: VersionScope | null) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // "Not now" is remembered for the tab; each test starts a fresh tab.
+  window.sessionStorage.clear();
 });
 
 /**
@@ -121,6 +123,51 @@ describe("useAutosaveRecovery", () => {
    * reloads must still be offered the work rather than finding it gone because
    * they closed a banner.
    */
+  it("offers nothing for a recovery point that holds what the document stores", async () => {
+    // An author who undid back to the saved document left this behind; the
+    // test above, with a different title, is the offer this one withholds.
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+
+    const { result } = renderRecovery(SCOPE);
+
+    await waitFor(() => expect(result.current.recovery.isResolved).toBe(true));
+    expect(result.current.recovery.offer).toBeNull();
+  });
+
+  it("keeps a put-off recovery point put off across a reload in this tab, and offers a newer one", async () => {
+    const point = (updatedAt: string) => ({
+      snapshot: { title: "recovered" },
+      updatedAt,
+      locale: null,
+    });
+    getSpy.mockResolvedValue(point("2026-08-17T10:00:00.000Z"));
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    first.unmount();
+
+    // The editor loaded again: the same recovery point stays put off.
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(again.result.current.recovery.offer).toBeNull();
+    again.unmount();
+
+    // Edits made since recorded a newer one, which is offered.
+    getSpy.mockResolvedValue(point("2026-08-17T11:00:00.000Z"));
+    const newer = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(newer.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },
