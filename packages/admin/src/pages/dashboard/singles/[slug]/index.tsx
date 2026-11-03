@@ -352,7 +352,8 @@ export default function SingleEditPage({
     );
   }
 
-  // Error state
+  // Error state: no Single to show. A failed re-read of the Single on screen
+  // keeps the editor, read-only until a read succeeds.
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>

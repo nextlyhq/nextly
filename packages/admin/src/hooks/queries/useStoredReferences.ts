@@ -142,11 +142,13 @@ interface Merge<T> {
  *
  * `readAt` moves only when reads made since reach the document, including reads
  * that found it unchanged; it is undefined while there is no document.
+ * `failed` is true while the last read of the document on screen failed.
  * `reload` reads both again, replacing any read already on its way, and
  * rejects when either fails.
  */
 export interface DocumentLatest {
   readAt: number | undefined;
+  failed: boolean;
   reload: () => Promise<unknown>;
 }
 
@@ -154,6 +156,10 @@ export interface StoredReferencesResult<T> {
   /** The populated document with every stored link kept. */
   document: T | undefined;
   isLoading: boolean;
+  /**
+   * Why there is no document to edit. A failed read of a document already on
+   * screen is not one: that document stays, and `latest.failed` says so.
+   */
   error: Error | null;
   latest: DocumentLatest;
 }
@@ -314,7 +320,11 @@ export function useWithStoredReferences<T extends Doc>({
     !retries.spent && last.current?.scope === scope
       ? last.current.document
       : undefined;
-  const error = readError(populated, stored, retries.spent);
+  // A read that fails after the document is on screen leaves the editor in
+  // place, edits and all, for the lock surface to hold read-only; only a read
+  // that never produced a document replaces the editor with the error.
+  const failure = readError(populated, stored, retries.spent);
+  const error = document === undefined ? failure : null;
   const { refetch: refetchPopulated } = populated;
   const { refetch: refetchStored } = stored;
   const reload = useCallback(
@@ -331,6 +341,7 @@ export function useWithStoredReferences<T extends Doc>({
     error,
     latest: {
       readAt: document === undefined ? undefined : last.current?.readAt,
+      failed: document !== undefined && failure !== null,
       reload,
     },
   };

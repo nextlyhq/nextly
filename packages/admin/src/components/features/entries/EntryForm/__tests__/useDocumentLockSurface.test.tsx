@@ -146,6 +146,9 @@ describe("loading the latest document before a gain unlocks the form", () => {
     requestAccess,
   });
 
+  /** The reads of the document on screen: when, and whether the last failed. */
+  type Reads = { readAt: number | undefined; failed?: boolean };
+
   /** A reload the test settles, standing in for the document's reads. */
   function deferredReload() {
     const settles: { resolve: () => void; reject: (e: Error) => void }[] = [];
@@ -170,15 +173,15 @@ describe("loading the latest document before a gain unlocks the form", () => {
     // mounts, to go on showing that copy.
     const renders: { readOnly: boolean; readAt: number | undefined }[] = [];
     const hook = renderHook(
-      ({ readAt }: { readAt: number | undefined }) => {
+      ({ readAt, failed = false }: Reads) => {
         const surface = useDocumentLockSurface({
           ...options,
-          latest: { readAt, reload },
+          latest: { readAt, failed, reload },
         });
         renders.push({ readOnly: surface.readOnly, readAt });
         return surface;
       },
-      { initialProps: { readAt: 1 } }
+      { initialProps: { readAt: 1 } as Reads }
     );
     return { ...hook, renders };
   }
@@ -319,6 +322,68 @@ describe("loading the latest document before a gain unlocks the form", () => {
 
     expect(result.current.readOnly).toBe(true);
     expect(result.current.notice?.retryLabel).toBe("Try again");
+  });
+
+  describe("a read of the document on screen that fails, with no gain", () => {
+    // A refetch, or the read that follows a save, can fail while the editor
+    // holds the document. Editable over that copy, their next save writes it.
+    const holding = gained(0);
+
+    it("holds the editor read-only and offers to try again", async () => {
+      const { reload, settles } = deferredReload();
+      const { result, rerender } = mount(reload, holding);
+      expect(result.current.readOnly).toBe(false);
+
+      rerender({ readAt: 1, failed: true });
+      expect(result.current.readOnly).toBe(true);
+      expect(result.current.actionsDisabled).toBe(true);
+      expect(result.current.notice?.message).toMatch(
+        /couldn't load the latest version/
+      );
+      expect(result.current.notice?.retryLabel).toBe("Try again");
+      expect(reload).not.toHaveBeenCalled();
+
+      // Trying again shows the load, not the failure it is retrying.
+      act(() => {
+        result.current.retryLoad();
+      });
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(result.current.readOnly).toBe(true);
+      expect(result.current.notice?.tone).toBe("loading");
+
+      await act(async () => {
+        settles[0].resolve();
+      });
+      rerender({ readAt: 2, failed: false });
+      expect(result.current.readOnly).toBe(false);
+      expect(result.current.notice).toBeNull();
+    });
+
+    it("says so again when trying again fails", async () => {
+      const { reload, settles } = deferredReload();
+      const { result, rerender } = mount(reload, holding);
+      rerender({ readAt: 1, failed: true });
+      act(() => {
+        result.current.retryLoad();
+      });
+      await act(async () => {
+        settles[0].reject(new Error("offline"));
+      });
+      rerender({ readAt: 1, failed: true });
+
+      expect(result.current.readOnly).toBe(true);
+      expect(result.current.notice?.tone).toBe("unloaded");
+    });
+
+    it("unlocks once a later read succeeds, without trying again", () => {
+      const { reload } = deferredReload();
+      const { result, rerender } = mount(reload, holding);
+      rerender({ readAt: 1, failed: true });
+      rerender({ readAt: 2, failed: false });
+
+      expect(result.current.readOnly).toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+    });
   });
 
   it("unlocks a gain as before on a surface that cannot load the document", () => {

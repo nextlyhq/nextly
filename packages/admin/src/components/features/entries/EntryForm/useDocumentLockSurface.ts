@@ -25,6 +25,7 @@ import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import {
   documentLockAffordances,
   readerAffordances,
+  READER_LATEST_UNLOADED,
   READ_ONLY_REMOVED_FROM_CODE,
   type DocumentLockAffordances,
   type LatestDocumentLoad,
@@ -41,7 +42,7 @@ export interface DocumentLockSurface extends DocumentLockAffordances {
    * beat re-states it until this editor has the document or leaves.
    */
   readonly requestAccess: () => void;
-  /** Ask again for the latest version of a gained document that failed to load. */
+  /** Ask again for the latest version of the document after it failed to load. */
   readonly retryLoad: () => void;
 }
 
@@ -63,13 +64,14 @@ export interface DocumentLockSurfaceOptions extends UseDocumentLockOptions {
   /**
    * When the document on screen was read, and how to read it again: from the
    * reads that feed the form. Given, a document this editor gains after being
-   * kept out of it stays read-only until reads made since reach it. Absent, a
+   * kept out of it stays read-only until reads made since reach it, and one
+   * whose latest read failed stays read-only until a read succeeds. Absent, a
    * gain unlocks the copy on screen at once.
    */
   latest?: DocumentLatest;
 }
 
-/** A load of the latest document, asked for when this editor gained it. */
+/** A load of the latest document, asked for on a gain or by trying again. */
 interface GainLoad {
   readonly phase: "loading" | "failed";
   /** When the document on screen had been read as the load was asked for. */
@@ -80,7 +82,7 @@ interface GainLoad {
 
 /**
  * Whether the document on screen is the latest one, given the gains the claim
- * has reported and the load that the last of them asked for.
+ * has reported, the load last asked for, and whether the reads failed.
  *
  * 🔴 Answered in render, from facts in hand, and not by an effect that sets
  * "loading" after the gain: the render in between would unlock the copy read
@@ -94,13 +96,19 @@ function latestLoad(
 ): LatestDocumentLoad {
   if (latest === undefined) return "current";
   if (gainUnhandled) return "loading";
-  if (load === null || latest.readAt !== load.from) return "current";
-  return load.phase;
+  // A load is about the document as it was when asked for; reads that have
+  // reached the document since answer it.
+  const pending =
+    load !== null && latest.readAt === load.from ? load.phase : null;
+  // Trying again shows as loading, though the reads still carry the failure
+  // they are retrying.
+  if (pending === "loading") return "loading";
+  return pending === "failed" || latest.failed ? "failed" : "current";
 }
 
 /**
- * Load the latest document each time the claim reports a gain, and say how far
- * that load has got.
+ * Load the latest document each time the claim reports a gain, and on each try
+ * again, and say how far that load has got.
  *
  * 🔴 Done when the document on screen comes from reads made since the gain,
  * not when the reload answers: the answer resolves before the reads reach the
@@ -190,9 +198,13 @@ export function useDocumentLockSurface({
 
   return {
     ...(readOnlyForReader
-      ? readOnlyBecause === "removed-from-code"
-        ? READ_ONLY_REMOVED_FROM_CODE
-        : readerAffordances(holder)
+      ? // A reader writes nothing, so a failed read holds nothing back; it is
+        // still said, since what they read may be out of date.
+        gainLoad.load === "failed"
+        ? READER_LATEST_UNLOADED
+        : readOnlyBecause === "removed-from-code"
+          ? READ_ONLY_REMOVED_FROM_CODE
+          : readerAffordances(holder)
       : documentLockAffordances(state, lastKnownHolder.current, gainLoad.load)),
     takeOver,
     requestAccess,

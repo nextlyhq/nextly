@@ -302,7 +302,7 @@ describe("SingleForm when it gains a Single a colleague held", () => {
         schema={schema}
         document={document}
         onSubmit={vi.fn()}
-        latest={{ readAt: 1, reload }}
+        latest={{ readAt: 1, failed: false, reload }}
       />
     );
 
@@ -316,7 +316,7 @@ describe("SingleForm when it gains a Single a colleague held", () => {
         schema={schema}
         document={document}
         onSubmit={vi.fn()}
-        latest={{ readAt: 1, reload }}
+        latest={{ readAt: 1, failed: false, reload }}
       />
     );
 
@@ -347,7 +347,7 @@ describe("SingleForm when it gains a Single a colleague held", () => {
           } as unknown as SingleDocumentData
         }
         onSubmit={vi.fn()}
-        latest={{ readAt: 2, reload }}
+        latest={{ readAt: 2, failed: false, reload }}
       />
     );
     await waitFor(() =>
@@ -358,5 +358,46 @@ describe("SingleForm when it gains a Single a colleague held", () => {
     expect(
       (screen.getByLabelText("Hero Title") as HTMLInputElement).value
     ).toBe("Bob's hero");
+  });
+});
+
+describe("SingleForm when a read of the Single on screen fails", () => {
+  it("keeps what the editor typed, read-only, until a read succeeds", async () => {
+    // The read that follows a save, or a refetch, failed while the editor held
+    // the Single. The page keeps the editor rather than replacing it with an
+    // error, so their unsaved text is still there; a save would write it over
+    // a copy that may be out of date, so it waits for the reads.
+    const reload = vi.fn<() => Promise<unknown>>();
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 0,
+      takeOver,
+    });
+    const view = (failed: boolean, readAt: number) => (
+      <SingleForm
+        schema={schema}
+        document={document}
+        onSubmit={vi.fn()}
+        latest={{ readAt, failed, reload }}
+      />
+    );
+    const { rerender } = render(view(false, 1));
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Hero Title"), "Mine");
+
+    rerender(view(true, 1));
+    await waitFor(() =>
+      expect(screen.getByTestId("document-lock-banner")).toHaveTextContent(
+        "couldn't load the latest version"
+      )
+    );
+    const hero = () => screen.getByLabelText("Hero Title") as HTMLInputElement;
+    expect(hero().readOnly).toBe(true);
+    expect(hero().value).toBe("Mine");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+
+    rerender(view(false, 2));
+    await waitFor(() => expect(hero().readOnly).toBe(false));
+    expect(hero().value).toBe("Mine");
   });
 });

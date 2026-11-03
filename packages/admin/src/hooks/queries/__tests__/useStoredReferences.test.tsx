@@ -41,12 +41,18 @@ const pageA = { id: "a", title: "Page A" };
 /** A query result as the hook reads one. */
 function read(
   data: Doc | undefined,
-  { isFetching = false, refetch = vi.fn() } = {}
+  {
+    isFetching = false,
+    refetch = vi.fn(),
+    error = null as Error | null,
+    dataUpdatedAt = 0,
+  } = {}
 ) {
   return {
     data,
     isFetching,
-    error: null,
+    error,
+    dataUpdatedAt,
     refetch,
   } as never;
 }
@@ -297,5 +303,74 @@ describe("useWithStoredReferences", () => {
       document: undefined,
       isLoading: true,
     });
+  });
+
+  describe("a read of the document on screen that fails", () => {
+    const refused = new Error("The server could not be reached.");
+
+    it("keeps the document, with no error for the page, and says the read failed", () => {
+      // React Query keeps the data it had when a refetch fails, and adds the
+      // error beside it.
+      const { result, rerender } = renderHook(
+        (props: { populated: never }) =>
+          useWithStoredReferences({
+            fields: FIELDS,
+            documentKey: DOCUMENT,
+            populated: props.populated,
+            stored: read(storedV1),
+            scope: "e",
+          }),
+        { initialProps: { populated: read(populatedV1) } }
+      );
+      const onScreen = result.current.document;
+      expect(result.current.latest.failed).toBe(false);
+
+      rerender({ populated: read(populatedV1, { error: refused }) });
+      expect(result.current.document).toBe(onScreen);
+      expect(result.current.error).toBeNull();
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.latest.failed).toBe(true);
+
+      rerender({ populated: read(populatedV1) });
+      expect(result.current.latest.failed).toBe(false);
+    });
+
+    it("is the page's error when no document ever arrived", () => {
+      const { result } = renderHook(() =>
+        useWithStoredReferences({
+          fields: FIELDS,
+          documentKey: DOCUMENT,
+          populated: read(undefined, { error: refused }),
+          stored: read(storedV1),
+          scope: "e",
+        })
+      );
+      expect(result.current.document).toBeUndefined();
+      expect(result.current.error).toBe(refused);
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.latest.failed).toBe(false);
+    });
+  });
+
+  it("says when the document was read, including by reads that found it unchanged", () => {
+    const { result, rerender } = renderHook(
+      (props: { populatedAt: number; storedAt: number }) =>
+        useWithStoredReferences({
+          fields: FIELDS,
+          documentKey: DOCUMENT,
+          populated: read(populatedV1, { dataUpdatedAt: props.populatedAt }),
+          stored: read(storedV1, { dataUpdatedAt: props.storedAt }),
+          scope: "e",
+        }),
+      { initialProps: { populatedAt: 10, storedAt: 12 } }
+    );
+    const onScreen = result.current.document;
+    // The older of the two reads.
+    expect(result.current.latest.readAt).toBe(10);
+
+    rerender({ populatedAt: 20, storedAt: 21 });
+    expect(result.current.latest.readAt).toBe(20);
+    // Unchanged, so the form is not reset.
+    expect(result.current.document).toBe(onScreen);
   });
 });

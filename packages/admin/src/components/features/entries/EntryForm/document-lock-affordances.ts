@@ -65,8 +65,8 @@ export interface DocumentLockNotice {
    */
   readonly accessRequest: DocumentAccessRequest | null;
   /**
-   * Present when the latest version of the document could not be loaded after
-   * this editor gained it: what asking for it again says.
+   * Present when the latest version of the document could not be loaded: what
+   * asking for it again says.
    */
   readonly retryLabel?: string;
 }
@@ -228,11 +228,12 @@ function accessRequestFor(
 }
 
 /**
- * Whether the document on screen is the latest one, as far as gaining it goes.
+ * Whether the document on screen is the latest one the editor could read.
  *
- * `current` everywhere but a gain: an editor who gains a document they were
- * kept out of read it while a colleague held it, and is `loading` until reads
- * made since reach the document, or `failed` when they could not be made.
+ * `loading` after a gain: an editor who gains a document they were kept out of
+ * read it while a colleague held it, and the reads made since have not reached
+ * it yet. `failed` when a read of the document on screen failed, after a gain
+ * or at any other time, such as the read that follows a save.
  */
 export type LatestDocumentLoad = "current" | "loading" | "failed";
 
@@ -253,8 +254,9 @@ const LOADING_LATEST: DocumentLockAffordances = {
 };
 
 /**
- * A gained document whose latest version could not be loaded: it stays
- * read-only, and says so, rather than unlocking the copy it has.
+ * A document whose latest version could not be loaded: it stays read-only, and
+ * says so, rather than letting the editor save over a copy that may be out of
+ * date. Its unsaved changes stay in the form.
  */
 const LATEST_UNLOADED: DocumentLockAffordances = {
   readOnly: true,
@@ -270,12 +272,29 @@ const LATEST_UNLOADED: DocumentLockAffordances = {
 };
 
 /**
+ * The same, for someone who may only read the document: nothing to hold back,
+ * but what they read may be out of date.
+ */
+export const READER_LATEST_UNLOADED: DocumentLockAffordances = {
+  readOnly: true,
+  actionsDisabled: true,
+  notice: {
+    tone: "unloaded",
+    message:
+      "We couldn't load the latest version of this document, so what you see may be out of date.",
+    takeOverLabel: null,
+    accessRequest: null,
+    retryLabel: "Try again",
+  },
+};
+
+/**
  * Turn a claim's state into the editor's behaviour.
  *
  * `lastKnownHolder` is the colleague this editor was last told about, which
  * outlives a failed refresh. Null when nobody has ever been reported.
- * `latest` says whether a document this editor gained is the latest one; it
- * matters only while they hold it.
+ * `latest` says whether the document on screen is the latest one; it matters
+ * only where the editor could otherwise type.
  *
  * Decisions here that are not the obvious one:
  *
@@ -321,16 +340,26 @@ export function documentLockAffordances(
   lastKnownHolder: DocumentLockHolder | null = null,
   latest: LatestDocumentLoad = "current"
 ): DocumentLockAffordances {
+  const claimed = claimAffordances(state, lastKnownHolder);
+  // 🔴 Over every notice that lets the editor type, the courtesy and unchecked
+  // ones included: those withhold nothing, and a copy that may be out of date
+  // withholds everything. A notice that already withholds the form keeps its
+  // place, with the takeover or take-back it offers.
+  if (claimed.readOnly || latest === "current") return claimed;
+  return latest === "loading" ? LOADING_LATEST : LATEST_UNLOADED;
+}
+
+/** What the claim alone allows, before the document's freshness is asked. */
+function claimAffordances(
+  state: DocumentLockState,
+  lastKnownHolder: DocumentLockHolder | null
+): DocumentLockAffordances {
   switch (state.status) {
     case "idle":
     case "acquiring":
       return UNLOCKED;
 
     case "held-by-me":
-      // 🔴 Before the courtesy notice: a colleague waiting withholds nothing,
-      // and a copy that may be out of date withholds everything.
-      if (latest === "loading") return LOADING_LATEST;
-      if (latest === "failed") return LATEST_UNLOADED;
       return state.someoneWaiting ? AWAITED : UNLOCKED;
 
     case "held-by-other":

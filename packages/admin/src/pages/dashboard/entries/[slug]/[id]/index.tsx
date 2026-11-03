@@ -456,7 +456,9 @@ export default function EditEntryPage({
     // resolved component. A claim taken while the entry is still loading, or
     // after it failed, heartbeats a document the editor is not looking at - and
     // on a load failure that leaves the lock endpoint reachable, colleagues are
-    // told this person is editing a page that never appeared for them.
+    // told this person is editing a page that never appeared for them. A failed
+    // re-read of the entry on screen is not such a failure: `error` stays
+    // empty, the view stays, and so does its claim.
     enabled: Boolean(
       CustomEditView &&
         slug &&
@@ -563,7 +565,8 @@ export default function EditEntryPage({
     );
   }
 
-  // Error state
+  // Error state: no entry to show. A failed re-read of the entry on screen
+  // keeps the editor, read-only until a read succeeds.
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
