@@ -2,6 +2,7 @@ import type {
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
   RemotePatternInput,
+  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
@@ -397,6 +398,12 @@ export interface BlockRenderArgs<P>
    * context it built itself.
    */
   hostPolicy?: BlockHostPolicy;
+  /**
+   * The site's spacing model, for a block whose markup differs by it. Absent
+   * is the engine's default, `gaps`. An argument for the reason `hostPolicy`
+   * is one.
+   */
+  spacingMode?: SpacingMode;
 }
 
 /** A context with nothing wired up: the standalone default. */

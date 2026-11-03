@@ -5,6 +5,7 @@ import {
   type BlockNode,
   type ComponentUnresolvedReason,
   type ResolvedBlockNode,
+  type SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import {
   Suspense,
@@ -102,6 +103,11 @@ export interface BlockBoundaryProps {
    * own object is never rewritten and no block can supply its own.
    */
   hostPolicy?: BlockHostPolicy;
+  /**
+   * The site's spacing model, for the few blocks whose markup differs by it.
+   * Threaded down the tree beside `hostPolicy`, for the same reason.
+   */
+  spacingMode?: SpacingMode;
   /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
@@ -1285,6 +1291,7 @@ export function BlockBoundary({
   classes,
   fallback,
   hostPolicy,
+  spacingMode,
   nodeAttribute,
 }: BlockBoundaryProps): ReactNode {
   /*
@@ -1437,6 +1444,7 @@ export function BlockBoundary({
         // The renderer's, not the context's. A block may replace the context its
         // slot children see; it can neither drop nor forge this.
         ...(hostPolicy === undefined ? {} : { hostPolicy }),
+        ...(spacingMode === undefined ? {} : { spacingMode }),
         // Synchronous by contract: it returns an element describing what to
         // render, not the rendered result. That is what lets a block call it
         // inside its own JSX, and what lets a slot that is never shown never run
@@ -1454,6 +1462,7 @@ export function BlockBoundary({
             classes={classes}
             fallback={fallback}
             {...(hostPolicy === undefined ? {} : { hostPolicy })}
+            {...(spacingMode === undefined ? {} : { spacingMode })}
             {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
           />
         ),
@@ -1514,6 +1523,11 @@ export interface BlockListProps {
   fallback?: ReactNode;
   hostPolicy?: BlockHostPolicy;
   /**
+   * The site's spacing model, for the few blocks whose markup differs by it.
+   * Threaded down the tree beside `hostPolicy`, for the same reason.
+   */
+  spacingMode?: SpacingMode;
+  /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
    * OFF by default: a published page should not carry editor concerns, which is
@@ -1542,6 +1556,7 @@ export function BlockList({
   classes,
   fallback,
   hostPolicy,
+  spacingMode,
   nodeAttribute,
 }: BlockListProps): ReactNode {
   return nodes
@@ -1555,6 +1570,7 @@ export function BlockList({
         classes={classes}
         fallback={fallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
+        {...(spacingMode === undefined ? {} : { spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
       />
     ));
