@@ -385,7 +385,7 @@ describe.each(getConfiguredTestDialects())(
       const hidden = await call("GET", where, styleReader);
       expect(hidden.body).toMatchObject({
         items: [],
-        meta: { total: 1, hiddenCount: 1 },
+        meta: { total: 0, hiddenCount: 1 },
       });
     });
 

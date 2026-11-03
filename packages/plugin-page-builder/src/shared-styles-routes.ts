@@ -36,10 +36,12 @@ import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import {
   SHARED_STYLE_ID_PARAM,
   SHARED_STYLE_LOCK_ROUTE_PATH,
+  SHARED_STYLE_PAGE_PARAM,
   SHARED_STYLE_REMOVE_ROUTE_PATH,
   SHARED_STYLE_USAGE_IDS_MAX,
   SHARED_STYLE_USAGE_ROUTE_PATH,
   SHARED_STYLE_WHERE_USED_MAX,
+  SHARED_STYLE_WHERE_USED_PAGES_MAX,
   SHARED_STYLE_WHERE_USED_ROUTE_PATH,
   type SharedStyleLockRequest,
   type SharedStyleRemoveRequest,
@@ -273,12 +275,31 @@ export async function readSharedStyleUsage(
   return { whole: indexIsWhole(health), mayLock, styles };
 }
 
-/** The one id a where-used read asks about. */
-function whereUsedId(url: string): string {
-  const parsed = CLASS_ID.safeParse(
-    new URL(url).searchParams.get(SHARED_STYLE_ID_PARAM) ?? undefined
-  );
-  if (!parsed.success) throw invalidRequest("Name the shared style with ?id=.");
+/** What a where-used read asks for: one style, and which page of its uses. */
+const WhereUsedQuery = z.object({
+  id: CLASS_ID,
+  // 1-based. Bounded by the most documents one listing can name, so a page
+  // past every use is still a small number.
+  page: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(SHARED_STYLE_WHERE_USED_PAGES_MAX)
+    .default(1),
+});
+
+/** The style a where-used read asks about, and the page. */
+function whereUsedQuery(url: string): { id: string; page: number } {
+  const params = new URL(url).searchParams;
+  const parsed = WhereUsedQuery.safeParse({
+    id: params.get(SHARED_STYLE_ID_PARAM) ?? undefined,
+    page: params.get(SHARED_STYLE_PAGE_PARAM) ?? undefined,
+  });
+  if (!parsed.success) {
+    throw invalidRequest(
+      "Name the shared style with ?id=, and a page from 1 with ?page=."
+    );
+  }
   return parsed.data;
 }
 
@@ -294,45 +315,56 @@ async function listingOf(
 }
 
 /**
- * The documents a shared style is used on, read as the caller.
+ * Every document of a listing the caller may read, in the listing's order,
+ * and how many it may not: each collection's read as the caller, a batch at a
+ * time. Bounded by the listing, which the index read bounds.
+ */
+async function readableUses(
+  found: DocumentsUsing,
+  usage: SharedStyleUsageSource,
+  readNamed: ReadNamedDocuments
+): Promise<{ readable: SharedStyleUseItem[]; hidden: number }> {
+  const readable: SharedStyleUseItem[] = [];
+  let hidden = 0;
+  for (const { collection, documents } of found.collections) {
+    const ids = documents.filter((doc): doc is string => doc !== null);
+    const kind = usage.kindOf(collection);
+    for (const batch of chunked(ids, ID_BATCH_SIZE)) {
+      const named = (await readNamed(collection, batch)) ?? [];
+      hidden += batch.length - named.length;
+      for (const doc of named) {
+        readable.push({ id: doc.id, title: doc.title, collection, kind });
+      }
+    }
+  }
+  return { readable, hidden };
+}
+
+/**
+ * The documents a shared style is used on, read as the caller, a page of
+ * twenty at a time.
  *
- * The index names the documents; each collection's are read as the caller, a
- * batch at a time, so only readable ones are named and the rest are counted.
- * Reading stops once the list is full; the documents not read are the
- * remainder, `meta.total` less the named and the hidden.
+ * The index names the documents; each is read as the caller, so only readable
+ * ones are listed and the rest are counted in `meta.hiddenCount`. `meta.total`
+ * and the pages count the readable documents, the list being paged.
  */
 export async function readSharedStyleUses(
   req: Request,
   usage: SharedStyleUsageSource,
   readNamed: ReadNamedDocuments
 ): Promise<Response> {
-  const id = whereUsedId(req.url);
-  const health = await usage.health();
-  const found = await listingOf(usage, id, health);
-  const items: SharedStyleUseItem[] = [];
-  let hidden = 0;
-  for (const { collection, documents } of found.collections) {
-    const ids = documents.filter((doc): doc is string => doc !== null);
-    for (const batch of chunked(ids, ID_BATCH_SIZE)) {
-      if (items.length >= SHARED_STYLE_WHERE_USED_MAX) break;
-      const named = await readNamed(collection, batch);
-      const readable = named ?? [];
-      hidden += batch.length - readable.length;
-      const kind = usage.kindOf(collection);
-      for (const doc of readable) {
-        if (items.length >= SHARED_STYLE_WHERE_USED_MAX) break;
-        items.push({ id: doc.id, title: doc.title, collection, kind });
-      }
-    }
-  }
-  const total = documentCountOf(found);
-  return respondList(items, {
-    total,
-    page: 1,
-    limit: SHARED_STYLE_WHERE_USED_MAX,
-    totalPages: 1,
-    hasNext: total > items.length + hidden,
-    hasPrev: false,
+  const { id, page } = whereUsedQuery(req.url);
+  const found = await listingOf(usage, id, await usage.health());
+  const { readable, hidden } = await readableUses(found, usage, readNamed);
+  const limit = SHARED_STYLE_WHERE_USED_MAX;
+  const totalPages = Math.max(1, Math.ceil(readable.length / limit));
+  return respondList(readable.slice((page - 1) * limit, page * limit), {
+    total: readable.length,
+    page,
+    limit,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
     hiddenCount: hidden,
     // Documents the index has not counted yet are a source this list could
     // not consult, named so the screen says the list may be short.
