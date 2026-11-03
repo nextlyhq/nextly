@@ -117,6 +117,49 @@ of a published Layout.
 Inside a batch write the check can't run safely, so deleting or unpublishing a component
 there is refused. Delete or unpublish it on its own instead.
 
+## Removing a Layout
+
+Delete or unpublish a Layout with **Remove Layout…**, at the bottom of the Layout's edit
+screen. The Layout's own delete and unpublish are refused with "Use Remove Layout to take
+a Layout down safely.", from the admin and the API alike, and so is a scheduled release
+that would unpublish a Layout.
+
+Remove Layout first checks what stands in the way:
+
+- **The site's default** can't be removed. Make another Layout the default first.
+- **Pages that use the Layout** stop the removal: published pages, unpublished pages, and
+  unpublished edits of published pages. The dialog lists them, each a link that opens the
+  page, so you can choose another Layout for each one. Pages you can't view are counted but
+  not named.
+- **A site with many pages**: one removal checks up to 2,000 pages. Past that it says "at
+  least" how many it found and refuses, rather than guessing that the rest are clear.
+
+With nothing in the way, choose **Unpublish** or **Delete Layout**. While a removal runs,
+the Layout can't be made the default. An unpublished Layout can't be made the default again
+until it is published again.
+
+The same action is a route, for scripts and other tools. It runs as the caller, who needs
+**read** on Layouts plus **delete** (to delete) or **unpublish** (to unpublish):
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/remove
+Content-Type: application/json
+
+{ "action": "delete", "dryRun": true }
+```
+
+`action` is `delete` or `unpublish`. A dry run changes nothing. Its `item.check` holds
+`isDefault`, `pages` (`{ id, title }`), `unreadable` and `complete`. A real removal that
+something stops answers `409 CONFLICT`, with the reason in the message.
+
+If a Layout is made the default at the very moment it is being deleted, the delete loses:
+the Layout comes back from a copy taken just before, under a new id, and the default
+points at it. Unpublishing in that race leaves the default to the background repair,
+which points it back at **Default (site)**.
+
+Some writes skip collection hooks: a batch write with hooks turned off, and publishing or
+unpublishing every language at once. None of the checks above reach them.
+
 ## Existing sites: run a migration
 
 This release adds two columns to pages (`layout` and `noHeaderFooter`) and the
@@ -129,6 +172,10 @@ npx nextly migrate
 ```
 
 In development you can use `npx nextly db:sync` instead.
+
+Remove Layout keeps its records in a table of the plugin's own,
+`page_builder__layout_removals`. The plugin ships the migration that creates it, and
+`npx nextly migrate` applies it with your app's own migrations.
 
 ## Draw pages inside their Layout
 
