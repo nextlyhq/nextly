@@ -843,4 +843,203 @@ describe.each(DIALECTS)("a column conversion on %s", dialect => {
       ]);
     }
   );
+
+  /** The plan for converting `table`'s column, as `[property, name]` pairs of what it cannot keep. */
+  async function blockedBy(
+    table: string,
+    column: string,
+    from: ColumnState,
+    to: ColumnState
+  ): Promise<{ plan: ColumnConversionPlan; named: [string, string][] }> {
+    const plan = await buildColumnConversion(connection.db, {
+      dialect,
+      table,
+      column,
+      from,
+      to,
+    });
+    for (const item of plan.cannotCarry) {
+      expect(item.ownerCan.length).toBeGreaterThan(0);
+    }
+    return {
+      plan,
+      named: plan.cannotCarry.map(item => [item.property, item.name]),
+    };
+  }
+
+  it.skipIf(dialect !== "postgresql" || !available)(
+    "an identity column becoming text blocks it, as PostgreSQL refuses the type change",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_ident (c integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, d text)"
+      );
+      const { plan, named } = await blockedBy(
+        "conv_ident",
+        "c",
+        { type: "int4", nullable: false },
+        { type: "text", nullable: false }
+      );
+      expect(named).toEqual([["definition", "c"]]);
+      await expect(runPlan(connection, plan)).rejects.toThrow(/identity/);
+      // Another integer keeps it.
+      expect(
+        (
+          await blockedBy(
+            "conv_ident",
+            "c",
+            { type: "int4", nullable: false },
+            { type: "int8", nullable: false }
+          )
+        ).named
+      ).toEqual([]);
+    }
+  );
+
+  it.skipIf(dialect !== "postgresql" || !available).each([
+    {
+      shape: "inheritance children",
+      statements: [
+        "CREATE TABLE conv_tree (id integer, c text)",
+        "CREATE TABLE conv_tree_kid (extra integer) INHERITS (conv_tree)",
+      ],
+      table: "conv_tree",
+    },
+    {
+      shape: "partitions",
+      statements: [
+        "CREATE TABLE conv_tree (id integer, c text) PARTITION BY LIST (id)",
+        "CREATE TABLE conv_tree_kid PARTITION OF conv_tree FOR VALUES IN (1)",
+      ],
+      table: "conv_tree",
+    },
+    {
+      shape: "a column inherited from a parent",
+      statements: [
+        "CREATE TABLE conv_tree (id integer, c text)",
+        "CREATE TABLE conv_tree_kid (extra integer) INHERITS (conv_tree)",
+      ],
+      table: "conv_tree_kid",
+    },
+  ])(
+    "a table with $shape blocks any change of the column, nullability included",
+    async ({ statements, table }) => {
+      for (const statement of statements) await connection.exec(statement);
+      const kid = async () =>
+        connection.query(
+          `SELECT column_name, data_type, is_nullable FROM information_schema.columns
+           WHERE table_name = 'conv_tree_kid' ORDER BY ordinal_position`
+        );
+      const kidBefore = await kid();
+      for (const to of [
+        { type: "varchar", typeModifier: "255", nullable: true },
+        { type: "text", nullable: false },
+      ]) {
+        const { named } = await blockedBy(
+          table,
+          "c",
+          { type: "text", nullable: true },
+          to
+        );
+        expect(named).toEqual([["definition", "c"]]);
+      }
+      // Building the plans changed no table in the tree.
+      expect(await kid()).toEqual(kidBefore);
+    }
+  );
+
+  it.skipIf(dialect !== "mysql" || !available)(
+    "a primary-key column becoming JSON blocks it as the key, as MySQL refuses it",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_pk (c varchar(36) PRIMARY KEY, d int)"
+      );
+      const { plan, named } = await blockedBy(
+        "conv_pk",
+        "c",
+        { type: "varchar(36)", nullable: false },
+        { type: "json", nullable: false }
+      );
+      expect(named).toEqual([["key", "PRIMARY"]]);
+      await expect(runPlan(connection, plan)).rejects.toThrow(/JSON/);
+    }
+  );
+
+  it.skipIf(dialect !== "mysql" || !available)(
+    "an AUTO_INCREMENT column becoming varchar blocks it, as MySQL refuses it",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_ai (c int AUTO_INCREMENT PRIMARY KEY, d int)"
+      );
+      const { plan, named } = await blockedBy(
+        "conv_ai",
+        "c",
+        { type: "int", nullable: false },
+        { type: "varchar(36)", nullable: false }
+      );
+      expect(named).toEqual([["definition", "c"]]);
+      await expect(runPlan(connection, plan)).rejects.toThrow(
+        /Incorrect column specifier/
+      );
+      expect(
+        (
+          await blockedBy(
+            "conv_ai",
+            "c",
+            { type: "int", nullable: false },
+            { type: "bigint", nullable: false }
+          )
+        ).named
+      ).toEqual([]);
+    }
+  );
+
+  it.skipIf(dialect !== "sqlite" || !available)(
+    "a stored generated column that reads the column blocks a type change; a virtual one does not",
+    async () => {
+      await connection.exec(
+        "CREATE TABLE conv_gen (id integer PRIMARY KEY, c text, g text GENERATED ALWAYS AS (typeof(c)) STORED, v text AS (typeof(c)) VIRTUAL)"
+      );
+      const { named } = await blockedBy(
+        "conv_gen",
+        "c",
+        { type: "text", nullable: true },
+        { type: "integer", nullable: true }
+      );
+      expect(named).toEqual([["generated column", "g"]]);
+    }
+  );
+
+  it.skipIf(dialect !== "sqlite" || !available)(
+    "a unique key and foreign keys on the column, read from the catalog, block a change of affinity; the same affinity keeps them",
+    async () => {
+      await connection.exec("CREATE TABLE conv_parent (k text PRIMARY KEY)");
+      await connection.exec(
+        "CREATE TABLE conv_u (id integer PRIMARY KEY, c text UNIQUE REFERENCES conv_parent (k))"
+      );
+      await connection.exec(
+        "CREATE TABLE conv_uc (id integer PRIMARY KEY, c_ref text REFERENCES conv_u (c))"
+      );
+      const { named } = await blockedBy(
+        "conv_u",
+        "c",
+        { type: "text", nullable: true },
+        { type: "integer", nullable: true }
+      );
+      expect(named).toEqual([
+        ["key", "UNIQUE (c)"],
+        ["key", "conv_u (c) REFERENCES conv_parent (k)"],
+        ["key", "conv_uc (c_ref) REFERENCES conv_u (c)"],
+      ]);
+      expect(
+        (
+          await blockedBy(
+            "conv_u",
+            "c",
+            { type: "text", nullable: true },
+            { type: "varchar(36)", nullable: true }
+          )
+        ).named
+      ).toEqual([]);
+    }
+  );
 });

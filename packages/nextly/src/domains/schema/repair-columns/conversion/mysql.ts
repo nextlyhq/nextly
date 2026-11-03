@@ -32,10 +32,12 @@ import { parseColumnType } from "../../value-conversion/column-type";
 
 import {
   OWNER_CAN,
+  PRIMARY_KEY_OWNER_CAN,
   checkRefusals,
   defaultLiteralRefusal,
   expressionIndexRefusal,
   foreignKeyRefusals,
+  isIntegerType,
   kindChanges,
   refusedDefault,
   renderedType,
@@ -84,6 +86,8 @@ export interface MysqlCarryFacts {
     direction: "into" | "out-of";
     setsNull: boolean;
   }[];
+  /** Whether the column is `AUTO_INCREMENT`, which MySQL keeps only on an integer type. */
+  autoIncrement: boolean;
 }
 
 /** What this server's catalog reports, read from `information_schema`'s own columns. */
@@ -157,6 +161,16 @@ export function mysqlCarry(
   return {
     cannotCarry: [
       ...setNull,
+      ...(facts.autoIncrement && !isIntegerType(request.to)
+        ? [
+            {
+              property: "definition" as const,
+              name: request.column,
+              reason: `the column is AUTO_INCREMENT, which MySQL keeps only on an integer type, not on ${to}`,
+              ownerCan: OWNER_CAN.definition,
+            },
+          ]
+        : []),
       ...mysqlDefaultRefusals(request, facts.default, target),
       ...mysqlIndexRefusals(facts.indexes, to, target),
       ...(target.kindChange
@@ -236,7 +250,10 @@ function mysqlDefaultRefusals(
   return refusal === null ? [] : [refusedDefault(request, refusal)];
 }
 
-/** Each index the new type cannot keep, named once however many of its parts read the column. */
+/**
+ * Each index the new type cannot keep, named once however many of its parts read the column. The
+ * primary key's index, which MySQL always names `PRIMARY`, is named as the table's key.
+ */
 function mysqlIndexRefusals(
   indexes: readonly MysqlIndexUse[],
   to: string,
@@ -253,12 +270,22 @@ function mysqlIndexRefusals(
     }
     const reason = mysqlIndexRefusal(index, to, target);
     if (reason === null) continue;
-    refused.set(index.name, {
-      property: "index",
-      name: index.name,
-      reason,
-      ownerCan: OWNER_CAN.index,
-    });
+    refused.set(
+      index.name,
+      index.name === "PRIMARY"
+        ? {
+            property: "key",
+            name: index.name,
+            reason: `the column is in the table's primary key, and ${reason}`,
+            ownerCan: PRIMARY_KEY_OWNER_CAN,
+          }
+        : {
+            property: "index",
+            name: index.name,
+            reason,
+            ownerCan: OWNER_CAN.index,
+          }
+    );
   }
   return [...refused.values()];
 }
@@ -468,8 +495,7 @@ async function readMysqlCarryFacts(
     "mysql",
     sql`SELECT INDEX_NAME AS name, NON_UNIQUE AS nonUnique, SUB_PART AS subPart, ${expression} AS expression
         FROM information_schema.STATISTICS
-        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${request.table} AND INDEX_NAME <> 'PRIMARY'
-          AND ${readsColumn}
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${request.table} AND ${readsColumn}
         ORDER BY INDEX_NAME, SEQ_IN_INDEX`
   );
   const checks = await readMysqlChecks(db, request, mysqlCheckSource(catalog));
@@ -512,6 +538,7 @@ async function readMysqlCarryFacts(
       expression: index.expression !== null,
     })),
     checks,
+    autoIncrement: /\bauto_increment\b/i.test(column.extra),
     foreignKeys: foreignKeys.map(key => ({
       name: key.name,
       table: key.table,

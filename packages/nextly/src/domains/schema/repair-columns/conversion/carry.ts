@@ -6,6 +6,7 @@
 // @module domains/schema/repair-columns/conversion/carry
 
 import { typesDiffer } from "../../pipeline/diff/declared-size";
+import { normalizeType } from "../../pipeline/diff/normalize-type";
 import {
   parseColumnType,
   type TypeFamily,
@@ -194,3 +195,20 @@ export function foreignKeyRefusals(
     ownerCan: OWNER_CAN.key,
   }));
 }
+
+/** The integer types, as `normalizeType` spells them, MySQL's one- and three-byte ones included. */
+const INTEGER_TYPES = new Set(["int2", "int4", "int8", "tinyint", "mediumint"]);
+
+/**
+ * Whether a column type is an integer, signed or not: the only types a MySQL `AUTO_INCREMENT`
+ * column or a PostgreSQL identity column keeps. Both databases refuse to give either attribute to
+ * any other type.
+ */
+export function isIntegerType(state: ColumnState): boolean {
+  const bare = state.type.replace(/\s+(unsigned|zerofill)\b/gi, "");
+  return INTEGER_TYPES.has(normalizeType(bare) ?? "");
+}
+
+/** What the owner can change where the column is in its table's primary key. */
+export const PRIMARY_KEY_OWNER_CAN =
+  "keep the key column's type, or change it in a manual migration (nextly migrate:create --blank)";

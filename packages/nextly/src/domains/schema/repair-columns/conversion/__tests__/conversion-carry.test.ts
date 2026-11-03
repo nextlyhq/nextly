@@ -49,6 +49,9 @@ const pgFacts = (facts: Partial<PostgresCarryFacts>): PostgresCarryFacts => ({
   generatedColumns: [],
   policies: [],
   foreignKeys: [],
+  identity: false,
+  hasDescendants: false,
+  inheritedColumn: false,
   ...facts,
 });
 
@@ -59,6 +62,7 @@ const mysqlFacts = (facts: Partial<MysqlCarryFacts>): MysqlCarryFacts => ({
   indexes: [],
   checks: [],
   foreignKeys: [],
+  autoIncrement: false,
   ...facts,
 });
 
@@ -246,6 +250,46 @@ describe("PostgreSQL: what the new type cannot keep", () => {
     expect(
       postgresCarry(pgRequest({ ...TEXT, nullable: false }, TEXT), facts)
         .cannotCarry
+    ).toEqual([]);
+  });
+
+  it("identity: an identity column becoming a non-integer is named; one becoming another integer is not", () => {
+    const facts = pgFacts({ identity: true });
+    const INT4 = { type: "int4", nullable: false };
+    expect(
+      named(
+        postgresCarry(pgRequest(INT4, { ...TEXT, nullable: false }), facts)
+          .cannotCarry,
+        "definition"
+      )
+    ).toEqual(["body"]);
+    expect(
+      postgresCarry(pgRequest(INT4, { type: "int8", nullable: false }), facts)
+        .cannotCarry
+    ).toEqual([]);
+  });
+
+  it("inheritance: a table with children or partitions, or an inherited column, is named for any change, nullability included", () => {
+    for (const facts of [
+      pgFacts({ hasDescendants: true }),
+      pgFacts({ inheritedColumn: true }),
+    ]) {
+      expect(
+        named(
+          postgresCarry(pgRequest(TEXT, VARCHAR_255), facts).cannotCarry,
+          "definition"
+        )
+      ).toEqual(["body"]);
+      expect(
+        named(
+          postgresCarry(pgRequest({ ...TEXT, nullable: false }, TEXT), facts)
+            .cannotCarry,
+          "definition"
+        )
+      ).toEqual(["body"]);
+    }
+    expect(
+      postgresCarry(pgRequest(TEXT, VARCHAR_255), pgFacts({})).cannotCarry
     ).toEqual([]);
   });
 
@@ -507,6 +551,43 @@ describe("MySQL: what the new type cannot keep", () => {
         mariadb: true,
       })
     ).toBe("unreadable");
+  });
+
+  it("primary key: the PRIMARY index is named as the key where the new type cannot be keyed; kept where it can", () => {
+    const facts = mysqlFacts({
+      indexes: [
+        { name: "PRIMARY", unique: true, prefix: null, expression: false },
+      ],
+    });
+    for (const to of [MYSQL_JSON, MYSQL_TEXT]) {
+      const plan = mysqlCarry(mysqlRequest(MYSQL_VARCHAR_36, to), facts);
+      expect(named(plan.cannotCarry, "key")).toEqual(["PRIMARY"]);
+      expect(named(plan.cannotCarry, "index")).toEqual([]);
+    }
+    expect(
+      mysqlCarry(mysqlRequest(MYSQL_VARCHAR_36, MYSQL_VARCHAR_255), facts)
+        .cannotCarry
+    ).toEqual([]);
+  });
+
+  it("AUTO_INCREMENT: a column becoming a non-integer is named; one becoming another integer is not", () => {
+    const facts = mysqlFacts({ autoIncrement: true });
+    const INT = { type: "int", nullable: false };
+    expect(
+      named(
+        mysqlCarry(
+          mysqlRequest(INT, { type: "varchar(36)", nullable: false }),
+          facts
+        ).cannotCarry,
+        "definition"
+      )
+    ).toEqual(["body"]);
+    expect(
+      mysqlCarry(
+        mysqlRequest(INT, { type: "bigint unsigned", nullable: false }),
+        facts
+      ).cannotCarry
+    ).toEqual([]);
   });
 
   it("character set and collation: both named as not carried for a JSON column, never blocking; kept for a string", () => {

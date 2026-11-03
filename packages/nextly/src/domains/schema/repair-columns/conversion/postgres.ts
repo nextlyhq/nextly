@@ -26,6 +26,7 @@ import { parseColumnType } from "../../value-conversion/column-type";
 import {
   OWNER_CAN,
   checkRefusals,
+  isIntegerType,
   defaultLiteralRefusal,
   expressionIndexRefusal,
   foreignKeyRefusals,
@@ -82,6 +83,15 @@ export interface PostgresCarryFacts {
   generatedColumns: { name: string }[];
   /** The row-level-security policies whose expressions read the column. */
   policies: { name: string }[];
+  /** Whether the column is an identity column (`GENERATED .. AS IDENTITY`). */
+  identity: boolean;
+  /**
+   * Whether the table has inheritance children or partitions, which an `ALTER TABLE` without
+   * `ONLY` changes too.
+   */
+  hasDescendants: boolean;
+  /** Whether the column is inherited from a parent table, which alone can change it. */
+  inheritedColumn: boolean;
   /** The foreign keys from or to the column, and the table at their other end. */
   foreignKeys: {
     name: string;
@@ -132,10 +142,23 @@ export function postgresCarry(
   request: ConversionRequest,
   facts: PostgresCarryFacts
 ): Carry {
-  if (!typeChanges(request)) return { cannotCarry: [], notCarried: [] };
+  const inheritance = inheritanceRefusals(request, facts);
+  if (!typeChanges(request))
+    return { cannotCarry: inheritance, notCarried: [] };
   const to = renderedType(request.to);
   const kindChange = kindChanges(request);
   const cannotCarry: CannotCarry[] = [
+    ...inheritance,
+    ...(facts.identity && !isIntegerType(request.to)
+      ? [
+          {
+            property: "definition" as const,
+            name: request.column,
+            reason: `the column is an identity column, which PostgreSQL keeps only on smallint, integer or bigint, not on ${to}`,
+            ownerCan: OWNER_CAN.definition,
+          },
+        ]
+      : []),
     ...readerRefusals(facts),
     ...postgresDefaultRefusals(request, facts.default),
     ...facts.indexes.flatMap(index =>
@@ -158,6 +181,33 @@ export function postgresCarry(
       ? [{ property: "collation", value: facts.collation.name }]
       : [];
   return { cannotCarry, notCarried };
+}
+
+/**
+ * A table in an inheritance tree, for any change of the column, its nullability included: with
+ * children or partitions, the statement (no `ONLY`, which PostgreSQL refuses for a type change of
+ * a column they inherit) changes their columns too, whose indexes, views and keys this plan does
+ * not read; an inherited column PostgreSQL changes only from its parent.
+ */
+function inheritanceRefusals(
+  request: ConversionRequest,
+  facts: PostgresCarryFacts
+): CannotCarry[] {
+  const reason = facts.hasDescendants
+    ? `${request.table} has inheritance children or partitions, and converting the column would change theirs too, which this plan does not read`
+    : facts.inheritedColumn
+      ? `the column is inherited from a parent of ${request.table}, and PostgreSQL changes an inherited column only from the parent`
+      : null;
+  return reason === null
+    ? []
+    : [
+        {
+          property: "definition",
+          name: request.column,
+          reason,
+          ownerCan: OWNER_CAN.definition,
+        },
+      ];
 }
 
 /**
@@ -319,6 +369,9 @@ function postgresStatements(
 
 interface ColumnRow {
   attnum: number;
+  identity: boolean;
+  inherited: boolean;
+  has_descendants: boolean;
   default_expression: string | null;
   default_casts: boolean;
   new_type_takes_collation: boolean;
@@ -360,6 +413,8 @@ async function readPostgresCarryFacts(
     db,
     "postgresql",
     sql`SELECT a.attnum::int AS attnum, pg_get_expr(d.adbin, d.adrelid) AS default_expression,
+          a.attidentity <> '' AS identity, a.attinhcount > 0 AS inherited,
+          EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhparent = a.attrelid) AS has_descendants,
           (a.atttypid = ${newType}
             OR EXISTS (SELECT 1 FROM pg_cast c WHERE c.castsource = a.atttypid
                        AND c.casttarget = ${newType} AND c.castcontext IN ('a', 'i'))
@@ -540,6 +595,9 @@ async function readPostgresCarryFacts(
     foreignKeys,
     generatedColumns,
     policies,
+    identity: column.identity,
+    hasDescendants: column.has_descendants,
+    inheritedColumn: column.inherited,
   };
 }
 

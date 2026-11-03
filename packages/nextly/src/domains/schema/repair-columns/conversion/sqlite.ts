@@ -35,10 +35,13 @@ import {
 import type { ColumnState } from "../types";
 
 import {
+  OWNER_CAN,
+  PRIMARY_KEY_OWNER_CAN,
   checkRefusals,
   expressionIndexRefusal,
   kindChanges,
   renderedType,
+  typeChanges,
 } from "./carry";
 import type {
   CannotCarry,
@@ -60,11 +63,24 @@ export interface SqliteTableFacts {
   /** The table's stored CREATE TABLE statement. */
   createSql: string;
   /** Every column, in the table's order (`pragma_table_xinfo`). */
-  columns: readonly { name: string; generated: boolean; primaryKey: boolean }[];
+  columns: readonly {
+    name: string;
+    generated: boolean;
+    primaryKey: boolean;
+    /** A generated column whose value is stored, not computed on each read. */
+    storedGenerated?: boolean;
+  }[];
   /** The table's CREATE INDEX statements: the indexes it was given, not its UNIQUE constraints'. */
   indexes: readonly string[];
   /** Every view and trigger in the schema, in the order they were stored. */
   objects: readonly SqliteSchemaObject[];
+  /** The table's UNIQUE keys but its primary key: each by its name, and its columns. */
+  uniqueKeys: readonly { name: string; columns: readonly string[] }[];
+  /**
+   * The foreign keys out of the table and into it from other tables, each by a name that shows
+   * both ends, with the column of this table it compares.
+   */
+  foreignKeys: readonly { name: string; column: string }[];
 }
 
 /** The plan for converting `request`'s column on SQLite, read from the live table through `db`. */
@@ -115,16 +131,97 @@ async function readSqliteTableFacts(
     "sqlite",
     sql`SELECT type, name, tbl_name AS tableName, sql FROM sqlite_schema WHERE type IN ('view', 'trigger') AND sql IS NOT NULL ORDER BY rowid`
   );
+  const primaryKey = columns.find(column => column.pk === 1)?.name ?? "";
   return {
     createSql: stored.sql,
     columns: columns.map(column => ({
       name: column.name,
       generated: column.hidden === 2 || column.hidden === 3,
       primaryKey: column.pk > 0,
+      storedGenerated: column.hidden === 3,
     })),
     indexes: indexes.map(index => index.sql),
     objects,
+    uniqueKeys: await readSqliteUniqueKeys(db, table),
+    foreignKeys: await readSqliteForeignKeys(db, table, primaryKey),
   };
+}
+
+/**
+ * The table's UNIQUE keys, from SQLite's own index list: an inline or table `UNIQUE` named by its
+ * columns, a `CREATE UNIQUE INDEX` by its name. The primary key is judged on its own.
+ */
+async function readSqliteUniqueKeys(
+  db: unknown,
+  table: string
+): Promise<SqliteTableFacts["uniqueKeys"]> {
+  const rows = await querySqlRows<{
+    indexName: string;
+    origin: string;
+    columnName: string | null;
+  }>(
+    db,
+    "sqlite",
+    sql`SELECT il.name AS indexName, il.origin AS origin, ii.name AS columnName
+        FROM pragma_index_list(${table}) il JOIN pragma_index_info(il.name) ii
+        WHERE il."unique" = 1 AND il.origin <> 'pk'
+        ORDER BY il.seq DESC, ii.seqno`
+  );
+  const keys = new Map<string, { origin: string; columns: string[] }>();
+  for (const row of rows) {
+    const key = keys.get(row.indexName) ?? { origin: row.origin, columns: [] };
+    if (row.columnName !== null) key.columns.push(row.columnName);
+    keys.set(row.indexName, key);
+  }
+  return [...keys].map(([indexName, key]) => ({
+    name: key.origin === "u" ? `UNIQUE (${key.columns.join(", ")})` : indexName,
+    columns: key.columns,
+  }));
+}
+
+/**
+ * The foreign keys out of the table, then those into it from every other table, each named
+ * `child (column) REFERENCES parent (column)`. A key that names no parent column references the
+ * parent's primary key.
+ */
+async function readSqliteForeignKeys(
+  db: unknown,
+  table: string,
+  primaryKey: string
+): Promise<SqliteTableFacts["foreignKeys"]> {
+  const ends = (to: string | null): string => (to === null ? "" : ` (${to})`);
+  const out = await querySqlRows<{
+    parent: string;
+    fromColumn: string;
+    toColumn: string | null;
+  }>(
+    db,
+    "sqlite",
+    sql`SELECT "table" AS parent, "from" AS fromColumn, "to" AS toColumn
+        FROM pragma_foreign_key_list(${table}) ORDER BY id, seq`
+  );
+  const into = await querySqlRows<{
+    child: string;
+    fromColumn: string;
+    toColumn: string | null;
+  }>(
+    db,
+    "sqlite",
+    sql`SELECT m.name AS child, f."from" AS fromColumn, f."to" AS toColumn
+        FROM sqlite_schema m JOIN pragma_foreign_key_list(m.name) f
+        WHERE m.type = 'table' AND lower(f."table") = lower(${table})
+        ORDER BY m.name, f.id, f.seq`
+  );
+  return [
+    ...out.map(key => ({
+      name: `${table} (${key.fromColumn}) REFERENCES ${key.parent}${ends(key.toColumn)}`,
+      column: key.fromColumn,
+    })),
+    ...into.map(key => ({
+      name: `${key.child} (${key.fromColumn}) REFERENCES ${table}${ends(key.toColumn)}`,
+      column: key.toColumn ?? primaryKey,
+    })),
+  ];
 }
 
 /** How the conversion of `request`'s column rebuilds the table `facts` describe. Changes nothing. */
@@ -184,8 +281,7 @@ export function planSqliteConversion(
       name: column.name,
       reason:
         "the column is in the table's primary key, and its declared type decides whether the key is the table's rowid, so retyping it changes what the key is",
-      ownerCan:
-        "keep the key column's type, or change it in a manual migration (nextly migrate:create --blank)",
+      ownerCan: PRIMARY_KEY_OWNER_CAN,
     }));
   // A STRICT table takes only its own type names, and refuses the rebuilt table's CREATE otherwise:
   // said here, before anything runs, rather than as a failed rebuild.
@@ -203,6 +299,10 @@ export function planSqliteConversion(
   if (kindChanges(request)) {
     cannotCarry.push(...kindChangeRefusals(facts, request));
   }
+  if (typeChanges(request)) {
+    cannotCarry.push(...storedGeneratedRefusals(facts, request));
+  }
+  cannotCarry.push(...affinityKeyRefusals(facts, request));
   const readers = readersOf(request.table, facts.objects);
   const statements = sqliteSwapStatements({
     table: request.table,
@@ -247,6 +347,99 @@ function kindChangeRefusals(
     return name === undefined ? [] : [expressionIndexRefusal(name, to)];
   });
   return [...checkRefusals(checks, to), ...indexes];
+}
+
+/**
+ * The stored generated columns whose expression reads the column. The rebuild computes each again
+ * from the converted values, so a value that reads the column's type (`typeof(c)`) would change in
+ * place: the same rule PostgreSQL keeps, where any type change under one is refused. A virtual
+ * column stores nothing; it is computed on each read, as any query over the column is.
+ */
+function storedGeneratedRefusals(
+  facts: SqliteTableFacts,
+  request: ConversionRequest
+): CannotCarry[] {
+  const stored = new Set(
+    facts.columns
+      .filter(column => column.storedGenerated === true)
+      .map(column => column.name.toLowerCase())
+  );
+  const words = significant(tokenize(facts.createSql) ?? []);
+  const open = columnListStart(words);
+  const items = open === undefined ? undefined : columnListItems(words, open);
+  return (items ?? []).flatMap((item): CannotCarry[] => {
+    const name = item[0] === undefined ? "" : identifierOf(item[0]);
+    if (!stored.has(name.toLowerCase())) return [];
+    const as = item.findIndex(
+      (token, k) => isWord(token, "AS") && isPunct(item[k + 1], "(")
+    );
+    const close = as < 0 ? undefined : closingParen(item, as + 1);
+    if (close === undefined) return [];
+    if (!namesColumn(item.slice(as + 2, close), request.column)) return [];
+    return [
+      {
+        property: "generated column",
+        name,
+        reason:
+          "the stored generated column is computed from this column, and the rebuild would compute it again from the converted values, changing what it stores",
+        ownerCan: OWNER_CAN["generated column"],
+      },
+    ];
+  });
+}
+
+/**
+ * SQLite's affinity for a declared type, by its documented rules, in their order: INT gives
+ * INTEGER; CHAR, CLOB or TEXT gives TEXT; BLOB or no type gives BLOB; REAL, FLOA or DOUB gives
+ * REAL; anything else NUMERIC.
+ */
+function affinityOf(type: string): string {
+  const upper = type.toUpperCase();
+  if (upper.includes("INT")) return "INTEGER";
+  if (/CHAR|CLOB|TEXT/.test(upper)) return "TEXT";
+  if (upper.includes("BLOB") || upper.trim() === "") return "BLOB";
+  if (/REAL|FLOA|DOUB/.test(upper)) return "REAL";
+  return "NUMERIC";
+}
+
+/**
+ * The unique keys and foreign keys on the column, where its affinity changes. Each compares the
+ * stored values, and a new affinity stores some of them differently: as INTEGER, '1' and '01' both
+ * become 1, so a unique key that held them apart would collide, and a key would compare its two
+ * ends differently. Judged from the catalog, reading no row.
+ */
+function affinityKeyRefusals(
+  facts: SqliteTableFacts,
+  request: ConversionRequest
+): CannotCarry[] {
+  const from = affinityOf(request.from.type);
+  const to = affinityOf(request.to.type);
+  if (from === to) return [];
+  const isColumn = (name: string): boolean =>
+    name.toLowerCase() === request.column.toLowerCase();
+  const change = `the change from ${from} to ${to} affinity`;
+  return [
+    ...facts.uniqueKeys
+      .filter(key => key.columns.some(isColumn))
+      .map(
+        (key): CannotCarry => ({
+          property: "key",
+          name: key.name,
+          reason: `the unique key compares the column's stored values, and ${change} can store two values it holds apart as one (as INTEGER, '1' and '01' both become 1)`,
+          ownerCan: "drop the unique key, run the repair, then add it again",
+        })
+      ),
+    ...facts.foreignKeys
+      .filter(key => isColumn(key.column))
+      .map(
+        (key): CannotCarry => ({
+          property: "key",
+          name: key.name,
+          reason: `the foreign key compares the column's stored values with its other end, and ${change} can store a value that no longer matches it`,
+          ownerCan: OWNER_CAN.key,
+        })
+      ),
+  ];
 }
 
 /** Whether any name among `tokens` is `column`, case-folded as SQLite resolves names. */

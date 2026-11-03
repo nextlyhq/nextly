@@ -33,6 +33,8 @@ const facts = (
   ],
   indexes: [],
   objects: [],
+  uniqueKeys: [],
+  foreignKeys: [],
   ...overrides,
 });
 
@@ -406,5 +408,67 @@ describe("planSqliteConversion: what the new type cannot keep", () => {
       []
     );
     expect(plan({ type: "text", nullable: false }).cannotCarry).toEqual([]);
+  });
+});
+
+describe("planSqliteConversion: what a change of affinity cannot keep", () => {
+  const TEXT = { type: "text", nullable: true };
+  const INTEGER = { type: "integer", nullable: true };
+  const VARCHAR = { type: "varchar(36)", nullable: true };
+  const named = (cannotCarry: { property: string; name: string }[]) =>
+    cannotCarry.map(item => [item.property, item.name]);
+  const convert = (
+    createSql: string,
+    overrides: Partial<SqliteTableFacts>,
+    to: ConversionRequest["to"]
+  ) =>
+    planSqliteConversion(facts(createSql, overrides), {
+      ...request(),
+      from: TEXT,
+      to,
+    }).cannotCarry;
+
+  it("a stored generated column that reads the column blocks a type change; a virtual one, or one reading another column, does not", () => {
+    const createSql = `CREATE TABLE "t" ("id" integer PRIMARY KEY, "c" text, "d" text, "g" text GENERATED ALWAYS AS (typeof(c)) STORED, "v" text AS (typeof(c)) VIRTUAL, "h" text AS (upper(d)) STORED)`;
+    const columns: SqliteTableFacts["columns"] = [
+      { name: "id", generated: false, primaryKey: true },
+      { name: "c", generated: false, primaryKey: false },
+      { name: "d", generated: false, primaryKey: false },
+      { name: "g", generated: true, primaryKey: false, storedGenerated: true },
+      { name: "v", generated: true, primaryKey: false },
+      { name: "h", generated: true, primaryKey: false, storedGenerated: true },
+    ];
+    expect(named(convert(createSql, { columns }, INTEGER))).toEqual([
+      ["generated column", "g"],
+    ]);
+    expect(
+      convert(createSql, { columns }, { ...TEXT, nullable: false })
+    ).toEqual([]);
+  });
+
+  it("a unique key or a foreign key on the column blocks a change of affinity, naming the key; the same affinity keeps both", () => {
+    const createSql = `CREATE TABLE "t" ("id" integer PRIMARY KEY, "c" text UNIQUE REFERENCES "p" ("k"), "d" text)`;
+    const keys: Partial<SqliteTableFacts> = {
+      uniqueKeys: [
+        { name: "UNIQUE (c)", columns: ["c"] },
+        { name: "UNIQUE (d)", columns: ["d"] },
+      ],
+      foreignKeys: [
+        { name: "t (c) REFERENCES p (k)", column: "c" },
+        { name: "lines (t_c) REFERENCES t (c)", column: "C" },
+        { name: "t (d) REFERENCES p (k)", column: "d" },
+      ],
+    };
+    const blocked = convert(createSql, keys, INTEGER);
+    expect(named(blocked)).toEqual([
+      ["key", "UNIQUE (c)"],
+      ["key", "t (c) REFERENCES p (k)"],
+      ["key", "lines (t_c) REFERENCES t (c)"],
+    ]);
+    for (const item of blocked) {
+      expect(item.ownerCan.length).toBeGreaterThan(0);
+    }
+    // text and varchar(36) both take TEXT affinity.
+    expect(convert(createSql, keys, VARCHAR)).toEqual([]);
   });
 });
