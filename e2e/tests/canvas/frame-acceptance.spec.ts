@@ -417,6 +417,7 @@ test.describe("the canvas keeps the site's colours whatever the admin's theme", 
             .evaluate(element => getComputedStyle(element).colorScheme);
 
           const site = await page.context().newPage();
+          let siteScheme = "";
           try {
             await site.setViewportSize(device);
             await site.goto("/");
@@ -431,11 +432,17 @@ test.describe("the canvas keeps the site's colours whatever the admin's theme", 
             expect(ground, `${theme} admin, ${String(device.name)}`).toEqual(
               siteGround
             );
+            siteScheme = await site
+              .locator(".nx-pb-page")
+              .first()
+              .evaluate(element => getComputedStyle(element).colorScheme);
           } finally {
             await site.close();
           }
-          // The page is light, as the site is, and its text reads on it.
-          expect(scheme).toBe("light");
+          // The page is in the site's own scheme, whatever the admin's, and
+          // its text reads on it. The site's stylesheet decides the scheme, as
+          // it does for the published page, rather than the editor.
+          expect(scheme).toBe(siteScheme);
           expect(ink).not.toEqual(ground);
         }
       } finally {
