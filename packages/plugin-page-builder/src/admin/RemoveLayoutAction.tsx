@@ -79,7 +79,9 @@ type DialogState =
   | { readonly kind: "checking" }
   | { readonly kind: "checked"; readonly check: RemovalCheck }
   | { readonly kind: "removing"; readonly check: RemovalCheck }
-  | { readonly kind: "failed"; readonly message: string };
+  | { readonly kind: "failed"; readonly message: string }
+  /** Deleted, with pages a publish made meanwhile still naming it. */
+  | { readonly kind: "deleted"; readonly message: string };
 
 /** The route's answer, inside the mutation envelope. */
 interface Envelope {
@@ -212,13 +214,23 @@ export function RemoveLayoutAction({
     );
   };
 
+  const toList = (): void => {
+    navigateTo(`/admin/collections/${collectionSlug}`);
+  };
+
   const confirm = (check: RemovalCheck, action: "delete" | "unpublish") => {
     const asked = opening.current;
     setState({ kind: "removing", check });
     callRemove(entryId, action, false).then(
-      () => {
+      answer => {
         if (action === "delete") {
-          navigateTo(`/admin/collections/${collectionSlug}`);
+          // Pages published while the delete ran still name the Layout: the
+          // author reads which, and what they show, before leaving.
+          if (answer?.item.stillUsedBy !== undefined) {
+            settle(asked, { kind: "deleted", message: answer.message });
+          } else {
+            toList();
+          }
         } else {
           // The form still holds the published Layout; reading it again
           // shows it unpublished.
@@ -247,7 +259,10 @@ export function RemoveLayoutAction({
       <AlertDialog
         open={state.kind !== "closed"}
         onOpenChange={next => {
-          if (!next && state.kind !== "removing") close();
+          if (next || state.kind === "removing") return;
+          // The Layout is gone once deleted: closing leaves for the list.
+          if (state.kind === "deleted") toList();
+          else close();
         }}
       >
         <AlertDialogContent>
@@ -257,9 +272,15 @@ export function RemoveLayoutAction({
           </AlertDialogHeader>
           <DialogBody state={state} />
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={state.kind === "removing"}>
-              {removable(state) ? "Cancel" : "Close"}
-            </AlertDialogCancel>
+            {state.kind === "deleted" ? (
+              <Button type="button" onClick={toList}>
+                Back to Layouts
+              </Button>
+            ) : (
+              <AlertDialogCancel disabled={state.kind === "removing"}>
+                {removable(state) ? "Cancel" : "Close"}
+              </AlertDialogCancel>
+            )}
             {removable(state) ? (
               <ConfirmButtons
                 busy={state.kind === "removing"}
@@ -298,6 +319,7 @@ function describe(state: DialogState): string {
     case "checking":
       return "Checking which pages use this Layout…";
     case "failed":
+    case "deleted":
       return state.message;
     case "checked":
     case "removing": {

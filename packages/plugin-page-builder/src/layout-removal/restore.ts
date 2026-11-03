@@ -73,6 +73,34 @@ function authored(row: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * Put a Layout a removal unpublished back as its copy held it: its live row
+ * published again with the copy's content, then its working draft as a
+ * working draft. Written as the system, carrying the removal's token, since
+ * the removal still holds the Layout. Used when a page published while the
+ * unpublish ran still names the Layout, so the unpublish changes nothing.
+ */
+export async function republishFromCopy(
+  deps: Pick<RestoreDeps, "nextly" | "slugs" | "warn">,
+  layoutId: string,
+  copy: LayoutCopy | null,
+  context: Record<string, unknown>
+): Promise<void> {
+  const slug = copy?.live.slug;
+  await deps.nextly.update({
+    collection: deps.slugs.layouts,
+    id: layoutId,
+    data: {
+      ...(copy === null ? {} : authored(copy.live)),
+      ...(typeof slug === "string" && slug !== "" ? { slug } : {}),
+      status: "published",
+    },
+    overrideAccess: true,
+    context,
+  });
+  if (copy !== null) await restoreDraft(deps, layoutId, copy, context);
+}
+
+/**
  * The working draft's own address, when its edit changed it; `null` when the
  * draft keeps the live row's, which the restored Layout already has (under the
  * next free address if its own was taken).
@@ -91,9 +119,11 @@ function draftSlug(copy: LayoutCopy): string | null {
  * log line, rather than failing the restore.
  */
 async function restoreDraft(
-  deps: RestoreDeps,
+  deps: Pick<RestoreDeps, "nextly" | "slugs" | "warn">,
   restored: string,
-  copy: LayoutCopy
+  copy: LayoutCopy,
+  /** The hook context the writes carry: a removal's token, where one holds the Layout. */
+  context?: Record<string, unknown>
 ): Promise<void> {
   const draft = copy.draft;
   if (draft === null) return;
@@ -104,6 +134,7 @@ async function restoreDraft(
       id: restored,
       data,
       overrideAccess: true,
+      ...(context === undefined ? {} : { context }),
     });
   try {
     await save({ ...authored(draft), ...(slug === null ? {} : { slug }) });

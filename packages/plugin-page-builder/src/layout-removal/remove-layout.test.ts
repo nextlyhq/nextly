@@ -101,6 +101,15 @@ function memoryStore(): LayoutRemovalStore & {
     },
     unsettled: async () =>
       [...rows.values()].filter(removal => removal.settledAt === null),
+    removalsOf: async ids =>
+      [...rows.values()].filter(removal => ids.includes(removal.layoutId)),
+    tombstones: async () =>
+      [...rows.values()].filter(
+        removal =>
+          removal.step === "removed" &&
+          removal.action === "unpublish" &&
+          removal.settledAt !== null
+      ),
   };
 }
 

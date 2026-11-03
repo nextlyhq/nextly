@@ -310,3 +310,32 @@ describe("in the document bar", () => {
     expect(container.innerHTML).toBe("");
   });
 });
+
+describe("a delete that a page published meanwhile still names", () => {
+  it("says so in the dialog, and returns to the list only once the author has read it", async () => {
+    const sentence =
+      "Home still uses this Layout. It shows the site default until it is published with another Layout.";
+    answer = async body =>
+      body.dryRun
+        ? { message: "", item: { check: check() } }
+        : {
+            message: sentence,
+            item: {
+              stillUsedBy: {
+                pages: [{ id: "p1", title: "Home" }],
+                unreadable: 0,
+              },
+            },
+          };
+    openDialog();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Delete Layout" })
+    );
+
+    expect(await screen.findByText(sentence)).toBeTruthy();
+    expect(navigated).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Back to Layouts" }));
+    expect(navigated).toEqual(["/admin/collections/layouts"]);
+  });
+});

@@ -171,7 +171,13 @@ points at it. Unpublishing in that race leaves the default to the background rep
 which points it back at **Default (site)**.
 
 Some writes skip collection hooks: a batch write with hooks turned off, and publishing or
-unpublishing every language at once. None of the checks above reach them.
+unpublishing every language at once (`POST
+/admin/api/collections/layouts/entries/:id/unpublish-all` or `publish-all`). None of
+the checks above reach them, so unpublishing every language of a Layout takes it down
+without Remove Layout's checks. This is a known limit until core runs collection hooks
+there. Two things are repaired afterwards: the background repair points the site's default
+back at a published Layout if the default was taken down this way, and a Layout published
+again this way can be made the default once the next background check has run.
 
 ## Existing sites: run a migration
 

@@ -33,6 +33,9 @@
  * - at `restoring`, a restore that stopped part-way cannot tell whether its
  *   Layout was created, so it is settled and logged rather than run twice.
  *
+ * It also drops an unpublish tombstone whose Layout is published again by a
+ * write that ran no collection hooks (core's all-languages publish).
+ *
  * @module layout-removal/settle
  */
 import {
@@ -42,7 +45,7 @@ import {
   type DefaultLayoutDirectApi,
 } from "../default-layout/store";
 
-import { scanLayoutReferences } from "./layout-references";
+import { scanLayoutReferences, type PageReference } from "./layout-references";
 import { clearPageReference } from "./page-reference-guard";
 import { restoreFromCopy, type RestoreDeps } from "./restore";
 import { REMOVAL_LEASE_MS, type LayoutRemoval } from "./store";
@@ -77,7 +80,8 @@ export type SettleDeps = RestoreDeps & {
 async function clearPagesLeftOnIt(
   deps: SettleDeps,
   removal: LayoutRemoval
-): Promise<void> {
+): Promise<PageReference[]> {
+  const live: PageReference[] = [];
   try {
     const scan = await scanLayoutReferences({
       nextly: deps.nextly,
@@ -85,7 +89,10 @@ async function clearPagesLeftOnIt(
       layoutId: removal.layoutId,
     });
     for (const reference of scan.references) {
-      if (reference.place === "live") continue;
+      if (reference.place === "live") {
+        live.push(reference);
+        continue;
+      }
       if (
         await clearPageReference(
           deps.nextly,
@@ -109,14 +116,33 @@ async function clearPagesLeftOnIt(
       }
     );
   }
+  return live;
+}
+
+/**
+ * What the check after the write did, and the pages whose LIVE row still
+ * names the Layout: a page published while the removal ran, which no write
+ * can change without publishing its draft.
+ */
+export interface SettledRemoval {
+  readonly outcome: SettleOutcome;
+  readonly live: readonly PageReference[];
 }
 
 /** Run the check after the write for a removal whose write has committed. */
 export async function settleRemoval(
   deps: SettleDeps,
   removal: LayoutRemoval
+): Promise<SettledRemoval> {
+  const live = await clearPagesLeftOnIt(deps, removal);
+  return { outcome: await settleDefault(deps, removal), live };
+}
+
+/** The default half of the check after the write. */
+async function settleDefault(
+  deps: SettleDeps,
+  removal: LayoutRemoval
 ): Promise<SettleOutcome> {
-  await clearPagesLeftOnIt(deps, removal);
   const { defaultLayout } = await readLayoutSettings(deps.nextly, deps.slugs);
   if (defaultLayout === removal.layoutId) {
     if (removal.action === "delete") {
@@ -209,6 +235,35 @@ async function sweepOne(
  * logged and the rest still run.
  */
 export async function settleLayoutRemovals(deps: SweepDeps): Promise<void> {
+  await finishStoppedRemovals(deps);
+  await releasePublishedTombstones(deps);
+}
+
+/**
+ * Drop each unpublish tombstone whose Layout is published again. A publish
+ * normally drops it from the Layout's own after-write hook, but core's
+ * all-languages publish runs no collection hooks, and would otherwise leave a
+ * published Layout that make-default refuses as being removed. Never throws.
+ */
+async function releasePublishedTombstones(deps: SweepDeps): Promise<void> {
+  try {
+    const tombstones = await deps.store.tombstones();
+    const published = await publishedLayoutIds(
+      deps.nextly,
+      deps.slugs,
+      tombstones.map(removal => removal.layoutId)
+    );
+    for (const id of published) await deps.store.releaseTombstone(id);
+  } catch (error) {
+    deps.warn(
+      "[page-builder] the unpublish records of Layouts published again could not be checked; the next sweep will try again",
+      { error: error instanceof Error ? error.message : String(error) }
+    );
+  }
+}
+
+/** The rows stopped requests left, each finished or cleared. */
+async function finishStoppedRemovals(deps: SweepDeps): Promise<void> {
   const now = (deps.now ?? (() => new Date()))();
   for (const removal of await deps.store.unsettled()) {
     if (!isStale(removal, now)) continue;

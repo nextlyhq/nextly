@@ -129,3 +129,28 @@ export function pagesUseItRefusal(found: PagesInTheWay): string {
   const verb = total === 1 ? "uses" : "use";
   return `${pages(total)} ${verb} this Layout: ${listed(found.titles, found.unreadable)}. Choose another Layout for ${total === 1 ? "it" : "them"} first.`;
 }
+
+/** "Home", "Home and About", "Home, About and 1 page you can't view". */
+function namedPages(titles: readonly string[], unreadable: number): string {
+  const parts = [...titles];
+  if (unreadable > 0) {
+    parts.push(`${pages(unreadable)} you can't view`);
+  }
+  if (parts.length <= 1) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1] ?? ""}`;
+}
+
+/**
+ * What a delete is told when a page published while it ran still names the
+ * Layout: the delete stands, and those pages show the site default until
+ * they are published with another Layout.
+ */
+export function stillUsedAfterDelete(found: {
+  readonly titles: readonly string[];
+  readonly unreadable: number;
+}): string {
+  const one = found.titles.length + found.unreadable === 1;
+  return one
+    ? `${namedPages(found.titles, found.unreadable)} still uses this Layout. It shows the site default until it is published with another Layout.`
+    : `${namedPages(found.titles, found.unreadable)} still use this Layout. They show the site default until they are published with another Layout.`;
+}

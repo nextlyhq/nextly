@@ -12,6 +12,7 @@ import {
   pagesUseItRefusal,
   pickerRemovalNote,
   REMOVE_LAYOUT_REFUSAL,
+  stillUsedAfterDelete,
 } from "./words";
 
 describe("the refusal when pages use the Layout", () => {
@@ -95,5 +96,21 @@ describe("the picker's note on a Layout behind the fence", () => {
       "Unpublished. Publish it again to choose it."
     );
     expect(pickerRemovalNote("deleted")).toBe("Deleted");
+  });
+});
+
+describe("a delete that a page published meanwhile still names", () => {
+  it("names the page and says what it shows", () => {
+    expect(stillUsedAfterDelete({ titles: ["Home"], unreadable: 0 })).toBe(
+      "Home still uses this Layout. It shows the site default until it is published with another Layout."
+    );
+  });
+
+  it("speaks of several pages, and counts those the author can't view", () => {
+    expect(
+      stillUsedAfterDelete({ titles: ["Home", "About"], unreadable: 1 })
+    ).toBe(
+      "Home, About and 1 page you can't view still use this Layout. They show the site default until they are published with another Layout."
+    );
   });
 });

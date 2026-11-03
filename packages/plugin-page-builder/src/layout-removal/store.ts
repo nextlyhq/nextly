@@ -14,7 +14,7 @@
  * @module layout-removal/store
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
-import { and, eq, inArray, isNull } from "@nextlyhq/plugin-sdk/db";
+import { and, eq, inArray, isNotNull, isNull } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -114,6 +114,8 @@ export interface LayoutRemovalStore {
   unsettled(): Promise<LayoutRemoval[]>;
   /** The rows of `layoutIds` that have one, as one read. */
   removalsOf(layoutIds: readonly string[]): Promise<LayoutRemoval[]>;
+  /** Every settled unpublish tombstone. */
+  tombstones(): Promise<LayoutRemoval[]>;
 }
 
 /** The database the plugin runs on, as `ctx.dialect` names it. */
@@ -359,6 +361,20 @@ export function layoutRemovalStore(
       const rows = await db
         .select(layoutRemovals)
         .where(inArray(t().layoutId, [...layoutIds]))
+        .all();
+      return rows.map(toRemoval);
+    },
+
+    tombstones: async () => {
+      const rows = await db
+        .select(layoutRemovals)
+        .where(
+          both(
+            eq(t().step, "removed"),
+            eq(t().action, "unpublish"),
+            isNotNull(t().settledAt)
+          )
+        )
         .all();
       return rows.map(toRemoval);
     },

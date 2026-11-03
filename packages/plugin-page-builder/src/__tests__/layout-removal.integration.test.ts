@@ -44,6 +44,7 @@ import {
   writeLayoutSettings,
 } from "../default-layout/store";
 import { readLayoutCopy } from "../layout-removal/layout-copy";
+import { settleLayoutRemovals } from "../layout-removal/settle";
 import { LAYOUT_REMOVAL_CONTEXT_KEY } from "../layout-removal/layout-removal-guard";
 import {
   layoutRemovalStore,
@@ -1133,6 +1134,151 @@ describe.each(getConfiguredTestDialects())(
 
         expect(answer.successful, JSON.stringify(answer)).toBe(1);
         expect(await fence().removalOf(other)).toBeNull();
+      });
+    });
+
+    /** POST core's all-languages lifecycle route for one Layout, as the owner. */
+    async function allLanguages(
+      cookie: string,
+      id: string,
+      verb: "publish-all" | "unpublish-all"
+    ): Promise<Answer> {
+      const handlers = createDynamicHandlers();
+      const path = ["collections", LAYOUTS_SLUG, "entries", id, verb];
+      const response = await handlers.POST(
+        new Request(`${ORIGIN}/api/${path.join("/")}`, {
+          method: "POST",
+          headers: {
+            cookie: `${cookie}; nextly_csrf=${CSRF}`,
+            "x-csrf-token": CSRF,
+            origin: ORIGIN,
+            "content-type": "application/json",
+          },
+          body: "{}",
+        }),
+        { params: Promise.resolve({ params: path }) }
+      );
+      const text = await response.text();
+      return {
+        status: response.status,
+        body: (text === "" ? {} : JSON.parse(text)) as Record<string, unknown>,
+      };
+    }
+
+    /** The pages table, as the registry resolved it. */
+    async function pagesTable(t: TestNextly): Promise<string> {
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        getCollectionBySlug(
+          slug: string
+        ): Promise<{ tableName: string } | null>;
+      };
+      const table = (await registry.getCollectionBySlug(PAGES_SLUG))?.tableName;
+      if (table === undefined) throw new Error("no pages table");
+      return table;
+    }
+
+    describe("a page published while the Layout is being removed", () => {
+      /**
+       * A page publish whose checks passed before the fence, committing as the
+       * removal's own write starts: past every hook, as it would have been.
+       */
+      async function publishedAsTheWriteStarts(
+        t: TestNextly,
+        phase: "beforeDelete" | "beforeChange",
+        layoutId: string,
+        pageId: string
+      ) {
+        const table = await pagesTable(t);
+        let armed = true;
+        t.hooks.register(phase, LAYOUTS_SLUG, async context => {
+          const hook = context as { data?: unknown; originalData?: unknown };
+          const id = relationId(hook.originalData) ?? relationId(hook.data);
+          if (!armed || id !== layoutId) return;
+          armed = false;
+          await t.adapter.update(
+            table,
+            { layout: layoutId, status: "published" },
+            { and: [{ column: "id", op: "=", value: pageId }] }
+          );
+        });
+        return () => armed;
+      }
+
+      it("undoes an unpublish, answering the page that uses the Layout, so nothing changed", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "draft" });
+        const pending = await publishedAsTheWriteStarts(
+          t,
+          "beforeChange",
+          other,
+          home
+        );
+
+        const answer = await remove(cookie, other, "unpublish");
+
+        expect(pending()).toBe(false);
+        expect(answer.status).toBe(409);
+        expect(told(answer)).toBe(
+          '1 page uses this Layout: "Home". Choose another Layout for it first.'
+        );
+        expect((await layoutRow(t, other))?.status).toBe("published");
+        expect(await fence().removalOf(other)).toBeNull();
+        expect(await pageLayout(t, home)).toBe(other);
+        // Nothing left behind: the Layout can be made the default again.
+        expect((await makeDefault(cookie, other)).status).toBe(200);
+      });
+
+      it("lets a delete stand, saying which page still uses the Layout and what it shows", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "draft" });
+        const pending = await publishedAsTheWriteStarts(
+          t,
+          "beforeDelete",
+          other,
+          home
+        );
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(pending()).toBe(false);
+        expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+        expect(answer.body.message).toBe(
+          "Home still uses this Layout. It shows the site default until it is published with another Layout."
+        );
+        expect(
+          (answer.body.item as { stillUsedBy?: unknown }).stillUsedBy
+        ).toEqual({ pages: [{ id: home, title: "Home" }], unreadable: 0 });
+        expect(await layoutRow(t, other)).toBeUndefined();
+      });
+    });
+
+    describe("publishing every language of a Layout Remove Layout unpublished", () => {
+      it("leaves no tombstone once the sweep runs, so it can be made the default", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        expect((await remove(cookie, other, "unpublish")).status).toBe(200);
+        // Core's all-languages publish runs no collection hooks, so the
+        // Layout's own after-write never sees it.
+        expect((await allLanguages(cookie, other, "publish-all")).status).toBe(
+          200
+        );
+        expect((await layoutRow(t, other))?.status).toBe("published");
+
+        await settleLayoutRemovals({
+          nextly: t.nextly,
+          slugs: SLUGS,
+          pagesSlug: PAGES_SLUG,
+          store: fence(),
+          warn: () => {},
+        });
+
+        expect(await fence().removalOf(other)).toBeNull();
+        expect((await makeDefault(cookie, other)).status).toBe(200);
       });
     });
 

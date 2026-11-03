@@ -43,13 +43,14 @@ import { readLayoutCopy } from "./layout-copy";
 import {
   readableTitles,
   scanLayoutReferences,
+  type PageReference,
   type PersonReads,
 } from "./layout-references";
 import {
   LAYOUT_REMOVAL_CONTEXT_KEY,
   VERSION_MOVED,
 } from "./layout-removal-guard";
-import type { RestoreDeps } from "./restore";
+import { republishFromCopy, type RestoreDeps } from "./restore";
 import { settleRemoval, writeLanded } from "./settle";
 import type { RemovalAction } from "./store";
 import {
@@ -59,6 +60,7 @@ import {
   KEPT_AS_DEFAULT,
   NOT_PUBLISHED,
   pagesUseItRefusal,
+  stillUsedAfterDelete,
 } from "./words";
 
 /** How many times a removal takes its copy again for a Layout that changed. */
@@ -100,6 +102,15 @@ export interface RemoveResult {
   readonly dryRun: boolean;
   /** Present on a dry run. */
   readonly check?: RemovalCheck;
+  /**
+   * After a delete: the pages a publish made while it ran left naming the
+   * Layout on their live row, as the person may see them. They show the site
+   * default until published with another Layout.
+   */
+  readonly stillUsedBy?: {
+    readonly pages: readonly { readonly id: string; readonly title: string }[];
+    readonly unreadable: number;
+  };
 }
 
 /** The answer: the envelope's message and item. */
@@ -360,6 +371,73 @@ async function copyThenRemove(
   );
 }
 
+/**
+ * Step 7, for an unpublish: scan again, live rows included. A page published
+ * while the unpublish ran, naming the Layout, would show the site default in
+ * its place with nobody having confirmed it; so the Layout is published again
+ * from its copy, the fence comes down, and the removal answers as blocked by
+ * that page, having changed nothing.
+ */
+async function undoIfPagesNameIt(
+  deps: RemoveLayoutDeps,
+  request: RemoveRequest,
+  token: string
+): Promise<void> {
+  const { layoutId } = request;
+  const pages = await checkPages(deps, layoutId);
+  if (pages.complete && pages.pages.length + pages.unreadable === 0) return;
+  const removal = await deps.store.removalOf(layoutId);
+  await republishFromCopy(deps, layoutId, removal?.copy ?? null, {
+    [LAYOUT_REMOVAL_CONTEXT_KEY]: token,
+  });
+  await deps.store.stop(layoutId, token);
+  deps.warn(
+    "[page-builder] a page was published onto a Layout while it was being unpublished; the Layout was published again",
+    { layoutId }
+  );
+  throw conflict(
+    pagesUseItRefusal({
+      titles: pages.pages.map(page => page.title),
+      unreadable: pages.unreadable,
+      complete: pages.complete,
+    }),
+    "layout-removal-page-published-meanwhile",
+    layoutId
+  );
+}
+
+/**
+ * The pages still naming a deleted Layout on their live row, as the person
+ * may see them, and the sentence that says so; null when there are none.
+ */
+async function stillUsedAfterTheDelete(
+  deps: RemoveLayoutDeps,
+  layoutId: string,
+  live: readonly PageReference[]
+): Promise<{
+  message: string;
+  stillUsedBy: NonNullable<RemoveResult["stillUsedBy"]>;
+} | null> {
+  if (live.length === 0) return null;
+  const named = await readableTitles({
+    nextly: deps.nextly,
+    pages: deps.slugs.pages,
+    references: live,
+    asPerson: deps.person.as,
+  });
+  deps.warn(
+    "[page-builder] a deleted Layout is still named by published pages; they show the site default until published with another Layout",
+    { layoutId, pages: live.map(page => page.id) }
+  );
+  return {
+    message: stillUsedAfterDelete({
+      titles: named.readable.map(page => page.title),
+      unreadable: named.unreadable,
+    }),
+    stillUsedBy: { pages: named.readable, unreadable: named.unreadable },
+  };
+}
+
 /** Step 7: the check after the write. */
 async function settle(
   deps: RemoveLayoutDeps,
@@ -367,6 +445,9 @@ async function settle(
   token: string
 ): Promise<RemoveAnswer> {
   const { layoutId } = request;
+  if (request.action === "unpublish") {
+    await undoIfPagesNameIt(deps, request, token);
+  }
   const moved = await deps.store.advance({
     layoutId,
     token,
@@ -382,11 +463,19 @@ async function settle(
       layoutId
     );
   }
-  if (
-    (await settleRemoval({ ...deps, pagesSlug: deps.slugs.pages }, removal)) ===
-    "restored"
-  ) {
+  const settled = await settleRemoval(
+    { ...deps, pagesSlug: deps.slugs.pages },
+    removal
+  );
+  if (settled.outcome === "restored") {
     throw conflict(KEPT_AS_DEFAULT, "layout-removal-raced-promotion", layoutId);
+  }
+  const still = await stillUsedAfterTheDelete(deps, layoutId, settled.live);
+  if (still !== null) {
+    return {
+      message: still.message,
+      item: { ...request, stillUsedBy: still.stillUsedBy },
+    };
   }
   return {
     message:
