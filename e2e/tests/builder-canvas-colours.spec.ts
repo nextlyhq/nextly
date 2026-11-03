@@ -191,9 +191,11 @@ async function groundBehind(target: Locator): Promise<string> {
  * Read once the seeded heading is on screen: an empty page root has no box,
  * and a ground read before the document arrived would describe nothing.
  */
-async function published(
-  page: Page
-): Promise<{ ground: [number, number, number]; colorScheme: string }> {
+async function published(page: Page): Promise<{
+  ground: [number, number, number];
+  colorScheme: string;
+  face: string;
+}> {
   await page.goto("/");
   await expect(
     page.getByRole("heading", { name: HEADING, level: 1 })
@@ -204,6 +206,7 @@ async function published(
     colorScheme: await root.evaluate(
       element => getComputedStyle(element).colorScheme
     ),
+    face: await root.evaluate(element => getComputedStyle(element).fontFamily),
   };
 }
 
@@ -267,7 +270,13 @@ for (const theme of ["dark", "light"] as const) {
       expect(face, "the page is not set in the admin's face").not.toContain(
         "Geist"
       );
-      expect(face.split(",")[0]?.trim()).toBe("system-ui");
+      // The site's own body face, as published: the canvas is drawn inside
+      // the site's page, which sets it.
+      expect(
+        await canvasPage(page).evaluate(
+          element => getComputedStyle(element).fontFamily
+        )
+      ).toBe(site.face);
     });
 
     test("the editor's marks on the page are legible and its chrome stays the admin's", async ({
