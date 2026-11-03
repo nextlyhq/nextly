@@ -593,3 +593,78 @@ export interface SiteSettingsRead {
    */
   readonly layouts: readonly SiteLayoutOption[];
 }
+
+/**
+ * Where the component editor asks what it needs to know about the component it
+ * edits that the component's own document does not hold.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export const COMPONENT_FACTS_ROUTE_PATH = "/component-facts";
+
+/** The query parameter naming the component, by id. */
+export const COMPONENT_FACTS_ID_PARAM = "id";
+
+/** The query parameter carrying an asker's mount token, which the route ignores. */
+const COMPONENT_FACTS_MOUNT_PARAM = "mount";
+
+/**
+ * The facts route's path for one component, in the language being edited, as
+ * the client requests it. No language is the app default, as everywhere in
+ * the admin.
+ */
+export function componentFactsPath(
+  id: string,
+  locale?: string | null,
+  /**
+   * A token the route ignores, which makes the path, and so the read's cache
+   * key, one asker's own: an editor trusts no answer read before it mounted.
+   */
+  mount?: string
+): string {
+  const query = new URLSearchParams({ [COMPONENT_FACTS_ID_PARAM]: id });
+  if (locale !== undefined && locale !== null && locale !== "") {
+    query.set(COMPONENT_LIBRARY_LOCALE_PARAM, locale);
+  }
+  if (mount !== undefined) query.set(COMPONENT_FACTS_MOUNT_PARAM, mount);
+  return `${COMPONENT_FACTS_ROUTE_PATH}?${query.toString()}`;
+}
+
+/**
+ * What the component editor is told about the component it edits.
+ *
+ * NOT A SECURITY BOUNDARY: the save judges every write on its own. This keeps
+ * a draft from minting an id the live definition still uses, and tells the
+ * author how far a change reaches.
+ *
+ * @experimental Settles when the component editor ships.
+ */
+export interface ComponentFactsResponse {
+  /**
+   * The field and slot ids the component's LIVE definition holds. A draft
+   * that dropped one still has placements holding values under it, so a new
+   * field must never be minted under any of these.
+   */
+  readonly live: {
+    readonly properties: readonly string[];
+    readonly slots: readonly string[];
+  };
+  /**
+   * The field and slot ids the component has retired: removed by a published
+   * definition, and never to be minted again, since a host may still hold a
+   * value under one until it is next written. `null` where retirements are not
+   * recorded (a localized component store, or a host rendering components
+   * from its own source), so a new field cannot be kept clear of them and the
+   * editor adds none.
+   */
+  readonly retired: {
+    readonly properties: readonly string[];
+    readonly slots: readonly string[];
+  } | null;
+  /**
+   * How many documents place the component directly, from the usage index;
+   * `complete` false makes the number a floor. `null` when the index could not
+   * answer, or the caller may not read the component.
+   */
+  readonly reach: { readonly count: number; readonly complete: boolean } | null;
+}
