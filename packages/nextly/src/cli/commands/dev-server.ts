@@ -808,6 +808,25 @@ export async function performAutoSync(
 // ============================================================================
 
 /**
+ * Run a generated migration's statements one at a time, each without its comment lines: the
+ * generator separates them with `--> statement-breakpoint`. One place for the Single and component
+ * syncs and the Single reconcile, which each ran their own copy.
+ */
+async function executeMigrationStatements(
+  adapter: DrizzleAdapter,
+  migrationSQL: string
+): Promise<void> {
+  for (const statement of migrationSQL.split("--> statement-breakpoint")) {
+    const clean = statement
+      .split("\n")
+      .filter(line => !line.trim().startsWith("--"))
+      .join("\n")
+      .trim();
+    if (clean) await adapter.executeQuery(clean);
+  }
+}
+
+/**
  * Register a newly-DDL'd Single table with the live schema resolver.
  *
  * Why: the adapter's `TableResolver` is built once at boot from the current
@@ -827,15 +846,21 @@ export async function performAutoSync(
  * log and continue. The next boot will rebuild the resolver from the
  * registry row that was just written, so the table becomes visible then.
  */
-function registerSingleTableInResolver(
+export function registerSingleTableInResolver(
   adapter: DrizzleAdapter,
   tableName: string,
   fields: FieldDefinition[],
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  // Whether its translatable values live in its per-language table, as the CREATE just laid it
+  // out: the registered table then names none of them, so the next query asks for no column the
+  // main table lacks.
+  localized: boolean
 ): void {
   try {
     const dialect = adapter.getCapabilities().dialect;
-    const { table } = generateRuntimeSchema(tableName, fields, dialect);
+    const { table } = generateRuntimeSchema(tableName, fields, dialect, {
+      localized,
+    });
     const resolver = (
       adapter as unknown as {
         tableResolver?: {
@@ -974,22 +999,7 @@ export async function performSinglesAutoSync(
           { isSingle: true, localized: storesPerLanguage(singleConfig) }
         );
 
-        const statements = migrationSQL
-          .split("--> statement-breakpoint")
-          .map((s: string) => s.trim())
-          .filter((s: string) => s.length > 0);
-
-        for (const statement of statements) {
-          const cleanStatement = statement
-            .split("\n")
-            .filter((line: string) => !line.trim().startsWith("--"))
-            .join("\n")
-            .trim();
-
-          if (cleanStatement) {
-            await drizzleAdapter.executeQuery(cleanStatement);
-          }
-        }
+        await executeMigrationStatements(drizzleAdapter, migrationSQL);
 
         const tableActuallyExists = await drizzleAdapter.tableExists(tableName);
 
@@ -1000,7 +1010,8 @@ export async function performSinglesAutoSync(
             drizzleAdapter,
             tableName,
             singleConfig.fields as unknown as FieldDefinition[],
-            logger
+            logger,
+            storesPerLanguage(singleConfig)
           );
           await singleRegistry.updateMigrationStatus(slug, "applied");
           synced.push(slug);
@@ -1117,21 +1128,7 @@ export async function performSinglesReconcile(
         { isSingle: true, localized }
       );
 
-      const statements = migrationSQL
-        .split("--> statement-breakpoint")
-        .map((s: string) => s.trim())
-        .filter((s: string) => s.length > 0);
-
-      for (const statement of statements) {
-        const cleanStatement = statement
-          .split("\n")
-          .filter((line: string) => !line.trim().startsWith("--"))
-          .join("\n")
-          .trim();
-        if (cleanStatement) {
-          await drizzleAdapter.executeQuery(cleanStatement);
-        }
-      }
+      await executeMigrationStatements(drizzleAdapter, migrationSQL);
 
       const tableExists = await drizzleAdapter.tableExists(single.tableName);
       if (tableExists) {
@@ -1142,7 +1139,8 @@ export async function performSinglesReconcile(
           drizzleAdapter,
           single.tableName,
           fields,
-          logger
+          logger,
+          localized
         );
         await singleRegistry.updateMigrationStatus(single.slug, "applied");
         reconciledSlugs.push(single.slug);
@@ -1255,22 +1253,7 @@ export async function performComponentsAutoSync(
           { localized: storesPerLanguage(componentConfig) }
         );
 
-        const statements = migrationSQL
-          .split("--> statement-breakpoint")
-          .map((s: string) => s.trim())
-          .filter((s: string) => s.length > 0);
-
-        for (const statement of statements) {
-          const cleanStatement = statement
-            .split("\n")
-            .filter((line: string) => !line.trim().startsWith("--"))
-            .join("\n")
-            .trim();
-
-          if (cleanStatement) {
-            await drizzleAdapter.executeQuery(cleanStatement);
-          }
-        }
+        await executeMigrationStatements(drizzleAdapter, migrationSQL);
 
         const tableActuallyExists = await drizzleAdapter.tableExists(tableName);
 
