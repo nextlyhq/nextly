@@ -21,6 +21,7 @@ import {
   type CanvasFrameFallback,
   type SiteFrameSource,
 } from "./canvas-frame";
+import { Canvas } from "./canvas";
 import { SITE_CHROME_ATTRIBUTE } from "./canvas-frame-sheet";
 
 afterEach(() => {
@@ -616,6 +617,59 @@ describe("the canvas frame on a page the site serves", () => {
       await Promise.resolve();
     });
     expect(mount?.querySelector(".nx-canvas")).toBeNull();
+  });
+});
+
+describe("a click on the site's page around the canvas", () => {
+  const EMPTY = { formatVersion: 1, kind: "page", nodes: [] } as const;
+
+  it("clears the selection, as a click on the canvas's own ground does", async () => {
+    const onSelect = vi.fn();
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={siteSource()}>
+        <Canvas
+          document={EMPTY}
+          siteStyles={false}
+          selectedId="a"
+          onSelect={onSelect}
+        />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    await hydrate(frame);
+    const doc = frameDocument(frame);
+    expect(doc.querySelector(".nx-canvas")).not.toBeNull();
+
+    // Below a short page, on the site's own ground.
+    act(() => {
+      doc.body.click();
+    });
+    expect(onSelect).toHaveBeenCalledWith(null, expect.anything());
+
+    // A click on the canvas is the canvas's own, answered once.
+    onSelect.mockClear();
+    act(() => {
+      doc.querySelector<HTMLElement>(".nx-canvas")?.click();
+    });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not listened for when the canvas shares the editor's document", () => {
+    const onSelect = vi.fn();
+    render(
+      <Canvas
+        document={{ formatVersion: 1, kind: "page", nodes: [] }}
+        siteStyles={false}
+        selectedId="a"
+        onSelect={onSelect}
+      />
+    );
+    // Outside the canvas there, a click is on the editor's own panels.
+    act(() => {
+      document.body.click();
+    });
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 
