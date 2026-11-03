@@ -109,9 +109,12 @@ not change, move or disappear, and the save is refused with the code
 setting it to `null`, is refused the same way while the page holds a locked block, on
 the data the save's hooks leave: a hook that empties the field is refused as the
 caller would be. A block added before a locked one, or a block removed from before it,
-shifts its position without moving it, so that is allowed; swapping it with a block
-beside it moves it, and so does swapping a block that holds it with one beside that.
-To change or move a locked block, send it unlocked in the same save.
+shifts its position without moving it, so that is allowed. A reorder is read as the
+fewest blocks moved that explain it: moving another block across the locked one is that block's move and is
+allowed, while moving the locked block past more of its neighbours than would have to move
+round it is a move of the locked block, and refused. The same holds for a block that
+holds it. The editor asks the same question of a move before it is made. To change or
+move a locked block, send it unlocked in the same save.
 
 Deleting is the exception. A locked block can't be deleted in the same save that
 unlocks it, and neither can a block that holds it: unlock it and save first, then
@@ -138,9 +141,16 @@ refused, naming the placement.
 A block locked in Layers inside a component holds on every page that places it too. A
 placement's value for an exposed field, or its content for an exposed slot, cannot
 change it, even on a placement a visibility condition hides, and the save is refused
-with `layers-lock-changed`, naming the block. A page cannot unlock it: remove the value, or unlock the block in the component. A value a page
-already stores is kept, so locking a block after pages gave it values refuses only a new
-one.
+with `layers-lock-changed`, naming the block. A page cannot unlock it: remove the value, or
+unlock the block in the component. A value a page already stores is kept, so locking a
+block after pages gave it values refuses only a new one. A component's variant is held
+the same way: a variant that sets a value on a block the component locks is refused when
+the component is saved, naming the block and the variant.
+
+In the editor, the field that drives such a block is read-only on the placement, with "Set
+by the component" and its name, and where to change it. Double-clicking its text on the
+canvas says the same rather than opening it for editing. A field held by a
+`"contentOnly"` area is read-only the same way, with that area's reason.
 
 A component cannot add an exposed field that drives something a `"contentOnly"` lock
 holds, since no placement could change it. Expose a content field instead, remove the

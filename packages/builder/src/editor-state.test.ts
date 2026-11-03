@@ -1146,6 +1146,81 @@ describe("the locks an edit is held to", () => {
     expect(bare.result.current.composed()).toBeUndefined();
   });
 
+  it("refuses a placement's value on a block its component locks, naming the component", () => {
+    // The component locks "Hero" in Layers and exposes its text; the page
+    // cannot unlock it, so a value for it is refused before it is applied,
+    // as the save would refuse it, and a value for the free block applies.
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        { ...headline("hero"), locked: true, name: "Hero" },
+        headline("free"),
+      ],
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "hero",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "strap",
+          label: "Strap",
+          nodeId: "free",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    } as unknown as BlockDocument;
+    const onLockRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo" },
+          } as BlockNode,
+        ]),
+        definitions: new Map([["promo", promo]]),
+        componentName: id => (id === "promo" ? "Promo" : undefined),
+        onLockRefused,
+      })
+    );
+    const give = (overrides: Record<string, string>) => ({
+      kind: "update" as const,
+      id: "i1",
+      patch: { props: { componentId: "promo", overrides } },
+    });
+
+    expect(result.current.lockRefusalFor([give({ title: "Changed" })])).toEqual(
+      {
+        code: "layers-locked",
+        label: "Promo",
+        relation: "component",
+        verb: "change",
+      }
+    );
+    act(() => {
+      expect(result.current.apply(give({ title: "Changed" }))).toBeNull();
+    });
+    expect(onLockRefused).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sentence:
+          "Set by the component Promo. Change it where the component is edited.",
+      })
+    );
+    expect(
+      result.current.lockRefusalFor([give({ strap: "Sale" })])
+    ).toBeUndefined();
+    act(() => {
+      expect(result.current.apply(give({ strap: "Sale" }))).not.toBeNull();
+    });
+  });
+
   it("refuses content a placement gives a component's locked slot, judged on the composed page", () => {
     // The component exposes its own row, locked "all", for each placement to
     // fill. One headline is what the row starts with; a second is a block the

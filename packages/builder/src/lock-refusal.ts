@@ -46,9 +46,16 @@ export type LockedVerb = "move" | "delete" | "change" | "add";
  * - `self`: it is that block;
  * - `inside`: it is inside that block;
  * - `around`: that block is inside it;
- * - `destination`: the action would put a block into it.
+ * - `destination`: the action would put a block into it;
+ * - `component`: the block is a component's, which locks it; `label` is then
+ *   the component's name, since the page cannot unlock it.
  */
-export type LockedRelation = "self" | "inside" | "around" | "destination";
+export type LockedRelation =
+  | "self"
+  | "inside"
+  | "around"
+  | "destination"
+  | "component";
 
 /**
  * The facts a Layers-lock refusal is worded from: the locked block by the name
@@ -251,6 +258,15 @@ function layersLockWording(found: LayersLockRefusalFacts): RefusalWording {
       return {
         headline: `This block is inside ${found.label}, which is locked.`,
         remedy: `Unlock ${found.label} to ${found.verb} this block.`,
+      };
+    case "component":
+      return {
+        // A host that names no component still says whose the block is.
+        headline:
+          found.label === ""
+            ? "Set by its component."
+            : `Set by the component ${found.label}.`,
+        remedy: "Change it where the component is edited.",
       };
     case "destination":
       return {

@@ -22,6 +22,7 @@ import {
   type UseInlineEditingResult,
   CANVAS_ROOT_CLASS,
   inspectInstance,
+  lockViewOf,
   partOfComponentSentence,
   useEditorState,
   createOpenPassages,
@@ -251,7 +252,7 @@ function useInlineNotices(
   componentLibrary: ComponentLibraryRead
 ): {
   announce: (outcome: InlineEditOutcome) => void;
-  partOf: (placementId: string) => void;
+  partOf: (placementId: string, heldExposureId?: string) => void;
 } {
   /*
    * ONE place the author is told about an inline edit that did not save.
@@ -276,16 +277,21 @@ function useInlineNotices(
    * holds failures: this is information, and it fades.
    */
   const partOf = useCallback(
-    (placementId: string) => {
+    (placementId: string, heldExposureId?: string) => {
+      // With the editor's lock view, so a field a lock the component sets
+      // holds is said in the reason the panel shows for its row.
       const inspection = inspectInstance(
         editor.document,
         placementId,
         componentLibrary.definitions,
-        componentLibrary.components
+        componentLibrary.components,
+        lockViewOf(editor)
       );
-      if (inspection !== null) toast.info(partOfComponentSentence(inspection));
+      if (inspection !== null) {
+        toast.info(partOfComponentSentence(inspection, heldExposureId));
+      }
     },
-    [editor.document, componentLibrary]
+    [editor, componentLibrary]
   );
   return { announce, partOf };
 }
@@ -363,6 +369,10 @@ export function useEditorMount(
     onRefused: refusal => notices.raise(refusal.sentence),
     // A lock refusal, said the same way: the author reads why, in words.
     onLockRefused: refusal => notices.raise(refusal.sentence),
+    // A block a component locks is refused naming the component, as the
+    // panel's held row names it, from the library the canvas draws with.
+    componentName: id =>
+      componentLibrary.components.find(component => component.id === id)?.title,
     // What the next save judges locks against, so the editor refuses exactly
     // what that save would.
     stored,
@@ -482,7 +492,7 @@ function placementSentence(refusal: LocatedPlacementBreak): string {
 function useInlineAndInspector(
   editor: EditorState,
   announce: (outcome: InlineEditOutcome) => void,
-  partOf: (placementId: string) => void
+  partOf: (placementId: string, heldExposureId?: string) => void
 ): {
   inline: UseInlineEditingResult;
   passages: OpenPassages;
