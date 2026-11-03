@@ -303,7 +303,10 @@ describe("the allowlist", () => {
   // 475 -> 452: the 23 recorded offences in `collection-query-service.ts`,
   // comments naming milestones in its localized reads, were rewritten to
   // describe the code, and its entry emptied (216 -> 215).
-  const EXPECTED_TOTAL = 452;
+  // 452 -> 449: one recorded offence each in `migrate-create.ts`,
+  // `permission-seed-service.ts` and `prompt-renames.ts` no longer exists;
+  // all three entries remain.
+  const EXPECTED_TOTAL = 449;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

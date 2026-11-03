@@ -717,6 +717,28 @@ describe("an exposed image", () => {
     });
   });
 
+  it("names the picker by its row's label, which points at it", () => {
+    mountWithServices(instance(), { MediaPicker: OnePick });
+    // The label targets the Choose button, a labelable control, so pressing
+    // the label reaches the picker as it reaches every other row's control.
+    const label = screen.getByText("Picture", { selector: "label" });
+    const target = document.getElementById(label.getAttribute("for") ?? "");
+    expect(target?.tagName).toBe("BUTTON");
+    expect(target?.getAttribute("aria-label")).toBe("Choose Picture");
+  });
+
+  it("keeps a malformed image value visible and out of the picker's reach", () => {
+    // A number is not an image id; offered to the picker it read as "Nothing
+    // chosen" and could be replaced unseen.
+    mountWithServices(instance({ overrides: { picture: 42 } }), {
+      MediaPicker: OnePick,
+    });
+    expect(
+      screen.getByText(/Not editable here yet \(image\)/).textContent
+    ).toContain("42");
+    expect(screen.queryByRole("button", { name: "Choose Picture" })).toBeNull();
+  });
+
   it("says the library is not available where the host offers none", () => {
     mountWithServices(instance(), {});
     expect(

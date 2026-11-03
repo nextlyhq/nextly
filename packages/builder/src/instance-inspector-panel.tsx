@@ -564,7 +564,12 @@ function representable(row: ExposedRow): boolean {
   const { value } = row;
   if (value === undefined || value === null) return true;
   // An image row shows a cleared override as nothing chosen.
-  if (row.type === "image" && isUnsetOverride(value)) return true;
+  // An image is a file's id, a string, or a cleared override; anything else
+  // stays shown as it is rather than offered to a picker that would replace
+  // it behind a blank-looking control.
+  if (row.type === "image") {
+    return typeof value === "string" || isUnsetOverride(value);
+  }
   return typeof value !== "object";
 }
 
@@ -592,7 +597,9 @@ function ExposedImageField({
   const name = picked?.id === stored ? picked?.filename : undefined;
   return (
     <div
-      id={id}
+      // The field's label names the Choose button, a labelable control; with
+      // no library there is no control, and the group carries the name.
+      {...(Picker === undefined ? { id } : {})}
       className="nx-inspector__media"
       role="group"
       aria-label={row.label}
@@ -608,6 +615,7 @@ function ExposedImageField({
         </p>
       ) : (
         <MediaChoice
+          id={id}
           Picker={Picker}
           label={row.label}
           stored={stored}

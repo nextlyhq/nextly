@@ -30,14 +30,22 @@ import { confirm, input } from "@inquirer/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { projectUsesSrcLayout } from "../../shared/lib/generated-output-paths";
 import { exitWithError } from "../errors";
-import { projectAlreadyInitialized } from "../errors/areas/commands";
+import {
+  initAnswersRequired,
+  projectAlreadyInitialized,
+} from "../errors/areas/commands";
 import {
   createContext,
   type CommandContext,
   type GlobalOptions,
 } from "../program";
+import {
+  isPromptForceClosed,
+  promptCancelled,
+} from "../utils/prompt-cancelled";
 
 /**
  * Options specific to the init command
@@ -131,19 +139,21 @@ export async function runInit(
   if (options.yes) {
     answers = { ...defaults };
     logger.info("Using default configuration...");
+  } else if (!canPrompt()) {
+    // Nobody can answer the questions: stop before anything is written and
+    // name the flag that answers them with the defaults.
+    exitWithError(logger, initAnswersRequired());
   } else {
     logger.info("Answer a few questions to set up your project.\n");
 
     try {
       answers = await promptUser(defaults);
     } catch (error) {
-      // User cancelled (Ctrl+C)
-      if (
-        error instanceof Error &&
-        error.message.includes("User force closed")
-      ) {
+      // Ctrl+C at a prompt: nothing has been written yet, and the run ends
+      // as interrupted, exit 130.
+      if (isPromptForceClosed(error)) {
         logger.warn("\nSetup cancelled.");
-        process.exit(0);
+        await promptCancelled();
       }
       throw error;
     }

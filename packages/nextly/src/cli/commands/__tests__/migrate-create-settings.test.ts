@@ -7,7 +7,7 @@
  * Site content settings are data, not schema: a change to the email setup or
  * the admin's general settings never appears in a migration. The command runs
  * over a config that changes ONLY those, and must find nothing to write (exit
- * 2, no new file). The positive control is the same run after a collection's
+ * 0, no new file). The positive control is the same run after a collection's
  * description changes, which must write one: a command that wrote nothing for
  * any settings change would pass the first half on its own.
  *
@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig, group, text } from "../../../config";
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { uiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
@@ -93,18 +94,17 @@ async function migrateCreate(config: unknown): Promise<number | undefined> {
     options: {},
     cwd: dir,
   } as CommandContext;
+  // As `--non-interactive` does: no rename is asked about.
+  setNonInteractive(true);
   try {
-    await runMigrateCreate(
-      "change",
-      { cwd: dir, nonInteractive: true },
-      context
-    );
+    await runMigrateCreate("change", { cwd: dir }, context);
     return undefined;
   } catch (error) {
     const match = /^exit (\d+)$/.exec((error as Error).message);
     if (match) return Number(match[1]);
     throw error;
   } finally {
+    setNonInteractive(false);
     exit.mockRestore();
   }
 }
@@ -152,7 +152,7 @@ describe("site content settings never appear in a migration", () => {
           siteName: "Example Inc.",
         })
       )
-    ).toBe(2);
+    ).toBe(0);
     expect(migrationFiles()).toHaveLength(1);
 
     // The control: a collection's own setting does write one.
