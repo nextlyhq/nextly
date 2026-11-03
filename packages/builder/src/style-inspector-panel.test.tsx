@@ -2065,6 +2065,68 @@ describe("a length field's unit", () => {
     expect(width.placeholder).not.toContain("px");
   });
 
+  /** Type into Width, then move focus to its unit menu, as a click does. */
+  function typeThenFocusUnit(text: string) {
+    const width = fieldsOf("width").getByLabelText(/^Width/);
+    const trigger = fieldsOf("width").getByLabelText("Unit for Width");
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: text } });
+    fireEvent.blur(width, { relatedTarget: trigger });
+    return trigger;
+  }
+
+  it("writes one step when a number is typed and then a unit chosen", () => {
+    // Committing on the way to the menu wrote "20px" and then "20rem": two
+    // undo steps for one gesture, the first a value nobody asked for.
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20rem"'
+    );
+  });
+
+  it("still writes the typed number when the menu closes with no choice", () => {
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20px"'
+    );
+  });
+
+  it("still writes the typed number when focus moves past the menu", () => {
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.blur(trigger, { relatedTarget: document.body });
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20px"'
+    );
+  });
+
+  it("keeps a unit while it is being typed", () => {
+    // "2c" on the way to "2ch" was cut to "2", so no letter unit could be
+    // typed at all.
+    const editor = mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: "2c" } });
+    expect(width.value).toBe("2c");
+    fireEvent.change(width, { target: { value: "2ch" } });
+    expect(width.value).toBe("2ch");
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"2ch"'
+    );
+  });
+
   it("offers the property's keywords after its units", () => {
     const editor = mount({ dimensions: true });
     fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));

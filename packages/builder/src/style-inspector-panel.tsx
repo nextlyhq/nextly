@@ -4708,6 +4708,7 @@ function NumericField({
   });
   const { unit, keywords } = unitMenu;
   const showUnits = !compact && unitMenu.acts;
+  const hold = useHeldBlur();
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
   // `PX` the validator folds — is live and compiles while matching no item, and
   // a controlled select over it renders an EMPTY trigger above a value that is
@@ -4730,6 +4731,8 @@ function NumericField({
         setDraft={setDraft}
         describedBy={describedBy}
         invalid={describedBy !== undefined}
+        // With no menu drawn there is nothing to hold for: its refs are empty.
+        holdBlur={hold.holdBlur}
         // A bare number takes the unit the field shows: "24" is 24px.
         onCommit={value => onCommit(withDefaultUnit(control.leaf, value, unit))}
         // The unit shown in the suffix is left out of the field.
@@ -4757,9 +4760,12 @@ function NumericField({
           // displaying it while the draft has none. The draft is the only unit
           // state, and passing `undefined` would give it a second one.
           value={unitMenu.value}
-          onValueChange={unitMenu.choose}
+          onValueChange={hold.choosing(unitMenu.choose)}
+          onOpenChange={hold.onOpenChange}
         >
           <SelectTrigger
+            ref={hold.trigger}
+            onBlur={hold.onTriggerBlur}
             className="nx-style-inspector__unit"
             aria-label={`Unit for ${actionName}`}
             // A unit change can be refused — a document at its byte limit, a
@@ -4773,7 +4779,7 @@ function NumericField({
           >
             <SelectValue placeholder="unit" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent ref={hold.content}>
             {extraUnit === null ? null : (
               <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
             )}
@@ -4962,6 +4968,64 @@ function useFieldUnit({
   };
 }
 
+/** A blur's commit, held while focus moves within one control. */
+interface HoldBlur {
+  /** Whether focus moving to `next` stays within the control. */
+  readonly within: (next: EventTarget | null) => boolean;
+  /** The commit held meanwhile, if any. */
+  readonly held: React.RefObject<(() => void) | null>;
+}
+
+/**
+ * Holds the number field's commit while focus moves to its own unit menu.
+ *
+ * Committed on that blur, a number typed and then given a unit was written
+ * twice — "20px", then "20rem" — so one Undo left a value nobody asked for.
+ * Held, the choice writes the number with its unit as one step; closing the
+ * menu without a choice, or moving past it, writes the number as typed.
+ */
+function useHeldBlur(): {
+  holdBlur: HoldBlur;
+  trigger: React.RefObject<HTMLButtonElement | null>;
+  content: React.RefObject<HTMLDivElement | null>;
+  choosing: (choose: (choice: string) => void) => (choice: string) => void;
+  onOpenChange: (open: boolean) => void;
+  onTriggerBlur: (event: React.FocusEvent) => void;
+} {
+  const held = React.useRef<(() => void) | null>(null);
+  const open = React.useRef(false);
+  const trigger = React.useRef<HTMLButtonElement | null>(null);
+  const content = React.useRef<HTMLDivElement | null>(null);
+  const within = (next: EventTarget | null): boolean =>
+    isElement(next) &&
+    (trigger.current?.contains(next) === true ||
+      content.current?.contains(next) === true);
+  const flush = () => {
+    const commit = held.current;
+    held.current = null;
+    commit?.();
+  };
+  return {
+    holdBlur: { within, held },
+    trigger,
+    content,
+    // A choice writes the typed number with its unit, so the commit held on
+    // the way to the menu is dropped rather than written first.
+    choosing: choose => choice => {
+      held.current = null;
+      choose(choice);
+    },
+    onOpenChange: next => {
+      open.current = next;
+      if (!next) flush();
+    },
+    // Opening moves focus into the menu, which is not leaving the control.
+    onTriggerBlur: event => {
+      if (!open.current && !within(event.relatedTarget)) flush();
+    },
+  };
+}
+
 /**
  * A text field over one stored value.
  *
@@ -4981,6 +5045,7 @@ function TextField({
   onStep,
   display,
   fallbackHint,
+  holdBlur,
 }: {
   id: string;
   control: StyleControl;
@@ -5026,13 +5091,20 @@ function TextField({
   display?: (text: string) => string;
   /** The hint while nothing applies, in place of the leaf's own. */
   fallbackHint?: string;
+  /** Holds the commit while focus moves within the control; see `useHeldBlur`. */
+  holdBlur?: HoldBlur | undefined;
 }): React.JSX.Element {
+  // Typed since focus: the text is then shown as typed, since a unit on its
+  // way in ("2c" for "2ch") would read as a unit to leave out and be cut.
+  const [typing, setTyping] = React.useState(false);
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
   const hint = useUnsetHint(
     compact ? "–" : (fallbackHint ?? placeholderFor(control))
   );
   const commit = () => {
+    // Written or not, the text is no longer mid-edit.
+    setTyping(false);
     if (draft === storedText(stored)) return;
     // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
     // strips NBSP and the Unicode spaces, so a draft of nothing but a
@@ -5054,14 +5126,29 @@ function TextField({
   return (
     <Input
       id={id}
-      value={display === undefined ? draft : display(draft)}
+      value={display === undefined || typing ? draft : display(draft)}
       placeholder={display === undefined ? hint : display(hint)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
       // keystroke would make one undo remove one character.
-      onChange={event => setDraft(event.target.value)}
-      onBlur={commit}
+      onChange={event => {
+        setTyping(true);
+        setDraft(event.target.value);
+      }}
+      // Back in the field, a commit held for the unit menu is superseded by
+      // the one this field's own blur makes.
+      onFocus={() => {
+        if (holdBlur !== undefined) holdBlur.held.current = null;
+      }}
+      onBlur={event => {
+        if (holdBlur?.within(event.relatedTarget) === true) {
+          setTyping(false);
+          holdBlur.held.current = commit;
+          return;
+        }
+        commit();
+      }}
       onKeyDown={event => {
         if (commitOnEnter(event, commit)) return;
         if (onStep === undefined) return;
@@ -5078,6 +5165,7 @@ function TextField({
         // The draft follows the value that was written, so the field shows the
         // step immediately rather than waiting for `stored` to come back.
         setDraft(next);
+        setTyping(false);
         // Only once the step was applied, so an unsteppable value keeps the
         // caret movement the key would otherwise perform.
         event.preventDefault();
