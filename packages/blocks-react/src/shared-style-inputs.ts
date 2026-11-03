@@ -150,6 +150,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const ENCODING = "v4";
 
 /**
+ * Whether a stored stamp was written under the current {@link ENCODING}.
+ *
+ * Answerable from the stamp alone, so a read with no compile context, which
+ * cannot rebuild a stamp to compare against, can still refuse a sheet the
+ * compiler before this encoding wrote. Absent and unidentified stamps carry no
+ * encoding and answer `true`: they are judged where a context exists, as
+ * before.
+ */
+export function stampedUnderCurrentEncoding(
+  stamp: string | undefined
+): boolean {
+  if (stamp === undefined || stamp === UNIDENTIFIED_SHARED_INPUTS) return true;
+  return stamp.startsWith(`${ENCODING}:`);
+}
+
+/**
  * The identity of shared inputs that decline to identify themselves.
  *
  * Deliberately not valid digest output: every stamp this module produces is

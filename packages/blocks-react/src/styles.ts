@@ -31,6 +31,7 @@ import type { BlockResolver } from "./resolver";
 import {
   UNIDENTIFIED_SHARED_INPUTS,
   sharedStyleInputsId,
+  stampedUnderCurrentEncoding,
 } from "./shared-style-inputs";
 import { pruneNodes } from "./visibility";
 
@@ -1201,10 +1202,10 @@ export function resolvePageStylesWithTrace(
   // URLs it dropped would stay missing for good. Neither a stable stamp nor an
   // absent one separates those, so the stamp records what compiled the sheet and
   // this comparison refuses it outright.
-  const compiledUnderAnotherPolicy =
-    styles !== undefined &&
-    (styles.fetchPolicyId !== options.fetchPolicyId ||
-      styles.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY);
+  const compiledUnderAnotherPolicy = storedUnderAnotherPolicy(
+    styles,
+    options.fetchPolicyId
+  );
 
   // The same test for the site-level inputs, and it refuses an ABSENT stamp for
   // the same reason the policy one refuses its sentinel: absence is equally the
@@ -1269,6 +1270,17 @@ export function resolvePageStylesWithTrace(
     styles.previewContainer !== undefined;
 
   /*
+   * A sheet the compiler wrote under an earlier stamp encoding, asked of the
+   * stamp alone. With a context this is already part of the comparison above;
+   * WITHOUT one it is the only check that can see it, and a stored sheet
+   * written before blocks lost their outer margins would otherwise be served
+   * with those margins on every context-free read.
+   */
+  const compiledUnderAnotherEncoding = !stampedUnderCurrentEncoding(
+    styles?.sharedInputsId
+  );
+
+  /*
    * ONE answer to "may this stored sheet be served as it stands", used by both
    * the trust branch and the context-free refusal below.
    *
@@ -1283,7 +1295,8 @@ export function resolvePageStylesWithTrace(
     compiledFromAnotherTree ||
     compiledUnderAnotherPolicy ||
     compiledAgainstOtherInputs ||
-    compiledForPreview;
+    compiledForPreview ||
+    compiledUnderAnotherEncoding;
 
   if (styles && !untrusted) {
     const normalized = normalizeStoredStyles(styles, document);
@@ -1315,6 +1328,22 @@ export function resolvePageStylesWithTrace(
       classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
     },
   };
+}
+
+/**
+ * Whether a stored sheet was compiled under a different fetch policy than the
+ * one in force, or under an anonymous one, which is stale against every
+ * policy. See the reasoning where {@link resolvePageStylesWithTrace} asks.
+ */
+function storedUnderAnotherPolicy(
+  styles: PageStyles | undefined,
+  fetchPolicyId: string | undefined
+): boolean {
+  if (styles === undefined) return false;
+  return (
+    styles.fetchPolicyId !== fetchPolicyId ||
+    styles.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY
+  );
 }
 
 /**

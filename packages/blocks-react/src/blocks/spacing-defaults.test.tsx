@@ -17,7 +17,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import type { BlockResolver } from "../resolver";
-import { resolvePageStyles } from "../styles";
+import { resolvePageStyles, type PageStyles } from "../styles";
 
 import { accordion } from "./accordion";
 import { accordionItem } from "./accordion-item";
@@ -179,5 +179,72 @@ describe("a whole page's sheet", () => {
     const gap = css.indexOf("> * + *");
     expect(gap).toBeGreaterThanOrEqual(0);
     expect(css.indexOf(own)).toBeGreaterThan(gap);
+  });
+});
+
+describe("a sheet stored by the compiler before this spacing", () => {
+  const STORED_DOC: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "t",
+        type: "core/heading",
+        version: 1,
+        props: { text: "T", level: "h2" },
+      } as BlockNode,
+    ],
+  };
+  const resolver: BlockResolver = {
+    get: (name: string) =>
+      coreBlocks.find(block => block.name === name) as never,
+  };
+  const context = {
+    breakpoints: {
+      viewport: [{ id: "base", label: "Desktop" }],
+      container: [],
+    },
+  };
+
+  /**
+   * An artifact as the `v3` compiler stored it: the heading's old outer
+   * margins in its CSS, and a stamp under the `v3` encoding.
+   */
+  function storedByV3(): PageStyles {
+    const current = resolvePageStyles(STORED_DOC, undefined, context, resolver);
+    return {
+      ...current,
+      css: `.${PAGE_ROOT_CLASS} :where(h2) { margin-block-start: 1.5em; margin-block-end: 0.5em }`,
+      sharedInputsId: current.sharedInputsId?.replace(/^v\d+:/, "v3:"),
+    } as PageStyles;
+  }
+
+  it("is not served on a read with no compile context", () => {
+    const served = resolvePageStyles(
+      STORED_DOC,
+      storedByV3(),
+      undefined,
+      resolver
+    );
+    expect(served.css).not.toContain("1.5em");
+    // Classes survive, so the blocks still carry the names the sheet uses.
+    expect(Object.keys(served.classes)).toContain("t");
+  });
+
+  it("CONTROL: a sheet stored by the current compiler is served as it stands", () => {
+    const current = resolvePageStyles(STORED_DOC, undefined, context, resolver);
+    const served = resolvePageStyles(STORED_DOC, current, undefined, resolver);
+    expect(served.css).toBe(current.css);
+  });
+
+  it("is recompiled where a compile context exists", () => {
+    const served = resolvePageStyles(
+      STORED_DOC,
+      storedByV3(),
+      context,
+      resolver
+    );
+    expect(served.css).not.toContain("1.5em");
+    expect(served.sharedInputsId?.startsWith("v4:")).toBe(true);
   });
 });
