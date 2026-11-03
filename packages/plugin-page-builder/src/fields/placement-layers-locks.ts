@@ -22,11 +22,12 @@
  */
 import {
   componentLayersLocks,
+  definitionWithConditionGatesLifted,
   heldBaselines,
-  isConditionGated,
   keptForSameComponents,
   placedLockChanges,
   walkNodes,
+  withConditionGatesLifted,
   type BlockDocument,
   type BlockNode,
   type DocumentLimits,
@@ -54,45 +55,10 @@ export type PlacedLocksAnswer =
 const NONE: PlacedLocksAnswer = { kind: "judged", changes: [] };
 
 /**
- * The document with every gate a condition puts on its own blocks lifted, or
- * `undefined` when it holds none. The composition leaves a gated placement,
- * and every placement inside a gated block, standing unexpanded, since no
- * reader is served it; but its values are stored, and served once the
- * condition lifts, so its component's locks hold on them all the same.
- */
-function withGatesLifted(
-  document: BlockDocument,
-  limits: DocumentLimits
-): BlockDocument | undefined {
-  const bound = { maxNodes: limits.maxNodes };
-  // Asked of the document first: most pages gate no block, and then nothing
-  // is cloned.
-  let gated = false;
-  walkNodes(
-    document.nodes,
-    node => {
-      if (isConditionGated(node)) gated = true;
-    },
-    bound
-  );
-  if (!gated) return undefined;
-  const copy = structuredClone(document);
-  walkNodes(
-    copy.nodes,
-    node => {
-      if (isConditionGated(node)) {
-        delete (node as { visibility?: unknown }).visibility;
-      }
-    },
-    bound
-  );
-  return copy;
-}
-
-/**
  * The library with every gate lifted in the definitions it holds, or
  * `undefined` when none gates a block: a gated placement inside a definition
- * is left unexpanded by the composition just as one on the page is.
+ * is left unexpanded by the composition just as one on the page is. Each is
+ * lifted by the engine, the same lifting the editor judges an edit with.
  */
 function libraryWithGatesLifted(
   library: HeldLibrary,
@@ -101,12 +67,9 @@ function libraryWithGatesLifted(
   let lifted = false;
   const held = new Map<string, unknown>();
   for (const [id, definition] of library.held) {
-    const nodes = (definition as { nodes?: unknown } | null)?.nodes;
-    const ungated = Array.isArray(nodes)
-      ? withGatesLifted(definition as BlockDocument, limits)
-      : undefined;
-    if (ungated !== undefined) lifted = true;
-    held.set(id, ungated ?? definition);
+    const ungated = definitionWithConditionGatesLifted(definition, limits);
+    if (ungated !== definition) lifted = true;
+    held.set(id, ungated);
   }
   return lifted ? { held, missing: new Set(library.missing) } : undefined;
 }
@@ -155,7 +118,7 @@ export async function placedLayersLocks(args: {
   // Gated placements are judged as served once their condition lifts: the
   // page, the definitions it reaches, its baseline and its stored forms all
   // composed with the gates off.
-  const ungated = withGatesLifted(args.document, limits);
+  const ungated = withConditionGatesLifted(args.document, limits);
   const library = libraryWithGatesLifted(args.reading.library, limits);
   const reading =
     library === undefined ? args.reading : { ...args.reading, library };
@@ -192,7 +155,7 @@ export async function placedLayersLocks(args: {
     hosts: stored.forms.map(form =>
       keptForSameComponents(
         document,
-        withGatesLifted(form, limits) ?? form,
+        withConditionGatesLifted(form, limits) ?? form,
         limits
       )
     ),

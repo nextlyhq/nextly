@@ -1376,6 +1376,106 @@ describe("the locks an edit is held to", () => {
     ).toBeUndefined();
   });
 
+  it("refuses a value on a block locked behind a condition gate, as the save does", () => {
+    // A gated placement, and a gated placement inside a definition, are left
+    // unexpanded by the composition, but their values are stored and served
+    // once the condition lifts: the save judges them with every gate lifted,
+    // so the editor refuses the same edits.
+    const gate = {
+      conditions: [[{ field: "title", op: "eq", value: "Home" }]],
+    };
+    const banner = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "nested",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "promo" },
+          visibility: gate,
+        },
+      ],
+      exposed: [
+        {
+          id: "headline",
+          label: "Headline",
+          nodeId: "nested",
+          propPath: "overrides.title",
+          type: "text",
+        },
+        {
+          id: "line",
+          label: "Line",
+          nodeId: "nested",
+          propPath: "overrides.strap",
+          type: "text",
+        },
+      ],
+    } as unknown as BlockDocument;
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo" },
+            visibility: gate,
+          } as unknown as BlockNode,
+          {
+            id: "b1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "banner" },
+          } as BlockNode,
+        ]),
+        definitions: new Map([
+          ["promo", lockingPromo()],
+          ["banner", banner],
+        ]),
+        componentName: id => (id === "promo" ? "Promo" : "Banner"),
+      })
+    );
+    const give = (
+      id: string,
+      componentId: string,
+      overrides: Record<string, string>
+    ) => ({
+      kind: "update" as const,
+      id,
+      patch: { props: { componentId, overrides } },
+    });
+    const refusedBy = (label: string) => ({
+      code: "layers-locked",
+      label,
+      relation: "component",
+      verb: "change",
+    });
+
+    expect(
+      result.current.lockRefusalFor([give("i1", "promo", { title: "Changed" })])
+    ).toEqual(refusedBy("Promo"));
+    expect(
+      result.current.lockRefusalFor([
+        give("b1", "banner", { headline: "Changed" }),
+      ])
+    ).toEqual(refusedBy("Banner"));
+    act(() => {
+      expect(
+        result.current.apply(give("b1", "banner", { headline: "Changed" }))
+      ).toBeNull();
+    });
+    // CONTROL: a value for the free block, gated or relayed, is the
+    // placement's to give.
+    expect(
+      result.current.lockRefusalFor([give("i1", "promo", { strap: "Sale" })])
+    ).toBeUndefined();
+    expect(
+      result.current.lockRefusalFor([give("b1", "banner", { line: "Sale" })])
+    ).toBeUndefined();
+  });
+
   it("refuses switching a placement to another component while keeping the first one's value", () => {
     // The copy's locked block shares the first one's id; the value the page
     // gave it was given under the first component's lock, not the copy's.

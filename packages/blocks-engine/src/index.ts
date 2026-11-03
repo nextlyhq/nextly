@@ -1132,6 +1132,14 @@ export {
   type HeldBaseline,
   type PlacedLockChange,
 } from "./component-layers-locks";
+// The composition a component's locks are judged on, with every condition gate
+// lifted: one lifting for the editor and the save.
+export {
+  componentsWithConditionGatesLifted,
+  definitionWithConditionGatesLifted,
+  withConditionGatesLifted,
+  type UngatedComponentLookup,
+} from "./condition-gates-lifted";
 // How every copy into a document keeps the Layers locks it carries.
 export { insertKeepingLocks, type Placed } from "./locked-insert";
 

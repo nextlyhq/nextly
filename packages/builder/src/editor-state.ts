@@ -29,6 +29,7 @@
 
 import {
   componentLayersLocks,
+  componentsWithConditionGatesLifted,
   componentUsageIn,
   compositionFaults,
   DEFAULT_LIMITS,
@@ -44,6 +45,7 @@ import {
   registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
+  withConditionGatesLifted,
   type BlockDocument,
   type CompositionFault,
   type ResolvedComposition,
@@ -54,6 +56,7 @@ import {
   type NestingSource,
   type RepairPlan,
   type SlotDefaultSource,
+  type UngatedComponentLookup,
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
@@ -345,14 +348,24 @@ function refusedForRoom(
   return true;
 }
 
-/** A document as composed, under the store's components and limits. */
-type Composer = (document: BlockDocument) => ResolvedComposition;
+/**
+ * A document as composed, under the store's components and limits; and, as
+ * `ungated`, as composed with every condition gate lifted, the composition a
+ * component's Layers locks are judged on.
+ */
+type Composer = ((document: BlockDocument) => ResolvedComposition) & {
+  readonly ungated: (document: BlockDocument) => ResolvedComposition;
+};
 
 /** Compositions already made, by document, and what they were made under. */
 interface CompositionCache {
   readonly components: ComponentLookup | undefined;
   readonly limits: DocumentLimits;
   readonly byDocument: WeakMap<BlockDocument, ResolvedComposition>;
+  /** The same, composed with every condition gate lifted. */
+  readonly ungatedByDocument: WeakMap<BlockDocument, ResolvedComposition>;
+  /** The components with their gates lifted, each lifted once. */
+  readonly ungatedComponents: UngatedComponentLookup | undefined;
 }
 
 /**
@@ -372,12 +385,19 @@ function composerFrom(
 ): Composer {
   if (
     cache.current.components !== components ||
-    cache.current.limits !== limits
+    cache.current.limits !== limits ||
+    cache.current.ungatedComponents === undefined
   ) {
-    cache.current = { components, limits, byDocument: new WeakMap() };
+    cache.current = {
+      components,
+      limits,
+      byDocument: new WeakMap(),
+      ungatedByDocument: new WeakMap(),
+      ungatedComponents: componentsWithConditionGatesLifted(components, limits),
+    };
   }
-  const { byDocument } = cache.current;
-  return document => {
+  const { byDocument, ungatedByDocument, ungatedComponents } = cache.current;
+  const compose = (document: BlockDocument): ResolvedComposition => {
     let composed = byDocument.get(document);
     if (composed === undefined) {
       // With the exposure map: the editor's composition is never rendered or
@@ -390,6 +410,49 @@ function composerFrom(
     }
     return composed;
   };
+  const ungated = (document: BlockDocument): ResolvedComposition => {
+    let composed = ungatedByDocument.get(document);
+    if (composed === undefined) {
+      composed = composedUngated(document, compose(document), {
+        ungatedComponents,
+        limits,
+      });
+      ungatedByDocument.set(document, composed);
+    }
+    return composed;
+  };
+  return Object.assign(compose, { ungated });
+}
+
+/**
+ * A document composed with every condition gate lifted, as the save judges a
+ * component's Layers locks: a gated placement, or one inside a gated block of
+ * the page or of a definition, is left unexpanded by the plain composition,
+ * but its values are stored and served once the condition lifts.
+ *
+ * The plain composition itself where it reached no gate: the page gates
+ * nothing, and no definition it read does, so lifting changes nothing.
+ */
+function composedUngated(
+  document: BlockDocument,
+  plain: ResolvedComposition,
+  {
+    ungatedComponents,
+    limits,
+  }: {
+    ungatedComponents: UngatedComponentLookup;
+    limits: DocumentLimits;
+  }
+): ResolvedComposition {
+  const lifted = withConditionGatesLifted(document, limits);
+  const reachedNoGate =
+    lifted === undefined &&
+    plain.referenced.every(id => !ungatedComponents.lifts(id));
+  if (reachedNoGate) return plain;
+  return resolveComponentInstances(lifted ?? document, ungatedComponents, {
+    limits,
+    exposures: true,
+  });
 }
 
 /** What a lock question reads besides the documents. */
@@ -451,17 +514,27 @@ function lockBreakAdded(
  * page against the same page with every placement as its component holds it,
  * keeping a value the page already gave the block, before this edit or as
  * last saved. Named by the component, since the page cannot unlock it.
+ *
+ * Every form is composed with its condition gates lifted, as the save
+ * composes them: a gated placement, or one gated inside a definition, is
+ * stored with its values and served once the condition lifts.
  */
 function componentLockAdded(
+  before: BlockDocument,
   after: BlockDocument,
-  composedAfter: BlockDocument,
-  kept: readonly BlockDocument[],
+  stored: BlockDocument,
   {
     compose,
     limits,
     componentName,
   }: Pick<LockJudgement, "limits" | "componentName"> & { compose: Composer }
 ): LockRefusalFacts | undefined {
+  const composedAfter = compose.ungated(after).document;
+  // A value is kept only under the component that gave it: a placement this
+  // edit switches to another component is left out of the forms it keeps.
+  const kept = [before, stored].map(
+    form => compose.ungated(keptForSameComponents(after, form, limits)).document
+  );
   // Asked of the as-held baseline, not of the page after the edit: an edit
   // that hides or removes the locked block leaves no lock after it to find,
   // but the page before it, or as saved, still draws one. A page none of
@@ -471,7 +544,7 @@ function componentLockAdded(
   );
   if (!drawsLock) return undefined;
   const held = heldBaselines(after, limits).map(level => ({
-    form: compose(level.document).document,
+    form: compose.ungated(level.document).document,
     placements: level.placements,
   }));
   const [change] = placedLockChanges(composedAfter, held, kept, limits);
@@ -526,21 +599,15 @@ function composedLockAdded(
   // A page placing no component has no composed break to add.
   const placed = componentUsageIn(after.nodes, limits.maxNodes);
   if (placed.complete && placed.ids.length === 0) return undefined;
-  const composedBefore = compose(before);
-  const baselines = [composedBefore.document, compose(stored).document];
-  const composedAfter = compose(after);
-  // A value is kept only under the component that gave it: a placement this
-  // edit switches to another component is left out of the forms it keeps.
-  const kept = [before, stored].map((form, index) => {
-    const same = keptForSameComponents(after, form, limits);
-    return same === form ? baselines[index] : compose(same).document;
-  });
-  const held = componentLockAdded(after, composedAfter.document, kept, {
+  const held = componentLockAdded(before, after, stored, {
     compose,
     limits,
     componentName,
   });
   if (held !== undefined) return held;
+  const composedBefore = compose(before);
+  const baselines = [composedBefore.document, compose(stored).document];
+  const composedAfter = compose(after);
   const lockFaults = (host: BlockDocument, composition: ResolvedComposition) =>
     compositionFaults(host, composition, {
       definitions: sources.definitions,
@@ -709,6 +776,8 @@ function useComposer(
     components: undefined,
     limits,
     byDocument: new WeakMap(),
+    ungatedByDocument: new WeakMap(),
+    ungatedComponents: undefined,
   });
   return useCallback((): Composer | undefined => {
     const components = composition.current.definitions;
