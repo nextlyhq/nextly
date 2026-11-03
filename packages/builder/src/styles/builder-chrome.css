@@ -2849,8 +2849,10 @@
   cursor: pointer;
 }
 
+/* The raised surface, not the panel's own: on the panel's surface a hover in
+   that colour would look exactly like rest. */
 .nx-layers-region:hover {
-  background: var(--nx-builder-surface);
+  background: var(--nx-builder-surface-raised);
 }
 
 .nx-layers-region:focus-visible {
