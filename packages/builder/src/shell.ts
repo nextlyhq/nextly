@@ -109,13 +109,24 @@ export {
  * outside the canvas see the frame the canvas registers into it.
  *
  * `CanvasMarks` draws the selection and the drop container over the page.
+ *
+ * A `CanvasFrameSource` says where the frame's page comes from: the editor's
+ * blank page, or a page the site serves so the canvas is drawn inside the
+ * site's own layout, with `onSourceFallback` told when that page cannot be
+ * shown.
  */
 export {
   CanvasFrame,
   CANVAS_FRAME_TITLE_PREFIX,
   canvasFrameTitle,
 } from "./canvas-frame";
-export type { CanvasFrameProps } from "./canvas-frame";
+export type {
+  BlankFrameSource,
+  CanvasFrameFallback,
+  CanvasFrameProps,
+  CanvasFrameSource,
+  SiteFrameSource,
+} from "./canvas-frame";
 export { CanvasFrameProvider, useCanvasFrame } from "./canvas-frame-context";
 export { CanvasMarks } from "./canvas-marks";
 

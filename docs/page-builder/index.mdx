@@ -147,6 +147,35 @@ breakpoint.
 trusted, pre-renders, and returns a `generateStaticParams` to export alongside the other
 two. Which one you call *is* the security posture — there is no option to flip.
 
+## Draw the canvas in your site's layout
+
+The editor's canvas can draw the page inside your own site's layout, so your global
+stylesheet, fonts, header and footer are around it, as they are around the published page.
+Add one route, inside the same layouts your pages are published in, that renders the
+canvas's empty page:
+
+```tsx
+// src/app/(frontend)/page-builder-canvas/page.tsx
+export { PageBuilderCanvas as default } from "@nextlyhq/plugin-page-builder/canvas";
+```
+
+Then name the route's path in the plugin's options:
+
+```ts
+pageBuilder({ canvasPath: "/page-builder-canvas" });
+```
+
+The editor loads that page into the canvas and draws the page being edited in it. Your
+layout stays visible around the page, faded and inert: its links and forms do nothing in
+the editor. The route renders no content of its own and reads nothing, and it tells search
+engines not to index it.
+
+The path must be on the same site as the admin, since the editor draws into the page it
+loads. Without `canvasPath`, or when the route is not found or does not load, the canvas
+draws the page on a blank page of its own, and a note above it says so. The page then has
+its block styles and the site's shared styles, but not your app's own CSS files, such as a
+`globals.css` that styles `h2` or `body`.
+
 ## Breakpoints
 
 Breakpoints are desktop-first. The `base` breakpoint applies at every width. Each other
@@ -177,10 +206,11 @@ Desktop.
   is a frame of its own at that width, so sizes in `vw` or `vh`, `@media` rules you write
   yourself and code that reads the window's width answer for the device, as they do on the
   published page.
-- **Your site's global stylesheet is not loaded into the canvas yet.** The canvas has the
-  page's block styles and the site's shared styles, but rules from your app's own CSS
-  files, such as a `globals.css` that styles `h2` or `body`, do not reach it. Boxes size as
-  `border-box`, which most site resets set.
+- **Your site's global stylesheet reaches the canvas through its canvas route.** With
+  [the canvas route](#draw-the-canvas-in-your-sites-layout) mounted, the canvas is drawn in
+  your site's layout and takes your app's own CSS. Without it, rules from your app's CSS
+  files, such as a `globals.css` that styles `h2` or `body`, do not reach the canvas, and
+  boxes size as `border-box`, which most site resets set.
 - **Saved breakpoints reach a page only when its route reads them.** Breakpoints you save
   in the editor are stored in the plugin's `site-style` single. The route above compiles
   against the breakpoints it declares in `styleContext` and never reads that single, so a
@@ -275,9 +305,10 @@ loads:
 The editor's canvas draws your page with the same React renderer that serves it,
 `PageRenderer` from `@nextlyhq/blocks-react`. It is not pixel-identical to the published
 page: the editor draws its outlines and markers over the canvas, and your app's own global
-stylesheet is not loaded into it yet. The page is drawn in a frame of its own at the
-device's width, so viewport units and your own `@media` rules answer as they do when
-published, and neither the admin's styles nor the page's reach the other.
+stylesheet reaches it only through [the canvas route](#draw-the-canvas-in-your-sites-layout).
+The page is drawn in a frame of its own at the device's width, so viewport units and your
+own `@media` rules answer as they do when published, and neither the admin's styles nor the
+page's reach the other.
 
 ## Use it as a field instead
 
