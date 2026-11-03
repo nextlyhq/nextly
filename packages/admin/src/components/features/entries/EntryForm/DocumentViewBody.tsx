@@ -204,13 +204,15 @@ function useViewField(
 /**
  * What fills the view's area: the question of which field, the reason a field
  * may not be edited, or the view itself — absent for the one commit a restore
- * withdraws it, and keyed by the restore count so it reads restored values.
+ * withdraws it, and keyed by the restore count so it reads restored values, and
+ * by the loads of a gained document's latest version so it reads those.
  */
 function ViewArea({
   editing,
   refusal,
   withdrawn,
   generation,
+  reloads,
   component,
   viewProps,
 }: {
@@ -218,6 +220,7 @@ function ViewArea({
   refusal: ViewFieldRefusal | null;
   withdrawn: boolean;
   generation: number;
+  reloads: number;
   component: string;
   viewProps: DocumentViewProps;
 }): React.JSX.Element | null {
@@ -232,7 +235,7 @@ function ViewArea({
   if (withdrawn) return null;
   return (
     <PluginSlot
-      key={generation}
+      key={`${generation}:${reloads}`}
       path={component}
       props={viewProps}
       fallback={<MissingDocumentViewComponent path={component} />}
@@ -328,6 +331,7 @@ export function DocumentViewBody({
             refusal={refusal}
             withdrawn={offered.withdrawn}
             generation={offered.generation}
+            reloads={lock.reloads}
             component={view.component}
             viewProps={viewProps}
           />

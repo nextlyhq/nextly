@@ -343,6 +343,40 @@ describe("loading the latest document before a gain unlocks the form", () => {
     expect(result.current.notice?.retryLabel).toBe("Try again");
   });
 
+  it("counts each load that reaches the document, and no other read", async () => {
+    // What a view that reads its document once is keyed on: it moves when the
+    // loaded copy is on screen, not when the load is asked for or answers, and
+    // not for later reads. Timestamps play no part, so two gains inside one
+    // second are two moves.
+    const { reload, settles } = deferredReload();
+    const { result, rerender } = mount(reload);
+    expect(result.current.reloads).toBe(0);
+
+    useDocumentLock.mockReturnValue(gained(1));
+    rerender({ readAt: 1 });
+    await act(async () => {
+      settles[0].resolve();
+    });
+    rerender({ readAt: 1 });
+    expect(result.current.reloads).toBe(0);
+    rerender({ readAt: 2 });
+    expect(result.current.reloads).toBe(1);
+    rerender({ readAt: 3 });
+    expect(result.current.reloads).toBe(1);
+
+    // Kept out again; the claim's count of gains never goes back.
+    useDocumentLock.mockReturnValue({ ...keptOut, gains: 1 });
+    rerender({ readAt: 3 });
+    useDocumentLock.mockReturnValue(gained(2));
+    rerender({ readAt: 3 });
+    expect(result.current.reloads).toBe(1);
+    await act(async () => {
+      settles[1].resolve();
+    });
+    rerender({ readAt: 4 });
+    expect(result.current.reloads).toBe(2);
+  });
+
   describe("a read of the document on screen that fails, with no gain", () => {
     // A refetch, or the read that follows a save, can fail while the editor
     // holds the document. Editable over that copy, their next save writes it.

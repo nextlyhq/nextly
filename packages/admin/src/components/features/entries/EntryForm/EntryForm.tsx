@@ -131,6 +131,7 @@ import {
   offerHeldWhileRecovering,
   quickEditSave,
 } from "./useRefusedForm";
+import { useResetOnReload } from "./useResetOnReload";
 
 // ============================================================================
 // Types
@@ -389,6 +390,7 @@ export function EntryForm({
 
   const {
     form,
+    defaultValues,
     handleSubmit: submitEntry,
     writeStatus,
     handleDelete: deleteEntry,
@@ -674,7 +676,13 @@ export function EntryForm({
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     latest,
   });
-  const lock = heldWhileRecovering(lockSurface, recovering);
+  // A gained entry's latest version starts the whole form again, whatever its
+  // `updatedAt` says, and the lock holds until it has; the document views key
+  // on the count it carries.
+  const lock = heldWhileRecovering(
+    useResetOnReload(form, lockSurface, defaultValues),
+    recovering
+  );
 
   /*
    * Delegated whole, including the decision to answer NULL when there is

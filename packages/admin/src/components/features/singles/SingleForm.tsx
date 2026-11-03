@@ -93,6 +93,7 @@ import {
   offerHeldWhileRecovering,
   useRefusedForm,
 } from "@admin/components/features/entries/EntryForm/useRefusedForm";
+import { useResetOnReload } from "@admin/components/features/entries/EntryForm/useResetOnReload";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
@@ -811,7 +812,13 @@ export function SingleForm({
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     latest,
   });
-  const lock = heldWhileRecovering(lockSurface, recovering);
+  // A gained Single's latest version starts the whole form again, whatever
+  // its `updatedAt` says, and the lock holds until it has; the document views
+  // key on the count it carries.
+  const lock = heldWhileRecovering(
+    useResetOnReload(form, lockSurface, defaultValues),
+    recovering
+  );
 
   // System fields: title (drawn first in the editor) and slug (not drawn for a
   // Single, whose slug its config fixes). Per the

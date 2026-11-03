@@ -15,6 +15,7 @@ import userEvent from "@testing-library/user-event";
 import {
   Activity,
   useEffect,
+  useState,
   type ComponentProps,
   type ReactElement,
   type ReactNode,
@@ -1180,5 +1181,59 @@ describe("a field the form would not let the author edit", () => {
       },
     ]);
     refusedSaying(/read-only/);
+  });
+});
+
+describe("a document view that copies the form as it mounts, when the entry is gained", () => {
+  const COPYING = "@acme/copy/admin#Copying";
+
+  /** A view that keeps its own copy of the form, read once as it mounts. */
+  function CopyingView(): ReactElement {
+    const { getValues } = useFormContext();
+    const [copy] = useState(() => String(getValues("title")));
+    return <p data-testid="copied">{copy}</p>;
+  }
+
+  it("mounts again on the loaded copy, not the one from before", async () => {
+    // Unlocked over its own copy of what was read while the colleague held
+    // the entry, the view's next write would put that copy back.
+    registerComponent(COPYING, CopyingView);
+    const reload = vi.fn(() => Promise.resolve());
+    const view = (title: string, readAt: number) => (
+      <EntryForm
+        collection={collection}
+        entry={
+          { id: "e1", title, updatedAt: "2026-01-01T00:00:00.000Z" } as never
+        }
+        mode="edit"
+        onCancel={onCancel}
+        documentView={{ component: COPYING, onExit }}
+        latest={{ readAt, failed: false, reload }}
+      />
+    );
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob, requestSent: false },
+      gains: 0,
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    const { rerender } = render(view("Hello", 1), { wrapper: Providers });
+    expect(screen.getByTestId("copied")).toHaveTextContent("Hello");
+
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 1,
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    rerender(view("Hello", 1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    // Bob's save arrives with the same timestamp, as two saves inside one
+    // second do on a column kept to the second.
+    rerender(view("Bob's page", 2));
+    await waitFor(() =>
+      expect(screen.getByTestId("copied")).toHaveTextContent("Bob's page")
+    );
   });
 });

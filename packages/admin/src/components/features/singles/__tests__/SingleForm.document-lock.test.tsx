@@ -401,3 +401,47 @@ describe("SingleForm when a read of the Single on screen fails", () => {
     expect(hero().value).toBe("Mine");
   });
 });
+
+describe("SingleForm on each gain, though every save shares one timestamp", () => {
+  it("starts again from the loaded copy each time", async () => {
+    // The form resets to a newer version by `updatedAt`, and keeps what the
+    // editor typed when the version looks unchanged. Two saves inside one
+    // second share it, so each gain's load resets it whatever it says.
+    const reload = vi.fn<() => Promise<unknown>>().mockResolvedValue(undefined);
+    const lockAs = (state: object, gains: number) =>
+      useDocumentLock.mockReturnValue({ state, gains, takeOver });
+    const view = (heroTitle: string, readAt: number) => (
+      <SingleForm
+        schema={schema}
+        document={{ ...document, heroTitle } as unknown as SingleDocumentData}
+        onSubmit={vi.fn()}
+        latest={{ readAt, failed: false, reload }}
+      />
+    );
+    const hero = () => screen.getByLabelText("Hero Title") as HTMLInputElement;
+    const user = userEvent.setup();
+
+    // Typed while the first claim was on its way, before Bob was reported.
+    lockAs({ status: "acquiring" }, 0);
+    const { rerender } = render(view("", 1));
+    await user.type(hero(), "Mine");
+    lockAs({ status: "held-by-other", holder: bob, requestSent: false }, 0);
+    rerender(view("", 1));
+
+    lockAs({ status: "held-by-me", someoneWaiting: false }, 1);
+    rerender(view("", 1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    rerender(view("Bob's first", 2));
+    await waitFor(() => expect(hero().value).toBe("Bob's first"));
+    expect(hero().readOnly).toBe(false);
+
+    await user.type(hero(), " and mine");
+    lockAs({ status: "held-by-other", holder: bob, requestSent: false }, 1);
+    rerender(view("Bob's first", 2));
+    lockAs({ status: "held-by-me", someoneWaiting: false }, 2);
+    rerender(view("Bob's first", 2));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
+    rerender(view("Bob's second", 3));
+    await waitFor(() => expect(hero().value).toBe("Bob's second"));
+  });
+});
