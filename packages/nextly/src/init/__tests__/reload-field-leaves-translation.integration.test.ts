@@ -519,6 +519,38 @@ describe.each(getConfiguredTestDialects())(
       expect(await archived()).toEqual([]);
     });
 
+    // A rename the main table's rule can't pair, because another field is added beside it or the
+    // type changes too, still leaves the old translated name gone while new shared names appear.
+    it.each([
+      {
+        edit: "another shared field added in the same edit",
+        body: { localized: false, renamedTo: "content", summary: true } as Body,
+      },
+      {
+        edit: "its type changed in the same edit",
+        body: {
+          localized: false,
+          renamedTo: "content",
+          type: "number",
+        } as Body,
+      },
+    ])(
+      "refuses a translated field gone while shared fields appear, with $edit, changing nothing",
+      async ({ body }) => {
+        await seed({ e1: { en: "Hello", es: "Hola" } });
+
+        loaded.config = configWith(body);
+        await reloadNextlyConfig();
+
+        expect(told()).toMatch(
+          /"rlleaves".*body.*content.*Rename the field first, then mark it shared, in two reloads/s
+        );
+        expect(await columnsOf(TABLE)).not.toContain("content");
+        expect(await columnsOf(COMPANION)).toContain("body");
+        expect(await archived()).toEqual([]);
+      }
+    );
+
     it("refuses a Unique field while two entries share an English value, changing nothing", async () => {
       await seed({ e1: { en: "Same", es: "Uno" }, e2: { en: "Same" } });
 

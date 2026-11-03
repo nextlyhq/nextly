@@ -160,9 +160,12 @@ function reloadTarget(
 
 /**
  * The refusal of a field translated before this reload that the config renames and makes shared in
- * the same edit, found by the main table's own rename rule (`detectFieldRename`). The move finds
- * fields leaving translation by name, so the renamed one is not among them, and its values would
- * stay in a translations column nothing reads. Undefined for any other edit.
+ * the same edit. The move finds fields leaving translation by name, so the renamed one is not among
+ * them, and its values would stay in a translations column nothing reads. Found by the main table's
+ * own rename rule (`detectFieldRename`) where it can pair the two names; where it can't (another
+ * field added or removed beside it, or its type changed too), any translated field gone while
+ * shared fields appear is refused the same way (`goneWhileSharedAppear`). Undefined for any other
+ * edit.
  */
 async function renamedWhileLeaving(
   adapter: DrizzleAdapter,
@@ -181,7 +184,7 @@ async function renamedWhileLeaving(
     before.fields as unknown as FieldDefinition[],
     fields as unknown as FieldDefinition[]
   );
-  if (!detected) return undefined;
+  if (!detected) return goneWhileSharedAppear(e, before, fields, adapter);
   const translatedBefore = new Set(
     resolveLocalizedFieldNames([...before.fields], true)
   );
@@ -198,6 +201,50 @@ async function renamedWhileLeaving(
       `[nextly] "${e.slug}": \`${detected.from.name}\` is renamed to \`${detected.to.name}\` and made ` +
       "shared in one edit, which would leave its values in the translations table. Rename the " +
       "field first, then mark it shared, in two reloads.",
+  };
+}
+
+/**
+ * The refusal of an edit in which a field translated before this reload is gone by name while
+ * shared fields that store a column appear, when no rename pair can be chosen between them. Either
+ * one of them is the translated field renamed, whose values would stay in the translations table,
+ * or a field was removed and others added in one edit; both are refused alike, since the reload
+ * cannot tell them apart. Undefined when either side is empty.
+ */
+function goneWhileSharedAppear(
+  e: ReloadTarget,
+  before: RecordedEntity,
+  fields: readonly LeavingFieldLike[],
+  adapter: DrizzleAdapter
+): { slug: string; message: string } | undefined {
+  const dialect = adapter.getCapabilities().dialect;
+  const stores = (f: LeavingFieldLike) => {
+    const column = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
+    return column !== null && column !== undefined;
+  };
+  const namesNow = new Set(fields.map(f => f.name));
+  const namesBefore = new Set(before.fields.map(f => f.name));
+  const translatedBefore = new Set(
+    resolveLocalizedFieldNames([...before.fields], true)
+  );
+  const translatedNow = new Set(resolveLocalizedFieldNames([...fields], true));
+  const gone = before.fields
+    .filter(f => translatedBefore.has(f.name) && !namesNow.has(f.name))
+    .filter(stores)
+    .map(f => `\`${f.name}\``);
+  const appeared = fields
+    .filter(f => !namesBefore.has(f.name) && !translatedNow.has(f.name))
+    .filter(stores)
+    .map(f => `\`${f.name}\``);
+  if (gone.length === 0 || appeared.length === 0) return undefined;
+  return {
+    slug: e.slug,
+    message:
+      `[nextly] "${e.slug}": the translated ${gone.join(", ")} ${gone.length === 1 ? "is" : "are"} ` +
+      `gone while the shared ${appeared.join(", ")} ${appeared.length === 1 ? "appears" : "appear"} ` +
+      "in one edit. A translated field renamed and made shared at " +
+      "once would leave its values in the translations table. Rename the field first, then mark it " +
+      "shared, in two reloads (or, to remove one field and add another, save each change on its own).",
   };
 }
 
