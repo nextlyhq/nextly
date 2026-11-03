@@ -39,6 +39,7 @@ import {
   classUsageDocumentRowReader,
   ownIndexReader,
   usageCountReader,
+  usageRowReader,
 } from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
@@ -139,7 +140,7 @@ import {
   type BackfillHost,
 } from "./usage-backfill-wiring";
 import { usageBookkeeping } from "./usage-bookkeeping";
-import { listDocumentsUsing } from "./usage-count";
+import { listDocumentsUsingEach } from "./usage-count";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
@@ -1471,14 +1472,15 @@ export const pageBuilder = (
                   classUsageIndex,
                   index
                 ),
-              documentsUsing: async (classId, health) =>
-                listDocumentsUsing({
+              // One bounded read for a whole page of styles.
+              documentsUsingEach: async (classIds, health) =>
+                listDocumentsUsingEach({
                   index: classUsageIndex,
-                  read: usageCountReader(
+                  rows: usageRowReader(
                     await requireInstalled().nextly(),
                     index
                   ),
-                  referenceId: classId,
+                  referenceIds: classIds,
                   health,
                 }),
               // Every other collection with a page builder field holds pages,

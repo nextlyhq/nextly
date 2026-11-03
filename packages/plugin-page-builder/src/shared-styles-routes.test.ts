@@ -55,18 +55,25 @@ function usageOf(
   complete = true
 ) {
   const asked: string[] = [];
+  const batches: (readonly string[])[] = [];
   const source: SharedStyleUsageSource = {
     health: vi.fn(async () => health),
-    documentsUsing: async id => {
-      asked.push(id);
-      return {
-        collections: uses[id] ?? [],
-        complete: complete && health.coversExistingDocuments,
-      };
+    documentsUsingEach: async ids => {
+      batches.push(ids);
+      asked.push(...ids);
+      return new Map(
+        ids.map(id => [
+          id,
+          {
+            collections: uses[id] ?? [],
+            complete: complete && health.coversExistingDocuments,
+          },
+        ])
+      );
     },
     kindOf: collection => KINDS[collection] ?? "pages",
   };
-  return { source, asked };
+  return { source, asked, batches };
 }
 
 const post = (body: unknown) =>
@@ -259,6 +266,18 @@ describe("how widely shared styles are used", () => {
     });
     // Health is read once for the screen, not per style.
     expect(source.health).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks the index about a whole page of styles in one read", async () => {
+    const { source, batches } = usageOf(WHOLE);
+    const many = Array.from({ length: 50 }, (_, n) => `c-${n}`);
+    const answer = await readSharedStyleUsage(
+      usageRequest(...many),
+      caller(false),
+      source
+    );
+    expect(batches).toEqual([many]);
+    expect(Object.keys(answer.styles)).toHaveLength(50);
   });
 
   it("refuses more than one page of rows, and none", async () => {

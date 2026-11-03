@@ -98,11 +98,14 @@ export interface SharedStyleStore {
 export interface SharedStyleUsageSource {
   /** The index's health, read once per request. */
   health(): Promise<UsageIndexHealth>;
-  /** The documents using one class, by collection. */
-  documentsUsing(
-    classId: string,
+  /**
+   * The documents using each class asked about, by collection, in a bounded
+   * number of reads however many are asked.
+   */
+  documentsUsingEach(
+    classIds: readonly string[],
     health: UsageIndexHealth
-  ): Promise<DocumentsUsing>;
+  ): Promise<ReadonlyMap<string, DocumentsUsing>>;
   /** Which kind of document a collection holds. */
   kindOf(collection: string): SharedStyleUsageKind;
 }
@@ -207,6 +210,12 @@ function usageIds(url: string): string[] {
   return parsed.data;
 }
 
+/**
+ * A listing for an id a read did not answer for. Not complete: nothing vouched
+ * for it, so its zero is a floor.
+ */
+const NOTHING_FOUND: DocumentsUsing = { collections: [], complete: false };
+
 const NO_KINDS: Readonly<Record<SharedStyleUsageKind, number>> = {
   pages: 0,
   components: 0,
@@ -244,9 +253,11 @@ export async function readSharedStyleUsage(
 ): Promise<SharedStylesUsageResponse> {
   const ids = usageIds(req.url);
   const health = await usage.health();
+  // One read for the whole page of styles, not one per style.
+  const found = await usage.documentsUsingEach(ids, health);
   const styles: Record<string, SharedStyleUsage> = {};
   for (const id of ids) {
-    styles[id] = usageOf(await usage.documentsUsing(id, health), collection =>
+    styles[id] = usageOf(found.get(id) ?? NOTHING_FOUND, collection =>
       usage.kindOf(collection)
     );
   }
@@ -267,6 +278,17 @@ function whereUsedId(url: string): string {
   return parsed.data;
 }
 
+/** The listing for one style, through the batch read. */
+async function listingOf(
+  usage: SharedStyleUsageSource,
+  id: string,
+  health: UsageIndexHealth
+): Promise<DocumentsUsing> {
+  return (
+    (await usage.documentsUsingEach([id], health)).get(id) ?? NOTHING_FOUND
+  );
+}
+
 /**
  * The documents a shared style is used on, read as the caller.
  *
@@ -282,7 +304,7 @@ export async function readSharedStyleUses(
 ): Promise<Response> {
   const id = whereUsedId(req.url);
   const health = await usage.health();
-  const found = await usage.documentsUsing(id, health);
+  const found = await listingOf(usage, id, health);
   const items: SharedStyleUseItem[] = [];
   let hidden = 0;
   for (const { collection, documents } of found.collections) {
@@ -360,8 +382,13 @@ async function usageRefusals(
     ];
   }
   const reasons: string[] = [];
+  const counted = await usage.documentsUsingEach(
+    removable.map(style => style.id),
+    health
+  );
   for (const { id, name } of removable) {
-    const found = await usage.documentsUsing(id, health);
+    // An id the read did not answer for is one it cannot vouch for.
+    const found = counted.get(id) ?? { collections: [], complete: false };
     const documents = documentCountOf(found);
     if (documents > 0) {
       reasons.push(
