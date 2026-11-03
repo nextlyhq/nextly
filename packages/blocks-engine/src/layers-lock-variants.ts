@@ -152,29 +152,45 @@ function keptByStored(
   );
 }
 
+/** One variant drawn twice: as the write would draw it, and as before it. */
+interface VariantPair {
+  readonly choosing: BlockDocument;
+  readonly before: BlockDocument | undefined;
+}
+
 /**
- * Draw the component choosing each of its variants, and the stored form
- * choosing the same one, handing each pair to `visit`. False once the
+ * Hand `visit` each variant of `component` drawn as a pair. False once the
  * allowance is spent, before every variant was drawn.
  */
 function eachVariantDrawn(
   component: BlockDocument,
-  previous: BlockDocument | undefined,
   drawing: VariantDrawing,
-  visit: (
-    variant: string,
-    choosing: BlockDocument,
-    before: BlockDocument | undefined
-  ) => void
+  pair: (variant: string) => VariantPair,
+  visit: (variant: string, drawn: VariantPair) => void
 ): boolean {
   for (const variant of variantNamesIn(component) ?? []) {
-    const choosing = drawn(component, variant, drawing);
-    const before =
-      previous === undefined ? undefined : drawn(previous, variant, drawing);
+    const drawnPair = pair(variant);
     if (spent(drawing)) return false;
-    visit(variant, choosing, before);
+    visit(variant, drawnPair);
   }
   return true;
+}
+
+/**
+ * Add each change not yet reported, unless `kept` keeps it, naming the
+ * variant: one entry per locked block, from the first variant changing it.
+ */
+function reportOnce(
+  changes: readonly LayersLockChange[],
+  variant: string,
+  into: { found: VariantLockChange[]; reported: Set<string> },
+  kept: (change: LayersLockChange) => boolean
+): void {
+  for (const change of changes) {
+    if (into.reported.has(change.id) || kept(change)) continue;
+    into.reported.add(change.id);
+    into.found.push({ ...change, variant });
+  }
 }
 
 /**
@@ -197,21 +213,87 @@ export function variantLockChanges(
   const previous = isComponent(stored) ? lift(stored) : undefined;
   const unselected = drawn(component, "", ungated);
   if (spent(ungated)) return UNCHECKED;
-  const found: VariantLockChange[] = [];
-  const reported = new Set<string>();
+  const into = {
+    found: [] as VariantLockChange[],
+    reported: new Set<string>(),
+  };
   const whole = eachVariantDrawn(
     component,
-    previous,
     ungated,
-    (variant, choosing, before) => {
-      for (const change of layersLockChanges(choosing, unselected)) {
-        if (reported.has(change.id) || keptByStored(change, choosing, before)) {
-          continue;
-        }
-        reported.add(change.id);
-        found.push({ ...change, variant });
-      }
+    variant => ({
+      choosing: drawn(component, variant, ungated),
+      before:
+        previous === undefined ? undefined : drawn(previous, variant, ungated),
+    }),
+    (variant, { choosing, before }) => {
+      reportOnce(
+        layersLockChanges(choosing, unselected),
+        variant,
+        into,
+        change => keptByStored(change, choosing, before)
+      );
     }
   );
-  return whole ? { kind: "judged", changes: found } : UNCHECKED;
+  return whole ? { kind: "judged", changes: into.found } : UNCHECKED;
+}
+
+/** What a component placing a changed one is drawn with, before and after. */
+export interface HostVariantDrawing {
+  readonly limits?: DocumentLimits;
+  /** The library as stored, before the write. */
+  readonly before: ComponentLookup;
+  /** The library with the write applied. */
+  readonly after: ComponentLookup;
+  /** The allowance the caller's save shares, charged for every draw. */
+  readonly work?: WorkAllowance;
+}
+
+/**
+ * Each block locked in Layers that a variant of `host` changes once a write
+ * to a component it places is applied, and did not change before: a lock the
+ * write adds to a block the host's variant already relays a value onto
+ * changes that block wherever the variant is chosen. A change the host's
+ * variant already made before the write is not the write's, and is left out.
+ * Unchecked when the allowance runs out first.
+ *
+ * @param host - a component placing the written one, as stored
+ * @experimental
+ */
+export function hostVariantLockChanges(
+  host: unknown,
+  { limits, before, after, work }: HostVariantDrawing
+): VariantLocksAnswer {
+  if (!isComponent(host)) return { kind: "judged", changes: [] };
+  const was = ungatedDrawing({ limits, work, components: before });
+  const now = ungatedDrawing({ limits, work, components: after });
+  const component = now.lift(host);
+  const unselectedNow = drawn(component, "", now.drawing);
+  const unselectedWas = drawn(component, "", was.drawing);
+  if (spent(now.drawing)) return UNCHECKED;
+  const into = {
+    found: [] as VariantLockChange[],
+    reported: new Set<string>(),
+  };
+  const whole = eachVariantDrawn(
+    component,
+    now.drawing,
+    variant => ({
+      choosing: drawn(component, variant, now.drawing),
+      before: drawn(component, variant, was.drawing),
+    }),
+    (variant, pair) => {
+      const had = new Set(
+        layersLockChanges(pair.before ?? unselectedWas, unselectedWas).map(
+          change => change.id
+        )
+      );
+      reportOnce(
+        layersLockChanges(pair.choosing, unselectedNow),
+        variant,
+        into,
+        change => had.has(change.id)
+      );
+    }
+  );
+  return whole ? { kind: "judged", changes: into.found } : UNCHECKED;
 }

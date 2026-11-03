@@ -44,3 +44,16 @@ export function variantLockMessage(
 ): string {
   return `"${change.label}" is locked in Layers, and the variant "${change.variant}" would ${whatItWouldDo(change)}. Remove the variant's value for it, or unlock it in the same write.`;
 }
+
+/**
+ * A lock a component save adds to a block that a variant of a component
+ * placing it already changes, naming the block, the variant and that
+ * component. The variant is the other component's, so the way on is to
+ * change it first, or to leave the block unlocked.
+ */
+export function hostVariantLockMessage(
+  change: LayersLockChange & { readonly variant: string },
+  hostId: string
+): string {
+  return `"${change.label}" is locked in Layers by this write, and the variant "${change.variant}" of the component "${hostId}", which places this one, would ${whatItWouldDo(change)}. Remove that variant's value for it first, or leave the block unlocked.`;
+}

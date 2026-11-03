@@ -863,6 +863,84 @@ describe.each(getConfiguredTestDialects())(
         await expectRefusedNamingHero(outer({ headline: "Changed" }, "banner"));
       });
 
+      it("refuses locking a block that a variant of a component placing it changes, naming the variant", async () => {
+        current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+        const t = current;
+        // The promo starts with nothing locked; a banner places it and its
+        // variant "loud" relays a value onto the promo's "Hero".
+        const promoRow = await t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Promo",
+            slug: "promo",
+            content: promoContent({}, false),
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        const promoId = String(promoRow.item.id);
+        await t.nextly.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Banner",
+            slug: "banner",
+            content: {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: [
+                {
+                  id: "nested",
+                  type: COMPONENT_INSTANCE_TYPE,
+                  version: 1,
+                  props: { componentId: promoId },
+                },
+              ],
+              exposed: [
+                {
+                  id: "headline",
+                  label: "Headline",
+                  nodeId: "nested",
+                  propPath: "overrides.title",
+                  type: "text",
+                },
+              ],
+              variants: {
+                loud: { label: "Loud", overrides: { headline: "Changed" } },
+              },
+            },
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        // The usage index, which lists the banner as placing the promo, is
+        // maintained once the banner's write commits.
+        await t.events.settle();
+        const lockPromo = (lockHero: boolean, lockSub: boolean) => {
+          const content = promoContent({}, lockHero);
+          if (lockSub) {
+            (content.nodes[1] as Record<string, unknown>).locked = true;
+          }
+          return t.nextly.update({
+            collection: COMPONENTS_SLUG,
+            id: promoId,
+            data: { content, status: "published" },
+            overrideAccess: true,
+          });
+        };
+
+        // CONTROL: a lock on the block the variant leaves alone saves.
+        await expect(lockPromo(false, true)).resolves.toBeDefined();
+        const refused = issuesOf(await refusalOf(lockPromo(true, true)));
+        expect(refused).toEqual([
+          expect.objectContaining({
+            path: "content",
+            code: LAYERS_LOCK_CHANGED,
+          }),
+        ]);
+        expect(refused[0]!.message).toContain('"Hero" is locked in Layers');
+        expect(refused[0]!.message).toContain('the variant "loud"');
+      });
+
       it("refuses it on an update too", async () => {
         const { update } = await storedPage([heading("loose")]);
         const id = await promo(current!);

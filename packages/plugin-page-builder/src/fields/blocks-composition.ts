@@ -44,6 +44,7 @@ import {
   contentOnlyExposures,
   MAX_COMPOSED_DEPTH,
   contentModelKeyOf,
+  hostVariantLockChanges,
   nodeLocks,
   placementValueIssues,
   placementVariantIssues,
@@ -52,6 +53,7 @@ import {
   resolveComponentInstances,
   variantLockChanges,
   variantNamesIn,
+  walkNodes,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
@@ -89,6 +91,7 @@ import {
 
 import { isForest } from "./blocks-document";
 import {
+  hostVariantLockMessage,
   LAYERS_LOCK_CHANGED,
   placedLockMessage,
   variantLockMessage,
@@ -970,23 +973,9 @@ async function judgeHosts(args: {
   work: WorkAllowance;
   tally: Tally;
 }): Promise<void> {
-  const { self, document, draft, source, read, write, setup, work, tally } =
-    args;
-  const before = await source(self, draft);
-  // Not stored in this form yet: a create under a caller's own id, which pages
-  // may already place. Nothing to compare against, so every host is judged.
-  const was =
-    before.kind === "document" && isForest(before.document)
-      ? await footprintOf(
-          self,
-          before.document as BlockDocument,
-          read,
-          setup,
-          work
-        )
-      : undefined;
-  const now = await footprintOf(self, document, read, setup, work);
-  if (was !== undefined && !mayWorsen(was, now)) return;
+  const { self, document, draft, read, write, setup, work, tally } = args;
+  const reach = await changeReach(args);
+  if (reach === undefined) return;
 
   // The index is read through the Direct API, on a connection of its own. Inside
   // a transaction that read can wait on the connection the transaction holds,
@@ -1026,8 +1015,45 @@ async function judgeHosts(args: {
       setup,
       work,
       tally,
+      judgeVariants: reach.locksAdded,
     });
   }
+}
+
+/**
+ * Whether this save can make any host worse, by comparing the component's
+ * footprint before and after it; `undefined` when it cannot.
+ */
+async function changeReach(args: {
+  self: string;
+  document: BlockDocument;
+  draft: boolean;
+  source: ComponentSource;
+  read: BoundedReader;
+  setup: CompositionSetup;
+  work: WorkAllowance;
+}): Promise<{ readonly locksAdded: boolean } | undefined> {
+  const { self, document, draft, source, read, setup, work } = args;
+  const before = await source(self, draft);
+  // Not stored in this form yet: a create under a caller's own id, which pages
+  // may already place. Nothing to compare against, so every host is judged.
+  const was =
+    before.kind === "document" && isForest(before.document)
+      ? await footprintOf(
+          self,
+          before.document as BlockDocument,
+          read,
+          setup,
+          work
+        )
+      : undefined;
+  const now = await footprintOf(self, document, read, setup, work);
+  if (was === undefined) return { locksAdded: true };
+  if (!mayWorsen(was, now)) return undefined;
+  // A lock this save adds holds wherever the component is placed, so a
+  // component placing it whose variant changes the newly locked block is
+  // judged as well as composed.
+  return { locksAdded: added(was.layersLocks, now.layersLocks) };
 }
 
 type Tally = ReturnType<typeof hostTally>;
@@ -1047,6 +1073,7 @@ function hostTally(componentId: string, setup: CompositionSetup) {
   // the component in two fields is still one page an operator has to open.
   const broken = new Map<string, HostDamage>();
   const stillBroken = new Map<string, HostDamage>();
+  const variantLocks = new Set<string>();
   return {
     host(host: HostRef, reason: string): void {
       unjudged.add(documentKey(host));
@@ -1062,7 +1089,14 @@ function hostTally(componentId: string, setup: CompositionSetup) {
     stillBroken(host: HostRef, fault: HostFault): void {
       addDamage(stillBroken, host, fault);
     },
+    /** A host component's variant changing a block this save locks. */
+    variantLock(message: string): void {
+      variantLocks.add(message);
+    },
     flush(report: Report): void {
+      for (const message of variantLocks) {
+        report.add(LAYERS_LOCK_CHANGED, message);
+      }
       if (broken.size > 0) {
         report.add(
           "COMPONENT_HOST_BROKEN",
@@ -1256,6 +1290,8 @@ async function judgeOneHost(args: {
   setup: CompositionSetup;
   work: WorkAllowance;
   tally: Tally;
+  /** Whether the host's own variants are judged, as a component placing it. */
+  judgeVariants: boolean;
 }): Promise<void> {
   const { host, self, document, draft, read, write, setup, work, tally } = args;
   // A localized field holds a document per language, and the read is refused
@@ -1293,6 +1329,61 @@ async function judgeOneHost(args: {
     return;
   }
   reportWhatBroke({ host, stored, before, after, setup, tally });
+  if (args.judgeVariants && isComponentDocument(host, setup)) {
+    await judgeHostVariantLocks({ ...args, stored });
+  }
+}
+
+/** Whether a host is a component's own document, which may offer variants. */
+function isComponentDocument(host: HostRef, setup: CompositionSetup): boolean {
+  return (
+    host.slug === setup.store.collection && host.field === setup.store.field
+  );
+}
+
+/**
+ * Refuse a save that locks a block a host component's variant already
+ * changes, naming the variant and the host (`hostVariantLockChanges`). The
+ * host is drawn over the library as stored and with this save applied, so a
+ * change its variant made before the save is not this save's. A host that
+ * cannot be drawn within the save's reads or allowance is reported unjudged,
+ * as one that cannot be composed is.
+ */
+async function judgeHostVariantLocks(args: {
+  host: HostRef;
+  self: string;
+  document: BlockDocument;
+  stored: BlockDocument;
+  read: BoundedReader;
+  setup: CompositionSetup;
+  work: WorkAllowance;
+  tally: Tally;
+}): Promise<void> {
+  const { host, self, document, stored, read, setup, work, tally } = args;
+  if ((variantNamesIn(stored) ?? []).length === 0) return;
+  const library = await placedLibrary([stored, document], read, setup.limits);
+  const before = lookupOf(library);
+  const answer = read.exhausted()
+    ? ({ kind: "unchecked" } as const)
+    : hostVariantLockChanges(stored, {
+        limits: setup.limits,
+        before,
+        after: {
+          has: id => id === self || before.has(id),
+          get: id => (id === self ? document : before.get(id)),
+        },
+        work,
+      });
+  if (answer.kind === "unchecked") {
+    tally.host(
+      host,
+      `${describeHost(host)} composes more than one save can check`
+    );
+    return;
+  }
+  for (const change of answer.changes) {
+    tally.variantLock(hostVariantLockMessage(change, host.id));
+  }
 }
 
 /**
@@ -1440,6 +1531,8 @@ interface Footprint {
   readonly slots: ReadonlyMap<string, string>;
   /** Each exposed property, as the node, prop path and type it writes to. */
   readonly exposures: ReadonlyMap<string, string>;
+  /** The component's own blocks locked in Layers, by id. */
+  readonly layersLocks: ReadonlySet<string>;
 }
 
 interface SelectionFootprint {
@@ -1511,7 +1604,27 @@ async function footprintOf(
     selections,
     slots: exposedSlots(document, setup, locks),
     exposures: exposedProperties(document, locks),
+    layersLocks: layersLocksOf(document, setup),
   };
+}
+
+/**
+ * The component's own blocks locked in Layers. A lock added holds on every
+ * block a host's variant relays a value onto, so it may make a host worse.
+ */
+function layersLocksOf(
+  document: BlockDocument,
+  setup: CompositionSetup
+): ReadonlySet<string> {
+  const locked = new Set<string>();
+  walkNodes(
+    document.nodes,
+    node => {
+      if ((node as { locked?: unknown }).locked === true) locked.add(node.id);
+    },
+    { maxNodes: setup.limits.maxNodes }
+  );
+  return locked;
 }
 
 /** The deepest node of a composed forest, counted from its own top. */
@@ -1691,7 +1804,8 @@ function lockOf(locks: ReadonlyMap<string, NodeLock>, nodeId: unknown): string {
  * slot that moved, and any exposure added, re-aimed or removed. A slot removed
  * or a root type dropped cannot make a host break a rule it kept before; an
  * exposure removed can, since the host's override of it falls back to the
- * default, which may draw what the override kept out.
+ * default, which may draw what the override kept out. A block newly locked
+ * in Layers may too: a host component's variant may already change it.
  */
 function mayWorsen(was: Footprint, now: Footprint): boolean {
   if (!was.complete || !now.complete) return true;
@@ -1703,8 +1817,18 @@ function mayWorsen(was: Footprint, now: Footprint): boolean {
     // the other way, an exposure that is gone hands the default back.
     moved(was.exposures, now.exposures) ||
     moved(now.exposures, was.exposures) ||
-    moved(was.slots, now.slots)
+    moved(was.slots, now.slots) ||
+    added(was.layersLocks, now.layersLocks)
   );
+}
+
+/** Whether `after` holds an entry `before` does not. */
+function added(
+  before: ReadonlySet<string>,
+  after: ReadonlySet<string>
+): boolean {
+  for (const entry of after) if (!before.has(entry)) return true;
+  return false;
 }
 
 /** Whether any selection that exists now is worse than it was, or new. */

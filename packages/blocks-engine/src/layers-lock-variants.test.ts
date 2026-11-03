@@ -8,7 +8,10 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type BlockNode,
 } from "./document";
-import { variantLockChanges } from "./layers-lock-variants";
+import {
+  hostVariantLockChanges,
+  variantLockChanges,
+} from "./layers-lock-variants";
 
 /** The changes a judged answer holds; an unchecked one fails the case. */
 function judgedChanges(...args: Parameters<typeof variantLockChanges>) {
@@ -238,6 +241,72 @@ describe("variantLockChanges", () => {
       } as never;
       expect(
         variantLockChanges(late, undefined, { work: { left: 52 * 5 } })
+      ).toEqual({ kind: "unchecked" });
+    });
+  });
+
+  describe("a component placing one whose locks a write changes", () => {
+    /** A banner placing the promo, whose variant relays a value onto `exposure`. */
+    const banner = (exposure: "title" | "subtitle") => ({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        {
+          id: "nested",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "promo" },
+        },
+      ],
+      exposed: [
+        {
+          id: "relayed",
+          label: "Relayed",
+          nodeId: "nested",
+          propPath: `overrides.${exposure}`,
+          type: "text",
+        },
+      ],
+      variants: { loud: { label: "Loud", overrides: { relayed: "Changed" } } },
+    });
+    const library = (heroLocked: boolean) =>
+      new Map([["promo", component({}, heroLocked) as never]]);
+
+    it("reports a block the write newly locks that the host's variant changes", () => {
+      expect(
+        hostVariantLockChanges(banner("title"), {
+          before: library(false),
+          after: library(true),
+        })
+      ).toEqual({
+        kind: "judged",
+        changes: [expect.objectContaining({ label: "Hero", variant: "loud" })],
+      });
+      // CONTROL: the lock lands on a block the variant leaves alone.
+      expect(
+        hostVariantLockChanges(banner("subtitle"), {
+          before: library(false),
+          after: library(true),
+        })
+      ).toEqual({ kind: "judged", changes: [] });
+    });
+
+    it("leaves out a change the host's variant already made before the write", () => {
+      expect(
+        hostVariantLockChanges(banner("title"), {
+          before: library(true),
+          after: library(true),
+        })
+      ).toEqual({ kind: "judged", changes: [] });
+    });
+
+    it("answers unchecked once the allowance is spent", () => {
+      expect(
+        hostVariantLockChanges(banner("title"), {
+          before: library(false),
+          after: library(true),
+          work: { left: 1 },
+        })
       ).toEqual({ kind: "unchecked" });
     });
   });

@@ -1117,7 +1117,9 @@ export {
   type LayersLockChangeKind,
 } from "./layers-lock-stored";
 export {
+  hostVariantLockChanges,
   variantLockChanges,
+  type HostVariantDrawing,
   type VariantDrawing,
   type VariantLockChange,
   type VariantLocksAnswer,
