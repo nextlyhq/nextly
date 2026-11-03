@@ -120,6 +120,7 @@ describe("the toolbar's Edit component", () => {
           undefined,
           true,
           undefined,
+          undefined,
           true
         )
       )

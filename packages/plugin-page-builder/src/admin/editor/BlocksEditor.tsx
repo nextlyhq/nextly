@@ -79,6 +79,7 @@ import {
   useSiteStyleHistory,
 } from "./site-style-history";
 import { offerableTokens, siteStyleStatus } from "./site-style-studios";
+import { useComponentView, type ComponentView } from "./use-component-view";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
   hasUnsavedWork,
@@ -98,7 +99,11 @@ import {
 type EditorView = EditorMount &
   SiteStyleInputs &
   CanvasInputs &
-  EditorPanels & { documentDirty: boolean };
+  EditorPanels & {
+    documentDirty: boolean;
+    /** "Edit component", and the banner over a component's own view. */
+    componentView: ComponentView;
+  };
 
 /**
  * Whether the empty-container appender should be suppressed right now.
@@ -780,8 +785,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   const mount = useEditorMount(
     initialValue,
     kinds,
-    valueAtPath(defaultValues, name),
-    name
+    valueAtPath(defaultValues, name)
   );
   const { editor, inline } = mount;
 
@@ -820,6 +824,15 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
 
   const page = usePageFacts(control);
+  // A component's own view, and the way into one from a placement: its
+  // banner, which says how far a change reaches, and "Edit component".
+  const componentView = useComponentView({
+    initialDocument: mount.initialDocument,
+    editor,
+    componentLibrary: mount.componentLibrary,
+    fieldName: name,
+    componentFacts: mount.componentFacts,
+  });
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
@@ -830,6 +843,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     ...canvas,
     ...panels,
     documentDirty,
+    componentView,
   };
   useOpenAtSection({
     sectionId: openAt,
@@ -840,7 +854,6 @@ function EditorBody<TFieldValues extends FieldValues>({
   const {
     notices,
     componentLibrary,
-    componentView,
     savePattern,
     mayCreatePattern,
     makeComponent,

@@ -63,7 +63,6 @@ import {
 
 import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
-import { useComponentView, type ComponentView } from "./use-component-view";
 import { finishInlineEdit } from "./use-host-commit";
 
 /**
@@ -323,9 +322,7 @@ export function useEditorMount(
    * The field's value as last loaded or saved, which locks keep against;
    * undefined for an entry never saved.
    */
-  savedValue?: unknown,
-  /** The blocks field the editor is bound to, by name. */
-  fieldName?: string
+  savedValue?: unknown
 ): EditorMount {
   // The core blocks and every block a plugin contributed, before anything
   // reads the registry. Inside the component that mounts the editor rather
@@ -427,15 +424,6 @@ export function useEditorMount(
    * three places would be three requests answering one question.
    */
   const { mayCreatePattern, componentFacts } = useServerReads(initialDocument);
-  // A component's own view, and the way into one from a placement: its
-  // banner, which says how far a change reaches, and "Edit component".
-  const componentView = useComponentView({
-    initialDocument,
-    editor,
-    componentLibrary,
-    fieldName,
-    componentFacts,
-  });
   // The make-component verbs, and whether this author holds their grants.
   const makeComponent = useMakeComponentVerb(
     editor,
@@ -467,7 +455,6 @@ export function useEditorMount(
     componentVerbs: makeComponent.verbs,
     preferenceStore,
     componentFacts,
-    componentView,
   };
 }
 
@@ -493,8 +480,6 @@ export type EditorMount = {
   preferenceStore: NonNullable<BuilderShellProps["store"]>;
   /** What the inspector is told about the component being edited, if any. */
   componentFacts: ComponentFieldsHost | undefined;
-  /** "Edit component", and the banner over a component's own view. */
-  componentView: ComponentView;
 };
 
 /**
