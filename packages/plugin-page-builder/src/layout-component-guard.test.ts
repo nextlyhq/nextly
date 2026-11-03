@@ -21,7 +21,7 @@ function context() {
     ctx,
     registered,
     run: (c: unknown) => handlers.get("beforeDelete")?.(c),
-    update: (c: unknown) => handlers.get("beforeUpdate")?.(c),
+    update: (c: unknown) => handlers.get("beforeChange")?.(c),
   };
 }
 
@@ -112,7 +112,7 @@ const register = (ctx: ReturnType<typeof context>["ctx"]) =>
   });
 
 describe("deleting a component a Layout still uses", () => {
-  it("registers on beforeDelete and beforeUpdate, for the components collection only", () => {
+  it("registers on beforeDelete and beforeChange, for the components collection only", () => {
     // Named rather than the wildcard: a wildcard registration would run a
     // Layout scan on every delete the site performs.
     const c = context();
@@ -120,7 +120,7 @@ describe("deleting a component a Layout still uses", () => {
 
     expect(c.registered).toEqual([
       { type: "beforeDelete", collection: "nx_pb_components" },
-      { type: "beforeUpdate", collection: "nx_pb_components" },
+      { type: "beforeChange", collection: "nx_pb_components" },
     ]);
   });
 
@@ -419,6 +419,40 @@ describe("unpublishing a component a Layout still uses", () => {
       c.update({
         data: { status: "draft" },
         originalData: { id: "cmp", status: "draft" },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+    expect(asked).toEqual([]);
+  });
+
+  it("reads any explicit status other than published as an unpublish, whatever its type", async () => {
+    // Core's lifecycle gate does: a value a dialect coerces into the status
+    // column takes the row out of published all the same.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ layouts: [layout("l1", "Marketing", "cmp")] });
+
+    await expect(
+      c.update(updating({ title: "Renamed", status: false }, nextly))
+    ).rejects.toThrow(/cannot be unpublished/);
+  });
+
+  it("lets an undefined status and a create through without a scan", async () => {
+    // Core strips an undefined status before the write, so it names no
+    // change; a create has no stored row to take off the site.
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({
+      layouts: [layout("l1", "Marketing", "cmp")],
+    });
+
+    await expect(
+      c.update(updating({ title: "Renamed", status: undefined }, nextly))
+    ).resolves.toBeUndefined();
+    await expect(
+      c.update({
+        operation: "create",
+        data: { id: "cmp", status: "draft" },
         req: { nextly },
       })
     ).resolves.toBeUndefined();

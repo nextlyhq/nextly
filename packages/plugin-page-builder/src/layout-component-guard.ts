@@ -116,7 +116,13 @@ export function registerLayoutComponentGuard(args: {
   // a reader is served only published components, so every page drawn inside
   // a Layout using it would show the gap. Every other save is let through
   // without a scan.
-  args.ctx.hooks.on("beforeUpdate", args.componentsCollection, async context => {
+  //
+  // `beforeChange`, not `beforeUpdate`: it runs after every `beforeUpdate`
+  // hook, the app's and those configured in the admin, so a status one of
+  // them sets is the status judged. It still runs before the write. A hook
+  // a plugin cannot follow (an admin-configured `beforeChange`, or a field's
+  // own hook on `status`) is judged by no plugin guard today.
+  args.ctx.hooks.on("beforeChange", args.componentsCollection, async context => {
     if (!unpublishes(context)) return;
     await refuseWhileALayoutNamesIt(args, context, UNPUBLISHING);
   });
@@ -147,15 +153,28 @@ const UNPUBLISHING: Removal = {
 /**
  * Whether this update unpublishes a published component.
  *
- * Only an explicit status other than `published` does. A save that leaves the
- * status out keeps the published row live and stores a pending edit beside it,
- * which takes nothing off the site.
+ * Any explicit status other than `published` does, whatever its type, as
+ * core's own lifecycle gate reads it: a value a dialect would coerce into the
+ * status column takes the row out of `published` all the same. A save that
+ * leaves the status out, or sets it to `undefined` (which core strips), keeps
+ * the published row live and stores a pending edit beside it. A create has no
+ * stored row, so it unpublishes nothing.
  */
 function unpublishes(context: unknown): boolean {
-  const hook = context as { data?: unknown; originalData?: unknown } | null;
-  const next = statusOf(hook?.data);
+  const hook = context as {
+    operation?: unknown;
+    data?: unknown;
+    originalData?: unknown;
+  } | null;
+  if (hook?.operation !== undefined && hook.operation !== "update") {
+    return false;
+  }
+  const data = hook?.data;
+  if (typeof data !== "object" || data === null) return false;
+  const next = (data as { status?: unknown }).status;
   return (
     statusOf(hook?.originalData) === "published" &&
+    Object.hasOwn(data, "status") &&
     next !== undefined &&
     next !== "published"
   );
