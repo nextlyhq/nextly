@@ -28,7 +28,8 @@ afterEach(() => {
 });
 
 describe("collectionSaveIssuesDdl", () => {
-  it.each([
+  // A save body carries any of the collection's options, not only the three the predicate reads.
+  it.each<[Record<string, unknown>, boolean]>([
     [{ fields: [] }, true],
     [{ localized: true }, true],
     [{ status: false }, true],
