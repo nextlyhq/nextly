@@ -27,7 +27,6 @@ import {
   inspectInstance,
   lockViewOf,
   partOfComponentSentence,
-  useEditorState,
   createOpenPassages,
   useInlineEditing,
   type OpenPassages,
@@ -66,6 +65,7 @@ import {
 } from "../pattern-capability-client";
 import { useEditedComponentVariants } from "../variant-use-client";
 
+import { useRestorableEditorState } from "./restore-as-edit";
 import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
@@ -406,28 +406,33 @@ export function useEditorMount(
    * raises into it from here.
    */
   const notices = useNoticeQueue();
-  const editor = useEditorState({
-    initialDocument,
-    limits: documentLimits,
-    // The SAME map the canvas draws with, so an edit is refused when the page
-    // would no longer compose with it in — every surface reaches the page
-    // through this apply, and this is the one place the reason is known.
-    definitions: componentLibrary.definitions,
-    onRefused: refusal => notices.raise(refusal.sentence),
-    // A lock refusal, said the same way: the author reads why, in words.
-    onLockRefused: refusal => notices.raise(refusal.sentence),
-    // A block a component locks is refused naming the component, as the
-    // panel's held row names it, from the library the canvas draws with.
-    componentName: id =>
-      componentLibrary.components.find(component => component.id === id)?.title,
-    // What the next save judges locks against, so the editor refuses exactly
-    // what that save would.
-    stored,
-    // An edit that would put a block where it may not go is refused by the op
-    // store whichever surface asked for it, so the author is told why here
-    // rather than seeing the edit silently not happen.
-    onPlacementRefused: refusal => notices.raise(placementSentence(refusal)),
-  });
+  // With a recovery point's restore as one edit, so the author can undo it.
+  const editor = useRestorableEditorState(
+    {
+      initialDocument,
+      limits: documentLimits,
+      // The SAME map the canvas draws with, so an edit is refused when the page
+      // would no longer compose with it in — every surface reaches the page
+      // through this apply, and this is the one place the reason is known.
+      definitions: componentLibrary.definitions,
+      onRefused: refusal => notices.raise(refusal.sentence),
+      // A lock refusal, said the same way: the author reads why, in words.
+      onLockRefused: refusal => notices.raise(refusal.sentence),
+      // A block a component locks is refused naming the component, as the
+      // panel's held row names it, from the library the canvas draws with.
+      componentName: id =>
+        componentLibrary.components.find(component => component.id === id)
+          ?.title,
+      // What the next save judges locks against, so the editor refuses exactly
+      // what that save would.
+      stored,
+      // An edit that would put a block where it may not go is refused by the op
+      // store whichever surface asked for it, so the author is told why here
+      // rather than seeing the edit silently not happen.
+      onPlacementRefused: refusal => notices.raise(placementSentence(refusal)),
+    },
+    kinds
+  );
   // A shared style change saved while this editor is open is a step of its
   // history, so the editor connects the history to the style writers.
   useConnectStyleHistory(editor.recordStep);
