@@ -141,7 +141,6 @@ import {
   physicalSideName,
   sideBoxFor,
   sideOf,
-  type LogicalSide,
   type SideBox,
 } from "./style-sides";
 import { styleSubjectFor } from "./style-subject";
@@ -4249,20 +4248,22 @@ const FIXED_PLACEHOLDER: Partial<Record<StyleLeaf["kind"], string>> = {
   // literal here would also be a hardcoded colour, which this repository bans
   // outright — the rule reads source, not intent, and it is right to: a hex in
   // a placeholder is one copy away from a hex in a style.
-  color: "hex, rgb(), or a colour name",
+  // Short enough to read inside the field rather than cut off mid-word.
+  color: "Name, hex or rgb()",
   url: "https://…",
 };
 
-/** A length's hint, which depends on what the catalog lets this one hold. */
+/**
+ * A length's hint, which depends on what the catalog lets this one hold.
+ *
+ * The form alone, never the keyword list: a field shows about twenty
+ * characters, and a hint cut off mid-word ("16px or 50%, or xx-sm…") says
+ * less than a short one. The keywords stay valid to type.
+ */
 function dimensionHint(
   leaf: Extract<StyleLeaf, { kind: "dimension" }>
 ): string {
-  const units = leaf.allowPercentage === true ? "16px or 50%" : "16px";
-  // The catalog's helper always writes this field, and the TYPE leaves it
-  // optional — so a leaf assembled by hand, which every fixture in this package
-  // is, legitimately arrives without one.
-  const keywords = leaf.keywords ?? [];
-  return keywords.length > 0 ? `${units}, or ${keywords.join(", ")}` : units;
+  return leaf.allowPercentage === true ? "16px or 50%" : "16px";
 }
 
 /** A number's hint, which names its bounds when the catalog gives it both. */

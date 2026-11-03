@@ -984,6 +984,20 @@ describe("controls", () => {
     expect(screen.getByLabelText("Font style form")).toBeDefined();
   });
 
+  it("hints at a value in words short enough to read inside the field", () => {
+    // A hint cut off mid-word ("16px or 50%, or xx-sm…") tells the author
+    // less than a short one. Keywords stay valid to type; the hint shows the
+    // form a value takes, not every value it may take.
+    mount({ typography: true, color: true });
+
+    expect(
+      (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
+    ).toBe("16px or 50%");
+    expect(
+      fieldsOf("color").getByPlaceholderText("Name, hex or rgb()")
+    ).toBeDefined();
+  });
+
   it("leaves a trailing decimal point for the catalog, rather than reading it as a number", () => {
     // CSS requires a digit AFTER a decimal point, so `1.` is a number followed
     // by a stray delimiter rather than a number. `Number("1.")` answers 1

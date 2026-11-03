@@ -1951,7 +1951,9 @@
   inline-size: 0.375rem;
   block-size: 0.375rem;
   border-radius: 999px;
-  background: var(--nx-primary);
+  /* The colour a field's own dot gives a value set here, which is what this
+     says of the section; `--nx-primary` was the label's own black or white. */
+  background: var(--nx-chart-2);
 }
 
 /* A section's "+ More": quiet, so the controls above it lead. */
@@ -5039,7 +5041,9 @@ fieldset.nx-inspector__fields {
 }
 
 .nx-style-inspector__side-box[data-ring="padding"] {
-  grid-template-columns: minmax(3rem, 1fr) minmax(1rem, 0.8fr) minmax(3rem, 1fr);
+  /* Equal columns, so its top and bottom sides, in the middle one, have the
+     room its left and right have. */
+  grid-template-columns: repeat(3, minmax(2.75rem, 1fr));
   border: 1px solid var(--nx-builder-border);
   background: var(--nx-builder-surface-raised);
 }
@@ -5066,6 +5070,10 @@ fieldset.nx-inspector__fields {
  */
 .nx-spacing-box .nx-inspector__field {
   position: relative;
+  /* One width for every side, wherever its column is wide. */
+  justify-self: center;
+  inline-size: 100%;
+  max-inline-size: 3.5rem;
 }
 
 .nx-spacing-box .nx-inspector__field input {
