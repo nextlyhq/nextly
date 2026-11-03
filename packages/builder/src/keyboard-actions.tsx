@@ -1264,17 +1264,10 @@ function parentOf(
  * gets exactly what this rendered before.
  */
 export function BlockKeyboardActions({
-  editor,
-  enabled,
-  onEditText,
-  nesting,
-  definitions,
-  onSaveAsPattern,
-  mayCreatePattern,
-  onEditComponent,
-  components,
   onShareVerbs,
   children,
+  // Handed on whole, so an option the host left out stays out.
+  ...options
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
   /**
@@ -1289,17 +1282,7 @@ export function BlockKeyboardActions({
     nesting: rules,
     selectionActions: offered,
     depthMoves,
-  } = useBlockKeyboardActions({
-    editor,
-    enabled,
-    onSaveAsPattern,
-    ...(mayCreatePattern === undefined ? {} : { mayCreatePattern }),
-    ...(onEditComponent === undefined ? {} : { onEditComponent }),
-    ...(onEditText === undefined ? {} : { onEditText }),
-    ...(nesting === undefined ? {} : { nesting }),
-    ...(definitions === undefined ? {} : { definitions }),
-    ...(components === undefined ? {} : { components }),
-  });
+  } = useBlockKeyboardActions(options);
 
   /*
    * Shared from a layout effect, so a surface outside sees the verbs for the

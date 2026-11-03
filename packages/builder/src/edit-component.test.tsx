@@ -67,6 +67,7 @@ describe("the toolbar's Edit component", () => {
           undefined,
           true,
           undefined,
+          undefined,
           true
         )
       )
@@ -88,6 +89,7 @@ describe("the toolbar's Edit component", () => {
           undefined,
           true,
           undefined,
+          undefined,
           true
         )
       )
@@ -96,7 +98,18 @@ describe("the toolbar's Edit component", () => {
 
   it("is not offered for an ordinary block, several blocks, or without a host", () => {
     expect(
-      ids(toolbarActions(page, "h", ["h"], undefined, true, undefined, true))
+      ids(
+        toolbarActions(
+          page,
+          "h",
+          ["h"],
+          undefined,
+          true,
+          undefined,
+          undefined,
+          true
+        )
+      )
     ).not.toContain("edit-component");
     expect(
       ids(
@@ -119,6 +132,7 @@ describe("the toolbar's Edit component", () => {
           ["placed"],
           undefined,
           true,
+          undefined,
           undefined,
           false
         )
