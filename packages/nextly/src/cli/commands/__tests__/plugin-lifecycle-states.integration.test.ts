@@ -23,11 +23,11 @@ import { buildExtensionSchema } from "../../../domains/schema/extension/build-ex
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
+import { canPrompt } from "../../../domains/schema/migrate/can-prompt";
 import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import {
   countDeletions,
-  isInteractiveTerminal,
   NO_CONSENT,
   resolveDataLossConsent,
   type DataLossConsent,
@@ -651,7 +651,7 @@ describe.each(getConfiguredTestDialects())(
 
       it("with no terminal and no consent, changes nothing, names the tables with their rows, and ends promptly", async () => {
         // The run has no terminal to ask, which is what is under test.
-        expect(isInteractiveTerminal()).toBe(false);
+        expect(canPrompt()).toBe(false);
         await install();
         await writeNote("a");
         await writeNote("b");

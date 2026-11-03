@@ -12,13 +12,15 @@ import {
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
 import {
+  browserStore,
   DEFAULT_PREFERENCES,
   type LeftPanel,
+  type PreferenceStore,
   type SavedPattern,
 } from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
-  ClassManagerPanel,
+  CHECKLIST_STORAGE_KEY,
   ComponentsPanel,
   InsertPanel,
   LayersPanel,
@@ -61,15 +63,38 @@ import {
   offerableFaces,
   offerableTokens,
   renderedTokens,
+  SharedStylesStudio,
   TokensStudio,
+  VariablesTab,
 } from "./site-style-studios";
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
+/** A key for the document the editor has open, from its identity. */
+function identityKey(
+  identity: ReturnType<typeof useDocumentIdentity>
+): string | undefined {
+  if (identity === null) return undefined;
+  return identity.kind === "collection"
+    ? `collection:${identity.slug}:${identity.documentId ?? "new"}`
+    : `${identity.kind}:${identity.slug}`;
+}
+
+/**
+ * Where the getting-started card's dismissal is kept: under the author's own
+ * key, so dismissing it is one author's choice in a browser two people share.
+ * With no author known, the card's own browser-wide default.
+ */
+function checklistStoreFor(userId: string | null): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : browserStore(`${CHECKLIST_STORAGE_KEY}:${userId}`);
+}
+
 /**
  * Every left panel the editor can fill today: Add, Layers, Pages, the site's
- * Components, and Design with the site's variables, classes and fonts.
+ * Components, and Design with the site's variables, shared styles and fonts.
  *
  * The shell offers only what is listed, so the rail never holds an item that
  * opens a region with nothing in it. Listing a panel here that renders nothing
@@ -380,9 +405,19 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
    * config and a malformed one both leave it on, because the default is the
    * behaviour a site that configured nothing asked for.
    */
+  const checklistStore = useMemo(
+    () => checklistStoreFor(mount.userId),
+    [mount.userId]
+  );
+  const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
-    enabled: clientConfig?.checklist !== false,
+    documentKey: identityKey(identity),
+    // Not until the author is known: their own dismissal is the one to read,
+    // and a card drawn before it arrives would flash for an author who
+    // dismissed it.
+    enabled: clientConfig?.checklist !== false && checklistStore !== undefined,
+    ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
   const library = useOfferedLibrary(mount);
@@ -452,12 +487,15 @@ export function editorPanelRenderer({
   storedSiteStyle,
   unreadableStoredFonts,
   classes,
-  documentClasses,
+  pageClassBlocks,
   classSummaryContext,
   requestPanel,
   insertInside,
   pages,
+  documentDirty,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+  /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
+  documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
   layersRegions?: readonly LayersRegionRow[];
   /** "Edit component", which the Components panel offers on each row. */
@@ -472,7 +510,7 @@ export function editorPanelRenderer({
     | "unreadableStoredFonts"
     | "classes"
   > &
-  Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
+  Pick<CanvasInputs, "drag" | "pageClassBlocks" | "classSummaryContext"> &
   Pick<
     EditorPanels,
     "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
@@ -554,48 +592,40 @@ export function editorPanelRenderer({
       ),
       // Read when the panel is drawn, as every other entry reads its inputs,
       // so drawing another panel never needs the Pages panel's mount.
-      pages: () => pages.renderPagesPanel(),
+      pages: () => pages.renderPagesPanel({ unsavedWork: documentDirty }),
       design: () => (
         <DesignPanel
           view={view}
+          // The studio surrounds every tab, so the header it draws stays the
+          // same whichever is open.
+          frame={designTabs => (
+            <TokensStudio
+              merged={offerableTokens(
+                canvasSiteStyle,
+                siteStylePending,
+                siteStyleError
+              )}
+              supplied={configSiteStyle?.tokens}
+              pending={siteStylePending}
+            >
+              {designTabs}
+            </TokensStudio>
+          )}
           tabs={{
-            variables: () => (
-              <TokensStudio
-                merged={offerableTokens(
+            variables: () => <VariablesTab />,
+            classes: () => (
+              <SharedStylesStudio
+                classes={classes}
+                pageBlocks={pageClassBlocks}
+                styleContext={classSummaryContext}
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+                // The same variables the Fonts tab reads, as the canvas draws.
+                tokens={renderedTokens(
                   canvasSiteStyle,
                   siteStylePending,
                   siteStyleError
-                )}
-                supplied={configSiteStyle?.tokens}
-                pending={siteStylePending}
-              />
-            ),
-            classes: () => (
-              <ClassManagerPanel
-                absence={classes.absence}
-                pendingSlugs={classes.pendingSlugs}
-                documentClassIds={documentClasses.ids}
-                /*
-                      Whether that walk reached the whole document. It stops at the
-                      node ceiling, and a class applied past it is missing from the
-                      list — which the panel must not read as "not on this page".
-                    */
-                documentScan={documentClasses.complete ? "complete" : "partial"}
-                library={classes.library}
-                styleContext={classSummaryContext}
-                onRename={classes.rename}
-                currentRenameAttempt={classes.currentRenameAttempt}
-                /*
-                      No `usage`, and no `onDelete`. The usage index is a
-                      collection and this surface has no read for one, so the panel
-                      reports that nothing was read rather than reporting an empty
-                      index — which would say every class is unused. Deleting needs
-                      that same reach plus a write stripping the class from every
-                      document holding it, so it is withheld entirely rather than
-                      offered as a control that cannot keep its promise.
-                    */
-                suppliedClassIds={configSiteStyle?.classes?.map(
-                  entry => entry.id
                 )}
               />
             ),

@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * The component's own view, in the inspector: the switches that expose a
- * prop, the switch that lets placements hide a block, the list of exposed
- * fields, and the dialog that confirms a removal.
+ * The component's own view, in the inspector: the icon beside each property
+ * that lets each page change it, the same icon on a block's Shown row,
+ * the card naming the component over its list of fields, and the dialog that
+ * confirms a removal.
  *
  * Draws what `component-fields` decides and decides nothing itself.
  *
@@ -19,7 +20,7 @@
  * @module component-fields-panel
  */
 import {
-  findNode,
+  variantOptions,
   type ComponentDocument,
   type ExposedProperty,
   type ExposureEdit,
@@ -34,10 +35,24 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
-  Label,
-  Switch,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@nextlyhq/ui";
-import { Crosshair, Trash2 } from "lucide-react";
+import {
+  AlignLeft,
+  Component,
+  Crosshair,
+  Eye,
+  Image as ImageIcon,
+  Link2,
+  List,
+  SquareDashed,
+  Trash2,
+  Type,
+  type LucideIcon,
+} from "lucide-react";
 import * as React from "react";
 
 import { commitOnEnter } from "./commit-on-enter";
@@ -49,20 +64,21 @@ import {
   exposeOffer,
   exposeProp,
   exposeVisibility,
+  fieldSource,
   idsIn,
   planFieldRemoval,
   propExposure,
   removalSentences,
   renameField,
   reservedIds,
+  slotSource,
   visibilityExposure,
   applyFieldEdit,
   type ComponentFieldsHost,
   type FieldEditContext,
 } from "./component-fields";
 import type { EditorState } from "./editor-state";
-import { blockLabel } from "./inserter";
-import { fieldLabel, type EditableProp } from "./inspector";
+import { propLabel, type EditableProp } from "./inspector";
 import { useStoredDraft } from "./stored-draft";
 
 /** A field or an exposed slot the author asked to remove. */
@@ -77,6 +93,8 @@ export interface FieldRemoval {
 export interface ComponentFieldsBinding {
   readonly context: FieldEditContext;
   readonly requestRemoval: (removal: FieldRemoval) => void;
+  /** The component's name, for the card heading its view; absent if unknown. */
+  readonly name?: string | undefined;
 }
 
 /**
@@ -159,6 +177,7 @@ function useComponentFields(
             reserved: reservedIds(host?.reserved, seen),
           },
           requestRemoval: setRemoval,
+          name: host?.name,
         };
   const dialog =
     component === undefined || removal === null ? null : (
@@ -181,9 +200,136 @@ function useEditProblem(): [
   return React.useState<string | undefined>(undefined);
 }
 
+/** The type icon a field's row shows, by what a placement sets through it. */
+const TYPE_ICON: Readonly<Record<ExposedProperty["type"], LucideIcon>> = {
+  text: Type,
+  richText: AlignLeft,
+  image: ImageIcon,
+  link: Link2,
+  visibility: Eye,
+  select: List,
+};
+
 /**
- * Under a prop's control while a component is edited: whether placements may
- * set it, and the field's name when they may.
+ * What the icon beside a property says, in the author's words: "page" where
+ * the code says placement, and a one-line tooltip on what pressing it does.
+ */
+const TOGGLE_WORDS = {
+  prop: {
+    label: (property: string) => `Let each page change ${property}`,
+    off: (property: string) =>
+      `Turn this on to let each use of the component, on any page, set its own ${property.toLowerCase()}.`,
+    on: "Each use can change this. Turn off to use the component’s value everywhere.",
+  },
+  visibility: {
+    label: (block: string) => `Let each page hide ${block}`,
+    off: (block: string) =>
+      `Turn this on to let each use of the component, on any page, hide this ${block.toLowerCase()}.`,
+    on: "Each use can hide this. Turn off to show it everywhere.",
+  },
+} as const;
+
+/**
+ * The icon beside a property that lets each page change it: the
+ * component mark, pressed while the property is exposed. A button with a
+ * pressed state rather than a switch row under every property, as Figma and
+ * Webflow bind a property, so a long list stays a list of properties.
+ *
+ * A property no placement could set keeps its icon HELD rather than disabled:
+ * still focusable and hoverable, so the reason can be read, and said aloud
+ * when pressed.
+ */
+function ExposeToggle({
+  label,
+  pressed,
+  held,
+  title,
+  onPress,
+}: {
+  /** The button's name, the same whether pressed or not. */
+  label: string;
+  pressed: boolean;
+  /** Why it cannot be pressed, or nothing when it can. */
+  held: string | undefined;
+  /** What its tooltip says, on hover and on focus. */
+  title: string;
+  onPress: () => void;
+}): React.JSX.Element {
+  return (
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="nx-expose__toggle"
+            aria-label={label}
+            aria-pressed={pressed}
+            aria-disabled={held === undefined ? undefined : true}
+            onClick={onPress}
+          >
+            <Component size={15} aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        {/* Below the icon, ending at its right edge: the row's own label stays
+            readable beside the icon, and the tip lies over the next row, which
+            the author isn't reading while pointing here. */}
+        <TooltipContent side="bottom" align="end" className="nx-expose__tip">
+          {held ?? title}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+/** What the dashed row's "Field" label says on hover. */
+const FIELD_HINT = "The name each page’s editor shows for this field.";
+
+/**
+ * Under a property, once it is exposed: the dashed row naming the field
+ * each page sets it through.
+ */
+function ExposedFieldName({
+  binding,
+  field,
+  label,
+  inputRef,
+}: {
+  binding: ComponentFieldsBinding;
+  field: ExposedProperty;
+  label: string;
+  inputRef?: React.Ref<HTMLInputElement>;
+}): React.JSX.Element {
+  // The hint is said with the name input as its description, so it reaches
+  // a keyboard or screen-reader user too; the title keeps it on hover.
+  const hintId = `${React.useId()}-hint`;
+  return (
+    <div className="nx-expose__field">
+      <span
+        className="nx-expose__field-label"
+        aria-hidden="true"
+        title={FIELD_HINT}
+      >
+        <Component size={13} />
+        Field
+      </span>
+      <span id={hintId} className="nx-sr-only">
+        {FIELD_HINT}
+      </span>
+      <FieldName
+        inputRef={inputRef}
+        binding={binding}
+        field={field}
+        label={label}
+        describedBy={hintId}
+        className="nx-expose__name-input"
+      />
+    </div>
+  );
+}
+
+/**
+ * Beside a prop's control while a component is edited: the icon that lets
+ * each page change it, and the field's name under it once it does.
  */
 export function PropExposeControl({
   binding,
@@ -198,10 +344,10 @@ export function PropExposeControl({
   const field = propExposure(context.component, nodeId, prop.name);
   const offer = exposeOffer(prop.schema);
   const [problem, setProblem] = useEditProblem();
-  const switchId = React.useId();
   const reasonId = React.useId();
   const nameRef = React.useRef<HTMLInputElement | null>(null);
   const focusName = React.useRef(false);
+  const named = propLabel(prop.name, prop.schema);
 
   React.useEffect(() => {
     // The name is the next thing an author decides, so a field just exposed
@@ -213,58 +359,51 @@ export function PropExposeControl({
     }
   }, [field]);
 
-  const toggle = (on: boolean) => {
-    if (!on) {
-      if (field !== undefined) {
-        requestRemoval({ kind: "field", id: field.id, label: field.label });
-      }
+  const unavailable =
+    field === undefined && "reason" in offer ? offer.reason : undefined;
+  const press = () => {
+    if (field !== undefined) {
+      requestRemoval({ kind: "field", id: field.id, label: field.label });
       return;
     }
-    const outcome = exposeProp(
-      context,
-      nodeId,
-      prop.name,
-      fieldLabel(prop.name)
-    );
+    if (unavailable !== undefined) {
+      setProblem(unavailable);
+      return;
+    }
+    const outcome = exposeProp(context, nodeId, prop.name, named);
     setProblem(outcome.applied ? undefined : outcome.reason);
     focusName.current = outcome.applied;
   };
 
-  const unavailable = "reason" in offer ? offer.reason : undefined;
-  const said = problem ?? unavailable;
   return (
     <div
       className="nx-expose"
       data-exposed={field === undefined ? undefined : ""}
       data-expose-prop={prop.name}
+      aria-describedby={problem === undefined ? undefined : reasonId}
     >
-      <div className="nx-expose__row">
-        <Switch
-          id={switchId}
-          checked={field !== undefined}
-          disabled={field === undefined && unavailable !== undefined}
-          onCheckedChange={toggle}
-          aria-describedby={said === undefined ? undefined : reasonId}
+      <ExposeToggle
+        label={TOGGLE_WORDS.prop.label(named)}
+        pressed={field !== undefined}
+        held={unavailable}
+        title={
+          field === undefined
+            ? TOGGLE_WORDS.prop.off(named)
+            : TOGGLE_WORDS.prop.on
+        }
+        onPress={press}
+      />
+      {field === undefined ? null : (
+        <ExposedFieldName
+          inputRef={nameRef}
+          binding={binding}
+          field={field}
+          label={`Name pages see for ${named}`}
         />
-        <Label htmlFor={switchId} className="nx-expose__label">
-          {field === undefined ? "Expose to placements" : "Exposed as"}
-        </Label>
-        {field === undefined ? null : (
-          <FieldName
-            inputRef={nameRef}
-            binding={binding}
-            field={field}
-            label={`Name of the exposed field for ${fieldLabel(prop.name)}`}
-          />
-        )}
-      </div>
-      {said === undefined ? null : (
-        <p
-          id={reasonId}
-          className="nx-expose__reason"
-          role={problem === undefined ? undefined : "alert"}
-        >
-          {said}
+      )}
+      {problem === undefined ? null : (
+        <p id={reasonId} className="nx-expose__reason" role="alert">
+          {problem}
         </p>
       )}
     </div>
@@ -272,8 +411,8 @@ export function PropExposeControl({
 }
 
 /**
- * Above a block's props while a component is edited: whether each placement
- * may hide the block.
+ * Above a block's props while a component is edited: its Shown row, with the
+ * same icon, letting each page hide the block.
  */
 export function VisibilityExposeControl({
   binding,
@@ -287,14 +426,11 @@ export function VisibilityExposeControl({
   const { context, requestRemoval } = binding;
   const field = visibilityExposure(context.component, nodeId);
   const [problem, setProblem] = useEditProblem();
-  const switchId = React.useId();
   const reasonId = React.useId();
 
-  const toggle = (on: boolean) => {
-    if (!on) {
-      if (field !== undefined) {
-        requestRemoval({ kind: "field", id: field.id, label: field.label });
-      }
+  const press = () => {
+    if (field !== undefined) {
+      requestRemoval({ kind: "field", id: field.id, label: field.label });
       return;
     }
     const outcome = exposeVisibility(
@@ -306,33 +442,42 @@ export function VisibilityExposeControl({
   };
 
   return (
-    <div
-      className="nx-expose nx-expose--visibility"
-      data-exposed={field === undefined ? undefined : ""}
-    >
-      <div className="nx-expose__row">
-        <Switch
-          id={switchId}
-          checked={field !== undefined}
-          onCheckedChange={toggle}
-          aria-describedby={problem === undefined ? undefined : reasonId}
+    <div className="nx-inspector__prop nx-expose-shown">
+      <div
+        className="nx-expose"
+        data-exposed={field === undefined ? undefined : ""}
+        data-expose-visibility=""
+      >
+        <p className="nx-expose__shown">
+          <span className="nx-expose__shown-label">Shown</span>
+          <span className="nx-expose__shown-value">
+            {field === undefined ? "On every page" : "Each use chooses"}
+          </span>
+        </p>
+        <ExposeToggle
+          label={TOGGLE_WORDS.visibility.label(blockName)}
+          pressed={field !== undefined}
+          held={undefined}
+          title={
+            field === undefined
+              ? TOGGLE_WORDS.visibility.off(blockName)
+              : TOGGLE_WORDS.visibility.on
+          }
+          onPress={press}
         />
-        <Label htmlFor={switchId} className="nx-expose__label">
-          Let placements hide this
-        </Label>
         {field === undefined ? null : (
-          <FieldName
+          <ExposedFieldName
             binding={binding}
             field={field}
-            label="Name of the field that hides this block"
+            label={`Name pages see for hiding ${blockName}`}
           />
         )}
+        {problem === undefined ? null : (
+          <p id={reasonId} className="nx-expose__reason" role="alert">
+            {problem}
+          </p>
+        )}
       </div>
-      {problem === undefined ? null : (
-        <p id={reasonId} className="nx-expose__reason" role="alert">
-          {problem}
-        </p>
-      )}
     </div>
   );
 }
@@ -343,11 +488,17 @@ function FieldName({
   field,
   label,
   inputRef,
+  describedBy,
+  className,
 }: {
   binding: ComponentFieldsBinding;
   field: ExposedProperty;
   label: string;
   inputRef?: React.Ref<HTMLInputElement>;
+  /** The id of text that says more about the name, read with the input. */
+  describedBy?: string;
+  /** How the name is drawn: flat in the list, dashed under a property. */
+  className: string;
 }): React.JSX.Element {
   const [draft, setDraft] = useStoredDraft(field.label);
   const [problem, setProblem] = useEditProblem();
@@ -364,12 +515,14 @@ function FieldName({
     setProblem(outcome.reason);
   };
   return (
-    <span className="nx-expose__name">
+    <span className="nx-field-name">
       <Input
         ref={inputRef}
         size="sm"
+        className={className}
         value={draft}
         aria-label={label}
+        aria-describedby={describedBy}
         onChange={event => setDraft(event.target.value)}
         onBlur={send}
         onKeyDown={event => {
@@ -385,9 +538,76 @@ function FieldName({
   );
 }
 
+/** "Component · 5 fields · 2 variants", or "Component · no fields yet". */
+function holdsSentence(fieldCount: number, variantCount: number): string {
+  const parts = ["Component"];
+  parts.push(
+    fieldCount === 0
+      ? "no fields yet"
+      : `${fieldCount} ${fieldCount === 1 ? "field" : "fields"}`
+  );
+  if (variantCount > 0) {
+    parts.push(
+      `${variantCount} ${variantCount === 1 ? "variant" : "variants"}`
+    );
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * The card heading the component's view: its mark, its name (whole on hover,
+ * for a name too long for the panel) and how much it holds.
+ */
+function ComponentHeader({
+  name,
+  fieldCount,
+  variantCount,
+}: {
+  name: string;
+  fieldCount: number;
+  variantCount: number;
+}): React.JSX.Element {
+  return (
+    <div className="nx-component-head">
+      <span className="nx-component-head__mark" aria-hidden="true">
+        <Component size={16} />
+      </span>
+      <div className="nx-component-head__text">
+        <h2 className="nx-component-head__name" title={name}>
+          {name}
+        </h2>
+        <p className="nx-component-head__holds">
+          {holdsSentence(fieldCount, variantCount)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** What the list says before the component has a field. */
+function NoFieldsYet(): React.JSX.Element {
+  return (
+    <div className="nx-component-fields__empty">
+      <p className="nx-component-fields__empty-title">No fields yet</p>
+      <p className="nx-component-fields__empty-text">
+        Select a block, then use{" "}
+        <span
+          className="nx-component-fields__mark"
+          role="img"
+          aria-label="the component mark"
+        >
+          <Component size={13} aria-hidden="true" />
+        </span>{" "}
+        beside a property to let each page change it.
+      </p>
+    </div>
+  );
+}
+
 /**
  * The component's fields and exposed slots, drawn while nothing is selected:
- * the component itself is what the inspector then describes.
+ * the component itself is what the inspector then describes, under a card
+ * naming it.
  */
 export function ExposedFieldsList({
   binding,
@@ -405,18 +625,19 @@ export function ExposedFieldsList({
   const headingId = React.useId();
   return (
     <div className="nx-inspector" data-component-fields="">
-      <h2 className="nx-inspector__title">Component</h2>
-      <section aria-labelledby={headingId} className="nx-exposed-fields">
+      <ComponentHeader
+        name={binding.name ?? "This component"}
+        fieldCount={fields.length + slots.length}
+        variantCount={variantOptions(component).length}
+      />
+      <section aria-labelledby={headingId} className="nx-component-fields">
         <h3 id={headingId} className="nx-inspector__heading">
-          Exposed fields
+          Fields
         </h3>
         {fields.length === 0 && slots.length === 0 ? (
-          <p className="nx-inspector__note">
-            Placements can’t change anything in this component yet. Select a
-            block, then switch on “Expose to placements” beside a property.
-          </p>
+          <NoFieldsYet />
         ) : (
-          <ul className="nx-exposed-fields__list">
+          <ul className="nx-component-fields__list">
             {fields.map(field => (
               <ExposedFieldRow
                 key={field.id}
@@ -435,22 +656,52 @@ export function ExposedFieldsList({
             ))}
           </ul>
         )}
-        <p className="nx-inspector__note">
-          Select a block to expose more of its properties.
-        </p>
       </section>
       {children}
     </div>
   );
 }
 
-/** Where a field points, in words: "Heading · Text". */
-function targetOf(editor: EditorState, field: ExposedProperty): string {
-  const node = findNode(editor.document.nodes, field.nodeId);
-  const block = node === undefined ? "A missing block" : blockLabel(node.type);
-  return field.type === "visibility"
-    ? `${block} · visibility`
-    : `${block} · ${fieldLabel(field.propPath)}`;
+/** A row's two actions, drawn on hover and focus: show its block, remove it. */
+function RowActions({
+  selectLabel,
+  onSelect,
+  removeLabel,
+  removeTitle,
+  onRemove,
+}: {
+  selectLabel: string | undefined;
+  onSelect: () => void;
+  removeLabel: string;
+  removeTitle: string;
+  onRemove: () => void;
+}): React.JSX.Element {
+  return (
+    <span className="nx-component-field__actions">
+      {selectLabel === undefined ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={selectLabel}
+          title="Select its block"
+          onClick={onSelect}
+        >
+          <Crosshair size={14} aria-hidden="true" />
+        </Button>
+      )}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={removeLabel}
+        title={removeTitle}
+        onClick={onRemove}
+      >
+        <Trash2 size={14} aria-hidden="true" />
+      </Button>
+    </span>
+  );
 }
 
 function ExposedFieldRow({
@@ -462,50 +713,41 @@ function ExposedFieldRow({
   editor: EditorState;
   field: ExposedProperty;
 }): React.JSX.Element {
-  const target = targetOf(editor, field);
+  const Icon = TYPE_ICON[field.type];
   return (
-    <li className="nx-exposed-fields__item" data-field-id={field.id}>
-      <div className="nx-exposed-fields__main">
+    <li className="nx-component-field" data-field-id={field.id}>
+      <span
+        className="nx-component-field__type"
+        role="img"
+        aria-label={EXPOSURE_TYPE_LABEL[field.type]}
+        title={EXPOSURE_TYPE_LABEL[field.type]}
+      >
+        <Icon size={15} aria-hidden="true" />
+      </span>
+      <span className="nx-component-field__text">
         <FieldName
           binding={binding}
           field={field}
           label={`Name of the field ${field.label}`}
+          className="nx-component-field__name"
         />
-        <span className="nx-exposed-fields__type">
-          {EXPOSURE_TYPE_LABEL[field.type]}
+        <span className="nx-component-field__source">
+          {fieldSource(editor.document, field)}
         </span>
-      </div>
-      <div className="nx-exposed-fields__meta">
-        <span className="nx-exposed-fields__target">{target}</span>
-        <span className="nx-exposed-fields__actions">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-label={`Select the block ${field.label} comes from`}
-            title="Select its block"
-            onClick={() => editor.select(field.nodeId)}
-          >
-            <Crosshair size={14} aria-hidden="true" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-label={`Remove the field ${field.label}`}
-            title="Remove field"
-            onClick={() =>
-              binding.requestRemoval({
-                kind: "field",
-                id: field.id,
-                label: field.label,
-              })
-            }
-          >
-            <Trash2 size={14} aria-hidden="true" />
-          </Button>
-        </span>
-      </div>
+      </span>
+      <RowActions
+        selectLabel={`Select the block ${field.label} comes from`}
+        onSelect={() => editor.select(field.nodeId)}
+        removeLabel={`Remove the field ${field.label}`}
+        removeTitle="Remove field"
+        onRemove={() =>
+          binding.requestRemoval({
+            kind: "field",
+            id: field.id,
+            label: field.label,
+          })
+        }
+      />
     </li>
   );
 }
@@ -522,42 +764,34 @@ function ExposedSlotRow({
   const slot = binding.context.component.slots?.[slotId];
   const label = typeof slot?.label === "string" ? slot.label : slotId;
   return (
-    <li className="nx-exposed-fields__item" data-slot-id={slotId}>
-      <div className="nx-exposed-fields__main">
-        <span className="nx-exposed-fields__name">{label}</span>
-        <span className="nx-exposed-fields__type">Slot</span>
-      </div>
-      <div className="nx-exposed-fields__meta">
-        <span className="nx-exposed-fields__target">
-          Placements fill it with their own blocks
+    <li className="nx-component-field" data-slot-id={slotId}>
+      <span
+        className="nx-component-field__type"
+        role="img"
+        aria-label="Blocks each use adds"
+        title="Blocks each use adds"
+      >
+        <SquareDashed size={15} aria-hidden="true" />
+      </span>
+      <span className="nx-component-field__text">
+        <span className="nx-component-field__label">{label}</span>
+        <span className="nx-component-field__source">
+          {slotSource(binding.context.component, slotId)}
         </span>
-        <span className="nx-exposed-fields__actions">
-          {slot === undefined ? null : (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-label={`Select the block holding ${label}`}
-              title="Select its block"
-              onClick={() => editor.select(slot.nodeId)}
-            >
-              <Crosshair size={14} aria-hidden="true" />
-            </Button>
-          )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-label={`Remove the slot ${label}`}
-            title="Remove slot"
-            onClick={() =>
-              binding.requestRemoval({ kind: "slot", id: slotId, label })
-            }
-          >
-            <Trash2 size={14} aria-hidden="true" />
-          </Button>
-        </span>
-      </div>
+      </span>
+      <RowActions
+        selectLabel={
+          slot === undefined ? undefined : `Select the block holding ${label}`
+        }
+        onSelect={() => {
+          if (slot !== undefined) editor.select(slot.nodeId);
+        }}
+        removeLabel={`Remove the field ${label}`}
+        removeTitle="Remove field"
+        onRemove={() =>
+          binding.requestRemoval({ kind: "slot", id: slotId, label })
+        }
+      />
     </li>
   );
 }

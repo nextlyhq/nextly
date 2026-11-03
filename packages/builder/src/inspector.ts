@@ -241,7 +241,11 @@ export function fieldLabel(name: string): string {
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/[-_]+/g, " ")
     .trim();
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+  const label = spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+  // The editor's spelling, which its own words ("Colour for", the Colour
+  // form) already use: a key's American "color" read beside them as the same
+  // word spelled two ways in one panel.
+  return label.replace(/\b([Cc])olor\b/g, "$1olour");
 }
 
 /**

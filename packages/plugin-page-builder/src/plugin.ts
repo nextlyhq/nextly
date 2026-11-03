@@ -26,17 +26,24 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
-import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
+import {
+  BUILDER_VIEW_COMPONENT,
+  BUILDER_VIEW_PATH,
+  REMOVE_LAYOUT_ACTION_COMPONENT,
+} from "./builder-view";
+import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import {
   registerClassUsageMaintenance,
   type CommittedWriteReconciler,
 } from "./class-usage-hook";
+import { classUsageIndex } from "./class-usage-reconcile";
 import {
   classUsageDocumentRowReader,
   ownIndexReader,
   usageCountReader,
+  usageRowReader,
 } from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
@@ -63,8 +70,13 @@ import { componentActionRoutes } from "./component-actions-route";
 import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
+import {
+  componentPageReach,
+  sitePageReachSources,
+} from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
+import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
   defaultLayoutJob,
   type EnsureDefaultDeps,
@@ -92,7 +104,12 @@ import {
 } from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
-import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
+import { layoutFenceFloor } from "./layout-removal/page-reference-guard";
+import { removeLayoutRoute } from "./layout-removal/remove-route";
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  type SharedStyleUsageKind,
+} from "./library-contract";
 import {
   componentLibraryRoute,
   DEFAULT_COMPONENT_STORE,
@@ -112,6 +129,10 @@ import {
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
 import {
+  LOCK_SHARED_STYLES_DECLARATION,
+  sharedStyleRoutes,
+} from "./shared-styles-routes";
+import {
   resolveFontOptions,
   type PageBuilderFontOptions,
 } from "./site-fonts/options";
@@ -119,7 +140,13 @@ import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
-import { siteStyleSingle } from "./site-style-storage";
+import { referableClassIds } from "./site-style-record";
+import { siteStyleRoute } from "./site-style-route";
+import {
+  loadSiteStyle,
+  SITE_STYLE_SLUG,
+  siteStyleSingle,
+} from "./site-style-storage";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -127,6 +154,7 @@ import {
   type BackfillHost,
 } from "./usage-backfill-wiring";
 import { usageBookkeeping } from "./usage-bookkeeping";
+import { listDocumentsUsingEach } from "./usage-count";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
@@ -144,9 +172,11 @@ import { variantUseRoute } from "./variant-use-route";
  */
 function pagesOptions(
   opts: PageBuilderOptions,
-  configStyle: SiteStyleData
+  configStyle: SiteStyleData,
+  validateLayout: PagesCollectionOptions["validateLayout"]
 ): PagesCollectionOptions {
   return {
+    ...(validateLayout === undefined ? {} : { validateLayout }),
     ...(opts.pagePreviewPath === undefined
       ? {}
       : { previewPath: opts.pagePreviewPath }),
@@ -450,6 +480,31 @@ export interface PageBuilderOptions {
   pagePreviewPath?: string;
 
   /**
+   * Where this application serves the editor's canvas route: the path of a
+   * route whose page is `PageBuilderCanvas` from
+   * `@nextlyhq/plugin-page-builder/canvas`, inside the layouts the site's
+   * pages are published in.
+   *
+   * **Setting this is what draws the canvas inside the site's own layout**, so
+   * its global stylesheets, fonts, header and footer show around the page
+   * being edited exactly as they do around the published page. There is no
+   * default, for the reason `pagePreviewPath` has none: the plugin cannot add
+   * a route to the application, and a defaulted path would load a page that is
+   * not there. Without it, the canvas draws on a blank page of the editor's own
+   * and says so.
+   *
+   * A path on this site only, such as `"/page-builder-canvas"`: the editor
+   * draws into the frame's document, which a browser allows on its own origin
+   * alone.
+   *
+   * A site whose pages sit under their language writes `{locale}` where the
+   * code goes, as in `"/{locale}/page-builder-canvas"`: the editor loads the
+   * route for the language being edited, and for the default language leaves
+   * the segment out, as most localized sites serve it.
+   */
+  canvasPath?: string;
+
+  /**
    * The viewport widths the pages preview offers.
    *
    * Defaults to **this site's own breakpoints**, read from the `site-style`
@@ -480,6 +535,66 @@ export interface PageBuilderOptions {
    * false }` turns the catalogue off; uploading a font file still works.
    */
   fonts?: PageBuilderFontOptions;
+}
+
+/**
+ * What the plugin publishes to the editor in the browser, as the admin's
+ * `clientConfig`, or nothing when the host stated none of it.
+ *
+ * The canvas runs in the browser, where a server-side option cannot reach it,
+ * so what it needs travels with the rest of the admin metadata: the media
+ * allowlist, the checklist, the canvas route, the site style, the document
+ * limits and whether there is a font catalogue. All of it is plain data that
+ * survives the trip, and the serializer rejects a future addition that does
+ * not.
+ *
+ * Sent only when the host said something. An always-present `clientConfig`
+ * would make every future reader distinguish "the host set this" from "the
+ * default is showing", which is what the absent key already says. Each key is
+ * written only where the host stated it, so a config with no key is one the
+ * host said nothing in.
+ */
+function adminClientConfig(
+  opts: PageBuilderOptions,
+  {
+    configStyle,
+    canvasPath,
+    fontsOff,
+  }: {
+    configStyle: SiteStyleData;
+    canvasPath: string | undefined;
+    fontsOff: boolean;
+  }
+): { clientConfig?: Record<string, unknown> } {
+  const clientConfig: Record<string, unknown> = {
+    // The Fonts tab offers no catalogue when the host turned it off, rather
+    // than one whose routes do not exist.
+    ...(fontsOff ? { fontCatalogue: false } : {}),
+    ...(opts.remotePatterns === undefined
+      ? {}
+      : { remotePatterns: opts.remotePatterns }),
+    ...(opts.checklist === undefined ? {} : { checklist: opts.checklist }),
+    // The canvas route's path, which the editor loads its frame from. A path,
+    // never a secret: the route serves an empty page.
+    ...(canvasPath === undefined ? {} : { canvasPath }),
+    // The RESOLVED defaults tier rather than the raw option, so the canvas and
+    // the validator read one answer. Plain data: tokens, fonts, classes and
+    // breakpoints all serialize, and none of it is secret — a published page
+    // emits it as CSS.
+    ...(opts.siteStyle === undefined ? {} : { siteStyle: configStyle }),
+    /*
+     * The bounds the renderer draws under, so the admin asks the same question
+     * the page answers. The classes manager walks the open document to say
+     * which classes a page applies, and a walk under different limits selects
+     * different nodes — reporting a class as absent from a page that renders
+     * it. Plain numbers, and nothing secret: the published page is drawn under
+     * them.
+     */
+    ...(opts.limits === undefined
+      ? {}
+      : { limits: jsonSafeLimits(opts.limits) }),
+  };
+  return Object.keys(clientConfig).length === 0 ? {} : { clientConfig };
 }
 
 /**
@@ -604,46 +719,6 @@ function rowsHoldBlocks(
     if (survey.addressable.length > 0 || survey.unaddressable) return true;
   }
   return false;
-}
-
-/** The slugs the app's configuration still declares as Singles. */
-function declaredSingleSlugs(ctx: {
-  config?: { singles?: unknown };
-}): ReadonlySet<string> | undefined {
-  const singles = ctx.config?.singles;
-  // No list at all is not an empty list. A config shape this cannot read must
-  // not be treated as declaring nothing, which would make every registry row an
-  // orphan and hide real content from the completeness answer.
-  if (!Array.isArray(singles)) return undefined;
-  const slugs = new Set<string>();
-  for (const single of singles) {
-    const slug = (single as { slug?: unknown } | null)?.slug;
-    if (typeof slug === "string" && slug.length > 0) slugs.add(slug);
-  }
-  return slugs;
-}
-
-/**
- * Whether a registry row is a removed code-first Single rather than a live one.
- *
- * Only a `code` row can be one: a Builder-made Single exists nowhere else, so
- * its registry row IS the declaration and configuration says nothing about it.
- *
- * Anything this cannot read is NOT an orphan. A row with no readable slug, or a
- * configuration this could not enumerate, keeps the Single counted — the
- * direction that withholds completeness rather than the one that grants it over
- * content nobody looked at.
- */
-function isOrphanedSingle(
-  row: unknown,
-  declared: ReadonlySet<string> | undefined
-): boolean {
-  if (declared === undefined) return false;
-  const record = row as { source?: unknown; slug?: unknown } | null;
-  if (record?.source !== "code") return false;
-  const slug = record.slug;
-  if (typeof slug !== "string" || slug.length === 0) return false;
-  return !declared.has(slug);
 }
 
 /** How many registry rows one page of the collection listing asks for. */
@@ -888,6 +963,8 @@ export const pageBuilder = (
   // The font catalogue's hosts and caps, refused at boot when unusable, and
   // what it adds to the plugin.
   const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
+  // The canvas route's path, refused at boot when it names another origin.
+  const canvasPath = canvasPathOption(opts.canvasPath);
 
   // The usage indexes' reconciler for a write made in a transaction the
   // caller owns, which their hooks skip. Set by `init`, read per request.
@@ -1015,6 +1092,23 @@ export const pageBuilder = (
         // a document composed against this store would be judged by
         // definitions it is not drawn with.
         composesDocuments: opts.componentReadiness !== false,
+        // The classes a page may add a reference to: the ones the compiler
+        // applies, from the code's defaults and the stored record of the
+        // Single as renamed, read per write so a style removed a moment ago
+        // is gone for the next save.
+        siteClassIds: async () => {
+          // Imported at call time, for the reason the readers above give.
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = await getCachedNextly();
+          const style = await loadSiteStyle({
+            nextly: { findSingle: args => nextly.findSingle(args) },
+            defaults: configStyle,
+            slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+          });
+          // Capped and resolved as the compiler reads the library, so a page
+          // may reference exactly the classes it applies.
+          return referableClassIds(style.classes ?? []);
+        },
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
           indexCollection: componentIndex,
@@ -1214,7 +1308,15 @@ export const pageBuilder = (
       // A single table discriminated by a column would leave both behind one
       // permission and could not declare a slug unique per kind.
       collections: [
-        pagesCollection(pagesOptions(opts, configStyle)),
+        pagesCollection(
+          pagesOptions(
+            opts,
+            configStyle,
+            // Read per write through the holder `init` fills: the field is
+            // declared before the plugin is installed.
+            layoutFenceFloor(() => defaultLayoutSetup?.removals)
+          )
+        ),
         patternsCollection(),
         componentsCollection(),
         layoutsCollection(),
@@ -1313,6 +1415,51 @@ export const pageBuilder = (
               ),
             });
           },
+          // How many pages a change reaches, for the banner over the view:
+          // through other components by the same index, and through the
+          // Layouts wrapping pages, read live, the site's default included.
+          countPages: ctx => async id => {
+            const index =
+              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+              COMPONENT_USAGE_INDEX_SLUG;
+            const host = requireInstalled();
+            const rows = usageRowReader(await host.nextly(), index);
+            const health = await usageHealthService(requireInstalled).read(
+              componentUsageIndex,
+              index
+            );
+            // Imported at call time, as the Layout choices route does, so the
+            // entry stays free of the runtime graph.
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            return componentPageReach(
+              id,
+              sitePageReachSources({
+                nextly: await getCachedNextly(),
+                slugs: {
+                  layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                  settings:
+                    ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+                    PAGE_BUILDER_SETTINGS_SLUG,
+                },
+                pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+                componentsCollection:
+                  componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                notPages: new Set([
+                  ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+                  ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                ]),
+                documentsUsingEach: componentIds =>
+                  listDocumentsUsingEach({
+                    index: componentUsageIndex,
+                    rows,
+                    referenceIds: componentIds,
+                    health,
+                  }),
+              })
+            );
+          },
           // The ids a published removal retired, from the store the write
           // hooks record them in. Where those hooks are not registered (the
           // host renders components from a source of its own), nothing is
@@ -1398,6 +1545,11 @@ export const pageBuilder = (
         // preconditions (the Layout is published, the caller may publish
         // Layouts) that a plain Single write cannot state.
         makeDefaultRoute(),
+        // Remove Layout: the one way a Layout is deleted or unpublished, fenced
+        // and checked so no page and not the site's default is taken from
+        // under it. The Layout's own delete and unpublish refuse every write
+        // that does not come through here.
+        removeLayoutRoute(),
         // The Layouts an author may choose for a page, with the published
         // regions the editor draws around it, read as the author from the
         // component store the editor's library reads, under the bounds the
@@ -1413,8 +1565,58 @@ export const pageBuilder = (
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
+        // The editor's read of the stored site style, for anyone who may
+        // edit something the builder opens: the canvas cannot draw without it.
+        siteStyleRoute(componentStoreOf(opts)),
         // Design → Fonts' catalogue: read it, and add a family to the site.
         ...fonts.routes,
+        // The Design panel's shared styles: lock and unlock one, how widely
+        // each is used and where, and removing the unused. Usage is read from
+        // the class usage index the installed host maintains.
+        ...sharedStyleRoutes({
+          configClassIds: new Set(
+            (configStyle.classes ?? []).map(entry => entry.id)
+          ),
+          usage: ctx => {
+            const index =
+              ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
+              CLASS_USAGE_INDEX_SLUG;
+            const kinds = new Map<string, SharedStyleUsageKind>([
+              [
+                componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                "components",
+              ],
+              [
+                ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+                "patterns",
+              ],
+              [ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG, "layouts"],
+            ]);
+            return {
+              health: () =>
+                usageHealthService(requireInstalled).read(
+                  classUsageIndex,
+                  index
+                ),
+              // One bounded read for a whole page of styles.
+              documentsUsingEach: async (classIds, health) =>
+                listDocumentsUsingEach({
+                  index: classUsageIndex,
+                  rows: usageRowReader(
+                    await requireInstalled().nextly(),
+                    index
+                  ),
+                  referenceIds: classIds,
+                  health,
+                }),
+              // Every other collection with a page builder field holds pages,
+              // as the editor's page search reads them.
+              kindOf: collection => kinds.get(collection) ?? "pages",
+            };
+          },
+        }),
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,
@@ -1430,6 +1632,10 @@ export const pageBuilder = (
           description:
             "Change the site's breakpoints, and choose its default Layout.",
         },
+        // Locking a shared style is its own grant, distinct from changing
+        // Design (`update-site-style`), so a lock protects a style from every
+        // Design manager who does not hold it. Asked by the lock route alone.
+        LOCK_SHARED_STYLES_DECLARATION,
       ],
 
       // No `publish` permission. One was declared here and nothing ever read
@@ -1438,51 +1644,13 @@ export const pageBuilder = (
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
       admin: {
-        // The canvas needs the allowlist and runs in the browser, so it
-        // travels with the rest of the admin metadata. `remotePatterns` is
-        // plain data and survives the trip; the serializer rejects it if a
-        // future addition here does not.
-        // Sent only when the host said something. An always-present
-        // `clientConfig` would make every future reader distinguish "the host
-        // set this" from "the default is showing", which is what the absent
-        // key already says.
-        ...(opts.remotePatterns !== undefined ||
-        opts.checklist !== undefined ||
-        opts.limits !== undefined ||
-        opts.siteStyle !== undefined ||
-        fonts.off
-          ? {
-              clientConfig: {
-                // The Fonts tab offers no catalogue when the host turned it
-                // off, rather than one whose routes do not exist.
-                ...(fonts.off ? { fontCatalogue: false } : {}),
-                ...(opts.remotePatterns === undefined
-                  ? {}
-                  : { remotePatterns: opts.remotePatterns }),
-                ...(opts.checklist === undefined
-                  ? {}
-                  : { checklist: opts.checklist }),
-                // The RESOLVED defaults tier rather than the raw option, so
-                // the canvas and the validator read one answer. Plain data:
-                // tokens, fonts, classes and breakpoints all serialize, and
-                // none of it is secret — a published page emits it as CSS.
-                ...(opts.siteStyle === undefined
-                  ? {}
-                  : { siteStyle: configStyle }),
-                /*
-                 * The bounds the renderer draws under, so the admin asks the
-                 * same question the page answers. The classes manager walks the
-                 * open document to say which classes a page applies, and a walk
-                 * under different limits selects different nodes — reporting a
-                 * class as absent from a page that renders it. Plain numbers,
-                 * and nothing secret: the published page is drawn under them.
-                 */
-                ...(opts.limits === undefined
-                  ? {}
-                  : { limits: jsonSafeLimits(opts.limits) }),
-              },
-            }
-          : {}),
+        // What the editor in the browser needs of the options: see
+        // `adminClientConfig`.
+        ...adminClientConfig(opts, {
+          configStyle,
+          canvasPath,
+          fontsOff: fonts.off,
+        }),
         // The three LIBRARIES, and no link to Pages.
         //
         // Pages is an ordinary collection that happens to declare a `blocks`
@@ -1527,6 +1695,11 @@ export const pageBuilder = (
             label: "Page Builder",
           },
         ],
+        // "Remove Layout…" in a Layout's document bar, beside History: the one
+        // way an author deletes or unpublishes a Layout, since the form's own
+        // delete and unpublish are refused. The slot is offered to every entry
+        // form; the component draws only on a saved Layout's own.
+        entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
         menu: [
           {
             label: "Patterns",
@@ -1547,20 +1720,13 @@ export const pageBuilder = (
             icon: "PanelsTopLeft",
           },
         ],
-        // No `schemaBuilderSlot` and no `entryFormToolbarSlot`.
-        //
-        // Both named components this package no longer ships: a schema-builder
-        // toggle for turning a collection into a page-builder one, and a
-        // per-entry Normal / Page Builder switch. They belonged to an editor
-        // that stored its own document format, so the choice they offered was
-        // between two storage shapes rather than between two ways of editing
-        // one.
-        //
-        // A slot is registered by SPECIFIER, so nothing type-checks the name:
-        // pointing at a component that is not exported resolves to nothing at
-        // render time, in the admin, at the moment an author opens the form.
-        // Declaring them is therefore worse than omitting them — the admin
-        // reserves the slot either way and only the populated case works.
+        // No `schemaBuilderSlot`. It named a component this package no longer
+        // ships: a schema-builder toggle for turning a collection into a
+        // page-builder one, from an editor that stored its own document
+        // format. A slot is registered by SPECIFIER, so nothing type-checks
+        // the name: pointing at a component that is not exported resolves to
+        // nothing at render time. The toolbar slot above names one this entry
+        // registers (`admin/index.ts`).
       },
     },
   });

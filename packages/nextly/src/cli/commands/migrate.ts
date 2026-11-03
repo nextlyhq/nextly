@@ -1027,12 +1027,21 @@ function buildSqlExecutor(
 }
 
 /**
- * Per-element owner rows for elements the APP contributed to tables a
- * plugin owns (its indexes riding the app migration stream). Table-level
- * rows are written by the streams that carry the tables; these say who
- * owns the ELEMENT, so a plugin's reconcile can exclude it.
+ * Per-element owner rows for the elements an owner added to a table another
+ * owner declared: the app's indexes on a plugin's table, riding the app
+ * migration stream, and a plugin's column or index on its dependency's
+ * table, riding its own modules. Table-level rows are written by the streams
+ * that carry the tables; these say who owns the ELEMENT, so a plugin's
+ * reconcile can exclude it, and a full uninstall knows what it added where.
+ *
+ * Read from the compiled extension schema, the one record of who declared
+ * each element. `contributors`, when given, keeps the rows of those plugins'
+ * elements only, for a run that applied no other owner's.
  */
-async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
+async function recordElementOwners(
+  deps: MigrateCoreDeps,
+  contributors?: ReadonlySet<string>
+): Promise<void> {
   const elementOwners = deps.extensionSchema?.elementOwners;
   if (elementOwners === undefined || elementOwners.size === 0) return;
   const { SchemaOwnersRepository: OwnersRepo } = await import(
@@ -1060,7 +1069,15 @@ async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
         : null,
     };
   };
-  for (const [tableName, elements] of elementOwners) {
+  for (const [tableName, all] of elementOwners) {
+    const elements = all.filter(element =>
+      ofContributors(
+        element.owner.kind,
+        element.owner.kind === "plugin" ? element.owner.id : "",
+        contributors
+      )
+    );
+    if (elements.length === 0) continue;
     await owners.upsert(
       elements.map(element => ({
         tableName,
@@ -1087,10 +1104,33 @@ async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
   }
 }
 
-/** Record the current element owner rows, and retire the stale ones. */
-export async function syncElementOwners(deps: MigrateCoreDeps): Promise<void> {
-  await recordElementOwners(deps);
-  await retireElementOwners(deps);
+/**
+ * Whether an element row's owner is among `contributors`: plugins named by
+ * name, or every owner when none are named. The one test both recording and
+ * retiring scope by, so the rows a run writes are the rows it may retire.
+ */
+function ofContributors(
+  ownerKind: string,
+  ownerId: string,
+  contributors: ReadonlySet<string> | undefined
+): boolean {
+  return (
+    contributors === undefined ||
+    (ownerKind === "plugin" && contributors.has(ownerId))
+  );
+}
+
+/**
+ * Record the current element owner rows, and retire the stale ones: those
+ * of `contributors` only when given, for a run that applied no other
+ * owner's elements.
+ */
+export async function syncElementOwners(
+  deps: MigrateCoreDeps,
+  contributors?: ReadonlySet<string>
+): Promise<void> {
+  await recordElementOwners(deps, contributors);
+  await retireElementOwners(deps, contributors);
 }
 
 /**
@@ -1135,9 +1175,13 @@ export async function recordAppTableOwners(
 
 /**
  * Delete element owner rows whose element is gone from the config AND the
- * database; see `retiredElementRows` for why both must hold.
+ * database; see `retiredElementRows` for why both must hold. `contributors`,
+ * when given, keeps the rows of those plugins' elements only.
  */
-async function retireElementOwners(deps: MigrateCoreDeps): Promise<void> {
+async function retireElementOwners(
+  deps: MigrateCoreDeps,
+  contributors?: ReadonlySet<string>
+): Promise<void> {
   const { SchemaOwnersRepository: OwnersRepo } = await import(
     "../../domains/schema/ownership/schema-owners-repository"
   );
@@ -1146,7 +1190,9 @@ async function retireElementOwners(deps: MigrateCoreDeps): Promise<void> {
   );
   const owners = new OwnersRepo(deps.db, deps.dialect);
   const elementRows = (await owners.read()).filter(
-    row => (row.elementKind ?? "table") !== "table"
+    row =>
+      (row.elementKind ?? "table") !== "table" &&
+      ofContributors(row.ownerKind, row.ownerId, contributors)
   );
   if (elementRows.length === 0) return;
   const tables = [...new Set(elementRows.map(row => row.tableName))];
@@ -1372,6 +1418,23 @@ export async function runPluginPhase(
       for (const row of recorded) ownerRows.set(row.tableName, row);
     },
   });
+  // What each plugin's modules added to other owners' tables, claimed as
+  // `syncElementOwners` claims it after every stream, and what a later module
+  // stopped adding, retired. Here as well because `nextly plugins install`
+  // runs this phase alone: without it, an install left the column or index
+  // it added unclaimed, and so did a run of it again after one that stopped
+  // between a module's ledger row and its owner rows, which skips the module
+  // and repairs only its tables' rows. And a claim a later module's drop left
+  // behind gave a same-named element another owner adds afterwards to this
+  // plugin's stream, whose reconcile then refused the owner's next module as
+  // drift. Only with the compiled schema, which alone says what is declared:
+  // without it nothing can tell an element gone from the config.
+  if (deps.extensionSchema !== undefined) {
+    await syncElementOwners(
+      deps,
+      new Set(deps.pluginMigrationSets.map(set => set.pluginName))
+    );
+  }
   if (pluginOutcome.applied > 0 || pluginOutcome.adopted > 0) {
     deps.logger.success(
       `Plugin migrations: ${pluginOutcome.applied} applied, ${pluginOutcome.adopted} adopted, ${pluginOutcome.skipped} already recorded.`

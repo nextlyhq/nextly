@@ -1,0 +1,25 @@
+---
+title: CORE_DESTRUCTIVE_NEEDS_TERMINAL
+description: "`nextly upgrade --reconcile-core` has a destructive change to Nextly's own tables to confirm, and no terminal is attached to ask, so none was made."
+---
+
+## Cause
+
+`nextly upgrade --reconcile-core` has a destructive change to Nextly's own tables to confirm, and no terminal is attached to ask, so none was made.
+
+`nextly upgrade --reconcile-core` asks before each destructive change to Nextly's own tables. With no terminal attached, as in CI or a script, or with `--non-interactive` given or `CI` set, it cannot ask, so it stopped before making any change. The Why line lists the changes it would make.
+
+## Fix
+
+- Check that the data in the tables and columns the Why line names is not needed.
+- Run `nextly upgrade --reconcile-core` again in a terminal and confirm each change.
+
+## Example
+
+```text
+✗ This confirmation needs a terminal, so nothing was changed.
+  Why:  `--reconcile-core` asks before each destructive change to Nextly's own tables, and no terminal is attached to ask (or `--non-interactive` was given, or `CI` is set). The changes it would make:
+        - drops column 'nextly_users.legacy_role'
+  Next: Run `nextly upgrade --reconcile-core` again at a terminal, and confirm each change once you have checked its data is not needed.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-destructive-needs-terminal  (CORE_DESTRUCTIVE_NEEDS_TERMINAL)
+```

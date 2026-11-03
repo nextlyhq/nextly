@@ -95,6 +95,103 @@ describe("a field's provenance dot", () => {
   });
 });
 
+describe("a jump to another tier's value", () => {
+  it("sits under the label, where every other source is named", () => {
+    // "From H2 defaults" sat under the label and "From Desktop" under the
+    // control, on a row of its own. Under the label, beside a control that
+    // spans both lines, it costs no row.
+    expect(FLAT).toContain(
+      '.nx-style-inspector .nx-inspector__field > [data-action="jump"] { grid-column: 1; grid-row: 2; justify-self: start; padding-inline: 0; }'
+    );
+    expect(FLAT).toContain(
+      '.nx-style-inspector .nx-inspector__field:has(> [data-action="jump"]) > :not(label, [data-action="jump"], .nx-inspector__error) { grid-row: 1 / span 2; }'
+    );
+  });
+
+  it("follows the control again where the row stacks", () => {
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 17rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      '.nx-style-inspector .nx-inspector__field:has(> [data-action="jump"]) > :not(label, [data-action="jump"], .nx-inspector__error) { grid-row: auto; }'
+    );
+  });
+});
+
+describe("the Font control in a style row", () => {
+  it("is as tall as the lists and fields beside it", () => {
+    // The shared list trigger and text field are 40px (2.5rem); the font
+    // picker was 28px, the one short control in Typography.
+    expect(ruleBody(".nx-style-inspector .nx-font-pick__trigger")).toContain(
+      "height: 2.5rem"
+    );
+  });
+});
+
+describe("a field under its form toggle", () => {
+  it("hides its label's words from sight only, the toggle's row saying them", () => {
+    const words = ruleBody(
+      "label[data-named-above] .nx-style-inspector__field-label-text"
+    );
+    // Clipped, not removed: the control keeps its name for assistive
+    // technology, and `display: none` would take it away.
+    expect(words).toContain("clip-path: inset(50%)");
+    expect(words).toContain("position: absolute");
+    expect(words).not.toContain("display: none");
+  });
+});
+
+describe("an inherited value's icon", () => {
+  it("is ringed, dashed and muted, never filled as a chosen one is", () => {
+    // More too, when the inherited value is one of its own.
+    const ring = ruleBody(
+      ".nx-icon-choice__option[data-inherited], .nx-icon-choice .nx-icon-choice__more[data-inherited]"
+    );
+    expect(ring).toContain("outline: 1px dashed var(--nx-builder-text-muted)");
+    expect(ring).not.toContain("background");
+  });
+});
+
+describe("an inherited colour's swatch", () => {
+  it("is drawn with a dashed border, as the inherited icon is ringed", () => {
+    expect(ruleBody(".nx-style-inspector__swatch[data-inherited]")).toContain(
+      "border-style: dashed"
+    );
+  });
+});
+
+describe("an inherited value's source", () => {
+  it("sits muted at the end of the label's row, cut short rather than wrapped", () => {
+    // Always shown, unlike the dot: it is half of what the greyed value in
+    // the control means.
+    const source = ruleBody(".nx-style-inspector__provenance-source");
+    expect(source).toContain("margin-inline-start: auto");
+    expect(source).toContain("color: var(--nx-builder-text-muted)");
+    expect(source).toContain("font-size: var(--text-xs)");
+    expect(source).toContain("text-overflow: ellipsis");
+    expect(source).toContain("white-space: nowrap");
+    expect(source).not.toContain("opacity: 0");
+  });
+
+  it("takes a line of its own under the label in the wide layout", () => {
+    // Beside its control the label has a 7rem column, which the label and
+    // its source cannot share on one line.
+    expect(
+      ruleBody(".nx-style-inspector .nx-inspector__field > label")
+    ).toContain("flex-wrap: wrap");
+    expect(FLAT).toContain(
+      ".nx-style-inspector .nx-inspector__field > label > .nx-style-inspector__provenance-source { flex-basis: 100%; margin-inline-start: 0; }"
+    );
+    // Stacked, the label has the row to itself, so the source shares it.
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 17rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field > label > .nx-style-inspector__provenance-source { flex-basis: auto; margin-inline-start: auto; }"
+    );
+  });
+});
+
 describe("the spacing box", () => {
   it("draws a side's action and a refusal over the box, bounded to the inspector", () => {
     // Inside a 3.5rem side, a sentence became a tall column and pushed the
@@ -143,6 +240,8 @@ describe("the spacing box", () => {
     );
     expect(clear).toContain("position: absolute");
     expect(clear).toContain("opacity: 0");
+    // Faded and out of the pointer's way, so it cannot take a click unseen.
+    expect(clear).toContain("pointer-events: none");
     // Flush with the side: a gap between them is where a pointer moving to
     // Clear leaves the side's hover, and Clear fades before it is reached.
     // An explicit zero, and no other margin: a shorthand such as
@@ -155,6 +254,12 @@ describe("the spacing box", () => {
         ".nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button, .nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__token > button"
       )
     ).toContain("opacity: 1");
+    // Shown, it takes the click it is shown for.
+    expect(
+      ruleBody(
+        ".nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button, .nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__token > button"
+      )
+    ).toContain("pointer-events: auto");
   });
 });
 
@@ -175,5 +280,186 @@ describe("a token side in the narrow inspector", () => {
     expect(body).toContain("position: static");
     expect(body).toContain("opacity: 1");
     expect(body).toContain("pointer-events: auto");
+  });
+});
+
+describe("a field's Clear", () => {
+  it("is a target at least 24px square, beside a list or a token", () => {
+    // WCAG 2.2's minimum target size: the browser's default button around a
+    // word of small text is smaller, and axe reports it.
+    const clear = ruleBody(".nx-style-inspector__token button");
+    expect(clear).toContain("min-block-size: 1.5rem");
+    expect(clear).toContain("min-inline-size: 1.5rem");
+  });
+});
+
+describe("a style field's row", () => {
+  it("keeps its label beside its control at the default panel width", () => {
+    /*
+     * One line per row, as the design draws it: stacking every label over its
+     * control at the default 1440 panel (about 18.5rem of fields) doubled the
+     * inspector's height. The label column is at most 7rem, so the widest icon
+     * strip (five icons and More) beside it still starts where the other
+     * controls do at 1440, and it gives way to
+     * a control that needs the room, since an icon strip never shrinks; the
+     * reset has a fixed slot at the end, whether or not the row has one, so
+     * every control ends at one edge.
+     */
+    expect(FLAT).toContain(
+      ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 7rem) minmax(min-content, 1fr) 1.5rem; }"
+    );
+    // Placed by name, so the shared rule below 18rem, which sends every child
+    // to column 1, does not stack a style row the panel still has room for.
+    expect(FLAT).toContain(
+      ".nx-style-inspector .nx-inspector__field > * { grid-column: 2; }"
+    );
+    expect(FLAT).toContain(
+      ".nx-style-inspector .nx-inspector__field > label, .nx-style-inspector .nx-inspector__field > .nx-inspector__field-name { grid-column: 1; grid-row: 1; }"
+    );
+    expect(FLAT).not.toContain(':not(:has(> [data-action="reset"]))');
+  });
+
+  it("keeps a list's chosen value on one line, cut rather than wrapped", () => {
+    // "Semibold 600" wrapped to two lines in a 9rem list, making its row
+    // twice the height of every other.
+    const value = ruleBody(
+      '.nx-style-inspector__select [data-slot="select-value"]'
+    );
+    expect(value).toContain("white-space: nowrap");
+    expect(value).toContain("text-overflow: ellipsis");
+    expect(value).toContain("min-width: 0");
+  });
+
+  it("stacks only below 17rem, near the panel's narrowest", () => {
+    expect(
+      atRuleBodies("@container nx-inspector-fields (max-width: 19rem)")
+    ).toEqual([]);
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 17rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field { grid-template-columns: minmax(0, 1fr) 1.5rem; }"
+    );
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field > * { grid-column: 1; }"
+    );
+    expect(narrow).toContain(
+      ".nx-style-inspector .nx-inspector__field > label, .nx-style-inspector .nx-inspector__field > .nx-inspector__field-name { grid-column: 1 / -1; }"
+    );
+  });
+});
+
+describe("an open style section", () => {
+  it("lets a field's focus tooltip show above the section's first row", () => {
+    // The shared accordion clips its content, which cut off a provenance
+    // tooltip drawn above the first field.
+    expect(
+      ruleBody(
+        '.nx-style-inspector [data-slot="accordion-content"][data-state="open"]'
+      )
+    ).toContain("overflow: visible");
+  });
+});
+
+describe("the icon strip", () => {
+  it("never shrinks to hide its last segment", () => {
+    expect(ruleBody(".nx-icon-choice__strip")).toContain("flex: none");
+  });
+
+  it("looks disabled, and ignores the pointer, in a locked section", () => {
+    const disabled = ruleBody(
+      ".nx-icon-choice__option:disabled, .nx-icon-choice .nx-icon-choice__more:disabled"
+    );
+    expect(disabled).toContain("opacity: 0.5");
+    expect(disabled).toContain("cursor: not-allowed");
+    expect(FLAT).toContain(".nx-icon-choice__option:not(:disabled):hover");
+    expect(FLAT).not.toMatch(/\.nx-icon-choice__option:hover/);
+  });
+});
+
+describe("a list field's Clear", () => {
+  it("is styled by its own class, leaving the list's trigger alone", () => {
+    expect(FLAT).not.toMatch(/\.nx-style-inspector__select > button/);
+    expect(ruleBody(".nx-style-inspector__token button")).toContain(
+      "min-block-size: 1.5rem"
+    );
+  });
+});
+
+describe("a style row's reset", () => {
+  it("sits at the row's end, an icon in the control's row, not a line under it", () => {
+    const reset = ruleBody(
+      '.nx-style-inspector .nx-inspector__field > [data-action="reset"]'
+    );
+    expect(reset).toContain("grid-column: 3");
+    expect(reset).toContain("grid-row: 1");
+    expect(reset).toContain("inline-size: 1.5rem");
+    // A jump or a refusal still reads under the control, across the row.
+    expect(FLAT).toContain(
+      '.nx-style-inspector .nx-inspector__field > [data-action="jump"], .nx-style-inspector .nx-inspector__field > .nx-inspector__error { grid-column: 2 / -1; }'
+    );
+  });
+
+  it("follows its control onto the second row when the narrow inspector stacks", () => {
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 17rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      '.nx-style-inspector .nx-inspector__field > .nx-style-inspector__breakpoint-action[data-action="reset"] { grid-column: 2; grid-row: 2; }'
+    );
+    expect(narrow).toContain(
+      '.nx-style-inspector .nx-inspector__field > [data-action="jump"], .nx-style-inspector .nx-inspector__field > .nx-inspector__error { grid-column: 1 / -1; }'
+    );
+  });
+
+  it("stays in a spacing side's focus overlay, hidden until the side has focus", () => {
+    // As specific as the row's reset, and after it, so the row's
+    // `inline-grid` does not draw it under every side of the box.
+    const row = FLAT.indexOf(
+      '.nx-style-inspector .nx-inspector__field > [data-action="reset"] {'
+    );
+    const hidden = FLAT.indexOf(
+      ".nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action { display: none; }"
+    );
+    expect(row).toBeGreaterThan(-1);
+    expect(hidden).toBeGreaterThan(row);
+    // Below 18rem the box is rows again, and the reset is shown in its row.
+    const rows = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 18rem)"
+    ).join(" ");
+    expect(rows).toContain(
+      ".nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action, .nx-spacing-box .nx-inspector__error { display: flex;"
+    );
+  });
+
+  it("keeps a side's jump clear of its reset when the box shows both", () => {
+    // A value stored here and shadowed by another tier earns both, and the
+    // overlay drew them at one inset, the jump over the reset.
+    expect(
+      ruleBody(
+        '.nx-spacing-box .nx-inspector__field:has(> [data-action="reset"]) > [data-action="jump"]'
+      )
+    ).toContain("inset-block-start: calc(100% + 2.5rem)");
+  });
+
+  it("no longer draws the words beside it, which made each set control two rows", () => {
+    expect(FLAT).not.toContain(".nx-style-inspector__breakpoint-reveals");
+    expect(FLAT).not.toContain(".nx-icon-choice__clear");
+    expect(FLAT).not.toContain(".nx-style-inspector__select-clear");
+  });
+});
+
+describe("the Content tab's Advanced", () => {
+  it("draws the panel's chevron, not the browser's triangle", () => {
+    const summary = ruleBody(".nx-inspector__advanced > summary");
+    expect(summary).toContain("list-style: none");
+    expect(FLAT).toContain(
+      ".nx-inspector__advanced > summary::-webkit-details-marker { display: none; }"
+    );
+    expect(
+      ruleBody(
+        ".nx-inspector__advanced[open] > summary > .nx-inspector__advanced-chevron"
+      )
+    ).toContain("rotate: 90deg");
   });
 });
