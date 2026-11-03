@@ -2125,8 +2125,35 @@ export function compilePageCss(
       {
         selector: `${defaultsAnchor} :where(${typeClass})`,
         declarations: spaced.declarations,
-      }
+      },
+      // A block whose own default lays it out as flex or grid spaces its
+      // children with `gap`, so the flow margin comes back off — decided the
+      // same way a node's or a class's display decides it, and written after
+      // the flow rule on the same selector so it wins.
+      ...layoutModeRules(
+        Object.hasOwn(bases, type) ? bases[type] : undefined,
+        typeClass,
+        flow.declarations,
+        contexts,
+        defaultsAnchor,
+        tokenPrefix
+      )
     );
+  }
+
+  // The container types each named class is actually worn by in this
+  // document, so a class's layout rules follow the document rather than every
+  // class times every container type. Read from the same bounded node walk
+  // and the same per-node cap the class list on an element is built from.
+  const classWearers = new Map<string, Set<string>>();
+  for (const { node } of nodes) {
+    if (!flowGaps.has(node.type) || !Array.isArray(node.classes)) continue;
+    for (const id of node.classes.slice(0, MAX_CLASSES_PER_NODE)) {
+      if (typeof id !== "string") continue;
+      const wearers = classWearers.get(id) ?? new Set<string>();
+      wearers.add(node.type);
+      classWearers.set(id, wearers);
+    }
   }
 
   // The named classes, in library order — the tier between a block's defaults and a node's own
@@ -2274,10 +2301,12 @@ export function compilePageCss(
       )
     );
     // A class that makes a container flex or grid swaps the flow margin for
-    // `gap` on every container type wearing it, exactly as a node's own
-    // display does below.
+    // `gap` on each container type that wears it here, exactly as a node's
+    // own display does below.
     const classSelector = `.${escapeIdentifier(namedClassName(cls.slug))}`;
-    for (const [type, flow] of flowGaps) {
+    for (const type of [...(classWearers.get(cls.id) ?? [])].sort()) {
+      const flow = flowGaps.get(type);
+      if (flow === undefined) continue;
       rules.push(
         ...layoutModeRules(
           cls.styles,

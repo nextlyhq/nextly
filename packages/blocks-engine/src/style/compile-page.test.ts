@@ -2071,6 +2071,65 @@ describe("the space a container puts between its children", () => {
     );
   });
 
+  it("drops the flow margin where a block's own default makes it a grid", () => {
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      childGaps: GAPS,
+      blockBases: { "core/box": { base: { base: { display: "grid" } } } },
+    });
+    const flow = rulesAt(out, FLOW);
+    // The gap, then the default's own display taking it back off: same
+    // selector, later rule, so a grid's children are spaced by `gap` alone.
+    expect(flow).toEqual([
+      `${FLOW} { margin-block-start: var(--site-space-stack) }`,
+      `${FLOW} { margin-block-start: 0 }`,
+    ]);
+  });
+
+  it("keeps the flow margin for a block default that stays in block flow", () => {
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      childGaps: GAPS,
+      blockBases: { "core/box": { base: { base: { display: "block" } } } },
+    });
+    expect(rulesAt(out, FLOW).at(-1)).toBe(
+      `${FLOW} { margin-block-start: var(--site-space-stack) }`
+    );
+  });
+
+  it("writes a class's layout rules only for the containers that wear it", () => {
+    // 200 flex classes and 50 container types, and ONE node wearing two of the
+    // classes: the rules follow the document, not the library times the types.
+    const types = Array.from({ length: 50 }, (_, i) => `acme/c${String(i)}`);
+    const nodes = types.map(
+      (type, i) =>
+        ({
+          id: `n${String(i)}`,
+          type,
+          version: 1,
+          props: {},
+          ...(i === 0 ? { classes: ["k0", "k1"] } : {}),
+        }) as unknown as BlockNode
+    );
+    const out = css(doc(nodes), {
+      ...CTX,
+      childGaps: Object.fromEntries(types.map(type => [type, "1rem"])),
+      namedClasses: Array.from({ length: 200 }, (_, i) => ({
+        id: `k${String(i)}`,
+        slug: `row-${String(i)}`,
+        orderIndex: i,
+        styles: { base: { base: { display: "flex" } } },
+      })),
+    } as unknown as StyleCompileContext);
+    const classRules = out
+      .split("\n")
+      .filter(line => line.includes(".nx-c-") && line.includes("> * + *"));
+    expect(classRules).toEqual([
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-acme--c0.nx-c-row-0 > * + *) { margin-block-start: 0 }`,
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-acme--c0.nx-c-row-1 > * + *) { margin-block-start: 0 }`,
+    ]);
+  });
+
   it("writes no layout rule for a node whose type has no child gap", () => {
     const out = css(
       doc([node("n1", { base: { base: { display: "flex" } } })]),
