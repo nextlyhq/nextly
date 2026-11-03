@@ -145,7 +145,11 @@ describe("the spacing box", () => {
     expect(clear).toContain("opacity: 0");
     // Flush with the side: a gap between them is where a pointer moving to
     // Clear leaves the side's hover, and Clear fades before it is reached.
-    expect(clear).not.toMatch(/margin-block-start: (?!0[;\s])/);
+    // An explicit zero, and no other margin: a shorthand such as
+    // `margin: 0.25rem 0 0` would reopen the gap.
+    expect(clear).toContain("margin: 0;");
+    expect(clear).not.toMatch(/margin-[a-z-]+:/);
+    expect(clear.match(/margin:/g)).toHaveLength(1);
     expect(
       ruleBody(
         ".nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button, .nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__token > button"

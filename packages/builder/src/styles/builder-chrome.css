@@ -4837,6 +4837,7 @@ fieldset.nx-inspector__fields {
      the field the whole way, so its hover holds and Clear stays shown. */
   inset-block-start: 100%;
   inset-inline-start: 0;
+  margin: 0;
   opacity: 0;
   pointer-events: none;
   background: var(--nx-popover);
