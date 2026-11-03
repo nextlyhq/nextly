@@ -374,6 +374,7 @@ function editorInspector(
     siteStylePending,
     siteStyleError,
     requestPanel,
+    componentFacts,
   } = view;
   return (
     <InspectorPanel
@@ -445,6 +446,9 @@ function editorInspector(
         fromCode: configSiteStyle.fonts ?? [],
         onManageFonts: () => requestPanel("design", "fonts"),
       }}
+      // In a component's own view: the ids its live definition holds, which a
+      // new field must never reuse, and how far a removal reaches.
+      componentFields={componentFacts}
     />
   );
 }
