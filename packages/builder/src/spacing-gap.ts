@@ -8,21 +8,27 @@
  * labelled with the number alone tells the author the child carries spacing it
  * does not. The overlay names the container instead: "Gap · from Section".
  *
- * Decided by which rule WINS, not by what the value is. The gap rule is keyed
- * on the container's block-type class, so taking that class off the container
- * for one synchronous read takes the gap rule out of the cascade and nothing
- * else the child depends on: if the child's margin changes, the gap rule was
- * the one applying. An author's margin on the child (a node value or a named
- * class, either of which outranks the gap) survives the removal unchanged,
- * even when it is the same length or reads the same token as the gap. The
- * attribute is restored inside the same task, so nothing paints and the
- * canvas's mutation watch sees no net change.
+ * Decided by which rule WINS, not by what the value is. Every rule the gap
+ * decides is keyed on {@link CHILD_GAP_CLASS}, which the element holding it
+ * wears, so taking that one class off for a synchronous read takes the gap out
+ * of the cascade and changes nothing else: the container keeps its padding,
+ * font size and every other default, so a margin an author wrote in `%` or `em`
+ * resolves exactly as before. If the child's margin changes, the gap was the
+ * rule applying; an author's margin outranks the gap and survives unchanged,
+ * even when it is the same length or reads the same token. The attribute is
+ * restored inside the same task, so nothing paints and the canvas's mutation
+ * watch sees no net change.
+ *
+ * The element holding the rule is the block's parent. It is usually the
+ * container's own element; inside a configured collection loop it is the
+ * entry wrapper the loop draws around each repetition, which is no node of
+ * its own, so the OWNER named is the nearest enclosing node: the loop.
  *
  * @module spacing-gap
  */
 
 import {
-  BLOCK_TYPE_CLASS_PREFIX,
+  CHILD_GAP_CLASS,
   findNode,
   type AnyBlockDefinition,
   type BlockDocument,
@@ -76,37 +82,34 @@ export function gapOwnerOf(
 ): string | undefined {
   // `> * + *`: the first child is never spaced by its container.
   if (block.previousElementSibling === null) return undefined;
-  const parent = block.parentElement;
-  const parentId = parent?.getAttribute(NODE_ID_ATTRIBUTE);
-  if (parent === null || parentId === null || parentId === undefined) {
+  // The element the gap rule is keyed on, which must wear the marker.
+  const holder = block.parentElement;
+  if (holder === null || !holder.classList.contains(CHILD_GAP_CLASS)) {
     return undefined;
   }
-  const container = findNode(document.nodes, parentId);
+  // The node that owns it: the holder itself, or the nearest node around it.
+  const ownerId = holder
+    .closest(`[${NODE_ID_ATTRIBUTE}]`)
+    ?.getAttribute(NODE_ID_ATTRIBUTE);
+  if (ownerId === null || ownerId === undefined) return undefined;
+  const container = findNode(document.nodes, ownerId);
   if (container === undefined) return undefined;
   if (lookup(container.type)?.childGap === undefined) return undefined;
   const view = block.ownerDocument.defaultView;
   if (view === null) return undefined;
-  // A flex or grid container spaces with `gap`, and its children's flow
-  // margin is taken off; a margin there is the child's own.
-  if (spacesWithGap(view.getComputedStyle(parent).display)) return undefined;
+  // A flex or grid holder spaces with `gap`, and its children's flow margin
+  // is taken off; a margin there is the child's own.
+  if (spacesWithGap(view.getComputedStyle(holder).display)) return undefined;
 
   const style = view.getComputedStyle(block);
   const side = blockStartSide(style.writingMode);
   const shown = marginOn(style, side);
-  const classes = parent.getAttribute("class");
-  if (classes === null) return undefined;
-  parent.setAttribute(
-    "class",
-    classes
-      .split(/\s+/)
-      .filter(name => name !== "" && !name.startsWith(BLOCK_TYPE_CLASS_PREFIX))
-      .join(" ")
-  );
+  holder.classList.remove(CHILD_GAP_CLASS);
   let withoutGap: string;
   try {
     withoutGap = marginOn(view.getComputedStyle(block), side);
   } finally {
-    parent.setAttribute("class", classes);
+    holder.classList.add(CHILD_GAP_CLASS);
   }
   return withoutGap === shown ? undefined : layerLabel(container, lookup);
 }

@@ -2031,4 +2031,25 @@ test.describe("the space a container puts between its children", () => {
     const margin = page.locator(band("margin", "top"));
     await expect(margin).toHaveText(/^\d+(\.\d+)?$/);
   });
+
+  test("calls an author's percentage margin the block's own inside a padded section", async ({
+    page,
+  }) => {
+    const target = await secondChildOfSection(page);
+    // A percentage resolves against a width the section's own padding decides,
+    // so anything that took the section's defaults away to ask would see it
+    // move. Only the gap marker comes off, and the author's margin stands.
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
+      const style = document.createElement("style");
+      style.textContent =
+        '.nx-pb-page.nx-pb-page [data-nx-node="hx-nested-text"] { margin-block-start: 5%; }';
+      document.head.append(style);
+    });
+    await target.click();
+    await expect(page.locator(band("margin", "top"))).toHaveText(
+      /^\d+(\.\d+)?$/
+    );
+  });
 });
