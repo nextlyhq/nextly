@@ -1796,10 +1796,14 @@ export class DynamicCollectionService extends BaseService {
         // The main table's rename, decided on its own columns as its diff and the refusals above
         // decide it: on every field, a translated field added beside a renamed shared one makes
         // the rename read as a drop and two adds, and the push would drop the column the file
-        // renames.
-        renamed: fieldRenameOf(
-          this.schemaService.detectFieldRename(mainBefore, mainAfter)
-        ),
+        // renames. Where main renames nothing, the change's own rename, a translated field's,
+        // which the companion's rename is resolved from.
+        renamed:
+          fieldRenameOf(
+            this.schemaService.detectFieldRename(mainBefore, mainAfter)
+          ) ??
+          changeRename ??
+          null,
       });
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;
 
