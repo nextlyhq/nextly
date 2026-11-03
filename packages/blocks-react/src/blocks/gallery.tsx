@@ -103,8 +103,12 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
   defineBlock({
     name: GALLERY_BLOCK,
     version: 1,
-    description:
-      "A reflowing grid of pictures. Restricts its slot to core/image so every item carries alt text and an intrinsic size, and a stray block cannot be laid out as though it were a photograph.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A reflowing grid of
+    // pictures. Restricts its slot to core/image so every item carries alt text
+    // and an intrinsic size, and a stray block cannot be laid out as though it
+    // were a photograph.
+    description: "A grid of images.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -115,8 +119,12 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["images", "photos", "grid", "carousel"],
     },
     props: {
-      as: { type: "select", options: ["div", "section", "article"] },
-      contained: { type: "checkbox" },
+      as: {
+        label: "HTML tag",
+        type: "select",
+        options: ["div", "section", "article"],
+      },
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "div", contained: false },
     example: { props: { as: "div" } },

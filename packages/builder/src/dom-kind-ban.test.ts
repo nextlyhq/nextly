@@ -46,10 +46,9 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url));
  * Files still carrying a realm-bound check, by exact path, with exactly the
  * constructors each names.
  *
- * The plain inline-editing hook, whose event-target check moves to
- * `dom-kind` together with the change that hands it the canvas's document in
- * place of the global one; the hook that routes between the two surfaces now
- * finds its target through it. An entry is compared for EQUALITY, not
+ * The inline text hook, whose event-target check moves to `dom-kind`
+ * together with the change that hands it the canvas's document in place of
+ * the global one. An entry is compared for EQUALITY, not
  * containment: a new check added to one of these files fails like anywhere
  * else, and converting the listed one fails until its entry is removed, so the
  * list can only shrink.

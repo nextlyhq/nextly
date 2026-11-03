@@ -37,19 +37,10 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { BlockResolver, PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
-  Checkbox,
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-  Textarea,
   useIsomorphicLayoutEffect,
 } from "@nextlyhq/ui";
 import * as React from "react";
@@ -57,14 +48,19 @@ import * as React from "react";
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
 import { deviceLabel } from "./breakpoint-switcher";
+import {
+  contentControlFor,
+  UnsupportedField,
+  type ContentServices,
+} from "./content-controls";
 import { EditingBar } from "./editing-bar";
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
 import { HeldByLock } from "./held-by-lock";
 import type { SavedComponent } from "./inserter";
 import {
   blockIsReadOnly,
   designReadOnlyReason,
-  fieldLabel,
   inspectSelection,
   lockOp,
   lockStateOf,
@@ -83,7 +79,6 @@ import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
-import { useStoredDraft } from "./stored-draft";
 import {
   breakpointLabel,
   StyleInspectorPanel,
@@ -259,6 +254,13 @@ export interface InspectorPanelProps {
    * provider. Omitted, the menu offers Rename and Lock alone.
    */
   verbs?: CardVerbs;
+  /**
+   * What the host lends the Content tab: the media library and the shared
+   * rich-text editor. A control whose service is absent says so.
+   *
+   * @experimental Grows with the controls registry.
+   */
+  contentServices?: ContentServices;
 }
 
 /** What the inspector needs of the host's component read. */
@@ -279,9 +281,14 @@ export interface ComponentLibrary {
  * where an author looking for an anchor id goes after the block's own fields.
  */
 const INSPECTOR_TABS = [
-  { value: "content", label: "Content" },
-  { value: "style", label: "Style" },
+  { value: "content", label: EDITOR_WORDS.content },
+  { value: "style", label: EDITOR_WORDS.style },
 ] as const;
+
+/** The inspector's tab names, in order, as an author reads them. */
+export function inspectorTabLabels(): string[] {
+  return INSPECTOR_TABS.map(tab => tab.label);
+}
 
 /**
  * The Style tab's own handler for a change of tab.
@@ -459,6 +466,7 @@ export function InspectorPanel({
   componentLibrary,
   inspectors,
   verbs,
+  contentServices,
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
 }: InspectorPanelProps): React.JSX.Element {
@@ -516,12 +524,13 @@ export function InspectorPanel({
   const [tab, setTab] = React.useState<string>(() => openingTabFor(styleState));
 
   const commit = React.useCallback(
-    (name: string, value: unknown) => {
+    (name: string, value: unknown): BlockDocument | null => {
       const id = editor.selectedId;
-      if (id === null) return;
+      if (id === null) return null;
       // Read at commit time rather than closed over: a field committing on
-      // blur can fire after another edit has already replaced the node.
-      commitProp(editor, editor.document, id, name, value);
+      // blur can fire after another edit has already replaced the node. The
+      // document written is answered, for a caller storing it straight away.
+      return commitProp(editor, editor.document, id, name, value);
     },
     [editor]
   );
@@ -546,10 +555,19 @@ export function InspectorPanel({
         name={block.identity.name}
         description={block.description}
         lock={lock}
-        onRename={name => editor.apply(renameOp(block.nodeId, name))}
+        // Withheld while a Layers lock holds the block, its own or one around
+        // it: renaming is a change like any other, and the op layer refuses it.
+        onRename={
+          lock.layers || lock.inheritedFrom !== undefined
+            ? undefined
+            : name => editor.apply(renameOp(block.nodeId, name))
+        }
         onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
         // Held inside a `contentOnly` area, which pins the node's own lock
-        // with its design: the save would refuse the change.
+        // with its design: the save would refuse the change. The one predicate
+        // the multi-selection card asks too, so a block's Lock is offered alike
+        // however it was selected; inside a block locked in Layers it stays
+        // offered, since a change to the lock alone is always allowed.
         lockHeld={
           layersLockChangeable(lock)
             ? undefined
@@ -592,6 +610,7 @@ export function InspectorPanel({
             editor={editor}
             onCommit={commit}
             inspectors={inspectors}
+            services={contentServices}
             blocks={blocks}
             onScreen={tab === "content"}
             reasonId={reasonId}
@@ -625,14 +644,16 @@ function ContentTab({
   editor,
   onCommit: commit,
   inspectors,
+  services,
   blocks,
   onScreen,
   reasonId,
 }: {
   block: BlockInspection;
   editor: EditorState;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   inspectors: BlockInspectorResolver | undefined;
+  services: ContentServices | undefined;
   blocks: BlockResolver | undefined;
   /** The id of the lock reason held controls point to, in the card. */
   reasonId: string;
@@ -659,6 +680,7 @@ function ContentTab({
         editor={editor}
         onCommit={commit}
         inspectors={inspectors}
+        services={services}
         reasonId={reasonId}
       />
       <details className="nx-inspector__advanced" open={advancedOpen}>
@@ -830,18 +852,21 @@ function ContentSurface({
   editor,
   onCommit,
   inspectors,
+  services,
   reasonId,
 }: {
   inspection: BlockInspection;
   editor: EditorState;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   inspectors: BlockInspectorResolver | undefined;
+  services: ContentServices | undefined;
   reasonId: string;
 }): React.JSX.Element {
   const generated = (
     <ContentFields
       inspection={inspection}
       onCommit={onCommit}
+      services={services}
       reasonId={reasonId}
       writable={name =>
         propIsWritable(
@@ -966,11 +991,13 @@ class CustomInspectorBoundary extends React.Component<
 function ContentFields({
   inspection,
   onCommit,
+  services,
   reasonId,
   writable,
 }: {
   inspection: BlockInspection;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
+  services: ContentServices | undefined;
   /** The id of the lock reason a held field points to. */
   reasonId: string;
   /**
@@ -1003,6 +1030,7 @@ function ContentFields({
             prop={prop}
             disabled={!writable(prop.name)}
             onCommit={onCommit}
+            services={services}
           />
         </HeldByLock>
       ))}
@@ -1014,158 +1042,30 @@ function PropField({
   prop,
   disabled,
   onCommit,
+  services,
 }: {
   prop: EditableProp;
   disabled: boolean;
-  onCommit: (name: string, value: unknown) => void;
+  onCommit: (name: string, value: unknown) => BlockDocument | null | void;
+  services: ContentServices | undefined;
 }): React.JSX.Element {
-  const id = `nx-prop-${prop.name}`;
+  // Unique per mount, so two editors on one page never share a field id and a
+  // label never points at the other editor's control.
+  const id = React.useId();
+  const Control = contentControlFor(prop.schema.type);
 
-  if (!prop.supported) {
-    return (
-      <div className="nx-inspector__field" data-unsupported="">
-        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-        {/*
-          Listed rather than omitted. A block declaring a prop this panel cannot
-          draw is still a block with that prop, and hiding it presents an
-          incomplete block as a complete one — an author would conclude the
-          field does not exist rather than that it is edited elsewhere.
-        */}
-        <p className="nx-inspector__note">
-          Not editable here ({prop.schema.type}).
-        </p>
-      </div>
-    );
-  }
-
-  if (prop.schema.type === "checkbox") {
-    return (
-      <div className="nx-inspector__field nx-inspector__field--inline">
-        <Checkbox
-          id={id}
-          disabled={disabled}
-          checked={prop.value === true}
-          onCheckedChange={checked => onCommit(prop.name, checked === true)}
-        />
-        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-      </div>
-    );
-  }
-
-  if (prop.schema.type === "select") {
-    return (
-      <div className="nx-inspector__field">
-        <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-        <Select
-          disabled={disabled}
-          value={typeof prop.value === "string" ? prop.value : undefined}
-          onValueChange={next => onCommit(prop.name, next)}
-        >
-          <SelectTrigger id={id}>
-            <SelectValue placeholder="Choose" />
-          </SelectTrigger>
-          <SelectContent>
-            {prop.options.map(option => (
-              <SelectItem key={option} value={option}>
-                {option}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    );
+  if (Control === undefined) {
+    return <UnsupportedField prop={prop} />;
   }
 
   return (
-    <TextishField id={id} prop={prop} disabled={disabled} onCommit={onCommit} />
-  );
-}
-
-/** A prop's value as editable text, or empty when it is not representable. */
-function storedText(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return "";
-}
-
-/**
- * A field the author types into: text, textarea, url, number.
- *
- * Holds its own value while focused so typing is responsive, and reports it on
- * blur. Reading straight from the node would make every keystroke a document
- * edit; reporting only on blur without local state would make the field refuse
- * to show what was typed.
- */
-function TextishField({
-  id,
-  prop,
-  disabled,
-  onCommit,
-}: {
-  id: string;
-  prop: EditableProp;
-  disabled: boolean;
-  onCommit: (name: string, value: unknown) => void;
-}): React.JSX.Element {
-  // Only a primitive becomes text. `String({})` is "[object Object]", and a
-  // field showing that would COMMIT it on blur — turning a prop the panel
-  // cannot represent into a string that permanently replaces it. An
-  // unrepresentable value shows empty and, because `send` compares against
-  // this, an untouched field writes nothing.
-  const stored = storedText(prop.value);
-  const [draft, setDraft] = useStoredDraft(stored);
-
-  const send = () => {
-    if (draft === stored) return;
-    if (prop.schema.type === "number") {
-      const parsed = Number(draft);
-      // A number field that cannot parse reverts rather than writing NaN, which
-      // survives JSON as `null` and reaches the renderer as a missing prop.
-      if (draft.trim() === "" || Number.isNaN(parsed)) {
-        setDraft(stored);
-        return;
-      }
-      onCommit(prop.name, parsed);
-      return;
-    }
-    onCommit(prop.name, draft);
-  };
-
-  const shared = {
-    id,
-    disabled,
-    value: draft,
-    onBlur: send,
-    onChange: (
-      event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-    ) => setDraft(event.target.value),
-  };
-
-  return (
-    <div className="nx-inspector__field">
-      <Label htmlFor={id}>{fieldLabel(prop.name)}</Label>
-      {prop.schema.type === "textarea" ? (
-        <Textarea {...shared} rows={3} />
-      ) : (
-        <Input
-          {...shared}
-          type={prop.schema.type === "number" ? "number" : "text"}
-          inputMode={prop.schema.type === "url" ? "url" : undefined}
-          // Enter commits as well as blur. A single-line field is where an
-          // author expects Enter to mean "done", and waiting for them to click
-          // elsewhere leaves the canvas stale after a deliberate action.
-          onKeyDown={event => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              send();
-            }
-          }}
-        />
-      )}
-    </div>
+    <Control
+      id={id}
+      prop={prop}
+      disabled={disabled}
+      onCommit={onCommit}
+      services={services}
+    />
   );
 }
 

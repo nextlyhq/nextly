@@ -27,6 +27,7 @@ import safeRegex from "safe-regex2";
 
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
 import { isVirtualField } from "../../collections/fields/virtual";
+import { omitDirectComponentFields } from "../../domains/field-groups/direct-component-fields";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
@@ -140,6 +141,21 @@ export interface ValidateEntryOptions {
   componentFields?: (slug: string) => ValidatableField[] | undefined;
   /** Set by the walk itself once it is inside a group or repeater's value. */
   insideContainer?: boolean;
+  /**
+   * Judge a top-level component's value against its own fields' rules too.
+   * A component's instance is judged when it is written, so an ordinary write
+   * leaves it to that write; a publish sets this, since a rule tightened since
+   * the instance was saved is then judged as it goes live. Needs
+   * `componentFields` to resolve the top-level components.
+   */
+  judgeComponentInstances?: boolean;
+  /**
+   * `false` leaves a component held in a group or repeater unjudged by its
+   * own fields' rules too. A publish in a language whose component rules are
+   * not enforced sets it, as it leaves `judgeComponentInstances` off; an
+   * ordinary write leaves it on, since nothing else judges such a component.
+   */
+  judgeContainedComponents?: boolean;
 }
 
 /**
@@ -369,7 +385,10 @@ async function validateFieldValue(
   // required password genuinely must be set the first time.
   if (
     field.type === "password" &&
-    options.mode === "update" &&
+    // A stored instance judged as it goes live reads back without its hash,
+    // which no read returns, so its password is not judged again: whether one
+    // is stored is not known without reading a secret, and none is read.
+    (options.mode === "update" || options.judgeComponentInstances === true) &&
     (value === undefined || (typeof value === "string" && value.trim() === ""))
   ) {
     return;
@@ -392,6 +411,8 @@ async function validateFieldValue(
     (field.type === "select" || field.type === "radio");
   const emptyIsOmission =
     !options.emptyIsAValue || value === null || value === undefined;
+  // Read before the empty-value return, which a type may opt out of below.
+  const pluginType = getFieldType(field.type);
   if (
     isEmpty(value) &&
     emptyIsOmission &&
@@ -405,6 +426,24 @@ async function validateFieldValue(
         message: `${label} is required.`,
       });
     }
+    // A type that asked to judge an emptied field is handed the empty value a
+    // write SENT. Absent means untouched on an update, so it is not handed on.
+    if (
+      pluginType?.validateEmpty === true &&
+      pluginType.validate !== undefined &&
+      value !== undefined
+    ) {
+      await validatePluginFieldType(
+        pluginType.validate,
+        field,
+        value,
+        path,
+        label,
+        write,
+        options,
+        issues
+      );
+    }
     return;
   }
 
@@ -414,7 +453,6 @@ async function validateFieldValue(
   // statement of what its column holds, so the built-in rules for that
   // primitive's equivalent type are the ones that apply. Built-ins resolve to
   // themselves — a plugin cannot redefine one, so this never reroutes them.
-  const pluginType = getFieldType(field.type);
   const effectiveType = pluginType
     ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[pluginType.storage]
     : field.type;
@@ -729,7 +767,12 @@ async function validateFieldValue(
     // normalization passes and referential checks; no scalar rules apply. A
     // component inside a container is the exception: nothing else judges it.
     default:
-      if (options.insideContainer && isFieldGroupFieldType(field.type)) {
+      if (
+        ((options.insideContainer &&
+          options.judgeContainedComponents !== false) ||
+          options.judgeComponentInstances) &&
+        isFieldGroupFieldType(field.type)
+      ) {
         await validateContainedComponents(
           field,
           value,
@@ -976,17 +1019,44 @@ async function validateContainedComponents(
     // its default is not refused. Filled on a copy: validation reports, and
     // the value written is the caller's.
     const filled = { ...(instance as Record<string, unknown>) };
-    applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
+    // A top-level instance going live is judged as its own row stores it: a
+    // default added since it was saved was never written into it, so it does
+    // not stand in. One held in a group or repeater is stored as sent, its
+    // defaults filled only to judge it, so they are filled again here.
+    const storedRow =
+      options.judgeComponentInstances === true && !options.insideContainer;
+    if (!storedRow) {
+      applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
+    }
+    // A component's own stored row never holds a component placed directly
+    // among its fields, which the component write omits, so it is not judged
+    // missing; held in a container, the whole value is stored and judged.
+    const judged = storedRow ? omitDirectComponentFields(own) : own;
     await validateFields(
-      attachFieldValidators("fieldGroup", slug, own),
+      attachFieldValidators("fieldGroup", slug, judged),
       filled,
-      write,
+      // A stored row is judged as the component write judges one: a field
+      // type's validator sees the instance as the document it compares with,
+      // and no entry write, which that pass does not hand it either.
+      storedRow ? { data: filled, mode: "create" } : write,
       at,
       // A component's value is written whole, so its required fields apply.
-      { ...options, mode: "create", insideContainer: true },
+      {
+        ...(storedRow ? withoutEntryWrite(options) : options),
+        mode: "create",
+        insideContainer: true,
+      },
       issues
     );
   }
+}
+
+/** `options` without the entry write a plugin field type is handed. */
+function withoutEntryWrite(
+  options: ValidateEntryOptions
+): ValidateEntryOptions {
+  const { write: _entryWrite, ...rest } = options;
+  return rest;
 }
 
 async function validateFields(

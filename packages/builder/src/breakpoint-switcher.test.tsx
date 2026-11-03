@@ -74,6 +74,18 @@ describe("choosing a device", () => {
   });
 });
 
+describe("focus", () => {
+  it("draws the house ring on every device button, not the browser's outline", () => {
+    // Off the button by a gap, so it shows on the chosen device's fill too.
+    mount({ selected: "mobile" });
+    for (const option of options()) {
+      expect(option.className).toContain("focus-visible:ring-2");
+      expect(option.className).toContain("focus-visible:ring-offset-1");
+      expect(option.className).toContain("focus-visible:outline-none");
+    }
+  });
+});
+
 describe("which device is shown as being styled", () => {
   it("selects the device the author chose", () => {
     mount({ selected: "tablet" });
@@ -276,6 +288,21 @@ function openMore(): HTMLElement[] {
 
 const names = (elements: HTMLElement[]): string[] =>
   elements.map(element => element.getAttribute("aria-label") ?? "");
+
+describe("the open device menu and the rest of the editor", () => {
+  it("leaves the editor around it in the accessibility tree", () => {
+    // As the zoom menu: a modal menu hides the focusable editor around it,
+    // which axe reports as aria-hidden-focus.
+    mount({ breakpoints: devicesFor(5) });
+    const trigger = moreDevices();
+    if (trigger === null) throw new Error("no More devices button");
+
+    expect(openMore().length).toBeGreaterThan(0);
+
+    expect(trigger.closest('[aria-hidden="true"]')).toBeNull();
+    expect(document.querySelector('[aria-hidden="true"] button')).toBeNull();
+  });
+});
 
 describe("how many devices are buttons", () => {
   it("offers nothing on a site with the base breakpoint alone", () => {

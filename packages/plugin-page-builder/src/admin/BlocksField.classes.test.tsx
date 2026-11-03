@@ -64,14 +64,27 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       topBarCenter,
       topBarEnd,
       children,
+      renderSettings,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       topBarCenter?: React.ReactNode;
       topBarEnd?: React.ReactNode;
       children?: React.ReactNode;
+      renderSettings?: (dialog: {
+        open: boolean;
+        onOpenChange: (open: boolean) => void;
+        returnFocus: () => HTMLElement | null;
+      }) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
+        {/* The real shell renders the host's Settings on every pass, open
+            or not, which is where the breakpoint manager now lives. */}
+        {renderSettings?.({
+          open: false,
+          onOpenChange: () => {},
+          returnFocus: () => null,
+        })}
         {topBar}
         {topBarCenter}
         {topBarEnd}
@@ -83,14 +96,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       seen.inspector = props;
       return <div data-recorder="inspector" />;
     },
-    // Counts its mounts: it holds its own draft of the breakpoints, so a
-    // style step undone or redone has to mount it afresh.
-    BreakpointManager: (): null => {
-      React.useEffect(() => {
-        managerMounts += 1;
-      }, []);
-      return null;
-    },
+    BreakpointManager: nothing,
     BreakpointSwitcher: nothing,
     Canvas: nothing,
     BlockKeyboardActions: passthrough,
@@ -148,7 +154,20 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+// Counts the Settings dialog's mounts: its breakpoint section holds its own
+// draft, so a style step undone or redone has to mount it afresh.
+vi.mock("./editor/settings-dialog", () => ({
+  SettingsDialog: (): null => {
+    React.useEffect(() => {
+      managerMounts += 1;
+    }, []);
+    return null;
+  },
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written
@@ -176,6 +195,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,

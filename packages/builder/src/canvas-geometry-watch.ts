@@ -37,10 +37,26 @@
  * @module canvas-geometry-watch
  */
 
-import { nodeElements } from "./canvas";
 import { isElement } from "./dom-kind";
 import { canvasRootFrom } from "./geometry-dom";
+import { nodeElements, nodeElementsIn } from "./rendered-nodes";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
+
+/**
+ * Marks a layer the editor draws OVER the page — absolutely positioned and
+ * taking no part in layout — whose own redrawing can move no block.
+ *
+ * Every overlay's watch ignores what happens inside one, not only the caller's
+ * own: one overlay drawing would otherwise make every other re-measure, for a
+ * change that cannot have moved anything they measure.
+ */
+export const OVERLAY_OUTPUT_ATTRIBUTE = "data-nx-overlay-output";
+
+/** Whether a mutated node sits inside a layer marked as overlay output. */
+function insideOverlayOutput(target: Node): boolean {
+  const element = isElement(target) ? target : target.parentElement;
+  return element?.closest(`[${OVERLAY_OUTPUT_ATTRIBUTE}]`) != null;
+}
 
 /**
  * Everything an overlay drawn over this canvas has to re-measure for.
@@ -102,15 +118,43 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
    * answer different questions: a runtime missing the observer must still hear
    * a scroll. A missing observer costs a re-measure, not correctness — every
    * caller measures on render as well.
+   *
+   * Built from the ROOT's window, the realm of everything it observes: a
+   * canvas rendered in a frame is laid out by that frame, and an observer from
+   * another window is not guaranteed to report on its nodes.
    */
-  const sizes =
-    typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver(() => moved());
+  const view = root.ownerDocument.defaultView;
+  const Sizes = view?.ResizeObserver;
+  const sizes = typeof Sizes === "function" ? new Sizes(() => moved()) : null;
   if (sizes !== null) {
     sizes.observe(root);
     for (const node of nodeElements(root)) sizes.observe(node);
   }
+  /*
+   * And every node that arrives LATER, which the snapshot above cannot see: a
+   * block that resolves after a Suspense fallback, or one an edit inserts. Its
+   * insertion is heard as a mutation and measured then, but an image loading
+   * inside it afterwards resizes only that block — no ancestor need change —
+   * so unobserved, nothing would report it. A node leaving is released, so the
+   * observer does not hold elements the page no longer has.
+   */
+  const Arrivals = view?.MutationObserver;
+  const arrivals =
+    sizes === null || typeof Arrivals !== "function"
+      ? null
+      : new Arrivals(records => {
+          for (const record of records) {
+            record.addedNodes.forEach(added => {
+              if (!isElement(added)) return;
+              for (const node of nodeElementsIn(added)) sizes.observe(node);
+            });
+            record.removedNodes.forEach(removed => {
+              if (!isElement(removed)) return;
+              for (const node of nodeElementsIn(removed)) sizes.unobserve(node);
+            });
+          }
+        });
+  arrivals?.observe(root, { childList: true, subtree: true });
 
   /*
    * `overflow: auto` and `overflow: scroll` are catalog values, so a block can
@@ -133,12 +177,24 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
   root.addEventListener("transitionend", settled);
   root.addEventListener("transitioncancel", settled);
   root.addEventListener("scroll", settled, true);
+  /*
+   * And the root's DOCUMENT, in the bubble phase, for the viewport itself
+   * scrolling. A canvas in a frame of its own is scrolled by that frame's
+   * viewport, and a viewport's scroll is dispatched at the document, which no
+   * listener on the root can hear. Not in the capture phase: that would hear
+   * every element's scroll anywhere in the document, which the listener above
+   * already covers for the ones inside the canvas.
+   */
+  const doc = root.ownerDocument;
+  doc.addEventListener("scroll", settled);
 
   return () => {
     sizes?.disconnect();
+    arrivals?.disconnect();
     root.removeEventListener("transitionend", settled);
     root.removeEventListener("transitioncancel", settled);
     root.removeEventListener("scroll", settled, true);
+    doc.removeEventListener("scroll", settled);
   };
 }
 
@@ -254,9 +310,11 @@ function watchCanvasStyleMutations(
 ): () => void {
   // Absent in jsdom unless a test supplies one, and absent in older browsers.
   // A missing observer costs a re-measure rather than correctness: every caller
-  // measures on render as well.
-  if (typeof MutationObserver === "undefined") return () => {};
-  const styles = new MutationObserver(records => {
+  // measures on render as well. From the root's window, the realm of the
+  // subtree it watches.
+  const Mutations = root.ownerDocument.defaultView?.MutationObserver;
+  if (typeof Mutations !== "function") return () => {};
+  const styles = new Mutations(records => {
     const own = ownOutput();
     /*
      * `own === null` counts as OUTSIDE rather than as the caller's own. The
@@ -273,7 +331,9 @@ function watchCanvasStyleMutations(
      * layer's `childList` records and reports a change the caller caused.
      */
     const foreign = records.filter(
-      record => own === null || !own.contains(record.target)
+      record =>
+        (own === null || !own.contains(record.target)) &&
+        !insideOverlayOutput(record.target)
     );
     if (foreign.length > 0 && !changedNothing(foreign)) moved();
   });

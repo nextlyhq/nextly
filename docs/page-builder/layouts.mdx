@@ -9,10 +9,10 @@ published like a component: its draft can change without the site seeing it unti
 publish.
 
 <Callout type="warn">
-  Layouts are experimental. Pages store their Layout and their switch, and the
-  site keeps one protected default Layout, but the page route does not draw
-  Layouts yet: a page renders without its header and footer for now. Drawing
-  them lands with a later release of the renderer.
+  Layouts are experimental: the fields, the default's rules and the route option
+  may still change before they are marked stable. A page route draws Layouts
+  once it turns them on; see [Draw pages inside their
+  Layout](#draw-pages-inside-their-layout).
 </Callout>
 
 ## Which Layout a page gets
@@ -29,7 +29,42 @@ names while it is published, then the site's default while it is published, and
 otherwise none. So a page naming a Layout that is not published (or was deleted) gets
 the site's default, and a page whose default is not usable gets no header or footer.
 `effectiveLayoutFor` from `@nextlyhq/plugin-page-builder` answers this for a stored
-page; it is experimental while the renderer does not use it yet.
+page; it is experimental.
+
+### Choose a page's Layout
+
+Both settings are one choice, made in one place. The **Layout** picker sits at the top
+of the editor's **Settings** and on the page's Page Builder card in the entry form. It
+offers:
+
+- **Site default (Main)**: the site's default Layout, named. It reads **Site default
+  (none set)** when the site has no published default.
+- Each published Layout, by its title.
+- Each Layout that is not published yet, marked "(not published: the site default
+  shows until it is)".
+- **No header or footer**.
+
+The line under the picker says which Layout is in effect and why, for example "Site
+default: Main" or "Landing (not published, so the site default shows)". A page whose
+Layout was deleted shows "Site default (the chosen Layout was deleted)". An author who
+may not read Layouts sees the choice but cannot change it.
+
+### The Layout's regions in the editor
+
+The editor draws the header and footer of the Layout in effect around the page, as a
+visitor gets them: the published Layout and the published versions of its components.
+Changing the picker redraws them at once, before you save.
+
+The regions are locked. A click selects nothing and shows where the region comes
+from, such as "Header, from Layout Main". If you may edit Layouts, **Edit Layout ↗**
+opens it in a new tab, so your page and its undo history stay as they are. Press
+Enter on a focused region to show the same tag, and Escape to close it. When the
+Layout or one of its components has changes that are not published yet, the tag says
+"Draft changes not live" and names which. Layers lists the regions as locked rows
+above and below the page's blocks; selecting one shows it on the canvas.
+
+Publishing a page that names an unpublished Layout publishes the page only, and you
+are told that the site default shows until that Layout is published.
 
 ## The default Layout
 
@@ -83,3 +118,56 @@ npx nextly migrate
 ```
 
 In development you can use `npx nextly db:sync` instead.
+
+## Draw pages inside their Layout
+
+<Callout type="info">
+  The `layouts` route option and `pageBuilderLayouts()` are **experimental**:
+  their names and shape may change before they are marked stable.
+</Callout>
+
+Your site's page route draws the header and footer only when you turn Layouts on for
+it. Pass the plugin's provider as the `layouts` option of `createBlocksPage` (or
+`createPublicBlocksPage`):
+
+```tsx title="app/(frontend)/[...slug]/page.tsx"
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderLayouts } from "@nextlyhq/plugin-page-builder";
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  layouts: pageBuilderLayouts(),
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+Each page is then served in three parts: the header, the page, then the footer. The
+header is wrapped in a `<header>` element and the footer in a `<footer>` element,
+each with a `data-nextly-region` attribute naming its area, so you can style or test
+them. Without the option, the route serves the page exactly as before.
+
+- **Which Layout:** the one the page names while it is published, otherwise the
+  site's default, or none when the page has **No header or footer** switched on.
+- **No JavaScript added:** the header and footer are drawn on the server, like the
+  rest of the page.
+- **Titles stay the page's own:** a heading in your header never becomes a page's
+  title or description.
+- **Updates reach only the pages they affect:** publishing a Layout, or a component
+  one uses, refreshes the pages drawn inside it. Changing the default refreshes the
+  pages that use the default, including pages whose own Layout is not published.
+- **No usable default:** pages that use the default are drawn without a header or
+  footer, and the server logs a warning. The plugin's background job repairs the
+  default, and those pages pick it up within a minute.
+
+A preview shows the page's own draft choice of Layout. A route that serves drafts
+outright (`draft: true`) also shows the Layout's and its components' drafts; a
+preview link shows their published versions.
+
+If your site renamed the Layouts collection or the `page-builder-settings` Single,
+pass the new names, or the route reads the old ones:
+`pageBuilderLayouts({ layoutsCollection: "frames", settingsSingle: "site-settings" })`.
+For a route that reads through its own Nextly instance, pass that reader as
+`nextly`. The option is not offered on a Single's route.

@@ -28,6 +28,10 @@ import {
   COMPONENT_LIBRARY_ROUTE_PATH,
   LIBRARY_ROUTE_PATH,
 } from "../library-contract";
+import {
+  LAYOUT_CHOICES_ROUTE_PATH,
+  PAGE_COLLECTION_ROUTE_PATH,
+} from "../layout-choices-contract";
 
 /**
  * What the library route answers, for the one case that cares.
@@ -95,6 +99,8 @@ const paths = vi.hoisted(() => ({
   library: "/library",
   components: "/library/components",
   capability: "/capability",
+  layoutChoices: "/layouts/choices",
+  pageCollection: "/layouts/page-collection",
 }));
 
 /** Props the recorders captured on the most recent render. */
@@ -292,6 +298,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    * REPLACES the module wholesale, so an export the subject imports and this
    * omits is a missing-export error rather than an unused stub.
    */
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // Which document the field sits in. Mutable so one case can put the
@@ -316,6 +324,20 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // and a mock that counted both as one made "does not read the library" fail
   // for a read of something else entirely.
   usePluginRoute: (args: { path: string }) => {
+    // The page's Layout reads, reads of their own: which collection holds the
+    // pages, answered with nothing so this form is not a page's, and the
+    // choices, asked for nothing. Neither is the library these count.
+    if (
+      args.path.startsWith(paths.layoutChoices) ||
+      args.path === paths.pageCollection
+    ) {
+      return {
+        data: undefined,
+        pending: false,
+        error: null,
+        refetch: () => {},
+      };
+    }
     if (args.path === paths.capability) {
       capabilityReads += 1;
       return {
@@ -357,6 +379,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   // `null` is a real answer the pill handles — "no status has been persisted",
   // which is what a create form and a preview both look like — so this mounts
@@ -582,6 +607,8 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(paths.library).toBe(LIBRARY_ROUTE_PATH);
     expect(paths.components).toBe(COMPONENT_LIBRARY_ROUTE_PATH);
     expect(paths.capability).toBe(CAPABILITY_ROUTE_PATH);
+    expect(paths.layoutChoices).toBe(LAYOUT_CHOICES_ROUTE_PATH);
+    expect(paths.pageCollection).toBe(PAGE_COLLECTION_ROUTE_PATH);
   });
 
   it("asks what the author may do EAGERLY, before any panel is opened", () => {

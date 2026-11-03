@@ -14,6 +14,16 @@ export type {
   LayoutSite,
   PageLayoutChoice,
 } from "./resolve-layout";
+// The regions a Layout fills around a page, and the document each is drawn
+// from: one reading of a stored Layout, shared by the route, the editor and
+// the plugin.
+export {
+  layoutRelationId,
+  regionDocument,
+  regionsOf,
+  REGION_AREAS,
+} from "./layout-regions";
+export type { LayoutRegion, RegionArea } from "./layout-regions";
 export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 
 export {
@@ -506,6 +516,17 @@ export type {
 // the editor that consumes them ships.
 export { lockBreaksIn, lockRefusal } from "./lock-breaks";
 export type { LocatedLockBreak, LockSources } from "./lock-breaks";
+// Turning every copy of a component in one document into plain blocks, and
+// asking whether a document still references it, for deleting a component that
+// is in use. `@experimental` until the delete that consumes them ships.
+export { inlineComponentInstances, stillReferences } from "./component-inline";
+export type {
+  InlinedDocument,
+  InlineProblem,
+  InlineRefusal,
+  InlineResult,
+  ReferenceAnswer,
+} from "./component-inline";
 export { lockRepairRule, planRepair } from "./repair-plan";
 // The placement rule's repair, appended after the lock rule when planning, so
 // a page holding blocks where the placement rule refuses them is offered a
@@ -575,7 +596,7 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { BLOCK_ICONS, defineBlock } from "./block";
+export { BLOCK_ICONS, defineBlock, ITEM_SCHEMA_MAX_DEPTH } from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,
@@ -752,6 +773,11 @@ export {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   MAX_TOKEN_PREFIX_LENGTH,
+  // A variable's plain name: the optional label, its check, and the label
+  // derived from the code name when none is stored.
+  MAX_TOKEN_LABEL_LENGTH,
+  tokenDisplayLabel,
+  tokenLabelIssue,
   // Both halves of token identity, public for the same reason the types are:
   // an editor that offers rename has to pin the identity the way this package
   // pins it, and one that cannot reach these has no way to do that except to
@@ -770,12 +796,29 @@ export type {
   SiteTokenSet,
   TokenMode,
 } from "./style/site-tokens";
+// Light and dark across files: the DTCG theme (resolver) file, and one file
+// per mode as Figma imports and exports variables.
+export {
+  RESOLVER_VERSION,
+  modeFilesToTokens,
+  resolverToTokens,
+  tokensToFigma,
+  tokensToResolver,
+} from "./style/dtcg-modes";
+export type { ModeFile } from "./style/dtcg-modes";
+// Whether two tokens say the same thing: one answer for a stored override and
+// for an editor's Reset.
+export { sameJsonValue, sameSiteToken } from "./style/same-token";
+// A colour written as a value rather than through a variable, which the
+// inspector marks as not adapted to dark mode.
+export { isRawColour } from "./style/raw-colour";
 // Interop and judgement, both pure: the format other design-token tools read,
 // and the contrast a person needs while a colour picker is open.
 export {
   NEXTLY_EXTENSION,
   dtcgToTokens,
   isKind,
+  resolveAliases,
   tokensToDtcg,
   familyPartKind,
   readFamilyList,
@@ -1005,11 +1048,29 @@ export {
   sameStyleValue,
   type AppliedOp,
   type AppliedOps,
+  type ApplyOptions,
   type BuilderOp,
   type NodePatch,
   type OpPosition,
   type SlotAddress,
 } from "./ops";
+
+// The Layers lock's rule, stated once: for one op, which the apply asks of
+// every edit and an editing surface asks before offering one; and for a whole
+// write, judged against the document it would replace, which a save asks
+// because a write through the API carries no ops to judge.
+export {
+  layersLockBreak,
+  lockedAncestorOf,
+  type LayersLockBreak,
+} from "./layers-lock";
+export {
+  layersLockChanges,
+  type LayersLockChange,
+  type LayersLockChangeKind,
+} from "./layers-lock-stored";
+// How every copy into a document keeps the Layers locks it carries.
+export { insertKeepingLocks, type Placed } from "./locked-insert";
 
 /**
  * The stored shape of rich text.

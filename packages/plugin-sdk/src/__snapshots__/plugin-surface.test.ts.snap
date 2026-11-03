@@ -59,6 +59,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "DocumentLocale (type)",
   "DocumentLockGates (type)",
   "DocumentPreview (type)",
+  "DocumentPrimaryAction (value)",
+  "DocumentSaveIndicator (value)",
   "DocumentSaveState (type)",
   "DocumentStatus (type)",
   "DocumentViewProps (type)",
@@ -96,6 +98,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "JsonObject (type)",
   "JsonValue (type)",
   "Label (value)",
+  "MediaPickerDialog (value)",
+  "MediaPickerDialogProps (type)",
   "NextlyColumn (type)",
   "NextlyFieldSchema (type)",
   "NextlyFieldType (type)",
@@ -166,6 +170,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "operatorTakesValue (value)",
   "operatorsForType (value)",
   "pillStateFromForm (value)",
+  "readPluginRoute (value)",
   "registerBulkAction (value)",
   "registerCellRenderer (value)",
   "registerColumns (value)",
@@ -198,6 +203,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useWidgetClock (value)",
   "validationIssues (value)",
   "withOptionIds (value)",
+  "writePluginRoute (value)",
 ]
 `;
 

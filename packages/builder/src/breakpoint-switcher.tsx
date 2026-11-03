@@ -71,7 +71,7 @@ export interface BreakpointSwitcherProps {
  * The glyph for a device, chosen by the width it applies at rather than by
  * its name, which is whatever the site called it.
  */
-function tierIcon(
+export function tierIcon(
   bound: number | undefined
 ): React.ComponentType<{ className?: string }> {
   if (bound === undefined) return Monitor;
@@ -80,7 +80,7 @@ function tierIcon(
   return Laptop;
 }
 
-interface DeviceOption {
+export interface DeviceOption {
   id: BreakpointId;
   label: string;
   /** The width the canvas lays this device out at. */
@@ -89,8 +89,14 @@ interface DeviceOption {
   range: string;
 }
 
-/** The devices, base first, then each breakpoint from the widest down. */
-function deviceOptions(breakpoints: BreakpointSet | undefined): DeviceOption[] {
+/**
+ * The devices, base first, then each breakpoint from the widest down. One
+ * answer for every surface that names them: these buttons, and Settings' list
+ * of the site's breakpoints.
+ */
+export function deviceOptions(
+  breakpoints: BreakpointSet | undefined
+): DeviceOption[] {
   const authored = authoredBreakpoints(
     breakpoints ?? { viewport: [], container: [] }
   ).viewport;
@@ -130,6 +136,14 @@ export function deviceLabel(
 
 /** How many devices are buttons, the base counting as one. */
 const BUTTON_COUNT = 3;
+
+/**
+ * The house focus ring, off the button by a gap of the bar's surface, so it
+ * shows on the chosen device's filled button as well as on the others. Without
+ * it the buttons fell back to the browser's own outline.
+ */
+const FOCUS_RING =
+  "focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
 
 /** What a device's label reads: its name and the width it is previewed at. */
 function shownLabel(option: DeviceOption): string {
@@ -212,13 +226,16 @@ function MoreDevices({
    */
   const [open, setOpen] = React.useState(false);
   return (
-    <DropdownMenu open={open && ready} onOpenChange={setOpen}>
+    // Not modal, as the zoom menu: a modal menu hides the focusable editor
+    // around it from assistive technology (axe: aria-hidden-focus).
+    <DropdownMenu modal={false} open={open && ready} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         disabled={!ready}
         aria-label={trigger.name}
         title={trigger.title}
         className={cn(
           "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs disabled:opacity-40",
+          FOCUS_RING,
           trigger.tone
         )}
       >
@@ -324,6 +341,7 @@ export function BreakpointSwitcher({
               onClick={() => onSelect(option.id)}
               className={cn(
                 "inline-flex items-center gap-1 rounded px-2 py-1 text-xs",
+                FOCUS_RING,
                 isSelected
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground"

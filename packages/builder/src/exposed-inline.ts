@@ -36,7 +36,7 @@ import {
 
 import { inlinePropKind } from "./inline-prop-kind";
 import { setOverrideOp } from "./instance-inspector";
-import { isLocked } from "./locking";
+import { lockBlockingEdit } from "./locking";
 import type { BuilderOp } from "./ops";
 
 /** An exposed value the canvas may edit in place, addressed through its placement. */
@@ -86,7 +86,7 @@ export function composedTextAt(
   const found = placedNode(document, composed, nodeId);
   if (found === null) return null;
   const { node, placement } = found;
-  const exposureId = textExposureOf(node, prop, placement);
+  const exposureId = textExposureOf(document, node, prop, placement);
   const schema = getBlock(node.type)?.props?.[prop];
   if (
     exposureId === undefined ||
@@ -138,6 +138,7 @@ function placedNode(
  * at a text prop is edited in the panel, where its control keeps it valid.
  */
 function textExposureOf(
+  document: BlockDocument,
   node: ResolvedBlockNode,
   prop: string,
   placement: BlockNode
@@ -145,7 +146,14 @@ function textExposureOf(
   const fed = node.exposedProps;
   const exposure =
     fed !== undefined && Object.hasOwn(fed, prop) ? fed[prop] : undefined;
-  if (exposure?.type !== "text" || isLocked(placement)) return undefined;
+  // The placement's Layers lock, its own or one around it: either holds every
+  // value the placement stores.
+  if (
+    exposure?.type !== "text" ||
+    lockBlockingEdit(document, placement.id) !== undefined
+  ) {
+    return undefined;
+  }
   return exposure.id;
 }
 
@@ -184,7 +192,12 @@ export function exposedTextOp(
     document.nodes,
     target.placementId
   );
-  if (placement === undefined || isLocked(placement)) return null;
+  if (
+    placement === undefined ||
+    lockBlockingEdit(document, placement.id) !== undefined
+  ) {
+    return null;
+  }
   return setOverrideOp(
     placement,
     target.exposureId,

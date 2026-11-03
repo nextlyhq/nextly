@@ -72,6 +72,7 @@ const DEV_SPECS = [
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",
   "**/builder-nested-field.spec.ts",
+  "**/builder-canvas-embed.spec.ts",
   "**/removed-from-code-singles-list.spec.ts",
 ];
 

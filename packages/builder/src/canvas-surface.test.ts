@@ -24,16 +24,46 @@ const CHROME = readFileSync(
   "utf8"
 );
 
+/**
+ * The canvas mounted on its own, with no builder scope above it. Matches
+ * nothing inside the shell, where the tokens are inherited, and at zero
+ * specificity, so the canvas's own rules still win where they apply.
+ */
+const STANDALONE_CANVAS =
+  ":where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))";
+
+/** The token scopes' selector list: the shell's two, and a lone canvas. */
+const TOKENS = `.nx-builder-tokens,\n.nx-builder-chrome,\n${STANDALONE_CANVAS}`;
+
+/**
+ * Every place a rule is written under exactly `selector`: at the start of a
+ * line, followed by its brace, and not the last line of a longer selector LIST
+ * — a list such as `.a,\n.nx-canvas {` names the canvas too, but declares
+ * something different and must not answer for the canvas's own rule.
+ */
+function rulesUnder(selector: string): string[] {
+  const marker = `\n${selector} {`;
+  const bodies: string[] = [];
+  for (
+    let at = CHROME.indexOf(marker);
+    at !== -1;
+    at = CHROME.indexOf(marker, at + 1)
+  ) {
+    if (CHROME[at - 1] === ",") continue;
+    const body = CHROME.slice(at + marker.length);
+    bodies.push(body.slice(0, body.indexOf("\n}")));
+  }
+  return bodies;
+}
+
 /** The one `.nx-canvas` rule, so a second one cannot answer for the first. */
 function canvasRule(): string {
-  const marker = "\n.nx-canvas {";
-  const opened = CHROME.split(marker);
+  const bodies = rulesUnder(".nx-canvas");
   expect(
-    opened.length,
+    bodies.length,
     "exactly one `.nx-canvas` rule, or these assertions read whichever came first"
-  ).toBe(2);
-  const body = opened[1] as string;
-  return body.slice(0, body.indexOf("\n}"));
+  ).toBe(1);
+  return bodies[0] as string;
 }
 
 describe("the canvas as a sheet", () => {
@@ -87,22 +117,480 @@ describe("the canvas as a sheet", () => {
   });
 });
 
-describe("the canvas surface", () => {
-  it("declares a background rather than inheriting the frame", () => {
-    expect(canvasRule()).toContain("background-color:");
-  });
+/**
+ * The body of the one rule written under exactly `selector`.
+ *
+ * Matched on the whole selector at the start of a line, so a longer selector
+ * that merely contains this one cannot answer for it, and held to exactly one
+ * match for the reason {@link canvasRule} is.
+ */
+function ruleFor(selector: string): string {
+  const bodies = rulesUnder(selector);
+  expect(bodies.length, `exactly one rule for \`${selector}\``).toBe(1);
+  return bodies[0] as string;
+}
 
-  it("takes it from the RAISED token, not the frame's own", () => {
+/** The value of one declaration in a rule body, or undefined. */
+function declared(body: string, property: string): string | undefined {
+  const match = new RegExp(`(?:^|[\\s;])${property}\\s*:\\s*([^;]+);`).exec(
+    body
+  );
+  return match?.[1]?.trim();
+}
+
+/**
+ * The site's attribute dark mode, keyed on the strategy the canvas states and
+ * on the site's dark values including a dark ground.
+ */
+const SITE_DARK =
+  '.nx-canvas[data-nx-site-dark-ground][data-nx-site-theme="dark"]';
+
+/** Every rule whose selector names `.nx-canvas`, as selector and body. */
+function canvasRules(): { selector: string; body: string }[] {
+  const rules: { selector: string; body: string }[] = [];
+  const pattern = /\n([^{}\s/*][^{}]*?)\s*\{([^{}]*)\}/g;
+  for (const match of CHROME.matchAll(pattern)) {
+    const selector = (match[1] as string).trim();
+    if (selector.includes(".nx-canvas")) {
+      rules.push({ selector, body: match[2] as string });
+    }
+  }
+  return rules;
+}
+
+describe("the canvas surface is the site's, not the admin's", () => {
+  it("states a background, a text colour and a colour scheme of its own", () => {
     /*
-     * `--nx-builder-surface` is the frame. Naming it here would declare the
-     * inheritance rather than replace it — the same wrong colour, now written
-     * down, and a test asserting only that SOME background exists would pass.
+     * All three inherit, and each one left unstated is taken from the admin
+     * around the canvas: the background from the frame, the text colour and
+     * the scheme from the admin's theme. Stating only the background left a
+     * dark admin's light text on a white page.
      */
     const rule = canvasRule();
-    expect(rule).toContain("var(--nx-builder-surface-raised)");
+    /*
+     * From the site's own background and text tokens, which the canvas root
+     * names under the site's prefix; the browser's defaults where the host
+     * serves no site sheet.
+     */
+    expect(declared(rule, "background-color")).toBe(
+      "var(--nx-canvas-site-ground, Canvas)"
+    );
+    expect(declared(rule, "color")).toBe(
+      "var(--nx-canvas-site-ink, CanvasText)"
+    );
+    expect(declared(rule, "color-scheme")).toBe("light");
+  });
+
+  it("takes none of the three from an admin token", () => {
+    /*
+     * The defect this replaces was `--nx-builder-surface-raised`, an admin
+     * token that is near black in the dark theme. Any `--nx-*` token here
+     * repaints the page whenever the admin changes theme, which is exactly
+     * what a visitor's page never does.
+     */
+    const rule = canvasRule();
+    for (const property of ["background-color", "color", "color-scheme"]) {
+      const value = declared(rule, property);
+      expect(value, `${property} is declared`).toBeDefined();
+      // The canvas's own site-token references are the one `--nx-` name
+      // allowed: they point at the site's tokens, never at the admin's.
+      expect(
+        /var\(--nx-(?!canvas-site-)/.test(value ?? ""),
+        `${property} follows the admin's theme: ${value}`
+      ).toBe(false);
+    }
+  });
+
+  it("sets the page in the site's body font, not the admin's face", () => {
+    /*
+     * The face inherits like the colours do, and left unstated the page is set
+     * in the admin's Geist — a face the published page never uses.
+     */
+    const family = declared(canvasRule(), "font-family");
+    /*
+     * Through the property the canvas root sets inline, because the token's
+     * own name depends on the site's prefix: naming `--site-font-body` here
+     * left a site under another prefix in the fallback face.
+     */
+    expect(family).toBe("var(--nx-canvas-site-font, system-ui), sans-serif");
+    expect(family?.includes("--site-"), "a hard-coded token prefix").toBe(
+      false
+    );
+    expect(family?.includes("--font-sans"), "the admin's own face").toBe(false);
+  });
+
+  it("is darkened by the site's own dark mode and by nothing of the admin's", () => {
+    expect(declared(ruleFor(SITE_DARK), "color-scheme")).toBe("dark");
+    /*
+     * Positive control first: the scan below reads real rules, so a pattern
+     * that matched nothing would make the absence assertion meaningless.
+     */
+    const rules = canvasRules();
     expect(
-      rule.includes("var(--nx-builder-surface)"),
-      "the frame's own token would repaint the page in the colour this replaces"
-    ).toBe(false);
+      rules.some(rule => rule.selector === SITE_DARK),
+      "the rule scan finds the site's dark-mode rule"
+    ).toBe(true);
+    /*
+     * The host's attribute darkens only a site whose strategy IS the
+     * attribute. A site that follows the system keeps light token values
+     * under it, so an unqualified rule would draw dark ground under light
+     * tokens.
+     */
+    // Keyed on the nearest marker the canvas states, never on an ancestor
+    // selector, which cannot tell which of several markers is nearest.
+    const byAttribute = rules.filter(rule =>
+      rule.selector.includes("data-nx-theme")
+    );
+    expect(byAttribute, "no rule reads the markers above the canvas").toEqual(
+      []
+    );
+    expect(
+      rules.filter(rule =>
+        rule.selector.includes('[data-nx-site-theme="dark"]')
+      ).length,
+      "one rule for the canvas's stated dark marker"
+    ).toBe(1);
+    const admin = rules.filter(
+      rule =>
+        /\.dark\b/.test(rule.selector) &&
+        !rule.selector.includes("[data-nx-chrome]") &&
+        /(?:^|[\s;])(?:background(?:-color)?|color|color-scheme)\s*:/.test(
+          rule.body
+        )
+    );
+    expect(
+      admin.map(rule => rule.selector),
+      "the admin's .dark class repaints the page"
+    ).toEqual([]);
+  });
+});
+
+describe("a site that darkens with the visitor's system", () => {
+  it("darkens the canvas page's scheme with the device unless a light marker is above it", () => {
+    /*
+     * The site sheet applies dark values with the device for every site, so
+     * the scheme follows the device wherever the dark values include a dark
+     * ground; a light marker above the canvas keeps it light, as it keeps the
+     * values light.
+     */
+    // Only where no marker is stated: a stated marker, of either mode, is
+    // nearer than the device and decides instead.
+    const block =
+      /@media \(prefers-color-scheme: dark\) \{\s*\.nx-canvas\[data-nx-site-dark-ground\]:not\(\[data-nx-site-theme\]\) \{([^}]*)\}/.exec(
+        CHROME
+      );
+    expect(block, "the device rule exists").not.toBeNull();
+    const body = block?.[1] ?? "";
+    expect(declared(body, "color-scheme")).toBe("dark");
+    expect(declared(body, "--nx-builder-select")).toBe(
+      "var(--nx-builder-select-on-dark)"
+    );
+  });
+});
+
+describe("the editor's chrome on the canvas keeps the admin's theme", () => {
+  /*
+   * EVERY piece of chrome the editor draws inside the page, in one list: the
+   * controls marked as chrome, and the spacing overlay and drop line, which
+   * take no pointer events and so carry no chrome marker. The overlay's value
+   * chips are text, and without this they were set in the site's face.
+   */
+  const MEMBERS = [
+    "[data-nx-chrome]",
+    ".nx-spacing-overlay",
+    ".nx-drop-indicator",
+  ];
+
+  /** The `@layer base` block holding the chrome reset, as rule bodies by selector. */
+  function chromeLayer(): Map<string, string> {
+    const layers = CHROME.split("\n@layer base {").slice(1);
+    const holding = layers.filter(layer =>
+      layer.includes(".nx-canvas [data-nx-chrome]")
+    );
+    expect(holding.length, "exactly one base layer holds the reset").toBe(1);
+    const block = (holding[0] ?? "").slice(
+      0,
+      (holding[0] ?? "").indexOf("\n}")
+    );
+    const rules = new Map<string, string>();
+    for (const match of block.matchAll(/\n {2}([^{}]+?)\s*\{([^{}]*)\}/g)) {
+      rules.set((match[1] ?? "").replace(/\s+/g, " ").trim(), match[2] ?? "");
+    }
+    return rules;
+  }
+
+  it("hands chrome back the admin's text colour, scheme and face, below everything chrome states", () => {
+    /*
+     * The canvas states the site's scheme, text colour and face, and all three
+     * inherit into chrome drawn on the page. In the base layer so any rule a
+     * piece of chrome states for itself, and any utility class, still wins.
+     */
+    const rules = chromeLayer();
+    const light = rules.get(
+      MEMBERS.map(member => `.nx-canvas ${member}`).join(", ")
+    );
+    expect(light, "the light reset names every member").toBeDefined();
+    expect(declared(light ?? "", "color-scheme")).toBe(
+      "var(--nx-builder-scheme)"
+    );
+    expect(declared(light ?? "", "color")).toBe("var(--nx-builder-text)");
+    expect(declared(light ?? "", "font-family")).toBe(
+      "var(--font-sans, system-ui, sans-serif)"
+    );
+    /*
+     * The scheme is the admin's, picked by the admin's theme where every
+     * other builder token is: light at rest, dark under `.dark`.
+     */
+    expect(declared(ruleFor(TOKENS), "--nx-builder-scheme")).toBe("light");
+    expect(declared(ruleFor(ADMIN_DARK), "--nx-builder-scheme")).toBe("dark");
+  });
+});
+
+/** A `#rrggbb` value's relative luminance, per WCAG 2.2. */
+function luminance(hex: string): number {
+  const channels = [1, 3, 5].map(at => {
+    const value = Number.parseInt(hex.slice(at, at + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const [r, g, b] = channels as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrast(a: string, b: string): number {
+  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [
+    number,
+    number,
+  ];
+  return (light + 0.05) / (dark + 0.05);
+}
+
+/** A literal `#rrggbb` a token is declared with, read from a rule body. */
+function hexOf(body: string, property: string): string {
+  const value = declared(body, property);
+  expect(value, `${property} is a literal colour`).toMatch(/^#[0-9a-f]{6}$/);
+  return value as string;
+}
+
+const CONSTANTS = ".nx-builder-tokens,\n.nx-builder-chrome,\n.nx-canvas";
+const ADMIN_DARK = `.dark .nx-builder-tokens,\n.dark .nx-builder-chrome,\n.dark ${STANDALONE_CANVAS},\n.nx-builder-tokens.dark,\n.nx-builder-chrome.dark`;
+
+describe("the editing colours drawn on the page", () => {
+  it("are builder tokens, never the admin's black-or-white primary", () => {
+    /*
+     * `--nx-primary` is black in the light theme and white in the dark, and
+     * these marks sit on the site's page: white vanished on a white page.
+     */
+    expect(declared(ruleFor(".nx-canvas [data-nx-selected]"), "outline")).toBe(
+      "2px solid var(--nx-builder-select)"
+    );
+    expect(declared(ruleFor(".nx-drop-indicator"), "background")).toBe(
+      "var(--nx-builder-select)"
+    );
+    expect(
+      declared(ruleFor(".nx-canvas [data-nx-drop-parent]"), "outline")
+    ).toBe("2px dashed var(--nx-builder-select)");
+    expect(
+      declared(
+        ruleFor(".nx-canvas [data-nx-selected][data-nx-instance]"),
+        "outline-color"
+      )
+    ).toBe("var(--nx-builder-component)");
+    const marks = [
+      ".nx-canvas [data-nx-selected]",
+      ".nx-drop-indicator",
+      ".nx-drop-indicator::before",
+      ".nx-canvas [data-nx-drop-parent]",
+      ".nx-spacing-handles__handle::before",
+    ];
+    for (const selector of marks) {
+      expect(
+        ruleFor(selector).includes("var(--nx-primary)"),
+        `${selector} paints with the admin's primary`
+      ).toBe(false);
+    }
+  });
+
+  it("halo the selection ring and the drop line in a mode-invariant white", () => {
+    /*
+     * The ring is an outline, and the halo is measured and drawn in the
+     * editor's own layer — nothing on the page's elements. A `box-shadow`
+     * replaced a shadow the page gave the block, and an `anchor-name` an
+     * anchor it gave it, so neither may appear on a selection rule.
+     */
+    const selectionRules = canvasRules().filter(rule =>
+      rule.selector.includes("[data-nx-selected")
+    );
+    expect(
+      selectionRules.length,
+      "the scan finds the selection rules"
+    ).toBeGreaterThan(1);
+    for (const rule of selectionRules) {
+      for (const property of ["box-shadow", "anchor-name"]) {
+        expect(
+          declared(rule.body, property),
+          `${rule.selector} writes ${property} onto the page's element`
+        ).toBeUndefined();
+      }
+    }
+    const layer = ruleFor(".nx-selection-halos");
+    expect(declared(layer, "position")).toBe("absolute");
+    expect(declared(layer, "pointer-events")).toBe("none");
+    /*
+     * Above the page by order, not by a number: the page is one stacking
+     * context, so no z-index a site gives its content can rise past the layer,
+     * and a fixed number here would be a guess at what the page uses.
+     */
+    expect(declared(layer, "z-index")).toBeUndefined();
+    const page = ruleFor(".nx-canvas > .nx-pb-page");
+    expect(declared(page, "isolation")).toBe("isolate");
+    /*
+     * The page root stays an ordinary block — a flex or grid item would be its
+     * own formatting context and change how its children's margins collapse —
+     * and paints NO ground of its own unless the site's ground is opaque:
+     * laid over the canvas's ground, a translucent one is composited twice.
+     */
+    for (const property of ["display", "background-color", "background"]) {
+      expect(declared(page, property), `the page root's ${property}`).toBe(
+        undefined
+      );
+    }
+    /*
+     * Where the ground IS opaque, the page carries it for a blend to mix with
+     * — inside `:where()`, so it weighs nothing and a background the page's
+     * own styles compile onto `.nx-pb-page.nx-pb-page` (0-2-0) still wins, as
+     * it does when published. Found by the exact selector, so a weighted
+     * spelling of the same rule fails here.
+     */
+    expect(
+      declared(
+        ruleFor(":where(.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page)"),
+        "background-color"
+      )
+    ).toBe("var(--nx-canvas-site-ground, Canvas)");
+    /*
+     * On the editor's own element: the ring redrawn as the element carries
+     * it, with the white band as an inset shadow beneath, so the two stay
+     * adjacent at any zoom. Read off the halo's rule, never a page element's.
+     */
+    const halo = ruleFor(".nx-selection-halo");
+    expect(declared(halo, "outline")).toBe(
+      "1px solid var(--nx-builder-select)"
+    );
+    expect(declared(halo, "outline-offset")).toBe("-2px");
+    expect(declared(halo, "box-shadow")).toBe(
+      "inset 0 0 0 2px var(--nx-builder-halo)"
+    );
+    // The primary's ring and halo are the full width, as on the element.
+    const primary = ruleFor(".nx-selection-halo[data-primary]");
+    expect(declared(primary, "outline-width")).toBe("2px");
+    expect(declared(primary, "box-shadow")).toBe(
+      "inset 0 0 0 4px var(--nx-builder-halo)"
+    );
+    expect(
+      declared(ruleFor(".nx-selection-halo[data-component]"), "outline-color")
+    ).toBe("var(--nx-builder-component)");
+    // The element's ring is unchanged: what the halo redraws.
+    expect(declared(ruleFor(".nx-canvas [data-nx-selected]"), "outline")).toBe(
+      "2px solid var(--nx-builder-select)"
+    );
+    expect(declared(ruleFor(".nx-drop-indicator"), "box-shadow")).toBe(
+      "0 0 0 1px var(--nx-builder-halo)"
+    );
+    expect(hexOf(ruleFor(CONSTANTS), "--nx-builder-halo")).toBe("#ffffff");
+  });
+
+  it("pick their hue by the PAGE's scheme on the canvas, and by the admin's elsewhere", () => {
+    const constants = ruleFor(CONSTANTS);
+    const onLight = hexOf(constants, "--nx-builder-select-on-light");
+    const onDark = hexOf(constants, "--nx-builder-select-on-dark");
+    hexOf(constants, "--nx-builder-component-on-light");
+    hexOf(constants, "--nx-builder-component-on-dark");
+
+    // The canvas page is light unless the site's own dark mode applies.
+    const canvas = canvasRule();
+    expect(declared(canvas, "--nx-builder-select")).toBe(
+      "var(--nx-builder-select-on-light)"
+    );
+    expect(declared(canvas, "--nx-builder-component")).toBe(
+      "var(--nx-builder-component-on-light)"
+    );
+    const siteDark = ruleFor(SITE_DARK);
+    expect(declared(siteDark, "--nx-builder-select")).toBe(
+      "var(--nx-builder-select-on-dark)"
+    );
+
+    // The admin's theme picks for chrome on admin surfaces.
+    const adminDark = ruleFor(ADMIN_DARK);
+    expect(declared(adminDark, "--nx-builder-select")).toBe(
+      "var(--nx-builder-select-on-dark)"
+    );
+    expect(declared(adminDark, "--nx-builder-component")).toBe(
+      "var(--nx-builder-component-on-dark)"
+    );
+
+    // Each pick holds 3:1 on the ground it is for (WCAG 2.2 SC 1.4.11).
+    expect(contrast(onLight, "#ffffff")).toBeGreaterThanOrEqual(3);
+    expect(contrast(onDark, "#0b0f19")).toBeGreaterThanOrEqual(3);
+  });
+
+  it("draw the block toolbar as a dark ink bar whose text passes AA", () => {
+    const toolbar = ruleFor(".nx-block-toolbar");
+    expect(declared(toolbar, "background")).toBe("var(--nx-builder-ink)");
+    expect(declared(toolbar, "color")).toBe("var(--nx-builder-ink-text)");
+    expect(declared(ruleFor(".nx-block-toolbar__button"), "color")).toBe(
+      "var(--nx-builder-ink-text)"
+    );
+
+    const light = ruleFor(TOKENS);
+    const text = hexOf(light, "--nx-builder-ink-text");
+    const inks = [
+      hexOf(light, "--nx-builder-ink"),
+      hexOf(ruleFor(ADMIN_DARK), "--nx-builder-ink"),
+    ];
+    for (const ink of inks) {
+      expect(
+        contrast(text, ink),
+        `toolbar text on ${ink}`
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+/**
+ * The selector list of the rule whose body declares `property`, where that
+ * rule is the one opening with `first`.
+ */
+function selectorListDeclaring(first: string, property: string): string[] {
+  const pattern =
+    /(?:^|\n)((?:[^{}\n/*][^{}\n]*,\n)*[^{}\n/*][^{}\n]*)\s*\{([^{}]*)\}/g;
+  for (const match of CHROME.matchAll(pattern)) {
+    // One selector per line: a comma inside `:is(...)` is not a list's.
+    const selectors = (match[1] ?? "")
+      .split(",\n")
+      .map(selector => selector.trim().replace(/,$/, ""));
+    if (selectors[0] === first && (match[2] ?? "").includes(`${property}:`)) {
+      return selectors;
+    }
+  }
+  return [];
+}
+
+describe("a canvas mounted outside the editor shell", () => {
+  it("declares the builder tokens its region chrome reads", () => {
+    // The token block: the region's opacity, and the border, surface and text
+    // its badge and tag are drawn with.
+    const scope = selectorListDeclaring(
+      ".nx-builder-tokens",
+      "--nx-builder-region-opacity"
+    );
+    expect(scope).toContain(STANDALONE_CANVAS);
+  });
+
+  it("takes the dark picks under the admin's dark theme, as the shell does", () => {
+    const dark = selectorListDeclaring(
+      ".dark .nx-builder-tokens",
+      "--nx-builder-scheme"
+    );
+    expect(dark).toContain(`.dark ${STANDALONE_CANVAS}`);
   });
 });

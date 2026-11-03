@@ -328,3 +328,23 @@ export async function openEditorWith(
   // at an element that has not rendered lands on the page behind it.
   await expect(await block(page, firstId)).toBeVisible({ timeout: 30_000 });
 }
+
+/**
+ * Save from the top bar without publishing, as an author does: "Save draft"
+ * on a page never published, "Save" on one that is.
+ *
+ * The save leads where there is nothing to publish, and otherwise sits on the
+ * leading action's arrow, beside Publish, so a caller need not know which.
+ */
+export async function pressSave(page: Page): Promise<void> {
+  const bar = page.locator('[data-topbar="end"]');
+  const leading = bar.getByRole("button", { name: /^Save( draft)?$/ });
+  if ((await leading.count()) > 0) {
+    await leading.click();
+    return;
+  }
+  await bar
+    .getByRole("button", { name: /^More (ways to publish|document actions)$/ })
+    .click();
+  await page.getByRole("menuitem", { name: /^Save( draft)?$/ }).click();
+}

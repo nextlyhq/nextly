@@ -10,7 +10,13 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { defineCollection, number, text } from "../../../config";
+import {
+  defineCollection,
+  group,
+  number,
+  password,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -20,6 +26,11 @@ import {
 const SLUG = "mks_items";
 const LOCALIZED = "mks_titles";
 const RULED = "mks_ruled";
+const HOOKED = "mks_hooked";
+const SECRETS = "mks_secrets";
+
+/** Every read hook call on the hooked collection, by phase. */
+const hookCalls: string[] = [];
 
 interface Row {
   id: string;
@@ -71,6 +82,32 @@ describe.each(getConfiguredTestDialects())(
             slug: LOCALIZED,
             localized: true,
             fields: [text({ name: "title", localized: true })],
+          }),
+          defineCollection({
+            slug: SECRETS,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title" }),
+              password({ name: "pin" }),
+              group({ name: "account", fields: [password({ name: "code" })] }),
+            ],
+          }),
+          defineCollection({
+            slug: HOOKED,
+            fields: [number({ name: "grp" })],
+            hooks: {
+              beforeOperation: [
+                ({ operation, args }) => {
+                  if (operation === "read") hookCalls.push("beforeOperation");
+                  return args;
+                },
+              ],
+              beforeRead: [
+                () => {
+                  hookCalls.push("beforeRead");
+                },
+              ],
+            },
           }),
           defineCollection({
             slug: RULED,
@@ -269,6 +306,89 @@ describe.each(getConfiguredTestDialects())(
       expect(read.success).toBe(true);
       const titles = (read.data?.docs ?? []).map(item => String(item.title));
       expect(titles).toEqual([...titles].sort());
+    });
+
+    it("refuses unknown sort keys, naming each, when the read asks to", async () => {
+      const refusal = await t.nextly
+        .find({
+          collection: SLUG,
+          sort: ["grp", "nope", "createdBy"],
+          unknownSort: "refuse",
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => JSON.stringify(error)
+        );
+      expect(refusal).toContain("sort.nope");
+      // The owner column is named as unknown too, not as forbidden.
+      expect(refusal).toContain("sort.createdBy");
+      expect(refusal).not.toContain("sort.grp");
+      // The control: by default the same keys are dropped and the read runs.
+      await expect(
+        t.nextly.find({ collection: SLUG, sort: ["grp", "nope"] })
+      ).resolves.toBeDefined();
+    });
+
+    it("refuses an unknown sort key before any read hook runs", async () => {
+      // The control: a read the hooks do see.
+      hookCalls.length = 0;
+      await t.nextly.find({
+        collection: HOOKED,
+        sort: ["grp"],
+        unknownSort: "refuse",
+      });
+      expect(hookCalls.length).toBeGreaterThan(0);
+      hookCalls.length = 0;
+      await expect(
+        t.nextly.find({
+          collection: HOOKED,
+          sort: ["grp", "nope"],
+          unknownSort: "refuse",
+        })
+      ).rejects.toThrow();
+      expect(hookCalls).toEqual([]);
+    });
+
+    it("names a key every object inherits as unknown, not as a column", async () => {
+      const refusal = await t.nextly
+        .find({
+          collection: SLUG,
+          sort: ["constructor", "-toString", "grp"],
+          unknownSort: "refuse",
+        })
+        .then(
+          () => "read",
+          (error: unknown) => JSON.stringify(error)
+        );
+      expect(refusal).toContain("FIELD_NOT_SORTABLE");
+      expect(refusal).toContain("sort.constructor");
+      expect(refusal).toContain("sort.toString");
+      expect(refusal).not.toContain("sort.grp");
+    });
+
+    it("refuses an untrusted filter or sort on a password, or a group holding one", async () => {
+      const refused = (args: Record<string, unknown>) =>
+        t.nextly
+          .find({ collection: SECRETS, overrideAccess: false, ...args })
+          .then(
+            () => "read",
+            (error: unknown) => JSON.stringify(error)
+          );
+      expect(await refused({ where: { pin: { exists: true } } })).toContain(
+        "where.pin"
+      );
+      expect(
+        await refused({ where: { account: { contains: "$2" } } })
+      ).toContain("where.account");
+      expect(await refused({ sort: ["-pin"] })).toContain("sort.pin");
+      // The control: the same visitor may filter and sort on a plain field,
+      // and trusted server code may still filter on the password.
+      expect(
+        await refused({ where: { title: { exists: true } }, sort: ["title"] })
+      ).toBe("read");
+      await expect(
+        t.nextly.find({ collection: SECRETS, where: { pin: { exists: true } } })
+      ).resolves.toBeDefined();
     });
 
     it("refuses an offset given together with a page", async () => {

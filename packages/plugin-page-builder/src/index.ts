@@ -97,6 +97,13 @@ export { effectiveLayoutFor } from "./default-layout/effective-layout";
 export type { EffectiveLayoutDeps } from "./default-layout/effective-layout";
 // Where the site's default Layout is recorded.
 export { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
+// The provider a blocks page route takes as `layouts`, so the route draws each
+// page inside its Layout without importing this plugin.
+export { pageBuilderLayouts } from "./page-layouts";
+export type {
+  PageBuilderLayoutsOptions,
+  PageBuilderLayoutsProvider,
+} from "./page-layouts";
 
 // The class-usage index, the derivation behind it, and the walk that repairs
 // it.

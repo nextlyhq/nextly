@@ -19,11 +19,12 @@ import {
   useNoticeQueue,
   type NoticeQueue,
 } from "./builder-notices";
+import { CanvasFrameShortcuts } from "./canvas-frame-context";
 import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
 import { isHTMLElement } from "./dom-kind";
-import { EditorRail, panelLabel } from "./editor-rail";
+import { EditorRail, panelLabel, type EditorRailProps } from "./editor-rail";
 import { HelpDialog } from "./help-dialog";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
@@ -97,9 +98,28 @@ export interface PanelView {
   choose: (view: string) => void;
 }
 
+/** What the shell hands the host's Settings dialog. */
+export interface SettingsDialogState {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The control focus returns to when the dialog closes: the rail's item. */
+  returnFocus: () => HTMLElement | null;
+}
+
 export interface BuilderShellProps {
   /** Rendered inside the switched left panel. Keyed by the panel that is open. */
   renderPanel?: (panel: LeftPanel, view: PanelView) => React.ReactNode;
+  /**
+   * Settings, as a dialog the host draws and the rail's Settings item opens.
+   *
+   * A dialog rather than a panel: it holds the page's and the site's
+   * configuration, which an author visits and leaves, and a panel would take
+   * the canvas's room for it. The shell owns whether it is open, as it owns
+   * Help's, so the rail shows it pressed and the editor giving way to the
+   * narrow-window notice closes it. With this given, `settings` is never a
+   * left panel.
+   */
+  renderSettings?: (dialog: SettingsDialogState) => React.ReactNode;
   /**
    * The host's notice queue, when the host raises notices of its own.
    *
@@ -239,7 +259,7 @@ export interface BuilderShellProps {
    * whatever the sides hold.
    */
   topBarCenter?: React.ReactNode;
-  /** The top bar's end column, before the side-panel buttons: the actions. */
+  /** The top bar's end column, after the side-panel buttons: the actions. */
   topBarEnd?: React.ReactNode;
   /** The ancestor breadcrumb, along the bottom bar. */
   breadcrumb?: React.ReactNode;
@@ -808,25 +828,119 @@ function panelTopology(
 }
 
 /**
- * Help's open state, and the control focus returns to when it closes.
+ * Whether the host can fill a panel. One predicate, so the rail's items and
+ * the panel the layout reserves cannot answer differently.
  *
- * Help closes when the editor gives way to the narrow-window notice. The
+ * A name this shell does not know is never available, whatever the host
+ * offers: a request from untyped code can still name a panel that was
+ * renamed, and there is no chrome to draw it with. Settings is the host's
+ * dialog when it draws one, never a panel too.
+ */
+function panelAvailability(
+  availablePanels: readonly LeftPanel[] | undefined,
+  renderSettings: BuilderShellProps["renderSettings"]
+): (panel: LeftPanel) => boolean {
+  return panel =>
+    isLeftPanel(panel) &&
+    !(panel === "settings" && renderSettings !== undefined) &&
+    (availablePanels === undefined || availablePanels.includes(panel));
+}
+
+/** Opens a rail dialog from the item pressed, which focus returns to. */
+function opening(
+  dialog: ReturnType<typeof useRailDialog>
+): (button: HTMLElement) => void {
+  return button => {
+    dialog.opener.current = button;
+    dialog.setOpen(true);
+  };
+}
+
+/**
+ * The rail's dialog items: Help always, and Settings where the host draws a
+ * Settings dialog.
+ */
+function railDialogItems(
+  help: ReturnType<typeof useRailDialog>,
+  settings: ReturnType<typeof useRailDialog>,
+  renderSettings: BuilderShellProps["renderSettings"]
+): Pick<EditorRailProps, "onHelp" | "onSettings" | "settingsOpen"> {
+  return {
+    onHelp: opening(help),
+    ...(renderSettings === undefined
+      ? {}
+      : { settingsOpen: settings.open, onSettings: opening(settings) }),
+  };
+}
+
+/**
+ * The rail, with the dialogs its bottom items open: Help, and Settings where
+ * the host draws one. They own their open state here, beside the items that
+ * open them.
+ */
+function RailAndDialogs({
+  active,
+  renderSettings,
+  ...rail
+}: Omit<EditorRailProps, "onHelp" | "onSettings" | "settingsOpen"> & {
+  active: boolean;
+  renderSettings: BuilderShellProps["renderSettings"];
+}): React.JSX.Element {
+  const help = useRailDialog(active);
+  const settings = useRailDialog(active);
+  return (
+    <>
+      <EditorRail
+        {...rail}
+        {...railDialogItems(help, settings, renderSettings)}
+      />
+      <HelpDialog
+        open={help.open}
+        onOpenChange={help.setOpen}
+        returnFocus={() => help.opener.current}
+      />
+      <HostSettings render={renderSettings} dialog={settings} />
+    </>
+  );
+}
+
+/** The host's Settings dialog, handed whether it is open, when it draws one. */
+function HostSettings({
+  render,
+  dialog,
+}: {
+  render: BuilderShellProps["renderSettings"];
+  dialog: ReturnType<typeof useRailDialog>;
+}): React.ReactNode {
+  if (render === undefined) return null;
+  return render({
+    open: dialog.open,
+    onOpenChange: dialog.setOpen,
+    returnFocus: () => dialog.opener.current,
+  });
+}
+
+/**
+ * A rail dialog's open state (Help's, Settings'), and the control focus
+ * returns to when it closes.
+ *
+ * It closes when the editor gives way to the narrow-window notice. The
  * regions stay mounted there, hidden and inert, and a modal left open would
  * keep its focus trap and its hold on the keyboard over a notice whose Exit
  * button it would then keep out of reach. Closed rather than hidden, so
  * widening the window again does not bring back a dialog nobody reopened.
  */
-function useHelpDialog(active: boolean): {
-  helpOpen: boolean;
-  setHelpOpen: (open: boolean) => void;
-  helpOpener: React.RefObject<HTMLElement | null>;
+function useRailDialog(active: boolean): {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  opener: React.RefObject<HTMLElement | null>;
 } {
-  const [helpOpen, setHelpOpen] = React.useState(false);
-  const helpOpener = React.useRef<HTMLElement | null>(null);
+  const [open, setOpen] = React.useState(false);
+  const opener = React.useRef<HTMLElement | null>(null);
   React.useEffect(() => {
-    if (!active) setHelpOpen(false);
+    if (!active) setOpen(false);
   }, [active]);
-  return { helpOpen, setHelpOpen, helpOpener };
+  return { open, setOpen, opener };
 }
 
 /**
@@ -941,13 +1055,28 @@ function ShellTopBar({
         data-topbar="end"
         className="flex min-w-0 items-center justify-end gap-2"
       >
-        {topBarEnd}
+        {/* The panel buttons first, then the document's own controls after a
+          thin rule, so the bar ends on the action that leads, as the
+          accepted layout has it. */}
         <SidePanelToggles
           leftShown={leftShown}
           inspectorShown={inspectorShown}
           onLeft={onLeft}
           onInspector={onInspector}
         />
+        {/* `null` and `false` are what a conditional slot gives when it is
+          empty, so they draw no rule either. */}
+        {topBarEnd === undefined ||
+        topBarEnd === null ||
+        topBarEnd === false ? null : (
+          <>
+            <span
+              aria-hidden="true"
+              className="h-5 w-px shrink-0 bg-[color:var(--nx-builder-border)]"
+            />
+            {topBarEnd}
+          </>
+        )}
       </div>
     </header>
   );
@@ -1176,6 +1305,7 @@ function ShellRegions({
   appliedScale = 1,
   onZoomPick,
   renderPanel,
+  renderSettings,
   availablePanels,
   children,
   inspector,
@@ -1236,17 +1366,8 @@ function ShellRegions({
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
 
-  /**
-   * Whether the host can fill a panel. One predicate, so the rail's items and
-   * the panel the layout reserves cannot answer differently.
-   *
-   * A name this shell does not know is never available, whatever the host
-   * offers: a request from untyped code can still name a panel that was
-   * renamed, and there is no chrome to draw it with.
-   */
-  const isAvailable = (panel: LeftPanel) =>
-    isLeftPanel(panel) &&
-    (availablePanels === undefined || availablePanels.includes(panel));
+  // Whether the host can fill a panel: see `panelAvailability`.
+  const isAvailable = panelAvailability(availablePanels, renderSettings);
 
   /**
    * The open panel, NORMALISED against what the host can fill.
@@ -1281,7 +1402,6 @@ function ShellRegions({
     current: preferences.leftPanelView,
     choose: view => update(current => ({ ...current, leftPanelView: view })),
   };
-  const { helpOpen, setHelpOpen, helpOpener } = useHelpDialog(active);
 
   return (
     <div
@@ -1319,22 +1439,15 @@ function ShellRegions({
       />
 
       <div className="flex min-h-0 flex-1">
-        <EditorRail
+        <RailAndDialogs
+          active={active}
+          renderSettings={renderSettings}
           railRef={element => {
             regionRefs.current.rail = element;
           }}
           openPanel={openPanel}
           isAvailable={isAvailable}
           onSelect={selectPanel}
-          onHelp={button => {
-            helpOpener.current = button;
-            setHelpOpen(true);
-          }}
-        />
-        <HelpDialog
-          open={helpOpen}
-          onOpenChange={setHelpOpen}
-          returnFocus={() => helpOpener.current}
         />
 
         <ResizablePanelGroup
@@ -1518,7 +1631,7 @@ function ShellRegions({
         No `aria-label`. A `<footer>` nested inside a section is `generic`, and
         `aria-label` is PROHIBITED on that role — so the name was not announced
         and the element was invalid. Nothing is lost: the breadcrumb inside
-        names itself ("Selected block's ancestors"), which is the thing a
+        names itself ("Current location"), which is the thing a
         reader actually lands on.
       */}
       <footer className="border-[color:var(--nx-builder-border)] text-[color:var(--nx-builder-text-muted)] flex h-8 shrink-0 items-center gap-2 border-t px-3 text-xs">
@@ -1753,6 +1866,9 @@ export function BuilderShell({
 
   return (
     <ShortcutProvider>
+      {/* The same manager, listening in the canvas's frame as well, so a key
+          pressed with focus inside the page reaches every binding above. */}
+      <CanvasFrameShortcuts />
       {/* Provided here rather than required of the host: the shell's own
           controls carry tooltips, so a shell that renders them depends on this
           and should not make it someone else's setup step. Radix nests

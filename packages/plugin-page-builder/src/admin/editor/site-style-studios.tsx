@@ -28,6 +28,7 @@ import {
   type FontsPanelProps,
 } from "@nextlyhq/builder/shell";
 import { useUploadMedia } from "@nextlyhq/plugin-sdk/admin";
+import { useCan } from "@nextlyhq/plugin-sdk/client";
 import { WEB_FONT_FORMATS } from "nextly/config";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
@@ -40,6 +41,7 @@ import {
 import { useSaveSiteStyle } from "../site-style-client";
 import { useShown } from "../use-shown";
 
+import { useDesignHeaderSlot } from "./design-panel";
 import { StyleRevisionContext } from "./site-style-history";
 
 /**
@@ -141,6 +143,11 @@ export function TokensStudio({
   pending: boolean;
 }): React.JSX.Element {
   const { save } = useSaveSiteStyle();
+  // The server refuses a change to the site style without this grant; the
+  // panel shows the variables read-only rather than offering edits it would
+  // refuse.
+  const mayChange = useCan("update-site-style");
+  const headerActions = useDesignHeaderSlot();
   /*
    * What the CANVAS resolves, which is what the studio has to show and edit.
    *
@@ -213,6 +220,8 @@ export function TokensStudio({
       supplied={baseline}
       issue={issue}
       absence={pending ? "pending" : "failed"}
+      readOnly={!mayChange}
+      headerActions={headerActions}
       onChange={commit}
       /*
        * The set as it is at the moment an import needs it, rather than the one

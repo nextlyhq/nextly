@@ -18,6 +18,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
+import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
@@ -144,7 +145,7 @@ async function saveDraft(page: Page): Promise<void> {
       ["PATCH", "PUT", "POST"].includes(response.request().method()) &&
       response.ok()
   );
-  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await pressSave(page);
   await saved;
 }
 
@@ -210,7 +211,7 @@ test.describe("the inspector", () => {
 
     const card = page.locator("[data-block-card]");
     await expect(card.getByRole("heading", { level: 2 })).toHaveText("Heading");
-    await expect(card).toContainText("A section title.");
+    await expect(card).toContainText("A title for a page or section.");
     await expect(card.locator(".nx-block-icon")).toBeVisible();
     await expect(
       card.getByRole("button", { name: "Actions for Heading" })
@@ -353,7 +354,7 @@ test.describe("the inspector", () => {
     await expect(content.getByLabel("Text")).toBeEnabled();
 
     await page.getByRole("button", { name: "Actions for Heading" }).click();
-    await page.getByRole("menuitem", { name: "Lock" }).click();
+    await page.getByRole("menuitem", { name: "Lock", exact: true }).click();
 
     await expect(page.locator('[data-lock="layers"]')).toContainText("Locked");
     await expect(content.getByLabel("Text")).toBeDisabled();
@@ -361,7 +362,7 @@ test.describe("the inspector", () => {
     await expect(page.locator("[data-read-only]")).toContainText("Locked");
 
     await page.getByRole("button", { name: "Actions for Heading" }).click();
-    await page.getByRole("menuitem", { name: "Unlock" }).click();
+    await page.getByRole("menuitem", { name: "Unlock", exact: true }).click();
     await expect(page.locator('[data-lock="layers"]')).toHaveCount(0);
     await page.getByRole("tab", { name: "Content" }).click();
     await expect(content.getByLabel("Text")).toBeEnabled();

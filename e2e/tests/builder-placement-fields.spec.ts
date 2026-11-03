@@ -10,7 +10,7 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { canvasRoot } from "./canvas/editor-driver";
+import { canvasRoot, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -178,8 +178,7 @@ async function save(page: Page, pageId: string): Promise<void> {
       ["PATCH", "PUT"].includes(response.request().method()) &&
       response.ok()
   );
-  // "Save draft" on a page never published, "Save" on one that is.
-  await page.getByRole("button", { name: /^Save( draft)?$/ }).click();
+  await pressSave(page);
   await saved;
 }
 

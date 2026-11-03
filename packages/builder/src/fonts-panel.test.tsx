@@ -85,7 +85,7 @@ describe("the panel over a site that has been read", () => {
       )
     ).toBeTruthy();
     expect(
-      screen.getByText(/Brand is the typeface this token asks for first/)
+      screen.getByText(/Brand is the typeface this variable asks for first/)
     ).toBeTruthy();
   });
 
@@ -298,7 +298,7 @@ describe("the panel over a site that has been read", () => {
   it("says a site with no faces has none, rather than staying silent", () => {
     render(<FontsPanel faces={[]} tokens={{ tokens: [] }} />);
     expect(screen.getByText(/loads no font files of its own/)).toBeTruthy();
-    expect(screen.getByText(/no typeface tokens yet/)).toBeTruthy();
+    expect(screen.getByText(/no typeface variables yet/)).toBeTruthy();
   });
 });
 
@@ -934,5 +934,13 @@ describe("what a cut label and a specimen say", () => {
     const listed = within(region);
     expect(listed.getByText("400")).toBeTruthy();
     expect(listed.getByText("700")).toBeTruthy();
+  });
+});
+
+describe("the Fonts tab's words", () => {
+  it("says typefaces and variables, never tokens", () => {
+    render(<FontsPanel faces={[]} tokens={{ tokens: [] }} />);
+    expect(screen.getByRole("heading", { name: "Typefaces" })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/token/i);
   });
 });

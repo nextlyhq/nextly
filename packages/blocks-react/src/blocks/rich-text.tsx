@@ -90,19 +90,28 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
   defineBlock({
     name: "core/rich-text",
     version: 1,
-    description:
-      "A passage of formatted text: bold and links within a sentence, lists, and headings between paragraphs, all held as one value.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A passage of
+    // formatted text: bold and links within a sentence, lists, and headings
+    // between paragraphs, all held as one value.
+    description: "Text with bold, links, lists and headings.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
     editor: {
       label: "Rich text",
-      icon: "text",
+      // Its own mark, so a passage is told from plain Text at a glance.
+      icon: "rich-text",
       category: CONTENT,
       keywords: ["rich text", "formatted", "prose", "wysiwyg", "editor"],
     },
     props: {
-      content: { role: "content", type: RICH_TEXT_PROP_TYPE, inline: true },
+      content: {
+        label: "Content",
+        role: "content",
+        type: RICH_TEXT_PROP_TYPE,
+        inline: true,
+      },
     },
     defaultProps: { content: EMPTY_PASSAGE },
     /*

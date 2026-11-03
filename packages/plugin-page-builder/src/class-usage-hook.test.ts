@@ -43,6 +43,7 @@ function harness(
     getCollection?: () => Promise<unknown>;
     draftSplit?: () => Promise<{ eligible: boolean }>;
     locales?: readonly string[];
+    markDirty?: () => Promise<void>;
   } = {}
 ) {
   const registered: string[] = [];
@@ -99,13 +100,16 @@ function harness(
     delete: vi.fn(async () => ({})),
   };
 
-  registerClassUsageMaintenance({
+  const reconcile = registerClassUsageMaintenance({
     ctx,
     indexCollection: INDEX,
     componentIndexCollection: COMPONENT_INDEX,
     draftSplit: options.draftSplit ?? (async () => ({ eligible: false })),
     locales: () => options.locales ?? [],
     limits: () => DEFAULT_LIMITS,
+    ...(options.markDirty === undefined
+      ? {}
+      : { markDirty: options.markDirty }),
   });
 
   const fire = (over: Record<string, unknown> = {}) =>
@@ -131,7 +135,7 @@ function harness(
       ...over,
     });
 
-  return { registered, fire, fireDelete, api, errors };
+  return { registered, fire, fireDelete, api, errors, reconcile };
 }
 
 describe("what maintenance is registered on", () => {
@@ -527,5 +531,100 @@ describe("a Single, which a wildcard registration also receives", () => {
     await fire({ collection: "my:pages" });
 
     expect(api.create).toHaveBeenCalled();
+  });
+});
+
+describe("reconciling a write made in a caller-owned transaction", () => {
+  it("brings the indexes up to date for the document named", async () => {
+    const { api, reconcile } = harness();
+
+    await reconcile({ slug: "pages", documentId: "p1", nextly: api as never });
+
+    expect(api.findByID).toHaveBeenCalled();
+  });
+
+  it("logs a failure and never raises it, since the write has committed", async () => {
+    const { api, errors, reconcile } = harness({
+      getCollection: () => Promise.reject(new Error("registry unavailable")),
+    });
+
+    await expect(
+      reconcile({ slug: "pages", documentId: "p1", nextly: api as never })
+    ).resolves.toBeUndefined();
+    expect(errors).toHaveLength(1);
+  });
+
+  it("marks the index dirty when the document cannot be reconciled", async () => {
+    const marks: string[] = [];
+    const { api, reconcile } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
+
+    await expect(
+      reconcile({ slug: "pages", documentId: "p1", nextly: api as never })
+    ).resolves.toBeUndefined();
+    expect(marks).toEqual(["dirty"]);
+  });
+});
+
+describe("marking the index dirty when a write fails", () => {
+  it("marks it when a subject cannot be reconciled, and still raises", async () => {
+    // A failed write leaves this document's rows stale, and no later save of
+    // another document repairs them. Unmarked, health kept calling the index
+    // whole and every count over it read as exact.
+    const marks: string[] = [];
+    const { fire, api } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
+
+    await expect(fire()).rejects.toThrow(/1 of 1 subject\(s\)/);
+    expect(marks).toEqual(["dirty"]);
+  });
+
+  it("marks it when a deleted document's rows cannot be forgotten", async () => {
+    const marks: string[] = [];
+    const { fireDelete, api } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+    api.find.mockRejectedValue(new Error("index unreachable"));
+
+    await expect(fireDelete()).rejects.toThrow(/could not forget/);
+    expect(marks).toEqual(["dirty"]);
+  });
+
+  it("still raises the write's own failure when the mark cannot be written", async () => {
+    // The caller must still learn the index is stale; a failing mark is
+    // logged beside it rather than replacing it.
+    const { fire, api, errors } = harness({
+      markDirty: async () => {
+        throw new Error("bookkeeping unavailable");
+      },
+    });
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
+
+    await expect(fire()).rejects.toThrow(/1 of 1 subject\(s\)/);
+    expect(JSON.stringify(errors)).toContain("could not be marked dirty");
+  });
+
+  it("CONTROL: marks nothing on a save every subject reconciles", async () => {
+    // A handler that marked on every save would satisfy the cases above and
+    // keep every index dirty for ever.
+    const marks: string[] = [];
+    const { fire } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+
+    await expect(fire()).resolves.toBeUndefined();
+    expect(marks).toEqual([]);
   });
 });

@@ -45,6 +45,7 @@ import { acceptedKinds } from "../fields/blocks-options";
 
 import { builderAddress } from "./editor/builder-address";
 import { documentFrom, PLUGIN_SOURCE } from "./editor/stored-document";
+import { PageLayoutPicker } from "./page-layout";
 import { PageBuilderCard } from "./PageBuilderCard";
 import { useRestingPageRender } from "./use-resting-page-render";
 
@@ -193,6 +194,9 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       canEdit={editable}
       href={"href" in address ? address.href : undefined}
       onNavigate={navigateTo}
+      // The page's Layout, chosen where its blocks are summarised. Draws
+      // nothing for a form that is not a page's.
+      after={<PageLayoutPicker control={control} disabled={!editable} />}
       {...("unavailable" in address
         ? { note: address.unavailable }
         : address.note === undefined

@@ -148,23 +148,32 @@ test.describe("the editor inside locked areas", () => {
     ).not.toHaveAttribute("aria-disabled", "true");
   });
 
-  test("offers nothing to insert into a slot locked all, and says why", async ({
+  test("adds after a slot locked all rather than into it, and says where", async ({
     page,
   }) => {
     await open(page);
     await clickBlock(page, "lk-row-heading");
     // The rail's button for the panel holding the inserter.
     await page.getByRole("button", { name: "Add" }).click();
-    // The inserter's own sentence: the toolbar carries the same reason for
-    // its dimmed actions, so the page holds it more than once.
-    await expect(page.getByRole("listbox").getByText(FIXED)).toBeVisible({
-      timeout: 15_000,
-    });
-    await expect(page.getByRole("option")).toHaveCount(0);
+    const heading = page.getByRole("option", { name: "Heading", exact: true });
+    // The row refuses every block, so a tile climbs past it and says so.
+    await expect(heading).toHaveAccessibleDescription(
+      /^Goes after Fixed row\./,
+      { timeout: 15_000 }
+    );
+    await heading.click();
 
-    // The control: after a free block, the inserter offers blocks.
+    const placed = (await tree(page)) as unknown[];
+    expect(placed).toHaveLength(PLACED.length + 1);
+    // The row as it was, and the new block straight after it.
+    expect(placed[1]).toEqual(PLACED[1]);
+    expect(typeof placed[2]).toBe("string");
+    expect(placed.slice(3)).toEqual(PLACED.slice(2));
+
+    // The control: after a free block, a tile goes where the line says, with
+    // nothing to add about it.
     await clickBlock(page, "lk-free-text");
-    await expect(page.getByRole("option").first()).toBeVisible();
+    await expect(heading).not.toHaveAccessibleDescription(/Goes/);
   });
 
   test("shows a block's design read-only inside contentOnly, its content editable", async ({
@@ -175,7 +184,10 @@ test.describe("the editor inside locked areas", () => {
 
     await expect(page.getByText(SEALED_DESIGN)).toBeVisible();
     await expect(page.getByLabel("Text", { exact: true })).toBeEnabled();
-    await expect(page.getByLabel("Level", { exact: true })).toBeDisabled();
+    // Level is a row of radio buttons; the held block holds every one.
+    await expect(
+      page.getByRole("radiogroup", { name: "Level" }).getByRole("radio").first()
+    ).toBeDisabled();
     // The block's own lock is held with its design: the card's menu shows
     // Lock disabled, with the reason.
     await page.getByRole("button", { name: "Actions for Heading" }).click();
@@ -203,7 +215,9 @@ test.describe("the editor inside locked areas", () => {
     // The control: a free heading's level is editable.
     await clickBlock(page, "lk-free-heading");
     await page.getByRole("tab", { name: "Content" }).click();
-    await expect(page.getByLabel("Level", { exact: true })).toBeEnabled();
+    await expect(
+      page.getByRole("radiogroup", { name: "Level" }).getByRole("radio").first()
+    ).toBeEnabled();
     await expect(includingHidden(page).getByText(SEALED_DESIGN)).toHaveCount(0);
   });
 });
