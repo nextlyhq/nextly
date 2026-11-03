@@ -345,21 +345,12 @@ export async function runChecks(args: {
   } catch {
     sqlFiles = [];
   }
-  // The folder as every reader reads it: an old Builder file is named and
-  // checked no further, and a file with only part of its signature is named
-  // with what it lacks and checked as any migration. Classifying reads
-  // statements, so without a dialect no file is set aside.
-  if (args.dialect !== undefined) {
-    const folder = await readMigrationFolder(migrationsDir, args.dialect);
-    const ignored = new Set(folder.oldBuilderFiles.map(f => f.file));
-    for (const file of folder.oldBuilderFiles) {
-      logger.info(oldBuilderFileLine(file));
-    }
-    for (const file of folder.partialBuilderFiles) {
-      logger.warn(partialBuilderFileLine(file));
-    }
-    sqlFiles = sqlFiles.filter(f => !ignored.has(f));
-  }
+  sqlFiles = await withoutOldBuilderFiles(
+    sqlFiles,
+    migrationsDir,
+    args.dialect,
+    logger
+  );
 
   let snapshotFiles: string[];
   try {
@@ -503,6 +494,30 @@ export async function runChecks(args: {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * `sqlFiles` as every reader of the folder reads them: an old Builder file is
+ * named and checked no further, and a file with only part of its signature is
+ * named with what it lacks and checked as any migration. Classifying reads
+ * statements, so without a dialect no file is set aside.
+ */
+async function withoutOldBuilderFiles(
+  sqlFiles: string[],
+  migrationsDir: string,
+  dialect: SupportedDialect | undefined,
+  logger: CommandContext["logger"]
+): Promise<string[]> {
+  if (dialect === undefined) return sqlFiles;
+  const folder = await readMigrationFolder(migrationsDir, dialect);
+  const ignored = new Set(folder.oldBuilderFiles.map(f => f.file));
+  for (const file of folder.oldBuilderFiles) {
+    logger.info(oldBuilderFileLine(file));
+  }
+  for (const file of folder.partialBuilderFiles) {
+    logger.warn(partialBuilderFileLine(file));
+  }
+  return sqlFiles.filter(f => !ignored.has(f));
+}
 
 /**
  * Check 6: settings changed with no migration for them, as the error the

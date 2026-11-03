@@ -82,39 +82,58 @@ export function isMarkCurrent(
 export function judgeOldBuilderLedger(
   input: OldBuilderLedgerInput
 ): OldBuilderLedger {
-  const ignoredRows = new Set<string>();
-  const toMark: { file: string; checksum: string }[] = [];
-  const changed: ChangedOldBuilderFile[] = [];
-  const inFolder = new Set<string>();
-
-  for (const { file, checksum } of input.oldBuilderFiles) {
-    inFolder.add(file);
-    ignoredRows.add(file);
-    if (!input.namedByRows.has(file)) continue;
-    // Marked afresh where no mark stands (none, or one withdrawn: the file
-    // carries the signature again), or where the file changed within it.
-    const mark = input.marks.get(file);
-    if (!isMarkCurrent(mark) || mark?.sha256 !== checksum) {
-      toMark.push({ file, checksum });
-    }
-  }
-
-  for (const { file, lacks, checksum } of input.partialBuilderFiles) {
-    inFolder.add(file);
-    const mark = input.marks.get(file);
-    if (!isMarkCurrent(mark)) continue;
-    // With the content as marked only the snapshot can have changed the
-    // reading; any other difference is read as a change of content, the
-    // stricter of the two.
-    const asMarked = mark?.sha256 === checksum && lacks.includes("snapshot");
-    changed.push({ file, change: asMarked ? "snapshot" : "content", lacks });
-  }
-
+  const inFolder = new Set([
+    ...input.oldBuilderFiles.map(f => f.file),
+    ...input.partialBuilderFiles.map(f => f.file),
+  ]);
+  const ignoredRows = new Set(input.oldBuilderFiles.map(f => f.file));
   for (const [file, mark] of input.marks) {
     if (!inFolder.has(file) && isMarkCurrent(mark)) ignoredRows.add(file);
   }
+  return {
+    ignoredRows,
+    toMark: input.oldBuilderFiles.filter(f => owesMark(input, f)),
+    changed: input.partialBuilderFiles.flatMap(f =>
+      changedSinceMarked(input, f)
+    ),
+  };
+}
 
-  return { ignoredRows, toMark, changed };
+/**
+ * Whether an old Builder file a row names is marked now: where no mark
+ * stands (none, or one withdrawn: the file carries the signature again), or
+ * where the file changed within the signature.
+ */
+function owesMark(
+  input: Pick<OldBuilderLedgerInput, "namedByRows" | "marks">,
+  { file, checksum }: { file: string; checksum: string }
+): boolean {
+  if (!input.namedByRows.has(file)) return false;
+  const mark = input.marks.get(file);
+  return !isMarkCurrent(mark) || mark?.sha256 !== checksum;
+}
+
+/**
+ * A partial file a current mark names, as the change since it was marked;
+ * none where no mark stands. With the content as marked only the snapshot
+ * can have changed the reading; any other difference is read as a change of
+ * content, the stricter of the two.
+ */
+function changedSinceMarked(
+  input: Pick<OldBuilderLedgerInput, "marks">,
+  file: OldBuilderLedgerInput["partialBuilderFiles"][number]
+): ChangedOldBuilderFile[] {
+  const mark = input.marks.get(file.file);
+  if (!isMarkCurrent(mark)) return [];
+  const asMarked =
+    mark?.sha256 === file.checksum && file.lacks.includes("snapshot");
+  return [
+    {
+      file: file.file,
+      change: asMarked ? "snapshot" : "content",
+      lacks: file.lacks,
+    },
+  ];
 }
 
 /**

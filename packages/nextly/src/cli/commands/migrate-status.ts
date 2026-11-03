@@ -83,11 +83,9 @@ import {
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatCount } from "../utils/logger";
 import {
-  discoverMigrationGroups,
+  migrationFilesInRunOrder,
   oldBuilderFileLine,
   readMigrationFolder,
-  selectVariant,
-  getSortedBaseNames,
 } from "../utils/migration-discovery";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
@@ -349,24 +347,16 @@ export async function runMigrateStatus(
       options.plugin,
       migrationsDir
     );
-    // The old Schema Builder files every reader ignores, and the marked ones
-    // that changed since, each named with a line: on standard error under
-    // `--json`, so standard output holds only the document.
-    const folder =
+    const ignoredOldBuilderFiles =
       options.plugin === undefined
-        ? await readMigrationFolder(migrationsDir, dialect)
-        : undefined;
-    const ignoredOldBuilderFiles = (folder?.oldBuilderFiles ?? []).map(
-      f => f.file
-    );
-    const oldBuilderLines = [
-      ...(folder?.oldBuilderFiles ?? []).map(oldBuilderFileLine),
-      ...(ledger.changedOldBuilderFiles ?? []).map(changedOldBuilderFileLine),
-    ];
-    for (const line of oldBuilderLines) {
-      if (options.json) process.stderr.write(`${line}\n`);
-      else logger.info(line);
-    }
+        ? await nameOldBuilderFiles({
+            migrationsDir,
+            dialect,
+            changed: ledger.changedOldBuilderFiles ?? [],
+            json: options.json === true,
+            logger,
+          })
+        : [];
     const appliedMigrations = ledger.applied;
     logger.debug(`${appliedMigrations.length} migration(s) in database`);
 
@@ -440,6 +430,31 @@ export async function runMigrateStatus(
  * yet then reads as pending, as an app file without a ledger row does.
  */
 /**
+ * Names the old Schema Builder files every reader ignores, and the marked
+ * ones that changed since, each with a line: on standard error under
+ * `--json`, so standard output holds only the document. Returns the ignored
+ * files, for the document's `ignoredOldBuilderFiles`.
+ */
+async function nameOldBuilderFiles(args: {
+  migrationsDir: string;
+  dialect: SupportedDialect;
+  changed: readonly ChangedOldBuilderFile[];
+  json: boolean;
+  logger: CommandContext["logger"];
+}): Promise<string[]> {
+  const folder = await readMigrationFolder(args.migrationsDir, args.dialect);
+  const lines = [
+    ...folder.oldBuilderFiles.map(oldBuilderFileLine),
+    ...args.changed.map(changedOldBuilderFileLine),
+  ];
+  for (const line of lines) {
+    if (args.json) process.stderr.write(`${line}\n`);
+    else args.logger.info(line);
+  }
+  return folder.oldBuilderFiles.map(f => f.file);
+}
+
+/**
  * The line naming a marked old Builder file that no longer carries the
  * signature, and the part it lacks: every history check refuses it.
  */
@@ -464,21 +479,12 @@ async function discoverMigrations(
   migrationsDir: string,
   dialect: SupportedDialect
 ): Promise<ParsedMigration[]> {
-  // Use shared migration discovery to group dialect variants
-  const groups = await discoverMigrationGroups(migrationsDir, dialect);
   const migrations: ParsedMigration[] = [];
-
-  // Process each migration group in sorted order
-  for (const baseName of getSortedBaseNames(groups)) {
-    const group = groups.get(baseName)!;
-    const selectedFile = selectVariant(group.variants, dialect);
-
-    if (!selectedFile) {
-      continue;
-    }
-
-    const filePath = resolve(migrationsDir, selectedFile);
-
+  for (const { baseName, filePath } of await migrationFilesInRunOrder(
+    migrationsDir,
+    dialect
+  )) {
+    if (filePath === undefined) continue;
     try {
       const content = await readFile(filePath, "utf-8");
       const parsed = parseMigrationFile(baseName, filePath, content);

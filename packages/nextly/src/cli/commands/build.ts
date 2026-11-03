@@ -71,11 +71,7 @@ import { loadConfigOrExit } from "../utils/command-prerequisites";
 import type { LoadConfigResult } from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
-import {
-  discoverMigrationGroups,
-  selectVariant,
-  getSortedBaseNames,
-} from "../utils/migration-discovery";
+import { migrationFilesInRunOrder } from "../utils/migration-discovery";
 import { writeGeneratedTypesFile } from "../utils/write-generated-types";
 
 import {
@@ -925,21 +921,12 @@ async function discoverMigrations(
   migrationsDir: string,
   dialect: SupportedDialect
 ): Promise<ParsedMigration[]> {
-  // Use shared migration discovery to group dialect variants
-  const groups = await discoverMigrationGroups(migrationsDir, dialect);
   const migrations: ParsedMigration[] = [];
-
-  // Process each migration group in sorted order
-  for (const baseName of getSortedBaseNames(groups)) {
-    const group = groups.get(baseName)!;
-    const selectedFile = selectVariant(group.variants, dialect);
-
-    if (!selectedFile) {
-      continue;
-    }
-
-    const filePath = resolve(migrationsDir, selectedFile);
-
+  for (const { baseName, filePath } of await migrationFilesInRunOrder(
+    migrationsDir,
+    dialect
+  )) {
+    if (filePath === undefined) continue;
     try {
       const content = await readFile(filePath, "utf-8");
       const checksum = createHash("sha256").update(content).digest("hex");

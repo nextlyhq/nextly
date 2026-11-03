@@ -34,6 +34,20 @@ function oneTable(cursor: StatementCursor): string[] | undefined {
   return name === undefined ? undefined : [name];
 }
 
+/** The table a CREATE TABLE or CREATE [UNIQUE] INDEX … ON names, read after CREATE. */
+function createdOn(cursor: StatementCursor): string[] | undefined {
+  cursor.accept("TEMPORARY");
+  if (cursor.accept("TABLE")) {
+    cursor.acceptCondition();
+    return oneTable(cursor);
+  }
+  cursor.accept("UNIQUE");
+  if (!cursor.accept("INDEX")) return undefined;
+  cursor.acceptCondition();
+  if (cursor.name() === undefined || !cursor.accept("ON")) return undefined;
+  return oneTable(cursor);
+}
+
 /**
  * The tables `statement` changes, lower-cased, or `undefined` when it is not a
  * form read here: CREATE/ALTER/DROP TABLE, CREATE [UNIQUE] INDEX … ON, MySQL's
@@ -44,18 +58,7 @@ export function tablesChangedIn(
   dialect: SupportedDialect
 ): string[] | undefined {
   const cursor = cursorOf(statement, dialect);
-  if (cursor.accept("CREATE")) {
-    cursor.accept("TEMPORARY");
-    if (cursor.accept("TABLE")) {
-      cursor.acceptCondition();
-      return oneTable(cursor);
-    }
-    cursor.accept("UNIQUE");
-    if (!cursor.accept("INDEX")) return undefined;
-    cursor.acceptCondition();
-    if (cursor.name() === undefined || !cursor.accept("ON")) return undefined;
-    return oneTable(cursor);
-  }
+  if (cursor.accept("CREATE")) return createdOn(cursor);
   if (cursor.accept("ALTER", "TABLE")) {
     cursor.acceptCondition();
     cursor.accept("ONLY");

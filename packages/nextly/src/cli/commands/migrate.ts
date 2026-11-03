@@ -30,7 +30,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -160,11 +160,9 @@ import {
 } from "../utils/command-prerequisites";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
-  discoverMigrationGroups,
+  migrationFilesInRunOrder,
   oldBuilderFileLine,
   readMigrationFolder,
-  selectVariant,
-  getSortedBaseNames,
 } from "../utils/migration-discovery";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
@@ -1948,7 +1946,7 @@ async function nameOldBuilderFiles(
  * earlier records none, and the next run records them. Without a ledger no
  * row names a file, so there is nothing to mark.
  */
-export async function markOldBuilderFiles(args: AppHistoryArgs): Promise<void> {
+async function markOldBuilderFiles(args: AppHistoryArgs): Promise<void> {
   const history = await readAppHistory(args);
   if (history === undefined) return;
   for (const { file, checksum } of history.oldBuilder.toMark) {
@@ -2519,21 +2517,15 @@ async function discoverMigrations(
   dialect: SupportedDialect,
   source: MigrationSource = "app"
 ): Promise<ParsedMigration[]> {
-  // Use shared migration discovery to group dialect variants
-  const groups = await discoverMigrationGroups(migrationsDir, dialect);
   const migrations: ParsedMigration[] = [];
-
-  // Process each migration group in sorted order
-  for (const baseName of getSortedBaseNames(groups)) {
-    const group = groups.get(baseName)!;
-    const selectedFile = selectVariant(group.variants, dialect);
-
-    if (!selectedFile) {
+  for (const { baseName, filePath } of await migrationFilesInRunOrder(
+    migrationsDir,
+    dialect
+  )) {
+    if (filePath === undefined) {
       logger.warn(`No suitable migration file found for ${baseName}`);
       continue;
     }
-
-    const filePath = resolve(migrationsDir, selectedFile);
 
     try {
       const content = await readFile(filePath, "utf-8");
@@ -2545,7 +2537,7 @@ async function discoverMigrations(
       // run report success while the transition this one describes never happened.
       if (isLocalizationIntentRefusal(error)) throw error;
       logger.warn(
-        `Failed to parse migration file ${selectedFile}: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to parse migration file ${basename(filePath)}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

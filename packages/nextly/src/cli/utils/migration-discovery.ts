@@ -183,6 +183,25 @@ export async function discoverMigrationGroups(
   return (await readMigrationFolder(migrationsDir, dialect)).groups;
 }
 
+/**
+ * Each migration in the folder in run order, with the path of the file
+ * `dialect` runs (`selectVariant`), or undefined where its group has none:
+ * the one walk over the folder every reader of migration files reads.
+ */
+export async function migrationFilesInRunOrder(
+  migrationsDir: string,
+  dialect: SupportedDialect
+): Promise<{ baseName: string; filePath: string | undefined }[]> {
+  const groups = await discoverMigrationGroups(migrationsDir, dialect);
+  return getSortedBaseNames(groups).map(baseName => {
+    const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
+    return {
+      baseName,
+      filePath: file === undefined ? undefined : resolve(migrationsDir, file),
+    };
+  });
+}
+
 /** `files` grouped by base name, each group with its dialect variants. */
 function groupMigrationFiles(
   files: readonly string[]
