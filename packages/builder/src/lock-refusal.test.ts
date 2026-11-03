@@ -239,4 +239,46 @@ describe("layersLockRefusalFor", () => {
       ])
     ).toBeUndefined();
   });
+
+  describe("moves of other blocks across a locked one, as the save reads them", () => {
+    const row = (ids: string[]) =>
+      ({
+        formatVersion: 1,
+        kind: "page",
+        nodes: ids.map(id =>
+          id === "hero" ? box("hero", { locked: true, name: "Hero" }) : box(id)
+        ),
+      }) as unknown as BlockDocument;
+    const saved = row(["lead", "mid", "hero", "tail"]);
+
+    it("allows one sibling moved across it, which the save accepts too", () => {
+      expect(
+        layersLockRefusalFor(
+          saved,
+          [{ kind: "move", id: "lead", to: { index: 3 } }],
+          saved
+        )
+      ).toBeUndefined();
+    });
+
+    it("refuses moving several past it at once, which the save reads as the locked block moving", () => {
+      expect(
+        layersLockRefusalFor(
+          saved,
+          // To [hero, lead, mid, tail]: two blocks moved past it, where the
+          // hero moving back would explain the page with one.
+          [
+            { kind: "move", id: "lead", to: { index: 2 } },
+            { kind: "move", id: "mid", to: { index: 2 } },
+          ],
+          saved
+        )
+      ).toEqual({
+        code: "layers-locked",
+        label: "Hero",
+        relation: "self",
+        verb: "move",
+      });
+    });
+  });
 });

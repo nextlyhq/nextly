@@ -43,21 +43,6 @@ import { TEST_MODULE, collectModules } from "./source-modules";
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Files still carrying a realm-bound check, by exact path, with exactly the
- * constructors each names.
- *
- * The inline text hook, whose event-target check moves to `dom-kind`
- * together with the change that hands it the canvas's document in place of
- * the global one. An entry is compared for EQUALITY, not
- * containment: a new check added to one of these files fails like anywhere
- * else, and converting the listed one fails until its entry is removed, so the
- * list can only shrink.
- */
-const PENDING: ReadonlyMap<string, readonly string[]> = new Map([
-  ["use-inline-text.ts", ["Element"]],
-]);
-
-/**
  * The DOM constructors this realm defines, read off the realm rather than
  * listed: everything that is `Node`, `Event`, `EventTarget` or `Window`, or
  * inherits from one of them.
@@ -149,29 +134,20 @@ describe("node kinds are asked through dom-kind", () => {
         "block-toolbar.tsx",
         "geometry-dom.ts",
         "dom-kind.ts",
-        ...PENDING.keys(),
+        // The last file to carry one, converted together with the change
+        // that hands it the canvas's document.
+        "use-inline-text.ts",
       ])
     );
   });
 
-  it("finds no DOM-constructor instanceof outside the pending files", () => {
-    const offenders = files
-      .filter(file => !PENDING.has(relative(SRC_DIR, file)))
-      .flatMap(file =>
-        domInstanceofChecks(readFileSync(file, "utf8"), file).map(
-          name => `${relative(SRC_DIR, file)}: instanceof ${name}`
-        )
-      );
+  it("finds no DOM-constructor instanceof in any product file", () => {
+    const offenders = files.flatMap(file =>
+      domInstanceofChecks(readFileSync(file, "utf8"), file).map(
+        name => `${relative(SRC_DIR, file)}: instanceof ${name}`
+      )
+    );
     expect(offenders).toEqual([]);
-  });
-
-  it("finds exactly the pending checks in the pending files", () => {
-    // Also the positive control on REAL files: these checks are on disk, so a
-    // scan that read nothing, or matched nothing, fails here.
-    for (const [path, expected] of PENDING) {
-      const text = readFileSync(join(SRC_DIR, path), "utf8");
-      expect(domInstanceofChecks(text, path), path).toEqual(expected);
-    }
   });
 
   it("knows this realm's constructors", () => {

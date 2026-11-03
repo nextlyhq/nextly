@@ -9,6 +9,7 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
+import { block, clickBlock } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -76,7 +77,7 @@ async function openPanel(page: Page, search: string): Promise<void> {
     .getByRole("button", { name: "Pages" });
   if ((await item.getAttribute("aria-pressed")) !== "true") await item.click();
   await expect(
-    panel(page).getByRole("heading", { name: "Pages" })
+    panel(page).getByRole("heading", { name: "Pages", level: 2 })
   ).toBeVisible();
   await panel(page).getByRole("textbox", { name: "Search pages" }).fill(search);
 }
@@ -142,7 +143,7 @@ test.describe("the Pages panel", () => {
     await switcher(page, `${stamp} first`).click();
     await page.getByRole("menuitem", { name: "All pages…" }).click();
     await expect(
-      panel(page).getByRole("heading", { name: "Pages" })
+      panel(page).getByRole("heading", { name: "Pages", level: 2 })
     ).toBeVisible();
     await expect(
       panel(page).getByRole("textbox", { name: "Search pages" })
@@ -246,9 +247,10 @@ test.describe("the Pages panel", () => {
     const id = await createPage(page.request, `${stamp} here`);
     await openBuilder(page, id);
 
-    // An edit not yet saved: one heading deleted on the canvas.
-    const second = page.locator(`.nx-canvas [data-nx-node="${SECOND}"]`);
-    await second.click();
+    // An edit not yet saved: one heading deleted on the canvas, which is
+    // drawn in its own frame.
+    const second = await block(page, SECOND);
+    await clickBlock(page, SECOND);
     await page.keyboard.press("Delete");
     await expect(second).toHaveCount(0);
 

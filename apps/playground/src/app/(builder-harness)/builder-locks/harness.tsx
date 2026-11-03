@@ -12,7 +12,12 @@ import {
   BlockToolbar,
   BuilderShell,
   Canvas,
+  CanvasFrame,
+  CanvasFrameProvider,
+  CanvasMarks,
+  DESKTOP_PREVIEW_WIDTH,
   DropIndicator,
+  DropRefusal,
   InsertPanel,
   InspectorPanel,
   RepairNotice,
@@ -105,47 +110,60 @@ export function BuilderLocksHarness({ seed }: { seed: "placed" | "broken" }) {
       data-nx-tree={JSON.stringify(treeOf(editor.document.nodes))}
       style={{ height: "100vh" }}
     >
-      <BuilderShell
-        notices={notices}
-        // The rail's panel that holds the inserter, which it names "Add".
-        availablePanels={["add"]}
-        inspector={<InspectorPanel editor={editor} />}
-        renderPanel={panel =>
-          panel === "add" ? <InsertPanel editor={editor} /> : null
-        }
-      >
-        <BlockKeyboardActions
-          editor={editor}
-          nesting={sources.nesting}
-          // No pattern library behind this route, so saving one is not
-          // offered and the gesture does nothing.
-          onSaveAsPattern={NO_PATTERN_LIBRARY}
-          mayCreatePattern={false}
+      {/* Above the shell, as the editor provides it, so the keys and the
+          panels see the canvas's frame. */}
+      <CanvasFrameProvider>
+        <BuilderShell
+          notices={notices}
+          // The rail's panel that holds the inserter, which it names "Add".
+          availablePanels={["add"]}
+          inspector={<InspectorPanel editor={editor} />}
+          renderPanel={panel =>
+            panel === "add" ? <InsertPanel editor={editor} /> : null
+          }
         >
-          <RepairNotice editor={editor} />
-          <Canvas
-            document={editor.document}
-            siteStyles={NO_BREAKPOINTS}
-            render={{ styleContext: NO_BREAKPOINTS }}
-            selectedId={editor.selectedId}
-            selectedIds={editor.selection.ids}
-            onSelect={editor.select}
-            dragHandlers={drag.handlers}
-            // Whole, as the admin passes it, so a refused drop is drawn with
-            // its reason over the region that refuses it.
-            drag={drag}
-            overlay={
-              <>
-                <DropIndicator target={drag.target} />
-                <BlockToolbar
-                  editor={editor}
-                  hidden={drag.draggingId !== null}
-                />
-              </>
-            }
-          />
-        </BlockKeyboardActions>
-      </BuilderShell>
+          <BlockKeyboardActions
+            editor={editor}
+            nesting={sources.nesting}
+            // No pattern library behind this route, so saving one is not
+            // offered and the gesture does nothing.
+            onSaveAsPattern={NO_PATTERN_LIBRARY}
+            mayCreatePattern={false}
+          >
+            <RepairNotice editor={editor} />
+            {/* In its frame, with its chrome drawn over it, as the admin draws it. */}
+            <CanvasFrame
+              width={DESKTOP_PREVIEW_WIDTH}
+              title="Locks harness"
+              overlay={
+                <>
+                  <CanvasMarks />
+                  <DropIndicator target={drag.target} />
+                  {/* A refused drop is drawn with its reason over the region
+                      that refuses it. */}
+                  <DropRefusal drag={drag} document={editor.document} />
+                  <BlockToolbar
+                    editor={editor}
+                    hidden={drag.draggingId !== null}
+                  />
+                </>
+              }
+            >
+              <Canvas
+                document={editor.document}
+                siteStyles={NO_BREAKPOINTS}
+                render={{ styleContext: NO_BREAKPOINTS }}
+                selectedId={editor.selectedId}
+                selectedIds={editor.selection.ids}
+                onSelect={editor.select}
+                dragHandlers={drag.handlers}
+                // Whole, as the admin passes it, so the drag's marks are drawn.
+                drag={drag}
+              />
+            </CanvasFrame>
+          </BlockKeyboardActions>
+        </BuilderShell>
+      </CanvasFrameProvider>
     </main>
   );
 }

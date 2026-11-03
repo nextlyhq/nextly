@@ -22,11 +22,9 @@
  */
 import {
   authoredText,
-  contentPropsOf,
   findNode,
   getBlock,
   isComponentInstance,
-  nodeLocks,
   registryBlockSource,
   type BlockDocument,
   type BlockNode,
@@ -34,6 +32,7 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import { composedHolds } from "./component-holds";
 import { inlinePropKind } from "./inline-prop-kind";
 import { setOverrideOp } from "./instance-inspector";
 import { lockBlockingEdit } from "./locking";
@@ -56,8 +55,16 @@ export interface ExposedTextTarget {
 /** What a double-click on a component's text means. */
 export type ComposedTextAnswer =
   | { readonly kind: "exposed"; readonly target: ExposedTextTarget }
-  /** Not editable here: the text belongs to the component's design. */
-  | { readonly kind: "part-of"; readonly placementId: string };
+  /**
+   * Not editable here: the text belongs to the component's design, or, with
+   * `heldExposureId`, the exposure feeding it is held by a lock the component
+   * sets, whose row in the panel says why.
+   */
+  | {
+      readonly kind: "part-of";
+      readonly placementId: string;
+      readonly heldExposureId?: string;
+    };
 
 /**
  * What the canvas may do with a value of a composed node, or `null` when the
@@ -65,9 +72,10 @@ export type ComposedTextAnswer =
  *
  * Text a `text` exposure feeds, on an unlocked placement, is editable. Anything else in a
  * component is "part of" it: text it does not expose, a placement locked in
- * Layers, a prop that is not content inside an area locked to its content
- * (the panel holds that row read-only, with the reason), and rich text, which
- * has no inline editor for a placement yet.
+ * Layers, a value the component's own locks hold (a block it locks in Layers,
+ * or a prop that is not content inside an area locked to its content; the
+ * panel holds that row read-only, with the reason), and rich text, which has
+ * no inline editor for a placement yet.
  *
  * @param document - the page document, which holds the placement
  * @param composed - the editor's composition of it, with the exposure map
@@ -88,11 +96,19 @@ export function composedTextAt(
   const { node, placement } = found;
   const exposureId = textExposureOf(document, node, prop, placement);
   const schema = getBlock(node.type)?.props?.[prop];
+  // The judgement the panel's rows are held by, so the canvas offers exactly
+  // the text the panel lets change.
   if (
-    exposureId === undefined ||
-    inlinePropKind(schema) !== "plain" ||
-    heldByContentLock(composed, node, prop, locks)
+    exposureId !== undefined &&
+    composedHolds(composed, locks)(node, prop, false) !== undefined
   ) {
+    return {
+      kind: "part-of",
+      placementId: placement.id,
+      heldExposureId: exposureId,
+    };
+  }
+  if (exposureId === undefined || inlinePropKind(schema) !== "plain") {
     return { kind: "part-of", placementId: placement.id };
   }
   // The text the page draws for this value, through the projection every
@@ -155,24 +171,6 @@ function textExposureOf(
     return undefined;
   }
   return exposure.id;
-}
-
-/**
- * Whether the rule the store applies on the composed page holds this prop:
- * inside a `contentOnly` area only a prop declared `role: "content"` may
- * change.
- */
-function heldByContentLock(
-  composed: BlockDocument,
-  node: ResolvedBlockNode,
-  prop: string,
-  locks: SlotDefaultSource
-): boolean {
-  const held = nodeLocks(composed.nodes, locks).get(node.id);
-  return (
-    held?.area !== undefined &&
-    !contentPropsOf(locks.get(node.type)?.props).has(prop)
-  );
 }
 
 /**

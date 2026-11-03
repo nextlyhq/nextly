@@ -109,6 +109,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BreakpointSwitcher: nothing,
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
+    // Passed through: the canvas renders inside its frame, which jsdom never
+    // loads a page into.
+    CanvasFrame: ({
+      children,
+    }: {
+      children?: React.ReactNode;
+    }): React.JSX.Element => <>{children}</>,
     BlockKeyboardActions: passthrough,
     BlockContextMenu: passthrough,
     BlockToolbar: nothing,
@@ -149,6 +156,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),

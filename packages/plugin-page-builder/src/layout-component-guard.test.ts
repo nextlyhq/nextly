@@ -5,19 +5,24 @@ import {
   type LayoutGuardDirectApi,
 } from "./layout-component-guard";
 
-/** A plugin context that captures the handler, and the phase it was given. */
+/** A plugin context that captures each handler by the phase it was given. */
 function context() {
   const registered: { type: string; collection: string }[] = [];
-  let handler: ((context: unknown) => unknown) | undefined;
+  const handlers = new Map<string, (context: unknown) => unknown>();
   const ctx = {
     hooks: {
       on(type: string, collection: string, h: (context: unknown) => unknown) {
         registered.push({ type, collection });
-        handler = h;
+        handlers.set(type, h);
       },
     },
   };
-  return { ctx, registered, run: (c: unknown) => handler?.(c) };
+  return {
+    ctx,
+    registered,
+    run: (c: unknown) => handlers.get("beforeDelete")?.(c),
+    update: (c: unknown) => handlers.get("beforeChange")?.(c),
+  };
 }
 
 /**
@@ -107,7 +112,7 @@ const register = (ctx: ReturnType<typeof context>["ctx"]) =>
   });
 
 describe("deleting a component a Layout still uses", () => {
-  it("registers on beforeDelete, for the components collection only", () => {
+  it("registers on beforeDelete and beforeChange, for the components collection only", () => {
     // Named rather than the wildcard: a wildcard registration would run a
     // Layout scan on every delete the site performs.
     const c = context();
@@ -115,6 +120,7 @@ describe("deleting a component a Layout still uses", () => {
 
     expect(c.registered).toEqual([
       { type: "beforeDelete", collection: "nx_pb_components" },
+      { type: "beforeChange", collection: "nx_pb_components" },
     ]);
   });
 
@@ -357,5 +363,122 @@ describe("deleting a component a Layout still uses", () => {
     register(c.ctx);
 
     await expect(c.run({ data: { id: "cmp" } })).resolves.toBeUndefined();
+  });
+});
+
+describe("unpublishing a component a Layout still uses", () => {
+  /** An update of the published component `id` to `data`. */
+  const updating = (
+    data: Record<string, unknown>,
+    nextly: unknown,
+    id = "cmp"
+  ) => ({
+    data,
+    originalData: { id, status: "published" },
+    req: { nextly },
+  });
+
+  it("refuses, naming the Layout the author has to go and edit", async () => {
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ layouts: [layout("l1", "Marketing", "cmp")] });
+
+    await expect(
+      c.update(updating({ status: "draft" }, nextly))
+    ).rejects.toThrow(
+      /cannot be unpublished because the Layout "Marketing" uses it/
+    );
+  });
+
+  it("allows the unpublish when no Layout names it", async () => {
+    // The control: without it, a guard refusing every update would pass the
+    // refusal case.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ layouts: [layout("l1", "Marketing", "other")] });
+
+    await expect(
+      c.update(updating({ status: "draft" }, nextly))
+    ).resolves.toBeUndefined();
+  });
+
+  it("lets every other save through without a scan", async () => {
+    // A save leaving the status out keeps the published row live, and a
+    // publish takes nothing away: neither reads the Layouts.
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({
+      layouts: [layout("l1", "Marketing", "cmp")],
+    });
+
+    await expect(
+      c.update(updating({ title: "Renamed" }, nextly))
+    ).resolves.toBeUndefined();
+    await expect(
+      c.update(updating({ status: "published" }, nextly))
+    ).resolves.toBeUndefined();
+    await expect(
+      c.update({
+        data: { status: "draft" },
+        originalData: { id: "cmp", status: "draft" },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+    expect(asked).toEqual([]);
+  });
+
+  it("reads any explicit status other than published as an unpublish, whatever its type", async () => {
+    // Core's lifecycle gate does: a value a dialect coerces into the status
+    // column takes the row out of published all the same.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ layouts: [layout("l1", "Marketing", "cmp")] });
+
+    await expect(
+      c.update(updating({ title: "Renamed", status: false }, nextly))
+    ).rejects.toThrow(/cannot be unpublished/);
+  });
+
+  it("lets an undefined status and a create through without a scan", async () => {
+    // Core strips an undefined status before the write, so it names no
+    // change; a create has no stored row to take off the site.
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({
+      layouts: [layout("l1", "Marketing", "cmp")],
+    });
+
+    await expect(
+      c.update(updating({ title: "Renamed", status: undefined }, nextly))
+    ).resolves.toBeUndefined();
+    await expect(
+      c.update({
+        operation: "create",
+        data: { id: "cmp", status: "draft" },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+    expect(asked).toEqual([]);
+  });
+
+  it("finds the component by the stored row when the update omits its id", async () => {
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ layouts: [layout("l1", "Marketing", "cmp")] });
+
+    await expect(
+      c.update(updating({ status: "draft" }, nextly, "cmp"))
+    ).rejects.toThrow(/the Layout "Marketing" uses it/);
+  });
+
+  it("refuses inside a caller's transaction rather than reading from it", async () => {
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({});
+
+    await expect(
+      c.update({ ...updating({ status: "draft" }, nextly), executor: {} })
+    ).rejects.toThrow(/cannot be unpublished in a bulk operation/);
+    expect(asked).toEqual([]);
   });
 });

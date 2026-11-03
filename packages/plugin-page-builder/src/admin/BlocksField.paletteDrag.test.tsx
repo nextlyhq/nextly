@@ -99,6 +99,7 @@ const paths = vi.hoisted(() => ({
   library: "/library",
   components: "/library/components",
   capability: "/capability",
+  componentFacts: "/component-facts",
   layoutChoices: "/layouts/choices",
   pageCollection: "/layouts/page-collection",
 }));
@@ -218,16 +219,27 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     InspectorPanel: record("inspector"),
     Canvas: (props: Record<string, unknown>): React.JSX.Element => {
       seen.canvas = props;
-      /*
-       * The overlay is RENDERED, not dropped. The toolbar and the spacing
-       * bands are passed to the canvas as overlay content, so a recorder that
-       * returned a bare div would leave them unmounted — and every assertion
-       * about whether they are hidden would be an assertion about `undefined`.
-       */
-      return (
-        <div data-recorder="canvas">{props.overlay as React.ReactNode}</div>
-      );
+      return <div data-recorder="canvas" />;
     },
+    /*
+     * The frame's overlay is RENDERED, not dropped. The toolbar and the
+     * spacing bands are the frame's overlay content, so a recorder that
+     * dropped it would leave them unmounted — and every assertion about
+     * whether they are hidden would be an assertion about `undefined`. The
+     * canvas is passed through, as jsdom never loads a page into a frame.
+     */
+    CanvasFrame: ({
+      children,
+      overlay,
+    }: {
+      children?: React.ReactNode;
+      overlay?: React.ReactNode;
+    }): React.JSX.Element => (
+      <>
+        {children}
+        {overlay}
+      </>
+    ),
     // Passed through AND recorded: the canvas renders inside it, and what the
     // host hands it decides how a keyboard move is judged.
     BlockKeyboardActions: ({
@@ -292,6 +304,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   /*
    * Never awaited by these cases: the loader is reached only when an author
    * double-clicks a passage, and none of them do. Present because the mock
@@ -323,7 +342,17 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // library when the insert panel opens, and the capability eagerly on mount —
   // and a mock that counted both as one made "does not read the library" fail
   // for a read of something else entirely.
-  usePluginRoute: (args: { path: string }) => {
+  usePluginRoute: (args: { path: string; enabled?: boolean }) => {
+    // The component editor's own facts, read only while a component is open;
+    // a page's editor leaves the read disabled, so it answers nothing here.
+    if (args.path.startsWith(paths.componentFacts)) {
+      return {
+        data: undefined,
+        pending: args.enabled !== false,
+        error: null,
+        refetch: () => {},
+      };
+    }
     // The page's Layout reads, reads of their own: which collection holds the
     // pages, answered with nothing so this form is not a page's, and the
     // choices, asked for nothing. Neither is the library these count.

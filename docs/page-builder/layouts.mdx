@@ -106,6 +106,17 @@ If the default disappears another way, such as an import that skips hooks, the p
 repairs it. A background job checks the default every time the jobs runner runs, and
 points the default back at the **Default (site)** Layout, creating it again if needed.
 
+### Components a Layout uses are protected
+
+You cannot delete or unpublish a component that a Layout uses in any of its areas. A
+Layout appears on every page assigned to it, so the component would leave a gap on all
+of them. The refusal is `409 CONFLICT` and names each Layout that uses the component, so
+remove it from those Layouts first. Draft Layouts count, and so does an unpublished edit
+of a published Layout.
+
+Inside a batch write the check can't run safely, so deleting or unpublishing a component
+there is refused. Delete or unpublish it on its own instead.
+
 ## Existing sites: run a migration
 
 This release adds two columns to pages (`layout` and `noHeaderFooter`) and the

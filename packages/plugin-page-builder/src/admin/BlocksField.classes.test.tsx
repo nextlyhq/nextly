@@ -166,6 +166,13 @@ vi.mock("./editor/settings-dialog", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
