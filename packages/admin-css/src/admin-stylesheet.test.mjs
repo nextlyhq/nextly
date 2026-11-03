@@ -156,6 +156,19 @@ describe("isolateAdminStylesheet", () => {
       /escaped the \.nextly-admin scope: .*\.a/
     );
   });
+
+  it("refuses a variant ancestor written bare inside :is(...), naming it", () => {
+    // The confinement check reads `:is(...)` bodies as well as `:where(...)`
+    // ones: a marker list in a bare `:is(...)` is the same ancestor reference
+    // — one a host's `html.dark` satisfies from outside the wrapper — and
+    // `confineVariantClasses` rewrites no such shape, so the sequence's own
+    // gate refuses it rather than shipping the leak.
+    const leaked = ".nextly-admin .dark\\:x:is(.dark *) { color: red; }";
+
+    expect(() => isolateAdminStylesheet(leaked)).toThrow(
+      /reference a dark\/group\/peer variant outside the \.nextly-admin scope: .*:is\(\.dark \*\)/
+    );
+  });
 });
 
 describe("hasHostElementShield", () => {

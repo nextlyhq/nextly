@@ -464,7 +464,10 @@ function splitCompounds(item) {
     if (ch === "(" || ch === "[") depth++;
     else if (ch === ")" || ch === "]") depth--;
     // `[class~="x"]` keeps its `~`: it sits inside the brackets' depth.
-    if (depth === 0 && (/\s/.test(ch) || ch === ">" || ch === "+" || ch === "~")) {
+    if (
+      depth === 0 &&
+      (/\s/.test(ch) || ch === ">" || ch === "+" || ch === "~")
+    ) {
       if (current.trim()) compounds.push(current.trim());
       current = "";
     } else {
@@ -496,18 +499,35 @@ function markerOutsideScope(item, scope) {
 }
 
 /**
- * The contents of each `:where(...)` in a selector, however deeply the selector
- * nests them (`:is(:where(.group):hover *)` carries `.group`).
+ * The contents of each `:where(...)` and `:is(...)` in a selector, however
+ * deeply the selector nests them (`:is(:where(.group):hover *)` carries
+ * `.group`).
+ *
+ * Both are selector-list pseudos that match wherever a list item does, so a
+ * marker in either is an ancestor condition on the compound it attaches to —
+ * one a host's own `<html class="dark">` satisfies from outside the wrapper,
+ * whether the sheet's build wrote `:where(.dark, .dark *)` or a hand wrote
+ * `:is(.dark *)`. The other functional pseudos are not read: `:not(...)`
+ * excludes a match rather than requiring one, and `:has(...)` looks among
+ * descendants, which inside the wrapper the admin's own DOM supplies.
  */
-function* whereContents(selector) {
+function* selectorListPseudoContents(selector) {
   let from = 0;
   for (;;) {
-    const at = selector.indexOf(":where(", from);
+    // The first of the two names at or after `from`, so nesting between them
+    // cannot leave a marker unread: the group the first match opens is walked
+    // as one item, and a pseudo nested inside it (`:is(:where(.group) *)`)
+    // has its marker read as part of that item's text.
+    let at = -1;
+    for (const name of [":where(", ":is("]) {
+      const found = selector.indexOf(name, from);
+      if (found !== -1 && (at === -1 || found < at)) at = found;
+    }
     if (at === -1) return;
-    // `open` sits on the `(` of ":where(" itself, so the balanced scan covers
+    // `open` sits on the `(` of the pseudo itself, so the balanced scan covers
     // the whole group; an unbalanced one yields nothing rather than a slice
     // to the end of the selector.
-    const open = at + ":where(".length - 1;
+    const open = selector.indexOf("(", at);
     const close = skipBalanced(selector, open);
     if (close === -1) return;
     yield selector.slice(open + 1, close);
@@ -577,15 +597,17 @@ function functionalPseudoEnd(selector, i) {
  *
  * Two shapes reach for an ancestor the rule does not own:
  *
- *   - the variant references Tailwind compiles `dark:`/`group-*:`/`peer-*:`
- *     into — `:where(.dark, .dark *)`, `:is(:where(.group):hover *)` — where
- *     the marker class inside the `:where` is the ancestor;
+ *   - a marker inside a selector-list pseudo — the references Tailwind
+ *     compiles `dark:`/`group-*:`/`peer-*:` into, `:where(.dark, .dark *)`
+ *     and `:is(:where(.group):hover *)`, and the same ancestor reference
+ *     authored bare (`:is(.dark *)`), which names an element outside the
+ *     wrapper the same way;
  *   - a bare ancestor compound (`.dark .nextly-admin .x`), which passes the
  *     unscoped-rule check (the rule's own subject IS inside the wrapper) while
  *     still requiring a `.dark` ancestor the admin does not carry.
  */
 function hasUnconfinedVariant(selector, scope) {
-  for (const content of whereContents(selector)) {
+  for (const content of selectorListPseudoContents(selector)) {
     for (const item of splitTopLevel(content)) {
       if (markerOutsideScope(item, scope)) return true;
     }

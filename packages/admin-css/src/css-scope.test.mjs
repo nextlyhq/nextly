@@ -142,9 +142,9 @@ describe("findUnscopedRules", () => {
   it("flags an unscoped part of a mixed comma-separated selector list", () => {
     // The first part is scoped, the second escapes the wrapper; a whole-prelude
     // substring check would wrongly accept the rule.
-    expect(
-      findUnscopedRules(".nextly-admin .a, .leak{color:red}")
-    ).toContain(".leak");
+    expect(findUnscopedRules(".nextly-admin .a, .leak{color:red}")).toContain(
+      ".leak"
+    );
   });
 
   it("does not mistake keyframe steps for escaped rules", () => {
@@ -226,11 +226,12 @@ describe("findUnconfinedVariants", () => {
     // The class can follow a type selector (`html.dark`) or chain onto
     // another class (`.a.dark`): both name an element carrying `.dark`, and
     // a compound-initial-only check would let both through the gate.
-    expect(findUnconfinedVariants("html.dark .nextly-admin .a{color:red}"))
-      .toEqual(["html.dark .nextly-admin .a"]);
-    expect(findUnconfinedVariants(".a.dark .nextly-admin .x{color:red}")).toEqual(
-      [".a.dark .nextly-admin .x"]
-    );
+    expect(
+      findUnconfinedVariants("html.dark .nextly-admin .a{color:red}")
+    ).toEqual(["html.dark .nextly-admin .a"]);
+    expect(
+      findUnconfinedVariants(".a.dark .nextly-admin .x{color:red}")
+    ).toEqual([".a.dark .nextly-admin .x"]);
     expect(
       findUnconfinedVariants(
         ".nextly-admin .a:where(html.dark, html.dark *){color:red}"
@@ -257,14 +258,41 @@ describe("findUnconfinedVariants", () => {
     expect(findUnconfinedVariants(".nextly-admin.dark{--a:1}")).toEqual([]);
   });
 
+  it("reports a marker ancestor written bare inside :is(...)", () => {
+    // The ancestor reference does not need its `:where(...)`: authored or
+    // compiled bare in an `:is(...)`, `.dark *` still requires a `.dark`
+    // ancestor the wrapper does not carry, and a host `html.dark` satisfies
+    // it. `confineVariantClasses` rewrites no `:is(...)` shape, so this gate
+    // is what stands between one and the shipped sheet.
+    const dark = ".nextly-admin .dark\\:x:is(.dark *)";
+    expect(findUnconfinedVariants(`${dark}{color:red}`)).toEqual([dark]);
+    const group = ".nextly-admin .x:is(.group:hover *)";
+    expect(findUnconfinedVariants(`${group}{color:blue}`)).toEqual([group]);
+  });
+
+  it("passes a confined :is(...) and a :not(...) the host cannot activate", () => {
+    // A marker scoped inside the list item is confined however it is written;
+    // and `:not(...)` excludes a match rather than requiring one, so a host
+    // class there de-selects instead of activating.
+    expect(
+      findUnconfinedVariants(
+        ".nextly-admin .x:is(.nextly-admin.dark *){color:red}"
+      )
+    ).toEqual([]);
+    expect(
+      findUnconfinedVariants(".nextly-admin .x:not(.dark){color:red}")
+    ).toEqual([]);
+  });
+
   it("is not fooled by class names that merely start with a marker", () => {
-    expect(findUnconfinedVariants(".nextly-admin .group-card .a{color:red}"))
-      .toEqual([]);
+    expect(
+      findUnconfinedVariants(".nextly-admin .group-card .a{color:red}")
+    ).toEqual([]);
     // The utility class `.dark\:x` is one class name whose text contains
     // "dark", not a dark: variant — the variant is the :where, tested above.
-    expect(findUnconfinedVariants(".nextly-admin .dark\\:x{color:red}")).toEqual(
-      []
-    );
+    expect(
+      findUnconfinedVariants(".nextly-admin .dark\\:x{color:red}")
+    ).toEqual([]);
   });
 
   it("checks inside conditional at-rules", () => {
@@ -326,8 +354,9 @@ describe("a custom scope", () => {
   });
 
   it("still reports a leak when a rule escapes the given scope", () => {
-    expect(findUnscopedRules(".nextly-ui .a, .leak{color:red}", ".nextly-ui"))
-      .toHaveLength(1);
+    expect(
+      findUnscopedRules(".nextly-ui .a, .leak{color:red}", ".nextly-ui")
+    ).toHaveLength(1);
   });
 
   // A class that merely starts with the scope text is a different class, and an
