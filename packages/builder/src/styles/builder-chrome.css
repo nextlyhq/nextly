@@ -157,6 +157,23 @@
   --nx-builder-component: var(--nx-builder-component-on-light);
   --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
   --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
+  /*
+   * The editor's ONE density scale, for the top bar, the panels and the
+   * inspector alike, so every control in the editor is one size:
+   * - a control (button, field, select, icon button) is 28px high, above the
+   *   24px WCAG target;
+   * - body text and labels are 12px on a 16px line;
+   * - a section title is 12px semibold;
+   * - rows sit 8px apart.
+   * The same in light and dark: density is not a colour.
+   */
+  --nx-builder-control-height: 1.75rem;
+  --nx-builder-control-padding-x: 0.5rem;
+  --nx-builder-font-size: 0.75rem;
+  --nx-builder-line-height: 1rem;
+  --nx-builder-title-size: 0.75rem;
+  --nx-builder-title-weight: 600;
+  --nx-builder-row-gap: 0.5rem;
 }
 
 /*
