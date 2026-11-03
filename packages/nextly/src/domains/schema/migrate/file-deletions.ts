@@ -412,10 +412,7 @@ function readCreate(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
   if (cursor.accept("TEMPORARY") || cursor.accept("TEMP")) {
     return readCreateTemporary(cursor);
   }
-  if (!cursor.accept("TABLE")) return [];
-  if (cursor.accept("IF", "NOT", "EXISTS")) return [];
-  const table = cursor.name();
-  return table === undefined ? [] : [{ kind: "create", table }];
+  return readCreateTable(cursor, false);
 }
 
 /**
@@ -423,12 +420,24 @@ function readCreate(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
  * live table of its name until it is dropped.
  */
 function readCreateTemporary(cursor: StatementCursor): Step[] {
+  return readCreateTable(cursor, true);
+}
+
+/**
+ * `TABLE [IF NOT EXISTS] name`, after `CREATE [TEMPORARY]`: the table the
+ * list makes. One created only if absent may be a live table, so it makes
+ * nothing of the name.
+ */
+function readCreateTable(cursor: StatementCursor, temporary: boolean): Step[] {
   if (!cursor.accept("TABLE")) return [];
   if (cursor.accept("IF", "NOT", "EXISTS")) return [];
   const table = cursor.name();
-  return table === undefined
-    ? []
-    : [{ kind: "create", table, temporary: true }];
+  if (table === undefined) return [];
+  return [
+    temporary
+      ? { kind: "create", table, temporary }
+      : { kind: "create", table },
+  ];
 }
 
 /** A function the run defines, which a later SELECT may call. */
@@ -1361,14 +1370,18 @@ class FileWalk {
         if (key.live) this.emit({ kind: "rows", table: key.child });
         follow.push({ table: key.child, askLive: key.live });
       } else if (key.live) {
-        // A column the list added holds only the list's own values.
-        for (const column of key.columns) {
-          if (this.made(key.child, column)) continue;
-          this.emit({ kind: "column", table: key.child, column });
-        }
+        this.blank(key.child, key.columns);
       }
     }
     return follow;
+  }
+
+  /** The key columns of live `table` a SET NULL or SET DEFAULT blanks; a column the list added holds only its own values. */
+  private blank(table: string, columns: readonly string[]): void {
+    for (const column of columns) {
+      if (!this.made(table, column))
+        this.emit({ kind: "column", table, column });
+    }
   }
 
   /**
