@@ -888,6 +888,45 @@ describe("applyPluginSchemaContributions (transforms — C11)", () => {
     expect(fieldsAddedByPlugins.get("posts")).toBeUndefined();
   });
 
+  it("keeps a field a transform moved its owner's though a different field took its old path", () => {
+    // A text `note` takes the path the app's relationship left: the path is
+    // still there, but the field that stayed at it is not the one before.
+    const { fieldsAddedByPlugins } = applyPluginSchemaContributionsDeferred(
+      postsWithNote(),
+      [
+        plugin("fx", {
+          collections: [coll("fx-notes")],
+          transforms: [
+            {
+              target: "posts",
+              transform: entity => ({
+                ...entity,
+                fields: [
+                  ...((entity.fields as FieldConfig[] | undefined) ?? [])
+                    .filter(
+                      outer => (outer as { name?: string }).name !== "note"
+                    )
+                    .map(outer =>
+                      (outer as { name?: string }).name === "settings"
+                        ? groupField("settings", [
+                            ...((outer as { fields?: FieldConfig[] }).fields ??
+                              []),
+                            relField("note", "fx-notes"),
+                          ])
+                        : outer
+                    ),
+                  field("note"),
+                ],
+              }),
+            },
+          ],
+        }),
+      ]
+    );
+
+    expect(fieldsAddedByPlugins.get("posts")).toBeUndefined();
+  });
+
   it("does not count a new field its own while the transform took one of the owner's away", () => {
     // `fxNote` may be the app's `note` renamed as it moved: it cannot be
     // told from an addition, so it is not counted the plugin's.

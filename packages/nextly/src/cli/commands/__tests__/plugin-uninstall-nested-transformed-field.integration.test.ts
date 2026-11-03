@@ -164,6 +164,24 @@ const moveAppNote: EntityTransform = {
   },
 };
 
+/**
+ * The same move, with a text field of the moved one's name put at the path
+ * it left: a different field reusing that path.
+ */
+const moveAppNoteReusingItsPath: EntityTransform = {
+  target: "posts",
+  transform: entity => {
+    const moved = moveAppNote.transform(entity);
+    return {
+      ...moved,
+      fields: [
+        ...((moved.fields as FieldConfig[] | undefined) ?? []),
+        text({ name: "appNote" }),
+      ],
+    };
+  },
+};
+
 /** The plugin as the boot sees it: its notes, and `transform`. */
 function bootPlugin(transform: EntityTransform) {
   return definePlugin({
@@ -347,6 +365,25 @@ describe.each(getConfiguredTestDialects())(
 
     it("still refuses over an app field the transform only moved into that group", async () => {
       await setUp([], moveAppNote, [
+        relationship({ name: "appNote", relationTo: NOTES }),
+      ]);
+
+      const refusal: unknown = await uninstall().then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refusal).toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+      });
+      expect((refusal as { publicMessage: string }).publicMessage).toContain(
+        "settings.appNote"
+      );
+      expect(await handle.adapter.tableExists(NOTES_TABLE)).toBe(true);
+    });
+
+    it("still refuses over an app field the transform moved when a different field takes its old path", async () => {
+      await setUp([], moveAppNoteReusingItsPath, [
         relationship({ name: "appNote", relationTo: NOTES }),
       ]);
 
