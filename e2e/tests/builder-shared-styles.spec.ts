@@ -111,13 +111,13 @@ async function styleOf(page: Page, id: string): Promise<void> {
 }
 
 /**
- * The Typography section's Color field. Its name carries where its value
- * comes from ("Color From Card"), so it is matched by its start.
+ * The Typography section's Colour field. Its name carries where its value
+ * comes from ("Colour From Card"), so it is matched by its start.
  */
 const colourField = (page: Page) =>
   page
     .getByRole("region", { name: /^Typography/ })
-    .getByRole("textbox", { name: /^Color( |$)/ });
+    .getByRole("textbox", { name: /^Colour( |$)/ });
 
 test.describe("shared styles on a block", () => {
   test.describe.configure({ timeout: 180_000 });
@@ -243,7 +243,7 @@ test.describe("shared styles on a block", () => {
     await openEditorWith(page, [text(A, { classes: ["e2e-card"] })], A);
     await styleOf(page, A);
 
-    // Only Color holds a value in this test, so the section is its scope.
+    // Only Colour holds a value in this test, so the section is its scope.
     const field = page.getByRole("region", { name: /^Typography/ });
     await expect(field.getByRole("img", { name: "From Card" })).toBeVisible();
 
@@ -255,7 +255,7 @@ test.describe("shared styles on a block", () => {
 
     // Reset shows the style's value again.
     await field
-      .getByRole("button", { name: /^Reset Color on this block/ })
+      .getByRole("button", { name: /^Reset Colour on this block/ })
       .click();
     await expect(await block(page, A)).toHaveCSS("color", NAVY.rgb);
     await expect(field).not.toContainText("Set on this block");
@@ -266,7 +266,7 @@ test.describe("shared styles on a block", () => {
     await chip(page, "Card").click();
     await expect(field).toContainText("Set on this block · Move to Card");
     const moved = styleWrite(page);
-    await field.getByRole("button", { name: "Move Color to Card" }).click();
+    await field.getByRole("button", { name: "Move Colour to Card" }).click();
     await moved;
     expect((await storedClasses(page))?.[0]?.styles).toEqual(colour(BLACK.hex));
     await expect(field).not.toContainText("Set on this block");
