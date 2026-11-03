@@ -9601,6 +9601,9 @@ export class CollectionMutationService extends BaseService {
         collectionHasStatus,
         draftIsPluginCollection
       );
+      // Marked as the new draft is, so a hook diffing the two sees both as
+      // drafts rather than the marker appearing on every repeat save.
+      priorWorkingDraftDocument._isWorkingDraft = true;
     }
     // Recorded before the save's own capture, whose retention pass then keeps
     // it.

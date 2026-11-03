@@ -37,6 +37,7 @@ interface Seen {
   title: unknown;
   marked: unknown;
   originalTitle: unknown;
+  originalMarked: unknown;
 }
 
 /** The transactional surface these cases drive, narrowed to the calls used. */
@@ -85,6 +86,7 @@ describe.each(getConfiguredTestDialects())(
                     title: data.title,
                     marked: data._isWorkingDraft,
                     originalTitle: original.title,
+                    originalMarked: original._isWorkingDraft,
                   });
                 },
               ],
@@ -189,16 +191,27 @@ describe.each(getConfiguredTestDialects())(
 
         await edit(id, "draft1");
         expect(seen).toEqual([
-          { title: "draft1", marked: true, originalTitle: "live" },
+          {
+            title: "draft1",
+            marked: true,
+            originalTitle: "live",
+            originalMarked: undefined,
+          },
         ]);
         expect(fieldValues).toEqual(["draft1"]);
 
-        // A second save compares against the first draft, not the live row.
+        // A second save compares against the first draft, not the live row,
+        // and both are marked, so the marker is not reported as changing.
         seen.length = 0;
         fieldValues.length = 0;
         await edit(id, "draft2");
         expect(seen).toEqual([
-          { title: "draft2", marked: true, originalTitle: "draft1" },
+          {
+            title: "draft2",
+            marked: true,
+            originalTitle: "draft1",
+            originalMarked: true,
+          },
         ]);
         expect(fieldValues).toEqual(["draft2"]);
 
@@ -235,7 +248,12 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(result.successful).toBe(1);
       expect(seen).toEqual([
-        { title: "republished", marked: undefined, originalTitle: "live" },
+        {
+          title: "republished",
+          marked: undefined,
+          originalTitle: "live",
+          originalMarked: undefined,
+        },
       ]);
     });
   }

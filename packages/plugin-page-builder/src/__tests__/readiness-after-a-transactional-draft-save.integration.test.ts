@@ -7,9 +7,12 @@
  * `status: "published"`, so only `_isWorkingDraft` tells the two apart. The
  * transactional update hands its after-hooks the caller's transaction, and the
  * notice declines there, since a pooled read could not see the write; that is
- * what keeps a bulk draft save from being reported as a publish. Observed by
- * the notice actually recorded, with a publish through the single-entry update
- * as the control that the observation reaches the mechanism.
+ * one reason a bulk draft save is not reported as a publish. Observed by the
+ * notice actually recorded, with a publish through the single-entry update as
+ * the control that the observation reaches the mechanism. The other reason is
+ * the notice's own test of the document, which reads the working-draft marker:
+ * asked of the context the transactional draft save actually hands its hooks,
+ * it answers "not a publish".
  */
 import {
   COMPONENT_INSTANCE_TYPE,
@@ -47,7 +50,7 @@ vi.mock("nextly", async importOriginal => {
 });
 
 const { COMPONENTS_SLUG } = await import("../collections/components");
-const { COMPONENTS_NOT_PUBLISHED_CODE } = await import(
+const { COMPONENTS_NOT_PUBLISHED_CODE, leavesDocumentPublished } = await import(
   "../component-readiness-hook"
 );
 const { pageBuilder } = await import("../plugin");
@@ -59,6 +62,10 @@ interface Service {
     entries: Array<{ id: string; data: Record<string, unknown> }>,
     ctx: Record<string, unknown>
   ) => Promise<{ successful: number; failed: number }>;
+  getCollection: (
+    slug: string,
+    ctx: Record<string, unknown>
+  ) => Promise<unknown>;
 }
 
 const componentOf = (nodes: unknown[]) => ({
@@ -133,6 +140,33 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(result.successful).toBe(1);
       expect(notices()).toEqual([]);
+    });
+
+    it("judges the context a transactional draft save hands its hooks as no publish", async () => {
+      const service = t.getService("collectionService") as unknown as Service;
+      const seen: unknown[] = [];
+      t.hooks.register("afterUpdate", COMPONENTS_SLUG, async context => {
+        seen.push(context);
+      });
+      const result = await service.updateMany(
+        COMPONENTS_SLUG,
+        [{ id: hostId, data: { title: "band, edited again" } }],
+        { overrideAccess: true }
+      );
+      expect(result.successful).toBe(1);
+      expect(seen).toHaveLength(1);
+      const collection = await service.getCollection(COMPONENTS_SLUG, {});
+      expect(leavesDocumentPublished(seen[0] as never, collection)).toBe(false);
+
+      // CONTROL: the same question of a transactional publish answers yes,
+      // so the answer above is the marker's, not the collection's.
+      seen.length = 0;
+      await service.updateMany(
+        COMPONENTS_SLUG,
+        [{ id: hostId, data: { status: "published" } }],
+        { overrideAccess: true }
+      );
+      expect(leavesDocumentPublished(seen[0] as never, collection)).toBe(true);
     });
 
     it("records one when the same component is published through the single-entry update", async () => {
