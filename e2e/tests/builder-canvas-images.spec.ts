@@ -17,9 +17,12 @@ import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
 
-/** A one-pixel PNG, enough to be stored and drawn. */
+/**
+ * A 64-pixel square PNG: large enough to be pressed on the canvas, where a
+ * one-pixel image gives a pointer nowhere to land.
+ */
 const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAeklEQVR4nO3PUQkAIBTAwFfGZMa3hCH8OITBAtxm7fN1wwUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWPHYBmGYxWlLxJbIAAAAASUVORK5CYII=",
   "base64"
 );
 
@@ -144,7 +147,9 @@ test.describe("the canvas's images and buttons", () => {
       requestAnimationFrame(look);
     });
 
-    for (const id of ["lead", "cta", "lead", "address", "lead"]) {
+    // The button is drawn as a link, which a press on the canvas does not
+    // select; it is watched while the blocks around it are.
+    for (const id of ["lead", "address", "lead", "library", "lead"]) {
       await canvasBlock(page, id).click();
       await expect(canvasBlock(page, id)).toHaveAttribute(
         "data-nx-selected",
