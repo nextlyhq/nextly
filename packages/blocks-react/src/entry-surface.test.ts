@@ -159,10 +159,12 @@ const SOURCE_MODULES: ReadonlyArray<{
     //
     // The pre-hash label exists to explain an unexpected recompile from inside,
     // not to be compared by a consumer who would then be holding a second
-    // opinion about staleness.
+    // opinion about staleness. `stampedUnderCurrentEncoding` is that same
+    // staleness question, asked by `styles.ts` on a read with no context.
     internal: [
       "sharedStyleInputsId",
       "sharedStyleInputsLabel",
+      "stampedUnderCurrentEncoding",
       "UNIDENTIFIED_SHARED_INPUTS",
     ],
   },

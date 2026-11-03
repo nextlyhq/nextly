@@ -65,6 +65,16 @@ export interface PickedMedia {
   readonly filename?: string;
 }
 
+/** What a field shows of a chosen media item, read by its id. */
+export interface MediaSummary {
+  /** The file's name, as the author uploaded it. */
+  readonly name?: string;
+  /** An address to draw a small picture of it from. */
+  readonly thumbnail?: string;
+  /** Its alt text in the library, when it has one. */
+  readonly alt?: string;
+}
+
 /** What the content controls hand the host's media picker. */
 export interface MediaPickerProps {
   open: boolean;
@@ -111,6 +121,11 @@ export interface ContentServices {
    * a prop that points at one of them.
    */
   readonly findEntries?: (query: EntryQuery) => Promise<readonly FoundEntry[]>;
+  /**
+   * A media item by its id, read with the signed-in author's own access, so a
+   * stored file is shown by its picture and name rather than as "a file".
+   */
+  readonly readMedia?: (mediaId: string) => Promise<MediaSummary | null>;
   /**
    * Where a rich-text field holds the passage it has open, so the host
    * finishes it before the document is stored.
@@ -439,11 +454,12 @@ function MediaControl({
         role="group"
         aria-labelledby={`${id}-label`}
       >
-        <p className="nx-inspector__note">
-          {stored === null
-            ? "Nothing chosen."
-            : (name ?? "A file from the media library.")}
-        </p>
+        <ChosenMedia
+          mediaId={stored}
+          read={services?.readMedia}
+          pickedName={name}
+          fallback="A file from the media library."
+        />
         {Picker === undefined ? (
           <p className="nx-inspector__note">
             The media library is not available here.
@@ -480,6 +496,79 @@ function MediaControl({
       </div>
     </div>
   );
+}
+
+/**
+ * A chosen media item as a field shows it: its thumbnail, its name and its
+ * alt text, read by its id. Shared with a placement's exposed image, so a
+ * stored file reads the same in both. Until it is read, or where it cannot
+ * be, the name of the last pick, else a plain sentence that a file is chosen.
+ */
+export function ChosenMedia({
+  mediaId,
+  read,
+  pickedName,
+  fallback,
+}: {
+  mediaId: string | null;
+  read: ContentServices["readMedia"];
+  pickedName: string | undefined;
+  fallback: string;
+}): React.JSX.Element {
+  const summary = useMediaSummary(read, mediaId);
+  if (mediaId === null) {
+    return <p className="nx-inspector__note">Nothing chosen.</p>;
+  }
+  const name = summary?.name ?? pickedName ?? fallback;
+  return (
+    <div className="nx-inspector__media-chosen">
+      {summary?.thumbnail === undefined ? null : (
+        // Decorative: the name beside it says which file it is.
+        <img
+          className="nx-inspector__media-thumb"
+          src={summary.thumbnail}
+          alt=""
+        />
+      )}
+      <div className="nx-inspector__media-text">
+        <p className="nx-inspector__media-name" title={name}>
+          {name}
+        </p>
+        {summary?.alt === undefined ? null : (
+          // Named as the library's: a page's own Alt text, where the block
+          // has one, wins over it, and this is only the fallback.
+          <p className="nx-inspector__note">Library alt text: {summary.alt}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The summary of `mediaId`, read once per id; `undefined` until it is read,
+ * and for the id it was read for only, so a summary never shows beside
+ * another file's id.
+ */
+function useMediaSummary(
+  read: ContentServices["readMedia"],
+  mediaId: string | null
+): MediaSummary | null | undefined {
+  const [found, setFound] = React.useState<{
+    id: string;
+    summary: MediaSummary | null;
+  }>();
+  React.useEffect(() => {
+    if (read === undefined || mediaId === null) return;
+    let live = true;
+    const settle = (summary: MediaSummary | null) => {
+      if (live) setFound({ id: mediaId, summary });
+    };
+    read(mediaId).then(settle, () => settle(null));
+    return () => {
+      live = false;
+    };
+  }, [read, mediaId]);
+  return found?.id === mediaId ? found.summary : undefined;
 }
 
 /**
