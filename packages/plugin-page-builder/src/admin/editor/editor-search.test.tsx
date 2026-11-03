@@ -38,8 +38,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 vi.mock("@nextlyhq/builder", () => ({
   revealNode: (root: unknown, id: string) => revealNode(root, id),
-  // The platform's own spelling, as the builder would answer off a Mac.
-  keyHint: (spec: string) => (spec === "mod+k" ? "Ctrl+K" : null),
+  // The platform's own spelling, as the builder would answer.
+  keyHint: (spec: string, apple: boolean) =>
+    spec === "mod+k" ? (apple ? "⌘K" : "Ctrl+K") : null,
 }));
 
 /** What the palette was last handed, observed rather than rebuilt. */
@@ -220,12 +221,20 @@ describe("the editor's page search", () => {
 });
 
 describe("the top bar's search button", () => {
+  it("names no key in the server's render, before it knows the platform", async () => {
+    const { renderToString } = await import("react-dom/server");
+    const html = renderToString(<SearchButton onOpen={() => undefined} />);
+    // The browser's first render must match this, whatever keyboard it has.
+    expect(html).not.toContain("Ctrl+K");
+    expect(html).not.toContain("⌘K");
+  });
+
   it("opens the search, and names its shortcut as this platform spells it", () => {
     const onOpen = vi.fn();
     render(<SearchButton onOpen={onOpen} />);
     const button = screen.getByRole("button", { name: "Search and commands" });
     expect(button.getAttribute("aria-keyshortcuts")).toContain("Meta+K");
-    // Off a Mac there is no ⌘ key to press.
+    // Off a Mac there is no ⌘ key to press. jsdom reports no Apple platform.
     expect(button.textContent).toBe("Ctrl+K");
     expect(button.getAttribute("title")).toBe("Search and commands (Ctrl+K)");
     fireEvent.click(button);

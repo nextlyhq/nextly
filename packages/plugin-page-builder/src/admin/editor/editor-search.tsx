@@ -22,7 +22,7 @@ import {
   readPluginRoute,
   useDocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
-import { Button } from "@nextlyhq/ui";
+import { Button, detectApplePlatform } from "@nextlyhq/ui";
 import { FileText, Search } from "lucide-react";
 import * as React from "react";
 
@@ -79,7 +79,14 @@ export function SearchButton({
   onOpen: () => void;
 }): React.JSX.Element {
   // The key as this platform names it: ⌘K on a Mac, Ctrl+K elsewhere.
-  const hint = keyHint(COMMAND_PALETTE_KEYS);
+  // Resolved after mounting, as the editor's other hints are: a server render
+  // has no `navigator`, and would spell the key differently from the browser's
+  // first render. Until then the button names no key.
+  const [apple, setApple] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    setApple(detectApplePlatform());
+  }, []);
+  const hint = apple === null ? null : keyHint(COMMAND_PALETTE_KEYS, apple);
   return (
     <Button
       type="button"
