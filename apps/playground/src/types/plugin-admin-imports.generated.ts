@@ -23,6 +23,7 @@ const registered = {
   "@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard": _p3.NewSubmissionsCard, // widget "form-builder/new-submissions" of plugin "@nextlyhq/plugin-form-builder"
   "@nextlyhq/plugin-page-builder/admin#BlocksField": _p4.BlocksField,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p4.PageBuilderView,
+  "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p4.RemoveLayoutToolbarSlot,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
 
 /** The modules exporting each plugin's block definitions, for the page builder's editor. */

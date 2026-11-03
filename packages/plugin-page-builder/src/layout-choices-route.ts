@@ -54,6 +54,12 @@ import {
   type PageCollectionResponse,
   type RegionComponentFacts,
 } from "./layout-choices-contract";
+import { fencedStateOf } from "./layout-removal/page-reference-guard";
+import {
+  layoutRemovalStore,
+  type LayoutRemovalStore,
+} from "./layout-removal/store";
+import type { FencedLayoutState } from "./layout-removal/words";
 import {
   DEFAULT_COMPONENT_STORE,
   readingAsUser,
@@ -81,6 +87,15 @@ export type LayoutChoicesContext = Pick<PluginRouteContext, "caller" | "self">;
 export interface LayoutChoicesRequest {
   /** The Layout the page has selected, by id, or null for none. */
   readonly selected: string | null;
+  /**
+   * Where each listed Layout stands with Remove Layout's fence, asked once for
+   * the whole list. Absent, no Layout is marked.
+   */
+  readonly fence?: {
+    removalStates(
+      layoutIds: readonly string[]
+    ): Promise<ReadonlyMap<string, FencedLayoutState>>;
+  };
   /** Where component definitions are stored, as the plugin was told. */
   readonly store: ComponentStore;
   /**
@@ -238,11 +253,19 @@ export async function readLayoutChoices(
     { ...asUser, ...inLocale }
   );
 
+  const fenced =
+    (await request.fence?.removalStates(items.map(item => item.id))) ??
+    new Map<string, FencedLayoutState>();
+
   return {
-    items: items.map(item => ({
-      ...item,
-      draftChangesNotLive: drafts.has(item.id),
-    })),
+    items: items.map(item => {
+      const removal = fenced.get(item.id);
+      return {
+        ...item,
+        draftChangesNotLive: drafts.has(item.id),
+        ...(removal === undefined ? {} : { removal }),
+      };
+    }),
     meta: {
       defaultLayout: defaultReadable ? defaultLayout : null,
       defaultUnreadable: defaultLayout !== null && !defaultReadable,
@@ -499,6 +522,21 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
   };
 }
 
+/** Where each of some Layouts stands with the fence, from one read of it. */
+function fenceStates(
+  store: Pick<LayoutRemovalStore, "removalsOf">
+): NonNullable<LayoutChoicesRequest["fence"]> {
+  return {
+    removalStates: async ids =>
+      new Map(
+        (await store.removalsOf(ids)).map(removal => [
+          removal.layoutId,
+          fencedStateOf(removal),
+        ])
+      ),
+  };
+}
+
 /**
  * The route declaration: `read` on the Layouts collection, as resolved, with
  * component definitions read from the store the plugin was told about, under
@@ -527,6 +565,7 @@ export function layoutChoicesRoute(
       return Response.json(
         await readLayoutChoices(ctx, await getCachedNextly(), {
           ...query,
+          fence: fenceStates(layoutRemovalStore(ctx.db, ctx.dialect)),
           store,
           // Asked per request, as the renderer asks, so both read one answer.
           limits: limits(),
@@ -536,11 +575,14 @@ export function layoutChoicesRoute(
   };
 }
 
-/** Which collection holds the plugin's pages, as this site resolved it. */
+/** Which collections hold the plugin's pages and Layouts, as this site resolved them. */
 export function readPageCollection(
   ctx: Pick<PluginRouteContext, "self">
 ): PageCollectionResponse {
-  return { pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG };
+  return {
+    pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+    layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+  };
 }
 
 /**
