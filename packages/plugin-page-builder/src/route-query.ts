@@ -61,11 +61,35 @@ export function parseRouteQuery<S extends z.ZodType>(
     const value = params.get(name);
     if (value !== null) raw[name] = value;
   }
+  return parseParameters(raw, schema, route, "query");
+}
+
+/**
+ * A plugin route's path parameters (`:collection`, `:id`), parsed by `schema`,
+ * or the same refusal a query gets: the parameter named, its value never
+ * echoed. One refusal for both, so a route answers a bad `:id` the way it
+ * answers a bad `?limit`.
+ */
+export function parseRouteParams<S extends z.ZodType>(
+  params: Readonly<Record<string, string>> | undefined,
+  schema: S,
+  route: string
+): z.output<S> {
+  return parseParameters(params ?? {}, schema, route, "params");
+}
+
+/** `raw` parsed by `schema`, or a validation error naming each parameter refused. */
+function parseParameters<S extends z.ZodType>(
+  raw: Readonly<Record<string, string>>,
+  schema: S,
+  route: string,
+  where: "query" | "params"
+): z.output<S> {
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     throw NextlyError.validation({
       errors: parsed.error.issues.map(issue => ({
-        path: issue.path.map(String).join(".") || "query",
+        path: issue.path.map(String).join(".") || where,
         code: "INVALID_QUERY",
         message: `This parameter is not one the ${route} accepts.`,
       })),

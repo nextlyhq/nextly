@@ -344,6 +344,8 @@ function refusal(collection: string): NextlyError {
 export interface TitleField {
   readonly name: string;
   readonly kind: TitleKind;
+  /** The field's declared type, where it declares one (`text`, `email`, …). */
+  readonly type?: string;
 }
 
 /**
@@ -388,7 +390,12 @@ export function titleFieldIn(record: object): TitleField | undefined {
     fieldNames(fields)
   );
   if (name === undefined) return undefined;
-  return { name, kind: titleKind(fieldType(fields, name)) };
+  const type = fieldType(fields, name);
+  return {
+    name,
+    kind: titleKind(type),
+    ...(type === undefined ? {} : { type }),
+  };
 }
 
 /** The field types whose stored value is text, which `contains` matches. */

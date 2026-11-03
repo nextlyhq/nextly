@@ -13,6 +13,7 @@
 import {
   newId,
   resolveSiteTokens,
+  validateFontFace,
   type BreakpointSet,
   type FontFaceDef,
   type NamedClass,
@@ -817,8 +818,25 @@ function useFontFaceWriter(
        * face points at would stay in the media library. The type check after
        * the upload stays, for what the pipeline settles on.
        */
-      if (!(await beginsAsWebFont(request.file))) {
+      const signed = await webFontFormatOf(request.file);
+      if (signed === undefined) {
         return NOT_A_FONT;
+      }
+      // The face judged as the save will judge it, also BEFORE the upload: a
+      // family the site cannot store would otherwise leave a stored file no
+      // face points at.
+      const problems = validateFontFace(
+        {
+          family: request.family,
+          src: [{ url: "/api/media/pending/raw", format: signed }],
+          weight: request.weight,
+          style: request.style,
+          source: { kind: "upload" },
+        },
+        "fonts"
+      );
+      if (problems.length > 0) {
+        return problems.map(problem => problem.message).join(" ");
       }
 
       const stored_ = await storeOnce(request.file, uploaded, uploadMedia);
@@ -1072,10 +1090,11 @@ const NOT_A_FONT =
   "This file isn\u2019t a .woff2 or .woff font, so it wasn\u2019t added.";
 
 /**
- * Whether a file begins with a web font's signature, read from the same table
- * the upload gate checks the bytes against.
+ * The `format()` keyword of the web font a file begins as, by its signature,
+ * read from the same table the upload gate checks the bytes against; nothing
+ * when it begins as none.
  */
-async function beginsAsWebFont(file: File): Promise<boolean> {
+async function webFontFormatOf(file: File): Promise<string | undefined> {
   // `FileReader` rather than `Blob.arrayBuffer()`, which not every DOM the
   // admin runs in provides.
   const head = await new Promise<Uint8Array>(resolve => {
@@ -1090,7 +1109,8 @@ async function beginsAsWebFont(file: File): Promise<boolean> {
     reader.readAsArrayBuffer(file.slice(0, 4));
   });
   const text = String.fromCharCode(...head);
-  return WEB_FONT_FORMATS.some(format => format.signature === text);
+  return WEB_FONT_FORMATS.find(format => format.signature === text)
+    ?.formatKeyword;
 }
 
 /**
