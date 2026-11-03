@@ -2127,6 +2127,51 @@ describe("a length field's unit", () => {
     );
   });
 
+  it("shows a unit being typed once, in the field, not again beside it", () => {
+    // "2ch" in the field beside a "ch" suffix read as "2ch ch".
+    mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    const trigger = fieldsOf("width").getByLabelText("Unit for Width");
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: "2ch" } });
+    expect(width.value).toBe("2ch");
+    expect(trigger.textContent).toBe("");
+    fireEvent.blur(width);
+    expect(width.value).toBe("2");
+    expect(trigger.textContent).toBe("ch");
+  });
+
+  it("writes a held number when the field goes away with its menu open", () => {
+    // Selecting another block unmounts the field with no close from the menu.
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.click(trigger);
+    cleanup();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20px"'
+    );
+  });
+
+  it("drops a held number once the stored value moves under it", () => {
+    // An undo while the menu is open must not be reversed when it closes.
+    register({ dimensions: true });
+    const before = editorFor(documentOf());
+    const view = render(<StyleInspectorPanel editor={before} />);
+    const trigger = typeThenFocusUnit("20");
+    const after = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { width: "50px" } },
+      } as NodeStyles)
+    );
+    view.rerender(<StyleInspectorPanel editor={after} />);
+    fireEvent.blur(trigger, { relatedTarget: document.body });
+    expect(before.applyAll).not.toHaveBeenCalled();
+    expect(after.applyAll).not.toHaveBeenCalled();
+  });
+
   it("offers the property's keywords after its units", () => {
     const editor = mount({ dimensions: true });
     fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));

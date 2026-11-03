@@ -4708,7 +4708,11 @@ function NumericField({
   });
   const { unit, keywords } = unitMenu;
   const showUnits = !compact && unitMenu.acts;
-  const hold = useHeldBlur();
+  const hold = useHeldBlur(storedText(stored));
+  // Owned here rather than by the field, so the suffix can step aside while
+  // the field shows a unit being typed.
+  const [typing, setTyping] = React.useState(false);
+  const suffix = suffixState(unitMenu, typing, measurement);
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
   // `PX` the validator folds — is live and compiles while matching no item, and
   // a controlled select over it renders an EMPTY trigger above a value that is
@@ -4732,7 +4736,7 @@ function NumericField({
         describedBy={describedBy}
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
-        holdBlur={hold.holdBlur}
+        editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
         // A bare number takes the unit the field shows: "24" is 24px.
         onCommit={value => onCommit(withDefaultUnit(control.leaf, value, unit))}
         // The unit shown in the suffix is left out of the field.
@@ -4759,7 +4763,7 @@ function NumericField({
           // picked, so a unit added and then undone leaves the trigger still
           // displaying it while the draft has none. The draft is the only unit
           // state, and passing `undefined` would give it a second one.
-          value={unitMenu.value}
+          value={suffix.value}
           onValueChange={hold.choosing(unitMenu.choose)}
           onOpenChange={hold.onOpenChange}
         >
@@ -4777,7 +4781,7 @@ function NumericField({
             aria-describedby={describedBy}
             aria-invalid={describedBy === undefined ? undefined : true}
           >
-            <SelectValue placeholder="unit" />
+            <SelectValue placeholder={suffix.placeholder} />
           </SelectTrigger>
           <SelectContent ref={hold.content}>
             {extraUnit === null ? null : (
@@ -4968,6 +4972,23 @@ function useFieldUnit({
   };
 }
 
+/**
+ * What the unit suffix shows. While the field shows typed text that carries
+ * its own unit or a keyword ("2ch", "auto"), nothing: the text says it once,
+ * where the suffix beside it read as "2ch ch".
+ */
+function suffixState(
+  unitMenu: { value: string; isKeyword: boolean },
+  typing: boolean,
+  measurement: ReturnType<typeof measurementOfText>
+): { value: string; placeholder: string } {
+  const typedOwn =
+    typing && (unitMenu.isKeyword || unitOf(measurement) !== undefined);
+  return typedOwn
+    ? { value: "", placeholder: "" }
+    : { value: unitMenu.value, placeholder: "unit" };
+}
+
 /** A blur's commit, held while focus moves within one control. */
 interface HoldBlur {
   /** Whether focus moving to `next` stays within the control. */
@@ -4984,7 +5005,10 @@ interface HoldBlur {
  * Held, the choice writes the number with its unit as one step; closing the
  * menu without a choice, or moving past it, writes the number as typed.
  */
-function useHeldBlur(): {
+function useHeldBlur(
+  /** The stored value as text; a held commit is dropped once it moves. */
+  storedKey: string
+): {
   holdBlur: HoldBlur;
   trigger: React.RefObject<HTMLButtonElement | null>;
   content: React.RefObject<HTMLDivElement | null>;
@@ -4996,6 +5020,21 @@ function useHeldBlur(): {
   const open = React.useRef(false);
   const trigger = React.useRef<HTMLButtonElement | null>(null);
   const content = React.useRef<HTMLDivElement | null>(null);
+  // A value that moved under the held commit — an undo while the menu is
+  // open — wins: writing the older typed text over it would reverse it.
+  React.useEffect(() => {
+    held.current = null;
+  }, [storedKey]);
+  // A field taken away with its menu open, as selecting another block does,
+  // gets no close from the menu: the typed number is written as it goes.
+  React.useEffect(
+    () => () => {
+      const commit = held.current;
+      held.current = null;
+      commit?.();
+    },
+    []
+  );
   const within = (next: EventTarget | null): boolean =>
     isElement(next) &&
     (trigger.current?.contains(next) === true ||
@@ -5026,6 +5065,100 @@ function useHeldBlur(): {
   };
 }
 
+/** Write a text field's draft, when it differs from what is stored. */
+function commitDraft({
+  draft,
+  stored,
+  kind,
+  onCommit,
+  setDraft,
+}: {
+  draft: string;
+  stored: StyleValue | undefined;
+  kind: StyleControlKind | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+  setDraft: (value: string) => void;
+}): void {
+  if (draft === storedText(stored)) return;
+  // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
+  // strips NBSP and the Unicode spaces, so a draft of nothing but a
+  // non-breaking space would read as empty and DELETE the declaration —
+  // where the engine treats it as a value and refuses it.
+  const emptied = trimCssWhitespace(draft) === "";
+  const outcome = onCommit(emptied ? null : committedValue(kind, draft));
+  // The document did not move because it already holds this value in another
+  // spelling: `01`, `+1` and `1e0` all commit as the `1` that is stored. The
+  // effect above cannot cover it — `stored` is identical, so it does not fire
+  // — and without this the field goes on showing text the document does not
+  // contain until something remounts it. A REFUSAL deliberately keeps the
+  // draft: the author has to be able to correct what they typed.
+  if (outcome === "unchanged") setDraft(storedText(stored));
+}
+
+/**
+ * What a number field shares with its text field: the commit it holds while
+ * focus moves to its unit menu, and whether text was typed since focus, which
+ * its unit suffix reads.
+ */
+interface FieldEditing {
+  readonly holdBlur: HoldBlur;
+  readonly typing: boolean;
+  readonly setTyping: (typing: boolean) => void;
+}
+
+/**
+ * The field's text and hint as shown: through `display` (which leaves out a
+ * unit shown beside the field), except text typed since focus, shown as
+ * typed.
+ */
+function shownText(
+  display: ((text: string) => string) | undefined,
+  typing: boolean,
+  draft: string,
+  hint: string
+): { value: string; placeholder: string } {
+  if (display === undefined) return { value: draft, placeholder: hint };
+  return { value: typing ? draft : display(draft), placeholder: display(hint) };
+}
+
+/** Whether text was typed since focus: the caller's, else the field's own. */
+function useTyping(
+  editing: FieldEditing | undefined
+): [boolean, (typing: boolean) => void] {
+  const [own, setOwn] = React.useState(false);
+  return editing === undefined
+    ? [own, setOwn]
+    : [editing.typing, editing.setTyping];
+}
+
+/**
+ * The field's focus and blur: back in the field, a commit held for the unit
+ * menu is superseded by the one this field's own blur makes; leaving for the
+ * menu holds the commit; leaving elsewhere commits.
+ */
+function focusHandlers(
+  holdBlur: HoldBlur | undefined,
+  setTyping: (typing: boolean) => void,
+  commit: () => void
+): {
+  onFocus: () => void;
+  onBlur: (event: React.FocusEvent) => void;
+} {
+  return {
+    onFocus: () => {
+      if (holdBlur !== undefined) holdBlur.held.current = null;
+    },
+    onBlur: event => {
+      if (holdBlur?.within(event.relatedTarget) === true) {
+        setTyping(false);
+        holdBlur.held.current = commit;
+        return;
+      }
+      commit();
+    },
+  };
+}
+
 /**
  * A text field over one stored value.
  *
@@ -5045,7 +5178,7 @@ function TextField({
   onStep,
   display,
   fallbackHint,
-  holdBlur,
+  editing,
 }: {
   id: string;
   control: StyleControl;
@@ -5091,12 +5224,12 @@ function TextField({
   display?: (text: string) => string;
   /** The hint while nothing applies, in place of the leaf's own. */
   fallbackHint?: string;
-  /** Holds the commit while focus moves within the control; see `useHeldBlur`. */
-  holdBlur?: HoldBlur | undefined;
+  /** The number field's part in the edit; see {@link FieldEditing}. */
+  editing?: FieldEditing | undefined;
 }): React.JSX.Element {
   // Typed since focus: the text is then shown as typed, since a unit on its
   // way in ("2c" for "2ch") would read as a unit to leave out and be cut.
-  const [typing, setTyping] = React.useState(false);
+  const [typing, setTyping] = useTyping(editing);
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
   const hint = useUnsetHint(
@@ -5105,29 +5238,13 @@ function TextField({
   const commit = () => {
     // Written or not, the text is no longer mid-edit.
     setTyping(false);
-    if (draft === storedText(stored)) return;
-    // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
-    // strips NBSP and the Unicode spaces, so a draft of nothing but a
-    // non-breaking space would read as empty and DELETE the declaration —
-    // where the engine treats it as a value and refuses it.
-    const emptied = trimCssWhitespace(draft) === "";
-    const outcome = onCommit(
-      emptied ? null : committedValue(control.kind, draft)
-    );
-    // The document did not move because it already holds this value in another
-    // spelling: `01`, `+1` and `1e0` all commit as the `1` that is stored. The
-    // effect above cannot cover it — `stored` is identical, so it does not fire
-    // — and without this the field goes on showing text the document does not
-    // contain until something remounts it. A REFUSAL deliberately keeps the
-    // draft: the author has to be able to correct what they typed.
-    if (outcome === "unchanged") setDraft(storedText(stored));
+    commitDraft({ draft, stored, kind: control.kind, onCommit, setDraft });
   };
 
   return (
     <Input
       id={id}
-      value={display === undefined || typing ? draft : display(draft)}
-      placeholder={display === undefined ? hint : display(hint)}
+      {...shownText(display, typing, draft, hint)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
@@ -5136,42 +5253,45 @@ function TextField({
         setTyping(true);
         setDraft(event.target.value);
       }}
-      // Back in the field, a commit held for the unit menu is superseded by
-      // the one this field's own blur makes.
-      onFocus={() => {
-        if (holdBlur !== undefined) holdBlur.held.current = null;
-      }}
-      onBlur={event => {
-        if (holdBlur?.within(event.relatedTarget) === true) {
-          setTyping(false);
-          holdBlur.held.current = commit;
-          return;
-        }
-        commit();
-      }}
+      {...focusHandlers(editing?.holdBlur, setTyping, commit)}
       onKeyDown={event => {
         if (commitOnEnter(event, commit)) return;
-        if (onStep === undefined) return;
-        const delta = arrowStep(event);
-        if (delta === null) return;
-        // Stepped from the DRAFT rather than from what is stored, so the key
-        // works while an author is mid-edit — which is most of when they reach
-        // for it. Reading `stored` instead would either discard an uncommitted
-        // edit or, if it declined to act, leave the arrow doing nothing in a
-        // text input that has no numeric fallback: an affordance that appears
-        // broken exactly while it is being used.
-        const next = onStep(draft, delta);
-        if (next === null) return;
         // The draft follows the value that was written, so the field shows the
         // step immediately rather than waiting for `stored` to come back.
-        setDraft(next);
-        setTyping(false);
-        // Only once the step was applied, so an unsteppable value keeps the
-        // caret movement the key would otherwise perform.
-        event.preventDefault();
+        stepOnKey(event, onStep, draft, next => {
+          setDraft(next);
+          setTyping(false);
+        });
       }}
     />
   );
+}
+
+/**
+ * An arrow key's step on the draft, where the field steps and the value can
+ * be stepped; `written` receives the text that was written.
+ */
+function stepOnKey(
+  event: React.KeyboardEvent,
+  onStep: ((draft: string, delta: number) => string | null) | undefined,
+  draft: string,
+  written: (next: string) => void
+): void {
+  if (onStep === undefined) return;
+  const delta = arrowStep(event);
+  if (delta === null) return;
+  // Stepped from the DRAFT rather than from what is stored, so the key works
+  // while an author is mid-edit — which is most of when they reach for it.
+  // Reading `stored` instead would either discard an uncommitted edit or, if
+  // it declined to act, leave the arrow doing nothing in a text input that has
+  // no numeric fallback: an affordance that appears broken exactly while it is
+  // being used.
+  const next = onStep(draft, delta);
+  if (next === null) return;
+  written(next);
+  // Only once the step was applied, so an unsteppable value keeps the caret
+  // movement the key would otherwise perform.
+  event.preventDefault();
 }
 
 /**
