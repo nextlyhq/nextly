@@ -522,6 +522,55 @@ describe("counts", () => {
     expect(reads).toBe(1 + USAGE_RECOUNT_UNKNOWN_MAX);
   });
 
+  it("renews the unknown host's recounts when a style it has not read arrives", async () => {
+    const base = accessOf().access;
+    const asked: (readonly string[])[] = [];
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        asked.push(ids);
+        return {
+          whole: false,
+          mayLock: false,
+          styles: new Map(ids.map(id => [id, reach({}, false)])),
+        };
+      }),
+    };
+    const tick = async () =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+      });
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      const view = await panel({ library: [CARD], access });
+      // Spend the budget on Card.
+      for (let n = 0; n < USAGE_RECOUNT_UNKNOWN_MAX + 2; n += 1) await tick();
+      const spent = asked.length;
+      // A style made since arrives, and is read not whole.
+      view.rerender(
+        <SharedStylesPanel
+          library={[CARD, HERO]}
+          pageBlocks={NO_BLOCKS}
+          onRename={async () => ({ ok: true })}
+          access={access}
+        />
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(asked.length).toBe(spent + 1);
+      await tick();
+      // Its floors are asked about again, on the timer, not only read once.
+      expect(asked.length).toBe(spent + 2);
+      expect(asked.at(-1)).toContain("c-hero");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("asks nothing more when the count cannot become whole", async () => {
     // A blocks-backed Single, say: floors for good, so no timer.
     const { access, usageReads } = accessOf({ whole: false, counting: false });
@@ -736,9 +785,13 @@ describe("the filters", () => {
     await panel({ library: [CARD, HERO, OLD], access });
     pick(/^Unused/);
     expect(shownRows()).toEqual(["c-old"]);
-    // Hero is held back, but every page is counted: no note says otherwise
-    // over the proven row listed.
-    expect(screen.queryByText(/can be called unused/)).toBeNull();
+    // Hero is held back, and the list says some are, beside the proven row;
+    // every page is counted, so it promises no wait.
+    expect(
+      screen.getByText(
+        "Some uses could not all be counted, so some styles can't be called unused yet."
+      )
+    ).toBeTruthy();
     expect(screen.queryByText(/^Some pages/)).toBeNull();
   });
 

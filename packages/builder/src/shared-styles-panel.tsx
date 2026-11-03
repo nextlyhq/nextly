@@ -711,11 +711,8 @@ function StyleList({
   note: string | undefined;
   children: React.ReactNode;
 }): React.JSX.Element {
-  if (
-    withheld &&
-    rows.length > 0 &&
-    (note !== undefined || found.length === 0)
-  ) {
+  // Whenever Unused holds a row back it says so, beside the rows it lists.
+  if (withheld && rows.length > 0) {
     return (
       <WithheldList note={note} listed={found.length > 0}>
         {children}
@@ -892,6 +889,10 @@ function useUsage(
   const counting = countingOf(state.readings, ids);
   const [recount, setRecount] = React.useState(0);
   const recounted = React.useRef(recount);
+  // The recount the unknown host's budget runs from: renewed whenever styles
+  // not read before are read, so a style made after the budget was spent is
+  // still asked about again, not only once.
+  const budgetFrom = React.useRef(0);
   React.useEffect(() => {
     // Only while the site is still being counted, or may be: floors that
     // nothing will make whole (content the index cannot reach) are not asked
@@ -901,7 +902,7 @@ function useUsage(
       whole,
       counting,
       failed: state.failed,
-      recounts: recount,
+      recounts: recount - budgetFrom.current,
     });
     if (!due) return;
     const timer = setTimeout(
@@ -921,6 +922,7 @@ function useUsage(
       id => id !== "" && (again || !known.current.has(id))
     );
     if (unread.length === 0) return;
+    if (!again) budgetFrom.current = recount;
     return readInto(access, unread, setState);
   }, [access, key, recount]);
   // Styles asked about again on their own, after a write the server refused.
@@ -1180,6 +1182,8 @@ function RowContent({
         style={tile.page}
         data-dark-unreadable={tile.darkUnreadable ? "" : undefined}
       >
+        {/* Outlined: its outline is inline, chosen against its own
+            background; the class marks it. */}
         <span
           className={
             tile.outlined
