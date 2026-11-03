@@ -4852,9 +4852,20 @@ function suffixedText(
   shown: boolean
 ): { display?: (text: string) => string; fallbackHint?: string } {
   if (!shown) return {};
+  const fallbackHint = bareNumberHint(control);
   return {
-    display: isKeyword ? () => "" : text => withoutUnit(text, unit),
-    fallbackHint: bareNumberHint(control),
+    display: isKeyword
+      ? () => ""
+      : text => {
+          // A length in another unit (an inherited "2px" beside a pending
+          // "rem") is not shown beside this one, which would read as one
+          // value it is not; the plain hint takes its place.
+          const other = unitOf(measurementOfText(text));
+          return other !== undefined && other !== unit
+            ? fallbackHint
+            : withoutUnit(text, unit);
+        },
+    fallbackHint,
   };
 }
 
@@ -4933,10 +4944,15 @@ function useFieldUnit({
     isKeyword,
     acts:
       units.length > 0 && unitActs(draft, measurement, inherited, isKeyword),
-    value: isKeyword ? draft : unit,
+    // A unit chosen over a stored keyword shows at once, though nothing is
+    // written until a number is typed.
+    value: isKeyword && chosen === undefined ? draft : unit,
     choose: choice => {
       // A keyword is a whole value, written as chosen.
-      if (keywords.includes(choice)) return write(choice);
+      if (keywords.includes(choice)) {
+        setChosen(undefined);
+        return write(choice);
+      }
       setChosen(choice);
       // Composed from the draft, which is what the author is looking at;
       // with no number on screen yet, the unit waits for one.

@@ -139,6 +139,24 @@ describe("a length field's unit", () => {
     expect(unit).toContain("font-size: var(--text-xs)");
   });
 
+  it("draws a refusal's border on the whole control", () => {
+    // The field gave its border up to the box, so the box shows the refusal.
+    expect(
+      ruleBody(
+        '.nx-style-inspector__numeric:has(> .nx-style-inspector__unit):has( [aria-invalid="true"] )'
+      )
+    ).toContain("border-color: var(--nx-destructive)");
+  });
+
+  it("keeps four characters of the number in view beside the unit", () => {
+    // A narrow control column used to cut "-0.035" to "-0.03" beside the menu.
+    expect(
+      ruleBody(
+        ".nx-style-inspector__numeric:has(> .nx-style-inspector__unit) > :first-child"
+      )
+    ).toContain("min-width: calc(4ch + 1.5rem)");
+  });
+
   it("draws the focus ring on the whole control, the field's own given up", () => {
     expect(
       ruleBody(

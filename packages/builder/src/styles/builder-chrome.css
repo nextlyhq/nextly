@@ -2072,17 +2072,34 @@
   background: var(--nx-background);
 }
 
+/* A refused value marks the whole control, the field's own border given up. */
+.nx-style-inspector__numeric:has(> .nx-style-inspector__unit):has(
+    [aria-invalid="true"]
+  ) {
+  border-color: var(--nx-destructive);
+}
+
 .nx-style-inspector__numeric:has(> .nx-style-inspector__unit):focus-within {
   outline: 2px solid var(--nx-ring);
   outline-offset: -1px;
 }
 
+/*
+ * The number keeps four characters and the field's own padding however narrow
+ * the control column gets: "-0.035" or "1.25" has to be read whole, and below
+ * this the column grows to min-content rather than cutting the value.
+ */
 .nx-style-inspector__numeric:has(> .nx-style-inspector__unit) > :first-child {
+  min-width: calc(4ch + 1.5rem);
   border: 0;
   box-shadow: none;
   background: transparent;
 }
 
+/*
+ * Exactly its text: the menu's own `min-width` is given up here, so the suffix
+ * takes no width the number could use.
+ */
 .nx-style-inspector__numeric .nx-style-inspector__unit {
   min-width: 0;
   height: auto;

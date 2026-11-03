@@ -2041,6 +2041,30 @@ describe("a length field's unit", () => {
     expect(fieldsOf("width").queryByLabelText("Unit for Width")).toBeNull();
   });
 
+  it("shows a unit chosen over a stored keyword, writing nothing until a number", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "auto" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "rem"
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("never shows an inherited length beside a different pending unit", () => {
+    // "2px" beside "rem" read as one value it is not.
+    mountCardedWidth("2px");
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    expect(width.placeholder).not.toContain("px");
+  });
+
   it("offers the property's keywords after its units", () => {
     const editor = mount({ dimensions: true });
     fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
