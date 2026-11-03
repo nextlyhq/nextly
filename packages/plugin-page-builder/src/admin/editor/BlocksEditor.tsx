@@ -33,6 +33,7 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
+  type ComponentFieldsHost,
   type OpenPassages,
 } from "@nextlyhq/builder/shell";
 import {
@@ -483,12 +484,22 @@ function editorInspector(
         onManageFonts: () => requestPanel("design", "fonts"),
       }}
       // In a component's own view: the ids its live definition holds, which a
-      // new field must never reuse, and how far a removal reaches.
-      componentFields={componentFacts}
+      // new field must never reuse, how far a removal reaches, and its name
+      // for the card heading the view, which is the open document's title.
+      componentFields={namedFacts(componentFacts, view.pageTitle)}
       // And how many placements chose a variant, for its delete dialog.
       componentVariants={componentVariants}
     />
   );
+}
+
+/** The component facts with the component's name, or nothing for a page. */
+function namedFacts(
+  facts: ComponentFieldsHost | undefined,
+  title: string | undefined
+): ComponentFieldsHost | undefined {
+  if (facts === undefined || title === undefined || title === "") return facts;
+  return { ...facts, name: title };
 }
 
 /** The canvas, or what stands in its place while a read it needs is out. */

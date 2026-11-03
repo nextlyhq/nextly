@@ -1298,79 +1298,116 @@
 }
 
 /*
- * A prop row in a component's own view: the field, then the switch that
- * exposes it. Stacked in one cell so the switch reads as belonging to the
- * field above it rather than as the next field.
+ * A prop row in a component's own view: the field, then the icon that lets
+ * each placement change it, on the same line, and under both the dashed row
+ * naming the field once it is exposed. The expose control's own wrapper is
+ * `display: contents`, so its icon, name row and reason are laid out by this
+ * grid beside the field they belong to.
  */
 .nx-inspector__prop {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 0.375rem;
+  row-gap: 0.25rem;
   min-width: 0;
+}
+
+.nx-inspector__prop > :first-child {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.nx-expose {
+  display: contents;
 }
 
 /*
- * The expose switch and, once on, the field's name. Quiet while off, since
- * most props are not exposed; once on, dashed in the component's hue, as the
- * accepted editor mock marks an exposed part (`.exposed`), so an exposed prop
- * is found at a glance down a long list.
+ * The expose icon: the component mark, quiet until hovered, in the
+ * component's hue and wash while pressed. Held (aria-disabled) stays readable
+ * and focusable, only dimmer.
  */
-.nx-expose {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 0;
-  padding: 0.25rem 0.5rem;
+.nx-expose__toggle {
+  grid-column: 2;
+  grid-row: 1;
+  display: inline-grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-top: 0.125rem;
+  padding: 0;
+  border: 1px solid transparent;
   border-radius: var(--radius-md, 0.375rem);
-  border: 1px dashed transparent;
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
 }
 
-.nx-expose[data-exposed] {
+.nx-expose__toggle:hover {
+  color: var(--nx-builder-component);
+  background: color-mix(in oklch, var(--nx-builder-component) 8%, transparent);
+}
+
+.nx-expose__toggle:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-expose__toggle[aria-pressed="true"] {
+  color: var(--nx-builder-component);
+  background: color-mix(in oklch, var(--nx-builder-component) 10%, transparent);
   border-color: color-mix(
     in oklch,
-    var(--nx-builder-component) 45%,
+    var(--nx-builder-component) 40%,
     transparent
   );
-  background: color-mix(in oklch, var(--nx-builder-component) 6%, transparent);
 }
 
-.nx-expose--visibility {
-  margin-bottom: 0.5rem;
+.nx-expose__toggle[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-/*
- * Wraps, so a long label ("Let placements hide this") puts the name on a line
- * of its own rather than squeezing it to a few letters.
- */
-.nx-expose__row {
+.nx-expose__toggle[aria-disabled="true"]:hover {
+  color: var(--nx-muted-foreground);
+  background: transparent;
+}
+
+/* The dashed "Field" row under an exposed property, naming the field. */
+.nx-expose__field {
+  grid-column: 1 / -1;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0.375rem 0.5rem;
+  gap: 0.375rem;
   min-width: 0;
-  min-height: 2rem;
+  margin-bottom: 0.25rem;
 }
 
-.nx-expose__label {
+.nx-expose__field-label {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 0.25rem;
   font-size: 0.75rem;
   font-weight: 500;
-  color: var(--nx-muted-foreground);
-}
-
-.nx-expose[data-exposed] .nx-expose__label {
   color: var(--nx-builder-component);
 }
 
-.nx-expose__name {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  flex: 1 1 9rem;
-  min-width: 0;
+.nx-expose__field .nx-field-name {
+  flex: 1 1 auto;
+}
+
+.nx-expose__name-input {
+  border-style: dashed;
+  border-color: color-mix(
+    in oklch,
+    var(--nx-builder-component) 45%,
+    var(--nx-border)
+  );
 }
 
 .nx-expose__reason {
+  grid-column: 1 / -1;
   margin: 0;
   font-size: 0.75rem;
   line-height: 1.4;
@@ -1381,90 +1418,217 @@
   color: var(--nx-destructive);
 }
 
-/*
- * The component's exposed fields, listed while nothing is selected: each a
- * name to edit, its type, the block and prop it drives, and the two things
- * that can be done with it.
- */
-.nx-exposed-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+/* A block's Shown row: the words in the field's place, the icon beside. */
+.nx-expose-shown {
+  margin-bottom: 0.5rem;
 }
 
-/* The list's own heading, at the size the inspector's section labels take. */
-.nx-exposed-fields .nx-inspector__heading {
+.nx-expose__shown {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  min-height: 2rem;
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.nx-expose__shown-label {
+  min-width: 6rem;
+  font-weight: 500;
+}
+
+.nx-expose__shown-value {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-expose[data-exposed] .nx-expose__shown-value {
+  color: var(--nx-builder-component);
+}
+
+/* A field's name and its refusal, stacked. */
+.nx-field-name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+/*
+ * The card heading a component's view: its mark in the component's wash, the
+ * name on one line (whole on hover), and what it holds.
+ */
+.nx-component-head {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--nx-border);
+  min-width: 0;
+}
+
+.nx-component-head__mark {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-lg, 0.5rem);
+  color: var(--nx-builder-component);
+  background: color-mix(in oklch, var(--nx-builder-component) 8%, transparent);
+  border: 1px solid
+    color-mix(in oklch, var(--nx-builder-component) 35%, transparent);
+}
+
+.nx-component-head__text {
+  min-width: 0;
+}
+
+.nx-component-head__name {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-component-head__holds {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--nx-muted-foreground);
+}
+
+/* The fields, as flat rows of one even width. */
+.nx-component-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.nx-component-fields .nx-inspector__heading {
   margin: 0;
   font-size: 0.75rem;
 }
 
-.nx-exposed-fields__list {
+.nx-component-fields__list {
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
 }
 
-.nx-exposed-fields__item {
+.nx-component-field {
+  display: grid;
+  grid-template-columns: 1.375rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-md, 0.375rem);
+}
+
+.nx-component-field:hover,
+.nx-component-field:focus-within {
+  background: var(--nx-accent);
+}
+
+.nx-component-field__type {
+  display: grid;
+  place-items: center;
+  color: var(--nx-builder-component);
+}
+
+.nx-component-field__text {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.5rem;
-  border: 1px solid var(--nx-border);
-  border-left: 3px solid var(--nx-builder-component);
-  border-radius: var(--radius-md, 0.375rem);
+  min-width: 0;
+}
+
+/*
+ * The field's name, edited in place but drawn as the row's title: no box
+ * until it is hovered or focused, so the list reads as a list.
+ */
+.nx-component-field__name {
+  height: 1.375rem;
+  padding: 0 0.25rem;
+  margin-left: -0.25rem;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 500;
+}
+
+.nx-component-field__name:hover {
+  border-color: var(--nx-border);
+}
+
+.nx-component-field__name:focus-visible {
   background: var(--nx-background);
 }
 
-.nx-exposed-fields__main {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.nx-exposed-fields__name {
-  flex: 1 1 auto;
-  min-width: 0;
+.nx-component-field__label {
   font-size: 0.8125rem;
   font-weight: 500;
-  line-height: 2rem;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.nx-exposed-fields__type {
-  flex: 0 0 auto;
-  margin-top: 0.4rem;
-  padding: 0 0.375rem;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--nx-builder-component);
-  background: color-mix(in oklch, var(--nx-builder-component) 12%, transparent);
-}
-
-.nx-exposed-fields__meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.nx-exposed-fields__target {
-  min-width: 0;
+.nx-component-field__source {
   font-size: 0.75rem;
   color: var(--nx-muted-foreground);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.nx-exposed-fields__actions {
+/* Drawn on hover and focus, and always where nothing can hover. */
+.nx-component-field__actions {
   display: flex;
-  flex: 0 0 auto;
   gap: 0.125rem;
+  opacity: 0;
+}
+
+.nx-component-field:hover .nx-component-field__actions,
+.nx-component-field:focus-within .nx-component-field__actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .nx-component-field__actions {
+    opacity: 1;
+  }
+}
+
+/* Before the first field: what to do, with the icon itself in the sentence. */
+.nx-component-fields__empty {
+  display: grid;
+  gap: 0.375rem;
+  padding: 0.875rem;
+  border: 1px dashed var(--nx-border);
+  border-radius: var(--radius-lg, 0.5rem);
+}
+
+.nx-component-fields__empty-title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.nx-component-fields__empty-text {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-component-fields__mark {
+  display: inline-flex;
+  vertical-align: -0.125rem;
+  color: var(--nx-builder-component);
 }
 
 .nx-remove-field__variants ul {

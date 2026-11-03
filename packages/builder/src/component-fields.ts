@@ -18,6 +18,8 @@
 import {
   EXPOSED_PROPERTY_TYPES,
   exposureTypeForProp,
+  findNode,
+  getBlock,
   isComponentDocument,
   isPlainRecord,
   planExposeProperty,
@@ -38,6 +40,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
+import { blockLabel } from "./inserter";
+import { fieldLabel, propLabel } from "./inspector";
 import type { BuilderOp } from "./ops";
 
 /**
@@ -73,6 +77,8 @@ export interface ComponentFieldsHost {
    * it a floor, said as "at least". Absent while the host has no count.
    */
   readonly pages?: { readonly count: number; readonly complete: boolean };
+  /** The component's name, for the card heading its own view. */
+  readonly name?: string;
 }
 
 /** Why the ids a new field must avoid are not known, said to the author. */
@@ -425,4 +431,69 @@ export function removalSentences(
       : `${variant.label}: loses its value`,
   }));
   return { placements, variants };
+}
+
+/** What a field's source line says of a block that is no longer there. */
+const MISSING_BLOCK = "A missing block";
+
+/**
+ * Where a field comes from, in the words an author reads: the block and the
+ * property, by the names the block gives them, never a stored prop name or an
+ * id. "Heading text", "Button link"; the block alone where the property is
+ * named as the block is ("Image"); and "Heading · level" where the plain line
+ * would only repeat the field's own name. A visibility field says what it
+ * does instead, since it drives no property.
+ */
+export function fieldSource(
+  document: BlockDocument,
+  field: ExposedProperty
+): string {
+  const node = findNode(document.nodes, field.nodeId);
+  if (node === undefined) return MISSING_BLOCK;
+  const block = blockLabel(node.type);
+  if (field.type === "visibility") return `${block}, shown or hidden`;
+  const prop = inSentence(propWord(node.type, field.propPath));
+  if (prop.toLowerCase() === block.toLowerCase()) return block;
+  const line = `${block} ${prop}`;
+  return line.toLowerCase() === field.label.trim().toLowerCase()
+    ? `${block} · ${prop}`
+    : line;
+}
+
+/** Where an exposed slot sits, and what each placement does with it. */
+export function slotSource(
+  component: ComponentDocument,
+  slotId: string
+): string {
+  const slots: unknown = component.slots;
+  const slot = isPlainRecord(slots) ? slots[slotId] : undefined;
+  const nodeId = isPlainRecord(slot) ? slot.nodeId : undefined;
+  const node =
+    typeof nodeId === "string"
+      ? findNode(component.nodes, nodeId)
+      : undefined;
+  if (node === undefined) return MISSING_BLOCK;
+  return `${blockLabel(node.type)}, filled on each placement`;
+}
+
+/**
+ * What the block calls the property a path starts at: its own label, or the
+ * name spaced when it gives none.
+ */
+function propWord(type: string, propPath: string): string {
+  const head = propPath.split(".", 1)[0] ?? propPath;
+  const schema = getBlock(type)?.props?.[head];
+  return schema === undefined ? fieldLabel(head) : propLabel(head, schema);
+}
+
+/**
+ * A label as it reads mid-sentence: its first letter lowered, unless the
+ * label opens with an acronym ("URL"), which keeps its capitals.
+ */
+function inSentence(label: string): string {
+  const second = label.charAt(1);
+  if (second !== "" && second === second.toUpperCase() && /[A-Z]/.test(second)) {
+    return label;
+  }
+  return label.charAt(0).toLowerCase() + label.slice(1);
 }
