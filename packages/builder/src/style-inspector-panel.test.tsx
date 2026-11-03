@@ -1893,6 +1893,43 @@ describe("what the arrow keys do and do not claim", () => {
 });
 
 describe("a length field's unit", () => {
+  /** Width inherited from a class `.card`, nothing stored on the box. */
+  function mountCardedWidth(value: string): void {
+    register({ dimensions: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              {
+                origin: { kind: "class", id: "cls-1", slug: "card" },
+                property: "width",
+                value,
+                state: "base",
+                breakpoint: BASE_BREAKPOINT,
+              },
+            ],
+          } as never
+        }
+      />
+    );
+  }
+
   it("commits a bare number in the unit beside it, px unless another is chosen", () => {
     // "24" was refused as "not a length".
     const editor = mount({ dimensions: true });
@@ -1956,10 +1993,52 @@ describe("a length field's unit", () => {
     );
   });
 
-  it("hints at a number alone while the unit is shown beside it", () => {
+  it("hints at what an unset size is, Auto or None, not a number that reads like a default", () => {
+    // "16" beside Width read as a real default; unset, a width is auto and a
+    // max width none.
     mount({ dimensions: true });
+    const hint = (label: string, property: string) =>
+      (fieldsOf(property).getByLabelText(label) as HTMLInputElement)
+        .placeholder;
+    expect(hint("Width", "width")).toBe("Auto");
+    expect(hint("Height", "height")).toBe("Auto");
+    expect(hint("Max width", "maxWidth")).toBe("None");
+  });
+
+  it("hints at a number alone for a length whose unset value is not a word", () => {
+    // Margin allows `auto` but starts at 0, so its hint stays a number.
+    mount({ spacing: true });
+    const top = fieldsOf("padding").getByLabelText(
+      "Block start"
+    ) as HTMLInputElement;
+    expect(top.placeholder).not.toBe("Auto");
+  });
+
+  it("shows a stored keyword once, in the suffix, not again in the field", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "auto" } },
+    } as NodeStyles;
+    mount({ dimensions: true }, styles);
     const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
-    expect(width.placeholder).toBe("16");
+    expect(width.value).toBe("");
+    expect(width.placeholder).toBe("");
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "auto"
+    );
+  });
+
+  it("keeps the suffix for every bare number the commit will take", () => {
+    // ".5" is committed with the unit shown, so the unit stays shown.
+    mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: ".5" } });
+    expect(fieldsOf("width").queryByLabelText("Unit for Width")).not.toBeNull();
+  });
+
+  it("draws no unit beside an inherited value that is not a measurement", () => {
+    // An inherited "auto" or "clamp(…)" beside "px" read "auto px".
+    mountCardedWidth("clamp(1rem, 2vw, 3rem)");
+    expect(fieldsOf("width").queryByLabelText("Unit for Width")).toBeNull();
   });
 
   it("offers the property's keywords after its units", () => {

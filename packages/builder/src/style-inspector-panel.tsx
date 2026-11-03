@@ -4732,14 +4732,8 @@ function NumericField({
         invalid={describedBy !== undefined}
         // A bare number takes the unit the field shows: "24" is 24px.
         onCommit={value => onCommit(withDefaultUnit(control.leaf, value, unit))}
-        // The unit shown in the suffix is left out of the field: "2" beside
-        // "rem", and a number alone as the hint.
-        {...(showUnits
-          ? {
-              display: (text: string) => withoutUnit(text, unit),
-              fallbackHint: bareNumberHint(control),
-            }
-          : {})}
+        // The unit shown in the suffix is left out of the field.
+        {...suffixedText(control, unit, unitMenu.isKeyword, showUnits)}
         onStep={(draft, delta) => {
           const next = steppedValue(
             control.leaf,
@@ -4801,9 +4795,67 @@ function NumericField({
   );
 }
 
-/** The leaf's own hint as a number alone, for a field showing its unit: "16", "1". */
+/**
+ * A field's hint while it shows its unit: what an unset value IS where the
+ * property's initial value is a word ("Auto" for a width, a height or an
+ * inset, "None" for a max size), so the hint never reads like a real default;
+ * otherwise the leaf's own hint as a number alone ("16", a border's "1").
+ * Margin allows `auto` but starts at 0, so it keeps a number.
+ */
 function bareNumberHint(control: StyleControl): string {
+  const { leaf } = control;
+  const keywords = leaf.kind === "dimension" ? (leaf.keywords ?? []) : [];
+  const css = leaf.cssProperty;
+  if (keywords.includes("none") && /^max-/.test(css)) return "None";
+  if (keywords.includes("auto") && !/^(margin|padding)/.test(css)) {
+    return "Auto";
+  }
   return /^-?[\d.]+/.exec(placeholderFor(control))?.[0] ?? "";
+}
+
+/**
+ * Whether a choice in the unit menu can act: on a measurement, a keyword, or
+ * any bare number the commit will give the unit (".5", "1e3" included, by the
+ * same grammar). On an empty field only when what shows there is a
+ * measurement or nothing: an inherited "auto" or "clamp(…)" beside "px"
+ * would read as one value it is not.
+ */
+function unitActs(
+  draft: string,
+  measurement: ReturnType<typeof measurementOfText>,
+  inherited: string | undefined,
+  isKeyword: boolean
+): boolean {
+  const text = trimCssWhitespace(draft);
+  if (text === "") {
+    return (
+      inherited === undefined || measurementOfText(inherited) !== undefined
+    );
+  }
+  return measurement !== undefined || isKeyword || CSS_NUMBER.test(text);
+}
+
+/** The first unit that says one, in order of precedence, else px. */
+function shownUnit(candidates: readonly (string | undefined)[]): string {
+  return candidates.find(candidate => candidate !== undefined) ?? "px";
+}
+
+/**
+ * How the field reads beside its unit suffix: the unit left out of the value
+ * and the hint ("2" beside "rem"), a keyword shown once, in the suffix, and a
+ * hint that says what an unset value is. Nothing when no suffix is shown.
+ */
+function suffixedText(
+  control: StyleControl,
+  unit: string,
+  isKeyword: boolean,
+  shown: boolean
+): { display?: (text: string) => string; fallbackHint?: string } {
+  if (!shown) return {};
+  return {
+    display: isKeyword ? () => "" : text => withoutUnit(text, unit),
+    fallbackHint: bareNumberHint(control),
+  };
 }
 
 /** A measurement's unit, or `undefined` for none or a bare number. */
@@ -4851,6 +4903,7 @@ function useFieldUnit({
 }): {
   unit: string;
   keywords: readonly string[];
+  isKeyword: boolean;
   acts: boolean;
   value: string;
   choose: (choice: string) => void;
@@ -4863,15 +4916,13 @@ function useFieldUnit({
   // The unit the draft says, else the one just chosen, else the stored
   // value's, else the inherited value's, so a new number keeps the unit the
   // author sees; px only when nothing says another.
-  const unit =
-    unitOf(measurement) ??
-    chosen ??
-    unitOf(measurementOf(stored)) ??
-    unitOf(
-      inherited === undefined ? undefined : measurementOfText(inherited)
-    ) ??
-    units[0] ??
-    "px";
+  const unit = shownUnit([
+    unitOf(measurement),
+    chosen,
+    unitOf(measurementOf(stored)),
+    unitOf(inherited === undefined ? undefined : measurementOfText(inherited)),
+    units[0],
+  ]);
   const isKeyword = keywords.includes(draft);
   const write = (value: string) => {
     if (onCommit(value) !== "refused") setDraft(value);
@@ -4879,11 +4930,9 @@ function useFieldUnit({
   return {
     unit,
     keywords,
+    isKeyword,
     acts:
-      units.length > 0 &&
-      (trimCssWhitespace(draft) === "" ||
-        measurement !== undefined ||
-        isKeyword),
+      units.length > 0 && unitActs(draft, measurement, inherited, isKeyword),
     value: isKeyword ? draft : unit,
     choose: choice => {
       // A keyword is a whole value, written as chosen.
