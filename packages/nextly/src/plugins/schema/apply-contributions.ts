@@ -313,18 +313,21 @@ function applyTransforms(
 }
 
 /**
- * Entity slug → top-level field name → the plugin that added the field to an
+ * Entity slug → field name path → the plugin that added the field to an
  * entity it does not own, by `extend` or by a transform: what goes with that
- * plugin when it is uninstalled. Read from the transforms' ownership ledgers,
- * so empty when no plugin declares a transform; `extend`'s fields are then
- * read from `extendersBySlug`.
+ * plugin when it is uninstalled. A field nested in a group or repeater is
+ * keyed by its whole path (`settings.note`), as the ledgers name it, so one a
+ * transform put inside another owner's group is told apart from that owner's
+ * fields beside it. Read from the transforms' ownership ledgers, so empty
+ * when no plugin declares a transform; `extend`'s fields are then read from
+ * `extendersBySlug`.
  */
 export type FieldsAddedByPlugins = ReadonlyMap<
   string,
   ReadonlyMap<string, string>
 >;
 
-/** The top-level fields a plugin declared on an entity it does not own, by the ledgers. */
+/** The fields, at any depth, a plugin declared on an entity it does not own, by the ledgers. */
 function fieldsAddedFrom(
   entities: readonly TransformableEntity[],
   contributors: TransformedEntities["fieldContributors"]
@@ -334,9 +337,7 @@ function fieldsAddedFrom(
     const fields =
       contributors.get(`${entity.kind}\u0000${entity.slug}`) ?? new Map();
     for (const [path, by] of fields) {
-      if (by === undefined || by === entity.owner || path.includes(".")) {
-        continue;
-      }
+      if (by === undefined || by === entity.owner) continue;
       const onEntity = added.get(entity.slug) ?? new Map<string, string>();
       onEntity.set(path, by);
       added.set(entity.slug, onEntity);
