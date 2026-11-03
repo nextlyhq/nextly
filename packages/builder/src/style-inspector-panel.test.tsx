@@ -2047,6 +2047,19 @@ describe("where a control's value came from", () => {
     expect(sourceIn("color")).toBe("From .card");
   });
 
+  it("leaves the swatch unpainted for an inherited colour it cannot resolve here", () => {
+    // A site variable or currentcolor resolves against the canvas, not this
+    // panel: painted raw, it showed the admin's colour or none.
+    mountCarded([fromCard({ value: "var(--site-color-primary)" })], {
+      color: true,
+    });
+    const swatch = document.querySelector<HTMLElement>(
+      '[data-property="color"] .nx-style-inspector__swatch'
+    );
+    expect(swatch?.style.getPropertyValue("--nx-swatch")).toBe("");
+    expect(swatch?.hasAttribute("data-empty")).toBe(true);
+  });
+
   it("paints an inherited colour in its swatch, marked as inherited", () => {
     mountCarded([fromCard({ value: "#123456" })], { color: true });
     const swatch = document.querySelector<HTMLElement>(

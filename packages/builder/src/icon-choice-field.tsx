@@ -279,11 +279,26 @@ function OtherValues({
 }): React.JSX.Element {
   const value =
     current !== undefined && values.includes(current) ? current : "";
+  // An inherited value with no icon of its own lives here: More is ringed
+  // as an inherited icon is, and says which value applies.
+  const inherited = React.useContext(InheritedValue);
+  const shows =
+    current === undefined &&
+    inherited !== undefined &&
+    values.includes(inherited)
+      ? inherited
+      : undefined;
   return (
     <Select value={value} onValueChange={next => onCommit(next)}>
       <SelectTrigger
         className="nx-icon-choice__more"
-        aria-label={`More ${actionName} values`}
+        data-inherited={shows === undefined ? undefined : ""}
+        title={shows}
+        aria-label={
+          shows === undefined
+            ? `More ${actionName} values`
+            : `More ${actionName} values, showing ${shows}`
+        }
         aria-describedby={describedBy}
         aria-invalid={describedBy === undefined ? undefined : true}
       >

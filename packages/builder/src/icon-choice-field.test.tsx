@@ -58,6 +58,21 @@ describe("IconChoiceField", () => {
     expect(marked[0]?.getAttribute("aria-checked")).toBe("false");
   });
 
+  it("rings More when the inherited value is one of its values", () => {
+    // "normal" has no icon: it lives in More, which then says what applies.
+    mount(undefined, undefined, "normal");
+    const more = screen.getByLabelText(/^More Justify content values/);
+    expect(more.hasAttribute("data-inherited")).toBe(true);
+    expect(more.getAttribute("aria-label")).toBe(
+      "More Justify content values, showing normal"
+    );
+    expect(
+      screen
+        .getAllByRole("radio")
+        .some(radio => radio.hasAttribute("data-inherited"))
+    ).toBe(false);
+  });
+
   it("marks nothing once a value is set here", () => {
     mount("start", undefined, "center");
     expect(

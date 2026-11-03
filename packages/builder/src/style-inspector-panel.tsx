@@ -2252,7 +2252,7 @@ function BreakpointAction({
   if (badge.kind === "authored") {
     return (
       <ResetAction
-        revealed={badge.revealed ?? "unset"}
+        revealed={revealedBy(badge)}
         label={label}
         editing={editing}
         fieldId={fieldId}
@@ -2419,6 +2419,17 @@ export function supersedes(
   return (
     target.closest(`[${COMMITS_FOR}]`)?.getAttribute(COMMITS_FOR) === fieldId
   );
+}
+
+/**
+ * What a reset reveals, from an authored badge: another tier, nothing, or a
+ * value passed down from an enclosing block or the page, which no tier names.
+ */
+function revealedBy(
+  badge: Extract<BreakpointBadge, { kind: "authored" }>
+): BreakpointSource | "unset" | "unknown" {
+  if (badge.revealed !== undefined) return badge.revealed;
+  return badge.passedDown === true ? "unknown" : "unset";
 }
 
 function ResetAction({
@@ -3987,9 +3998,12 @@ function ColourPicker({
   // into the next open.
   const superseded = React.useRef(false);
   // A colour inherited from another tier is painted while none is set here,
-  // and marked so the swatch reads as inherited rather than chosen.
+  // and marked so the swatch reads as inherited rather than chosen. Through
+  // the same projection as a stored colour, so a site variable or
+  // `currentcolor`, which resolve against the canvas, leave it unpainted
+  // rather than painted with the panel's own colour.
   const inherited = React.useContext(InheritedValue);
-  const painted = shown ?? inherited;
+  const painted = shown ?? colourHexOf(inherited, undefined);
   return (
     <Popover
       onOpenChange={open => {

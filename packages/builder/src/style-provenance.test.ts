@@ -150,6 +150,55 @@ describe("a value an enclosing block passes down", () => {
     expect(found.kind).toBe("unset");
   });
 
+  it("takes a page's value last, when no enclosing block sets one", () => {
+    // The page's colour reaches every block through inheritance, and a page
+    // declaration on the root lands on no block of its own.
+    const found = inheritedProvenance({
+      trace: [
+        {
+          origin: { kind: "page" },
+          property: "color",
+          value: "#123456",
+          state: "base",
+          breakpoint: "base",
+        } as StyleTraceEntry,
+      ],
+      subject: {
+        nodeId: "h1",
+        blockType: "core/heading",
+        ancestors: [{ nodeId: "s1", blockType: "core/section" }],
+      },
+      cssProperty: "color",
+      state: "base",
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    });
+    expect(found.kind).toBe("inherited");
+    if (found.kind !== "inherited") return;
+    expect(found.from).toEqual({ kind: "page" });
+    expect(found.entry.value).toBe("#123456");
+  });
+
+  it("says a reset reveals a value passed down, not that it leaves the control unset", () => {
+    const query = {
+      trace: traceOf(
+        { base: { base: { color: "#0000ff" } } },
+        { base: { base: { color: "#ff0000" } } }
+      ),
+      subject: {
+        nodeId: "h1",
+        blockType: "core/heading",
+        ancestors: [{ nodeId: "s1", blockType: "core/section" }],
+      },
+      cssProperty: "color",
+      state: "base" as const,
+      breakpoint: "base",
+      liveBreakpoints: ["base"],
+    };
+    const badge = breakpointBadge(query, inheritedProvenance(query), undefined);
+    expect(badge).toEqual({ kind: "authored", passedDown: true });
+  });
+
   it("keeps the element's own value over its parent's", () => {
     const found = askHeading(
       traceOf(

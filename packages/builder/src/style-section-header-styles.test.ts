@@ -143,7 +143,10 @@ describe("a field under its form toggle", () => {
 
 describe("an inherited value's icon", () => {
   it("is ringed, dashed and muted, never filled as a chosen one is", () => {
-    const ring = ruleBody(".nx-icon-choice__option[data-inherited]");
+    // More too, when the inherited value is one of its own.
+    const ring = ruleBody(
+      ".nx-icon-choice__option[data-inherited], .nx-icon-choice .nx-icon-choice__more[data-inherited]"
+    );
     expect(ring).toContain("outline: 1px dashed var(--nx-builder-text-muted)");
     expect(ring).not.toContain("background");
   });

@@ -483,7 +483,31 @@ export function inheritedProvenance(
     }
     if (found.kind !== "unset") return found;
   }
-  return own;
+  return pagePassesDown(query) ?? own;
+}
+
+/**
+ * The page's own value for an inheritable property, which every block takes
+ * when nothing nearer sets it. A page declaration on the root lands on no
+ * block of its own, so the ranking above never meets it; ranked here, among
+ * the page's root declarations alone, as the last place a value comes from.
+ */
+function pagePassesDown(
+  query: StyleProvenanceQuery
+): StyleProvenance | undefined {
+  const candidates = query.trace.filter(
+    entry =>
+      entry.origin.kind === "page" &&
+      normalizeDescendant(entry.descendant) === ""
+  );
+  const entry = styleOrigin(candidates, query.subject, {
+    property: query.cssProperty,
+    state: "base",
+    breakpoints: query.liveBreakpoints,
+  });
+  return entry === undefined
+    ? undefined
+    : { kind: "inherited", entry, from: entry.origin };
 }
 
 /** Where a value a control is showing was authored, in breakpoint terms. */
@@ -561,7 +585,16 @@ export type BreakpointBadge =
    * breakpoints, so what a reset reveals is whatever the next one holding a
    * value is.
    */
-  | { readonly kind: "authored"; readonly revealed?: BreakpointSource }
+  | {
+      readonly kind: "authored";
+      readonly revealed?: BreakpointSource;
+      /**
+       * Set when nothing on the block would show once this value is gone,
+       * but an enclosing block or the page passes one down: the control is
+       * not left unset, and no breakpoint names where the value comes from.
+       */
+      readonly passedDown?: true;
+    }
   /**
    * The value on screen was authored by THIS NODE at another breakpoint.
    *
@@ -733,9 +766,15 @@ export function breakpointBadge(
       )
   );
   const revealedBy = styleProvenance({ ...query, trace: cleared });
-  if (revealedBy.kind === "unset" || revealedBy.kind === "ambiguous") {
-    return { kind: "authored" };
+  if (revealedBy.kind === "unset") {
+    // What CSS inheritance would show instead, asked the same way the
+    // control is described once the value is gone.
+    const inherited = inheritedProvenance({ ...query, trace: cleared });
+    return inherited.kind === "unset"
+      ? { kind: "authored" }
+      : { kind: "authored", passedDown: true };
   }
+  if (revealedBy.kind === "ambiguous") return { kind: "authored" };
   const source = breakpointSource(revealedBy.entry.breakpoint, breakpoints);
   return source === undefined
     ? { kind: "authored" }

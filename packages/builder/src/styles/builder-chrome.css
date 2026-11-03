@@ -6435,7 +6435,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * borders; the focus ring, an outline too and written after this, takes its
  * place while the icon has focus.
  */
-.nx-icon-choice__option[data-inherited] {
+.nx-icon-choice__option[data-inherited],
+.nx-icon-choice .nx-icon-choice__more[data-inherited] {
   outline: 1px dashed var(--nx-builder-text-muted);
   outline-offset: -3px;
 }
