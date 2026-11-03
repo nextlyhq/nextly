@@ -3,9 +3,9 @@
  * there, for an author to see and confirm before anything changes.
  *
  * One planner, run as a list of rules, each on what the one before left: the
- * lock rule here first, and any later rule (a placement rule, say) appended
- * rather than built beside it. A rule never discards an authored block, and
- * every block it keeps keeps its id.
+ * lock rule here first, and any later rule (the placement rule in
+ * `placement-repair`, say) appended rather than built beside it. A rule never
+ * discards an authored block, and every block it keeps keeps its id.
  *
  * @module repair-plan
  */
@@ -18,6 +18,11 @@ import {
 } from "./lock-breaks";
 import { surveyDocument } from "./measure-bytes";
 import { placementVerdict, type PlacementTarget } from "./nesting";
+import type { PlacementSources } from "./placement";
+import {
+  placementBreaksIn,
+  type LocatedPlacementBreak,
+} from "./placement-breaks";
 import { isPlainRecord } from "./plain-record";
 import {
   contentPropsOf,
@@ -38,16 +43,24 @@ export interface SlotPlace {
 /** One change a repair makes, as a preview names it. */
 export type RepairStep =
   | {
-      /** A block the slot may not hold, moved where no lock fixes the blocks. */
+      /**
+       * A block moved out of the slot it sits in: one a locked slot may not
+       * hold, moved where no lock fixes the blocks, or one the placement rule
+       * refuses there, moved to the nearest place it allows.
+       */
       readonly kind: "move";
+      /** Which rule moved it, so a preview says why. */
+      readonly cause: "lock" | "placement";
       readonly nodeId: string;
       readonly type: string;
       readonly from: SlotPlace;
       /**
        * Placed just after this block, in the slot it sits in or at the top:
-       * the outermost locked block for the first block a slot moves out, and
-       * the block moved before it for each after, so the steps in order give
-       * the result's order.
+       * for a lock move, the outermost locked block for the first block a slot
+       * moves out, and the block moved before it for each after; for a
+       * placement move, the ancestor it leaves, or the block an earlier
+       * placement move put just after that ancestor. So the steps in order
+       * give the result's order.
        */
       readonly after: string;
     }
@@ -107,6 +120,13 @@ export interface RepairPlan {
    * keeps every lock; a preview says what is left when it is not.
    */
   readonly remaining: readonly LocatedLockBreak[];
+  /**
+   * The placement breaks the result still holds: a block the placement rule
+   * refuses where it sits that has nowhere nearer the top it may go, or none
+   * that keeps every lock. Empty when the result breaks no placement, and
+   * when the sources carry no nesting rules to judge one with.
+   */
+  readonly remainingPlacements: readonly LocatedPlacementBreak[];
 }
 
 /**
@@ -127,11 +147,7 @@ export function planRepair(
 ): RepairPlan {
   const limits = sources.limits ?? DEFAULT_LIMITS;
   if (!withinLimits(document, limits)) {
-    return {
-      steps: [],
-      result: document,
-      remaining: lockBreaksIn(document, sources),
-    };
+    return { steps: [], result: document, ...breaksLeftIn(document, sources) };
   }
   let result = structuredClone(document);
   const steps: RepairStep[] = [];
@@ -144,13 +160,40 @@ export function planRepair(
   // result a save would refuse is no repair: nothing is planned then, and the
   // breaks are named as before.
   if (!withinLimits(result, limits)) {
-    return {
-      steps: [],
-      result: document,
-      remaining: lockBreaksIn(document, sources),
-    };
+    return { steps: [], result: document, ...breaksLeftIn(document, sources) };
   }
-  return { steps, result, remaining: lockBreaksIn(result, sources) };
+  return { steps, result, ...breaksLeftIn(result, sources) };
+}
+
+/**
+ * The breaks a plan leaves, lock and placement, as the plan names them. Both
+ * walks are bounded by the document's node cap.
+ */
+function breaksLeftIn(
+  document: BlockDocument,
+  sources: LockSources
+): Pick<RepairPlan, "remaining" | "remainingPlacements"> {
+  const judged = placementSourcesOf(sources);
+  return {
+    remaining: lockBreaksIn(document, sources),
+    remainingPlacements:
+      judged === undefined
+        ? []
+        : placementBreaksIn(document, judged, sources.limits ?? DEFAULT_LIMITS),
+  };
+}
+
+/**
+ * The placement rule's sources, read off the lock sources a repair carries,
+ * or undefined without the nesting rules it needs. Component definitions are
+ * not among them, so a component placement's slots are unknown to it, which
+ * the rule treats as allowed rather than refused.
+ */
+export function placementSourcesOf(
+  sources: LockSources
+): PlacementSources | undefined {
+  if (sources.nesting === undefined) return undefined;
+  return { nesting: sources.nesting, definitions: sources.definitions };
 }
 
 /**
@@ -352,6 +395,7 @@ function refillSlot(
   for (const extra of extras) {
     moves.push({
       kind: "move",
+      cause: "lock",
       nodeId: extra.id,
       type: extra.type,
       from: place,
@@ -422,7 +466,7 @@ function sameOrder(a: readonly BlockNode[], b: readonly BlockNode[]): boolean {
 }
 
 /** Where a node sits: the list holding it, and the block and slot it is in. */
-interface Place {
+export interface Place {
   readonly node: BlockNode;
   readonly siblings: BlockNode[];
   readonly parent: BlockNode | undefined;
@@ -433,10 +477,10 @@ interface Place {
 
 /**
  * Every node of the document by id, with where it sits, read off
- * validation's own walk (`walkNodeForest`), so the repair finds every block
- * `lockBreaksIn` reports, under the same bounds.
+ * validation's own walk (`walkNodeForest`), so a repair finds every block
+ * `lockBreaksIn` or `placementBreaksIn` reports, under the same bounds.
  */
-function placesOf(
+export function placesOf(
   document: BlockDocument,
   sources: LockSources,
   maxNodes: number

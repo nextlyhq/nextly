@@ -31,6 +31,7 @@
 
 import {
   findNode,
+  isRawColour,
   isTokenRef,
   trimCssWhitespace,
   walkNodes,
@@ -57,6 +58,10 @@ import {
   AccordionItem,
   AccordionTrigger,
   ColorPicker,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Input,
   Label,
   Popover,
@@ -72,12 +77,21 @@ import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
+import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
-import { fieldLabel } from "./inspector";
+import {
+  designIsWritable,
+  designReadOnlyReason,
+  fieldLabel,
+  lockViewOf,
+} from "./inspector";
 import type { BuilderOp } from "./ops";
+import { usePrefersDark } from "./prefers-dark";
 import type { SideOrientation } from "./side-orientation";
+import { BASELINE_WITHHELD_HINT } from "./style-baseline";
 import {
   activeTokenMode,
   colourHexOf,
@@ -99,6 +113,7 @@ import type {
 } from "./style-controls";
 import {
   inspectStyle,
+  type StyleInspectionOptions,
   type InspectedStyleProperty,
   type StyleSection,
   type StyleInspection,
@@ -467,6 +482,13 @@ function SelectedNodeClasses({
   libraryAbsence: ClassSelectorProps["libraryAbsence"];
   onCreateClass: ClassSelectorProps["onCreateClass"] | undefined;
 }): React.JSX.Element | null {
+  /*
+   * The editor as it stands NOW. A class creation resolves through the
+   * callback of the render that began it, and a lock set while it was in
+   * flight lives only in a later render's editor.
+   */
+  const live = React.useRef(editor);
+  live.current = editor;
   if (onCreateClass === undefined) return null;
   return (
     <ClassSelector
@@ -481,15 +503,22 @@ function SelectedNodeClasses({
       library={library}
       libraryAbsence={libraryAbsence}
       nodeClassIds={findNode(editor.document.nodes, nodeId)?.classes ?? []}
-      onNodeClassesChange={classIds =>
+      onNodeClassesChange={classIds => {
+        const now = live.current;
+        // The lock is asked of the live document at the moment of the write,
+        // as a style value's write does: the store does not refuse an update
+        // to a block only because the block's own lock is set.
+        if (!designIsWritable(now.document, nodeId, lockViewOf(now))) {
+          return "refused";
+        }
         // `applyAll` answers null when the store refuses — a document at its
         // byte limit rejects an edit the class rules found perfectly valid.
         // Reported back so the selector keeps the draft rather than clearing
         // it as though the write had landed.
-        editor.applyAll([nodeClassesOp(nodeId, classIds)]) === null
+        return now.applyAll([nodeClassesOp(nodeId, classIds)]) === null
           ? "refused"
-          : "applied"
-      }
+          : "applied";
+      }}
       onCreateClass={onCreateClass}
     />
   );
@@ -545,11 +574,27 @@ export function StyleInspectorPanel({
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
   // anywhere changes both the document and the values shown.
+  /*
+   * ONE subject for the whole panel, and one live-breakpoint set.
+   *
+   * Every control on this panel asks about the SAME node, so building either per
+   * control would walk the document per control — which is the cost this file's
+   * own comments say the indicator must not pay. The inspection reads it too,
+   * to judge which tier's controls show by the display the cascade applies.
+   *
+   * Recomputed each render rather than memoised, exactly as the inspection is:
+   * both are only valid against the document they were read from, and an edit
+   * anywhere changes the document and the values shown together.
+   */
+  const subject = selectedSubject(editor, cascade, renderedTag);
   const inspection = inspectStyle(editor.document, editor.selectedId, {
     ...policy,
     state,
     breakpoint,
     variantAt: (property, path) => chosenForms[formKey(property, path)],
+    media: rendersMedia(renderedTag),
+    breakpoints,
+    cascade: cascadeFor(cascade, subject),
   });
 
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
@@ -580,18 +625,6 @@ export function StyleInspectorPanel({
   const inspected = availability.inspection;
 
   /*
-   * ONE subject for the whole panel, and one live-breakpoint set.
-   *
-   * Every control on this panel asks about the SAME node, so building either per
-   * control would walk the document per control — which is the cost this file's
-   * own comments say the indicator must not pay.
-   *
-   * Recomputed each render rather than memoised, exactly as the inspection above
-   * is: both are only valid against the document they were read from, and an
-   * edit anywhere changes the document and the values shown together.
-   */
-  const subject = selectedSubject(editor, cascade, renderedTag);
-  /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
    * asking about one node at one address.
@@ -613,7 +646,17 @@ export function StyleInspectorPanel({
     onJumpToBreakpoint,
   });
 
-  const groups = inspected.sections.map(section => section.group);
+  /*
+   * Why the design is read-only, read from the document's own locks: the
+   * same answer the write path refuses by, so the controls drawn and the
+   * writes allowed cannot disagree.
+   */
+  const readOnlyReason = designReadOnlyReason(
+    editor.document,
+    inspected.nodeId,
+    lockViewOf(editor)
+  );
+  const groups = inspected.sections.map(section => section.key);
   // Held rather than left to the accordion, so the open section survives a
   // change of selection. Falling back to the first is what keeps it valid when
   // the newly selected block does not offer the section that was open — an
@@ -653,7 +696,8 @@ export function StyleInspectorPanel({
        * it decides what the controls below are even editing. Webflow puts its
        * selector field at the top of the Style panel for the same reason.
        */}
-      <SelectedNodeClasses
+      <PanelClasses
+        readOnlyReason={readOnlyReason}
         editor={editor}
         nodeId={inspected.nodeId}
         library={classLibrary}
@@ -672,8 +716,9 @@ export function StyleInspectorPanel({
             // Keyed by node AND group: a bare group would let React reuse one
             // block's inputs for the next block's same-named section, so a field
             // would keep the previous block's uncommitted text.
-            key={`${inspected.nodeId}:${section.group}`}
+            key={`${inspected.nodeId}:${section.key}`}
             section={section}
+            readOnlyReason={readOnlyReason}
             {...surroundings}
           />
         ))}
@@ -683,47 +728,9 @@ export function StyleInspectorPanel({
 }
 
 /**
- * Whether the viewer's system asks for a dark colour scheme.
- *
- * Read because a site on the `media` dark-mode strategy has its dark token
- * block wrapped in `@media (prefers-color-scheme:dark)`, so the canvas switches
- * with the system and nothing tells the panel. Resolving every token to its
- * light value regardless would paint swatches and report ratios for colours the
- * canvas is not showing.
- *
- * Starts `false` and subscribes after mount, so a server render and the first
- * client render agree — React discards a subtree whose two renders disagree,
- * which would take the whole Style tab with it. A viewer already in dark mode
- * sees one frame of light-mode swatches; the alternative is a hydration
- * mismatch, which is worse and harder to see.
- */
-function usePrefersDark(): boolean {
-  const [prefersDark, setPrefersDark] = React.useState(false);
-  React.useEffect(() => {
-    // Detected by CALLABILITY, not by presence. `"matchMedia" in window` is
-    // true under jsdom while the value is not a function, so the property test
-    // passes and the call throws — measured, and it took 85 tests down. A
-    // capability check has to ask the question the caller will ask.
-    if (
-      typeof window === "undefined" ||
-      typeof window.matchMedia !== "function"
-    ) {
-      return;
-    }
-    const query = window.matchMedia("(prefers-color-scheme: dark)");
-    setPrefersDark(query.matches);
-    const listen = (event: MediaQueryListEvent): void =>
-      setPrefersDark(event.matches);
-    query.addEventListener("change", listen);
-    return () => query.removeEventListener("change", listen);
-  }, []);
-  return prefersDark;
-}
-
-/**
  * The breakpoints whose rules the browser is applying right now.
  *
- * Modelled on {@link usePrefersDark} directly below it, and for the same reason:
+ * Modelled on `usePrefersDark` in `prefers-dark.ts`, and for the same reason:
  * a media query's state is a fact about the viewer that nothing in React tells
  * this panel, so it is read and then subscribed to.
  *
@@ -763,17 +770,19 @@ function useLiveBreakpoints(
   const [matches, setMatches] = React.useState<readonly BreakpointId[]>(() =>
     matchedBreakpoints(breakpoints, never, options)
   );
+  /*
+   * The CANVAS's window, a frame's when the canvas is in one. A frame is as
+   * wide as the device it previews, so its media queries are the ones the
+   * page's breakpoints answer to; the editor's window is as wide as the
+   * admin, and asking it reports the tiers of a screen nobody is previewing.
+   */
+  const view = useCanvasFrame().window;
   React.useEffect(() => {
     // Detected by CALLABILITY rather than presence, the lesson `usePrefersDark`
     // records: `"matchMedia" in window` is true under jsdom while the value is
     // not a function, so the property test passes and the call throws.
-    if (
-      typeof window === "undefined" ||
-      typeof window.matchMedia !== "function"
-    ) {
-      return;
-    }
-    const ask = (query: string): boolean => window.matchMedia(query).matches;
+    if (view === null || typeof view.matchMedia !== "function") return;
+    const ask = (query: string): boolean => view.matchMedia(query).matches;
     const read = (): void =>
       setMatches(matchedBreakpoints(breakpoints, ask, options));
     read();
@@ -783,13 +792,13 @@ function useLiveBreakpoints(
      * query change event fires exactly when an answer here would differ.
      */
     const lists = breakpointQueries(breakpoints, options).map(query =>
-      window.matchMedia(query)
+      view.matchMedia(query)
     );
     for (const list of lists) list.addEventListener("change", read);
     return () => {
       for (const list of lists) list.removeEventListener("change", read);
     };
-  }, [breakpoints, options]);
+  }, [breakpoints, options, view]);
   /*
    * Previewing, the window is not the authority and the host is.
    *
@@ -917,9 +926,67 @@ function SideBoxFrame({
   );
 }
 
-/** One catalog group, as a section that opens onto its properties. */
+/**
+ * The elements whose content is an external resource the box fits, which is
+ * where the media fit properties show without being asked for. Not
+ * `<picture>`: it only chooses a source, and the `<img>` inside it is the
+ * element `object-fit` applies to.
+ */
+const REPLACED_ELEMENTS: ReadonlySet<string> = new Set([
+  "img",
+  "video",
+  "iframe",
+  "embed",
+  "object",
+  "canvas",
+]);
+
+/** Whether the block renders as one of {@link REPLACED_ELEMENTS}. */
+function rendersMedia(renderedTag: string | undefined): boolean {
+  return renderedTag !== undefined && REPLACED_ELEMENTS.has(renderedTag);
+}
+
+/**
+ * The class chips, and above them the reason when the design is read-only.
+ *
+ * A disabled fieldset rather than a flag on every control: it disables every
+ * native control inside at once, so a control added later cannot forget to be
+ * read-only.
+ */
+function PanelClasses({
+  readOnlyReason,
+  ...classes
+}: {
+  readOnlyReason: string | undefined;
+} & React.ComponentProps<typeof SelectedNodeClasses>): React.JSX.Element {
+  return (
+    <>
+      {readOnlyReason === undefined ? null : (
+        <p className="nx-inspector__note" data-read-only="style">
+          {readOnlyReason}
+        </p>
+      )}
+      <fieldset
+        className="nx-style-inspector__classes"
+        disabled={readOnlyReason !== undefined}
+      >
+        <SelectedNodeClasses {...classes} />
+      </fieldset>
+    </>
+  );
+}
+
+/**
+ * One section: its common properties, any that hold a value, and the rest
+ * behind "+ More".
+ *
+ * **The header marks a section that holds values** with a dot and the words
+ * "has values" for a screen reader, so an author can see which sections they
+ * have touched without opening each one, and the dot is never colour alone.
+ */
 function StyleSectionItem({
   section,
+  readOnlyReason,
   orientation,
   nodeId,
   state,
@@ -933,28 +1000,44 @@ function StyleSectionItem({
   onChooseForm,
 }: {
   section: StyleSection;
+  /** Why every control is read-only, which also withholds "+ More". */
+  readOnlyReason: string | undefined;
 } & StyleFieldSurroundings): React.JSX.Element {
-  // How many of this section's properties this node sets HERE, so an author can
-  // see which sections they have touched without opening each one.
-  const setCount = section.properties.filter(property => property.set).length;
+  const readOnly = readOnlyReason !== undefined;
+  /*
+   * What the author brought out from "+ More". Held here, by a section keyed
+   * by node and section, so it lasts while this block stays selected and
+   * starts empty for the next. Panel state, like the open section: what the
+   * author chose to look at, not anything the page stores — and a property
+   * holding a value shows whatever this says, so it can hide nothing set.
+   */
+  const [revealed, setRevealed] = React.useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  const isRevealed = (property: string) => revealed.has(property);
+  const holdsValues = section.properties.some(property => property.set);
+  const shown = section.properties.filter(
+    property => property.common || isRevealed(property.property)
+  );
+  const more = section.properties.filter(
+    property => !property.common && !isRevealed(property.property)
+  );
   return (
-    <AccordionItem value={section.group}>
+    <AccordionItem value={section.key} data-section={section.key}>
       <AccordionTrigger>
         <span className="nx-style-inspector__section-label">
           {section.label}
         </span>
-        {setCount > 0 ? (
-          <span
-            className="nx-style-inspector__section-count"
-            aria-label={`${setCount} set`}
-          >
-            {setCount}
+        {holdsValues ? (
+          <span className="nx-style-inspector__section-dot" data-has-values="">
+            <span aria-hidden="true" className="nx-style-inspector__dot" />
+            <span className="nx-sr-only">has values</span>
           </span>
         ) : null}
       </AccordionTrigger>
       <AccordionContent>
-        <div className="nx-inspector__fields">
-          {section.properties.map(property => (
+        <fieldset className="nx-inspector__fields" disabled={readOnly}>
+          {shown.map(property => (
             <StylePropertyFields
               key={`${nodeId}:${property.property}`}
               property={property}
@@ -971,9 +1054,66 @@ function StyleSectionItem({
               onChooseForm={onChooseForm}
             />
           ))}
-        </div>
+          {shown.length === 0 ? (
+            <p className="nx-inspector__note">
+              Nothing set here yet. Add a property from More.
+            </p>
+          ) : null}
+        </fieldset>
+        {readOnly || more.length === 0 ? null : (
+          <MoreProperties
+            sectionLabel={section.label}
+            properties={more}
+            onReveal={property =>
+              setRevealed(current => new Set(current).add(property))
+            }
+          />
+        )}
       </AccordionContent>
     </AccordionItem>
+  );
+}
+
+/**
+ * The section's "+ More": a menu of the properties it does not show yet.
+ *
+ * Choosing one shows its control; it stays shown for this block until the
+ * panel is left, and for good once it holds a value.
+ */
+function MoreProperties({
+  sectionLabel,
+  properties,
+  onReveal,
+}: {
+  sectionLabel: string;
+  properties: readonly InspectedStyleProperty[];
+  onReveal: (property: string) => void;
+}): React.JSX.Element {
+  return (
+    // Not modal: a modal menu marks the editor around it aria-hidden while
+    // its controls stay focusable (axe: aria-hidden-focus).
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="nx-style-inspector__more"
+          aria-label={`More ${sectionLabel.toLowerCase()} properties`}
+        >
+          + More
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {properties.map(property => (
+          <DropdownMenuItem
+            key={property.property}
+            onSelect={() => onReveal(property.property)}
+            title={property.summary}
+          >
+            {property.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -1079,7 +1219,7 @@ function StylePropertyFields({
             }
             summary={many ? undefined : property.summary}
             propertyLabel={property.label}
-            clearOnly={!property.offered}
+            clearOnly={!property.offered || control.withheld}
             nodeId={nodeId}
             state={state}
             breakpoint={breakpoint}
@@ -1483,6 +1623,18 @@ function selectedSubject(
 }
 
 /**
+ * The cascade as the inspection reads it, or `undefined` where there is no
+ * cascade or no subject in it: both are needed to ask what applies here.
+ */
+function cascadeFor(
+  cascade: PageStyleCascade | undefined,
+  subject: StyleSubject | undefined
+): StyleInspectionOptions["cascade"] {
+  if (cascade === undefined || subject === undefined) return undefined;
+  return { trace: cascade.entries, subject };
+}
+
+/**
  * The reader that answers, per control, where its value came from.
  *
  * Built OUTSIDE the panel because nothing in it is React: it is a pure function
@@ -1753,8 +1905,12 @@ const COMMITS_FOR = "data-nx-commits-for";
  */
 type PickerClose = "committed" | "superseded";
 
-/** The attributes marking a control as writing `fieldId`'s value itself. */
-function commitsFor(fieldId: string): Record<string, string> {
+/**
+ * The attributes marking a control as writing `fieldId`'s value itself.
+ *
+ * Exported with {@link supersedes} so the pair can be checked together.
+ */
+export function commitsFor(fieldId: string): Record<string, string> {
   return { [COMMITS_FOR]: fieldId };
 }
 
@@ -1764,9 +1920,15 @@ function commitsFor(fieldId: string): Record<string, string> {
  * Asked of the ancestor chain rather than of the target alone: the press lands
  * on whatever the control renders inside its button, and a control that puts a
  * span or an icon in there would otherwise stop making the promise.
+ *
+ * The target is classified by `dom-kind` rather than by `instanceof Element`,
+ * which answers only for elements this window built.
  */
-function supersedes(target: EventTarget | null, fieldId: string): boolean {
-  if (!(target instanceof Element)) return false;
+export function supersedes(
+  target: EventTarget | null,
+  fieldId: string
+): boolean {
+  if (!isElement(target)) return false;
   return (
     target.closest(`[${COMMITS_FOR}]`)?.getAttribute(COMMITS_FOR) === fieldId
   );
@@ -1905,6 +2067,8 @@ function ControlValue({
         labelledBy={labelledBy}
         label={actionName}
         stored={stored}
+        // A value the Baseline gate no longer offers says why it is clear-only.
+        note={control.withheld ? BASELINE_WITHHELD_HINT : undefined}
         onClear={() => onCommit(null)}
       />
     );
@@ -2284,6 +2448,15 @@ function writeStyleValue({
 }): CommitOutcome {
   const current = findNode(editor.document.nodes, nodeId);
   if (current === undefined) return "refused";
+  /*
+   * Refused here as well as drawn read-only: the controls are disabled while a
+   * lock holds, but a lock set from Layers after the panel drew must stop the
+   * next write too, so the live document is asked at the moment of the write.
+   */
+  if (!designIsWritable(editor.document, nodeId, lockViewOf(editor))) {
+    setIssue("This block's design is locked, so it can't be changed here.");
+    return "refused";
+  }
   /*
    * A ONE-NODE BATCH, and the single write path for a style edit in this
    * builder.
@@ -2779,7 +2952,7 @@ function ColourField({
   const { draft, setDraft, edited, reset } = useDraft(stored);
 
   const reference = isTokenRef(stored) ? stored.$token : null;
-  const mode = activeTokenMode(tokens, prefersDark);
+  const mode = activeTokenMode(prefersDark);
   const choices = colourTokensFor(control.leaf, tokens, mode);
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
@@ -2962,6 +3135,7 @@ function ColourField({
         )}
       </div>
       <ContrastNote id={noteId} contrast={contrast} />
+      <RawColourNote stored={stored} />
     </>
   );
 }
@@ -3215,6 +3389,26 @@ function TokenName({
  * and compiling, and the author may have a reason. The same position
  * Gutenberg's contrast checker takes.
  */
+/**
+ * The note beside a colour written as a value rather than through a variable.
+ *
+ * Such a colour keeps its one value when the visitor's device prefers dark,
+ * where a variable carries both. Read from what is stored, so a picker gesture
+ * still in progress does not make it flicker.
+ */
+function RawColourNote({
+  stored,
+}: {
+  stored: StyleValue | undefined;
+}): React.JSX.Element | null {
+  if (!isRawColour(stored)) return null;
+  return (
+    <p className="nx-inspector__note">
+      Not adapted to dark mode. Choose a variable to follow light and dark.
+    </p>
+  );
+}
+
 function ContrastNote({
   id,
   contrast,

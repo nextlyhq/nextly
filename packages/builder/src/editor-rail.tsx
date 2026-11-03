@@ -21,19 +21,20 @@ import {
 } from "lucide-react";
 import type * as React from "react";
 
+import { EDITOR_WORDS } from "./editor-words";
 import { RAIL_GROUPS, RAIL_WIDTH, type LeftPanel } from "./shell-state";
 
-/** Each panel's name and icon, kept beside each other. */
+/** Each panel's name, from the editor's words, and its icon, side by side. */
 const PANEL_CHROME: Record<
   LeftPanel,
   { label: string; Icon: React.ComponentType<{ className?: string }> }
 > = {
-  add: { label: "Add", Icon: Plus },
-  layers: { label: "Layers", Icon: Layers },
-  pages: { label: "Pages", Icon: FileText },
-  components: { label: "Components", Icon: Blocks },
-  design: { label: "Design", Icon: Palette },
-  settings: { label: "Settings", Icon: Settings },
+  add: { label: EDITOR_WORDS.add, Icon: Plus },
+  layers: { label: EDITOR_WORDS.layers, Icon: Layers },
+  pages: { label: EDITOR_WORDS.pages, Icon: FileText },
+  components: { label: EDITOR_WORDS.components, Icon: Blocks },
+  design: { label: EDITOR_WORDS.design, Icon: Palette },
+  settings: { label: EDITOR_WORDS.settings, Icon: Settings },
 };
 
 /** A panel's name, as the rail shows it and the open panel's region is named. */
@@ -41,8 +42,11 @@ export function panelLabel(panel: LeftPanel): string {
   return PANEL_CHROME[panel].label;
 }
 
+// The ring sits off the item by a gap of the rail's own surface: on the open
+// panel's item, filled with the accent, a ring drawn against the fill is the
+// same colour as it and does not show.
 const ITEM_CLASS =
-  "focus-visible:ring-ring flex w-full flex-col items-center gap-1 rounded-md py-1.5 text-xs leading-tight focus-visible:ring-2 focus-visible:outline-none";
+  "focus-visible:ring-ring flex w-full flex-col items-center gap-1 rounded-md py-1.5 text-xs leading-tight focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
 
 function RailItem({
   label,
@@ -87,6 +91,14 @@ export interface EditorRailProps {
   onHelp: (button: HTMLElement) => void;
   /** The rail's own element, for region navigation. */
   railRef: (element: HTMLElement | null) => void;
+  /**
+   * Settings was chosen, from this button, which focus returns to: the host's
+   * Settings dialog. Absent, Settings is a panel like the others, offered
+   * where the host can fill it.
+   */
+  onSettings?: (button: HTMLElement) => void;
+  /** Whether the Settings dialog is open, shown as the item pressed. */
+  settingsOpen?: boolean;
 }
 
 export function EditorRail({
@@ -95,6 +107,8 @@ export function EditorRail({
   onSelect,
   onHelp,
   railRef,
+  onSettings,
+  settingsOpen = false,
 }: EditorRailProps): React.JSX.Element {
   const item = (panel: LeftPanel) => {
     const { label, Icon } = PANEL_CHROME[panel];
@@ -123,9 +137,20 @@ export function EditorRail({
       </ul>
       <ul className="mt-auto flex flex-col gap-1">
         {RAIL_GROUPS.bottom.filter(isAvailable).map(item)}
+        {onSettings === undefined ? null : (
+          <li>
+            <RailItem
+              label={PANEL_CHROME.settings.label}
+              Icon={PANEL_CHROME.settings.Icon}
+              pressed={settingsOpen}
+              onClick={onSettings}
+              data-rail-action="settings"
+            />
+          </li>
+        )}
         <li>
           <RailItem
-            label="Help"
+            label={EDITOR_WORDS.help}
             Icon={CircleHelp}
             onClick={onHelp}
             data-rail-action="help"

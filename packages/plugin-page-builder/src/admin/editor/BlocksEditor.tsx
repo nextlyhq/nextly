@@ -12,45 +12,72 @@
  */
 import type { BlockDocument, DocumentKind } from "@nextlyhq/blocks-engine";
 import {
+  prepareDocumentForRead,
+  registeredBlocks,
+} from "@nextlyhq/blocks-react";
+import {
   BlockContextMenu,
   BlockKeyboardActions,
   BlockToolbar,
-  BreakpointManager,
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
   DropIndicator,
-  EditorCommandPalette,
   EmptyContainerAppenders,
   InspectorPanel,
   RepairNotice,
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
+  type OpenPassages,
 } from "@nextlyhq/builder/shell";
+import {
+  DocumentPrimaryAction,
+  DocumentSaveIndicator,
+  loadInlineRichTextEditor,
+  MediaPickerDialog,
+} from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import { useState, type ComponentProps, type JSX } from "react";
 import {
   useFormState,
+  useWatch,
   type Control,
   type FieldValues,
   type Path,
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { ComponentActionPrompt } from "../ComponentActionPrompt";
+import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
+import { findEntries } from "../entries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
+import { SiteStyleHistoryContext } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
-import { UnsavedChangesPill } from "../UnsavedChangesPill";
 
-import { DocumentActionButtons } from "./document-action-buttons";
 import {
   editorPanelRenderer,
   useEditorPanels,
   type EditorPanels,
 } from "./editor-panels";
+import { EditorSearch, SearchButton } from "./editor-search";
+import { HistoryButtons } from "./history-buttons";
+import { PreviewButton } from "./preview-button";
+import { SettingsDialog } from "./settings-dialog";
+import {
+  sharePreview,
+  type SharePreview,
+  type ShareSeoFields,
+} from "./share-preview";
+import {
+  ConnectStyleHistoryContext,
+  RemountOnStyleReplay,
+  StyleRevisionContext,
+  useSiteStyleHistory,
+} from "./site-style-history";
 import { offerableTokens, siteStyleStatus } from "./site-style-studios";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -188,66 +215,143 @@ const COMPONENT_READ_NOTES: Readonly<
  * inspector and the canvas region below, so the tree the shell receives is
  * the one it always received.
  */
-function editorTopBar(view: EditorView): React.JSX.Element {
+/**
+ * What the editor puts in the shell's top bar, by column: the document's
+ * history and state at the start, the devices in the centre, and Preview and
+ * the document's actions at the end.
+ */
+function editorTopBar(view: EditorView): {
+  topBar: React.JSX.Element;
+  topBarCenter: React.JSX.Element;
+  topBarEnd: React.JSX.Element;
+} {
   const {
     documentDirty,
     canvasRender,
-    saveBreakpoints,
     siteStylePending,
     siteStyleError,
     editedBreakpoint,
     chooseDevice,
+    editor,
+    inline,
   } = view;
-  return (
-    <>
-      <DocumentStatusPill isDirty={documentDirty} />
-      {/* Beside the publish state, not folded into it. The two answer
-                different questions and one of them has no answer where a
-                collection declares no lifecycle. */}
-      <UnsavedChangesPill isDirty={documentDirty} />
-      {/*
-       * Gated on the SAME read the canvas and the cascade are gated on.
-       * Until the stored style has answered, `canvasSiteStyle` is the
-       * host's config defaults — so the dialog would open on a set the
-       * site never chose, and saving from that draft would overwrite the
-       * site's real breakpoints with defaults the author never saw.
-       *
-       * `!== null`, not `!== undefined`: `useSiteStyle` types `error` as
-       * `Error | null` and normalises success to `null`, so the
-       * `undefined` comparison is true on success too — the same mistake
-       * that once withheld the provenance trace unconditionally.
-       */}
-      <BreakpointManager
-        value={canvasRender.styleContext.breakpoints}
-        onSave={saveBreakpoints}
-        status={siteStyleStatus(siteStylePending, siteStyleError)}
-      />
-      {/*
-       * Beside the manager, and gated on the same read for the same
-       * reason it is: until the stored style has answered, the set in
-       * hand is the host's config defaults, so a device chosen against it
-       * could name a breakpoint the site never had.
-       *
-       * The device chosen is the breakpoint being edited. The choice goes
-       * to the shell, which stores it with the author's preferences and
-       * reports it back, so this shows the device the edits go to.
-       */}
-      <BreakpointSwitcher
-        breakpoints={canvasRender.styleContext.breakpoints}
-        selected={editedBreakpoint}
-        onSelect={chooseDevice}
-        status={siteStyleStatus(siteStylePending, siteStyleError)}
-      />
-      {/* Last, at the bar's far end where the header kept them: the
-          document's save verbs, which the builder's taking the window would
-          otherwise leave reachable only from the keyboard. */}
-      <DocumentActionButtons />
-    </>
-  );
+  return {
+    topBar: (
+      <>
+        <HistoryButtons editor={editor} inline={inline} />
+        <DocumentStatusPill isDirty={documentDirty} />
+      </>
+    ),
+    topBarCenter: (
+      <>
+        {/*
+         * Beside the manager, and gated on the same read for the same
+         * reason it is: until the stored style has answered, the set in
+         * hand is the host's config defaults, so a device chosen against it
+         * could name a breakpoint the site never had.
+         *
+         * The device chosen is the breakpoint being edited. The choice goes
+         * to the shell, which stores it with the author's preferences and
+         * reports it back, so this shows the device the edits go to.
+         */}
+        <BreakpointSwitcher
+          breakpoints={canvasRender.styleContext.breakpoints}
+          selected={editedBreakpoint}
+          onSelect={chooseDevice}
+          status={siteStyleStatus(siteStylePending, siteStyleError)}
+        />
+      </>
+    ),
+    topBarEnd: (
+      <>
+        {/* Whether the work is stored, beside the verbs that store it: the
+          header's own chip, which reads the field's held work too. Its text
+          sits against Preview, so the width it reserves for its longest
+          state opens towards the panel buttons rather than between it and
+          what it describes. Reserved only where the bar has the room: below
+          1400px it takes what it shows, as the device labels give way there,
+          so the end column never runs into the zoom. */}
+        {/* First in the group, as the agreed bar has it: one search for
+          blocks, the page, other pages and commands, also on ⌘K. */}
+        <SearchButton onOpen={() => view.search.setOpen(true)} />
+        <DocumentSaveIndicator className="min-w-[9rem] justify-end @max-[1400px]/topbar:min-w-0" />
+        <PreviewButton />
+        {/* Last, at the bar's far end where the header kept them: the
+          document's leading action with its other ways to publish on its
+          arrow, which the builder's taking the window would otherwise leave
+          reachable only from the keyboard. */}
+        <DocumentPrimaryAction />
+      </>
+    ),
+  };
 }
 
+type ContentServices = NonNullable<
+  ComponentProps<typeof InspectorPanel>["contentServices"]
+>;
+
+let contentServices: ContentServices | undefined;
+
+/**
+ * What the inspector's Content tab borrows from the admin: the media library,
+ * to choose an image, the shared rich-text editor, and the page builder's
+ * entries route, to find an entry a `relation` prop points at with the
+ * author's own access. Built on first use and
+ * kept for the module's life, so the panel never sees a new object on a
+ * render, and loading this module reads nothing from the admin's surface
+ * until an editor is drawn.
+ */
+function borrowedServices(): ContentServices {
+  contentServices ??= {
+    MediaPicker: MediaPickerDialog,
+    loadRichTextEditor: loadInlineRichTextEditor,
+    findEntries,
+  };
+  return contentServices;
+}
+
+/**
+ * The borrowed services with this editor's open-passage registry and its
+ * language, one object per registry and language so the panel sees the same
+ * one on every render. A relation search reads titles in the language being
+ * edited.
+ */
+const servicesByPassages = new WeakMap<
+  OpenPassages,
+  Map<string, ContentServices>
+>();
+
+function servicesFor(
+  passages: OpenPassages,
+  locale: string | undefined
+): ContentServices {
+  let byLocale = servicesByPassages.get(passages);
+  if (byLocale === undefined) {
+    byLocale = new Map();
+    servicesByPassages.set(passages, byLocale);
+  }
+  const key = locale ?? "";
+  let services = byLocale.get(key);
+  if (services === undefined) {
+    services = {
+      ...borrowedServices(),
+      openPassages: passages,
+      findEntries: query =>
+        findEntries(locale === undefined ? query : { ...query, locale }),
+    };
+    byLocale.set(key, services);
+  }
+  return services;
+}
+
+/** The block verbs the inspector's card offers, as the verbs provider shares them. */
+type CardVerbs = ComponentProps<typeof InspectorPanel>["verbs"];
+
 /** The inspector, given the same readings the canvas draws with. */
-function editorInspector(view: EditorView): React.JSX.Element {
+function editorInspector(
+  view: EditorView,
+  verbs: CardVerbs
+): React.JSX.Element {
   const {
     editor,
     canvasElement,
@@ -282,6 +386,11 @@ function editorInspector(view: EditorView): React.JSX.Element {
       // component map; a block whose inspector did not load keeps its
       // generated controls.
       inspectors={contributedInspector}
+      // The verbs provider's own verbs and verdicts for Duplicate and Delete,
+      // handed out of it because the inspector is drawn beside the canvas
+      // rather than under it.
+      verbs={verbs}
+      contentServices={servicesFor(view.passages, view.locale)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
@@ -421,6 +530,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // box actually got rather than from what it was offered.
             preview={canvasPreview}
             dragHandlers={drag.handlers}
+            // The regions of the page's Layout, drawn locked around it from
+            // the published Layout, as a visitor gets them.
+            regions={view.canvasRegions}
             // The same object those handlers came from, forwarded whole.
             // The canvas draws what the pointer currently means — which
             // block is in flight, which container is receiving it, and why
@@ -488,12 +600,11 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     showEmptyElements
                   )}
                   onAppend={nodeId => {
-                    // Select first, then open. The inserter derives its
-                    // target from the selection, so selecting the container
-                    // is what makes the next insert land inside it — there
-                    // is no second targeting path to keep in step.
+                    // Select the container and open Add to add INSIDE it,
+                    // said explicitly: selecting a container never implies
+                    // inside, so a click on a selected block adds after it.
                     editor.select(nodeId);
-                    openInsertPanel();
+                    openInsertPanel(nodeId);
                   }}
                 />
               </>
@@ -505,6 +616,94 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
   );
 }
 
+/** What the editor reads of the page's own fields as the author has them now. */
+interface PageFacts {
+  /** The form's `title` while it is text, for the top bar and the preview. */
+  title: string | undefined;
+  /** The SEO plugin's fields, where the document has them. */
+  seo: ShareSeoFields | undefined;
+}
+
+function usePageFacts<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>
+): PageFacts {
+  const [title, seo]: unknown[] = useWatch({
+    control,
+    name: ["title", "seo"] as Path<TFieldValues>[],
+  });
+  return {
+    title: typeof title === "string" ? title : undefined,
+    seo: seo !== null && typeof seo === "object" ? seo : undefined,
+  };
+}
+
+/**
+ * How a shared link to the page would look, from the page as the published
+ * route reads it: prepared with the canvas's own inputs (the same resolver,
+ * limits and component definitions), so a component's heading speaks for the
+ * page as it does once published.
+ */
+function pagePreview(view: EditorView, page: PageFacts): SharePreview {
+  const { editor, canvasRender } = view;
+  const resolver = registeredBlocks();
+  const prepared = prepareDocumentForRead(editor.document, {
+    resolver,
+    styleContext: canvasRender.styleContext,
+    definitions: canvasRender.definitions,
+    ...(canvasRender.limits === undefined
+      ? {}
+      : { limits: canvasRender.limits }),
+  });
+  return sharePreview({
+    seo: page.seo,
+    document: prepared,
+    pageTitle: page.title ?? "",
+    definitions: type => resolver.get(type),
+  });
+}
+
+/**
+ * Settings, as the shell's rail opens it: the entry's own fields and a share
+ * preview built from the page as it is now, and the site's breakpoints, read
+ * from the same answer the canvas and the device buttons are.
+ */
+function editorSettings(
+  view: EditorView,
+  page: PageFacts
+): NonNullable<React.ComponentProps<typeof BuilderShell>["renderSettings"]> {
+  const {
+    entryFields,
+    pageLayout,
+    canvasRender,
+    saveBreakpoints,
+    siteStylePending,
+    siteStyleError,
+  } = view;
+  // Remounted when a style change is undone or redone, as every surface
+  // showing the site's style is, so its breakpoints show the set replayed.
+  return dialog => (
+    <RemountOnStyleReplay>
+      <SettingsDialog
+        {...dialog}
+        pageFields={entryFields}
+        // The page's Layout, in its own section after the page's fields.
+        pageLayout={pageLayout}
+        // Built only while the dialog is drawn, from the page on screen.
+        share={
+          // Prepared only while Settings is open: the shell asks for the
+          // dialog on every pass, open or not.
+          dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
+        }
+        breakpoints={{
+          value: canvasRender.styleContext.breakpoints,
+          onSave: saveBreakpoints,
+          status: siteStyleStatus(siteStylePending, siteStyleError),
+        }}
+      />
+    </RemountOnStyleReplay>
+  );
+}
+
 /**
  * The editor itself, mounted only while open.
  *
@@ -513,15 +712,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
  * ask the admin to hide its navigation for every entry form holding a blocks
  * field, open or not.
  */
-export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
-  initialValue,
-  kinds,
-  onCommit,
-  onClose,
-  name,
-  control,
-  openAt,
-}: {
+interface BlocksEditorProps<TFieldValues extends FieldValues> {
   initialValue: unknown;
   /** The kinds the field accepts, so a seeded document is one it will take. */
   kinds: readonly DocumentKind[] | undefined;
@@ -531,7 +722,53 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   control: Control<TFieldValues>;
   /** The section to open at, as the address names it; none opens at the top. */
   openAt?: string | undefined;
-}): JSX.Element {
+}
+
+export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
+  props: BlocksEditorProps<TFieldValues>
+): JSX.Element {
+  /*
+   * A change to the site's shared styles is a step of the editor's undo
+   * history. Provided from here, above the editor's own hooks, because some
+   * of the style writers run in the editor component itself.
+   */
+  const style = useSiteStyleHistory();
+  return (
+    <SiteStyleHistoryContext.Provider value={style.history}>
+      <StyleRevisionContext.Provider value={style.replay}>
+        <ConnectStyleHistoryContext.Provider value={style.connect}>
+          <EditorBody {...props} />
+        </ConnectStyleHistoryContext.Provider>
+      </StyleRevisionContext.Provider>
+    </SiteStyleHistoryContext.Provider>
+  );
+}
+
+/**
+ * What the editor's search adds from: the Add panel's own sources, and the
+ * container whose "+" opened Add, so a search row adds where the panel would.
+ */
+function searchInsertSources(
+  panels: EditorPanels
+): NonNullable<React.ComponentProps<typeof EditorSearch>["insert"]> {
+  return {
+    components: panels.offered.components,
+    componentDefinitions: panels.offered.definitions,
+    ...(panels.insertInside === undefined
+      ? {}
+      : { inside: panels.insertInside }),
+  };
+}
+
+function EditorBody<TFieldValues extends FieldValues>({
+  initialValue,
+  kinds,
+  onCommit,
+  onClose,
+  name,
+  control,
+  openAt,
+}: BlocksEditorProps<TFieldValues>): JSX.Element {
   // The field's value as last loaded or saved: the form resets its defaults to
   // what a save stored, so the editor holds an edit to the locks against the
   // same stored copy the next save is judged against.
@@ -563,7 +800,10 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
 
   const style = useSiteStyleInputs(mount.clientConfig);
   const canvas = useCanvasInputs(mount, style);
-  const panels = useEditorPanels(mount, name);
+  const panels = useEditorPanels(mount, name, {
+    control,
+    canvasRoot: canvas.canvasElement,
+  });
   const { done } = useHostCommit({
     name,
     control,
@@ -573,6 +813,11 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     onClose,
     savePoint,
   });
+
+  const page = usePageFacts(control);
+  // What the verbs provider shares for the card's menu; `undefined` until it
+  // mounts, when the menu offers Rename and Lock alone.
+  const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
 
   const view: EditorView = {
     ...mount,
@@ -592,6 +837,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     componentLibrary,
     savePattern,
     mayCreatePattern,
+    makeComponent,
+    componentVerbs,
     checklist,
     availablePanels,
     openPanelRequest,
@@ -609,6 +856,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       <BuilderShell
         notices={notices}
         onExit={done}
+        // The signed-in author's own preferences, not the browser's.
+        store={mount.preferenceStore}
         availablePanels={availablePanels}
         // Forces the insert panel open from the empty-container appender,
         // which lives on the canvas below rather than beside the rail that
@@ -628,7 +877,11 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
         // editor is open, because the document is committed on the way out.
-        topBar={editorTopBar(view)}
+        {...editorTopBar(view)}
+        // The document's title, read-only, as the author has it in the form
+        // right now. Nothing for a document with no title field.
+        title={page.title}
+        renderSettings={editorSettings(view, page)}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears
@@ -644,7 +897,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // already holds and cannot enumerate one. This is the MERGED set the
         // canvas compiles with, so the picker offers exactly the tokens the
         // page will resolve.
-        inspector={editorInspector(view)}
+        inspector={editorInspector(view, cardVerbs)}
         // Switched on the panel id rather than rendering the inserter for
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter
@@ -652,7 +905,15 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // The trail sits in the bottom bar, which the shell owns. Passed as a
         // slot rather than rendered beside the canvas so it cannot overlap the
         // page an author is editing.
-        breadcrumb={<SelectionBreadcrumb editor={editor} />}
+        // The hint names Enter, Escape and the palette's key because this
+        // editor binds all three: inline editing and the block keyboard
+        // actions below, and the palette it mounts.
+        breadcrumb={
+          <SelectionBreadcrumb
+            editor={editor}
+            hints={{ editText: true, goUp: true, commandPalette: true }}
+          />
+        }
         // Rendered only while it has somewhere to go: passing an element the
         // shell would position and then hide leaves an empty positioner over
         // the canvas.
@@ -692,6 +953,8 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             this plugin's business, not the canvas's.
           */
           mayCreatePattern={mayCreatePattern}
+          components={componentVerbs}
+          onShareVerbs={setCardVerbs}
         >
           {/*
             Inside the verbs provider, which is what lets the palette run
@@ -703,7 +966,15 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             while the button exists — would give the editor two ways out that
             behave differently.
           */}
-          <EditorCommandPalette editor={editor} onExit={done} />
+          <EditorSearch
+            editor={editor}
+            onExit={done}
+            canvas={canvas.canvasElement}
+            // The Add panel's own sources, so search offers what it offers.
+            insert={searchInsertSources(panels)}
+            open={panels.search.open}
+            onOpenChange={panels.search.setOpen}
+          />
           {editorCanvasRegion(view)}
           {/*
             Rendered inside the verbs provider so the form and the button that
@@ -718,6 +989,20 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             selectedIds={editor.selection.ids}
             onClose={savePattern.close}
             returnFocusTo={savePattern.returnFocusTo}
+          />
+          <ComponentFromSelectionPrompt
+            request={makeComponent.request}
+            editor={editor}
+            library={componentLibrary}
+            onClose={makeComponent.close}
+            returnFocusTo={makeComponent.returnFocusTo}
+          />
+          <ComponentActionPrompt
+            request={makeComponent.request}
+            editor={editor}
+            library={componentLibrary}
+            onClose={makeComponent.close}
+            returnFocusTo={makeComponent.returnFocusTo}
           />
         </BlockKeyboardActions>
       </BuilderShell>

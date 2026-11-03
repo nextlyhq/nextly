@@ -498,13 +498,23 @@ describe("undo and redo", () => {
       }
     });
 
-    // Asserted as the CAP, not merely "some number": a stack that dropped the
-    // newest instead would also stay bounded, and would make the last edit the
-    // one an author cannot take back.
-    expect(result.current.undoDepth).toBe(MAX_HISTORY);
+    // The most recent insert is what comes off first, and exactly the
+    // bound's worth can be taken back: the five oldest stay. Counted by
+    // undoing rather than by a depth, which measures the document's position
+    // and keeps counting past the bound.
     act(() => result.current.undo());
-    // The most recent insert is what comes off first.
     expect(ids(result.current.document)).not.toContain(`n${MAX_HISTORY + 4}`);
+    act(() => {
+      for (let i = 1; i < MAX_HISTORY; i += 1) result.current.undo();
+    });
+    expect(result.current.canUndo).toBe(false);
+    expect(ids(result.current.document)).toEqual([
+      "n0",
+      "n1",
+      "n2",
+      "n3",
+      "n4",
+    ]);
   });
 });
 
@@ -1312,5 +1322,509 @@ describe("the locks an edit is held to", () => {
     expect(result.current.planRepair().steps).toEqual([
       expect.objectContaining({ kind: "reset", nodeId: "h1" }),
     ]);
+  });
+});
+
+describe("the placement rule on every edit", () => {
+  const base = {
+    version: 1,
+    description: "A block.",
+    example: { props: {} },
+    render: () => null,
+  };
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  function registerLinkable(): void {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "t/card",
+          slots: { children: {} },
+          contentModel: (props: { link?: string }) =>
+            props.link
+              ? {
+                  is: ["flow", "interactive"],
+                  accepts: { without: ["interactive"] },
+                }
+              : { is: ["flow"] },
+        },
+        {
+          ...base,
+          name: "t/button",
+          contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
+        },
+      ] as never,
+      { source: "test" }
+    );
+  }
+
+  const card = (
+    props: Record<string, unknown>,
+    children: BlockNode[] = []
+  ): BlockNode => ({
+    id: "card",
+    type: "t/card",
+    version: 1,
+    props,
+    slots: { children },
+  });
+  const button: BlockNode = {
+    id: "btn",
+    type: "t/button",
+    version: 1,
+    props: {},
+  };
+
+  it("refuses an insert that puts a Button inside a linked card, and says which", () => {
+    registerLinkable();
+    const onPlacementRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([card({ link: "/go" })]),
+        onPlacementRefused,
+      })
+    );
+
+    let outcome: BlockDocument | null = doc([]);
+    act(() => {
+      outcome = result.current.apply({
+        kind: "insert",
+        node: button,
+        at: { parentId: "card", slot: "children", index: 0 },
+      });
+    });
+
+    expect(outcome).toBeNull();
+    expect(result.current.canUndo).toBe(false);
+    expect(onPlacementRefused).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "btn",
+        verdict: expect.objectContaining({ reason: "content-model" }),
+      })
+    );
+  });
+
+  it("refuses turning the link on while the card holds a Button", () => {
+    registerLinkable();
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([card({}, [button])]) })
+    );
+
+    let outcome: BlockDocument | null = doc([]);
+    act(() => {
+      outcome = result.current.apply({
+        kind: "update",
+        id: "card",
+        patch: { props: { link: "/go" } },
+      });
+    });
+
+    expect(outcome).toBeNull();
+  });
+
+  it("lets an unrelated edit through on a page that already breaks the rule", () => {
+    registerLinkable();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([card({ link: "/go" }, [button])]),
+      })
+    );
+
+    act(() => {
+      result.current.apply({
+        kind: "insert",
+        node: node("after"),
+        at: { index: 1 },
+      });
+    });
+
+    expect(ids(result.current.document)).toEqual(["card", "after"]);
+  });
+});
+
+/**
+ * A change made outside the document, such as a shared style, recorded as one
+ * step of the same history. Its two halves answer whether they took effect.
+ */
+function step(calls: string[], name: string, works = true) {
+  return {
+    undo: () => {
+      calls.push(`undo ${name}`);
+      return Promise.resolve(works);
+    },
+    redo: () => {
+      calls.push(`redo ${name}`);
+      return Promise.resolve(works);
+    },
+  };
+}
+
+describe("a step recorded from outside the document", () => {
+  const insert = (id: string, index: number) =>
+    ({ kind: "insert", node: node(id), at: { index } }) as const;
+
+  it("is undone and redone as one step of the same history", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => result.current.recordStep(step(calls, "style")));
+    expect(result.current.canUndo).toBe(true);
+
+    await act(async () => result.current.undo());
+    expect(calls).toEqual(["undo style"]);
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.canRedo).toBe(true);
+
+    await act(async () => result.current.redo());
+    expect(calls).toEqual(["undo style", "redo style"]);
+    expect(result.current.canUndo).toBe(true);
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("takes its place among document edits, undone in the order they were made", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    act(() => result.current.recordStep(step(calls, "style")));
+    act(() => {
+      result.current.apply(insert("c", 2));
+    });
+
+    await act(async () => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+    expect(calls).toEqual([]);
+
+    await act(async () => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+    expect(calls).toEqual(["undo style"]);
+
+    await act(async () => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a"]);
+
+    await act(async () => result.current.redo());
+    await act(async () => result.current.redo());
+    expect(calls).toEqual(["undo style", "redo style"]);
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("leaves the document's undo depth alone, so the page's save state does not move", async () => {
+    // The depth is what the host compares with its save point. A style is
+    // stored as it is changed, so its step is no unsaved work on the page.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    expect(result.current.undoDepth).toBe(1);
+
+    act(() => result.current.recordStep(step(calls, "style")));
+    expect(result.current.undoDepth).toBe(1);
+
+    await act(async () => result.current.undo());
+    expect(calls).toEqual(["undo style"]);
+    expect(result.current.undoDepth).toBe(1);
+
+    await act(async () => result.current.redo());
+    expect(result.current.undoDepth).toBe(1);
+  });
+
+  it("ends the redo branch, as a new document edit does", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => result.current.undo());
+    expect(result.current.canRedo).toBe(true);
+
+    act(() => result.current.recordStep(step(calls, "style")));
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("is dropped when it can no longer be taken back", async () => {
+    // A refused write changed nothing: keeping the step would offer a redo
+    // of a change that is still in place, and an undo that never clears.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    act(() => result.current.recordStep(step(calls, "style", false)));
+
+    await act(async () => result.current.undo());
+    expect(calls).toEqual(["undo style"]);
+    expect(result.current.canRedo).toBe(false);
+
+    // The next undo reaches the edit before it.
+    await act(async () => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a"]);
+  });
+
+  it("is dropped when its undo throws", async () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() =>
+      result.current.recordStep({
+        undo: () => Promise.reject(new Error("offline")),
+        redo: () => Promise.resolve(true),
+      })
+    );
+    await act(async () => result.current.undo());
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it("keeps the page's save point where it was when style steps pass the bound", () => {
+    // A page saved at depth 1 stays saved however many style steps follow,
+    // though its edit falls off the old end of the history.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([]) })
+    );
+    act(() => {
+      result.current.apply(insert("first", 0));
+      for (let i = 0; i < MAX_HISTORY + 5; i += 1) {
+        result.current.recordStep(step(calls, `s${i}`));
+      }
+    });
+    expect(result.current.undoDepth).toBe(1);
+  });
+
+  it("drops the oldest entry at the bound, never the newest step", async () => {
+    // A full history of page edits, then a style change: undo takes back the
+    // style change first, as the author made it last.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([]) })
+    );
+    act(() => {
+      for (let i = 0; i < MAX_HISTORY; i += 1) {
+        result.current.apply(insert(`n${i}`, i));
+      }
+      result.current.recordStep(step(calls, "style"));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    expect(calls).toEqual(["undo style"]);
+    expect(ids(result.current.document)).toHaveLength(MAX_HISTORY);
+  });
+
+  it("answers whether an undo or redo of a step took effect", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.recordStep(step(calls, "kept", true));
+    });
+    let undone: boolean | undefined;
+    await act(async () => {
+      undone = await result.current.undo();
+    });
+    expect(undone).toBe(true);
+    act(() => {
+      result.current.recordStep(step(calls, "refused", false));
+    });
+    await act(async () => {
+      undone = await result.current.undo();
+    });
+    expect(undone).toBe(false);
+  });
+
+  it("is withdrawn wherever it sits, even after it was undone", async () => {
+    // Undone while its save is still pending, then refused: no Redo may be
+    // left for a change that was never stored.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "pending"));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    expect(result.current.canRedo).toBe(true);
+    act(() => withdraw());
+    expect(result.current.canRedo).toBe(false);
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it("gives back the entry it pushed off a full history when it is withdrawn", () => {
+    // A refused change changed nothing, so it must not cost the oldest edit.
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([]) })
+    );
+    let withdraw: () => void = () => {};
+    act(() => {
+      for (let i = 0; i < MAX_HISTORY; i += 1) {
+        result.current.apply(insert(`n${i}`, i));
+      }
+      withdraw = result.current.recordStep(step(calls, "refused"));
+    });
+    act(() => withdraw());
+    expect(result.current.undoDepth).toBe(MAX_HISTORY);
+    act(() => {
+      for (let i = 0; i < MAX_HISTORY; i += 1) result.current.undo();
+    });
+    expect(ids(result.current.document)).toEqual([]);
+  });
+
+  it("can be withdrawn before it is replayed, as a refused save is", () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "style"));
+    });
+    act(() => withdraw());
+    // The next undo reaches the page edit, and the step was never replayed.
+    act(() => result.current.undo());
+    expect(ids(result.current.document)).toEqual(["a"]);
+    expect(calls).toEqual([]);
+    expect(result.current.canUndo).toBe(false);
+  });
+});
+
+describe("a block locked in Layers, asked and applied", () => {
+  /** A locked section holding a heading, beside an unlocked block. */
+  function lockedPage(): BlockDocument {
+    return doc([
+      { ...node("hero", { children: [node("title")] }), locked: true },
+      node("loose"),
+    ]);
+  }
+
+  it("answers ahead of time, in the lock's words, for every way into it", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: lockedPage() })
+    );
+    const ask = result.current.lockRefusalFor;
+    // A block put into the locked one, a block inside it changed, and the
+    // locked block itself moved: the store's question answers each, where it
+    // answered nothing before because the op layer's refusal was swallowed.
+    expect(
+      ask([
+        {
+          kind: "move",
+          id: "loose",
+          to: { parentId: "hero", slot: "children", index: 0 },
+        },
+      ])
+    ).toMatchObject({ code: "layers-locked", relation: "destination" });
+    expect(
+      ask([{ kind: "update", id: "title", patch: { name: "Big" } }])
+    ).toMatchObject({ code: "layers-locked", relation: "around" });
+    expect(ask([{ kind: "move", id: "hero", to: { index: 2 } }])).toMatchObject(
+      { code: "layers-locked", relation: "self", verb: "move" }
+    );
+    // The control: an edit the lock does not cover is not refused for it.
+    expect(
+      ask([{ kind: "update", id: "loose", patch: { name: "Free" } }])
+    ).toBeUndefined();
+  });
+
+  it("tells the host why when it refuses an edit the lock covers", () => {
+    const onLockRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: lockedPage(), onLockRefused })
+    );
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "title",
+          patch: { name: "Big" },
+        })
+      ).toBeNull();
+    });
+    expect(onLockRefused).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sentence:
+          "This block is inside Box, which is locked. Unlock Box to change this block.",
+      })
+    );
+  });
+
+  it("refuses deleting a block the saved page still holds locked, until the unlock is saved", () => {
+    // Unlocked in the editor and not yet saved: a save would refuse to drop a
+    // block locked in what is stored, so the editor refuses the delete first,
+    // with the way forward. Once the unlock is saved, the delete goes through.
+    const opened = lockedPage();
+    const onLockRefused = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ stored }) =>
+        useEditorState({ initialDocument: opened, stored, onLockRefused }),
+      { initialProps: { stored: opened } }
+    );
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "hero",
+          patch: {},
+          unset: ["locked"],
+        })
+      ).not.toBeNull();
+    });
+    expect(
+      result.current.lockRefusalFor([{ kind: "remove", id: "hero" }])
+    ).toMatchObject({ code: "layers-locked-when-saved", relation: "self" });
+    act(() => {
+      expect(result.current.apply({ kind: "remove", id: "hero" })).toBeNull();
+    });
+    expect(onLockRefused).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sentence:
+          "Save first: this block is still locked on the saved page. Save, then delete it.",
+      })
+    );
+    // A change to it, or a move, may ride in the same save as the unlock.
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "update",
+          id: "title",
+          patch: { name: "Big" },
+        })
+      ).not.toBeNull();
+    });
+
+    // Saved: the stored page now holds the unlock, so the delete is allowed.
+    rerender({ stored: result.current.document });
+    act(() => {
+      expect(
+        result.current.apply({ kind: "remove", id: "hero" })
+      ).not.toBeNull();
+    });
   });
 });

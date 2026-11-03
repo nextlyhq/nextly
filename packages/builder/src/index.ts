@@ -40,6 +40,9 @@
  *   `@nextlyhq/ui/styles.css` — or the admin's, which contains it — alongside.
  *   The shell says so in the console, in development, when it is missing.
  *
+ * - {@link deepActiveElement} and {@link isHTMLElement}, which read focus and
+ *   node kinds without a realm's constructors.
+ *
  * - The op store — {@link applyOp}, {@link OpError} and the op vocabulary —
  *   which every edit is expressed in and which derives each edit's inverse.
  *
@@ -91,6 +94,16 @@ export {
  * `clientLeft`/`clientTop` left three call sites short by the padding.
  */
 export { frameInsetOf } from "./geometry-dom";
+
+/**
+ * @experimental Node kinds and focus, read the same way in every realm.
+ *
+ * Exported for the host that mounts the editor, which reads focus and checks
+ * elements around a canvas that may live in a same-origin iframe: there an
+ * `instanceof HTMLElement` check fails for the frame's nodes, and the host
+ * document's `activeElement` names the iframe rather than what is focused in it.
+ */
+export { deepActiveElement, isHTMLElement } from "./dom-kind";
 
 /**
  * @experimental The op store: the vocabulary every edit is expressed in, and
@@ -265,6 +278,13 @@ export { blockLabel } from "./inserter";
  * show, whichever surface asked.
  */
 export { revealNode } from "./reveal-node";
+/**
+ * A binding as a person reads it on this platform ("⌘K" on a Mac, "Ctrl+K"
+ * elsewhere), for a host drawing a shortcut hint beside its own control.
+ *
+ * @experimental
+ */
+export { keyHint } from "./key-hint";
 
 /**
  * @experimental Whether the editor may move or delete a block the author has
@@ -302,6 +322,7 @@ export {
   EDITABLE_EXPOSED_TYPES,
   inspectInstance,
   overridesPatch,
+  partOfComponentSentence,
   resetOverrideOp,
   setOverrideOp,
   type ExposedRow,
@@ -439,6 +460,7 @@ export {
   toolbarActions,
   toolbarPlacement,
   unionRect,
+  type ComponentVerbsOffer,
   type ToolbarAction,
   type ToolbarActionId,
   type ToolbarPlacement,

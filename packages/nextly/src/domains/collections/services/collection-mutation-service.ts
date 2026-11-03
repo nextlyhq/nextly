@@ -260,7 +260,10 @@ import {
 } from "../../singles/services/live-shared-single";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
-import { mergeComponentPatches } from "../../versions/draft-components";
+import {
+  draftComponentValues,
+  mergeComponentPatches,
+} from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
@@ -683,6 +686,14 @@ interface UpdateEntryWriteParams {
    * update grant, so a super-admin-owned key cannot update other users' rows.
    */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The batch this write is one of, whose component definitions it is judged
+   * against, read once for them all. Its relations are not: under the row
+   * lock each entry's are read for it alone (`storedRelationsOf`).
+   *
+   * @internal
+   */
+  goingLiveBatch?: GoingLiveRelationsBatch;
 }
 
 /** The only things that differ between the two update entry points. */
@@ -728,6 +739,8 @@ interface UpdateEntryWriteOptions {
 interface GoingLiveArgs {
   collectionName: string;
   entryId: string;
+  /** The collection's resolved table, which its components are stored against. */
+  tableName: string;
   /** The write locale; `undefined` for the unlocalized write. */
   locale: string | undefined;
   user: UserContext | undefined;
@@ -746,6 +759,8 @@ interface GoingLiveArgs {
   drafts: Pick<VersionsRepository, "findWorkingDraft">;
   /** The batch's reads, when judged for many entries at once. */
   reads?: GoingLiveReads;
+  /** The batch the entry's components and relationships are read in, if any. */
+  relationsBatch?: GoingLiveRelationsBatch;
   draftLocaleKey: string | null;
   collectionHasStatus: boolean;
   /** The status the write will persist, if it names one. */
@@ -800,6 +815,8 @@ function promoteRestoreContext(args: {
  */
 interface GoingLiveReads {
   companion: CompanionSchema | null;
+  /** The entries' components and many-to-many ids, read for them all at once. */
+  relations: GoingLiveRelationsBatch;
   languageStatuses(entryId: string): Promise<Map<string, string | null> | null>;
   translations(
     entryId: string,
@@ -817,6 +834,7 @@ type ReleaseWriteContext = Omit<
   | "existingEntry"
   | "drafts"
   | "reads"
+  | "relationsBatch"
 >;
 
 /** What judging the languages a publish puts live needs. */
@@ -846,6 +864,356 @@ interface LanguagesGoLiveArgs {
   tx?: TransactionContext;
   /** The batch's reads, when judged for many entries at once. */
   reads?: GoingLiveReads;
+  /** What the document's components and relationships go live from. */
+  relations: GoingLiveRelationArgs;
+}
+
+/**
+ * What a publish judges a document's components and many-to-many
+ * relationships from: the stored ones, with the write's own over them.
+ */
+interface GoingLiveRelationArgs {
+  /** The collection's resolved table, which its components are stored against. */
+  tableName: string;
+  manyToManyFields: FieldDefinition[];
+  /** The write's own component values, which `shapeWriteParts` took off the patch. */
+  componentFieldData: Record<string, unknown>;
+  /** The write's own many-to-many ids, taken off the patch the same way. */
+  manyToManyData: Record<string, string[]>;
+  /** How a single component the write patches is merged, where known. */
+  componentSchemas: ComponentSchemas | null;
+  /** The batch they are read in, when the document publishes with others. */
+  batch?: GoingLiveRelationsBatch;
+}
+
+/**
+ * A collection document's components and junction many-to-many relationships,
+ * as a publish judges them.
+ *
+ * Neither sits on the document's row: a component's values live in tables of
+ * its own, and a many-to-many relationship in a junction. A publish judges the
+ * stored row in update mode, where an absent key is not judged, so a document
+ * built from the row and its translations alone put a required component or
+ * relationship missing from storage live unchecked. These are read as stored,
+ * every such field with a key of its own, and the write's own values laid over
+ * them.
+ *
+ * Read for many documents at once where a publish judges many: a batch, a bulk
+ * publish, a release's readiness. One read per field for the whole batch,
+ * never one per document.
+ */
+
+/** A document's top-level component values and many-to-many ids, as stored. */
+export interface StoredRelations {
+  components: Record<string, unknown>;
+  manyToMany: Record<string, string[]>;
+}
+
+/**
+ * How a batch's stored relations are read, on the connection the judgement
+ * runs on: components in a language, many-to-many ids the same in every one.
+ */
+export interface StoredRelationsLoad {
+  components(
+    entryIds: readonly string[],
+    language: string | undefined
+  ): Promise<Map<string, Record<string, unknown>>>;
+  manyToMany(
+    entryIds: readonly string[]
+  ): Promise<Map<string, Record<string, string[]>>>;
+}
+
+/**
+ * Ids per statement. Each id binds one parameter, and SQLite's default limit of
+ * 999 is the lowest across the supported dialects, so a larger batch is read
+ * in several statements: the size the versions repository deletes in.
+ */
+const RELATION_READ_CHUNK = 500;
+
+/** `read` over `ids` in statement-sized runs, its answers merged. */
+async function inChunks<T>(
+  ids: readonly string[],
+  read: (chunk: readonly string[]) => Promise<Map<string, T>>
+): Promise<Map<string, T>> {
+  const all = new Map<string, T>();
+  for (let at = 0; at < ids.length; at += RELATION_READ_CHUNK) {
+    for (const [id, value] of await read(
+      ids.slice(at, at + RELATION_READ_CHUNK)
+    )) {
+      all.set(id, value);
+    }
+  }
+  return all;
+}
+
+/**
+ * The stored relations of a batch of one collection's documents, read for all
+ * of them the first time any is asked for: the components once per language
+ * asked for, the many-to-many ids once. A document outside the batch is read
+ * on its own.
+ *
+ * The relations are only for reads on the pool, which judge ahead of any
+ * lock. A judgement on a transaction holds the lock of the one row it judges,
+ * so the other rows' relations read with it could still change before the
+ * transaction locks them; it reads its own row's alone (`storedRelationsOf`).
+ *
+ * @internal
+ */
+export class GoingLiveRelationsBatch {
+  private readonly entryIds: readonly string[];
+  private readonly components = new Map<
+    string,
+    Promise<Map<string, Record<string, unknown>>>
+  >();
+  private manyToMany:
+    | Promise<Map<string, Record<string, string[]>>>
+    | undefined;
+  private readonly definitions = new Map<
+    string,
+    Promise<FieldConfig[] | null>
+  >();
+
+  constructor(entryIds: readonly string[]) {
+    this.entryIds = [...new Set(entryIds)];
+  }
+
+  /**
+   * A component's own fields, read once for the batch through `read`: a
+   * batch writes documents, not definitions, so every document is judged
+   * against the same ones. Unlike the relations, safe to share on a
+   * transaction too, which locks rows, not definitions.
+   */
+  componentFields(
+    slug: string,
+    read: () => Promise<FieldConfig[] | null>
+  ): Promise<FieldConfig[] | null> {
+    let found = this.definitions.get(slug);
+    if (found === undefined) {
+      found = read();
+      this.definitions.set(slug, found);
+    }
+    return found;
+  }
+
+  /**
+   * One document's stored relations, its components in `language`, through
+   * `load`. The two reads are awaited in turn, one statement at a time on the
+   * connection they run on.
+   */
+  async read(
+    entryId: string,
+    language: string | undefined,
+    load: StoredRelationsLoad
+  ): Promise<StoredRelations> {
+    if (!this.entryIds.includes(entryId)) {
+      const components = await load.components([entryId], language);
+      const manyToMany = await load.manyToMany([entryId]);
+      return {
+        components: components.get(entryId) ?? {},
+        manyToMany: manyToMany.get(entryId) ?? {},
+      };
+    }
+    // `undefined` is the default resolution, a language of its own here.
+    const key = language === undefined ? "" : `:${language}`;
+    let components = this.components.get(key);
+    if (components === undefined) {
+      components = load.components(this.entryIds, language);
+      this.components.set(key, components);
+    }
+    const ofDocument = (await components).get(entryId) ?? {};
+    this.manyToMany ??= load.manyToMany(this.entryIds);
+    return {
+      components: ofDocument,
+      manyToMany: (await this.manyToMany).get(entryId) ?? {},
+    };
+  }
+}
+
+/** What reading a batch's stored relations needs. */
+interface StoredRelationsRead {
+  entryIds: readonly string[];
+  collectionName: string;
+  /** The collection's resolved table: a custom `dbName` is not the slug's. */
+  parentTable: string;
+  fields: readonly FieldDefinition[];
+  manyToManyFields: readonly FieldDefinition[];
+  /**
+   * The transaction's executor, where the judgement runs inside one; absent
+   * on the pool, where a component table not yet created reads as empty.
+   */
+  executor?: unknown;
+  fieldGroups:
+    | Pick<FieldGroupDataService, "populateComponentDataMany">
+    | undefined;
+  relationships: Pick<
+    CollectionRelationshipService,
+    "fetchManyToManyTargetIdsOf"
+  >;
+}
+
+/**
+ * Each document's top-level component values, keyed by document id: one read
+ * per component field for every 500 documents. A component missing from
+ * storage reads as its empty value (`null` for one, `[]` for a repeatable
+ * component or a zone), and a read that fails refuses rather than reading as
+ * empty.
+ *
+ * Refused where the collection has component fields and no field-group
+ * service is registered: its components cannot be read, and a document judged
+ * without them would go live unchecked.
+ */
+export async function readStoredComponents(
+  args: Omit<StoredRelationsRead, "manyToManyFields" | "relationships"> & {
+    /** Read in this language exactly, with no fallback; absent, the default resolution. */
+    language: string | undefined;
+  }
+): Promise<Map<string, Record<string, unknown>>> {
+  const componentFields = args.fields.filter(field =>
+    isFieldGroupField(field as unknown as FieldConfig)
+  );
+  if (componentFields.length === 0) return new Map();
+  const fieldGroups = args.fieldGroups;
+  if (fieldGroups === undefined) {
+    throw NextlyError.configuration({
+      logMessage:
+        "A collection with component fields cannot be published: no field-group service is registered, so its components cannot be read and judged. Boot with the field-group services registered.",
+      logContext: {
+        collection: args.collectionName,
+        fields: componentFields.map(field => field.name),
+      },
+    });
+  }
+  return inChunks(args.entryIds, async chunk => {
+    const populated = await fieldGroups.populateComponentDataMany({
+      entries: chunk.map(id => ({ id })),
+      parentTable: args.parentTable,
+      fields: args.fields as unknown as FieldConfig[],
+      depth: 0,
+      strict: true,
+      ...(args.executor === undefined ? {} : { executor: args.executor }),
+      ...(args.language === undefined
+        ? {}
+        : { locale: args.language, fallbackLocale: false as const }),
+    });
+    return new Map(
+      populated.map(entry => [
+        String(entry.id),
+        Object.fromEntries(
+          componentFields
+            .filter(field => entry[field.name] !== undefined)
+            .map(field => [field.name, entry[field.name]])
+        ),
+      ])
+    );
+  });
+}
+
+/**
+ * Each document's many-to-many ids, keyed by document id: one junction read
+ * per field for every 500 documents, a document with no links holding `[]`.
+ * The ids are every stored one, a target since unpublished included, as the
+ * write itself reads them.
+ */
+export async function readStoredManyToMany(
+  args: Omit<StoredRelationsRead, "parentTable" | "fieldGroups">
+): Promise<Map<string, Record<string, string[]>>> {
+  return inChunks(args.entryIds, async chunk => {
+    const byDocument = new Map<string, Record<string, string[]>>(
+      chunk.map(id => [id, {}])
+    );
+    for (const field of args.manyToManyFields) {
+      const targets = await args.relationships.fetchManyToManyTargetIdsOf(
+        args.collectionName,
+        chunk,
+        field,
+        args.executor as RelationshipDbExecutor | undefined
+      );
+      for (const [id, links] of byDocument) {
+        links[field.name] = targets.get(id) ?? [];
+      }
+    }
+    return byDocument;
+  });
+}
+
+/** A document's many-to-many ids, each field's that holds a list. */
+function manyToManyValuesIn(
+  document: Record<string, unknown>,
+  manyToManyFields: readonly FieldDefinition[]
+): Record<string, string[]> {
+  const values: Record<string, string[]> = {};
+  for (const field of manyToManyFields) {
+    const value = document[field.name];
+    if (Array.isArray(value)) values[field.name] = value.map(String);
+  }
+  return values;
+}
+
+/**
+ * The language rules a publish judges in, with a required top-level component
+ * enforced for the default language only, as a translated field's `required`
+ * is: one finished language can go live while another is incomplete. The
+ * validator relaxes `required` for the names it is given outside the default
+ * language, so the components' names join the translated fields'.
+ */
+export function componentsRequiredInDefaultLanguage<
+  T extends {
+    localizedFieldNames: ReadonlySet<string>;
+    enforceLocalizedRequired: boolean;
+  },
+>(
+  context: T,
+  fields: readonly FieldDefinition[],
+  /**
+   * Whether the document differs by language: it has translated fields, or
+   * reaches a localized field group, whose values its own translations hold.
+   * One that does not is one document in every language, its components as
+   * much the default language's as anyone's.
+   */
+  perLanguage: boolean
+): T {
+  if (context.enforceLocalizedRequired || !perLanguage) {
+    return context;
+  }
+  const components = fields
+    .filter(field => isFieldGroupField(field as unknown as FieldConfig))
+    .map(field => field.name);
+  if (components.length === 0) return context;
+  return {
+    ...context,
+    localizedFieldNames: new Set([
+      ...context.localizedFieldNames,
+      ...components,
+    ]),
+  };
+}
+
+/**
+ * The values a document goes live with for its components and many-to-many
+ * relationships: the stored ones, with the write's own over them. A single
+ * component the write patches is merged sub-field by sub-field, as the write
+ * merges it; a repeatable component, a zone and a relationship the write
+ * names are replaced whole.
+ */
+export function relationsGoingLive(args: {
+  stored: StoredRelations;
+  fields: readonly FieldDefinition[];
+  componentSchemas: ComponentSchemas | null;
+  /** The write's own component values. */
+  components: Record<string, unknown>;
+  /** The write's own many-to-many ids. */
+  manyToMany: Record<string, string[]>;
+}): Record<string, unknown> {
+  return {
+    ...mergeComponentPatches(
+      args.stored.components,
+      args.components,
+      args.fields as unknown as FieldConfig[],
+      args.componentSchemas
+    ),
+    ...args.stored.manyToMany,
+    ...args.manyToMany,
+  };
 }
 
 /** What judging one document against its collection's rules needs. */
@@ -865,15 +1233,32 @@ interface EntryValidationArgs {
    * `issuesTheReaderMaySee`.
    */
   readLocale?: string;
+  /**
+   * The language a single-language write is in, where the document is kept
+   * per language. Validators reading what the entry already stores read this
+   * language's value; absent means the app's default language.
+   */
+  writeLocale?: string;
   /** What `localizedRequiredContext` resolved for a localized write. */
   localeCtx?: {
     localizedFieldNames: ReadonlySet<string>;
     enforceLocalizedRequired: boolean;
+    /** Whether the document differs by language; see `publishLanguageContext`. */
+    perLanguage?: boolean;
   };
   /** The stored entry's id, on an update. */
   id?: string;
   /** The write's own transaction, where it runs inside one. */
   tx?: TransactionContext;
+  /**
+   * Whether the document goes live: its top-level component instances are
+   * then judged by their own fields' rules as well, in the default language,
+   * as a required component is. A rule tightened since an instance was saved
+   * would otherwise go live unjudged.
+   */
+  goesLive?: boolean;
+  /** The batch the document goes live with, which reads definitions once. */
+  batch?: GoingLiveRelationsBatch;
 }
 
 interface CreateEntryWriteParams {
@@ -2116,13 +2501,15 @@ export class CollectionMutationService extends BaseService {
   private validationWrite(
     slug: string,
     id: string | undefined,
-    tx?: TransactionContext
+    tx?: TransactionContext,
+    locale?: string
   ): EntryWriteContext {
     const defaultLocale = this.localization?.defaultLocale ?? null;
     return entryWriteContext({
       kind: "collection",
       slug,
       ...(id === undefined ? {} : { id }),
+      ...(locale === undefined ? {} : { locale }),
       connection:
         tx === undefined
           ? { db: this.adapter, executor: undefined, defaultLocale }
@@ -2154,6 +2541,25 @@ export class CollectionMutationService extends BaseService {
     args: EntryValidationArgs
   ): Promise<ValidationIssue[]> {
     const view = this.validationView(args.data, args.fields);
+    // A component's fields, on the write's connection, read once for the
+    // whole batch where the document goes live with others.
+    const componentFieldsOf = (componentSlug: string) => {
+      const read = async () =>
+        (await this.fieldGroupDataService?.getComponentFields(
+          componentSlug,
+          args.tx?.getDrizzle()
+        )) ?? null;
+      return args.batch === undefined
+        ? read()
+        : args.batch.componentFields(componentSlug, read);
+    };
+    // In the default language, or in any where the document has no
+    // translated fields and so is the same document in every language.
+    const judgeInstances =
+      args.goesLive === true &&
+      (args.localeCtx === undefined ||
+        args.localeCtx.enforceLocalizedRequired ||
+        args.localeCtx.perLanguage === false);
     const issues = await validateEntryData(
       view,
       attachFieldValidators("collection", args.collectionName, args.fields),
@@ -2163,19 +2569,26 @@ export class CollectionMutationService extends BaseService {
         ...args.localeCtx,
         // A component inside a group or repeater is judged here, since no
         // component write reaches it; read on the write's own connection.
+        // Going live, a top-level one too, in the default language.
         componentFields: await containedComponentResolver(
           args.fields as unknown as FieldConfig[],
-          async componentSlug =>
-            (await this.fieldGroupDataService?.getComponentFields(
-              componentSlug,
-              args.tx?.getDrizzle()
-            )) ?? null
+          componentFieldsOf,
+          judgeInstances
         ),
+        judgeComponentInstances: judgeInstances,
+        // Going live in a language whose component rules are not enforced,
+        // a component held in a group or repeater is left alone too.
+        ...(args.goesLive === true && !judgeInstances
+          ? { judgeContainedComponents: false }
+          : {}),
         write: this.validationWrite(
           args.collectionName,
           args.id ??
             suppliedCreateId(args.mode, args.collectionName, args.data),
-          args.tx
+          args.tx,
+          // The language judged: each in turn where a write judges several,
+          // else the one this write is in.
+          args.readLocale ?? args.writeLocale
         ),
       }
     );
@@ -2193,8 +2606,7 @@ export class CollectionMutationService extends BaseService {
       document: view,
       fields: args.fields as unknown as FieldConfig[],
       fieldGroups: service && {
-        getComponentFields: componentSlug =>
-          service.getComponentFields(componentSlug, args.tx?.getDrizzle()),
+        getComponentFields: componentFieldsOf,
       },
       executor: args.tx?.getDrizzle(),
       entryId: args.id,
@@ -2250,6 +2662,38 @@ export class CollectionMutationService extends BaseService {
     fields: FieldDefinition[]
   ): Record<string, unknown> {
     return relationshipValidationView(data, fields as unknown as FieldConfig[]);
+  }
+
+  /**
+   * The language rules a publish judges a document going live in, as
+   * {@link localizedRequiredContext} gives them, with its components'
+   * `required` relaxed outside the default language where the document differs
+   * by language, and whether it does.
+   */
+  private async publishLanguageContext(args: {
+    collectionName: string;
+    locale: string | undefined;
+    fields: FieldDefinition[];
+    tx?: TransactionContext;
+    companion?: CompanionSchema | null;
+  }): Promise<{
+    localizedFieldNames: ReadonlySet<string>;
+    enforceLocalizedRequired: boolean;
+    perLanguage: boolean;
+  }> {
+    const context = await this.localizedRequiredContext(
+      args.collectionName,
+      args.locale,
+      args.tx?.getDrizzle(),
+      args.companion
+    );
+    const perLanguage =
+      context.localizedFieldNames.size > 0 ||
+      (await this.reachesLocalizedFieldGroup(args.fields, args.tx));
+    return {
+      ...componentsRequiredInDefaultLanguage(context, args.fields, perLanguage),
+      perLanguage,
+    };
   }
 
   /**
@@ -3389,6 +3833,7 @@ export class CollectionMutationService extends BaseService {
     return {
       // Every language: the wildcard resolves to the unlocalized write.
       locale: undefined,
+      tableName: collectionTableName(collection, collectionName),
       fields,
       finalData,
       componentFieldData,
@@ -3548,6 +3993,9 @@ export class CollectionMutationService extends BaseService {
     args: GoingLiveArgs
   ): Promise<ValidationIssue[]> {
     let promotesDraft = false;
+    // The document the promotion puts live, whose component and relationship
+    // values every language then goes live with.
+    let promoted: Record<string, unknown> | undefined;
     if (args.promoteRestoreCtx !== null) {
       const advisoryDraft = await args.drafts.findWorkingDraft(
         {
@@ -3559,10 +4007,23 @@ export class CollectionMutationService extends BaseService {
       );
       if (advisoryDraft) {
         promotesDraft = true;
+        promoted = this.promotedDocumentOf(
+          args,
+          buildRestorePayload(
+            advisoryDraft.snapshot,
+            args.fields as unknown as FieldConfig[],
+            args.promoteRestoreCtx
+          ).payload
+        );
+        // Completed for this judgement alone, in the write's language, ahead
+        // of the write's lock as the draft itself is read; the write
+        // completes and judges it again once it holds the lock. `promoted`
+        // stays as the change left it: the languages judged below each read
+        // the relations it does not name as stored in that language, which a
+        // value completed in this one would otherwise stand in for.
         const issues = await this.promotedDraftIssues(
           args,
-          advisoryDraft.snapshot,
-          args.promoteRestoreCtx
+          await this.withEveryRelationKey(args, promoted, undefined)
         );
         if (issues.length > 0) return issues;
       }
@@ -3591,7 +4052,122 @@ export class CollectionMutationService extends BaseService {
       user: args.user,
       reader: args.reader,
       reads: args.reads,
+      relations: {
+        tableName: args.tableName,
+        manyToManyFields: args.manyToManyFields,
+        // The values the write leaves: a promoted change's, which carry the
+        // caller's own, or else the caller's.
+        componentFieldData:
+          promoted === undefined
+            ? args.componentFieldData
+            : draftComponentValues(
+                promoted,
+                args.fields as unknown as FieldConfig[]
+              ),
+        manyToManyData:
+          promoted === undefined
+            ? args.manyToManyData
+            : manyToManyValuesIn(promoted, args.manyToManyFields),
+        componentSchemas: args.splitComponentSchemas,
+        batch: args.relationsBatch ?? args.reads?.relations,
+      },
     });
+  }
+
+  /**
+   * A promoted document with a key for every component and many-to-many
+   * field the collection has now. A pending change saved before such a field
+   * was added does not name it, and a promotion leaves what is stored for a
+   * field its change does not name; judged in update mode, an absent key is
+   * not judged, so a field since made required would go live unchecked. Each
+   * absent one takes its stored value, `null` or `[]` where nothing is
+   * stored, read only when one is absent: on `tx` under the row lock, else on
+   * the pool, in the batch's one read where the document publishes with
+   * others. Returns `promoted` itself when no key is absent.
+   */
+  private async withEveryRelationKey(
+    args: Pick<
+      GoingLiveArgs,
+      | "collectionName"
+      | "entryId"
+      | "tableName"
+      | "locale"
+      | "fields"
+      | "manyToManyFields"
+      | "relationsBatch"
+      | "reads"
+    >,
+    promoted: Record<string, unknown>,
+    tx: TransactionContext | undefined
+  ): Promise<Record<string, unknown>> {
+    const relationFields = [
+      ...args.fields.filter(field =>
+        isFieldGroupField(field as unknown as FieldConfig)
+      ),
+      ...args.manyToManyFields,
+    ];
+    if (relationFields.every(field => promoted[field.name] !== undefined)) {
+      return promoted;
+    }
+    const stored = await this.storedRelationsOf({
+      entryId: args.entryId,
+      collectionName: args.collectionName,
+      fields: args.fields,
+      language: args.locale,
+      tx,
+      relations: {
+        tableName: args.tableName,
+        manyToManyFields: args.manyToManyFields,
+        batch: args.relationsBatch ?? args.reads?.relations,
+      },
+    });
+    // The stored read gives every field a key, its empty value where nothing
+    // is stored; `null` stands for one only should a read ever omit it, and
+    // reads as missing as the empty value does.
+    const complete = { ...promoted };
+    for (const field of relationFields) {
+      if (complete[field.name] !== undefined) continue;
+      complete[field.name] =
+        stored.components[field.name] ?? stored.manyToMany[field.name] ?? null;
+    }
+    return complete;
+  }
+
+  /**
+   * Refuse, under the row lock, a promotion whose document no longer passes
+   * once the relations its pending change does not name are read on `tx`. A
+   * promotion leaves what is stored for such a field, and the judgement
+   * before the lock read it on the pool, so another writer may have removed
+   * a required one since. Nothing is read where the change names them all.
+   * The refusal is kept in `refused` and thrown, rolling the write back: the
+   * adapter wraps what leaves the transaction, so the caller answers from
+   * `refused`.
+   */
+  private async refuseLockedPromotionRelations(
+    tx: TransactionContext,
+    args: Pick<
+      GoingLiveArgs,
+      | "collectionName"
+      | "entryId"
+      | "tableName"
+      | "locale"
+      | "fields"
+      | "manyToManyFields"
+      | "user"
+      | "reader"
+    >,
+    promoted: Record<string, unknown>,
+    refused: { refusal?: NextlyError }
+  ): Promise<void> {
+    const completed = await this.withEveryRelationKey(args, promoted, tx);
+    if (completed === promoted) return;
+    const issues = await this.promotedDocumentIssues(
+      { ...args, tx },
+      completed
+    );
+    if (issues.length === 0) return;
+    refused.refusal = NextlyError.validation({ errors: issues });
+    throw refused.refusal;
   }
 
   /**
@@ -3825,23 +4401,43 @@ export class CollectionMutationService extends BaseService {
   /** The violations of the document a promoted working draft would write. */
   private async promotedDraftIssues(
     args: GoingLiveArgs,
-    snapshot: unknown,
-    restoreCtx: RestoreSchemaContext
+    merged: Record<string, unknown>
   ): Promise<ValidationIssue[]> {
-    const merged = this.promotedDocumentOf(
-      args,
-      buildRestorePayload(
-        snapshot,
-        args.fields as unknown as FieldConfig[],
-        restoreCtx
-      ).payload
+    return this.promotedDocumentIssues(
+      {
+        ...args,
+        companion: args.reads?.companion,
+        batch: args.relationsBatch ?? args.reads?.relations,
+        tx: undefined,
+      },
+      merged
     );
-    // Judged as ASSEMBLED, with nothing removed. A field this publisher may
-    // not write is not a schema violation: the gate that judges permission
-    // refuses a promotion that changes one, under the row lock where it can
-    // compare against what is live. Filtering here would validate a document
-    // that is never written either way, and report a denied required field as
-    // missing rather than as forbidden.
+  }
+
+  /**
+   * The violations of a promoted document, judged on `tx` where the judgement
+   * runs under the row lock, else on the pool.
+   *
+   * Judged as ASSEMBLED, with nothing removed. A field this publisher may not
+   * write is not a schema violation: the gate that judges permission refuses a
+   * promotion that changes one, under the row lock where it can compare
+   * against what is live. Filtering here would validate a document that is
+   * never written either way, and report a denied required field as missing
+   * rather than as forbidden.
+   */
+  private async promotedDocumentIssues(
+    args: Pick<
+      GoingLiveArgs,
+      "collectionName" | "entryId" | "locale" | "fields" | "user" | "reader"
+    > & {
+      /** The companion already resolved for a batch; read when absent. */
+      companion?: CompanionSchema | null;
+      /** The batch the document goes live with, which reads definitions once. */
+      batch?: GoingLiveRelationsBatch;
+      tx: TransactionContext | undefined;
+    },
+    merged: Record<string, unknown>
+  ): Promise<ValidationIssue[]> {
     return this.entryIssues({
       data: merged,
       fields: args.fields,
@@ -3850,13 +4446,17 @@ export class CollectionMutationService extends BaseService {
       user: args.user,
       reader: args.reader,
       readLocale: args.locale,
-      localeCtx: await this.localizedRequiredContext(
-        args.collectionName,
-        args.locale,
-        undefined,
-        args.reads?.companion
-      ),
+      localeCtx: await this.publishLanguageContext({
+        collectionName: args.collectionName,
+        locale: args.locale,
+        fields: args.fields,
+        ...(args.tx === undefined ? {} : { tx: args.tx }),
+        companion: args.companion,
+      }),
       id: args.entryId,
+      goesLive: true,
+      ...(args.batch === undefined ? {} : { batch: args.batch }),
+      ...(args.tx === undefined ? {} : { tx: args.tx }),
     });
   }
 
@@ -3868,9 +4468,6 @@ export class CollectionMutationService extends BaseService {
   private async languagesGoLiveIssues(
     args: LanguagesGoLiveArgs
   ): Promise<ValidationIssue[]> {
-    const connection = args.tx ?? {
-      getDrizzle: <T = unknown>() => this.db as T,
-    };
     const languages = (await this.languagesGoingLive(args)).filter(
       locale => !(args.writeLocalePromoted && locale === args.writeLocale)
     );
@@ -3886,8 +4483,9 @@ export class CollectionMutationService extends BaseService {
           collectionName: args.collectionName,
           entryId: args.entryId,
           locale,
-          connection,
+          tx: args.tx,
           reads: args.reads,
+          relations: args.relations,
         }),
         fields: args.fields,
         collectionName: args.collectionName,
@@ -3895,12 +4493,15 @@ export class CollectionMutationService extends BaseService {
         user: args.user,
         reader: args.reader,
         readLocale: locale,
-        localeCtx: await this.localizedRequiredContext(
-          args.collectionName,
+        goesLive: true,
+        batch: args.relations.batch,
+        localeCtx: await this.publishLanguageContext({
+          collectionName: args.collectionName,
           locale,
-          args.tx?.getDrizzle(),
-          args.reads?.companion
-        ),
+          fields: args.fields,
+          ...(args.tx === undefined ? {} : { tx: args.tx }),
+          companion: args.reads?.companion,
+        }),
         id: args.entryId,
         ...(args.tx === undefined ? {} : { tx: args.tx }),
       });
@@ -4165,9 +4766,12 @@ export class CollectionMutationService extends BaseService {
    * the published library, say — has never judged it as published.
    *
    * The status is set to the one being written, because a per-locale status
-   * write carries it in the companion rather than the patch. Component
-   * subtrees and many-to-many values are not read: the caller's own were
-   * judged as its patch, and the stored ones do not sit on this row. Password
+   * write carries it in the companion rather than the patch. Its components
+   * and junction many-to-many ids are read as stored, in this language, with
+   * the caller's own over them: they do not sit on the row, and update mode
+   * skips an absent key, so a required one missing from storage would go live
+   * unjudged. Each has a key, `null` or `[]` where nothing is stored. Read in
+   * the batch's one read where the document publishes with others. Password
    * values are left out, since a stored one is a hash and the caller's was
    * judged before it was hashed.
    */
@@ -4179,17 +4783,21 @@ export class CollectionMutationService extends BaseService {
     entryId: string;
     /** The write locale, whose translations sit beside the row. */
     locale: string | undefined;
-    /** The connection the write runs on: the pool, or its transaction. */
-    connection: { getDrizzle<T = unknown>(): T };
+    /** The transaction the write runs on; absent, the judgement reads the pool. */
+    tx: TransactionContext | undefined;
     reads?: GoingLiveReads;
+    relations: GoingLiveRelationArgs;
   }): Promise<Record<string, unknown>> {
+    const connection = args.tx ?? {
+      getDrizzle: <T = unknown>() => this.db as T,
+    };
     const translations =
       args.locale === undefined
         ? {}
         : args.reads !== undefined
           ? await args.reads.translations(args.entryId, args.locale)
           : await this.readCompanionLocalizedValues(
-              args.connection,
+              connection,
               args.collectionName,
               args.entryId,
               args.locale
@@ -4206,9 +4814,81 @@ export class CollectionMutationService extends BaseService {
     stripPasswordFieldValues(
       document,
       args.fields,
-      await this.passwordReach(args.fields, args.connection.getDrizzle())
+      await this.passwordReach(args.fields, connection.getDrizzle())
     );
-    return document;
+    const stored = await this.storedRelationsOf({
+      entryId: args.entryId,
+      collectionName: args.collectionName,
+      fields: args.fields,
+      language: args.locale,
+      tx: args.tx,
+      relations: args.relations,
+    });
+    return {
+      ...document,
+      ...relationsGoingLive({
+        stored,
+        fields: args.fields,
+        componentSchemas: args.relations.componentSchemas,
+        components: args.relations.componentFieldData,
+        manyToMany: args.relations.manyToManyData,
+      }),
+    };
+  }
+
+  /**
+   * One document's components and many-to-many ids as stored, its components
+   * in `language`. Components read alike in every language unless one reaches
+   * a localized field group, so only then is each language read on its own.
+   *
+   * On `tx`, read for this document alone. A transaction judges the row it has
+   * just locked, and a batch's other rows are not locked yet: relations read
+   * for them now could be changed and committed by another writer before the
+   * batch reaches them, which would then be judged on what is no longer
+   * stored. Off a transaction, from its batch's one read where it publishes
+   * with others, on the pool, where a component table not yet created reads
+   * as empty; the pool's executor is never passed as a transaction's.
+   */
+  private async storedRelationsOf(args: {
+    entryId: string;
+    collectionName: string;
+    fields: FieldDefinition[];
+    language: string | undefined;
+    tx: TransactionContext | undefined;
+    relations: Pick<
+      GoingLiveRelationArgs,
+      "tableName" | "manyToManyFields" | "batch"
+    >;
+  }): Promise<StoredRelations> {
+    const executor = args.tx?.getDrizzle();
+    const read = {
+      collectionName: args.collectionName,
+      parentTable: args.relations.tableName,
+      fields: args.fields,
+      manyToManyFields: args.relations.manyToManyFields,
+      executor,
+      fieldGroups: this.fieldGroupDataService,
+      relationships: this.relationshipService,
+    };
+    const load: StoredRelationsLoad = {
+      components: (entryIds, language) =>
+        readStoredComponents({ ...read, entryIds, language }),
+      manyToMany: entryIds => readStoredManyToMany({ ...read, entryIds }),
+    };
+    const service = this.fieldGroupDataService;
+    const byLanguage =
+      service !== undefined &&
+      (await reachesLocalizedFieldGroup(args.fields, slug =>
+        service.getComponentDefinition(slug, executor)
+      ));
+    const batch =
+      (args.tx === undefined ? args.relations.batch : undefined) ??
+      new GoingLiveRelationsBatch([args.entryId]);
+    return batch.read(
+      args.entryId,
+      byLanguage ? args.language : undefined,
+      load
+    );
   }
 
   /**
@@ -5933,6 +6613,9 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           reader: params,
           localeCtx,
+          ...(params.locale === undefined
+            ? {}
+            : { writeLocale: params.locale }),
           // No transaction yet, so stored rows are read on the pool: no row
           // of this write exists for a read to miss.
         });
@@ -7295,6 +7978,14 @@ export class CollectionMutationService extends BaseService {
                 user: params.user,
                 reader: params,
                 tx,
+                // Publishing every language takes no values of its own.
+                relations: {
+                  tableName,
+                  manyToManyFields,
+                  componentFieldData: {},
+                  manyToManyData: {},
+                  componentSchemas: null,
+                },
               });
             } catch (refusal) {
               publishRefused = refusal;
@@ -8339,11 +9030,10 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * Many entries' documents as stored, keyed by id, as
-   * {@link storedDocumentOnTx} reads one: their components read for them all
-   * at once by the list read's batched component reader, their many-to-many
-   * ids by the write's junction read, one query per field, and the write
-   * language's translations by the batch's reads, one query for them all.
-   * Read on the pool, writing nothing.
+   * {@link storedDocumentOnTx} reads one: their components and many-to-many
+   * ids by the batch's one read of them, one query per field for them all, as
+   * a publish judges them, and the write language's translations by the
+   * batch's reads, one query for them all. Read on the pool, writing nothing.
    */
   private async storedDocumentsOf(args: {
     collectionName: string;
@@ -8355,49 +9045,22 @@ export class CollectionMutationService extends BaseService {
     locale: string | undefined;
     reads: GoingLiveReads;
   }): Promise<Map<string, Record<string, unknown>>> {
-    const ids = [...args.rows.keys()];
     const reach = await this.passwordReach(args.fields);
-    const componentFields = args.fields.filter(isFieldGroupField);
-    const populated =
-      this.fieldGroupDataService !== undefined && componentFields.length > 0
-        ? await this.fieldGroupDataService.populateComponentDataMany({
-            entries: ids.map(id => ({ id })),
-            parentTable: args.tableName,
-            fields: args.fields as unknown as FieldConfig[],
-            depth: 0,
-            strict: true,
-          })
-        : [];
-    const componentsById = new Map(
-      populated.map(entry => [String(entry.id), entry])
-    );
-    // Every stored id, as the write's own read takes them: a target since
-    // unpublished or removed is still what the junction holds, and a failed
-    // read refuses rather than reading as an empty relationship.
-    const targets = new Map<string, Map<string, string[]>>();
-    for (const field of args.manyToManyFields) {
-      targets.set(
-        field.name,
-        await this.relationshipService.fetchManyToManyTargetIdsOf(
-          args.collectionName,
-          ids,
-          field
-        )
-      );
-    }
     const documents = new Map<string, Record<string, unknown>>();
     for (const [id, row] of args.rows) {
-      const components: Record<string, unknown> = {};
-      const entry = componentsById.get(id) ?? {};
-      for (const field of componentFields) {
-        if (field.name && entry[field.name] !== undefined) {
-          components[field.name] = entry[field.name];
-        }
-      }
-      const manyToMany: Record<string, string[]> = {};
-      for (const field of args.manyToManyFields) {
-        manyToMany[field.name] = targets.get(field.name)?.get(id) ?? [];
-      }
+      // The default resolution, as the live document is read: no language.
+      const { components, manyToMany } = await this.storedRelationsOf({
+        entryId: id,
+        collectionName: args.collectionName,
+        fields: args.fields,
+        language: undefined,
+        tx: undefined,
+        relations: {
+          tableName: args.tableName,
+          manyToManyFields: args.manyToManyFields,
+          batch: args.reads.relations,
+        },
+      });
       documents.set(
         id,
         assembleDocument({
@@ -8438,6 +9101,7 @@ export class CollectionMutationService extends BaseService {
     >();
     return {
       companion,
+      relations: new GoingLiveRelationsBatch(entryIds),
       languageStatuses: async entryId => {
         if (companion === null) return null;
         statuses ??= readCompanionLocaleStatusAllOf(
@@ -9271,6 +9935,14 @@ export class CollectionMutationService extends BaseService {
       // publish/unpublish transition gate judges the key's OWN grants, since the
       // route only authorized `update` against the key's scope.
       authenticatedScope?: AuthenticatedScope;
+      /**
+       * The batch this write's components and relationships are read in where
+       * it publishes, when a bulk write runs it with others: one read for them
+       * all rather than one per document.
+       *
+       * @internal
+       */
+      goingLiveBatch?: GoingLiveRelationsBatch;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -9379,6 +10051,10 @@ export class CollectionMutationService extends BaseService {
     let outOfDateShared:
       | { fields: string[]; live: Record<string, unknown> }
       | undefined;
+    // A promotion refused under the row lock, for what its stored relations
+    // hold once locked; read after the transaction, as the adapter wraps
+    // what is thrown out of it.
+    const lockedPromotion: { refusal?: NextlyError } = {};
     // Which languages a wildcard sweep actually moved, and what each moved FROM.
     // Captured at the write because it is unrecoverable afterwards, and read at
     // the event step so each real transition is reported once.
@@ -9706,6 +10382,9 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           reader: params,
           localeCtx,
+          ...(params.locale === undefined
+            ? {}
+            : { writeLocale: params.locale }),
           id: params.entryId,
         });
       }
@@ -10147,6 +10826,8 @@ export class CollectionMutationService extends BaseService {
       const goingLive = await this.goingLiveIssues({
         collectionName: params.collectionName,
         entryId: params.entryId,
+        tableName,
+        relationsBatch: params.goingLiveBatch,
         locale: params.locale,
         user: params.user,
         reader: params,
@@ -10758,6 +11439,24 @@ export class CollectionMutationService extends BaseService {
                 locale: draftLocaleKey ?? params.locale ?? null,
                 componentSchemas: splitComponentSchemas,
               });
+              // A relation the pending change does not name was judged at its
+              // stored value before the lock; judged again under it, as
+              // another writer may have removed it since.
+              await this.refuseLockedPromotionRelations(
+                tx,
+                {
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  locale: params.locale,
+                  fields,
+                  manyToManyFields,
+                  user: params.user,
+                  reader: params,
+                },
+                promotedDocument,
+                lockedPromotion
+              );
               const draftParts = this.shapeWriteParts(
                 promotedDocument,
                 fields,
@@ -12118,6 +12817,13 @@ export class CollectionMutationService extends BaseService {
       // wraps the thrown sentinel in a DatabaseError before it reaches here.
       if (transitionDeniedResult) {
         return transitionDeniedResult;
+      }
+      if (lockedPromotion.refusal) {
+        return errorToServiceResult(
+          lockedPromotion.refusal,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        );
       }
       if (outOfDateShared) {
         return errorToServiceResult(
@@ -15269,7 +15975,15 @@ export class CollectionMutationService extends BaseService {
             collectionName: params.collectionName,
             entryId,
             locale: this.localization?.defaultLocale,
-            connection: tx,
+            // Read for this entry alone, under the lock taken above.
+            tx,
+            relations: {
+              tableName,
+              manyToManyFields,
+              componentFieldData,
+              manyToManyData,
+              componentSchemas: null,
+            },
           }),
           fields,
           collectionName: params.collectionName,
@@ -15278,6 +15992,8 @@ export class CollectionMutationService extends BaseService {
           reader: params,
           id: entryId,
           tx,
+          goesLive: true,
+          batch: params.goingLiveBatch,
         });
       }
 

@@ -462,7 +462,10 @@ describe("who may write from the canvas", () => {
    * fixes, so the inspector holds its Style tab read-only there and the canvas
    * must not offer the same write. The bands still report.
    */
-  function heldIn(lock: "contentOnly" | undefined): EditorState {
+  function heldIn(
+    lock: "contentOnly" | undefined,
+    layers = false
+  ): EditorState {
     registerBlocks(
       [
         {
@@ -491,7 +494,15 @@ describe("who may write from the canvas", () => {
           version: 1,
           props: {},
           slots: {
-            body: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            body: [
+              {
+                id: "a",
+                type: "acme/leaf",
+                version: 1,
+                props: {},
+                ...(layers ? { locked: true } : {}),
+              },
+            ],
           },
         },
       ],
@@ -508,6 +519,18 @@ describe("who may write from the canvas", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     register();
     const { container } = mount(heldIn("contentOnly"));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle")
+    ).toHaveLength(0);
+  });
+
+  it("draws no handles for a block its own Layers lock holds", () => {
+    // Locked from Layers or the inspector's card: every control is read-only,
+    // so the canvas must not offer the spacing write either.
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    register();
+    const { container } = mount(heldIn(undefined, true));
     expect(labels(container)).toEqual(["16"]);
     expect(
       container.querySelectorAll(".nx-spacing-handles__handle")

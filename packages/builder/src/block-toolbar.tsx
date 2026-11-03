@@ -43,22 +43,38 @@
  */
 
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@nextlyhq/ui";
+import {
   ArrowDown,
   ArrowUp,
+  Component,
   Copy,
+  CopyPlus,
   CornerLeftUp,
+  Ellipsis,
   LayoutTemplate,
+  Lock,
+  RefreshCw,
+  Replace,
   Trash2,
+  Unlink,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import { isHTMLElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasContentRect } from "./geometry-dom";
 import { useBlockActionsContext } from "./keyboard-actions";
+import { layerLabel } from "./layers";
+import { lockBlockingEdit } from "./locking";
 import { useSelectionActions } from "./selection-actions";
 import {
   toolbarPlacement,
@@ -76,6 +92,11 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   // A page outline rather than a bookmark or a star: what is stored is a piece
   // of layout, and the same glyph names the Patterns tier in the insert panel.
   "save-as-pattern": LayoutTemplate,
+  "save-as-component": Component,
+  "convert-to-component": Replace,
+  "detach-component": Unlink,
+  "duplicate-component": CopyPlus,
+  "update-pattern": RefreshCw,
   delete: Trash2,
 };
 
@@ -110,6 +131,17 @@ export function BlockToolbar({
   const { document, selectedId } = editor;
   const selectedIds = editor.selection.ids;
   const actions = useSelectionActions(editor);
+  // The verbs drawn as buttons, and those kept behind "More". One stop in the
+  // bar's roving order stands for the whole menu.
+  const buttons = React.useMemo(
+    () => actions.filter(action => action.inMenu !== true),
+    [actions]
+  );
+  const menu = React.useMemo(
+    () => actions.filter(action => action.inMenu === true),
+    [actions]
+  );
+  const stops = buttons.length + (menu.length > 0 ? 1 : 0);
 
   /*
    * Which button holds the tab stop, per the WAI-ARIA toolbar pattern: one stop
@@ -133,7 +165,13 @@ export function BlockToolbar({
      * already put the index where the caret is.
      */
     const element = bar.current;
-    if (element !== null && element.contains(window.document.activeElement)) {
+    // Asked of the bar's OWN document, which is the one whose focused element
+    // it can contain: the window's would report an iframe around the bar
+    // whenever the bar is drawn inside a frame.
+    if (
+      element !== null &&
+      element.contains(element.ownerDocument.activeElement)
+    ) {
       return;
     }
     setActiveIndex(0);
@@ -154,7 +192,9 @@ export function BlockToolbar({
       return;
     }
     const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) {
+    // By node kind, not `instanceof HTMLElement`: a root rendered into an
+    // iframe is built by that window, and the bar would never be placed.
+    if (!isHTMLElement(root)) {
       setPlacement(null);
       return;
     }
@@ -210,12 +250,15 @@ export function BlockToolbar({
     if (hidden || selectedId === null) return;
     const element = bar.current;
     const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) return;
+    if (!isHTMLElement(root)) return;
     // Absent in jsdom unless a test supplies one, and absent in older browsers.
     // A missing observer costs a re-measure, not correctness — every render
-    // path above still measures.
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => measure());
+    // path above still measures. Built from the canvas root's window, the
+    // realm of the blocks it observes, which is a frame's when the canvas is in
+    // one.
+    const Sizes = root.ownerDocument.defaultView?.ResizeObserver;
+    if (typeof Sizes !== "function") return;
+    const observer = new Sizes(() => measure());
 
     /*
      * EVERY selected block, not only the primary.
@@ -237,12 +280,12 @@ export function BlockToolbar({
     setActiveIndex(index);
     const buttons = bar.current?.querySelectorAll("button");
     const target = buttons?.[index];
-    if (target instanceof HTMLElement) target.focus();
+    if (isHTMLElement(target)) target.focus();
   }, []);
 
   const onKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const count = actions.length;
+      const count = stops;
       if (count === 0) return;
       // Wrapping, which the toolbar pattern lists as the common choice: the bar
       // is five buttons, and stopping at the ends makes reaching Delete from
@@ -262,7 +305,7 @@ export function BlockToolbar({
       // every shortcut the shell binds to reach their own handlers.
       event.preventDefault();
     },
-    [actions.length, activeIndex, focusAt]
+    [stops, activeIndex, focusAt]
   );
 
   /*
@@ -301,6 +344,20 @@ export function BlockToolbar({
 
   if (hidden || actions.length === 0) return null;
 
+  // The selected block's Layers lock, its own or one around it, said on the
+  // bar itself: the canvas draws nothing else that tells a locked block from
+  // any other, and the dimmed buttons only say why one at a time.
+  const holder =
+    selectedId === null || selectedIds.length > 1
+      ? undefined
+      : lockBlockingEdit(document, selectedId);
+  const lockNote =
+    holder === undefined
+      ? undefined
+      : holder.id === selectedId
+        ? "Locked"
+        : `Locked by ${layerLabel(holder)}`;
+
   return (
     <div
       ref={bar}
@@ -322,7 +379,15 @@ export function BlockToolbar({
       }
       onKeyDown={onKeyDown}
     >
-      {actions.map((action, index) => {
+      {lockNote === undefined ? null : (
+        // Text, not a control: it takes no tab stop in the bar's one roving
+        // stop, and a screen reader reads it with the bar.
+        <span className="nx-block-toolbar__lock" data-lock-note="">
+          <Lock size={12} aria-hidden="true" />
+          {lockNote}
+        </span>
+      )}
+      {buttons.map((action, index) => {
         const Icon = ICONS[action.id];
         const describedBy =
           action.reason === undefined
@@ -372,6 +437,81 @@ export function BlockToolbar({
           </button>
         );
       })}
+      {menu.length === 0 ? null : (
+        <MoreMenu
+          actions={menu}
+          index={buttons.length}
+          activeIndex={activeIndex}
+          onFocus={setActiveIndex}
+          run={run}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The bar's last stop: the verbs kept behind "More", each with its reason
+ * when it may not run. The reason is visible text, as in the context menu,
+ * since a disabled menu item takes no focus and a tooltip would reach nobody.
+ */
+function MoreMenu({
+  actions,
+  index,
+  activeIndex,
+  onFocus,
+  run,
+}: {
+  actions: readonly ToolbarAction[];
+  index: number;
+  activeIndex: number;
+  onFocus: (index: number) => void;
+  run: (action: ToolbarAction) => void;
+}): React.JSX.Element {
+  return (
+    // Not modal, as the block's other menus: a modal menu marks the editor
+    // around it aria-hidden while its controls stay focusable.
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="nx-block-toolbar__button"
+          aria-label="More actions"
+          title="More actions"
+          tabIndex={index === activeIndex ? 0 : -1}
+          onFocus={() => onFocus(index)}
+        >
+          <Ellipsis size={16} aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="nx-block-toolbar__menu"
+        // Chrome, so a press inside is not read as a click on the page.
+        {...{ [CHROME_ATTRIBUTE]: "" }}
+      >
+        {actions.map(action => {
+          const Icon = ICONS[action.id];
+          return (
+            <DropdownMenuItem
+              key={action.id}
+              disabled={!action.enabled}
+              className="nx-block-toolbar__menu-item"
+              onSelect={() => run(action)}
+            >
+              <Icon size={16} aria-hidden="true" />
+              <span className="nx-block-toolbar__menu-text">
+                <span>{action.label}</span>
+                {action.reason === undefined ? null : (
+                  <span className="nx-block-toolbar__menu-reason">
+                    {action.reason}
+                  </span>
+                )}
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

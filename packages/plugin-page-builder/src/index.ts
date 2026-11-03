@@ -90,6 +90,21 @@ export {
 } from "./preview-viewports";
 export type { SiteStyleReader } from "./site-style-storage";
 
+// The Layout a stored page is drawn inside, read from the site: its own
+// published Layout, else the site's default, else none. A published route
+// calls it per request; the rule itself is the engine's `resolvePageLayout`.
+export { effectiveLayoutFor } from "./default-layout/effective-layout";
+export type { EffectiveLayoutDeps } from "./default-layout/effective-layout";
+// Where the site's default Layout is recorded.
+export { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
+// The provider a blocks page route takes as `layouts`, so the route draws each
+// page inside its Layout without importing this plugin.
+export { pageBuilderLayouts } from "./page-layouts";
+export type {
+  PageBuilderLayoutsOptions,
+  PageBuilderLayoutsProvider,
+} from "./page-layouts";
+
 // The class-usage index, the derivation behind it, and the walk that repairs
 // it.
 //
@@ -166,6 +181,7 @@ export {
   componentUsageIndex as componentUsageIndexDescriptor,
 } from "./component-usage";
 export { usageCountReader } from "./class-usage-runtime";
+export { COMPONENT_RETIRED_SLUG } from "./collections/component-retired-exposures";
 export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
 export { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
 // The service key and its shape, so a host can reach the reader that is

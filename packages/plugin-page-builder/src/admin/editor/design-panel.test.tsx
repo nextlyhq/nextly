@@ -11,7 +11,11 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DesignPanel, designViewOf } from "./design-panel";
+import * as React from "react";
+import * as ReactDOM from "react-dom";
+
+import { DesignPanel, designViewOf, useDesignHeaderSlot } from "./design-panel";
+import { StyleRevisionContext } from "./site-style-history";
 
 afterEach(cleanup);
 
@@ -55,10 +59,115 @@ describe("DesignPanel", () => {
   it("hands a chosen tab to the shell to remember", () => {
     const { choose } = renderPanel("variables");
 
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Classes" }), {
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Shared styles" }), {
       button: 0,
     });
 
     expect(choose).toHaveBeenCalledWith("classes");
+  });
+});
+
+describe("a style change undone behind the open tab", () => {
+  it("mounts the tab afresh, so it reads the section again", () => {
+    // The tab holds its own copy while open; one kept across an undo would
+    // write the undone value back on its next edit.
+    function Studio(): React.JSX.Element {
+      const [draft, setDraft] = React.useState("stored");
+      return (
+        <button type="button" onClick={() => setDraft("edited")}>
+          {draft}
+        </button>
+      );
+    }
+    const panel = (revision: number, settling = false) => (
+      <StyleRevisionContext.Provider value={{ revision, settling }}>
+        <DesignPanel
+          view={{ current: "variables", choose: vi.fn() }}
+          tabs={{
+            variables: () => <Studio />,
+            classes: () => null,
+            fonts: () => null,
+          }}
+        />
+      </StyleRevisionContext.Provider>
+    );
+    const { rerender } = render(panel(0));
+    fireEvent.click(screen.getByRole("button", { name: "stored" }));
+    expect(screen.getByRole("button", { name: "edited" })).toBeTruthy();
+
+    rerender(panel(0));
+    expect(screen.getByRole("button", { name: "edited" })).toBeTruthy();
+
+    rerender(panel(1));
+    expect(screen.getByRole("button", { name: "stored" })).toBeTruthy();
+  });
+
+  it("holds the tab inert while a replay settles, so nothing is edited against the old value", () => {
+    const panel = (settling: boolean) => (
+      <StyleRevisionContext.Provider value={{ revision: 0, settling }}>
+        <DesignPanel
+          view={{ current: "variables", choose: vi.fn() }}
+          tabs={{
+            variables: () => <button type="button">a control</button>,
+            classes: () => null,
+            fonts: () => null,
+          }}
+        />
+      </StyleRevisionContext.Provider>
+    );
+    const { rerender } = render(panel(true));
+    const holder = screen.getByText("a control").closest("[aria-busy]");
+    expect(holder?.hasAttribute("inert")).toBe(true);
+    rerender(panel(false));
+    expect(screen.getByText("a control").closest("[inert]")).toBeNull();
+  });
+});
+
+describe("the panel's header", () => {
+  it("is titled Design, above the tabs Variables, Shared styles and Fonts", () => {
+    renderPanel("variables");
+    const heading = screen.getByRole("heading", { name: "Design" });
+    const tabs = screen.getAllByRole("tab").map(tab => tab.textContent);
+    expect(tabs).toEqual(["Variables", "Shared styles", "Fonts"]);
+    expect(
+      heading.compareDocumentPosition(screen.getByRole("tablist")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("still opens Shared styles for the stored view it always had", () => {
+    renderPanel("classes");
+    expect(
+      screen
+        .getByRole("tab", { name: "Shared styles" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+  });
+
+  it("gives the open tab a place in the header for its own controls", async () => {
+    function Controls(): React.JSX.Element | null {
+      const slot = useDesignHeaderSlot();
+      return slot === null
+        ? null
+        : ReactDOM.createPortal(
+            <button type="button">Tab control</button>,
+            slot
+          );
+    }
+    render(
+      <DesignPanel
+        view={{ current: "variables", choose: vi.fn() }}
+        tabs={{
+          variables: () => <Controls />,
+          classes: () => null,
+          fonts: () => null,
+        }}
+      />
+    );
+    const control = await screen.findByRole("button", { name: "Tab control" });
+    const header = screen.getByRole("heading", {
+      name: "Design",
+    }).parentElement;
+    expect(header?.contains(control)).toBe(true);
   });
 });

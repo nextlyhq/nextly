@@ -146,6 +146,12 @@ unset, `csrf` checks only the request's origin, which a same-origin write passes
 write. A page that writes with its own `fetch` leaves `csrf` unset, or fetches
 `/admin/api/auth/csrf` and sends the token as `x-csrf-token`.
 
+`writePluginRoute({ plugin, path, method, body })` (experimental) makes one write
+outside React, with the same session handling and token. Where
+`usePluginRouteMutation` reports a failure on `error` at the next render,
+`writePluginRoute` rejects with the parsed error. Use it when you need the reason
+at the moment you await, such as to show it beside the field that was refused.
+
 On a public route, `csrf: true` also checks the origin of a write no session
 authenticates, without asking it for a token; only such a write that sends an
 `Authorization: Bearer` token is exempt. A write a session authenticates is

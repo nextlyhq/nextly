@@ -136,7 +136,9 @@ describe.each(getConfiguredTestDialects())(
       // What a visitor is handed of a page, pinned: the page's own fields and
       // its dates, and nothing naming a person, a lock or a note. A column
       // that starts reaching visitors fails here, so whether it should is
-      // decided rather than inherited.
+      // decided rather than inherited. `layout` and `noHeaderFooter` reach
+      // visitors on purpose: they say which Layout the page is drawn inside,
+      // which the public render needs and which names no person.
       const one = await visit(["collections", PAGES, "entries", liveId]);
       expect(one.status).toBe(200);
       expect(Object.keys((await one.json()) as Doc).sort()).toEqual([
@@ -144,6 +146,8 @@ describe.each(getConfiguredTestDialects())(
         "createdAt",
         "firstPublishedAt",
         "id",
+        "layout",
+        "noHeaderFooter",
         "slug",
         "status",
         "title",

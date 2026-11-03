@@ -156,6 +156,41 @@ function mount(
 }
 
 describe("BlockToolbar", () => {
+  it("leaves the editor around its menu in the accessibility tree", () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    register();
+    const editor = editorSpy(pair(), "a");
+    // A host offering the component verbs, which are what "More" holds.
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          components={{
+            mayCreate: true,
+            onSaveAsComponent: () => {},
+            onConvertToComponent: () => {},
+          }}
+        >
+          <Canvas
+            document={editor.document}
+            siteStyles={{ css: "", classes: {} } as never}
+            selectedId={editor.selectedId}
+            onSelect={editor.select}
+            overlay={<BlockToolbar editor={editor} />}
+          />
+        </BlockKeyboardActions>
+      </ShortcutProvider>
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), {
+      key: "Enter",
+    });
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
   it("draws nothing with no selection", () => {
     register();
     mount(editorSpy(pair(), null));
@@ -297,6 +332,39 @@ describe("BlockToolbar", () => {
     );
   });
 
+  it("says on the bar that the selected block is locked, or locked by the block around it", () => {
+    register();
+    mount(editorSpy(pair({ locked: true }), "a"));
+    expect(document.querySelector("[data-lock-note]")?.textContent).toBe(
+      "Locked"
+    );
+    cleanup();
+
+    const inside = documentOf([
+      {
+        id: "hero",
+        type: "acme/leaf",
+        version: 1,
+        props: {},
+        locked: true,
+        name: "Hero",
+        slots: {
+          children: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+        },
+      } as BlockNode,
+    ]);
+    mount(editorSpy(inside, "a"));
+    const note = document.querySelector("[data-lock-note]");
+    expect(note?.textContent).toBe("Locked by Hero");
+    // Text, not a control: the bar's one tab stop stays on its buttons.
+    expect(note?.closest("button")).toBeNull();
+    cleanup();
+
+    // The control: nothing locks the block, so the bar says nothing.
+    mount(editorSpy(pair(), "a"));
+    expect(document.querySelector("[data-lock-note]")).toBeNull();
+  });
+
   it("keeps an unavailable button FOCUSABLE, and says why", () => {
     // The reason is the information. `disabled` would take the button out of
     // the tab sequence and take the reason with it, so the author most in need
@@ -312,7 +380,7 @@ describe("BlockToolbar", () => {
     const describedBy = remove.getAttribute("aria-describedby");
     expect(describedBy).not.toBeNull();
     expect(document.getElementById(describedBy ?? "")?.textContent).toBe(
-      "This block is locked."
+      "Leaf is locked."
     );
   });
 

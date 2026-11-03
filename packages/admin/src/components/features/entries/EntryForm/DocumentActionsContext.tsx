@@ -31,6 +31,7 @@ import {
   EntryFormProvider,
   type EntryFormProviderProps,
 } from "./EntryFormProvider";
+import type { RecoveryPointState } from "./SaveStateIndicator";
 import {
   useDocumentActionBindings,
   type DocumentActionBindings,
@@ -41,17 +42,38 @@ const DocumentActionsContext = createContext<DocumentActionBindings | null>(
   null
 );
 
+/** No recovery point is recorded: a host that keeps none. */
+const NO_RECOVERY_POINT: RecoveryPointState = {
+  enabled: false,
+  storedAt: null,
+  pendingOfferAt: null,
+};
+
+/**
+ * The document's recovery point, beside its actions, so a surface that draws
+ * the save state without the header reads the same one the header's chip
+ * reads: a recovery point newer than the stored document keeps the work
+ * "unsaved" wherever the save state is shown.
+ */
+const RecoveryPointContext =
+  createContext<RecoveryPointState>(NO_RECOVERY_POINT);
+
 export function DocumentActionsHost({
   input,
+  recovery = NO_RECOVERY_POINT,
   children,
 }: {
   input: DocumentActionBindingsInput;
+  /** The document's recovery point, for a save state drawn without the header. */
+  recovery?: RecoveryPointState;
   children: ReactNode;
 }): JSX.Element {
   const documentActions = useDocumentActionBindings(input);
   return (
     <DocumentActionsContext.Provider value={documentActions}>
-      {children}
+      <RecoveryPointContext.Provider value={recovery}>
+        {children}
+      </RecoveryPointContext.Provider>
       <DocumentActionConfirmations
         confirmations={documentActions.confirmations}
         entry={input.entry}
@@ -59,6 +81,11 @@ export function DocumentActionsHost({
       />
     </DocumentActionsContext.Provider>
   );
+}
+
+/** The document's recovery point, or none outside a host that records one. */
+export function useHostedRecoveryPoint(): RecoveryPointState {
+  return useContext(RecoveryPointContext);
 }
 
 /**

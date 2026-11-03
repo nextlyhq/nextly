@@ -186,6 +186,7 @@ describe("planRepair", () => {
     expect(plan.steps).toEqual([
       expect.objectContaining({
         kind: "move",
+        cause: "lock",
         nodeId: "extra",
         from: { holderId: "row", slot: "items" },
       }),

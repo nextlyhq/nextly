@@ -16,6 +16,7 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
+  resolveComponentInstances,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
@@ -330,7 +331,7 @@ describe("where a value came from, and the way back", () => {
     expect(screen.getByText("Overridden")).toBeDefined();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset Title to the component's value",
+        name: "Reset Title to inherited value",
       })
     );
 
@@ -347,7 +348,7 @@ describe("where a value came from, and the way back", () => {
     ).toBe("");
     expect(
       screen.getByRole("button", {
-        name: "Reset Title to the component's value",
+        name: "Reset Title to inherited value",
       })
     ).toBeDefined();
   });
@@ -577,7 +578,7 @@ describe("a link and a visibility exposure", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset Newsletter form to the component's value",
+        name: "Reset Newsletter form to inherited value",
       })
     );
 
@@ -781,12 +782,12 @@ describe("rows with no control", () => {
 
     expect(
       screen.queryByRole("button", {
-        name: "Reset Title to the component's value",
+        name: "Reset Title to inherited value",
       })
     ).toBeNull();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset Headline to the component's value",
+        name: "Reset Headline to inherited value",
       })
     );
     expect(appliedProps(editor)).toStrictEqual({ componentId: "header" });
@@ -863,38 +864,48 @@ describe("two editors on one page", () => {
     }
   });
 
-  it("gives the NAME field an id of its own too, which both inspectors draw", () => {
+  it("gives the LABEL field an id of its own too, which both inspectors draw", () => {
     mount({ ...instance(), name: "Header" } as BlockNode);
     mount({ ...instance(), name: "Header" } as BlockNode);
 
-    const names = screen.getAllByRole("textbox", {
-      name: "Name",
-    }) as HTMLInputElement[];
-    expect(names).toHaveLength(2);
-    expect(new Set(names.map(field => field.id)).size).toBe(2);
+    // One open at a time, as an author would: opening the second takes focus,
+    // and the first closes on its blur. Each one's id is read while it is open.
+    const ids = screen.getAllByRole("heading", { level: 2 }).map(title => {
+      fireEvent.doubleClick(title);
+      const field = screen.getByRole("textbox", { name: "Label" });
+      const id = field.id;
+      fireEvent.blur(field);
+      return id;
+    });
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 });
 
 describe("the instance's own name", () => {
   const named = (): BlockNode => ({ ...instance(), name: "Header" });
 
-  it("hands the field back the stored name when a draft differs from it only in spaces, and renames nothing", () => {
-    // The rename trims, so such a draft changes nothing — and a field left
-    // showing the spaces would show a name the document does not hold.
+  it("renames nothing when a draft differs from the label only in spaces, and shows the stored label", () => {
+    // The rename trims, so such a draft changes nothing — and a title left
+    // showing the spaces would show a label the document does not hold.
     const editor = mount(named());
-    const field = screen.getByRole("textbox", { name: "Name" });
+    fireEvent.doubleClick(screen.getByRole("heading", { level: 2 }));
+    const field = screen.getByRole("textbox", { name: "Label" });
 
     fireEvent.change(field, { target: { value: "  Header  " } });
     fireEvent.blur(field);
 
     expect(editor.apply).not.toHaveBeenCalled();
-    expect((field as HTMLInputElement).value).toBe("Header");
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toContain(
+      "Header"
+    );
   });
 
   it("renames with the trimmed name", () => {
     // The control: a draft that differs once trimmed is applied, trimmed.
     const editor = mount(named());
-    const field = screen.getByRole("textbox", { name: "Name" });
+    fireEvent.doubleClick(screen.getByRole("heading", { level: 2 }));
+    const field = screen.getByRole("textbox", { name: "Label" });
 
     fireEvent.change(field, { target: { value: "  Footer  " } });
     fireEvent.blur(field);
@@ -904,5 +915,228 @@ describe("the instance's own name", () => {
       id: "i1",
       patch: { name: "Footer" },
     });
+  });
+});
+
+describe("telling cleared from inherited, and the way back", () => {
+  it("draws Cleared and Inherited with different words AND different icons", () => {
+    // Two placements' rows side by side would need two editors; one header
+    // with the title cleared and the tone inherited shows both states.
+    mount(instance({ overrides: { title: { $unset: true } } }));
+    const badges = [
+      ...document.querySelectorAll<HTMLElement>(".nx-inspector__source"),
+    ];
+    const cleared = badges.find(b => b.dataset.source === "cleared");
+    const inherited = badges.find(b => b.dataset.source === "definition");
+    expect(cleared?.textContent).toBe("Cleared");
+    expect(inherited?.textContent).toBe("Inherited");
+    // Shape as well as words: never colour alone.
+    const iconOf = (badge: HTMLElement | undefined) =>
+      badge?.querySelector("svg")?.getAttribute("class") ?? "";
+    expect(iconOf(cleared)).not.toBe("");
+    expect(iconOf(inherited)).not.toBe("");
+    expect(iconOf(cleared)).not.toBe(iconOf(inherited));
+  });
+
+  it("names the reset for the inherited value, which under a variant is the variant's", () => {
+    mount(instance({ overrides: { title: "Mine" } }));
+    expect(
+      screen.getByRole("button", { name: "Reset Title to inherited value" })
+    ).toBeDefined();
+  });
+});
+
+describe("a placement locked in Layers", () => {
+  it("shows every row read-only with the reason, and no reset that works", () => {
+    const locked = {
+      ...instance({ overrides: { title: "Mine" } }),
+      locked: true,
+    };
+    const editor = mount(locked);
+
+    expect(screen.getByText(/This component is locked/)).toBeDefined();
+    const field = screen.getByRole("textbox", { name: "Title" });
+    expect(field.closest("fieldset")?.disabled).toBe(true);
+    const reset = screen.getByRole("button", {
+      name: "Reset Title to inherited value",
+    });
+    expect(reset.closest("fieldset")?.disabled).toBe(true);
+    // The card's menu, which holds Unlock, stays live.
+    expect(
+      screen
+        .getByRole("button", { name: /^Actions for/ })
+        .closest("fieldset[disabled]")
+    ).toBeNull();
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("holds the discard of a value no longer exposed as well", () => {
+    mount({
+      ...instance({ overrides: { subtitle: "Gone now" } }),
+      locked: true,
+    });
+    expect(
+      screen
+        .getByRole("button", { name: "Discard the stored value for subtitle" })
+        .closest("fieldset")?.disabled
+    ).toBe(true);
+  });
+
+  it("leaves the rows editable when it is not locked", () => {
+    mount(instance());
+    expect(
+      screen
+        .getByRole("textbox", { name: "Title" })
+        .closest("fieldset[disabled]")
+    ).toBeNull();
+  });
+});
+
+describe("a link the page could not draw", () => {
+  it("is held in the field with the reason, not written", () => {
+    const definition = header({
+      exposed: [
+        {
+          id: "href",
+          label: "Button link",
+          nodeId: "h1",
+          propPath: "href",
+          type: "link",
+        },
+      ],
+    } as Partial<ComponentDocument>);
+    const editor = mount(instance(), definition, [
+      { id: "header", title: "Header", document: definition },
+    ]);
+    const field = screen.getByRole("textbox", { name: "Button link" });
+
+    fireEvent.change(field, { target: { value: "javascript:alert(1)" } });
+    fireEvent.blur(field);
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Button link needs a link"
+    );
+
+    fireEvent.change(field, { target: { value: "/pricing" } });
+    fireEvent.blur(field);
+    expect(appliedProps(editor)).toMatchObject({
+      overrides: { href: "/pricing" },
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("a refused link once the value changes underneath it", () => {
+  it("drops the refusal when the stored value changes, as after a reset or an undo", () => {
+    const definition = header({
+      exposed: [
+        {
+          id: "href",
+          label: "Button link",
+          nodeId: "h1",
+          propPath: "href",
+          type: "link",
+        },
+      ],
+    } as Partial<ComponentDocument>);
+    const library = {
+      definitions: new Map([["header", definition]]) as ComponentLookup,
+      components: [{ id: "header", title: "Header", document: definition }],
+    };
+    const view = render(
+      <InspectorPanel
+        editor={editorFor(pageOf(instance()))}
+        componentLibrary={library}
+      />
+    );
+    const field = screen.getByRole("textbox", { name: "Button link" });
+    fireEvent.change(field, { target: { value: "javascript:alert(1)" } });
+    fireEvent.blur(field);
+    expect(screen.getByRole("alert")).toBeDefined();
+
+    view.rerender(
+      <InspectorPanel
+        editor={editorFor(pageOf(instance({ overrides: { href: "/new" } })))}
+        componentLibrary={library}
+      />
+    );
+    expect(
+      (screen.getByRole("textbox", { name: "Button link" }) as HTMLInputElement)
+        .value
+    ).toBe("/new");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("the variant a placement uses", () => {
+  it("is named under the title", () => {
+    const definition = header({
+      variants: { v1: { label: "Dark", overrides: { tone: "dark" } } },
+    } as Partial<ComponentDocument>);
+    mount(instance({ variant: "v1" }), definition, [
+      { id: "header", title: "Header", document: definition },
+    ]);
+    expect(screen.getByText(/Dark variant/)).toBeDefined();
+  });
+});
+
+describe("the selected placement's exposed parts on the canvas", () => {
+  it("are marked inside the canvas root the host names, and nowhere else", () => {
+    const page = pageOf(instance());
+    const lookup: ComponentLookup = new Map([["header", header()]]);
+    const composed = resolveComponentInstances(page, lookup, {
+      exposures: true,
+    }).document;
+    const headingId = composed.nodes[0]?.id ?? "";
+    const markup = `<h2 data-nx-node="${headingId}" data-nx-instance="i1" data-nx-prop="text">Site name</h2>`;
+    const canvas = document.createElement("div");
+    canvas.innerHTML = markup;
+    const elsewhere = document.createElement("div");
+    elsewhere.innerHTML = markup;
+    document.body.append(canvas, elsewhere);
+    const editor = { ...editorFor(page), composed: () => composed };
+
+    render(
+      <InspectorPanel
+        editor={editor}
+        componentLibrary={{ definitions: lookup, components: LIBRARY }}
+        canvasRoot={canvas}
+      />
+    );
+
+    expect(canvas.querySelector("h2")?.hasAttribute("data-nx-exposed")).toBe(
+      true
+    );
+    expect(elsewhere.querySelector("h2")?.hasAttribute("data-nx-exposed")).toBe(
+      false
+    );
+    canvas.remove();
+    elsewhere.remove();
+  });
+});
+
+describe("the instance's card menu", () => {
+  it("offers the shared block verbs, as a block's card does", () => {
+    const run = vi.fn();
+    const lookup: ComponentLookup = new Map([["header", header()]]);
+    render(
+      <InspectorPanel
+        editor={editorFor(pageOf(instance()))}
+        componentLibrary={{ definitions: lookup, components: LIBRARY }}
+        verbs={{
+          actions: [
+            { id: "duplicate", label: "Duplicate", enabled: true },
+            { id: "delete", label: "Delete", enabled: true },
+          ],
+          run,
+        }}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Actions for/ }), {
+      key: "Enter",
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    expect(run).toHaveBeenCalledWith("duplicate");
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull(); // menu closed
   });
 });

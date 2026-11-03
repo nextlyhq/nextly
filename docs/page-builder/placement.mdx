@@ -1,0 +1,89 @@
+---
+title: Where blocks may go
+description: The one rule the editor and the server use to decide whether a block may sit inside another, and how a block declares what it is as HTML.
+---
+
+The editor and the server decide every placement with the same rule, so a block the
+editor lets you drop is one the server saves, and an API write or an import is held to
+what the editor holds you to. The rule combines three things:
+
+- **The slot is one the container declares.** A container only draws the slots it
+  declares, so a block filed anywhere else would be saved and never shown. A block that
+  declares no slots holds no blocks at all.
+- **The names the blocks give.** A block's `parent` lists the only containers it may sit
+  directly inside, and a slot's `allow` lists the only blocks it takes.
+- **HTML's content model.** Nothing clickable inside a link or a button, no header or
+  footer inside another header or footer, and a `main` only inside plain boxes. These
+  follow a block's settings, not just its name: a Card with its link switched on is a
+  link, so it refuses a Button anywhere inside it.
+
+A refusal says why, in the same words in the editor and from the server.
+
+## Pages saved before the rule
+
+A page saved before a block declared these rules may already break them. It still opens
+and still saves your other changes: each break it already held is kept as a warning,
+with its blocks where they were. A write that adds a new break is refused. Moving a
+block that breaks the rule somewhere else that also breaks it, or changing a setting so a
+block breaks it, counts as new.
+
+Where a page's saved value cannot be read back to compare against (a single, or a field
+translated per language), a break is kept with a warning and written to the server log
+rather than refused.
+
+The editor offers to repair such a page. A **Repair this page** notice lists each block
+that breaks the rule and where it will go: just after the nearest container that allows
+it, with its settings and everything inside it. Nothing changes until you choose
+**Repair**, no block is removed, and one undo takes the whole repair back. Locked areas
+are repaired first. A block with nowhere on the page it may go stays where it is, and
+the notice says so.
+
+## Declare what your block is
+
+A block from a plugin can say what it is as HTML through an optional `contentModel`. It
+receives the block's props and returns what the block is (`is`) and, for a container,
+what may sit beneath it (`accepts`). This is experimental: the shape may change before
+the page builder is stable.
+
+```tsx
+import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+
+export const promo = defineBlock<{ href?: string }>({
+  name: "acme/promo",
+  version: 1,
+  description: "A promotion panel that can link somewhere as a whole.",
+  example: { props: {} },
+  props: { href: { type: "url", role: "content" } },
+  slots: { children: {} },
+  // Linked, the panel renders an <a>: it is interactive, and nothing interactive
+  // may sit anywhere inside it.
+  contentModel: props =>
+    props.href
+      ? { is: ["flow", "interactive"], accepts: { without: ["interactive"] } }
+      : { is: ["flow"] },
+  render: ({ props, renderSlot, className }) =>
+    props.href ? (
+      <a className={className} href={props.href}>
+        {renderSlot("children")}
+      </a>
+    ) : (
+      <div className={className}>{renderSlot("children")}</div>
+    ),
+});
+```
+
+- `is` lists the kinds the block's own markup is or contains: `flow`, `phrasing`,
+  `interactive`, `header`, `footer`, `main` or `form`.
+- `accepts.content` is what its slots' direct children must be: `flow` (the default) or
+  `phrasing`, for a container that only takes text-level blocks.
+- `accepts.without` lists kinds refused anywhere beneath it, at any depth.
+
+A block that declares nothing is flow content that accepts flow content, which is how
+every block was treated before, so existing plugin blocks keep working. The function must
+be pure and synchronous; if it throws or returns something else, the block is treated as
+declaring nothing.
+
+## Related
+
+- [Blocks from plugins](/docs/page-builder/contributed-blocks) — declaring blocks and their slots
+- [Locked areas](/docs/page-builder/locked-areas) — fixing what a slot holds

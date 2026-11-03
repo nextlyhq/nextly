@@ -90,7 +90,10 @@ import {
   previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
-import { fieldsBesidePanel } from "./EntryFieldsPanel";
+import {
+  fieldsBesidePanel,
+  type EntryFieldsPresentation,
+} from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import {
@@ -103,6 +106,7 @@ import { EntryMetaStrip } from "./EntryMetaStrip";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
+import type { RecoveryPointState } from "./SaveStateIndicator";
 import { deleteHeld, submitHeld } from "./submit-outcome";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
@@ -674,13 +678,14 @@ export function EntryForm({
    * whose read-only answer it shares with every other field.
    */
   const renderEntryFields = useCallback(
-    (excludePath: string) =>
+    (excludePath: string, presentation?: EntryFieldsPresentation) =>
       fieldsBesidePanel(allFields, excludePath, {
         disabled: savePending,
         readOnly: lock.readOnly,
         mode,
         values: conditionValues,
         hasPublicAddress,
+        ...(presentation === undefined ? {} : { presentation }),
       }),
     [
       allFields,
@@ -941,6 +946,18 @@ export function EntryForm({
    * through the gate above, and the storing ones hand back their outcome so an
    * action run from outside the header can say what it came to.
    */
+  /*
+   * The recovery point, once, for every place the save state is drawn: the
+   * header's chip, and a document view's own through the host.
+   */
+  const recoveryPoint: RecoveryPointState = {
+    enabled: autosaveScope !== null,
+    storedAt: autosave.lastSavedAt,
+    // A recovery point newer than the stored document, still on offer: its
+    // edits are not stored, whatever the form says.
+    pendingOfferAt: recovery.offer?.savedAt ?? null,
+  };
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -1118,6 +1135,9 @@ export function EntryForm({
               // Nor for a reader, who is offered no preview: an open pane
               // closes once the user may no longer change the entry.
               open={previewOnScreen}
+              // A document view is a full-height screen: the closed split
+              // hands it the content area's height to fill.
+              fill={documentView !== undefined}
               onClose={() => setPreviewOpen(false)}
               scope={{
                 collection: collection.name,
@@ -1154,7 +1174,10 @@ export function EntryForm({
                       it: every provider above, the guard, the claim, the
                       recovery, the shortcut and the document's actions are
                       this editor's own either way. */}
-                  <DocumentActionsHost input={documentActionsInput}>
+                  <DocumentActionsHost
+                    input={documentActionsInput}
+                    recovery={recoveryPoint}
+                  >
                     <SaveWithoutPublishingBridge into={saveWithoutPublishing} />
                     {/* Standalone only: an embedded editor in a modal takes no
                       shortcuts. Mod+S runs the Save action, so the shortcut
@@ -1211,13 +1234,11 @@ export function EntryForm({
                                   // The whole unsaved-work state, so the restore
                                   // confirmation covers builder-held work too.
                                   hasUnsavedWork={hasUnsavedWork}
-                                  autosaveEnabled={autosaveScope !== null}
-                                  // A recovery point newer than the stored document, still on offer:
-                                  // its edits are not stored, whatever the form says.
+                                  autosaveEnabled={recoveryPoint.enabled}
                                   pendingRecoveryAt={
-                                    recovery.offer?.savedAt ?? null
+                                    recoveryPoint.pendingOfferAt
                                   }
-                                  autosaveLastSavedAt={autosave.lastSavedAt}
+                                  autosaveLastSavedAt={recoveryPoint.storedAt}
                                   entry={entry}
                                   collectionSlug={collection.name}
                                   hasStatus={hasStatus}

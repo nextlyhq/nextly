@@ -77,14 +77,20 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     ...real,
     BuilderShell: ({
       inspector,
+      title,
       topBar,
+      topBarCenter,
+      topBarEnd,
       children,
       renderPanel,
       editingBreakpointRequest,
       onEditingBreakpointChange,
     }: {
       inspector: React.ReactNode;
+      title?: string;
       topBar?: React.ReactNode;
+      topBarCenter?: React.ReactNode;
+      topBarEnd?: React.ReactNode;
       children?: React.ReactNode;
       renderPanel?: (panel: string) => React.ReactNode;
       editingBreakpointRequest?: { breakpoint: string | null; count: number };
@@ -105,7 +111,10 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       }, [editingBreakpointRequest, onEditingBreakpointChange]);
       return (
         <div>
+          <span data-testid="shell-title">{title}</span>
           {topBar}
+          {topBarCenter}
+          {topBarEnd}
           {inspector}
           {/*
           The panel region, drawn as a SIBLING of the children — which is what
@@ -178,6 +187,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    * REPLACES the module wholesale, so an export the subject imports and this
    * omits is a missing-export error rather than an unused stub.
    */
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written
@@ -205,7 +216,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
   // Nothing stored, read successfully — so the merged style is the host's
   // config alone and `status` is "ready". A pending read would disable the
@@ -246,7 +264,7 @@ const SITE = {
 /** The builder's document view, open on the form's `body` field. */
 function Host(): React.JSX.Element {
   const { control } = useForm<FieldValues>({
-    defaultValues: { body: undefined },
+    defaultValues: { body: undefined, title: "About us" },
   });
   return (
     <PageBuilderView
@@ -377,6 +395,25 @@ describe("the container the canvas is compiled against", () => {
      * rule matching nothing, with the sheet valid and the canvas resizing.
      */
     expect(box().container).toBe(context?.previewContainer);
+  });
+});
+
+describe("the top bar's title", () => {
+  it("shows the document's title as the form holds it", async () => {
+    const { screen } = await import("@testing-library/react");
+    openEditor();
+    expect(screen.getByTestId("shell-title").textContent).toBe("About us");
+  });
+});
+
+describe("the top bar's history", () => {
+  it("draws undo and redo, unavailable on a fresh document", async () => {
+    const { screen } = await import("@testing-library/react");
+    openEditor();
+    const undo = screen.getByRole("button", { name: "Undo" });
+    const redo = screen.getByRole("button", { name: "Redo" });
+    expect((undo as HTMLButtonElement).disabled).toBe(true);
+    expect((redo as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

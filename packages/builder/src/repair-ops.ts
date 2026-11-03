@@ -1,6 +1,6 @@
 /**
- * A lock repair as ops the editor's store applies, so confirming it is one
- * edit an author can undo.
+ * A repair, of locks and placements, as ops the editor's store applies, so
+ * confirming it is one edit an author can undo.
  *
  * The engine's `planRepair` decides the repair: its `result` is the document
  * the author confirms, and its steps are what the preview shows. The store
@@ -15,8 +15,8 @@ import {
   applyOp,
   DEFAULT_LIMITS,
   findNode,
+  layersLockBreak,
   locateNode,
-  lockedWithin,
   OpError,
   positionOf,
   sameStoredValue,
@@ -30,7 +30,10 @@ import {
 
 /** Why a repair cannot be applied as planned. */
 export type RepairRefusal =
-  /** A block the repair moves is locked, or sits inside one it moves. */
+  /**
+   * A block the repair changes is locked in Layers: the block it moves, one
+   * inside it, or one around a block it moves, changes or adds to.
+   */
   | { readonly reason: "locked-block"; readonly nodeId: string }
   /** The ops did not give the planned document. */
   | { readonly reason: "unplaceable" };
@@ -104,7 +107,12 @@ function slotGroups(steps: readonly RepairStep[]): RepairStep[][] {
 function placeOf(step: RepairStep): string {
   switch (step.kind) {
     case "move":
-      return `${step.from.holderId}\u0000${step.from.slot}`;
+      // A placement move names the exact block it lands after, so it is a
+      // group of its own: never counted against a lock move's anchor, and
+      // never sorted ahead of a lock add in the slot it leaves.
+      return step.cause === "placement"
+        ? `placement\u0000${step.nodeId}`
+        : `${step.from.holderId}\u0000${step.from.slot}`;
     case "add":
       return `${step.at.holderId}\u0000${step.at.slot}`;
     case "reorder":
@@ -132,13 +140,13 @@ function applyStep(
   placedAfter: Map<string, number>
 ): RepairRefusal | undefined {
   for (const op of opsFor(at, step, result, placedAfter)) {
-    // Asked before applying, with the op layer's own rule: a locked block
-    // does not move until it is unlocked, and the author is told which one.
-    if (op.kind === "move") {
-      const moving = findNode(at.current.nodes, op.id);
-      const locked = moving === undefined ? undefined : lockedWithin(moving);
-      if (locked !== undefined)
-        return { reason: "locked-block", nodeId: locked };
+    // Asked before applying, with the op layer's own rule: nothing a Layers
+    // lock covers changes until it is unlocked, whether the step moves a
+    // locked block, moves or changes one inside a locked block, or adds to
+    // one, and the author is told which block to unlock.
+    const broken = layersLockBreak(at.current.nodes, op);
+    if (broken !== undefined) {
+      return { reason: "locked-block", nodeId: broken.lockedId };
     }
     try {
       at.current = applyOp(at.current, op, at.limits).document;

@@ -19,6 +19,7 @@
  * @module @nextlyhq/plugin-page-builder/site-style-storage
  */
 import { defineSingle, json, type SingleConfig } from "nextly/config";
+import { NextlyError } from "nextly/errors";
 
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import {
@@ -50,6 +51,78 @@ const refusing =
     return issues.length === 0 ? true : issues.join(" ");
   };
 
+/** The mark the Settings route puts on its own write. */
+const SITE_SETTINGS_WRITE = "pageBuilder.siteSettingsWrite";
+
+/**
+ * The context the Settings route writes the site's breakpoints with: the one
+ * write {@link refuseBreakpointsOutsideSettings} lets change them.
+ */
+export const SITE_SETTINGS_WRITE_CONTEXT: Readonly<Record<string, unknown>> = {
+  [SITE_SETTINGS_WRITE]: true,
+};
+
+/** What any other write that changes the site's breakpoints is told. */
+export const BREAKPOINTS_OUTSIDE_SETTINGS =
+  "The site's breakpoints are changed in the page builder's Settings.";
+
+/**
+ * A JSON value with every object's keys in one order, so two values holding
+ * the same thing compare equal however they were stored: Postgres `jsonb`
+ * reorders keys, and an unchanged set sent back by a form must not read as a
+ * change.
+ */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map(key => [key, canonical((value as Record<string, unknown>)[key])])
+    );
+  }
+  return value;
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return (
+    JSON.stringify(canonical(a ?? null)) ===
+    JSON.stringify(canonical(b ?? null))
+  );
+}
+
+/**
+ * Refuse a write to this Single that changes its breakpoints, unless the
+ * Settings route made it.
+ *
+ * The breakpoints have one door: redefining the site's devices needs the site
+ * permission, which the route asks for. This hook could not ask it itself,
+ * since core answers a permission here only for the content verbs, and two
+ * places judging who may change them would be two answers that drift.
+ *
+ * A write that names the breakpoints without changing them passes, as does
+ * server code acting as nobody (the Direct API, an import), which is trusted
+ * to say what the site is.
+ */
+export function refuseBreakpointsOutsideSettings(hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+  user?: { id: string };
+  principal?: unknown;
+  context?: Record<string, unknown>;
+}): void {
+  if (hook.context?.[SITE_SETTINGS_WRITE] === true) return;
+  const data = hook.data;
+  if (data === undefined || !Object.hasOwn(data, "breakpoints")) return;
+  if (sameValue(data.breakpoints, hook.originalData?.breakpoints)) return;
+  if (hook.user === undefined && hook.principal === undefined) return;
+  throw new NextlyError({
+    code: "FORBIDDEN",
+    publicMessage: BREAKPOINTS_OUTSIDE_SETTINGS,
+    logContext: { reason: "site-breakpoints-outside-settings" },
+  });
+}
+
 /**
  * The Site Style single: the one global, versioned, access-controlled
  * document a site's stored style edits live in.
@@ -71,6 +144,9 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
     slug: SITE_STYLE_SLUG,
     label: { singular: "Site Style" },
     versions: true,
+    // A precondition, so before validation: a refused write learns where the
+    // change is made rather than what is wrong with a value it may not set.
+    hooks: { beforeValidate: [refuseBreakpointsOutsideSettings] },
     // No `access` block, deliberately: read and update both fall through to
     // the `read-site-style` / `update-site-style` permissions seeded with the
     // single and granted to super_admin, so a role reaches this document only
@@ -98,7 +174,7 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
         validate: refusing(raw => checkStoredTokens(raw, policy)),
         admin: {
           description:
-            'A token set: { tokens: [{ id?, name, kind, values: { light, dark? } }], prefix?, darkMode? }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity.',
+            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? } }], prefix?, darkMode? }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity.',
         },
       }),
       json({
@@ -163,7 +239,11 @@ export interface SiteStyleReader {
 export async function loadSiteStyle(args: {
   nextly: SiteStyleReader;
   defaults?: SiteStyleData;
+  /** The Single's RESOLVED slug, where a host renamed it. */
+  slug?: string;
 }): Promise<SiteStyleData> {
-  const doc = await args.nextly.findSingle({ slug: SITE_STYLE_SLUG });
+  const doc = await args.nextly.findSingle({
+    slug: args.slug ?? SITE_STYLE_SLUG,
+  });
   return resolveSiteStyle(args.defaults, readSiteStyleRecord(doc));
 }

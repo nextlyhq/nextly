@@ -29,7 +29,7 @@ import {
 
 import { siteBreakpoints } from "../site-style";
 
-import type { DocumentKind } from "./blocks-options";
+import { DEFAULT_ACCEPTED_KINDS, type DocumentKind } from "./blocks-options";
 
 /**
  * The issue shape core's validation envelope carries. Declared structurally
@@ -67,8 +67,8 @@ export interface BlocksValidationOptions {
  * rejects — each side internally consistent, so neither looks wrong.
  */
 
-/** What a field accepts when it says nothing: its own entry's page content. */
-const DEFAULT_KINDS: readonly DocumentKind[] = ["page"];
+/** What a field accepts when it says nothing, from the one statement of it. */
+const DEFAULT_KINDS: readonly DocumentKind[] = DEFAULT_ACCEPTED_KINDS;
 
 /**
  * How many document issues one field reports. A document may hold thousands of

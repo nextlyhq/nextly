@@ -144,6 +144,20 @@ function mount(
   return editor;
 }
 
+/**
+ * Bring a property out from its section's "+ More", as an author does.
+ *
+ * Opened from the keyboard because that is a route Radix's menu takes in
+ * jsdom without pointer capture, and the item is chosen by its name.
+ */
+function reveal(section: string, label: string): void {
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: `More ${section} properties` }),
+    { key: "Enter" }
+  );
+  fireEvent.click(screen.getByRole("menuitem", { name: label }));
+}
+
 /** The fields of one property, scoped so two properties sharing a side name do not collide. */
 function fieldsOf(property: string) {
   return within(
@@ -463,6 +477,59 @@ describe("the class selector, mounted above the style sections", () => {
       patch: { classes: ["id-new"] },
     });
   });
+
+  it("refuses a created class once the block was locked while it was in flight", async () => {
+    /*
+     * The creation resolves through the callback of the render that began it.
+     * The block is locked in a LATER render, by a new editor object, the way
+     * the store hands one down; the write must ask that one, not the editor
+     * the pending callback closed over.
+     */
+    register({ spacing: true });
+    const node = { id: "a", type: "acme/box", version: 1, props: {} };
+    const free = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node] as BlockNode[],
+    } as BlockDocument);
+    let settle: (value: { ok: true; classId: string }) => void = () => {};
+    const onCreateClass = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(resolve => {
+          settle = resolve;
+        })
+    );
+    const { rerender } = render(
+      <StyleInspectorPanel
+        editor={free}
+        onCreateClass={onCreateClass}
+        classLibrary={LIBRARY}
+      />
+    );
+    const field = () => screen.getByRole("combobox", { name: /add a class/i });
+    fireEvent.change(field(), { target: { value: "call-to-action" } });
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(onCreateClass).toHaveBeenCalledTimes(1);
+
+    const locked = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ ...node, locked: true }] as BlockNode[],
+    } as BlockDocument);
+    rerender(
+      <StyleInspectorPanel
+        editor={locked}
+        onCreateClass={onCreateClass}
+        classLibrary={LIBRARY}
+      />
+    );
+    await React.act(async () => {
+      settle({ ok: true, classId: "id-new" });
+    });
+
+    expect(free.applyAll).not.toHaveBeenCalled();
+    expect(locked.applyAll).not.toHaveBeenCalled();
+  });
 });
 
 describe("sections", () => {
@@ -483,15 +550,42 @@ describe("sections", () => {
     expect(effects.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("counts the properties this node sets in each section", () => {
+  it("marks each section that holds values, in words as well as a dot", () => {
     const styles = {
-      base: { [BASE_BREAKPOINT]: { margin: "8px", opacity: 0.5 } },
+      base: { [BASE_BREAKPOINT]: { margin: "8px" } },
     } as NodeStyles;
     mount({ spacing: true, effects: true }, styles);
 
-    // One of two in spacing, one of five in effects — so an author can see
+    // Spacing holds a margin and Effects holds nothing, so an author can see
     // which sections they have touched without opening each one.
-    expect(screen.getAllByLabelText("1 set")).toHaveLength(2);
+    const spacing = screen.getByRole("button", { name: /Spacing/ });
+    const effects = screen.getByRole("button", { name: /Effects/ });
+    expect(spacing.textContent).toContain("has values");
+    expect(effects.textContent).not.toContain("has values");
+  });
+
+  it("shows a section's common properties and lists the rest under More", () => {
+    mount({ effects: true });
+
+    expect(document.querySelector('[data-property="opacity"]')).not.toBeNull();
+    expect(document.querySelector('[data-property="mixBlendMode"]')).toBeNull();
+
+    reveal("effects", "Mix blend mode");
+
+    expect(
+      document.querySelector('[data-property="mixBlendMode"]')
+    ).not.toBeNull();
+  });
+
+  it("always shows a property that holds a value, whatever its tier", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { mixBlendMode: "multiply" } },
+    } as NodeStyles;
+    mount({ effects: true }, styles);
+
+    expect(
+      document.querySelector('[data-property="mixBlendMode"]')
+    ).not.toBeNull();
   });
 
   it("keeps a section collapsed when the author closes it", () => {
@@ -542,6 +636,7 @@ describe("controls", () => {
 
   it("draws a keyword leaf as a select over the catalog's own vocabulary", () => {
     mount({ effects: true });
+    reveal("effects", "Mix blend mode");
 
     const trigger = screen.getByLabelText("Mix blend mode");
     fireEvent.click(trigger);
@@ -863,6 +958,7 @@ describe("controls", () => {
     // and a selector called "Form" three times over tells a screen-reader user
     // nothing about which property it changes.
     mount({ typography: true });
+    reveal("typography", "Font style");
 
     expect(screen.getByLabelText("Font weight form")).toBeDefined();
     expect(screen.getByLabelText("Line height form")).toBeDefined();
@@ -2780,13 +2876,17 @@ describe("a segmented keyword control behaves as a toggle", () => {
   };
 
   /** The panel with one `fontStyle` value already stored, or none. */
-  const mountWith = (stored?: string | undefined) =>
-    mount(
+  const mountWith = (stored?: string | undefined) => {
+    const editor = mount(
       { typography: true },
       stored === undefined
         ? undefined
         : ({ base: { [BASE_BREAKPOINT]: { fontStyle: stored } } } as NodeStyles)
     );
+    // Behind Typography's More until it holds a value.
+    if (stored === undefined) reveal("typography", "Font style");
+    return editor;
+  };
 
   /*
    * Every case below is driven from MORE THAN ONE option, and that is the point
@@ -2873,6 +2973,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
      * reading as valid parts of a control that is not.
      */
     const editor = mount({ typography: true });
+    reveal("typography", "Font style");
 
     // The positive control, BEFORE the refusal. Without it an implementation
     // that marks every button invalid unconditionally passes — and that
@@ -2921,6 +3022,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         <StyleInspectorPanel editor={editor} />
       </form>
     );
+    reveal("typography", "Font style");
 
     fireEvent.click(optionButton("italic"));
 
@@ -3092,5 +3194,150 @@ describe("a per-side property is drawn as a box", () => {
     expect(frameOf(box)?.style.getPropertyValue("--nx-side-direction")).toBe(
       "rtl"
     );
+  });
+});
+
+describe("the Baseline gate on the panel", () => {
+  it("offers no control for a withheld keyword", () => {
+    mount({ layout: true });
+
+    fireEvent.click(screen.getByLabelText("Display"));
+
+    expect(screen.getByRole("option", { name: "flex" })).toBeDefined();
+    expect(screen.queryByRole("option", { name: "contents" })).toBeNull();
+  });
+
+  it("shows a stored withheld value clear-only, and says why", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "contents" } },
+    } as NodeStyles;
+    const editor = mount({ layout: true }, styles);
+
+    const display = fieldsOf("display");
+    expect(display.queryByRole("combobox")).toBeNull();
+    expect(display.getByText("contents")).toBeDefined();
+    expect(
+      display.getByText(/not every major browser supports it yet/)
+    ).toBeDefined();
+
+    fireEvent.click(display.getByRole("button", { name: "Clear Display" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a read-only design", () => {
+  // Effects alone, so its section is the open one and its More is drawn
+  // whenever it is allowed: the locked case then cannot pass by absence.
+  const opacityInput = () =>
+    fieldsOf("opacity").getByLabelText("Opacity") as HTMLInputElement;
+
+  it("says why and disables every control, More included, while the block is locked", () => {
+    register({ effects: true });
+    const document = documentOf();
+    const locked = {
+      ...document,
+      nodes: [{ ...document.nodes[0], locked: true }],
+    } as BlockDocument;
+    render(<StyleInspectorPanel editor={editorFor(locked)} />);
+
+    expect(
+      screen.getByText(/Locked: it can't be moved, deleted or edited/)
+    ).toBeDefined();
+    expect(opacityInput().matches(":disabled")).toBe(true);
+    expect(
+      screen.queryByRole("button", { name: "More effects properties" })
+    ).toBeNull();
+  });
+
+  it("leaves the editor around the More menu in the accessibility tree", async () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    register({ effects: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "More effects properties" }),
+      { key: "Enter" }
+    );
+    await screen.findByRole("menu");
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
+  it("leaves every control editable on a block nothing locks", () => {
+    // The positive control for the case above.
+    register({ effects: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+
+    expect(opacityInput().matches(":disabled")).toBe(false);
+    expect(
+      screen.getByRole("button", { name: "More effects properties" })
+    ).toBeDefined();
+  });
+
+  it("refuses a write once a lock lands after the panel drew", () => {
+    // The guard is the write path's own, asked of the live document: a lock set
+    // in Layers after the panel drew still stops the next edit, though the
+    // field on screen was drawn editable.
+    register({ spacing: true });
+    const document = documentOf();
+    const editor = editorFor(document);
+    render(<StyleInspectorPanel editor={editor} />);
+    const input = fieldsOf("margin").getByLabelText("Block start");
+    fireEvent.change(input, { target: { value: "8px" } });
+
+    editor.document = {
+      ...document,
+      nodes: [{ ...document.nodes[0], locked: true }],
+    } as BlockDocument;
+    fireEvent.blur(input);
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toMatch(/locked/);
+  });
+});
+
+describe("which elements count as media for the fit controls", () => {
+  const fitShown = (renderedTag: string) => {
+    register({ dimensions: true });
+    const { unmount } = render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf())}
+        renderedTag={renderedTag}
+      />
+    );
+    const shown =
+      document.querySelector('[data-property="objectFit"]') !== null;
+    unmount();
+    clearBlocks();
+    return shown;
+  };
+
+  it("shows them on an image and not on a picture wrapper", () => {
+    expect(fitShown("img")).toBe(true);
+    // A `<picture>` only chooses a source; the image inside it is what fits.
+    expect(fitShown("picture")).toBe(false);
+    expect(fitShown("div")).toBe(false);
+  });
+});
+
+describe("a colour that does not follow light and dark", () => {
+  it("is marked on the control holding it", () => {
+    mount(
+      { color: true },
+      { base: { [BASE_BREAKPOINT]: { color: "#1d2b6b" } } }
+    );
+    expect(
+      fieldsOf("color").getByText(/Not adapted to dark mode/)
+    ).toBeDefined();
+  });
+
+  it("is not marked once a variable holds the colour", () => {
+    mount(
+      { color: true },
+      { base: { [BASE_BREAKPOINT]: { color: { $token: "color.text" } } } }
+    );
+    expect(
+      fieldsOf("color").queryByText(/Not adapted to dark mode/)
+    ).toBeNull();
   });
 });
