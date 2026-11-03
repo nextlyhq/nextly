@@ -259,6 +259,59 @@ describe("counts", () => {
     ).toBeTruthy();
   });
 
+  it("keeps the counts floors when an earlier batch was read before every page was counted", async () => {
+    const many: NamedClass[] = Array.from({ length: 61 }, (_, n) => ({
+      id: `c-${n}`,
+      slug: `s-${n}`,
+      orderIndex: n,
+      styles: {},
+    }));
+    let reads = 0;
+    const base = accessOf().access;
+    // The index finishes counting between the two batches of one scan.
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        reads += 1;
+        const whole = reads > 1;
+        return {
+          whole,
+          mayLock: false,
+          styles: new Map(ids.map(id => [id, reach({}, whole)])),
+        };
+      }),
+    };
+    await panel({ library: many, access });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(reads).toBe(2);
+    expect(
+      screen.getByText(
+        "Some pages are still being counted, so these numbers are minimums."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Unused" })).toBeTruthy();
+  });
+
+  it("asks about an id holding a newline as that one id", async () => {
+    const odd: NamedClass = {
+      id: "a\nb",
+      slug: "odd",
+      label: "Odd",
+      orderIndex: 0,
+      styles: {},
+    };
+    const { access, usageReads } = accessOf({
+      styles: { "a\nb": reach({ pages: 3 }) },
+    });
+    await panel({ library: [odd], access, suppliedClassIds: ["a\nb"] });
+    expect(usageReads).toEqual([["a\nb"]]);
+    expect(row(/^Odd, \.nx-c-odd/).getAttribute("aria-label")).toBe(
+      "Odd, .nx-c-odd, set in your site’s code, On 3 pages"
+    );
+  });
+
   it("asks again while counting, and shows the whole count once it is done", async () => {
     let counted = false;
     const base = accessOf().access;
@@ -420,6 +473,7 @@ describe("where a style is used", () => {
     items: Array.from({ length: count }, (_, i) => ({
       id: `p${from + i}`,
       title: `Page ${from + i}`,
+      collection: "pages",
       kind: "pages" as const,
     })),
     total: 25,
@@ -454,6 +508,34 @@ describe("where a style is used", () => {
     );
     expect(within(details).getByText("Page 24")).toBeTruthy();
     expect(within(details).queryByRole("button", { name: /Show/ })).toBeNull();
+  });
+
+  it("lists one id in two collections as two documents", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { access } = accessOf({
+        uses: () => ({
+          items: [
+            { id: "x", title: "Home", collection: "pages", kind: "pages" },
+            { id: "x", title: "News", collection: "posts", kind: "pages" },
+          ],
+          total: 2,
+          hidden: 0,
+          hasNext: false,
+          complete: true,
+        }),
+      });
+      await panel({ access });
+      const details = await open(/^Card, \.nx-c-card/, "Card");
+      expect(within(details).getByText("Home")).toBeTruthy();
+      expect(within(details).getByText("News")).toBeTruthy();
+      // Two rows keyed alike are one row to React, which says so.
+      expect(
+        errors.mock.calls.some(call => String(call[0]).includes("same key"))
+      ).toBe(false);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("asks for one page at a time, so a second press while one is coming skips nothing", async () => {
@@ -599,10 +681,22 @@ describe("locking", () => {
     });
     expect((lock as HTMLButtonElement).disabled).toBe(true);
     expect(
-      within(details).getByText("Lock it once the new name is saved.")
+      within(details).getByText("Wait until the name change is saved.")
     ).toBeTruthy();
     fireEvent.click(lock);
     expect(access.lock).not.toHaveBeenCalled();
+  });
+
+  it("holds Lock while another style's rename is still being stored", async () => {
+    // Every rename writes the whole list, so it is not only the same row's.
+    const { access } = accessOf({ mayLock: true });
+    await panel({ access, pendingNames: { "c-hero": "Big hero" } });
+    const details = await open(/^Card, \.nx-c-card/, "Card");
+    const lock = within(details).getByRole("button", { name: "Lock Card" });
+    expect((lock as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      within(details).getByText("Wait until the name change is saved.")
+    ).toBeTruthy();
   });
 });
 
@@ -629,6 +723,17 @@ describe("removing one style", () => {
     ).toBeNull();
     expect(
       within(details).getByText(/^In use, so it can’t be removed/)
+    ).toBeTruthy();
+  });
+
+  it("holds Remove while any rename is still being stored, and says why", async () => {
+    const { access } = accessOf();
+    await panel({ access, pendingNames: { "c-hero": "Big hero" } });
+    const details = await open(/^Old note/, "Old note");
+    const remove = within(details).getByRole("button", { name: "Remove" });
+    expect((remove as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      within(details).getByText("Wait until the name change is saved.")
     ).toBeTruthy();
   });
 
@@ -698,6 +803,59 @@ describe("Remove unused…", () => {
         "Some pages are still being counted, so no shared style can be removed yet."
       )
     ).toBeTruthy();
+  });
+
+  it("is held while any rename is still being stored, and says why", async () => {
+    const { access } = accessOf();
+    await panel({ access, pendingNames: { "c-hero": "Big hero" } });
+    const button = screen.getByRole("button", { name: "Remove unused…" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByText("Wait until the name change is saved.")
+    ).toBeTruthy();
+  });
+
+  it("keeps the styles a later batch could not remove, and resends only those", async () => {
+    const many: NamedClass[] = Array.from({ length: 55 }, (_, n) => ({
+      id: `c-${n}`,
+      slug: `s-${n}`,
+      orderIndex: n,
+      styles: {},
+    }));
+    let calls = 0;
+    const { access } = accessOf({
+      remove: async () => {
+        calls += 1;
+        return calls === 2 ? "Nothing was removed. s-50 is locked." : undefined;
+      },
+    });
+    await panel({ access, library: many });
+    fireEvent.click(screen.getByRole("button", { name: "Remove unused…" }));
+    let confirm = await screen.findByRole("group", {
+      name: "Remove 55 unused shared styles",
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(confirm).getByRole("button", { name: "Remove 55" })
+      );
+    });
+    confirm = screen.getByRole("group", {
+      name: "Remove 5 unused shared styles",
+    });
+    expect(confirm.textContent).toContain(
+      "50 were removed before the rest were refused."
+    );
+    expect(within(confirm).getByRole("alert").textContent).toBe(
+      "Nothing was removed. s-50 is locked."
+    );
+    await act(async () => {
+      fireEvent.click(
+        within(confirm).getByRole("button", { name: "Remove 5" })
+      );
+    });
+    expect(access.remove).toHaveBeenLastCalledWith(
+      many.slice(50).map(style => style.id)
+    );
   });
 
   it("leaves out locked styles and styles set in code", async () => {

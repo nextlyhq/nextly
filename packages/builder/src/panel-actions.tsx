@@ -17,12 +17,21 @@ export function KeepOrRemove({
   onKeep,
   onRemove,
   removeLabel,
+  removeHeld = false,
+  removeDescribedBy,
 }: {
   busy: boolean;
   onKeep: () => void;
   onRemove: () => void;
   /** The destructive button's words: "Remove Inter", "Remove 3". */
   removeLabel: string;
+  /**
+   * Remove waits while another write is pending, Keep does not: the author
+   * can always back out. The caller says why beside it.
+   */
+  removeHeld?: boolean;
+  /** The id of the words saying why Remove waits. */
+  removeDescribedBy?: string;
 }): React.JSX.Element {
   return (
     <div className="nx-vars-editor__actions">
@@ -41,7 +50,8 @@ export function KeepOrRemove({
         variant="destructive"
         size="sm"
         className="nx-vars-editor__button"
-        disabled={busy}
+        disabled={busy || removeHeld}
+        aria-describedby={removeHeld ? removeDescribedBy : undefined}
         onClick={onRemove}
       >
         {removeLabel}

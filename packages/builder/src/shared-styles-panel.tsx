@@ -44,7 +44,7 @@ import {
   ShowMore,
   useRefusableWrite,
 } from "./panel-actions";
-import { SharedStyleDetails } from "./shared-style-details";
+import { HoldReason, SharedStyleDetails } from "./shared-style-details";
 import {
   inSharedStyleFilter,
   isUnused,
@@ -60,6 +60,7 @@ import {
   sharedStyleSearchText,
   SHARED_STYLE_NOT_WHOLE_NOTE,
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
+  SHARED_STYLE_RENAME_PENDING,
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
   type SharedStyleFilter,
@@ -164,6 +165,23 @@ interface Issue {
   readonly reason: string;
 }
 
+/**
+ * A list of ids as one string an effect or a memo can depend on. JSON, since
+ * a class id is any string up to 128 characters, a newline or a comma
+ * included, so no separator could be told apart from an id.
+ */
+function idsKey(ids: readonly string[]): string {
+  return JSON.stringify(ids);
+}
+
+/** The ids a key made by {@link idsKey} holds. */
+function idsOf(key: string): string[] {
+  const parsed: unknown = JSON.parse(key);
+  return Array.isArray(parsed)
+    ? parsed.filter((id): id is string => typeof id === "string")
+    : [];
+}
+
 /** The rows the library gives, kept while the library and the code's ids are. */
 function useRows(
   library: readonly NamedClass[] | undefined,
@@ -172,15 +190,12 @@ function useRows(
   // Keyed by the ids rather than the array, which a host may build afresh on
   // every render: the search text compiles every style, once per library,
   // not once per render.
-  const suppliedKey = (suppliedClassIds ?? []).join("\n");
+  const suppliedKey = idsKey(suppliedClassIds ?? []);
   return React.useMemo(
     () =>
       library === undefined
         ? []
-        : sharedStyleRows(
-            library,
-            new Set(suppliedKey === "" ? [] : suppliedKey.split("\n"))
-          ),
+        : sharedStyleRows(library, new Set(idsOf(suppliedKey))),
     [library, suppliedKey]
   );
 }
@@ -234,6 +249,11 @@ export function SharedStylesPanel({
   const blocksOf = (id: string): BlocksOnThisPage =>
     pageBlocksOf(pageBlocks, id);
   const writable = !readOnly && onRename !== undefined;
+  // Any rename still being stored. A rename writes the whole list of styles,
+  // and so do Lock, Remove and Remove unused, so each waits for every
+  // pending rename, not only its own row's: whichever landed second would put
+  // the other's list back.
+  const held = Object.keys(pendingNames).length > 0;
 
   return (
     <div
@@ -266,7 +286,8 @@ export function SharedStylesPanel({
           exact={
             usage.whole === true &&
             pageBlocks.complete &&
-            rows.every(row => usage.styles.has(row.id))
+            // A count is exact only once every style's reach is complete.
+            rows.every(row => usage.styles.get(row.id)?.complete === true)
           }
         />
       )}
@@ -285,6 +306,7 @@ export function SharedStylesPanel({
             offered={!readOnly && access !== undefined}
             access={access}
             whole={usage.whole}
+            held={held}
             blocksOf={blocksOf}
             onRemoved={() => search.current?.focus()}
           />
@@ -307,6 +329,7 @@ export function SharedStylesPanel({
                   mayLock: usage.mayLock,
                   readOnly: !writable,
                   access,
+                  held,
                   issue: issueOf(issue, row.id),
                   onRename: value => rename(row, value),
                   onRemoved: () => {
@@ -529,13 +552,43 @@ function Unread({
 /** Usage read for the rows on screen, kept as it arrives. */
 interface UsageState {
   readonly styles: ReadonlyMap<string, SharedStyleReach>;
-  /** Undefined until a read has answered. */
+  /**
+   * Whether every style's usage was read while every page had been counted.
+   * Undefined until a read has answered.
+   */
   readonly whole: boolean | undefined;
   readonly mayLock: boolean;
   readonly failed: boolean;
 }
 
-/** Usage for some styles, read fifty at a time; the last read's health wins. */
+/** What the reads kept: each style's usage, and the health it was read under. */
+interface UsageReads {
+  readonly styles: ReadonlyMap<string, SharedStyleReach>;
+  /** Per style, whether the read that counted it saw a whole index. */
+  readonly readWhole: ReadonlyMap<string, boolean>;
+  readonly mayLock: boolean;
+  readonly failed: boolean;
+}
+
+/**
+ * Whether the counts of `ids` are whole: every one read so far was read under
+ * a whole index. Derived per style rather than from the last read, since one
+ * scan is several reads and the index can finish counting between them: an
+ * earlier read's floors stay floors until that style is read again. Only the
+ * styles listed now are asked, so a style since removed cannot hold it false.
+ */
+function wholeOf(
+  readWhole: ReadonlyMap<string, boolean>,
+  ids: readonly string[]
+): boolean | undefined {
+  const read = ids.flatMap(id => {
+    const whole = readWhole.get(id);
+    return whole === undefined ? [] : [whole];
+  });
+  return read.length === 0 ? undefined : read.every(Boolean);
+}
+
+/** Usage for some styles, read fifty at a time, each read handed on as it answers. */
 async function readUsage(
   access: SharedStylesAccess,
   ids: readonly string[],
@@ -559,40 +612,45 @@ function useUsage(
   access: SharedStylesAccess | undefined,
   ids: readonly string[]
 ): UsageState {
-  const [state, setState] = React.useState<UsageState>({
+  const [state, setState] = React.useState<UsageReads>({
     styles: new Map(),
-    whole: undefined,
+    readWhole: new Map(),
     mayLock: false,
     failed: false,
   });
   const known = React.useRef(state.styles);
   known.current = state.styles;
-  const key = ids.join("\n");
+  const key = idsKey(ids);
+  const whole = wholeOf(state.readWhole, ids);
   const [recount, setRecount] = React.useState(0);
   const recounted = React.useRef(recount);
   React.useEffect(() => {
-    if (access === undefined || state.whole !== false || state.failed) return;
+    if (access === undefined || whole !== false || state.failed) return;
     const timer = setTimeout(
       () => setRecount(count => count + 1),
       USAGE_RECOUNT_MS
     );
     return () => clearTimeout(timer);
-  }, [access, state.whole, state.failed, state.styles, recount]);
+  }, [access, whole, state.failed, state.styles, recount]);
   React.useEffect(() => {
     if (access === undefined) return;
     // A recount asks for every row on screen; otherwise only the rows that
     // have come on screen since the last read.
     const again = recounted.current !== recount;
     recounted.current = recount;
-    const unread = key
-      .split("\n")
-      .filter(id => id !== "" && (again || !known.current.has(id)));
+    // An empty id names no style, and the route refuses one.
+    const unread = idsOf(key).filter(
+      id => id !== "" && (again || !known.current.has(id))
+    );
     if (unread.length === 0) return;
     const controller = new AbortController();
     readUsage(access, unread, controller.signal, read =>
       setState(current => ({
         styles: new Map([...current.styles, ...read.styles]),
-        whole: read.whole,
+        readWhole: new Map([
+          ...current.readWhole,
+          ...[...read.styles.keys()].map(id => [id, read.whole] as const),
+        ]),
         mayLock: read.mayLock,
         failed: false,
       }))
@@ -603,7 +661,12 @@ function useUsage(
     });
     return () => controller.abort();
   }, [access, key, recount]);
-  return state;
+  return {
+    styles: state.styles,
+    whole,
+    mayLock: state.mayLock,
+    failed: state.failed,
+  };
 }
 
 /**
@@ -779,6 +842,19 @@ function RowContent({
   );
 }
 
+/**
+ * Why "Remove unused…" waits, or `undefined` when it need not: while some
+ * pages are still being counted, said first since it lasts longer, or while
+ * a rename is stored, since a removal writes the whole list of styles too.
+ */
+function removeUnusedWait(
+  whole: boolean | undefined,
+  held: boolean
+): string | undefined {
+  if (whole === false) return SHARED_STYLE_NOT_WHOLE_REMOVAL;
+  return held ? SHARED_STYLE_RENAME_PENDING : undefined;
+}
+
 /** What "Remove unused…" found: still reading, a refusal, or the list. */
 type UnusedRead =
   | { readonly kind: "reading" }
@@ -796,6 +872,7 @@ function RemoveUnusedHead({
   offered,
   access,
   whole,
+  held,
   blocksOf,
   onRemoved,
 }: {
@@ -804,6 +881,8 @@ function RemoveUnusedHead({
   offered: boolean;
   access: SharedStylesAccess | undefined;
   whole: boolean | undefined;
+  /** A rename is being stored, so a removal, which writes the whole list, waits. */
+  held: boolean;
   blocksOf: (id: string) => BlocksOnThisPage;
   onRemoved: () => void;
 }): React.JSX.Element {
@@ -811,7 +890,7 @@ function RemoveUnusedHead({
   // A locked style refuses removal, and one in code cannot be removed here.
   const candidates = rows.filter(row => !row.locked && !row.inCode);
   const shown = offered && access !== undefined && candidates.length > 0;
-  const withheld = whole === false;
+  const wait = removeUnusedWait(whole, held);
   return (
     <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverAnchor asChild>
@@ -824,9 +903,9 @@ function RemoveUnusedHead({
               <button
                 type="button"
                 className="nx-vars__link nx-shared-styles__remove-unused"
-                disabled={withheld}
+                disabled={wait !== undefined}
                 aria-describedby={
-                  withheld ? "nx-shared-styles-withheld" : undefined
+                  wait === undefined ? undefined : "nx-shared-styles-withheld"
                 }
               >
                 Remove unused&hellip;
@@ -835,9 +914,9 @@ function RemoveUnusedHead({
           ) : null}
         </div>
       </PopoverAnchor>
-      {shown && withheld ? (
+      {shown && wait !== undefined ? (
         <p className="nx-shared-styles__meta" id="nx-shared-styles-withheld">
-          {SHARED_STYLE_NOT_WHOLE_REMOVAL}
+          {wait}
         </p>
       ) : null}
       {shown && access !== undefined ? (
@@ -851,6 +930,7 @@ function RemoveUnusedHead({
           <RemoveUnused
             candidates={candidates}
             access={access}
+            held={held}
             blocksOf={blocksOf}
             onDone={() => {
               setOpen(false);
@@ -904,12 +984,14 @@ function unusedCount(count: number): string {
 function RemoveUnused({
   candidates,
   access,
+  held,
   blocksOf,
   onDone,
   onKeep,
 }: {
   candidates: readonly SharedStyleRow[];
   access: SharedStylesAccess;
+  held: boolean;
   blocksOf: (id: string) => BlocksOnThisPage;
   onDone: () => void;
   onKeep: () => void;
@@ -959,30 +1041,50 @@ function RemoveUnused({
     <ConfirmUnused
       rows={read.rows}
       access={access}
+      held={held}
       onDone={onDone}
       onKeep={onKeep}
     />
   );
 }
 
-/** The confirmation listing the unused styles, removed fifty at a time. */
+/** "50 were removed before the rest were refused." */
+function removedBefore(count: number): string {
+  return `${count} ${count === 1 ? "was" : "were"} removed before the rest were refused.`;
+}
+
+/**
+ * The confirmation listing the unused styles, removed fifty at a time.
+ *
+ * Each batch the route stores is gone for good, so it leaves the list as it
+ * lands: when a later batch is refused, the list holds only what is left, a
+ * retry sends only that, and the dialog says how many went first.
+ */
 function ConfirmUnused({
   rows,
   access,
+  held,
   onDone,
   onKeep,
 }: {
   rows: readonly SharedStyleRow[];
   access: SharedStylesAccess;
+  held: boolean;
   onDone: () => void;
   onKeep: () => void;
 }): React.JSX.Element {
   const { busy, refusal, run } = useRefusableWrite();
-  const count = rows.length;
+  const [left, setLeft] = React.useState(rows);
+  const [removed, setRemoved] = React.useState(0);
+  const count = left.length;
   const remove = async (): Promise<void> => {
-    for (let at = 0; at < count; at += PAGE_SIZE) {
-      const ids = rows.slice(at, at + PAGE_SIZE).map(row => row.id);
-      if (!(await run(() => access.remove(ids)))) return;
+    let rest = left;
+    while (rest.length > 0) {
+      const batch = rest.slice(0, PAGE_SIZE);
+      if (!(await run(() => access.remove(batch.map(row => row.id))))) return;
+      rest = rest.slice(PAGE_SIZE);
+      setLeft(rest);
+      setRemoved(gone => gone + batch.length);
     }
     onDone();
   };
@@ -994,20 +1096,26 @@ function ConfirmUnused({
     >
       <p>{`Remove ${unusedCount(count)}? No page uses them.`}</p>
       <ul className="nx-shared-styles__uses">
-        {rows.map(row => (
+        {left.map(row => (
           <li key={row.id}>
             <span className="nx-shared-styles__use-title">{row.name}</span>
             <span className="nx-shared-styles__class">{row.className}</span>
           </li>
         ))}
       </ul>
+      {refusal !== null && removed > 0 ? (
+        <p className="nx-shared-styles__meta">{removedBefore(removed)}</p>
+      ) : null}
       <Refusal refusal={refusal} />
       <KeepOrRemove
         busy={busy}
         onKeep={onKeep}
         onRemove={() => void remove()}
         removeLabel={`Remove ${count}`}
+        removeHeld={held}
+        removeDescribedBy="nx-shared-styles-confirm-held"
       />
+      <HoldReason held={held} id="nx-shared-styles-confirm-held" />
     </div>
   );
 }

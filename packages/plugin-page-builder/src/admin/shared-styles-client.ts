@@ -66,6 +66,8 @@ function usesFromResponse(
     items: body.items.map(item => ({
       id: item.id,
       title: item.title,
+      // Kept: an id is unique only within its collection.
+      collection: item.collection,
       kind: item.kind,
     })),
     total: body.meta.total,

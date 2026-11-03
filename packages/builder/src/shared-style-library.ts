@@ -50,8 +50,11 @@ export interface SharedStylesUsage {
 
 /** One document a shared style is used on. */
 export interface SharedStyleUse {
+  /** Unique only within its collection. */
   readonly id: string;
   readonly title: string;
+  /** The collection holding it: with `id`, what tells one document from another. */
+  readonly collection: string;
   readonly kind: SharedStyleKind;
 }
 
@@ -417,6 +420,14 @@ export function sharedStyleFilterEmpty(
  */
 export const SHARED_STYLE_NOT_WHOLE_REMOVAL =
   "Some pages are still being counted, so no shared style can be removed yet.";
+
+/**
+ * Why Lock, Remove and Remove unused wait: a rename writes the whole list of
+ * styles, and so does each of them, so whichever landed second would put the
+ * other's list back.
+ */
+export const SHARED_STYLE_RENAME_PENDING =
+  "Wait until the name change is saved.";
 
 /** The note under counts that are floors. */
 export const SHARED_STYLE_NOT_WHOLE_NOTE =
