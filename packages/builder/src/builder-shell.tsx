@@ -600,6 +600,15 @@ const REQUIRED_HOST_TOKEN = "--nx-background";
 const OWN_STYLESHEET_TOKEN = "--nx-builder-surface";
 
 /**
+ * The one surface both sides of the editor sit on, the rail's own: the left
+ * panels and the Inspector read as one frame around the canvas, divided from it
+ * by the resize handle's single line, and a panel paints nothing of its own
+ * behind its content. One class, so the two sides cannot drift apart.
+ */
+const SIDE_PANEL_CLASS =
+  "bg-[color:var(--nx-builder-surface)] h-full overflow-auto";
+
+/**
  * Tell a developer when the design system's stylesheet has not been loaded.
  *
  * The editor's own sheet supplements that one rather than restating it, so a
@@ -1684,9 +1693,7 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label={panelLabel(openPanel)}
-                  // The one surface every left panel sits on, the rail's own:
-                  // a panel paints nothing of its own behind its content.
-                  className="bg-[color:var(--nx-builder-surface)] h-full overflow-auto"
+                  className={SIDE_PANEL_CLASS}
                 >
                   {/* Keyed by the panel, because the prop's contract says the
                       result is keyed by the panel and React's default
@@ -1749,7 +1756,7 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label="Inspector"
-                  className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
+                  className={SIDE_PANEL_CLASS}
                 >
                   {inspector}
                 </aside>
