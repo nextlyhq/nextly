@@ -3054,14 +3054,15 @@
 }
 
 /*
- * The tag on the fixed dark ink the block toolbar uses, at the ring's top
- * left corner inside it, so it reads on any section of the page.
+ * The tag on the fixed dark ink the block toolbar uses, so it reads on any
+ * section of the page. Just outside the ring's bottom right corner: inside,
+ * it would cover the block it describes, and the toolbar owns the top left.
  */
 .nx-canvas-mark[data-mark="selected"][data-hidden]::after {
   content: attr(data-label);
   position: absolute;
-  top: 4px;
-  left: 4px;
+  top: calc(100% + 4px);
+  right: var(--nx-tag-inset-side, 0);
   padding: 1px 6px;
   border-radius: 4px;
   background: var(--nx-builder-ink);
@@ -3070,6 +3071,34 @@
     500 11px/16px var(--font-sans, system-ui),
     sans-serif;
   white-space: nowrap;
+}
+
+/* Above the ring when it ends at the bottom of what is on screen, where a
+   tag below would be cut off. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="above"]::after {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+/* Lined up with the ring's left edge, running right, when there is no room
+   on screen for it to run left from the ring's right edge. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag-edge="left"]::after {
+  right: auto;
+  left: var(--nx-tag-inset-side, 0);
+}
+
+/* Inside the ring, at its bottom corner, when neither side has room on
+   screen, as on a block that fills it. The insets keep the corner on screen
+   where the ring runs past it; the marks set them. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="inside"]::after {
+  top: auto;
+  bottom: var(--nx-tag-inset-bottom, 4px);
+  right: var(--nx-tag-inset-side, 4px);
+}
+
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="inside"][data-tag-edge="left"]::after {
+  right: auto;
+  left: var(--nx-tag-inset-side, 4px);
 }
 
 /*

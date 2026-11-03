@@ -2377,6 +2377,19 @@ describe("zooming from the keyboard", () => {
     expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1 });
   });
 
+  it("lists fitting in Help under Shift+1 alone, not a second key cap for the same press", async () => {
+    zoomShell({ zoom: 1.5 });
+    fireEvent.click(
+      within(
+        screen.getByRole("navigation", { name: "Editor panels" })
+      ).getByRole("button", { name: "Help" })
+    );
+    const dialog = await screen.findByRole("dialog");
+    const row = within(dialog).getByText("Fit the page to the canvas");
+    const caps = row.parentElement?.querySelectorAll("kbd") ?? [];
+    expect([...caps].map(cap => cap.textContent)).toEqual(["Shift+1"]);
+  });
+
   it("fits the canvas on Shift+1, whichever character the layout gives", () => {
     // On a US layout Shift+1 arrives as "!"; on layouts where the digit needs
     // Shift, it arrives as "1" with Shift held. Both mean the same press.
