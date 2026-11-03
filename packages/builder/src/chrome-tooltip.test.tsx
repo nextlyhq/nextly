@@ -166,7 +166,18 @@ describe("the builder's chrome tooltips", () => {
           return;
         }
         byName += 1;
+        // A type-only import draws nothing: `import type { … }` reaches no
+        // tooltip at runtime, so its names are not parts this module uses.
+        if (node.type === "ImportDeclaration" && node.importKind === "type") {
+          return;
+        }
         for (const specifier of specifiers) {
+          if (
+            specifier.type === "ImportSpecifier" &&
+            specifier.importKind === "type"
+          ) {
+            continue;
+          }
           const name =
             specifier.type === "ImportSpecifier"
               ? nameOf(specifier.imported)
