@@ -4838,6 +4838,12 @@ fieldset.nx-inspector__fields {
   color: var(--nx-popover-foreground);
 }
 
+/* The source caption held back after a commit, until the field is focused again. */
+.nx-inspector__field[data-provenance-quiet]:focus-within
+  .nx-style-inspector__provenance-text {
+  display: none;
+}
+
 /*
  * A style field's row: its label, its control, then a fixed slot for the
  * reset, on one line at the panel's default width as the design draws it.
@@ -6107,6 +6113,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * hover and covered the box when it showed.
  */
 .nx-spacing-box .nx-style-inspector__token.nx-variable-chip {
+  position: relative;
   gap: 0;
   padding-inline: 0.125rem 0;
   font-size: var(--text-xs);
@@ -6117,13 +6124,23 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   padding-inline: 0;
 }
 
+/*
+ * Over the name's end, inside the chip, and only while the side is pointed at
+ * or focused, which the box's own reveal for a side's clear decides: at rest
+ * the name has the side's whole width. Faded rather than removed, so Tab still
+ * reaches it and its focus shows it.
+ */
 .nx-spacing-box .nx-style-inspector__token.nx-variable-chip > button {
-  position: static;
+  position: absolute;
+  inset-block-start: 0;
+  inset-block-end: 0;
+  inset-inline-start: auto;
+  inset-inline-end: 0;
   margin: 0;
   padding: 0;
-  opacity: 1;
-  pointer-events: auto;
-  background: none;
+  opacity: 0;
+  pointer-events: none;
+  background: var(--nx-muted);
   box-shadow: none;
 }
 

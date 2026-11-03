@@ -1961,6 +1961,7 @@ function StyleControlField({
     setIssue(null);
   }, [stored]);
 
+  // The source caption, held back after a commit; see `useQuietCaption`.
   const commit = (value: StyleValue | null): CommitOutcome =>
     writeStyleValue({ editor, nodeId, address, policy, value, setIssue });
   /*
@@ -1992,13 +1993,7 @@ function StyleControlField({
   }
 
   return (
-    <div
-      className="nx-inspector__field"
-      data-control={control.kind}
-      // Absent when this is not a side: React omits an `undefined` attribute, so
-      // the value says whether the field is in a box without a branch here.
-      data-side={side}
-    >
+    <FieldRow controlKind={control.kind} side={side} stored={stored}>
       <StyleFieldLabel
         id={labelId}
         htmlFor={id}
@@ -2040,8 +2035,75 @@ function StyleControlField({
           {issue}
         </p>
       )}
+    </FieldRow>
+  );
+}
+
+/**
+ * A style field's row, which holds back the field's source caption once a
+ * value is written here; see {@link useQuietCaption}.
+ */
+function FieldRow({
+  controlKind,
+  side,
+  stored,
+  children,
+}: {
+  controlKind: StyleControlKind | undefined;
+  side: string | undefined;
+  stored: StyleValue | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const caption = useQuietCaption(stored);
+  return (
+    <div
+      className="nx-inspector__field"
+      data-control={controlKind}
+      // Absent when this is not a side: React omits an `undefined` attribute, so
+      // the value says whether the field is in a box without a branch here.
+      data-side={side}
+      {...caption}
+    >
+      {children}
     </div>
   );
+}
+
+/**
+ * Whether a field's source caption is held back, as its row's
+ * `data-provenance-quiet`, spread onto the row.
+ *
+ * The caption shows while the field has focus, and a commit leaves focus in
+ * the field (a typed value, a pick, a clear), so it would float over the row
+ * above. So once the stored value changes it is held back, until the author
+ * focuses the field again from elsewhere.
+ */
+function useQuietCaption(stored: StyleValue | undefined): {
+  "data-provenance-quiet": string | undefined;
+  onFocus: (event: React.FocusEvent<HTMLElement>) => void;
+} {
+  const [quiet, setQuiet] = React.useState(false);
+  const first = React.useRef(true);
+  React.useEffect(() => {
+    // The value the field opened on is not a commit.
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    setQuiet(true);
+  }, [stored]);
+  return {
+    "data-provenance-quiet": quiet ? "" : undefined,
+    onFocus: event => {
+      // The author's return is focus arriving from somewhere else. Focus the
+      // field moves itself after a commit, a pick or a clear, comes from
+      // nowhere (what held it is gone) or from inside the field.
+      const from = event.relatedTarget;
+      if (isElement(from) && !event.currentTarget.contains(from)) {
+        setQuiet(false);
+      }
+    },
+  };
 }
 
 /**

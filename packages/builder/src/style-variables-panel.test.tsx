@@ -666,3 +666,35 @@ describe("a spacing side holding a variable", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("the source caption after a variable is picked", () => {
+  it("is held back after a pick, and shown again when the author focuses the field", async () => {
+    register({ typography: true });
+    render(<LivePanel values={{}} />);
+    const field = () =>
+      document.querySelector(
+        '[data-property="fontSize"] .nx-inspector__field'
+      ) as HTMLElement;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Variables for Font size" })
+    );
+    fireEvent.click(screen.getByRole("option", { name: "Display 48px" }));
+    await screen.findByRole("group", { name: "Font size" });
+    // Focus lands in the field after the pick; that is not the author's.
+    await waitFor(() =>
+      expect(field().contains(document.activeElement)).toBe(true)
+    );
+    expect(field().hasAttribute("data-provenance-quiet")).toBe(true);
+
+    // The author comes back to it from elsewhere.
+    const elsewhere = screen.getByRole("button", {
+      name: "Variables for Line height",
+    });
+    elsewhere.focus();
+    fireEvent.focusIn(
+      within(field()).getByRole("button", { name: "Clear Font size" }),
+      { relatedTarget: elsewhere }
+    );
+    expect(field().hasAttribute("data-provenance-quiet")).toBe(false);
+  });
+});

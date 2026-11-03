@@ -71,17 +71,41 @@ describe("a side of a box", () => {
     expect(body).not.toContain("inset-block-end: 100%");
   });
 
-  it("keeps a held variable's clear in the side's own row", () => {
+  it("keeps a held variable's clear out of the name's way until the side is pointed at or focused", () => {
     const body = bodiesOf(
       ".nx-spacing-box .nx-style-inspector__token.nx-variable-chip > button"
     ).join(" ");
-    expect(body).toContain("position: static");
-    expect(body).toContain("opacity: 1");
+    // Out of the flow, so the name has the side's whole width at rest, and
+    // inside the chip rather than over the box below.
+    expect(body).toContain("position: absolute");
+    expect(body).toContain("inset-block-start: 0");
+    expect(body).toContain("inset-inline-end: 0");
+    expect(body).toContain("opacity: 0");
+    expect(body).toContain("pointer-events: none");
+    // The box's own reveal for a side's clear, on hover and on focus.
+    for (const reveal of [
+      ".nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button",
+      ".nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__token > button",
+    ]) {
+      expect(declares(reveal, "opacity: 1")).toBe(true);
+      expect(declares(reveal, "pointer-events: auto")).toBe(true);
+    }
   });
 
   it("lets a held variable's name shrink, so the field keeps the grid", () => {
     expect(declares(".nx-variable-chip__text", "contain: inline-size")).toBe(
       true
     );
+  });
+});
+
+describe("a field's source, after a value is committed", () => {
+  it("is held back while the field is quiet, though the field has focus", () => {
+    expect(
+      declares(
+        ".nx-inspector__field[data-provenance-quiet]:focus-within .nx-style-inspector__provenance-text",
+        "display: none"
+      )
+    ).toBe(true);
   });
 });
