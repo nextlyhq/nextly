@@ -571,7 +571,7 @@ export function componentEntriesFrom(
 }
 
 /**
- * The rows {@link componentEntriesFrom} offers no entry for, each as an entry
+ * The rows {@link componentEntriesFrom} offered no entry for, each as an entry
  * with nothing in it to place: no roots, and an empty definition.
  *
  * For a surface that lists the library to manage it as well as to place from
@@ -579,14 +579,18 @@ export function componentEntriesFrom(
  * is still one an author can open and fill, so it is listed, refused, rather
  * than left out. Never handed to the offers: there is nothing in it to judge
  * or to place, and the surface says so.
+ *
+ * Given the entries already built rather than the lookup, because building
+ * them walks every definition's roots, and a second walk to learn which rows
+ * were offered would repeat it.
  */
 export function unplaceableComponentEntries(
   components: readonly SavedComponent[],
-  definitions: ComponentLookup
+  entries: readonly InsertEntry[]
 ): ComponentInsertEntry[] {
   const offered = new Set(
-    componentEntriesFrom(components, definitions).map(
-      entry => entry.componentId
+    entries.flatMap(entry =>
+      entry.kind === "component" ? [entry.componentId] : []
     )
   );
   return components
