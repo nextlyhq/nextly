@@ -917,9 +917,20 @@ function useHistoryStacks(): {
       document: documentEntries(undoStack.current) + forgotten.current,
     });
   }, []);
+  /*
+   * The redo branch the newest recorded step ended, with that step, so that
+   * withdrawing it before anything follows gives the branch back: a change
+   * that never took effect must not cost the author their redo either.
+   */
+  const endedBranch = useRef<{
+    by: HistoryEntry;
+    branch: HistoryEntry[];
+  } | null>(null);
   const push = useCallback(
     (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
       let dropped: HistoryEntry | undefined;
+      // Whatever is pushed next means the branch can no longer come back.
+      endedBranch.current = null;
       if (into === "redo") {
         redoStack.current.push(entry);
       } else {
@@ -936,6 +947,7 @@ function useHistoryStacks(): {
         // A new edit invalidates the redo branch: those inverses were computed
         // against a document that no longer exists, so replaying one would
         // apply an edit derived from a tree that has since changed.
+        endedBranch.current = { by: entry, branch: redoStack.current };
         redoStack.current = [];
       }
       sync();
@@ -969,8 +981,20 @@ function useHistoryStacks(): {
     (origin: HistoryStep, dropped: HistoryEntry | undefined) => {
       const kept = (held: HistoryEntry) =>
         held.kind !== "step" || held.origin !== origin;
+      // Still the newest entry, with nothing undone or made since: the redo
+      // branch its recording ended comes back with its withdrawal.
+      const ended = endedBranch.current;
+      const restore =
+        ended !== null &&
+        ended.by.kind === "step" &&
+        ended.by.origin === origin &&
+        undoStack.current.at(-1) === ended.by &&
+        redoStack.current.length === 0
+          ? ended.branch
+          : [];
+      endedBranch.current = null;
       undoStack.current = undoStack.current.filter(kept);
-      redoStack.current = redoStack.current.filter(kept);
+      redoStack.current = [...redoStack.current.filter(kept), ...restore];
       if (dropped !== undefined && undoStack.current.length < MAX_HISTORY) {
         undoStack.current.unshift(dropped);
         if (dropped.kind === "ops") forgotten.current -= 1;
