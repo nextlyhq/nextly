@@ -120,9 +120,16 @@
  *
  * `.nx-builder-tokens` is that scope on its own. One declaration block serves
  * both, so the two cannot drift apart; only the painting below is the chrome's.
+ *
+ * The canvas is a third case: it is also mounted on its own, with no scope
+ * above it, and the chrome it draws (a Layout's region badge and tag) reads
+ * these tokens too. It takes them only when nothing above it declares them,
+ * and at zero specificity, so inside the shell it inherits the shell's values
+ * untouched and its own rules below still win where they apply.
  */
 .nx-builder-tokens,
-.nx-builder-chrome {
+.nx-builder-chrome,
+:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
      raised surfaces use that, and the frame must read as a layer behind them. */
   --nx-builder-surface: var(--nx-muted);
@@ -136,6 +143,9 @@
   /* How far a block in mid-drag fades where it sits, on the canvas and in
      Layers alike, so the thing in hand reads the same on both. */
   --nx-builder-drag-source-opacity: 0.4;
+  /* How far a Layout's region is quietened on the canvas: still the site's own
+     colours, read as "around the page" rather than "part of it". */
+  --nx-builder-region-opacity: 0.6;
   /*
    * The admin's colour scheme, as a value chrome can be handed back: chrome
    * drawn inside the canvas sits under the page's own scheme and takes the
@@ -192,6 +202,7 @@
  */
 .dark .nx-builder-tokens,
 .dark .nx-builder-chrome,
+.dark :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
 .nx-builder-tokens.dark,
 .nx-builder-chrome.dark {
   --nx-builder-scheme: dark;
@@ -222,7 +233,8 @@
    * should be quiet when someone has asked for more contrast.
    */
   .nx-builder-tokens,
-  .nx-builder-chrome {
+  .nx-builder-chrome,
+  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);
   }
@@ -715,18 +727,101 @@
  *
  * TWO tones, because the ring is drawn on the site's content and no single
  * colour reads on all of it: the select blue disappears on a blue section, and
- * a white mark on a white one. An inset white band directly inside the blue is
- * the halo — on a white ground the blue carries it, on a blue or a photograph
- * the white does, and on a dark section both do. The band is an inset shadow
- * the 2px outline covers half of, so it changes no geometry either.
- *
- * A block whose own styles set a `box-shadow` keeps it — an author's rule
- * outweighs this one — and then shows the blue ring alone.
+ * a white mark on a white one. A white band directly inside the blue is the
+ * halo — on a white ground the blue carries it, on a blue or a photograph the
+ * white does, and on a dark section both do. It is `.nx-selection-halo` below,
+ * measured and drawn in the canvas's own layer, and NOTHING on the block: the
+ * block's `box-shadow`, `anchor-name` and the rest belong to the page, and a
+ * selection that replaced one drew a page the visitor never sees.
  */
 .nx-canvas [data-nx-selected] {
   outline: 2px solid var(--nx-builder-select);
   outline-offset: -2px;
+}
+
+/*
+ * The halos' layer: a full-bleed sheet over the canvas root's content box, so
+ * the rectangles the canvas measures in its content coordinates land on the
+ * blocks they were measured from. Never a pointer target, so a press travels
+ * through to the block underneath.
+ *
+ * No z-index of its own. It comes after the page in the canvas, and the page
+ * is its own stacking context (below), so it paints above everything the page
+ * draws however high a site stacks its own content — and under the editor's
+ * other overlays, which state theirs.
+ */
+.nx-selection-halos {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/*
+ * The rendered page as ONE stacking context inside the canvas, so a site's
+ * `z-index: 5` orders the page's own content among itself and cannot rise
+ * above the editor's layers drawn over it.
+ *
+ * Isolation changes nothing about the page's own stacking or layout: its
+ * layers keep their order, and the page root stays an ordinary block, so its
+ * children's margins collapse as they do when published. What it does change
+ * is the backdrop a `mix-blend-mode` inside the page blends with — an isolated
+ * group starts from its own background.
+ */
+.nx-canvas > .nx-pb-page {
+  isolation: isolate;
+}
+
+/*
+ * The site's ground on the page root too, so a blended block inside the
+ * isolated page mixes with it as it does with the published page's — but only
+ * where the ground is fully OPAQUE, which the canvas root states from the
+ * site's tokens. Over the canvas's own ground an opaque one looks exactly as
+ * it does painted once; a translucent ground would be composited twice and
+ * read darker, so there the canvas root's ground is the only one, and a blend
+ * inside the page mixes with the page's own content alone.
+ *
+ * Inside `:where()` so it weighs nothing: a background the page's own styles
+ * give its root is compiled onto `.nx-pb-page.nx-pb-page`, and must outweigh
+ * this fallback in the editor exactly as it shows when published.
+ */
+:where(.nx-canvas[data-nx-site-ground-opaque] > .nx-pb-page) {
+  background-color: var(--nx-canvas-site-ground, Canvas);
+}
+
+/*
+ * One halo: a white band directly inside the ring, which covers the outer 2px
+ * of the element, so ring and halo keep the inset geometry — never clipped at
+ * the page edge, never merging with a neighbour's.
+ *
+ * On the element's own measured rectangle, and drawn with the RING as well:
+ * the same outline the selected element carries, and the white band as an
+ * inset shadow beneath it — on this editor-owned element, never the page's.
+ * One element drawing both is what keeps them adjacent at every zoom: a band
+ * placed on its own lands a fractional distance in and snaps apart from the
+ * ring, leaving a sliver of the page between them, and a layer drawn over the
+ * page covers the element's own ring wherever the two overlap. The element's
+ * ring is still there beneath, for every place this layer is not drawn.
+ *
+ * Above the block's content rather than beneath it, which a separate layer has
+ * to be; the band is the 2px beside the ring, which the ring's own width
+ * already sits over.
+ */
+.nx-selection-halo {
+  position: absolute;
+  outline: 1px solid var(--nx-builder-select);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
+}
+
+/* The primary's ring is the full 2px, and its halo matches it. */
+.nx-selection-halo[data-primary] {
+  outline-width: 2px;
   box-shadow: inset 0 0 0 4px var(--nx-builder-halo);
+}
+
+/* A component placement's ring is the component colour, as on the element. */
+.nx-selection-halo[data-component] {
+  outline-color: var(--nx-builder-component);
 }
 
 /*
@@ -744,7 +839,6 @@
  */
 .nx-canvas [data-nx-selected=""] {
   outline-width: 1px;
-  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
 }
 
 /*
@@ -1533,6 +1627,17 @@
 }
 
 /*
+ * A choice that may not be changed here, under a lock or in a read-only area,
+ * as the admin draws every disabled control: at half strength with a cursor
+ * that says the press will not land. The taken side keeps its fill, so what is
+ * chosen stays readable, but no longer reads as a live control.
+ */
+.nx-style-inspector__toggle > button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/*
  * A prop the panel cannot draw is dimmed rather than hidden — present, and
  * visibly not one of the things an author can change here.
  */
@@ -1883,36 +1988,32 @@
 /*
  * The site's OWN dark mode, which is the one thing that darkens the page.
  *
- * A site's dark token values apply with the viewer's device, unless a
- * `[data-nx-theme="light"]` marker sits above, and under a
- * `[data-nx-theme="dark"]` marker whatever the device says, as the site sheet
- * writes them. The page's ground and text already follow those values through
+ * A site's dark token values follow the nearest `data-nx-theme` marker
+ * above, or the viewer's device where there is none, as the site sheet writes
+ * them. The page's ground and text already follow those values through
  * the tokens; what these rules add is the SCHEME. The canvas root carries
  * `data-nx-site-dark-ground` only when the site's dark values include a dark
  * ground, so a site whose dark set keeps a light background keeps light
  * native controls.
  * The admin's `.dark` class is a different switch and reaches nothing here.
  */
-[data-nx-theme="dark"] .nx-canvas[data-nx-site-dark-ground] {
+/* The canvas states the nearest theme marker above it as
+   `data-nx-site-theme`, read from the DOM, which is the marker its token
+   values resolve to at any depth of nesting. Keyed on that rather than on
+   ancestor selectors, which cannot tell which marker is nearest. */
+.nx-canvas[data-nx-site-dark-ground][data-nx-site-theme="dark"] {
   color-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
 }
 
+/* With no marker stated, the device decides, as it does for the values. */
 @media (prefers-color-scheme: dark) {
-  .nx-canvas[data-nx-site-dark-ground] {
+  .nx-canvas[data-nx-site-dark-ground]:not([data-nx-site-theme]) {
     color-scheme: dark;
     --nx-builder-select: var(--nx-builder-select-on-dark);
     --nx-builder-component: var(--nx-builder-component-on-dark);
   }
-}
-
-/* A light marker above the canvas keeps its scheme light on a dark device,
-   as it keeps the site's values light. After the device rule and heavier. */
-[data-nx-theme="light"] .nx-canvas[data-nx-site-dark-ground] {
-  color-scheme: light;
-  --nx-builder-select: var(--nx-builder-select-on-light);
-  --nx-builder-component: var(--nx-builder-component-on-light);
 }
 
 /*
@@ -2199,6 +2300,158 @@
 }
 
 /*
+ * A region of the page's Layout, drawn locked around the page on the canvas.
+ *
+ * The content keeps the site's own colours and is quietened, so it reads as
+ * what surrounds the page rather than as part of it; its links and forms are
+ * `inert`. The region itself is one focus stop. Its badge says where it comes
+ * from at rest, and a click or Enter opens the tag with the way to edit it.
+ */
+.nx-canvas-region {
+  position: relative;
+  cursor: default;
+}
+
+.nx-canvas-region__content {
+  opacity: var(--nx-builder-region-opacity);
+}
+
+/*
+ * Where the region meets the page: a quiet line, so an author sees where the
+ * Layout ends and the page they are editing begins.
+ */
+.nx-canvas-region[data-nx-region="header"] {
+  border-bottom: 1px dashed var(--nx-builder-border);
+}
+
+.nx-canvas-region[data-nx-region="footer"] {
+  border-top: 1px dashed var(--nx-builder-border);
+}
+
+/*
+ * The badge and the tag are the admin's words, not the page's, so they keep
+ * the admin's size however far the canvas is zoomed out: the root's `zoom` is
+ * undone here, through the factor the canvas publishes.
+ */
+.nx-canvas-region__badge,
+.nx-canvas-region__tag {
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
+.nx-canvas-region:hover,
+.nx-canvas-region[data-open] {
+  box-shadow: inset 0 0 0 1px var(--nx-builder-border);
+}
+
+.nx-canvas-region:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: -2px;
+}
+
+.nx-canvas-region__badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+  /* The admin's type token, with its own value as the fallback: the scale is
+     declared inline to Tailwind, so the variable itself is not emitted. */
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+/* The badge opens into the tag, in the same place. */
+.nx-canvas-region[data-open] .nx-canvas-region__badge {
+  display: none;
+}
+
+.nx-canvas-region__tag {
+  position: absolute;
+  z-index: 3;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  max-width: calc(100% - 1rem);
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: 0.375rem;
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  box-shadow: 0 1px 3px var(--nx-builder-border);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.nx-canvas-region__note {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-canvas-region__edit {
+  color: var(--nx-builder-text);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.nx-canvas-region__edit:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * A region of the page's Layout in Layers: a read-only row above or below the
+ * page's own blocks, outside the tree so it takes no part in the page's
+ * selection, drag and drop, locks or visibility.
+ */
+.nx-layers-region {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border: 1px dashed var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-builder-text);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nx-layers-region:hover {
+  background: var(--nx-builder-surface);
+}
+
+.nx-layers-region:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: -2px;
+}
+
+.nx-layers-region__name {
+  flex: none;
+}
+
+.nx-layers-region__origin {
+  overflow: hidden;
+  color: var(--nx-builder-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
  * The layers panel: a search field above a tree that takes the rest of the
  * height.
  *
@@ -2416,6 +2669,17 @@
 }
 
 /*
+ * A lock, the block's own or one it is held by from a block around it, in the
+ * row's own ink rather than the muted badge colour. The row sets that ink for
+ * each state it can be in (the text colour at rest and on hover, the accent's
+ * foreground when selected), so the icon meets non-text contrast wherever the
+ * row is drawn. The two locks differ by stroke weight, set on the icon.
+ */
+.nx-layer-row__badge[data-lock] {
+  color: inherit;
+}
+
+/*
  * A block's mark, wherever one is drawn.
  *
  * `flex: none` for the same reason the badge has it: the mark is a fixed-size
@@ -2441,6 +2705,28 @@
  * and a deep selection would otherwise grow it and shrink the canvas every time
  * an author selected something nested.
  */
+/*
+ * The bar's two halves: the trail at the start, the hint at the end, as the
+ * agreed design draws it. The trail gives way first, scrolling rather than
+ * pushing the hint off the bar.
+ */
+.nx-bottom-bar {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.nx-bottom-bar__hint {
+  flex: none;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--nx-builder-text-muted);
+  white-space: nowrap;
+}
+
 .nx-breadcrumb {
   display: flex;
   align-items: center;
@@ -2571,6 +2857,37 @@
 
 .nx-block-toolbar__button[aria-disabled="true"]:hover {
   background: none;
+}
+
+/*
+ * The selected block's Layers lock, said at the start of its bar: a lock icon
+ * and "Locked", or "Locked by" the block whose lock covers it. In the bar's own
+ * ink, so it reads on the dark bar in either theme, and set apart from the
+ * buttons by a rule in that ink rather than by a fill.
+ */
+.nx-block-toolbar__lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline: 0.375rem 0.5rem;
+  margin-inline-end: 0.125rem;
+  border-inline-end: 1px solid
+    color-mix(in srgb, var(--nx-builder-ink-text) 25%, transparent);
+  color: var(--nx-builder-ink-text);
+  /* The type scale is declared inline, so its custom property can be absent
+     at runtime; the fallback is the same step. */
+  font-size: var(--text-xs, 0.75rem);
+  white-space: nowrap;
+}
+
+/*
+ * A selected block locked in Layers, by its own lock or one around it: the
+ * selection ring is dashed, so the canvas says it is held before anything is
+ * tried on it. Only a canvas node carries the lock mark, so the node marker is
+ * not repeated here; this still outranks the selection ring's own rule.
+ */
+.nx-canvas [data-nx-locked][data-nx-selected] {
+  outline-style: dashed;
 }
 
 /*
@@ -2967,14 +3284,14 @@
   width: 14px;
   height: 14px;
   border: 1px solid var(--nx-border);
-  border-radius: 3px;
+  border-radius: calc(var(--radius-sm) - 1px);
   background: var(--nx-swatch, transparent);
 }
 
 .nx-vars__swatch--main {
   width: 20px;
   height: 20px;
-  border-radius: 5px;
+  border-radius: calc(var(--radius-sm) + 1px);
 }
 
 .nx-vars__pair {
@@ -3002,7 +3319,7 @@
   width: 14px;
   height: 14px;
   border: 1px solid var(--nx-border);
-  border-radius: 3px;
+  border-radius: calc(var(--radius-sm) - 1px);
   background: var(--nx-card);
 }
 
@@ -3141,6 +3458,24 @@
   gap: 0.375rem;
   font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
+}
+
+/* A dark value in the type-size pair, with its own way back to light. */
+.nx-vars-editor__cell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nx-vars-editor__cell > input {
+  min-width: 0;
+}
+
+.nx-vars-editor__cell-action {
+  flex: none;
+  width: 24px;
+  height: 24px;
 }
 
 .nx-vars-editor__inline-action {

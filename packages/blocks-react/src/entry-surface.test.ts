@@ -27,6 +27,7 @@ import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
 import * as richTextModule from "./rich-text";
+import * as pagePartsModule from "./page-parts";
 import * as pageRendererModule from "./page-renderer";
 import * as pageStyleTraceModule from "./page-style-trace";
 import * as placeholderModule from "./placeholder";
@@ -101,19 +102,23 @@ const SOURCE_MODULES: ReadonlyArray<{
   {
     name: "component-source",
     module: componentSourceModule,
-    // Only the question a caller outside the render can legitimately ask is
-    // public. The discovery loop, its constants and its lookup memo are the
-    // render's own machinery: a consumer reaching for `definitionsFor` wants
-    // the definitions the pipeline already builds for it, and one reaching for
+    // The questions a caller outside the render can legitimately ask are
+    // public: which components a page lacks, and the definitions it reaches
+    // (the page builder's Layout choices read a region's components, nested
+    // ones included, as the published route reads them). The constants and
+    // the lookup memo are the render's own machinery: a consumer reaching for
     // the constants is sizing a batch the render decides.
     internal: [
       "COMPONENT_TAG_COLLECTION",
       "EMPTY_DEFINITIONS",
       "MAX_DISCOVERED_COMPONENTS",
-      "definitionsFor",
     ],
   },
   { name: "context", module: contextModule, internal: [] },
+  // Public whole: how a page and the regions of its Layout share one site
+  // sheet and keep their styles apart, asked by the published route and the
+  // editor's canvas alike.
+  { name: "page-parts", module: pagePartsModule, internal: [] },
   {
     name: "rich-text",
     module: richTextModule,
@@ -412,12 +417,17 @@ describe("the root entry", () => {
       "createBlockResolver",
       "createStandaloneContext",
       "defineBlock",
+      // The definitions a document reaches, discovered as the render does.
+      "definitionsFor",
       "emptyDataProvider",
       "fetchPolicyLabel",
       // The render-safe attribute rule. Public because the editor offering that
       // field asks it rather than keeping a copy that would drift.
       "isAllowedAttribute",
       "islandsFor",
+      // Which part of a page drawn inside its Layout emits the site sheet, and
+      // the scope each part compiles under.
+      "layoutPartSheets",
       "migrationSourceFor",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",

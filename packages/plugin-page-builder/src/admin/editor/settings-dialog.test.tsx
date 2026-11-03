@@ -41,7 +41,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 // The section's own behaviour is the builder's to test; here it only says
 // when editing starts, as the real one does.
-vi.mock("@nextlyhq/builder/shell", () => ({
+vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
+  // The editor's real words, so the dialog's title reads as an author sees it.
+  EDITOR_WORDS: (
+    await importOriginal<typeof import("@nextlyhq/builder/shell")>()
+  ).EDITOR_WORDS,
   BreakpointManager: ({
     status,
     onEditingChange,
@@ -93,7 +97,7 @@ const MANAGER: SiteSettingsRead = {
 /** Renders the dialog again with the current read, as a refetch would. */
 let reshow: () => void = () => {};
 
-function show(onOpenChange = vi.fn()) {
+function show(onOpenChange = vi.fn(), pageLayout?: ReactElement) {
   // Built afresh each time: React skips a child whose element is unchanged,
   // so re-rendering the same tree would never ask the dialog again.
   const element = (): ReactElement => (
@@ -103,6 +107,7 @@ function show(onOpenChange = vi.fn()) {
         onOpenChange={onOpenChange}
         returnFocus={() => null}
         pageFields={<input aria-label="Title" defaultValue="About us" />}
+        {...(pageLayout === undefined ? {} : { pageLayout })}
         share={{ title: "Who we are", description: "We build tools." }}
         breakpoints={{
           value: { viewport: [], container: [] },
@@ -128,6 +133,25 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the Settings dialog", () => {
+  it("draws the page's Layout section once, after the page's fields and before sharing", () => {
+    show(
+      vi.fn(),
+      <section aria-labelledby="layout-title">
+        <h3 id="layout-title">Header and footer</h3>
+      </section>
+    );
+    const sections = screen.getAllByRole("heading", {
+      name: "Header and footer",
+    });
+    expect(sections).toHaveLength(1);
+    const title = screen.getByRole("textbox", { name: "Title" });
+    const sharing = screen.getByRole("heading", { name: "Search and sharing" });
+    const order = (a: Node, b: Node) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(order(title, sections[0]!)).toBeTruthy();
+    expect(order(sections[0]!, sharing)).toBeTruthy();
+  });
+
   it("shows the page's fields and an approximate share preview", () => {
     show();
     expect(screen.getByRole("tab", { name: "This page" })).toBeTruthy();

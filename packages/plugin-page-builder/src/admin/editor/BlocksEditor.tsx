@@ -545,6 +545,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // box actually got rather than from what it was offered.
             preview={canvasPreview}
             dragHandlers={drag.handlers}
+            // The regions of the page's Layout, drawn locked around it from
+            // the published Layout, as a visitor gets them.
+            regions={view.canvasRegions}
             // The same object those handlers came from, forwarded whole.
             // The canvas draws what the pointer currently means — which
             // block is in flight, which container is receiving it, and why
@@ -685,6 +688,7 @@ function editorSettings(
 ): NonNullable<React.ComponentProps<typeof BuilderShell>["renderSettings"]> {
   const {
     entryFields,
+    pageLayout,
     canvasRender,
     saveBreakpoints,
     siteStylePending,
@@ -697,6 +701,8 @@ function editorSettings(
       <SettingsDialog
         {...dialog}
         pageFields={entryFields}
+        // The page's Layout, in its own section after the page's fields.
+        pageLayout={pageLayout}
         // Built only while the dialog is drawn, from the page on screen.
         share={
           // Prepared only while Settings is open: the shell asks for the
@@ -793,7 +799,10 @@ function EditorBody<TFieldValues extends FieldValues>({
 
   const style = useSiteStyleInputs(mount.clientConfig);
   const canvas = useCanvasInputs(mount, style);
-  const panels = useEditorPanels(mount, name);
+  const panels = useEditorPanels(mount, name, {
+    control,
+    canvasRoot: canvas.canvasElement,
+  });
   const { done } = useHostCommit({
     name,
     control,
@@ -895,7 +904,15 @@ function EditorBody<TFieldValues extends FieldValues>({
         // The trail sits in the bottom bar, which the shell owns. Passed as a
         // slot rather than rendered beside the canvas so it cannot overlap the
         // page an author is editing.
-        breadcrumb={<SelectionBreadcrumb editor={editor} />}
+        // The hint names Enter, Escape and the palette's key because this
+        // editor binds all three: inline editing and the block keyboard
+        // actions below, and the palette it mounts.
+        breadcrumb={
+          <SelectionBreadcrumb
+            editor={editor}
+            hints={{ editText: true, goUp: true, commandPalette: true }}
+          />
+        }
         // Rendered only while it has somewhere to go: passing an element the
         // shell would position and then hide leaves an empty positioner over
         // the canvas.

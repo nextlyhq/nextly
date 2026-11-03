@@ -16,6 +16,7 @@ import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyOps,
   clearBlocks,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
@@ -194,16 +195,42 @@ describe("useBlockKeyboardActions", () => {
     );
   });
 
-  it("ALLOWS moving a container that holds a locked block", () => {
+  it("refuses moving a block out of a locked one, naming the block that holds it", () => {
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          locked: true,
+          name: "Hero",
+          slots: {
+            children: [
+              { id: "kid", type: "acme/text", version: 1, props: {} },
+              { id: "next", type: "acme/text", version: 1, props: {} },
+            ],
+          },
+        },
+      ] as BlockDocument["nodes"]),
+      "kid"
+    );
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toBe(
+      "This block is inside Hero, which is locked. Unlock Hero to move this block."
+    );
+  });
+
+  it("REFUSES moving a container that holds a locked block, before applying", () => {
     /*
-     * The direction that is easy to get wrong by being cautious, and the reason
-     * move and delete ask different questions.
-     *
-     * Moving the container leaves the locked child in the same slot at the same
-     * index with the same neighbours, so nothing the lock protects has changed.
-     * Refusing here would let one locked caption freeze the entire section
-     * around it, which an author would experience as the editor breaking rather
-     * than as a lock working.
+     * A locked block does not move until it is unlocked, and moving the
+     * container would carry it. The op layer refuses the move, so the editor
+     * refuses it before applying and says so, rather than handing the store a
+     * move it will throw on.
      */
     const editor = editorSpy(
       documentOf([
@@ -232,8 +259,10 @@ describe("useBlockKeyboardActions", () => {
 
     press("ArrowDown", { altKey: true });
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(editor.apply.mock.calls[0][0].kind).toBe("move");
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(
+      /text inside this block is locked\. unlock text to move this block/i
+    );
   });
 
   it("moves the selected block up", () => {
@@ -843,6 +872,11 @@ describe("useBlockKeyboardActions", () => {
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0][0][0].kind).toBe("insert");
+    // And what it applies is accepted, giving a copy that keeps the lock: a
+    // spy that records ops says nothing about whether the store takes them.
+    const applied = applyOps(editor.document, editor.applyAll.mock.calls[0][0]);
+    expect(applied.document.nodes).toHaveLength(2);
+    expect(applied.document.nodes[1]?.locked).toBe(true);
   });
 
   it("does nothing with no selection", () => {
@@ -961,7 +995,7 @@ describe("useBlockKeyboardActions", () => {
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent ?? "").toMatch(
-      /contains .*which is locked/i
+      /text inside this block is locked\. unlock text to delete this block/i
     );
   });
 
@@ -1254,6 +1288,30 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
     press("Escape");
 
     expect(editor.select).toHaveBeenCalledWith(null);
+    expect(hostCancel).not.toHaveBeenCalled();
+  });
+
+  it("goes up a level from a block inside a container, and does NOT reach the page's cancel", () => {
+    // The bottom bar's hint says "Esc to go up": from a nested block the key
+    // selects the block holding it, walking up the trail the bar shows.
+    const nested = documentOf([
+      {
+        id: "box",
+        type: "acme/box",
+        version: 1,
+        props: {},
+        slots: {
+          children: [{ id: "inner", type: "acme/text", version: 1, props: {} }],
+        },
+      },
+    ]);
+    const editor = editorSpy(nested, "inner");
+    const hostCancel = mountWithHostEscape(editor);
+
+    press("Escape");
+
+    expect(editor.select).toHaveBeenCalledWith("box");
+    expect(editor.select).not.toHaveBeenCalledWith(null);
     expect(hostCancel).not.toHaveBeenCalled();
   });
 

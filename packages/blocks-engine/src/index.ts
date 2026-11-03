@@ -14,6 +14,16 @@ export type {
   LayoutSite,
   PageLayoutChoice,
 } from "./resolve-layout";
+// The regions a Layout fills around a page, and the document each is drawn
+// from: one reading of a stored Layout, shared by the route, the editor and
+// the plugin.
+export {
+  layoutRelationId,
+  regionDocument,
+  regionsOf,
+  REGION_AREAS,
+} from "./layout-regions";
+export type { LayoutRegion, RegionArea } from "./layout-regions";
 export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 
 export {
@@ -1026,11 +1036,29 @@ export {
   sameStyleValue,
   type AppliedOp,
   type AppliedOps,
+  type ApplyOptions,
   type BuilderOp,
   type NodePatch,
   type OpPosition,
   type SlotAddress,
 } from "./ops";
+
+// The Layers lock's rule, stated once: for one op, which the apply asks of
+// every edit and an editing surface asks before offering one; and for a whole
+// write, judged against the document it would replace, which a save asks
+// because a write through the API carries no ops to judge.
+export {
+  layersLockBreak,
+  lockedAncestorOf,
+  type LayersLockBreak,
+} from "./layers-lock";
+export {
+  layersLockChanges,
+  type LayersLockChange,
+  type LayersLockChangeKind,
+} from "./layers-lock-stored";
+// How every copy into a document keeps the Layers locks it carries.
+export { insertKeepingLocks, type Placed } from "./locked-insert";
 
 /**
  * The stored shape of rich text.

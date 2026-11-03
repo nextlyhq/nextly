@@ -38,7 +38,6 @@
 import {
   findNode,
   isComponentInstance,
-  lockedWithin,
   planConvertToComponent,
   planDetach,
   registryNestingSource,
@@ -52,16 +51,24 @@ import {
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import type { RefusalWording } from "./drag-refusal";
-import { blockDuplication } from "./duplicate-block";
 import type { Rect } from "./geometry";
 import {
   keyboardMovePosition,
   type KeyboardMove,
   type MoveDirection,
 } from "./keyboard-move";
-import { layerLabel, pathTo } from "./layers";
-import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
-import { lockBlockingDelete, lockBlockingMove } from "./locking";
+import { pathTo } from "./layers";
+import {
+  lockedBlockWording,
+  lockRefusalWording,
+  type LockedVerb,
+  type LockRefusalFacts,
+} from "./lock-refusal";
+import {
+  lockBlockingDelete,
+  lockBlockingEdit,
+  lockBlockingMove,
+} from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp, OpPosition } from "./ops";
 import {
@@ -296,9 +303,10 @@ function placementActions(
     });
     return actions;
   }
-  // The re-point is an edit of the placement, so a lock on it, or on the slot
-  // it sits in, refuses Duplicate as it would any edit.
-  const held = lockBlockingDelete(document, only);
+  // The re-point is an edit of the placement, so a Layers lock on it or around
+  // it refuses Duplicate as it refuses any edit (`lockBlockingEdit`), in the
+  // one wording; a slot's lock is the lock question's, through `heldByLock`.
+  const held = lockBlockingEdit(document, only);
   actions.push(
     held === undefined
       ? heldByLock(duplicate, ask, [
@@ -310,7 +318,11 @@ function placementActions(
             },
           },
         ])
-      : { ...duplicate, enabled: false, reason: lockedBy(held, only) }
+      : {
+          ...duplicate,
+          enabled: false,
+          reason: lockedBy(held, only, "change"),
+        }
   );
   return actions;
 }
@@ -365,16 +377,17 @@ function compositionActions(
 }
 
 /**
- * What a lock refusal says.
- *
- * Names the block only when it is not the selected one. "Caption inside this
- * block is locked" sends an author somewhere to look; repeating the selected
- * block's own name back at them while the bar is drawn against it does not.
+ * What a Layers-lock refusal says on a button or a menu item: the headline of
+ * the one wording every surface uses, the locked block by name and where it
+ * sits relative to the selected one. Short, because it is said beside the
+ * verb; the way forward is in the block card and in what a keystroke says.
  */
-function lockedBy(locked: BlockNode, selectedId: string): string {
-  return locked.id === selectedId
-    ? "This block is locked."
-    : `${layerLabel(locked)} inside this block is locked.`;
+function lockedBy(
+  locked: BlockNode,
+  selectedId: string,
+  verb: LockedVerb
+): string {
+  return lockedBlockWording(locked, selectedId, verb).headline;
 }
 
 /**
@@ -435,7 +448,7 @@ function singleMove<Id extends string>(
       id,
       label,
       enabled: false,
-      reason: lockedBy(moveLock, selectedId),
+      reason: lockedBy(moveLock, selectedId, "move"),
     };
   }
   const to = position(document, selectedId, direction);
@@ -595,8 +608,8 @@ function manyBlockActions(
 ): ToolbarAction[] {
   const many = oneAtATime(ids.length);
   const deleteLock = ids
-    .map(id => lockBlockingDelete(document, id))
-    .find(node => node !== undefined);
+    .map(id => ({ id, locked: lockBlockingDelete(document, id) }))
+    .find(held => held.locked !== undefined);
 
   return [
     {
@@ -616,7 +629,7 @@ function manyBlockActions(
     ),
     saveAction(document, ids, nesting, mayCreate),
     ...compositionActions(document, ids, nesting, components, ask),
-    deleteLock === undefined
+    deleteLock?.locked === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: true },
           ask,
@@ -628,7 +641,7 @@ function manyBlockActions(
           enabled: false,
           // ONE lock refuses the whole delete, because the group is applied
           // atomically and there is no half-done delete to fall back to.
-          reason: `${layerLabel(deleteLock)} is locked. Unlock it to delete.`,
+          reason: lockedBy(deleteLock.locked, deleteLock.id, "delete"),
         },
   ];
 }
@@ -708,7 +721,9 @@ export function toolbarActions(
 
   const deleteLock = lockBlockingDelete(document, selectedId);
 
-  const duplication = blockDuplication(document, selectedId);
+  // The very ops the Duplicate verb applies, so what the bar offers and what
+  // a press does cannot disagree.
+  const duplication = selectionDuplication(document, [selectedId]);
   const deletion = blockDeletion(document, selectedId);
 
   return [
@@ -743,9 +758,7 @@ export function toolbarActions(
     heldByLock(
       { id: "duplicate", label: "Duplicate", enabled: duplication !== null },
       lockRefusalFor,
-      duplication === null
-        ? undefined
-        : [{ kind: "insert", node: duplication.node, at: duplication.at }]
+      duplication?.ops
     ),
     saveAction(document, ids, rules, mayCreatePattern),
     ...compositionActions(document, ids, rules, components, lockRefusalFor),
@@ -767,7 +780,7 @@ export function toolbarActions(
           id: "delete",
           label: "Delete",
           enabled: false,
-          reason: lockedBy(deleteLock, selectedId),
+          reason: lockedBy(deleteLock, selectedId, "delete"),
         },
   ];
 }
@@ -868,22 +881,6 @@ function opsOf(
   return plan === null || !("ops" in plan) ? undefined : plan.ops;
 }
 
-/**
- * A locked block INSIDE the selected one, which the op store will not let a
- * move carry: it relocates no subtree holding a locked block (`lockedWithin`).
- * The selected block's own lock is `lockBlockingMove`'s, asked as before.
- */
-function heldInside(
-  document: BlockDocument,
-  selectedId: string
-): BlockNode | undefined {
-  const node = findNode(document.nodes, selectedId);
-  const lockedId = node === undefined ? undefined : lockedWithin(node);
-  return lockedId === undefined || lockedId === selectedId || node === undefined
-    ? undefined
-    : findNode([node], lockedId);
-}
-
 /** The block menu's moves across depth: into the block above, and out. */
 export type DepthMoveId = "move-in" | "move-out";
 
@@ -930,24 +927,23 @@ export function depthMoveActions(
     return [];
   }
   const ids = selectedIds ?? [selectedId];
-  const held = heldInside(document, selectedId);
+  // A locked block, one inside the selected one or one it sits inside is the
+  // single move's own question (`lockBlockingMove`), answered with its reason.
   return DEPTH_MOVES.map(move =>
     ids.length > 1
       ? { ...move, enabled: false, reason: oneAtATime(ids.length) }
-      : held !== undefined
-        ? { ...move, enabled: false, reason: lockedBy(held, selectedId) }
-        : {
-            ...singleMove(
-              document,
-              selectedId,
-              move.id,
-              move.label,
-              move.direction,
-              lockRefusalFor,
-              position,
-              judge
-            ),
-            direction: move.direction,
-          }
+      : {
+          ...singleMove(
+            document,
+            selectedId,
+            move.id,
+            move.label,
+            move.direction,
+            lockRefusalFor,
+            position,
+            judge
+          ),
+          direction: move.direction,
+        }
   );
 }

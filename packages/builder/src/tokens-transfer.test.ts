@@ -1802,3 +1802,127 @@ describe("a file naming one variable twice", () => {
     expect(plan.skipped.join(" ")).toMatch(/color\.ink/);
   });
 });
+
+describe("what an import applies", () => {
+  const site: SiteTokenSet = {
+    tokens: [
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      { name: "color.paper", kind: "color", values: { light: "#ffffff" } },
+    ],
+  };
+
+  it("applies and counts only what changes the site", () => {
+    const file = exportDtcg({
+      tokens: [
+        site.tokens[0]!,
+        { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+      ],
+    }).text;
+    const plan = planImport([{ name: "f.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, site, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.imported).toBe(1);
+  });
+
+  it("changes nothing, and says so, when nothing differs or every conflict is kept", () => {
+    const same = exportDtcg(site).text;
+    const plan = planImport([{ name: "same.tokens.json", text: same }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, site, new Map());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/nothing was changed/);
+
+    const differs = exportDtcg({
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#222222" } },
+      ],
+    }).text;
+    const conflict = planImport(
+      [{ name: "d.tokens.json", text: differs }],
+      site
+    );
+    if (!conflict.ok) throw new Error(conflict.error);
+    const kept = applyImport(
+      conflict,
+      site,
+      new Map([[conflict.conflicts[0]!.identity, "keep"]])
+    );
+    expect(kept.ok).toBe(false);
+  });
+});
+
+describe("an import that changes only a variable's vendor data", () => {
+  it("counts as a change, is previewed as one, and is stored", () => {
+    const site: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      ],
+    };
+    const file = exportDtcg({
+      tokens: [
+        {
+          ...site.tokens[0]!,
+          extensions: { "com.figma.variableId": "VariableID:9:9" },
+        },
+      ],
+    }).text;
+    const plan = planImport([{ name: "ink.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.unchanged).toEqual([]);
+    expect(plan.changed.map(t => t.name)).toEqual(["color.ink"]);
+    const result = applyImport(plan, site, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.imported).toBe(1);
+    expect(result.tokens.tokens[0]?.extensions).toEqual({
+      "com.figma.variableId": "VariableID:9:9",
+    });
+  });
+});
+
+describe("an import that leaves out a variable's optional fields", () => {
+  const stored: SiteTokenSet = {
+    tokens: [
+      {
+        name: "color.ink",
+        label: "Ink",
+        kind: "color",
+        values: { light: "#111111" },
+        extensions: { "com.figma.variableId": "VariableID:1:1" },
+      },
+    ],
+  };
+  const sparse = (values: { light: string; dark?: string }) =>
+    exportDtcg({
+      tokens: [{ name: "color.ink", kind: "color", values }],
+    }).text;
+
+  it("is unchanged when nothing it does state differs", () => {
+    const plan = planImport(
+      [{ name: "ink.tokens.json", text: sparse({ light: "#111111" }) }],
+      stored
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.unchanged.map(t => t.name)).toEqual(["color.ink"]);
+    expect(plan.changed).toEqual([]);
+  });
+
+  it("keeps the site's label and vendor data when it changes something else", () => {
+    const plan = planImport(
+      [
+        {
+          name: "ink.tokens.json",
+          text: sparse({ light: "#111111", dark: "#eeeeee" }),
+        },
+      ],
+      stored
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, stored, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.tokens.tokens[0]).toEqual({
+      ...stored.tokens[0],
+      values: { light: "#111111", dark: "#eeeeee" },
+    });
+  });
+});

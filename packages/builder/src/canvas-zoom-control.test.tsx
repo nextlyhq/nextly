@@ -214,6 +214,23 @@ describe("the canvas zoom control", () => {
   });
 });
 
+describe("the open zoom menu and the rest of the editor", () => {
+  it("leaves the editor around it in the accessibility tree", () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable, which axe reports as aria-hidden-focus. The
+    // zoom menu is a choice beside the canvas, not a dialog, so nothing
+    // outside it is hidden.
+    mount({ appliedScale: 1 });
+    const button = trigger();
+
+    fireEvent.pointerDown(button, { pointerType: "mouse" });
+    expect(screen.getAllByRole("menuitemradio").length).toBeGreaterThan(0);
+
+    expect(button.closest('[aria-hidden="true"]')).toBeNull();
+    expect(document.querySelector('[aria-hidden="true"] button')).toBeNull();
+  });
+});
+
 describe("which zoom the open menu says is current", () => {
   /** Open the menu and return the item with this label. */
   function itemNamed(name: string): HTMLElement {

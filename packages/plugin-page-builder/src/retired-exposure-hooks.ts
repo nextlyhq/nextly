@@ -54,10 +54,8 @@ import {
 import type { HookContext } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
-import {
-  asDocument,
-  leavesDocumentPublished,
-} from "./component-readiness-hook";
+import { leavesDocumentPublished } from "./component-readiness-hook";
+import { asDocument } from "./component-store-source";
 import type { RetiredStore } from "./retired-store";
 import { requestContextFor, SINGLE_HOOK_NAMESPACE } from "./write-target";
 

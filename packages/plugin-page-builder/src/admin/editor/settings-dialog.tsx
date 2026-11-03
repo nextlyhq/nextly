@@ -21,6 +21,7 @@
  */
 import {
   BreakpointManager,
+  EDITOR_WORDS,
   type BuilderShellProps,
 } from "@nextlyhq/builder/shell";
 import { usePluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
@@ -79,6 +80,11 @@ export interface SettingsDialogProps extends DialogState {
   /** The entry's own fields, drawn by the admin, or null where there are none. */
   pageFields: ReactNode | null;
   /**
+   * The page's Layout section, heading and all, or null for a document that
+   * is not a page drawn inside a Layout. Drawn as given.
+   */
+  pageLayout?: ReactNode | null;
+  /**
    * How a shared link to this page would look. It names no host: the public
    * site may be served from another origin than the admin, and only the
    * server knows which.
@@ -108,6 +114,7 @@ export function SettingsDialog({
   onOpenChange,
   returnFocus,
   pageFields,
+  pageLayout = null,
   share,
   breakpoints,
 }: SettingsDialogProps): JSX.Element {
@@ -145,7 +152,7 @@ export function SettingsDialog({
           }}
         >
           <DialogHeader className="px-6 pt-6">
-            <DialogTitle>Settings</DialogTitle>
+            <DialogTitle>{EDITOR_WORDS.settings}</DialogTitle>
             <DialogDescription className="sr-only">
               {"This page's settings, and the site's."}
             </DialogDescription>
@@ -163,7 +170,11 @@ export function SettingsDialog({
               value="page"
               className="min-h-0 flex-1 overflow-y-auto px-6 pb-6"
             >
-              <ThisPage pageFields={pageFields} share={share} />
+              <ThisPage
+                pageFields={pageFields}
+                pageLayout={pageLayout}
+                share={share}
+              />
             </TabsContent>
             {siteTab ? (
               <TabsContent
@@ -323,14 +334,22 @@ function SiteTab({
   );
 }
 
-/** The page's own fields, then how a shared link to it would look. */
+/**
+ * The page's own fields, the Layout it is drawn inside, then how a shared link
+ * to it would look.
+ */
 function ThisPage({
   pageFields,
+  pageLayout,
   share,
-}: Pick<SettingsDialogProps, "pageFields" | "share">): JSX.Element {
+}: Pick<
+  SettingsDialogProps,
+  "pageFields" | "pageLayout" | "share"
+>): JSX.Element {
   return (
     <div className="space-y-6 pt-4">
       {pageFields === null ? null : <section>{pageFields}</section>}
+      {pageLayout ?? null}
       <section aria-labelledby="settings-share-title" className="space-y-2">
         <h3 id="settings-share-title" className="text-sm font-semibold">
           Search and sharing
