@@ -189,6 +189,14 @@
   margin-top: 0;
   min-height: 0;
 }
+/* What an import or export reported, under the header whichever tab is
+   open; nothing at all until there is something to say. */
+.nx-pb-design__reports {
+  padding: 0 12px 8px;
+}
+.nx-pb-design__reports:empty {
+  display: none;
+}
 
 /* ------------------------------------------------------------ generic btn */
 .nx-pb-icon-btn {

@@ -23,6 +23,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldInstance,
+  PluginFieldIssue,
   PluginFieldType,
   PluginFieldValidateArgs,
   PluginFieldValidationResult,
@@ -40,6 +41,7 @@ import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
 import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
+import { newClassReferenceIssues } from "./class-reference-judgement";
 import {
   judgesLayersLocks,
   layersLockIssues,
@@ -222,22 +224,48 @@ export function blocksFieldType(
       const verdict = emptied
         ? true
         : judgedByRules(value, args, breakpoints, composition);
+      const label =
+        typeof args.field.label === "string" ? args.field.label : args.path;
+      // The classes a write adds must be ones the site defines, judged
+      // whatever the rules above answered, so one round fixes both. A value
+      // judged on its own, or an emptied field, references none.
+      const classIds = composition?.()?.siteClassIds;
+      const classes = (): Promise<readonly PluginFieldIssue[]> =>
+        emptied || classIds === undefined
+          ? Promise.resolve([])
+          : newClassReferenceIssues(value, args, label, {
+              classIds,
+              limits: composition?.()?.limits,
+            });
       // A value judged on its own, or a create, has no stored document to
       // hold a lock, and keeps the answer it always got, synchronously where
-      // the rules gave one.
-      if (!judgesLayersLocks(args)) return verdict;
+      // the rules gave one and nothing else is asked.
+      if (!judgesLayersLocks(args)) {
+        if (args.write === undefined || emptied || classIds === undefined) {
+          return verdict;
+        }
+        return Promise.resolve(verdict).then(answered =>
+          classes().then(found => withLockIssues(answered, found, args.path))
+        );
+      }
       // And the Layers locks, judged against the stored document on every
       // update, whatever the rules above answered: a write that breaks a lock
       // and also breaks a rule is told about both, so one round fixes both.
-      const label =
-        typeof args.field.label === "string" ? args.field.label : args.path;
       return Promise.resolve(verdict).then(answered =>
         layersLockIssues(
           emptied ? null : value,
           args,
           label,
           composition?.()?.onLayersLockUnjudged
-        ).then(locks => withLockIssues(answered, locks, args.path))
+        ).then(locks =>
+          classes().then(found =>
+            withLockIssues(
+              withLockIssues(answered, locks, args.path),
+              found,
+              args.path
+            )
+          )
+        )
       );
     },
 

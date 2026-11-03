@@ -201,7 +201,7 @@ describe("the Components panel's list", () => {
     });
 
     expect(screen.getByText("This site has no components yet.")).toBeTruthy();
-    expect(screen.getByText(/choose Save as component/)).toBeTruthy();
+    expect(screen.getByText(/choose Turn into component/)).toBeTruthy();
     expect(rowNames()).toEqual([]);
   });
 
@@ -214,7 +214,7 @@ describe("the Components panel's list", () => {
     });
 
     expect(screen.getByText("This site has no components yet.")).toBeTruthy();
-    expect(screen.queryByText(/Save as component/)).toBeNull();
+    expect(screen.queryByText(/Turn into component/)).toBeNull();
   });
 
   it("says none can go inside the component being edited, not that the site has none", () => {
@@ -359,6 +359,43 @@ describe("placing a component from the panel", () => {
     expect(described(row)).not.toBe("");
     fireEvent.click(row);
     expect(editor.apply).not.toHaveBeenCalled();
+  });
+});
+
+describe("a component with nothing in it to place", () => {
+  /** A published row saved without content, as the route may hand one. */
+  const EMPTY = { id: "empty", title: "Empty card", document: null };
+
+  it("is listed, says why it cannot be placed, and places nothing", () => {
+    registerText();
+    const editor = editorSpy(documentOf());
+    renderPanel({
+      editor,
+      components: [EMPTY],
+      componentDefinitions: new Map(),
+    });
+
+    const row = placeButton("Empty card");
+    expect(row.closest("li")?.getAttribute("data-refused")).toBe("true");
+    expect(described(row)).toBe("Nothing in it can be placed yet.");
+    expect(screen.queryByText("This site has no components yet.")).toBeNull();
+    fireEvent.click(row);
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("can still be opened, to be filled", () => {
+    registerText();
+    const onEditComponent = vi.fn();
+    renderPanel({
+      editor: editorSpy(documentOf()),
+      components: [EMPTY, PROMO],
+      componentDefinitions: lookupFor(PROMO),
+      onEditComponent,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Empty card" }));
+    expect(onEditComponent).toHaveBeenCalledWith("empty");
+    expect(rowNames()).toEqual(["Empty card", "Promo card"]);
   });
 });
 

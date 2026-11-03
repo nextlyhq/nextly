@@ -100,6 +100,10 @@ class FakeCatalogue {
     this.asked.length = 0;
     this.routes.clear();
     this.json("/v1/fonts?type=google", [LORA]);
+    // How popular each family is, keyed by id as Fontsource's stats are.
+    this.json("/v1/stats", {
+      lora: { total: { npmDownloadMonthly: 52_000 } },
+    });
     this.json("/v1/fonts/lora", LORA);
     for (const weight of [400, 500, 700]) {
       for (const style of ["normal", "italic"]) {
@@ -845,7 +849,9 @@ describe.each(getConfiguredTestDialects())(
       // The canonical list envelope: the families as items, and where
       // previews load and when the catalogue was read in its meta.
       expect(first.body).toMatchObject({
-        items: [{ id: "lora", family: "Lora", category: "serif" }],
+        items: [
+          { id: "lora", family: "Lora", category: "serif", popularity: 52_000 },
+        ],
         meta: {
           total: 1,
           page: 1,
@@ -858,6 +864,10 @@ describe.each(getConfiguredTestDialects())(
       expect(
         catalogue.asked.filter(path => path.startsWith("/v1/fonts?"))
       ).toHaveLength(1);
+      // The stats are read with the list and kept with it, never per open.
+      expect(catalogue.asked.filter(path => path === "/v1/stats")).toHaveLength(
+        1
+      );
 
       const fonts = resolveFontOptions({
         catalogue: { api: catalogue.origin, files: catalogue.origin },
@@ -892,6 +902,9 @@ describe.each(getConfiguredTestDialects())(
       expect(
         catalogue.asked.filter(path => path.startsWith("/v1/fonts?"))
       ).toHaveLength(3);
+      expect(catalogue.asked.filter(path => path === "/v1/stats")).toHaveLength(
+        3
+      );
     });
 
     it("still refuses a face loading from another server, written straight to the Single", async () => {

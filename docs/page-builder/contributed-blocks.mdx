@@ -118,6 +118,22 @@ props: {
 },
 ```
 
+A select whose options fit side by side is drawn as a row of buttons, and a longer one
+as a menu. Set `display: "menu"` to keep a select a menu however few its options are,
+for a prop that should look the same on every block whatever options each offers.
+The built-in blocks do this for the element they render as:
+
+```ts
+props: {
+  as: {
+    type: "select",
+    label: "Element type",
+    options: ["div", "section", "article"],
+    display: "menu",
+  },
+},
+```
+
 A `relation` prop names its collection in `relationTo`:
 
 ```ts

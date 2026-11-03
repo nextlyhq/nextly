@@ -277,8 +277,6 @@ describe("the allowlist", () => {
   // entries without removing or lowering any, one more when it learned the bracketed form, and one
   // more when patterns began reading normalised text and a label wrapped across lines became
   // visible. A raise for any other reason is the silencing this guards against.
-  // 216 -> 215: the localized reads' file no longer names milestones, and its
-  // entry is gone.
   const EXPECTED_ENTRIES = 215;
   // 503 -> 498: recorded offences in `services/users.ts`, the Direct API auth
   // namespace and its test, and `auth-service.ts` no longer exist, so the list
@@ -302,10 +300,11 @@ describe("the allowlist", () => {
   // naming a numbered change, no longer exist, and its entry emptied (217 -> 216).
   // 477 -> 475: one recorded offence each in `register-collections.ts` and
   // `collections-handler.ts` no longer exists; both entries remain.
-  // 475 -> 472: three recorded offences in `collection-mutation-service.ts`,
+  // 475 -> 452: the 23 recorded offences in `collection-query-service.ts`,
+  // comments naming milestones in its localized reads, were rewritten to
+  // describe the code, and its entry emptied (216 -> 215).
+  // 452 -> 449: three recorded offences in `collection-mutation-service.ts`,
   // each naming a roadmap milestone, no longer exist; its entry remains.
-  // 472 -> 449: the localized reads' file says what its code does, and its
-  // 23 recorded offences are gone with its entry.
   const EXPECTED_TOTAL = 449;
 
   it("matches its pinned size exactly", () => {
