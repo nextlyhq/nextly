@@ -100,14 +100,107 @@ export function ScheduleDocumentDialog({
   languages = [],
   hasUnsavedEdits = false,
 }: ScheduleDocumentDialogProps): JSX.Element {
+  const f = useScheduleDocumentForm({
+    open,
+    onOpenChange,
+    document,
+    documentTitle,
+    opener,
+  });
+  return (
+    <Dialog open={open} onOpenChange={f.requestOpenChange}>
+      <DialogContent
+        onCloseAutoFocus={event => returnFocusTo(f.returnTo.current, event)}
+        className="w-[calc(100%-2rem)] max-h-[90vh] overflow-y-auto"
+      >
+        <form
+          className="flex flex-col gap-5"
+          onSubmit={event => {
+            event.preventDefault();
+            f.submit();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Schedule “{f.title}”</DialogTitle>
+            <DialogDescription>
+              Choose how it goes out, then whether it goes live or comes down.{" "}
+              {descriptionTail(f.action, savesGoLive)}
+            </DialogDescription>
+          </DialogHeader>
+
+          <WayChoice
+            ids={f.ids}
+            way={f.way}
+            onChange={f.setWay}
+            canScheduleReleases={f.canScheduleReleases}
+          />
+
+          <WayDetails
+            way={f.way}
+            own={f.own}
+            now={f.now}
+            timeProblem={f.timeProblem}
+            readback={f.readback}
+            action={f.action}
+            targets={f.targets}
+            releaseId={f.releaseId}
+            onChoose={f.setReleaseId}
+            search={f.search}
+            onSearch={f.setSearch}
+            onStartNew={() => f.setWay("new")}
+            newTitle={f.newTitle}
+            onTitleChange={f.onTitleChange}
+            newDescription={f.newDescription}
+            onDescriptionChange={f.setNewDescription}
+            newTitleMissing={f.newTitleMissing}
+          />
+
+          <ReleaseActionChoice
+            action={f.action}
+            onChange={f.setAction}
+            canPublishDocument={f.canPublishDocument}
+            canUnpublishDocument={f.canUnpublishDocument}
+          />
+
+          <DocumentNotes
+            languages={languages}
+            hasUnsavedEdits={hasUnsavedEdits}
+          />
+
+          <Refusal request={f.schedule} action={f.action} />
+
+          <ScheduleFooter
+            sending={f.sending}
+            ready={f.ready}
+            confirm={confirmLabel(f.way, f.readback, f.chosen)}
+            onCancel={() => f.requestOpenChange(false)}
+          />
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Everything the dialog holds and works out: the way and action chosen, the time, the release to
+ * join or make, the request, and the handlers its controls call.
+ */
+function useScheduleDocumentForm({
+  open,
+  onOpenChange,
+  document,
+  documentTitle,
+  opener,
+}: Pick<
+  ScheduleDocumentDialogProps,
+  "open" | "onOpenChange" | "document" | "documentTitle" | "opener"
+>) {
   const ids = useId();
   const title = scheduledReleaseTitle(documentTitle);
   // On its own, the release is scheduled at once, which the server asks
   // permission to schedule releases for.
   const canScheduleReleases = useCan("publish-content-releases");
-  const [way, setWay] = useState<ScheduleWay>(
-    canScheduleReleases ? "own" : "existing"
-  );
+  const [way, setWay] = useState<ScheduleWay>(initialWay(canScheduleReleases));
   // Going live or coming down, each on the document's own grant.
   const canPublishDocument = useCan(`publish-${document.scopeSlug}`);
   const canUnpublishDocument = useCan(`unpublish-${document.scopeSlug}`);
@@ -117,7 +210,7 @@ export function ScheduleDocumentDialog({
   const own = useOwnTime();
   const [releaseId, setReleaseId] = useState("");
   const [search, setSearch] = useState("");
-  const targets = useScheduleTargets(search, open && way === "existing");
+  const targets = useScheduleTargets(search, asksForTargets(open, way));
   const chosen = targets.items.find(release => release.id === releaseId);
   const [newTitle, setNewTitle] = useState("");
   const [newDescription, setNewDescription] = useState("");
@@ -128,190 +221,332 @@ export function ScheduleDocumentDialog({
   // The clock, or the moment a send found the time passed between its ticks.
   const now = Math.max(request.now, own.checkedAt);
   const timeProblem = scheduleTimeProblem(own.wall, own.instant, now);
-  const readback =
-    timeProblem === null
-      ? releaseTimeText(own.instant, {
-          readerZone: own.reader,
-          scheduledZone: own.zone,
-          now,
-        })
-      : null;
+  const readback = ownReadback(own, timeProblem, now);
 
-  /** The request for the way chosen, or null where it cannot be sent yet. */
-  const payload = (): ScheduleDocumentPayload | null => {
-    const scheduled = { ...document, action };
-    if (way === "own") {
-      if (own.instant === null || timeProblem !== null) return null;
-      return {
-        into: "own",
-        document: scheduled,
-        title,
-        at: own.instant,
-        timezone: own.zone,
-      };
-    }
-    if (way === "existing") {
-      return chosen === undefined
-        ? null
-        : { into: "existing", document: scheduled, releaseId: chosen.id };
-    }
-    const named = newTitle.trim();
-    return named === ""
-      ? null
-      : {
-          into: "new",
-          document: scheduled,
-          title: named,
-          description: newDescription.trim() || null,
-        };
+  const payload = () =>
+    schedulePayload({
+      way,
+      scheduled: { ...document, action },
+      title,
+      own,
+      timeProblem,
+      chosen,
+      newTitle,
+      newDescription,
+    });
+
+  const submit = () =>
+    submitSchedule({
+      way,
+      newTitle,
+      own,
+      payload,
+      send,
+      onTitleMissing: () => setNewTitleMissing(true),
+    });
+
+  const ready = wayIsReady(way, timeProblem, chosen);
+
+  return {
+    ids,
+    title,
+    canScheduleReleases,
+    way,
+    setWay,
+    canPublishDocument,
+    canUnpublishDocument,
+    action,
+    setAction,
+    own,
+    releaseId,
+    setReleaseId,
+    search,
+    setSearch,
+    targets,
+    chosen,
+    newTitle,
+    newDescription,
+    setNewDescription,
+    newTitleMissing,
+    schedule,
+    sending,
+    requestOpenChange,
+    returnTo,
+    now,
+    timeProblem,
+    readback,
+    ready,
+    submit,
+    onTitleChange: (next: string) => {
+      setNewTitle(next);
+      setNewTitleMissing(false);
+    },
   };
+}
 
-  const submit = () => {
-    if (way === "new" && newTitle.trim() === "") {
-      // Refused in place, with the focus on the field that needs it.
-      setNewTitleMissing(true);
-      return;
-    }
-    // On its own, the time is asked again at the moment of sending: the clock
-    // moves once a minute, and a time can pass while the dialog sits open.
-    if (way === "own" && !own.stillValid()) return;
-    const body = payload();
-    if (body !== null) send(body);
-  };
+/** The way a dialog opens on: on its own where the reader may schedule releases. */
+function initialWay(canScheduleReleases: boolean): ScheduleWay {
+  return canScheduleReleases ? "own" : "existing";
+}
 
-  const ready =
-    way === "own"
-      ? timeProblem === null
-      : way === "existing"
-        ? chosen !== undefined
-        : true;
+/** Whether the releases a document may join are read: only while that way is open. */
+function asksForTargets(open: boolean, way: ScheduleWay): boolean {
+  return open && way === "existing";
+}
 
+/**
+ * Send the request for the way chosen, or say in place why it cannot go yet. A new release with
+ * no name is refused with the focus on its field. On its own, the time is asked again at the
+ * moment of sending: the clock moves once a minute, and a time can pass while the dialog sits
+ * open.
+ */
+function submitSchedule(args: {
+  way: ScheduleWay;
+  newTitle: string;
+  own: Pick<OwnTime, "stillValid">;
+  payload: () => ScheduleDocumentPayload | null;
+  send: (body: ScheduleDocumentPayload) => void;
+  onTitleMissing: () => void;
+}): void {
+  if (args.way === "new" && args.newTitle.trim() === "") {
+    args.onTitleMissing();
+    return;
+  }
+  if (args.way === "own" && !args.own.stillValid()) return;
+  const body = args.payload();
+  if (body !== null) args.send(body);
+}
+
+/** The chosen moment read back in words, once it is one that can be scheduled. */
+function ownReadback(
+  own: OwnTime,
+  timeProblem: ReturnType<typeof scheduleTimeProblem>,
+  now: number
+): ReleaseTimeText | null {
+  if (timeProblem !== null) return null;
+  return releaseTimeText(own.instant, {
+    readerZone: own.reader,
+    scheduledZone: own.zone,
+    now,
+  });
+}
+
+/** What the description adds for a document going live: whether a save before then ships. */
+function descriptionTail(
+  action: ReleaseMemberAction,
+  savesGoLive: boolean
+): string | null {
+  return action === "publish" ? savingBeforeThen(savesGoLive) : null;
+}
+
+/** How it goes out: on its own, with an existing release, or in a new one. */
+function WayChoice({
+  ids,
+  way,
+  onChange,
+  canScheduleReleases,
+}: {
+  ids: string;
+  way: ScheduleWay;
+  onChange: (next: ScheduleWay) => void;
+  canScheduleReleases: boolean;
+}) {
   return (
-    <Dialog open={open} onOpenChange={requestOpenChange}>
-      <DialogContent
-        onCloseAutoFocus={event => returnFocusTo(returnTo.current, event)}
-        className="w-[calc(100%-2rem)] max-h-[90vh] overflow-y-auto"
+    <fieldset className="flex flex-col gap-2">
+      <legend className="mb-1 text-sm font-medium">How it goes out</legend>
+      <RadioGroup
+        value={way}
+        onValueChange={next => onChange(next as ScheduleWay)}
       >
-        <form
-          className="flex flex-col gap-5"
-          onSubmit={event => {
-            event.preventDefault();
-            submit();
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>Schedule “{title}”</DialogTitle>
-            <DialogDescription>
-              Choose how it goes out, then whether it goes live or comes down.{" "}
-              {action === "publish" ? savingBeforeThen(savesGoLive) : null}
-            </DialogDescription>
-          </DialogHeader>
+        <WayOption
+          id={`${ids}-own`}
+          value="own"
+          label="On its own, at a time"
+          hint="A release of one, named after this document."
+          held={canScheduleReleases ? undefined : OWN_NEEDS_SCHEDULING}
+        />
+        <WayOption
+          id={`${ids}-existing`}
+          value="existing"
+          label="With an existing release"
+        />
+        <WayOption
+          id={`${ids}-new`}
+          value="new"
+          label="In a new release"
+          hint="You schedule the new release from its page."
+        />
+      </RadioGroup>
+    </fieldset>
+  );
+}
 
-          <fieldset className="flex flex-col gap-2">
-            <legend className="mb-1 text-sm font-medium">
-              How it goes out
-            </legend>
-            <RadioGroup
-              value={way}
-              onValueChange={next => setWay(next as ScheduleWay)}
-            >
-              <WayOption
-                id={`${ids}-own`}
-                value="own"
-                label="On its own, at a time"
-                hint="A release of one, named after this document."
-                held={canScheduleReleases ? undefined : OWN_NEEDS_SCHEDULING}
-              />
-              <WayOption
-                id={`${ids}-existing`}
-                value="existing"
-                label="With an existing release"
-              />
-              <WayOption
-                id={`${ids}-new`}
-                value="new"
-                label="In a new release"
-                hint="You schedule the new release from its page."
-              />
-            </RadioGroup>
-          </fieldset>
+/** Cancel, and the confirm that names what it does, held while a request is on its way. */
+function ScheduleFooter({
+  sending,
+  ready,
+  confirm,
+  onCancel,
+}: {
+  sending: boolean;
+  ready: boolean;
+  confirm: string;
+  onCancel: () => void;
+}) {
+  return (
+    <DialogFooter>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={sending}
+        onClick={onCancel}
+      >
+        Cancel
+      </Button>
+      <Button type="submit" disabled={!ready || sending}>
+        {sending ? "Scheduling…" : confirm}
+      </Button>
+    </DialogFooter>
+  );
+}
 
-          {way === "own" ? (
-            <OwnTimeFields
-              own={own}
-              now={now}
-              problem={timeProblem}
-              readback={readback}
-              action={action}
-            />
-          ) : null}
-          {way === "existing" ? (
-            <ExistingReleaseChoice
-              targets={targets}
-              releaseId={releaseId}
-              onChoose={setReleaseId}
-              search={search}
-              onSearch={setSearch}
-              onStartNew={() => setWay("new")}
-            />
-          ) : null}
-          {way === "new" ? (
-            <div className="flex flex-col gap-4">
-              <ReleaseNameFields
-                title={newTitle}
-                onTitleChange={next => {
-                  setNewTitle(next);
-                  setNewTitleMissing(false);
-                }}
-                description={newDescription}
-                onDescriptionChange={setNewDescription}
-                autoFocus
-                titleProblem={
-                  newTitleMissing ? "Name the new release." : undefined
-                }
-              />
-            </div>
-          ) : null}
+/** What a request is made from: the way chosen and what each way asks for. */
+interface PayloadParts {
+  way: ScheduleWay;
+  scheduled: ScheduleDocumentPayload["document"];
+  /** The name a release of its own takes. */
+  title: string;
+  own: Pick<OwnTime, "instant" | "zone">;
+  timeProblem: ReturnType<typeof scheduleTimeProblem>;
+  chosen: Release | undefined;
+  newTitle: string;
+  newDescription: string;
+}
 
-          <ReleaseActionChoice
-            action={action}
-            onChange={setAction}
-            canPublishDocument={canPublishDocument}
-            canUnpublishDocument={canUnpublishDocument}
-          />
+/** The request for the way chosen, or null where it cannot be sent yet. */
+function schedulePayload(parts: PayloadParts): ScheduleDocumentPayload | null {
+  const { way, scheduled, own } = parts;
+  if (way === "own") {
+    if (own.instant === null || parts.timeProblem !== null) return null;
+    return {
+      into: "own",
+      document: scheduled,
+      title: parts.title,
+      at: own.instant,
+      timezone: own.zone,
+    };
+  }
+  if (way === "existing") {
+    return parts.chosen === undefined
+      ? null
+      : { into: "existing", document: scheduled, releaseId: parts.chosen.id };
+  }
+  const named = parts.newTitle.trim();
+  return named === ""
+    ? null
+    : {
+        into: "new",
+        document: scheduled,
+        title: named,
+        description: parts.newDescription.trim() || null,
+      };
+}
 
-          {languages.length > 1 ? (
-            <p className="text-sm text-muted-foreground">
-              {languagesSentence(languages)}
-            </p>
-          ) : null}
-          {hasUnsavedEdits ? (
-            <p className="text-sm text-muted-foreground">
-              Unsaved changes aren&apos;t included until you save them. The
-              release ships the document as it is saved at that moment.
-            </p>
-          ) : null}
+/**
+ * Whether the way chosen has what it needs to be confirmed. A new release with no name is let
+ * through, so the confirm says in place which field is missing.
+ */
+function wayIsReady(
+  way: ScheduleWay,
+  timeProblem: ReturnType<typeof scheduleTimeProblem>,
+  chosen: Release | undefined
+): boolean {
+  if (way === "own") return timeProblem === null;
+  if (way === "existing") return chosen !== undefined;
+  return true;
+}
 
-          {schedule.isError ? (
-            <Refusal error={schedule.error} action={action} />
-          ) : null}
+/** What the way chosen asks for: a time, a release to join, or the new release's name. */
+function WayDetails(props: {
+  way: ScheduleWay;
+  own: OwnTime;
+  now: number;
+  timeProblem: ReturnType<typeof scheduleTimeProblem>;
+  readback: ReleaseTimeText | null;
+  action: ReleaseMemberAction;
+  targets: ReturnType<typeof useScheduleTargets>;
+  releaseId: string;
+  onChoose: (id: string) => void;
+  search: string;
+  onSearch: (next: string) => void;
+  onStartNew: () => void;
+  newTitle: string;
+  onTitleChange: (next: string) => void;
+  newDescription: string;
+  onDescriptionChange: (next: string) => void;
+  newTitleMissing: boolean;
+}) {
+  if (props.way === "own") {
+    return (
+      <OwnTimeFields
+        own={props.own}
+        now={props.now}
+        problem={props.timeProblem}
+        readback={props.readback}
+        action={props.action}
+      />
+    );
+  }
+  if (props.way === "existing") {
+    return (
+      <ExistingReleaseChoice
+        targets={props.targets}
+        releaseId={props.releaseId}
+        onChoose={props.onChoose}
+        search={props.search}
+        onSearch={props.onSearch}
+        onStartNew={props.onStartNew}
+      />
+    );
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      <ReleaseNameFields
+        title={props.newTitle}
+        onTitleChange={props.onTitleChange}
+        description={props.newDescription}
+        onDescriptionChange={props.onDescriptionChange}
+        autoFocus
+        titleProblem={
+          props.newTitleMissing ? "Name the new release." : undefined
+        }
+      />
+    </div>
+  );
+}
 
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={sending}
-              onClick={() => requestOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={!ready || sending}>
-              {sending ? "Scheduling…" : confirmLabel(way, readback, chosen)}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+/** What the reader should know about the document itself: its languages, and unsaved edits. */
+function DocumentNotes({
+  languages,
+  hasUnsavedEdits,
+}: {
+  languages: readonly string[];
+  hasUnsavedEdits: boolean;
+}) {
+  return (
+    <>
+      {languages.length > 1 ? (
+        <p className="text-sm text-muted-foreground">
+          {languagesSentence(languages)}
+        </p>
+      ) : null}
+      {hasUnsavedEdits ? (
+        <p className="text-sm text-muted-foreground">
+          Unsaved changes aren&apos;t included until you save them. The release
+          ships the document as it is saved at that moment.
+        </p>
+      ) : null}
+    </>
   );
 }
 
@@ -564,13 +799,16 @@ function confirmLabel(
  * sentence, then each hard problem it named, in the release page's words.
  */
 function Refusal({
-  error,
+  request,
   action,
 }: {
-  error: unknown;
+  /** The schedule request, whose failure this says; nothing is shown while it has not failed. */
+  request: { isError: boolean; error: unknown };
   action: ReleaseMemberAction;
 }) {
   const canReadReleases = useCan("read-content-releases");
+  if (!request.isError) return null;
+  const { error } = request;
   const lines = isDefiniteRefusal(error) ? refusalLines(error, action) : [];
   return (
     <div role="alert" className="flex flex-col gap-1 text-sm text-destructive">

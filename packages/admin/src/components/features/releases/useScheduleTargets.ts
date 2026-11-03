@@ -17,7 +17,7 @@ import { useReleases } from "@admin/hooks/queries/useReleases";
 import type { Release } from "@admin/types/releases";
 
 /** Whether a release is one a document may be added to from its editor. */
-export function isScheduleTarget(release: Release): boolean {
+function isScheduleTarget(release: Release): boolean {
   return (
     release.kind !== "single" &&
     (release.state === "draft" || release.state === "scheduled") &&

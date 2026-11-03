@@ -217,13 +217,6 @@ export interface ScheduleReleasePayload {
   timezone: string;
 }
 
-export interface AddReleaseMemberPayload {
-  scopeKind: "collection" | "single";
-  scopeSlug: string;
-  entryId: string;
-  action: ReleaseMemberAction;
-}
-
 /**
  * One document put into a release in one all-or-nothing step, going live or
  * coming down at the release's moment. Mirrors the server's strict body: a key
