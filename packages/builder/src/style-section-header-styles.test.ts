@@ -527,11 +527,22 @@ describe("a section opening and closing", () => {
       )
     ).toContain("animation: nx-section-close 150ms ease-out");
     expect(FLAT).toContain(
-      "@keyframes nx-section-open { from { height: 0; opacity: 0; } to { height: var(--radix-accordion-content-height); opacity: 1; } }"
+      "@keyframes nx-section-open { from { height: 0; opacity: 0; overflow: hidden; } to { height: var(--radix-accordion-content-height); opacity: 1; overflow: hidden; } }"
     );
     expect(FLAT).toContain(
-      "@keyframes nx-section-close { from { height: var(--radix-accordion-content-height); opacity: 1; } to { height: 0; opacity: 0; } }"
+      "@keyframes nx-section-close { from { height: var(--radix-accordion-content-height); opacity: 1; overflow: hidden; } to { height: 0; opacity: 0; overflow: hidden; } }"
     );
+  });
+
+  it("clips its fields while it moves, though an open section shows its overflow", () => {
+    // An open section is overflow-visible for a field's focus tooltip; while
+    // opening, that drew the fields over the headings below. The keyframes
+    // hold it clipped for exactly the animation, so the open rule applies after.
+    expect(
+      ruleBody(
+        '.nx-style-inspector [data-slot="accordion-content"][data-state="open"]'
+      )
+    ).toContain("overflow: visible");
   });
 
   it("does not move at all for an author who asks for less motion", () => {

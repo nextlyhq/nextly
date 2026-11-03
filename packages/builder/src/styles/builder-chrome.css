@@ -2554,15 +2554,23 @@
   animation: nx-section-close 150ms ease-out;
 }
 
+/*
+ * Clipped for exactly the animation: an open section shows its overflow (a
+ * field's focus tooltip above its first row), and left visible while it
+ * moved, its fields drew over the headings below. `overflow` animates
+ * discretely, so the open rule's `visible` returns as the animation ends.
+ */
 @keyframes nx-section-open {
   from {
     height: 0;
     opacity: 0;
+    overflow: hidden;
   }
 
   to {
     height: var(--radix-accordion-content-height);
     opacity: 1;
+    overflow: hidden;
   }
 }
 
@@ -2570,11 +2578,13 @@
   from {
     height: var(--radix-accordion-content-height);
     opacity: 1;
+    overflow: hidden;
   }
 
   to {
     height: 0;
     opacity: 0;
+    overflow: hidden;
   }
 }
 
