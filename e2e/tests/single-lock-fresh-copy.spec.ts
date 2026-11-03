@@ -157,7 +157,11 @@ test.describe(
               .getByRole("navigation", { name: "Breadcrumb" })
               .getByRole("link", { name: "Singles", exact: true })
               .click();
-            await page.waitForURL(/\/singles$/);
+            // The Singles page sends the browser on to the first Single, so
+            // what is waited for is leaving this one.
+            await page.waitForURL(
+              url => !url.pathname.endsWith("/singles/site-settings")
+            );
           } else {
             await other.page.getByRole("button", { name: "Take over" }).click();
           }
