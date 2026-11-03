@@ -92,6 +92,9 @@ export function SearchButton({
       type="button"
       size="sm"
       variant="outline"
+      // A square at the editor's control height while it shows only its icon,
+      // as the bar's other icon buttons are; wide again where the key hint shows.
+      className="w-[var(--nx-builder-control-height)] px-0 @min-[1500px]/topbar:w-auto @min-[1500px]/topbar:px-[var(--nx-builder-control-padding-x)]"
       title={
         hint === null ? "Search and commands" : `Search and commands (${hint})`
       }
@@ -100,8 +103,11 @@ export function SearchButton({
       onClick={onOpen}
     >
       <Search className="size-4" aria-hidden="true" />
+      {/* The key hint gives way first when the top bar is short of room, so
+          the save state beside it never has to wrap and its recovery offer
+          fits at 1440; the title still names the key. */}
       {hint === null ? null : (
-        <kbd className="rounded border border-border bg-muted px-1 font-mono text-[11px] text-muted-foreground">
+        <kbd className="rounded border border-border bg-muted px-1 font-mono text-[11px] text-muted-foreground @max-[1500px]/topbar:hidden">
           {hint}
         </kbd>
       )}

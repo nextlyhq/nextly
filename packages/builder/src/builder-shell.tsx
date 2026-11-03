@@ -1030,7 +1030,8 @@ function ShellTopBar({
       // Three columns, the outer two equal, so the centre column (the
       // devices and the zoom) sits in the middle of the editor whatever the
       // sides hold. A container, so controls inside can give way by width.
-      className="border-[color:var(--nx-builder-border)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
+      // `nx-builder-topbar` sets every control inside at the editor's density.
+      className="nx-builder-topbar border-[color:var(--nx-builder-border)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
       aria-label="Editor actions"
     >
       <div data-topbar="start" className="flex min-w-0 items-center gap-2">
@@ -1060,7 +1061,8 @@ function ShellTopBar({
              */
             aria-label="Exit editor"
             title="Exit editor"
-            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border p-1.5 focus-visible:ring-2 focus-visible:outline-none"
+            // A square at the editor's control height, as the bar's others are.
+            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height)] items-center justify-center rounded-md border focus-visible:ring-2 focus-visible:outline-none"
           >
             <ArrowLeft className="size-4" aria-hidden="true" />
           </button>
@@ -1682,7 +1684,9 @@ function ShellRegions({
                   }}
                   tabIndex={-1}
                   aria-label={panelLabel(openPanel)}
-                  className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
+                  // The one surface every left panel sits on, the rail's own:
+                  // a panel paints nothing of its own behind its content.
+                  className="bg-[color:var(--nx-builder-surface)] h-full overflow-auto"
                 >
                   {/* Keyed by the panel, because the prop's contract says the
                       result is keyed by the panel and React's default

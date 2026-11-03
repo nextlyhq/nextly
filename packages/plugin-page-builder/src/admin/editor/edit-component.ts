@@ -41,6 +41,15 @@ const RETURN_PARAM = "return";
 /** The view's own parameter naming the blocks field it opens. */
 const FIELD_PARAM = "field";
 
+/**
+ * The query parameter naming the document Back returns to, so the banner can
+ * say "Back to Home" rather than a bare "Back".
+ */
+const FROM_PARAM = "from";
+
+/** The longest name Back says before it is cut short. */
+const FROM_MAX = 80;
+
 /** A fixed origin to resolve a path against, which no real address has. */
 const NOWHERE = "http://return.invalid";
 
@@ -50,12 +59,19 @@ export function componentEditorAddress(
   componentId: string,
   returnTo: string | undefined,
   /** The blocks field the definition lives in, so the view opens that one. */
-  field?: string
+  field?: string,
+  /** The name of the document left, which Back says it returns to. */
+  from?: string
 ): string {
   const base = `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(componentId)}/${BUILDER_VIEW_PATH}`;
   const query = new URLSearchParams();
   if (field !== undefined) query.set(FIELD_PARAM, field);
   if (returnTo !== undefined) query.set(RETURN_PARAM, returnTo);
+  // Only beside a way back: a name with nowhere to go names nothing.
+  const named = from === undefined ? undefined : plainLabel(from);
+  if (returnTo !== undefined && named !== undefined) {
+    query.set(FROM_PARAM, named);
+  }
   const said = query.toString();
   return said === "" ? base : `${base}?${said}`;
 }
@@ -113,6 +129,31 @@ export function returnFromSearch(search: string): string | undefined {
 }
 
 /**
+ * The name of the document Back returns to, read from the view's own address
+ * as plain words. The parameter arrives in an address anyone can write, so it
+ * is only ever drawn as text, on one line and bounded; where it goes is
+ * decided by the checked path alone.
+ */
+export function returnLabelFromSearch(search: string): string | undefined {
+  const from = new URLSearchParams(search).get(FROM_PARAM);
+  return from === null ? undefined : plainLabel(from);
+}
+
+/** A name as one bounded line of text, or nothing when it is blank. */
+function plainLabel(value: string): string | undefined {
+  // Control characters become spaces, and runs of space one space.
+  const line = Array.from(value, char => {
+    const code = char.charCodeAt(0);
+    return code < 0x20 || code === 0x7f ? " " : char;
+  })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (line === "") return undefined;
+  return line.length <= FROM_MAX ? line : `${line.slice(0, FROM_MAX - 1)}…`;
+}
+
+/**
  * The address the author is at, to come back to: at the placement when it is
  * a section of the page, so the editor reopens with it selected.
  */
@@ -155,15 +196,20 @@ export function backAddress(
  * and Back returns to the address as the author left it.
  */
 export function useEditComponent(
-  isSection: (nodeId: string) => boolean
+  isSection: (nodeId: string) => boolean,
+  /** The name of the document open here, which Back will say it returns to. */
+  here?: string
 ): ((componentId: string, nodeId?: string) => void) | undefined {
   const editing = useComponentEditing();
   // The latest question, read when the author presses rather than closed over,
   // so the callback keeps one identity across the page's edits.
   const asked = useRef(isSection);
+  // The name as it stands when the author presses, for the same reason.
+  const named = useRef(here);
   useEffect(() => {
     asked.current = isSection;
-  }, [isSection]);
+    named.current = here;
+  }, [isSection, here]);
   const open = useCallback(
     (componentId: string, nodeId?: string) => {
       if (editing === undefined) return;
@@ -173,7 +219,8 @@ export function useEditComponent(
           editing.collection,
           componentId,
           back,
-          editing.field
+          editing.field,
+          named.current
         )
       );
     },

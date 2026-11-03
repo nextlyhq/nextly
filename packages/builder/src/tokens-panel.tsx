@@ -15,9 +15,12 @@
  * ## The header is the Design panel's
  *
  * The preview switch and the import-and-export menu belong in the Design
- * panel's own header, beside its title. The host passes that element as
- * `headerActions`, and the controls are drawn into it; with none, they sit at
- * the top of this view.
+ * panel's own header, beside its title, and stay there whichever of its tabs
+ * is open. A host that draws that header holds them with
+ * {@link useVariablesHeader} and hands the result in as `header`; this view
+ * then takes its preview mode from it and draws no controls of its own.
+ * Without one, the view holds them itself: drawn into `headerActions` when
+ * the host gives that element, else at the top of this view.
  *
  * ## Edits are lifted, not saved here
  *
@@ -57,7 +60,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 
 import { usePrefersDark } from "./prefers-dark";
-import { colourHexOf } from "./style-colour";
+import { colourHexOf, colourPairOf } from "./style-colour";
 import {
   addVariable,
   labelNewVariable,
@@ -66,7 +69,8 @@ import {
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
-import { swatchStyle, VariableEditor } from "./variable-editor";
+import { VariableEditor } from "./variable-editor";
+import { ColourPair, swatchStyle } from "./variable-swatch";
 import { useVariablesTransfer } from "./variables-transfer";
 
 export interface TokensPanelProps {
@@ -111,28 +115,102 @@ export interface TokensPanelProps {
   readOnly?: boolean;
   /** The Design panel's header element, where the header controls are drawn. */
   headerActions?: HTMLElement | null;
+  /**
+   * The header a host draws for the whole Design panel, from
+   * {@link useVariablesHeader}. Given, the view previews its mode and leaves
+   * the controls, and what an import or export reports, to the host.
+   */
+  header?: VariablesHeader;
 }
 
-/** How many rows of one group mount before the author asks for more. */
-const PAGE_SIZE = 50;
+/** The Design panel's header controls, and the preview mode they choose. */
+export interface VariablesHeader {
+  /** Which mode's values the swatches and specimens show. */
+  readonly mode: TokenMode;
+  /** The preview switch and the import-and-export menu. */
+  readonly controls: React.JSX.Element;
+  /** What an import or an export reports, and the import's preview. */
+  readonly overlays: React.JSX.Element;
+}
 
-export function TokensPanel({
-  tokens,
+/**
+ * The header controls and their state, for a host that keeps them while the
+ * Design panel's tabs change under them: the preview mode, the switch that
+ * chooses it, and the import-and-export menu with what it reports.
+ *
+ * `prefersDark` is as {@link TokensPanelProps.prefersDark} reads it.
+ */
+export function useVariablesHeader({
   onChange,
   currentTokens,
-  supplied,
-  issue,
-  absence = "pending",
+  readOnly,
   prefersDark,
-  readOnly = false,
-  headerActions,
-}: TokensPanelProps): React.JSX.Element {
+}: {
+  onChange: (tokens: SiteTokenSet) => void;
+  currentTokens: () => SiteTokenSet | undefined;
+  readOnly: boolean;
+  prefersDark?: boolean;
+}): VariablesHeader {
   // The device's scheme until the author picks one, as the canvas shows it.
   const device = usePrefersDark();
   const [picked, setMode] = React.useState<TokenMode | null>(() =>
     statedPreview(prefersDark)
   );
   const mode: TokenMode = picked ?? (device ? "dark" : "light");
+  const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
+  return {
+    mode,
+    controls: (
+      <div className="nx-vars__controls">
+        <PreviewSwitch mode={mode} onMode={setMode} />
+        {transfer.menu}
+      </div>
+    ),
+    overlays: transfer.overlays,
+  };
+}
+
+/** How many rows of one group mount before the author asks for more. */
+const PAGE_SIZE = 50;
+
+export function TokensPanel(props: TokensPanelProps): React.JSX.Element {
+  const { header } = props;
+  if (header !== undefined) {
+    return <VariablesView {...props} header={header} placed={false} />;
+  }
+  return <OwnHeader {...props} />;
+}
+
+/** The view holding its header itself, where no host draws one. */
+function OwnHeader(props: TokensPanelProps): React.JSX.Element {
+  const header = useVariablesHeader({
+    onChange: props.onChange,
+    currentTokens: props.currentTokens,
+    readOnly: props.readOnly ?? false,
+    ...(props.prefersDark === undefined
+      ? {}
+      : { prefersDark: props.prefersDark }),
+  });
+  return <VariablesView {...props} header={header} placed />;
+}
+
+function VariablesView({
+  tokens,
+  onChange,
+  currentTokens,
+  supplied,
+  issue,
+  absence = "pending",
+  readOnly = false,
+  headerActions,
+  header,
+  placed,
+}: TokensPanelProps & {
+  header: VariablesHeader;
+  /** Whether this view draws the header's controls and reports itself. */
+  placed: boolean;
+}): React.JSX.Element {
+  const { mode } = header;
   const [query, setQuery] = React.useState("");
   const { root, openKey, toggle, add, forget } = useOpenVariable({
     tokens,
@@ -141,7 +219,6 @@ export function TokensPanel({
     onAdded: () => setQuery(""),
   });
   const search = React.useRef<HTMLInputElement>(null);
-  const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
 
   const groups = React.useMemo(
     () => (tokens === undefined ? [] : variableGroups(tokens, mode)),
@@ -149,13 +226,6 @@ export function TokensPanel({
   );
   const needle = query.trim().toLowerCase();
   const shown = searched(groups, needle);
-
-  const header = (
-    <div className="nx-vars__controls">
-      <PreviewSwitch mode={mode} onMode={setMode} />
-      {transfer.menu}
-    </div>
-  );
 
   if (tokens === undefined) {
     return <Unread absence={absence} />;
@@ -167,7 +237,9 @@ export function TokensPanel({
       ref={root}
       data-read-only={readOnly ? "" : undefined}
     >
-      <HeaderControls slot={headerActions}>{header}</HeaderControls>
+      {placed ? (
+        <HeaderControls slot={headerActions}>{header.controls}</HeaderControls>
+      ) : null}
       <div className="nx-vars__search">
         <Search aria-hidden="true" size={16} />
         <Input
@@ -181,7 +253,7 @@ export function TokensPanel({
       </div>
       <div className="nx-vars__body">
         <PanelNotes readOnly={readOnly} issue={issue} />
-        {transfer.overlays}
+        {placed ? header.overlays : null}
         {shown.length === 0 ? (
           <p className="nx-vars__note">No variables match this search.</p>
         ) : (
@@ -818,22 +890,7 @@ function RowTail({
 }): React.JSX.Element | null {
   if (token === undefined) return null;
   if (entry.row.kind === "color") {
-    return (
-      <span className="nx-vars__pair" aria-hidden="true">
-        <span
-          className="nx-vars__swatch nx-vars__swatch--mode"
-          data-mode="light"
-          style={swatchStyle(colourHexOf(token.values.light, undefined))}
-        />
-        <span
-          className="nx-vars__swatch nx-vars__swatch--mode"
-          data-mode="dark"
-          style={swatchStyle(
-            colourHexOf(token.values.dark ?? token.values.light, undefined)
-          )}
-        />
-      </span>
-    );
+    return <ColourPair {...colourPairOf(token)} />;
   }
   return (
     <span className="nx-vars__chip" aria-hidden="true">

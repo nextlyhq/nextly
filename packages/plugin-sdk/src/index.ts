@@ -606,10 +606,16 @@ export {
   trustedClientIp,
 } from "nextly";
 
+/**
+ * The plugin route types. `PluginRouteCanOptions` is intended to be stable: it
+ * is how a route asks `ctx.caller.can` the type-level question (`anyEntry`),
+ * answered by the same access decision as plain `can`.
+ */
 export type {
   PaginationMeta,
   PluginRoute,
   PluginRouteCaller,
+  PluginRouteCanOptions,
   PluginRouteIdentity,
   PluginRouteContext,
   PluginRouteHandler,

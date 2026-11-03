@@ -73,13 +73,18 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@nextlyhq/ui";
-import { X } from "lucide-react";
+import { ChevronDown, RotateCcw } from "lucide-react";
 import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import { useCanvasFrame } from "./canvas-frame-context";
+import { ChoiceList } from "./choice-list";
 import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
@@ -173,6 +178,7 @@ import {
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
+import { ColourPair, swatchStyle } from "./variable-swatch";
 
 /**
  * Where one control's value came from, asked per control against a subject and a
@@ -1907,6 +1913,8 @@ function StyleControlField({
         editing={editing}
         fieldId={id}
         onReset={() => commit(null)}
+        stored={stored}
+        readOnly={readOnly}
       />
       {issue === null ? null : (
         <p className="nx-inspector__error" id={errorId} role="alert">
@@ -2082,6 +2090,8 @@ function BreakpointAction({
   editing,
   fieldId,
   onReset,
+  stored,
+  readOnly,
 }: {
   answer: ProvenanceAnswer | undefined;
   /**
@@ -2098,15 +2108,29 @@ function BreakpointAction({
   /** The field this control's actions write, passed on to {@link ResetAction}. */
   fieldId: string;
   onReset: () => void;
+  /** What this address stores: with no cascade, reset while it holds anything. */
+  stored: StyleValue | undefined;
+  /** A field drawn as a retained value, whose own Clear already resets it. */
+  readOnly: boolean;
 }): React.JSX.Element | null {
+  /*
+   * The row's one way back, so a list or an icon group needs no Clear of its
+   * own. With a cascade it follows the cascade's answer: a value authored at
+   * this tier is reset, revealing whatever shows through, and one arriving
+   * from another tier is a jump there.
+   *
+   * Where the cascade gives no answer for this row — none was supplied, or
+   * the tier being edited is one the canvas is not showing, so its values
+   * read as unset — a value stored at this address is still reset, unless the
+   * field is a retained value with a Clear of its own. What it reveals is not
+   * known there, so the reset does not claim it.
+   */
   const badge = answer?.badge;
-  // `none` is also refused below, by having no handler bound for it — this is
-  // the readable exit rather than the load-bearing one.
-  if (badge === undefined || badge.kind === "none") return null;
-  if (badge.kind === "authored") {
+  if (badge === undefined || badge.kind === "none") {
+    if (stored === undefined || readOnly) return null;
     return (
       <ResetAction
-        revealed={badge.revealed}
+        revealed="unknown"
         label={label}
         editing={editing}
         fieldId={fieldId}
@@ -2114,9 +2138,39 @@ function BreakpointAction({
       />
     );
   }
-  if (answer?.jump === undefined) return null;
+  if (badge.kind === "authored") {
+    return (
+      <ResetAction
+        revealed={badge.revealed ?? "unset"}
+        label={label}
+        editing={editing}
+        fieldId={fieldId}
+        onReset={onReset}
+      />
+    );
+  }
+  /*
+   * The value showing came from another tier. A value stored HERE as well is
+   * shadowed by it, and is still this row's to remove: the reset stays beside
+   * the jump, naming nothing it reveals, since what shows here once it is
+   * gone is the winning tier's business.
+   */
+  const reset =
+    stored === undefined || readOnly ? null : (
+      <ResetAction
+        revealed="unknown"
+        label={label}
+        editing={editing}
+        fieldId={fieldId}
+        onReset={onReset}
+      />
+    );
+  if (answer?.jump === undefined) return reset;
   return (
-    <JumpAction source={badge.source} label={label} onJump={answer.jump} />
+    <>
+      {reset}
+      <JumpAction source={badge.source} label={label} onJump={answer.jump} />
+    </>
   );
 }
 
@@ -2263,52 +2317,52 @@ function ResetAction({
   fieldId,
   onReset,
 }: {
-  revealed: BreakpointSource | undefined;
+  /**
+   * What shows once this value is gone: another tier's value, nothing, or
+   * `"unknown"` where no ranking of the cascade covers this tier, which the
+   * names then leave unsaid rather than guess.
+   */
+  revealed: BreakpointSource | "unset" | "unknown";
   label: string;
   editing: EditedAddress;
   /** The field whose value this press writes. See {@link commitsFor}. */
   fieldId: string;
   onReset: () => void;
 }): React.JSX.Element {
-  const reveals =
-    revealed === undefined
-      ? "leaving it unset"
-      : `showing the value from ${sourceLabel(revealed)}`;
+  const at = `Reset ${label} at ${editing.labelOf(editing.breakpoint)}`;
+  const named =
+    revealed === "unknown"
+      ? at
+      : revealed === "unset"
+        ? `${at}, leaving it unset`
+        : `${at}, showing the value from ${sourceLabel(revealed)}`;
+  const tip =
+    revealed === "unknown"
+      ? "Reset"
+      : revealed === "unset"
+        ? "Reset to unset"
+        : `Reset to ${sourceLabel(revealed)}`;
   return (
-    <button
-      type="button"
-      className="nx-style-inspector__breakpoint-action"
-      data-action="reset"
-      /*
-       * This press writes THIS field's value, which a picker mid-gesture on it
-       * needs to know.
-       *
-       * The colour picker commits its draft when the popover closes, and
-       * pressing anything outside it closes the popover first — so without this
-       * one Reset gesture writes twice: the draft the author was discarding,
-       * then the clear. The first undo would then restore the very colour they
-       * pressed Reset to be rid of.
-       *
-       * Declared on the element rather than held as a ref by each picker,
-       * because the rule is about what a CONTROL does, not about which specific
-       * button a particular field happens to know.
-       */
-      {...commitsFor(fieldId)}
-      onClick={onReset}
-      aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
-    >
-      Reset
-      {/*
-       * `aria-hidden`, because the accessible name above already carries this
-       * sentence: read out twice it is a stutter rather than emphasis.
-       */}
-      <span
-        className="nx-style-inspector__breakpoint-reveals"
-        aria-hidden="true"
-      >
-        {revealed === undefined ? "to unset" : `to ${sourceLabel(revealed)}`}
-      </span>
-    </button>
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="nx-style-inspector__breakpoint-action"
+            data-action="reset"
+            {...commitsFor(fieldId)}
+            onClick={onReset}
+            aria-label={named}
+          >
+            {/* An icon at the row's end, where a "Reset to unset" line under
+                every set control made each one two rows. The words are its
+                tooltip and, in full, its name. */}
+            <RotateCcw size={14} aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{tip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -2652,14 +2706,12 @@ function SelectField({
   id,
   control,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   control: StyleControl & { leaf: Extract<StyleLeaf, { kind: "keyword" }> };
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2694,25 +2746,6 @@ function SelectField({
           ))}
         </SelectContent>
       </Select>
-      {/*
-          A select cannot offer "unset" as an item: an empty value is not a
-          choice the list can carry, and a sentinel standing for it would mean
-          two things at once. A button beside it clears, which is the same act
-          an emptied text field performs.
-        */}
-      {current === "" ? null : (
-        <button
-          type="button"
-          className="nx-style-inspector__select-clear"
-          onClick={() => onCommit(null)}
-          aria-label={`Clear ${actionName}`}
-          title="Clear"
-        >
-          {/* An icon, not the word: beside a list in a narrow column, the
-              word ran to the panel's edge. */}
-          <X size={14} aria-hidden="true" />
-        </button>
-      )}
     </div>
   );
 }
@@ -2741,14 +2774,12 @@ function FoldedField({
   id,
   fold,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   fold: Fold;
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2767,7 +2798,6 @@ function FoldedField({
       id={id}
       options={fontWeightOptions(stored)}
       stored={stored}
-      actionName={actionName}
       describedBy={describedBy}
       onCommit={onCommit}
     />
@@ -2779,14 +2809,12 @@ function OptionSelect({
   id,
   options,
   stored,
-  actionName,
   describedBy,
   onCommit,
 }: {
   id: string;
   options: readonly FoldedOption[];
   stored: StyleValue | undefined;
-  actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
@@ -2815,18 +2843,6 @@ function OptionSelect({
           ))}
         </SelectContent>
       </Select>
-      {/* Cleared beside the list, as a keyword select is: an empty choice is
-          not one the list can carry. */}
-      {current === "" ? null : (
-        <button
-          type="button"
-          className="nx-style-inspector__select-clear"
-          onClick={() => onCommit(null)}
-          aria-label={`Clear ${actionName}`}
-        >
-          Clear
-        </button>
-      )}
     </div>
   );
 }
@@ -3453,9 +3469,9 @@ const PICKER_FALLBACK = "#000000";
  * the author swap it, replace it with a literal, or remove it.
  *
  * **A token is stored by IDENTITY, never by the name shown.** The two differ
- * after a rename, and `ColourToken` carries both for that reason — the picker
- * hands back the swatch it was given, so the identity travels with it and the
- * label never reaches the document.
+ * after a rename, and `ColourToken` carries both for that reason — the list
+ * hands back the variable it was given, so the identity travels with it and
+ * the label never reaches the document.
  *
  * **Literal and token are exclusive**, which is what the two layouts express.
  * The same rule Gutenberg's palette follows: a value is a reference or a
@@ -3621,6 +3637,10 @@ function ColourField({
         <ColourPicker
           shown={shown}
           choices={choices}
+          tokensRead={tokens !== undefined}
+          reference={reference}
+          referenceLabel={storedLabel}
+          customFirst={writtenAsValue(stored)}
           actionName={actionName}
           describedBy={describes}
           invalid={describedBy !== undefined}
@@ -3646,7 +3666,7 @@ function ColourField({
            * that has no way to hand a ref down here.
            */
           supersededBy={target => supersedes(target, id)}
-          // A preset is one discrete choice rather than a gesture, so it
+          // A variable is one discrete choice rather than a gesture, so it
           // commits immediately, exactly as the select and toggle controls do.
           onToken={identity => commitInstead({ $token: identity })}
         />
@@ -3670,8 +3690,7 @@ function ColourField({
             onCommit={onCommit}
           />
         ) : (
-          <TokenName
-            label={storedLabel}
+          <TokenClear
             actionName={actionName}
             fieldId={id}
             onClear={() => commitInstead(null)}
@@ -3685,22 +3704,30 @@ function ColourField({
 }
 
 /**
- * The swatch, and the surface it opens onto.
+ * The trigger, and the surface it opens onto: the site's colour variables
+ * first, and a custom colour behind its own button at the end.
+ *
+ * The variables lead because a variable carries a light and a dark value and a
+ * colour written as a value carries one, which the visitor's dark mode cannot
+ * change. So the list an author meets first is the one that keeps a page right
+ * in both modes, by the names the Variables tab gives them, each with its pair.
  *
  * Its own component because CHOOSING a colour is a different question from
- * showing one: the row below owns the stored value and its text, and this owns
- * the picker, the token swatches and what the trigger is painted with. Kept
- * together here because all three read the one resolved colour, and split from
- * the row because neither half needs the other's state.
+ * showing one: the row owns the stored value and its text, and this owns the
+ * list, the raw picker and what the trigger is painted with.
  *
  * The two callbacks stay separate for the reason `ColorPicker` keeps them
- * separate: only the host knows what a swatch MEANS. A token hands back its
+ * separate: only the host knows what a choice MEANS. A variable hands back its
  * identity and never the colour it currently resolves to — storing that would
- * turn a reference into a literal and stop the page following the token.
+ * turn a reference into a literal and stop the page following the variable.
  */
 function ColourPicker({
   shown,
   choices,
+  tokensRead,
+  reference,
+  referenceLabel,
+  customFirst,
   actionName,
   describedBy,
   invalid,
@@ -3713,6 +3740,14 @@ function ColourPicker({
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
   shown: string | undefined;
   choices: readonly ColourToken[];
+  /** Whether the site's variables have arrived; until then the list waits. */
+  tokensRead: boolean;
+  /** The identity the value refers to, or `null` for a value or none. */
+  reference: string | null;
+  /** What that reference is called, for the trigger. */
+  referenceLabel: string;
+  /** Whether the custom colour opens already showing. */
+  customFirst: boolean;
   actionName: string;
   /** Everything describing the control: a refusal, a contrast verdict, or both. */
   describedBy: string | undefined;
@@ -3751,36 +3786,40 @@ function ColourPicker({
   // itself. Read once by the close below and reset there, so it cannot leak
   // into the next open.
   const superseded = React.useRef(false);
+  const [open, setOpen] = React.useState(false);
+  const [custom, setCustom] = React.useState(customFirst);
   return (
     <Popover
-      onOpenChange={open => {
-        if (open) return;
+      open={open}
+      onOpenChange={next => {
+        setOpen(next);
+        if (next) {
+          setCustom(customFirst);
+          return;
+        }
         const own = superseded.current;
         superseded.current = false;
         onClosed(own ? "superseded" : "committed");
       }}
     >
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="nx-style-inspector__swatch"
-          aria-label={`Colour for ${actionName}`}
+        <ColourTrigger
+          shown={shown}
+          reference={reference}
+          referenceLabel={referenceLabel}
+          actionName={actionName}
           aria-describedby={describedBy}
           aria-invalid={invalid ? true : undefined}
-          // Painted through a custom property rather than `background-color`
-          // directly, so the chequerboard beneath a translucent colour stays
-          // visible through it. `undefined` leaves the class's own "nothing
-          // here" appearance rather than a colour this cannot vouch for.
-          style={
-            shown === undefined
-              ? undefined
-              : ({ "--nx-swatch": shown } as React.CSSProperties)
-          }
-          data-empty={shown === undefined ? "" : undefined}
         />
       </PopoverTrigger>
       <PopoverContent
+        align="end"
         className="nx-style-inspector__picker"
+        // The list takes focus itself, on its search or on its entries; with
+        // no list, the first control, Custom colour, takes it as usual.
+        onOpenAutoFocus={event => {
+          if (choices.length > 0) event.preventDefault();
+        }}
         /*
          * A PRESS, not any dismissal whose target happens to be such a control.
          *
@@ -3803,46 +3842,233 @@ function ColourPicker({
             activates(event.detail.originalEvent) && supersededBy(event.target);
         }}
       >
-        {unrepresented ? (
-          <p className="nx-inspector__note">
-            This value cannot be shown on the picker. Choosing here replaces it.
-          </p>
-        ) : null}
-        <ColorPicker<ColourToken>
-          // A fallback only where nothing could be resolved, and it is never
-          // WRITTEN by being shown: the picker reports a colour only once the
-          // author moves something, so opening it over a value it cannot
-          // represent changes nothing.
-          color={shown ?? PICKER_FALLBACK}
-          showAlpha
-          swatches={choices.map(choice => ({
-            // The IDENTITY as the swatch id, which is what keeps the list
-            // stable across a rename: a key built from the label would remount
-            // every renamed token's swatch, and would collide between a renamed
-            // token and a new one that took its old name.
-            id: choice.identity,
-            // Qualified with the identity only where another offered token
-            // shares this name. Two presets under one label with equal or
-            // unresolvable colours are indistinguishable, and choosing either
-            // stores an identity the author could not have predicted.
-            label: colourTokenLabel(choice, choices),
-            // The RESOLVED colour, never the token's raw value. A preset button
-            // paints what it is handed, so a token holding `var(--brand)`,
-            // `currentcolor` or a CSS-wide keyword would resolve against the
-            // inspector rather than the canvas and show a colour the page does
-            // not have — the same failure the main swatch refuses. A token this
-            // package cannot resolve paints nothing and stays choosable, which
-            // is what keeps the reference reachable.
-            color: choice.swatch ?? "transparent",
-            value: choice,
-          }))}
-          onColorChange={onColour}
-          onSwatchSelect={swatch => {
-            if (swatch.value !== undefined) onToken(swatch.value.identity);
+        <ColourVariables
+          choices={choices}
+          read={tokensRead}
+          current={reference}
+          onPick={identity => {
+            // One discrete choice, committed at once; the close that follows
+            // has nothing left to write.
+            onToken(identity);
+            setOpen(false);
           }}
+        />
+        <CustomColour
+          open={custom}
+          onToggle={() => setCustom(was => !was)}
+          shown={shown}
+          unrepresented={unrepresented}
+          onColour={onColour}
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * Whether a stored colour is written as a value rather than as a variable: the
+ * picker then opens with the controls that made it showing, under the
+ * variables. Nothing stored, or a variable, opens on the variables alone.
+ */
+function writtenAsValue(stored: StyleValue | undefined): boolean {
+  return stored !== undefined && !isTokenRef(stored);
+}
+
+/**
+ * What opens the picker: for a value or none, the swatch beside the field
+ * holding it; for a variable, the variable itself, its swatch and its name, as
+ * the control an author opens to choose another.
+ *
+ * Handed the popover's own trigger props, which it spreads on the button.
+ */
+function ColourTrigger({
+  shown,
+  reference,
+  referenceLabel,
+  actionName,
+  ...trigger
+}: React.ComponentProps<"button"> & {
+  shown: string | undefined;
+  reference: string | null;
+  referenceLabel: string;
+  actionName: string;
+}): React.JSX.Element {
+  const paint = {
+    // Painted through a custom property rather than `background-color`
+    // directly, so the chequerboard beneath a translucent colour stays visible
+    // through it. `undefined` leaves the class's own "nothing here" appearance
+    // rather than a colour this cannot vouch for.
+    style:
+      shown === undefined
+        ? undefined
+        : ({ "--nx-swatch": shown } as React.CSSProperties),
+    "data-empty": shown === undefined ? "" : undefined,
+  };
+  if (reference === null) {
+    return (
+      <button
+        {...trigger}
+        type="button"
+        className="nx-style-inspector__swatch"
+        aria-label={`Colour for ${actionName}`}
+        {...paint}
+      />
+    );
+  }
+  return (
+    <button
+      {...trigger}
+      type="button"
+      className="nx-font-pick__trigger nx-style-inspector__colour-pick"
+      aria-label={`Colour for ${actionName}: ${referenceLabel}`}
+      {...paint}
+    >
+      <span className="nx-vars__swatch" aria-hidden="true" />
+      <span className="nx-font-pick__value">{referenceLabel}</span>
+      <ChevronDown aria-hidden="true" size={14} />
+    </button>
+  );
+}
+
+/**
+ * Custom colour, at the end of the picker: a button that opens the raw
+ * picker in place, for the exception a variable does not cover.
+ */
+function CustomColour({
+  open,
+  onToggle,
+  shown,
+  unrepresented,
+  onColour,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  /** The resolved colour, or `undefined` when nothing here can resolve one. */
+  shown: string | undefined;
+  /** Whether the stored value is one the picker cannot show. */
+  unrepresented: boolean;
+  onColour: (hex: string) => void;
+}): React.JSX.Element {
+  const regionId = React.useId();
+  return (
+    <div className="nx-style-inspector__custom">
+      <button
+        type="button"
+        className="nx-style-inspector__custom-toggle"
+        aria-expanded={open}
+        aria-controls={regionId}
+        onClick={onToggle}
+      >
+        <span>Custom colour</span>
+        <ChevronDown aria-hidden="true" size={14} />
+      </button>
+      {open ? (
+        <div className="nx-style-inspector__custom-body" id={regionId}>
+          {unrepresented ? (
+            <p className="nx-inspector__note">
+              This value cannot be shown on the picker. Choosing here replaces
+              it.
+            </p>
+          ) : null}
+          <ColorPicker
+            // A fallback only where nothing could be resolved, and it is
+            // never WRITTEN by being shown: the picker reports a colour only
+            // once the author moves something, so opening it over a value it
+            // cannot represent changes nothing.
+            color={shown ?? PICKER_FALLBACK}
+            showAlpha
+            onColorChange={onColour}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** One colour variable as the picker lists it. */
+interface ColourChoice {
+  readonly key: string;
+  readonly label: string;
+  readonly token: ColourToken;
+}
+
+/**
+ * The site's colour variables, by name, each with its swatch and its light
+ * and dark pair; or, for a site with none, a line saying so.
+ */
+function ColourVariables({
+  choices,
+  read,
+  current,
+  onPick,
+}: {
+  choices: readonly ColourToken[];
+  /** Whether the site's variables have arrived. */
+  read: boolean;
+  /** The identity the value refers to, marked in the list. */
+  current: string | null;
+  onPick: (identity: string) => void;
+}): React.JSX.Element {
+  if (!read) {
+    // Not yet arrived is not the same as none: saying "no variables" while
+    // the site's style is still on its way would be wrong for a moment.
+    return (
+      <p
+        className="nx-vars__note nx-style-inspector__no-variables"
+        role="status"
+      >
+        Reading this site&rsquo;s colour variables&hellip;
+      </p>
+    );
+  }
+  if (choices.length === 0) {
+    return (
+      <p className="nx-vars__note nx-style-inspector__no-variables">
+        This site has no colour variables yet.
+      </p>
+    );
+  }
+  const listed: ColourChoice[] = choices.map(token => ({
+    // The IDENTITY as the key, which is what keeps the list stable across a
+    // rename: a key built from the label would remount every renamed
+    // variable's row, and would collide between a renamed variable and a new
+    // one that took its old name.
+    key: token.identity,
+    // Qualified with the identity only where another listed variable shares
+    // this name: two under one name with equal colours are otherwise
+    // indistinguishable, and choosing either stores an identity the author
+    // could not have predicted.
+    label: colourTokenLabel(token, choices),
+    token,
+  }));
+  return (
+    <div className="nx-style-inspector__variables">
+      <ChoiceList
+        choices={listed}
+        currentKey={current ?? undefined}
+        onPick={choice => onPick(choice.token.identity)}
+        label="Colour variables"
+        searchLabel="Search colour variables"
+        noMatch="No colour variables match this search."
+        choiceClassName="nx-style-inspector__variable"
+        renderChoice={choice => (
+          <>
+            <span
+              className="nx-vars__swatch nx-vars__swatch--main"
+              aria-hidden="true"
+              // The RESOLVED colour in the mode the canvas shows, never the
+              // raw value: `var(--brand)` or `currentcolor` painted here would
+              // resolve against the inspector rather than the canvas.
+              style={swatchStyle(choice.token.swatch)}
+            />
+            <span className="nx-style-inspector__variable-name">
+              {choice.label}
+            </span>
+            <ColourPair {...choice.token.pair} />
+          </>
+        )}
+      />
+    </div>
   );
 }
 
@@ -3873,50 +4099,39 @@ function storedTokenLabel(
 }
 
 /**
- * A stored token, by the name an author reads, with the way to remove it.
+ * The way to remove a stored variable, beside the trigger that names it.
  *
- * The name is resolved by the caller and the fallback is the stored identity,
- * which is the honest answer for a reference to a token the site no longer
- * defines: an unknown token is a warning rather than an error, so the value
- * goes on compiling and the author is shown the string their document holds
- * rather than an empty space.
+ * The name itself is on the trigger: the variable's current name, qualified
+ * with its identity where another listed variable shares it, and the stored
+ * identity when the site defines no such variable — an unknown variable is a
+ * warning rather than an error, so the value goes on compiling and the author
+ * is shown the string their document holds rather than an empty space.
  */
-function TokenName({
-  label,
+function TokenClear({
   actionName,
   fieldId,
   onClear,
 }: {
-  /**
-   * What to show: the token's current name, qualified with its identity where
-   * another offered token shares that name, and the identity alone when the
-   * site defines no token for it. Resolved by the caller, which is the only
-   * place that holds the list the collision would be against.
-   */
-  label: string;
   actionName: string;
   /** The field whose value this clear writes. See {@link commitsFor}. */
   fieldId: string;
   onClear: () => void;
 }): React.JSX.Element {
   return (
-    <>
-      <span className="nx-style-inspector__colour-token">{label}</span>
-      <button
-        /*
-         * This press writes this field's value: it commits the clear, and the
-         * picker must not also write the draft its dismissal would otherwise
-         * flush. Declared rather than handed up as a ref, so any control making
-         * the same promise says so the same way.
-         */
-        {...commitsFor(fieldId)}
-        type="button"
-        onClick={onClear}
-        aria-label={`Clear ${actionName}`}
-      >
-        Clear
-      </button>
-    </>
+    <button
+      /*
+       * This press writes this field's value: it commits the clear, and the
+       * picker must not also write the draft its dismissal would otherwise
+       * flush. Declared rather than handed up as a ref, so any control making
+       * the same promise says so the same way.
+       */
+      {...commitsFor(fieldId)}
+      type="button"
+      onClick={onClear}
+      aria-label={`Clear ${actionName}`}
+    >
+      Clear
+    </button>
   );
 }
 
@@ -4065,7 +4280,6 @@ function ValueField({
         id={id}
         fold={fold}
         stored={stored}
-        actionName={actionName}
         describedBy={describedBy}
         onCommit={onCommit}
       />
@@ -4106,7 +4320,6 @@ function ValueField({
         id={id}
         control={{ ...control, leaf: control.leaf }}
         stored={stored}
-        actionName={actionName}
         describedBy={describedBy}
         onCommit={onCommit}
       />

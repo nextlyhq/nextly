@@ -300,8 +300,9 @@ describe("the allowlist", () => {
   // naming a numbered change, no longer exist, and its entry emptied (217 -> 216).
   // 477 -> 475: one recorded offence each in `register-collections.ts` and
   // `collections-handler.ts` no longer exists; both entries remain.
-  // 475 -> 452: the allowlist itself was cut to 215 entries holding 452
-  // offences while these pins still read 216 / 475; they now match it.
+  // 475 -> 452: the 23 recorded offences in `collection-query-service.ts`,
+  // comments naming milestones in its localized reads, were rewritten to
+  // describe the code, and its entry emptied (216 -> 215).
   // 452 -> 449: one recorded offence each in `migrate-create.ts`,
   // `permission-seed-service.ts` and `prompt-renames.ts` no longer exists;
   // all three entries remain.
