@@ -78,7 +78,11 @@ import {
   StyleRevisionContext,
   useSiteStyleHistory,
 } from "./site-style-history";
-import { offerableTokens, siteStyleStatus } from "./site-style-studios";
+import {
+  offerableFaces,
+  offerableTokens,
+  siteStyleStatus,
+} from "./site-style-studios";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
   hasUnsavedWork,
@@ -363,8 +367,10 @@ function editorInspector(
     canvasPreviewContainer,
     liveBreakpoints,
     canvasSiteStyle,
+    configSiteStyle,
     siteStylePending,
     siteStyleError,
+    requestPanel,
   } = view;
   return (
     <InspectorPanel
@@ -424,6 +430,18 @@ function editorInspector(
         siteStylePending,
         siteStyleError
       )}
+      // The Font control lists only what the site can draw: the faces the
+      // canvas loads, of which those from the site's code cannot be removed,
+      // and a way to Design's fonts to add one.
+      fonts={{
+        faces: offerableFaces(
+          canvasSiteStyle,
+          siteStylePending,
+          siteStyleError
+        ),
+        fromCode: configSiteStyle.fonts ?? [],
+        onManageFonts: () => requestPanel("design", "fonts"),
+      }}
     />
   );
 }
