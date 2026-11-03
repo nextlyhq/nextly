@@ -24,6 +24,12 @@ vi.mock("@admin/services/versionApi", () => ({
   versionApi: { getAutosave: getSpy },
 }));
 
+/** The account signed in to this tab, which a test may change. */
+const signedIn = vi.hoisted(() => ({ id: "author-1" as string | null }));
+vi.mock("@admin/hooks/useCurrentUserId", () => ({
+  useCurrentUserId: () => signedIn.id,
+}));
+
 import { useAutosaveRecovery } from "../useAutosaveRecovery";
 
 const SCOPE = { kind: "collection" as const, slug: "posts", entryId: "e1" };
@@ -45,10 +51,11 @@ function wrapper({ children }: { children: ReactNode }) {
  */
 function useRecoveryHarness(
   scope: VersionScope | null,
-  stored: Record<string, unknown> = STORED
+  stored: Record<string, unknown> = STORED,
+  locale: string | null = null
 ) {
   const form = useForm<Record<string, unknown>>({ defaultValues: stored });
-  const recovery = useAutosaveRecovery({ scope, form });
+  const recovery = useAutosaveRecovery({ scope, form, locale });
   /*
    * `isDirty` is READ DURING RENDER and returned, deliberately.
    *
@@ -63,15 +70,19 @@ function useRecoveryHarness(
 
 function renderRecovery(
   scope: VersionScope | null,
-  stored?: Record<string, unknown>
+  stored?: Record<string, unknown>,
+  locale?: string | null
 ) {
-  return renderHook(() => useRecoveryHarness(scope, stored), { wrapper });
+  return renderHook(() => useRecoveryHarness(scope, stored, locale), {
+    wrapper,
+  });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   // "Not now" is remembered for the tab; each test starts a fresh tab.
   window.sessionStorage.clear();
+  signedIn.id = "author-1";
 });
 
 /**
@@ -201,36 +212,50 @@ describe("useAutosaveRecovery", () => {
     );
   });
 
-  it("passes over the fields a point lacks, and not one it holds differently", async () => {
-    // The server leaves out password fields and the fields this author may not
-    // read, which the form seeds with defaults of its own ("", false, 0, []).
+  it("offers a point lacking a field, whether withheld or deleted, rather than risk hiding work", async () => {
+    // A point the server stripped of a password is still offered: passing over
+    // a missing key would also pass over a JSON property an edit deleted.
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED, meta: { a: 1 } },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    const deleted = renderRecovery(SCOPE, { ...STORED, meta: { a: 1, b: 2 } });
+    await waitFor(() =>
+      expect(deleted.result.current.recovery.offer).not.toBeNull()
+    );
+    deleted.unmount();
+
     getSpy.mockResolvedValue({
       snapshot: { ...STORED },
       updatedAt: "2026-08-17T10:00:00.000Z",
       locale: null,
     });
-    const lacking = renderRecovery(SCOPE, {
-      ...STORED,
-      secret: "",
-      featured: false,
-      tags: [],
-    });
+    const withheld = renderRecovery(SCOPE, { ...STORED, secret: "" });
     await waitFor(() =>
-      expect(lacking.result.current.recovery.isResolved).toBe(true)
+      expect(withheld.result.current.recovery.offer).not.toBeNull()
     );
-    expect(lacking.result.current.recovery.offer).toBeNull();
-    lacking.unmount();
+  });
 
-    // A field the point holds with another value is unsaved work.
+  it("judges a point equal to the document only in the language it was recorded in", async () => {
+    // A point from another language can hold values equal to this one's
+    // stored document while differing from its own.
     getSpy.mockResolvedValue({
-      snapshot: { ...STORED, featured: true },
+      snapshot: { ...STORED },
       updatedAt: "2026-08-17T10:00:00.000Z",
-      locale: null,
+      locale: "fr",
     });
-    const differs = renderRecovery(SCOPE, { ...STORED, featured: false });
+    const other = renderRecovery(SCOPE, STORED, "en");
     await waitFor(() =>
-      expect(differs.result.current.recovery.offer).not.toBeNull()
+      expect(other.result.current.recovery.offer).not.toBeNull()
     );
+    other.unmount();
+
+    const same = renderRecovery(SCOPE, STORED, "fr");
+    await waitFor(() =>
+      expect(same.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(same.result.current.recovery.offer).toBeNull();
   });
 
   it("offers a point in another language stored in the same second with the same values, after one was put off", async () => {
@@ -252,6 +277,27 @@ describe("useAutosaveRecovery", () => {
       updatedAt: at,
       locale: "fr",
     });
+    const other = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(other.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("offers another account signed in to the same tab its own point, despite one put off", async () => {
+    // Recovery points are each author's own, and so is a "Not now".
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    first.unmount();
+
+    signedIn.id = "author-2";
     const other = renderRecovery(SCOPE);
     await waitFor(() =>
       expect(other.result.current.recovery.offer).not.toBeNull()

@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
   versionApi,
@@ -31,6 +32,24 @@ import {
  */
 function putOffKey(documentKey: string): string {
   return `nextly:recovery-not-now:${documentKey}`;
+}
+
+/**
+ * Whether a recovery point holds exactly what the document stores, in the
+ * language it was recorded in. Strict, and offered whenever in doubt: hiding a
+ * point loses work, while offering one needlessly costs a dismissal. A point
+ * in another language than the form shows is never judged equal, and neither
+ * is one lacking a field the server withheld (a password, a field this author
+ * may not read): passing over a missing key would also pass over a property
+ * an edit deleted.
+ */
+function holdsStored(
+  point: AutosaveDetail,
+  stored: unknown,
+  locale: string | null
+): boolean {
+  if ((point.locale ?? null) !== locale) return false;
+  return canonicalJson(point.snapshot) === canonicalJson(stored);
 }
 
 /**
@@ -66,33 +85,6 @@ function pointIdentity(point: AutosaveDetail): string {
   ].join("|");
 }
 
-/**
- * Whether a recovery point holds what the document stores: every value it holds
- * equals the document's. A key it lacks holds no unsaved work and is passed
- * over: the server leaves out the password fields and the fields this author
- * may not read, which the form still seeds with defaults of its own.
- */
-function holdsStored(snapshot: unknown, stored: unknown): boolean {
-  if (Array.isArray(snapshot) || Array.isArray(stored)) {
-    return (
-      Array.isArray(snapshot) &&
-      Array.isArray(stored) &&
-      snapshot.length === stored.length &&
-      snapshot.every((item, index) => holdsStored(item, stored[index]))
-    );
-  }
-  if (isPlainRecord(snapshot) && isPlainRecord(stored)) {
-    return Object.keys(snapshot).every(key =>
-      holdsStored(snapshot[key], stored[key])
-    );
-  }
-  return canonicalJson(snapshot) === canonicalJson(stored);
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** Whether this tab already put off the recovery point named `at`. */
 function wasPutOff(documentKey: string, at: string): boolean {
   try {
@@ -123,6 +115,11 @@ export interface UseAutosaveRecoveryOptions {
    * entry and Single editors must not be able to answer it differently.
    */
   form: UseFormReturn<Record<string, unknown>>;
+  /**
+   * The language the form shows, or `null` where the document has none. A
+   * recovery point recorded in another language is never judged equal to it.
+   */
+  locale?: string | null;
   /**
    * How many saves this editor has made. A save deletes the author's recovery
    * point on the server, so after one, an offer still on screen is for work the
@@ -182,8 +179,12 @@ export interface UseAutosaveRecoveryResult {
 export function useAutosaveRecovery({
   scope,
   form,
+  locale = null,
   savedCount = 0,
 }: UseAutosaveRecoveryOptions): UseAutosaveRecoveryResult {
+  // Recovery points are each author's own, so a "Not now" is too: another
+  // account signed in to this tab is offered its own point.
+  const author = useCurrentUserId();
   // Keyed by the document, so switching entries asks again rather than
   // reusing the previous document's answer.
   const queryKey = [
@@ -221,8 +222,9 @@ export function useAutosaveRecovery({
 
   const dismiss = useCallback(() => {
     setDismissed(true);
-    if (data) rememberPutOff(documentKey, pointIdentity(data));
-  }, [data, documentKey]);
+    if (data)
+      rememberPutOff(`${author ?? ""}|${documentKey}`, pointIdentity(data));
+  }, [data, documentKey, author]);
 
   // The document as stored, which the form was loaded with.
   const stored = form.formState.defaultValues;
@@ -250,13 +252,14 @@ export function useAutosaveRecovery({
     const savedAt = new Date(data.updatedAt);
     if (Number.isNaN(savedAt.getTime())) return null;
     // Put off in this tab already: see `dismiss`.
-    if (wasPutOff(documentKey, pointIdentity(data))) return null;
+    if (wasPutOff(`${author ?? ""}|${documentKey}`, pointIdentity(data)))
+      return null;
     // A recovery point holding what the document already stores is no unsaved
     // work: an author who undid back to the saved document left one behind,
     // and offering it back on every load restores nothing.
-    if (holdsStored(data.snapshot, stored)) return null;
+    if (holdsStored(data, stored, locale)) return null;
     return { savedAt, snapshot: data.snapshot };
-  }, [dismissed, data, documentKey, stored]);
+  }, [dismissed, data, documentKey, stored, locale, author]);
 
   const restore = useCallback(() => {
     if (!offer) return;
