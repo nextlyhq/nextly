@@ -89,9 +89,10 @@ import {
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   bumpDocumentRevision,
-  DOCUMENT_VERSION_KEY,
   documentVersionOn,
   revisionBumpColumns,
+  translationTableOf,
+  withDocumentVersion,
 } from "../../versions/document-revision";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
@@ -369,13 +370,10 @@ export class SinglePublishAllService extends BaseService {
         success: true,
         statusCode: 200,
         message: "All languages published.",
-        data: {
-          id: plan.existingDoc.id,
-          status: "published",
-          ...(outcome.version !== undefined
-            ? { [DOCUMENT_VERSION_KEY]: outcome.version }
-            : {}),
-        },
+        data: withDocumentVersion(
+          { id: plan.existingDoc.id, status: "published" as const },
+          outcome.version
+        ),
         eventRecorded: outcome.eventRecorded,
         committed: outcome.committed,
         // A Single is consumed sitewide, so its one tag is the whole cascade.
@@ -958,10 +956,7 @@ export class SinglePublishAllService extends BaseService {
         dialect: this.adapter.dialect,
         table: singleMeta.tableName,
         id: existingDoc.id,
-        languagesTable:
-          plan.companion && plan.companionReady
-            ? plan.companion.companionTableName
-            : null,
+        languagesTable: translationTableOf(plan.companion, plan.companionReady),
         localization: this.localization,
         locale: EVERY_LOCALE,
       }),

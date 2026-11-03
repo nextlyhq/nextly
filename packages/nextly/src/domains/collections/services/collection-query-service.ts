@@ -3866,7 +3866,6 @@ export class CollectionQueryService extends BaseService {
       const finalData = await this.finalizeReadRows({
         rows: expandedEntries,
         hooksWaived,
-        localized: (collection as { localized?: boolean }).localized === true,
         collectionName: params.collectionName,
         // The collection record this read was planned from, so a `dbName`
         // collection's contributed columns are found under its real table.
@@ -3887,6 +3886,7 @@ export class CollectionQueryService extends BaseService {
         select: params.select,
         richTextFormat: params.richTextFormat,
         locale: params.locale,
+        localized: (collection as { localized?: boolean }).localized === true,
       });
 
       // Build paginated response with all metadata

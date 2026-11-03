@@ -170,10 +170,11 @@ import { stopReleasesHolding } from "../../releases/early-stop";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   bumpDocumentRevision,
-  DOCUMENT_VERSION_KEY,
   documentVersionOn,
+  mainRowBump,
   revisionBumpColumns,
-  savesMainRow,
+  setDocumentVersion,
+  translationTableOf,
   withoutDocumentVersionKeys,
 } from "../../versions/document-revision";
 import {
@@ -3237,7 +3238,7 @@ export class SingleMutationService extends BaseService {
             // stored below instead. The stored row still travels onward so
             // everything after this reports the document as it stands, which
             // for a held edit is the published content the public still sees.
-            const savedBy = actorForWrite(options.actor ?? null, options.user);
+            const savedBy = actorForWrite(options.actor, options.user);
             const rows = holdEdit
               ? [existingDoc]
               : await tx.update<SingleDocument>(
@@ -3247,13 +3248,14 @@ export class SingleMutationService extends BaseService {
                     // The document's counter moves unless this save changed
                     // translated fields alone, which move only that
                     // language's row.
-                    ...(savesMainRow({
-                      updatePayload: mainPayload,
-                      componentFieldData: attemptComponentFields,
-                      manyToManyData: {},
-                    })
-                      ? revisionBumpColumns(savedBy)
-                      : {}),
+                    ...mainRowBump(
+                      {
+                        updatePayload: mainPayload,
+                        componentFieldData: attemptComponentFields,
+                        manyToManyData: {},
+                      },
+                      savedBy
+                    ),
                   },
                   this.whereEq("id", existingDoc.id),
                   { returning: "*" }
@@ -4832,22 +4834,21 @@ export class SingleMutationService extends BaseService {
             }
 
             // The version this save produced, read in its own transaction.
-            if (rows.length > 0) {
-              writtenVersion = await documentVersionOn(tx, {
-                dialect: this.adapter.dialect,
-                table: singleMeta.tableName,
-                id: existingDoc.id,
-                // Readiness decided before the transaction; without the table
-                // the translated values are on the Single's own row.
-                languagesTable:
-                  companion && companionPhysicallyExists
-                    ? companion.companionTableName
-                    : null,
-                localization: this.localization,
-                // A wildcard write moved every language, and answers for them all.
-                locale: sweepAllLocales ? EVERY_LOCALE : options.locale,
-              });
-            }
+            writtenVersion = await documentVersionOn(tx, {
+              dialect: this.adapter.dialect,
+              table: singleMeta.tableName,
+              id: existingDoc.id,
+              // Readiness decided before the transaction; without the table
+              // the translated values are on the Single's own row.
+              languagesTable: translationTableOf(
+                companion,
+                companionPhysicallyExists
+              ),
+              localization: this.localization,
+              // As asked: a wildcard write moved every language, and answers
+              // for them all.
+              locale: rawOptions.locale,
+            });
 
             return rows;
           })
@@ -5047,10 +5048,7 @@ export class SingleMutationService extends BaseService {
         visitor: this.fieldRuleVisitor,
       });
 
-      if (writtenVersion !== undefined) {
-        (updatedDoc as Record<string, unknown>)[DOCUMENT_VERSION_KEY] =
-          writtenVersion;
-      }
+      setDocumentVersion(updatedDoc, writtenVersion);
 
       return {
         success: true,

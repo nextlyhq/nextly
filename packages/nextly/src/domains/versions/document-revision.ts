@@ -91,7 +91,7 @@ export function withoutDocumentVersionKeys<T extends Record<string, unknown>>(
  * A row read without its counter is a read that selected too little, never a
  * version: guessing one would publish a version no save produced.
  */
-export function revisionOf(value: unknown): number {
+function revisionOf(value: unknown): number {
   const n = typeof value === "string" ? Number(value) : value;
   if (typeof n === "number" && Number.isInteger(n)) return n;
   throw NextlyError.internal({
@@ -165,7 +165,7 @@ export async function bumpDocumentRevision(
  * Read inside the write's transaction, after the write, so a save reports the
  * version it produced. A read after the commit can see a later save's.
  */
-export async function readDocumentRevisions(
+async function readDocumentRevisions(
   tx: Pick<TransactionContext, "select" | "execute">,
   args: {
     dialect: SupportedDialect;
@@ -212,7 +212,7 @@ export type RunStatement = (
  * declare the counter, since the same model serves field-group translation
  * tables, which are no documents and never carry it.
  */
-export async function readLanguageRevisions(
+async function readLanguageRevisions(
   run: RunStatement,
   args: { dialect: SupportedDialect; table: string; ids: readonly string[] }
 ): Promise<Map<string, Map<string, number>>> {
@@ -240,7 +240,7 @@ export async function readLanguageRevisions(
 }
 
 /** The counters of `locales`, 0 for a language with no translation row. */
-export function languageCounters(
+function languageCounters(
   rows: ReadonlyMap<string, number> | undefined,
   locales: readonly string[]
 ): Record<string, number> {
@@ -257,7 +257,7 @@ export function languageCounters(
  * One answer for every read and write, so the version a save returns and the
  * version the next read returns are spelled from the same languages.
  */
-export function versionLanguagesFor(args: {
+function versionLanguagesFor(args: {
   localized: boolean;
   localization: SanitizedLocalizationConfig | undefined;
   locale: string | undefined;
@@ -322,7 +322,7 @@ const BOOKKEEPING_KEYS: ReadonlySet<string> = new Set([
  * its main row, a component, or a relation. A save of translated fields alone
  * changes only that language's row, whose counter its upsert moves.
  */
-export function savesMainRow(args: {
+function savesMainRow(args: {
   /** The values written to the main row, translated fields already split out. */
   updatePayload: Record<string, unknown>;
   componentFieldData: Record<string, unknown>;
@@ -443,4 +443,45 @@ export function languageRevisionsOf(
     out.set(parent, languages);
   }
   return out;
+}
+
+/** Publish `version` on a response document, when there is one to publish. */
+export function setDocumentVersion(
+  doc: Record<string, unknown>,
+  version: string | undefined
+): void {
+  if (version !== undefined) doc[DOCUMENT_VERSION_KEY] = version;
+}
+
+/**
+ * The assignments a save adds to its main-row UPDATE: the counter and the
+ * changer when it changes what the main row's version covers
+ * (`savesMainRow`), nothing when it changed translated fields alone.
+ */
+export function mainRowBump(
+  write: Parameters<typeof savesMainRow>[0],
+  actor: RequestActor
+): Record<string, unknown> {
+  return savesMainRow(write) ? revisionBumpColumns(actor) : {};
+}
+
+/**
+ * The translation table a version reads, from what a write or read already
+ * knows of it: its table when it is there to read, else null.
+ */
+export function translationTableOf(
+  companion: { companionTableName: string } | null | undefined,
+  ready = true
+): string | null {
+  return companion && ready ? companion.companionTableName : null;
+}
+
+/** `data` with `version` published on it, when there is one to publish. */
+export function withDocumentVersion<T extends Record<string, unknown>>(
+  data: T,
+  version: string | undefined
+): T {
+  return version === undefined
+    ? data
+    : { ...data, [DOCUMENT_VERSION_KEY]: version };
 }

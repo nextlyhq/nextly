@@ -26,7 +26,7 @@ import { loadDialectTables } from "../../../database/dialect-tables";
 import { getDialectTables } from "../../../database/index";
 import { asRepositoryDb } from "../events/repository-db";
 import { runStatement } from "../pipeline/_internal/run-statement";
-import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
+import { liveColumnNames } from "../pipeline/diff/introspect-live";
 import {
   migrateStepColumnDescriptors,
   renderSystemColumnSql,
@@ -69,26 +69,57 @@ async function contentTables(
   return [...names].sort();
 }
 
-/** Which columns each existing table has, lower-cased. */
-async function liveColumns(
-  db: unknown,
-  dialect: SupportedDialect,
-  tables: string[]
-): Promise<Map<string, Set<string>>> {
-  const snapshot = await introspectLiveColumns(db, dialect, tables);
-  return new Map(
-    snapshot.tables.map(table => [
-      table.name.toLowerCase(),
-      new Set(table.columns.map(column => column.name.toLowerCase())),
-    ])
-  );
-}
-
 function quoteIdentifier(dialect: SupportedDialect) {
   return (name: string) =>
     dialect === "mysql"
       ? `\`${name.replace(/`/g, "``")}\``
       : `"${name.replace(/"/g, '""')}"`;
+}
+
+type ColumnDescriptor = ReturnType<typeof migrateStepColumnDescriptors>[number];
+
+/** Each per-document column a table that is there lacks, by table. */
+function missingColumns(
+  tables: readonly string[],
+  live: ReadonlyMap<string, ReadonlySet<string>>,
+  descriptors: readonly ColumnDescriptor[]
+): { table: string; column: ColumnDescriptor }[] {
+  return tables.flatMap(table => {
+    // A registered entity whose table, or translation table, is not there.
+    const present = live.get(table.toLowerCase());
+    if (present === undefined) return [];
+    return descriptors
+      .filter(column => !present.has(column.name))
+      .map(column => ({ table, column }));
+  });
+}
+
+/**
+ * Add one column. Reports false when another process added it between the
+ * catalog read and this statement: done, not failed. Any other failure is
+ * thrown.
+ */
+async function addColumn(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  column: ColumnDescriptor
+): Promise<boolean> {
+  const q = quoteIdentifier(dialect);
+  try {
+    await runStatement(
+      db,
+      dialect,
+      sql.raw(
+        `ALTER TABLE ${q(table)} ADD COLUMN ${renderSystemColumnSql(column, q)}`
+      )
+    );
+    return true;
+  } catch (error) {
+    const now = await liveColumnNames(db, dialect, [table]);
+    if (now.get(table.toLowerCase())?.has(column.name)) return false;
+    throw error;
+  }
 }
 
 /**
@@ -101,36 +132,18 @@ export async function addDocumentColumns(
   const { db, dialect } = args;
   const tables = await contentTables(db, dialect);
   if (tables.length === 0) return { added: 0 };
-  const live = await liveColumns(db, dialect, tables);
   // The same descriptors `CREATE TABLE` is written from, so an added column
   // and a created one cannot differ in type, default or nullability.
-  const descriptors = migrateStepColumnDescriptors(dialect);
-  const q = quoteIdentifier(dialect);
-
+  const missing = missingColumns(
+    tables,
+    await liveColumnNames(db, dialect, tables),
+    migrateStepColumnDescriptors(dialect)
+  );
   let added = 0;
-  for (const table of tables) {
-    const present = live.get(table.toLowerCase());
-    // A registered entity whose table, or translation table, is not there.
-    if (present === undefined) continue;
-    for (const descriptor of descriptors) {
-      if (present.has(descriptor.name)) continue;
-      try {
-        await runStatement(
-          db,
-          dialect,
-          sql.raw(
-            `ALTER TABLE ${q(table)} ADD COLUMN ${renderSystemColumnSql(descriptor, q)}`
-          )
-        );
-      } catch (error) {
-        // Another process added it between the catalog read and this
-        // statement: done, not failed. Anything else is a real failure.
-        const now = await liveColumns(db, dialect, [table]);
-        if (now.get(table.toLowerCase())?.has(descriptor.name)) continue;
-        throw error;
-      }
-      added += 1;
-    }
+  // One statement per column, each its own commit on MySQL: a run stopped
+  // part-way leaves whole columns, and the next run adds the rest.
+  for (const { table, column } of missing) {
+    if (await addColumn(db, dialect, table, column)) added += 1;
   }
   if (added > 0) {
     args.logger?.info?.(

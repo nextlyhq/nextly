@@ -1384,36 +1384,11 @@ export class SingleQueryService extends BaseService {
 
       // Last, so no hook can drop or forge it. The live row's version, a held
       // draft overlaid on the document included.
-      const joinedRevisions = translations
-        ? languageRevisionsOf(translations.companionRows)
-        : undefined;
-      await attachDocumentVersions([doc], {
+      await this.attachVersion(doc, {
+        singleMeta,
         stored: storedRevisions,
-        run: (statement, values) =>
-          this.adapter.executeQuery<Record<string, unknown>>(statement, values),
-        dialect: this.adapter.dialect,
-        // A translated Single whose table is not there yet keeps its
-        // translated values on its own row, and its version names none.
-        languagesTable:
-          this.localization &&
-          singleMeta.localized === true &&
-          (await isCompanionReady(
-            this.adapter,
-            `${singleMeta.tableName}_locales`
-          ))
-            ? `${singleMeta.tableName}_locales`
-            : null,
-        localization: this.localization,
+        translations,
         locale: options.locale,
-        // Taken with the document by the joined read, when it was joined.
-        ...(translations && joinedRevisions
-          ? {
-              known: {
-                revisions: joinedRevisions,
-                locales: translations.localeChain,
-              },
-            }
-          : {}),
       });
 
       return {
@@ -1434,6 +1409,49 @@ export class SingleQueryService extends BaseService {
         "Failed to get Single document"
       );
     }
+  }
+
+  /**
+   * Publish the document's version on `doc`, from the counter read with it and
+   * its translation counters: those the joined read took, else one read of
+   * its own. A translated Single whose table is not there yet keeps its
+   * translated values on its own row, and its version names no language.
+   */
+  private async attachVersion(
+    doc: Record<string, unknown>,
+    args: {
+      singleMeta: DynamicSingleRecord;
+      stored: ReadonlyMap<string, unknown>;
+      translations: JoinedTranslations | undefined;
+      locale: string | undefined;
+    }
+  ): Promise<void> {
+    const languagesTable = `${args.singleMeta.tableName}_locales`;
+    const translated =
+      this.localization !== undefined && args.singleMeta.localized === true;
+    const joined = args.translations
+      ? languageRevisionsOf(args.translations.companionRows)
+      : undefined;
+    await attachDocumentVersions([doc], {
+      stored: args.stored,
+      run: (statement, values) =>
+        this.adapter.executeQuery<Record<string, unknown>>(statement, values),
+      dialect: this.adapter.dialect,
+      languagesTable:
+        translated && (await isCompanionReady(this.adapter, languagesTable))
+          ? languagesTable
+          : null,
+      localization: this.localization,
+      locale: args.locale,
+      ...(args.translations && joined
+        ? {
+            known: {
+              revisions: joined,
+              locales: args.translations.localeChain,
+            },
+          }
+        : {}),
+    });
   }
 
   /** The Single's translations table, as its reads describe it; null when it has none. */

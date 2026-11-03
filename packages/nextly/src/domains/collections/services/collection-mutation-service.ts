@@ -96,7 +96,6 @@ import {
   selectPublicationTransition,
   stripUndefinedStatus,
 } from "../../../lib/status-transition";
-import { MIGRATE_STEP_COLUMN_NAMES } from "../../../lib/system-columns";
 import {
   buildEntryRevalidationIntent,
   readRevalidateConfig,
@@ -264,10 +263,12 @@ import { captureInTx } from "../../versions/capture-in-tx";
 import {
   bumpDocumentRevision,
   changerColumns,
-  DOCUMENT_VERSION_KEY,
   documentVersionOn,
+  mainRowBump,
   revisionBumpColumns,
-  savesMainRow,
+  setDocumentVersion,
+  translationTableOf,
+  withDocumentVersion,
   withoutDocumentVersionKeys,
 } from "../../versions/document-revision";
 import {
@@ -1464,6 +1465,20 @@ function changesFieldFilterNames(
  */
 function markedDraft(draft: Record<string, unknown>): Record<string, unknown> {
   return { ...draft, _isWorkingDraft: true };
+}
+
+/**
+ * Whether `companion`'s translation table is there to read and write: false
+ * for an entity with none.
+ */
+async function companionTableReady(
+  adapter: Parameters<typeof isCompanionReady>[0],
+  companion: { companionTableName: string } | null
+): Promise<boolean> {
+  return (
+    companion !== null &&
+    (await isCompanionReady(adapter, companion.companionTableName))
+  );
 }
 
 /**
@@ -6980,9 +6995,8 @@ export class CollectionMutationService extends BaseService {
         // per-document columns are no field and are never handed on: the
         // version is published as `_rev` below.
         for (const [key, value] of Object.entries(
-          rawEntry as Record<string, unknown>
+          withoutDocumentVersionKeys(rawEntry as Record<string, unknown>)
         )) {
-          if (MIGRATE_STEP_COLUMN_NAMES.includes(key)) continue;
           entry[toCamelCase(key)] = value;
         }
 
@@ -7012,9 +7026,9 @@ export class CollectionMutationService extends BaseService {
           dialect: this.dialect,
           table: tableName,
           id: String(entry.id),
-          languagesTable: localizedWrite?.companionTableName ?? null,
+          languagesTable: translationTableOf(localizedWrite),
           localization: this.localization,
-          locale: localizedWrite?.writeLocale ?? params.locale,
+          locale: params.locale,
         });
 
         // Save component field data to separate comp_{slug} tables
@@ -7466,9 +7480,7 @@ export class CollectionMutationService extends BaseService {
         tableName
       );
 
-      if (createdVersion !== undefined) {
-        responseEntry[DOCUMENT_VERSION_KEY] = createdVersion;
-      }
+      setDocumentVersion(responseEntry, createdVersion);
 
       return {
         success: true,
@@ -7903,9 +7915,7 @@ export class CollectionMutationService extends BaseService {
       );
       // Whether the translation table is there to read and move, asked once,
       // before the transaction: the question takes a pooled connection.
-      const companionReady =
-        !!companion &&
-        (await isCompanionReady(this.adapter, companion.companionTableName));
+      const companionReady = await companionTableReady(this.adapter, companion);
       const companionPublishable =
         !!companion &&
         companion.hasStatus &&
@@ -8266,23 +8276,18 @@ export class CollectionMutationService extends BaseService {
                 ...(publishFirstPublishedAt
                   ? { first_published_at: publishFirstPublishedAt }
                   : {}),
-                // The main row's lifecycle is part of what its counter covers.
-                ...revisionBumpColumns(
-                  actorForWrite(params.actor, params.user)
-                ),
               },
               this.whereEq("id", params.entryId)
             );
-          } else {
-            // A move of every language is a save of the document even where
-            // the main row keeps no status of its own; its content stays.
-            await bumpDocumentRevision(
-              tx,
-              tableName,
-              { id: params.entryId },
-              actorForWrite(params.actor, params.user)
-            );
           }
+          // A move of every language is a save of the document, whether or
+          // not its main row keeps a status of its own.
+          await bumpDocumentRevision(
+            tx,
+            tableName,
+            { id: params.entryId },
+            actorForWrite(params.actor, params.user)
+          );
           if (companion && companionPublishable) {
             await this.writeCompanionStatus(tx, {
               companionTableName: companion.companionTableName,
@@ -8298,8 +8303,7 @@ export class CollectionMutationService extends BaseService {
             dialect: this.dialect,
             table: tableName,
             id: params.entryId,
-            languagesTable:
-              companion && companionReady ? companion.companionTableName : null,
+            languagesTable: translationTableOf(companion, companionReady),
             localization: this.localization,
             locale: EVERY_LOCALE,
           });
@@ -8791,13 +8795,10 @@ export class CollectionMutationService extends BaseService {
         success: true,
         statusCode: 200,
         message: direction.successMessage,
-        data: {
-          id: params.entryId,
-          status: direction.nextStatus,
-          ...(allLocalesVersion !== undefined
-            ? { [DOCUMENT_VERSION_KEY]: allLocalesVersion }
-            : {}),
-        },
+        data: withDocumentVersion(
+          { id: params.entryId, status: direction.nextStatus },
+          allLocalesVersion
+        ),
         eventRecorded,
         revalidationIntent,
       };
@@ -11852,18 +11853,13 @@ export class CollectionMutationService extends BaseService {
           // component or a relation. A save of translated fields alone moves
           // only that language's row, so a reader of another language keeps
           // the version it holds.
-          if (
-            savesMainRow({
-              updatePayload,
-              componentFieldData,
-              manyToManyData,
-            })
-          ) {
-            Object.assign(
-              columns,
-              revisionBumpColumns(actorForWrite(params.actor, params.user))
-            );
-          }
+          Object.assign(
+            columns,
+            mainRowBump(
+              { updatePayload, componentFieldData, manyToManyData },
+              actorForWrite(params.actor, params.user)
+            )
+          );
           // Skip the live-row UPDATE for a draft edit — the pending
           // change is stored as the working draft below, not written to the row.
           if (!storeAsWorkingDraft) {
@@ -12753,10 +12749,11 @@ export class CollectionMutationService extends BaseService {
             id: params.entryId,
             // The split found the translation table there to write to;
             // without it the translated values are on the entry's own row.
-            languagesTable: localizedUpdate?.companionTableName ?? null,
+            languagesTable: translationTableOf(localizedUpdate),
             localization: this.localization,
-            // A wildcard write moved every language, and answers for them all.
-            locale: sweepAllLocales ? EVERY_LOCALE : params.locale,
+            // As asked: a wildcard write moved every language, and answers
+            // for them all.
+            locale: rawParams.locale,
           });
         })
       );
@@ -13078,9 +13075,7 @@ export class CollectionMutationService extends BaseService {
       if (workingDraftDocument) {
         responseEntry._isWorkingDraft = true;
       }
-      if (writtenVersion !== undefined) {
-        responseEntry[DOCUMENT_VERSION_KEY] = writtenVersion;
-      }
+      setDocumentVersion(responseEntry, writtenVersion);
 
       return {
         success: true,
@@ -15608,15 +15603,17 @@ export class CollectionMutationService extends BaseService {
         tx.getDrizzle()
       );
       // Read on the caller's transaction, where this create is visible.
-      (entry as Record<string, unknown>)[DOCUMENT_VERSION_KEY] =
+      setDocumentVersion(
+        entry as Record<string, unknown>,
         await documentVersionOn(tx, {
           dialect: this.dialect,
           table: tableName,
           id: (entry as { id: string }).id,
-          languagesTable: localizedWrite?.companionTableName ?? null,
+          languagesTable: translationTableOf(localizedWrite),
           localization: this.localization,
           locale: localizedWrite?.writeLocale,
-        });
+        })
+      );
 
       return {
         success: true,
@@ -16359,18 +16356,19 @@ export class CollectionMutationService extends BaseService {
               ...(updateStamp ? { first_published_at: updateStamp } : {}),
               // As on the single-entry update: the document's counter moves
               // unless this save changed translated fields alone.
-              ...(savesMainRow({
-                updatePayload: stripImmutableSystemFields(
-                  finalData,
-                  "collection",
-                  tableName,
-                  fields
-                ),
-                componentFieldData,
-                manyToManyData,
-              })
-                ? revisionBumpColumns(actorForWrite(params.actor, params.user))
-                : {}),
+              ...mainRowBump(
+                {
+                  updatePayload: stripImmutableSystemFields(
+                    finalData,
+                    "collection",
+                    tableName,
+                    fields
+                  ),
+                  componentFieldData,
+                  manyToManyData,
+                },
+                actorForWrite(params.actor, params.user)
+              ),
             },
             this.whereEq("id", entryId),
             { returning: "*" }
@@ -16998,14 +16996,17 @@ export class CollectionMutationService extends BaseService {
       );
       // Read on the caller's transaction, where this save is visible and no
       // later one can be.
-      response[DOCUMENT_VERSION_KEY] = await documentVersionOn(tx, {
-        dialect: this.dialect,
-        table: tableName,
-        id: entryId,
-        languagesTable: localizedUpdate?.companionTableName ?? null,
-        localization: this.localization,
-        locale: localizedUpdate?.writeLocale,
-      });
+      setDocumentVersion(
+        response,
+        await documentVersionOn(tx, {
+          dialect: this.dialect,
+          table: tableName,
+          id: entryId,
+          languagesTable: translationTableOf(localizedUpdate),
+          localization: this.localization,
+          locale: localizedUpdate?.writeLocale,
+        })
+      );
 
       return {
         success: true,
