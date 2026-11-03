@@ -18,6 +18,7 @@ import {
 } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
 import {
+  CHILD_GAP_CLASS,
   nodeClassName,
   nodeClassNames,
   PAGE_ROOT_CLASS,
@@ -1943,7 +1944,7 @@ describe("previewing an interaction state", () => {
 describe("the space a container puts between its children", () => {
   /** A container type with a child gap, and the class the gap rule is keyed on. */
   const GAPS = { "core/box": { $token: "space.stack" } };
-  const FLOW = `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box > * + *)`;
+  const FLOW = `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box.${CHILD_GAP_CLASS} > * + *)`;
 
   /** The rules (one per line) whose selector is exactly `selector`. */
   function rulesAt(out: string, selector: string): string[] {
@@ -2035,7 +2036,7 @@ describe("the space a container puts between its children", () => {
       ]),
       { ...CTX, childGaps: GAPS }
     );
-    const children = `.${PAGE_ROOT_CLASS} :where(.${nodeClassName("n1")} > * + *)`;
+    const children = `.${PAGE_ROOT_CLASS} :where(.${nodeClassName("n1")}.${CHILD_GAP_CLASS} > * + *)`;
     expect(out).toContain([`${children} { margin-block-start: 0 }`].join("\n"));
     // Each breakpoint answers for its own display: grid at tablet keeps the
     // margin off, and block at mobile puts the flow gap back.
@@ -2067,7 +2068,7 @@ describe("the space a container puts between its children", () => {
       ],
     } as unknown as StyleCompileContext);
     expect(out).toContain(
-      `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box.nx-c-row > * + *) { margin-block-start: 0 }`
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box.${CHILD_GAP_CLASS}.nx-c-row > * + *) { margin-block-start: 0 }`
     );
   });
 
@@ -2125,8 +2126,8 @@ describe("the space a container puts between its children", () => {
       .split("\n")
       .filter(line => line.includes(".nx-c-") && line.includes("> * + *"));
     expect(classRules).toEqual([
-      `.${PAGE_ROOT_CLASS} :where(.nx-bt-acme--c0.nx-c-row-0 > * + *) { margin-block-start: 0 }`,
-      `.${PAGE_ROOT_CLASS} :where(.nx-bt-acme--c0.nx-c-row-1 > * + *) { margin-block-start: 0 }`,
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-acme--c0.${CHILD_GAP_CLASS}.nx-c-row-0 > * + *) { margin-block-start: 0 }`,
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-acme--c0.${CHILD_GAP_CLASS}.nx-c-row-1 > * + *) { margin-block-start: 0 }`,
     ]);
   });
 
@@ -2140,7 +2141,7 @@ describe("the space a container puts between its children", () => {
       ]),
       { ...CTX, childGaps: GAPS }
     );
-    const container = `.${nodeClassName("n1")}`;
+    const container = `.${nodeClassName("n1")}.${CHILD_GAP_CLASS}`;
     const lines = out.split("\n");
     const base = lines.indexOf(
       `.${PAGE_ROOT_CLASS} :where(${container} > * + *) { margin-block-start: var(--site-space-stack) }`
@@ -2164,7 +2165,7 @@ describe("the space a container puts between its children", () => {
       ]),
       { ...CTX, childGaps: GAPS }
     );
-    const container = `.${nodeClassName("n1")}`;
+    const container = `.${nodeClassName("n1")}.${CHILD_GAP_CLASS}`;
     expect(out).toContain(
       `.${PAGE_ROOT_CLASS} :where(${container} > * + *) { margin-block-start: 0 }`
     );
@@ -2187,8 +2188,32 @@ describe("the space a container puts between its children", () => {
       ],
     } as unknown as StyleCompileContext);
     expect(out).toMatch(
-      /:where\(\.nx-bt-core--box\.nx-c-row:where\(:focus[^)]*\) > \* \+ \*\) \{ margin-block-start: 0 \}/
+      /:where\(\.nx-bt-core--box\.nx-pb-gap\.nx-c-row:where\(:focus[^)]*\) > \* \+ \*\) \{ margin-block-start: 0 \}/
     );
+  });
+
+  it("marks every container that spaces its children, and no other block", () => {
+    const child = node("child");
+    const result = compilePageCss(
+      doc([
+        node("parent", undefined, { slots: { children: [child] } }),
+        { ...node("other"), type: "core/text" } as BlockNode,
+      ]),
+      { ...CTX, childGaps: GAPS }
+    );
+    expect(result.classes.get("parent")?.split(" ")).toContain(CHILD_GAP_CLASS);
+    expect(result.classes.get("other")?.split(" ")).not.toContain(
+      CHILD_GAP_CLASS
+    );
+    // Every rule the gap decides is keyed on the marker, so taking the marker
+    // off a container takes exactly those rules away and nothing else.
+    const gapRules = result.css
+      .split("\n")
+      .filter(line => line.includes("> * + *"));
+    expect(gapRules.length).toBeGreaterThan(0);
+    for (const rule of gapRules) {
+      expect(rule).toContain(`.${CHILD_GAP_CLASS} > * + *`);
+    }
   });
 
   it("writes no layout rule for a node whose type has no child gap", () => {

@@ -64,6 +64,7 @@ import {
 import {
   blockPartClassName,
   blockTypeClassName,
+  CHILD_GAP_CLASS,
   nodeClassNames,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
@@ -2132,10 +2133,12 @@ export function compilePageCss(
     // The value was judged once above; this only respells it for `gap`.
     const spaced = compileStyleValues({ gap: gaps[type] }, path, tokenPrefix);
     const typeClass = `.${escapeIdentifier(blockTypeClassName(type))}`;
+    // The type AND the marker, so the marker alone switches the gap off.
+    const container = `${typeClass}.${CHILD_GAP_CLASS}`;
     flowGaps.set(type, flow.declarations);
     rules.push(
       {
-        selector: `${defaultsAnchor} :where(${typeClass} ${FLOW_CHILDREN})`,
+        selector: `${defaultsAnchor} :where(${container} ${FLOW_CHILDREN})`,
         declarations: flow.declarations,
       },
       {
@@ -2148,7 +2151,7 @@ export function compilePageCss(
       // the flow rule on the same selector so it wins.
       ...layoutModeRules(
         Object.hasOwn(bases, type) ? bases[type] : undefined,
-        typeClass,
+        container,
         flow.declarations,
         contexts,
         defaultsAnchor,
@@ -2327,7 +2330,7 @@ export function compilePageCss(
       rules.push(
         ...layoutModeRules(
           cls.styles,
-          `.${escapeIdentifier(blockTypeClassName(type))}${classSelector}`,
+          `.${escapeIdentifier(blockTypeClassName(type))}.${CHILD_GAP_CLASS}${classSelector}`,
           flow,
           contexts,
           defaultsAnchor,
@@ -2389,7 +2392,7 @@ export function compilePageCss(
       ),
       ...layoutModeRules(
         node.styles,
-        `.${className}`,
+        `.${className}.${CHILD_GAP_CLASS}`,
         flowGaps.get(node.type) ?? [],
         flowGaps.has(node.type) ? contexts : [],
         defaultsAnchor,
@@ -2440,7 +2443,9 @@ export function compilePageCss(
   for (const { node, path } of nodes) {
     const own = classes.get(node.id);
     if (own === undefined) continue;
-    const names = [own];
+    // A container that spaces its children wears the marker its gap rules are
+    // keyed on.
+    const names = flowGaps.has(node.type) ? [own, CHILD_GAP_CLASS] : [own];
     // A stored `classes` that is not a list — `"c1"` rather than `["c1"]` — references nothing
     // this compiler can apply. Normalized away in silence it leaves an author with classes in the
     // document, none on the element, and no account of either.

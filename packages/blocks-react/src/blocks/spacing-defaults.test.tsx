@@ -10,6 +10,7 @@
  */
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 import {
+  CHILD_GAP_CLASS,
   nodeClassName,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
@@ -163,7 +164,7 @@ describe("a whole page's sheet", () => {
 
   it("spaces the section's second child by the stack token", () => {
     expect(compiled()).toContain(
-      `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--section > * + *) { margin-block-start: var(--site-space-stack) }`
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--section.${CHILD_GAP_CLASS} > * + *) { margin-block-start: var(--site-space-stack) }`
     );
   });
 

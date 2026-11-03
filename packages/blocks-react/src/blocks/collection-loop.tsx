@@ -25,6 +25,7 @@
 import {
   type BlockDefinition,
   blockTypeClassName,
+  CHILD_GAP_CLASS,
   defineBlock,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
@@ -109,16 +110,18 @@ function sortWasRefused(error: unknown): boolean {
 const COLLECTION_LOOP_BLOCK = "core/collection-loop";
 
 /**
- * The class an entry's wrapper wears: the block-type class, and only that.
+ * The classes an entry's wrapper wears: the block-type class and the gap
+ * marker, and only those.
  *
  * The loop spaces its children by its `childGap`, written as a rule on the
- * block-type class. On the loop itself that separates one entry from the next;
- * worn by each entry's wrapper, the same rule spaces the blocks inside an entry
- * exactly as it spaces the template when no collection is configured. The node
- * class stays on the loop alone, so an author's styling of the loop (a flex
- * row of entries, say) applies to the loop and not to every entry.
+ * block-type class and the gap marker together. On the loop itself that
+ * separates one entry from the next; worn by each entry's wrapper, the same
+ * rule spaces the blocks inside an entry exactly as it spaces the template
+ * when no collection is configured. The node class stays on the loop alone,
+ * so an author's styling of the loop (a flex row of entries, say) applies to
+ * the loop and not to every entry.
  */
-const ENTRY_CLASS = blockTypeClassName(COLLECTION_LOOP_BLOCK);
+const ENTRY_CLASS = `${blockTypeClassName(COLLECTION_LOOP_BLOCK)} ${CHILD_GAP_CLASS}`;
 
 export async function renderCollectionLoop({
   props,
