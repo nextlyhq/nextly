@@ -23,6 +23,7 @@ import {
   canvasBlock,
   canvasFrame,
   canvasLayer,
+  frameAndRoom,
 } from "../support/canvas-frame";
 import { LOCK } from "../support/locks";
 import {
@@ -252,12 +253,19 @@ test.describe("the page on the canvas behaves as on a device of that size", () =
       // The block is 50vh: half of the window the page is laid out in,
       // which is the canvas frame's own height, as it is a browser window's
       // for a visitor.
+      // And the window is the room: painted, the frame is as tall as the
+      // region it is laid into, so the window changes with the room and the
+      // zoom rather than standing at one device height.
       const halfTheWindow = async (): Promise<boolean> => {
         const block = await sized.evaluate(
           element => (element as HTMLElement).offsetHeight
         );
         const window = await frameSize(page);
-        return Math.abs(block - window.height / 2) <= 1;
+        const { painted, room } = await frameAndRoom(page);
+        return (
+          Math.abs(block - window.height / 2) <= 1 &&
+          Math.abs(painted - room) <= 1
+        );
       };
       await expect.poll(halfTheWindow).toBe(true);
 
@@ -269,11 +277,16 @@ test.describe("the page on the canvas behaves as on a device of that size", () =
       await page.keyboard.press("Control+\\");
       await expect.poll(halfTheWindow).toBe(true);
 
+      const windows: number[] = [];
       for (const zoom of ["50%", "200%"]) {
         await chooseZoom(page, zoom);
         await expect(zoomTrigger(page)).toHaveText(zoom);
         await expect.poll(halfTheWindow).toBe(true);
+        windows.push((await frameSize(page)).height);
       }
+      // Four times as tall at half the zoom as at twice it: the window really
+      // follows the zoom, which a fixed device height would not.
+      expect(Math.round((windows[0] ?? 0) / (windows[1] ?? 1))).toBe(4);
     } finally {
       await storeBreakpoints(page, null);
     }

@@ -12,7 +12,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { canvasBlock, canvasFrame } from "./support/canvas-frame";
+import { canvasBlock, canvasFrame, frameAndRoom } from "./support/canvas-frame";
 import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
@@ -79,8 +79,6 @@ test.describe("a page taller than the screen", () => {
     page,
   }) => {
     await openBuilder(page);
-    const region = page.getByRole("region", { name: "Canvas" });
-    const frame = page.locator("[data-nx-canvas-frame-box]");
     for (const zoom of ["Fit", "50%", "100%"]) {
       if (zoom !== "Fit") {
         await page.getByRole("button", { name: /^Canvas zoom:/ }).click();
@@ -88,13 +86,16 @@ test.describe("a page taller than the screen", () => {
           .getByRole("menuitemradio", { name: zoom, exact: true })
           .click();
       }
+      // Painted exactly as tall as the room, to the pixel.
       await expect
         .poll(
-          async () =>
-            (await boxOf(frame)).height / (await boxOf(region)).height,
-          { message: `${zoom}: the frame's share of the canvas's height` }
+          async () => {
+            const { painted, room } = await frameAndRoom(page);
+            return Math.abs(painted - room);
+          },
+          { message: `${zoom}: the frame against the room's height` }
         )
-        .toBeGreaterThan(0.9);
+        .toBeLessThanOrEqual(1);
     }
   });
 

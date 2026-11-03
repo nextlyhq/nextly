@@ -1,13 +1,16 @@
 "use client";
 
 /**
- * The frame the canvas is drawn in: an iframe the editor owns, at the width
- * and height of the device being previewed, scaled to fit the room the panels
- * leave.
+ * The frame the canvas is drawn in: an iframe the editor owns, at the width of
+ * the device being previewed, fitted to the room the panels leave, and as tall
+ * as that room at the scale it is painted at. A page taller than the room
+ * scrolls inside it, as in a visitor's browser window. A host that states a
+ * height gets a frame of that height, fitted both ways.
  *
  * A frame of its own is what makes the canvas a real viewport. Inside it `vw`,
- * `vh`, a hand-written `@media` rule and the site's container queries answer
- * for the device being previewed rather than for the admin window, the site's
+ * a hand-written `@media` rule and the site's container queries answer for the
+ * device being previewed rather than for the admin window, and `vh` for the
+ * canvas window the author looks through; the site's
  * sheet goes in exactly as it is published, and nothing of the admin's theme or
  * stylesheet reaches the page — nor anything of the page's the admin.
  *
@@ -19,15 +22,17 @@
  * **One iframe element for the life of the editor.** It is never re-keyed: a
  * new iframe starts from a blank page before its content loads — visibly in
  * Firefox — and everything portalled into the old one is lost with it.
- * Changing device changes its width and height, nothing else.
+ * Changing device changes its width, nothing else.
  *
  * **`srcdoc`, never a blob URL.** The admin's content security policy allows
  * frames from its own origin only, which a blob is not; a `srcdoc` document is
  * same-origin with the admin and is not subject to it.
  *
- * **Zoom is a transform.** The frame is laid out at the device's size and
+ * **Zoom is a transform.** The frame is laid out at the device's width and
  * painted at the zoom by `transform: scale()`, inside a box sized to the painted
- * result, so the page's layout never depends on how much room the editor has.
+ * result, so the zoom never changes the page's widths, its media queries or its
+ * container queries. Only the window's height follows the room, as a browser
+ * window's does.
  *
  * **Chrome is drawn over it, in the editor's document.** The layer above the
  * frame is clipped to the frame's viewport, its content box is laid over the
@@ -205,7 +210,10 @@ export interface CanvasFrameProps {
    * answers for that window. See {@link frameFillingRegion}.
    */
   height?: number;
-  /** The zoom: fitting both dimensions into the region, or a chosen scale. */
+  /**
+   * The zoom: fitting the device's width into the region (both dimensions,
+   * where the host states a height), or a chosen scale.
+   */
   zoom?: CanvasZoom;
   /** The scale the frame is painted at, reported as it changes. */
   onScale?: (scale: number) => void;
