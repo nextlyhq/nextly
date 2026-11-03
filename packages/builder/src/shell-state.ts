@@ -375,6 +375,8 @@ export const NO_STORAGE: PreferenceStore = {
  *
  * @param key - where to store the value
  * @returns a store, or one that remembers nothing outside a browser
+ *
+ * @experimental
  */
 export function browserStore(key: string): PreferenceStore {
   if (typeof window === "undefined") return NO_STORAGE;

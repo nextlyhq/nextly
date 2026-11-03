@@ -19,10 +19,20 @@ vi.mock("../site-style-client", () => ({
   useSaveSiteStyle: () => ({
     save: vi.fn(() => Promise.resolve({ saved: true, issues: [] })),
   }),
+  useFontCatalogueClient: () => ({
+    load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),
+    add: async () => undefined,
+  }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
+  ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
+  useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  usePluginClientConfig: () => undefined,
 }));
 
 import { DesignPanel } from "./design-panel";
-import { TokensStudio } from "./site-style-studios";
+import { FontsPanelWithUpload, TokensStudio } from "./site-style-studios";
 
 afterEach(cleanup);
 
@@ -89,6 +99,46 @@ describe("the Variables studio", () => {
     ).toBeTruthy();
     expect(
       within(header).getByRole("button", { name: "Import or export" })
+    ).toBeTruthy();
+  });
+});
+
+describe("the Fonts tab", () => {
+  function renderFonts(): void {
+    render(
+      <FontsPanelWithUpload
+        faces={[]}
+        tokens={{ tokens: [] }}
+        storedFaces={[]}
+        storedPending={false}
+        unreadableFonts={[]}
+      />
+    );
+  }
+
+  it("is read-only for a role that may not update the site style", () => {
+    can.update = false;
+    renderFonts();
+    expect(
+      screen.getByText(
+        "You can view the site\u2019s fonts but not change them."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add a font" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Add from Google Fonts" })
+    ).toBeNull();
+  });
+
+  it("offers both ways to add a font to a role that may", () => {
+    can.update = true;
+    renderFonts();
+    expect(screen.getByRole("button", { name: "Add a font" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Add from Google Fonts" })
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Upload a font file" })
     ).toBeTruthy();
   });
 });

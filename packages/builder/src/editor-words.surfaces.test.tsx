@@ -32,6 +32,7 @@ const { InsertPanel } = await import("./insert-panel");
 const { LayersPanel } = await import("./layers-panel");
 const { useEditorState } = await import("./editor-state");
 const { HelpDialog } = await import("./help-dialog");
+const { FontsPanel } = await import("./fonts-panel");
 
 afterEach(cleanup);
 
@@ -99,6 +100,41 @@ describe("the editor's surfaces read the catalogue", () => {
     });
     expect(screen.getByText("No «sections» are saved yet.")).toBeTruthy();
     clearBlocks();
+  });
+
+  it("words the Fonts tab's search, states and links from it", () => {
+    const { unmount } = render(
+      <FontsPanel faces={undefined} tokens={undefined} absence="pending" />
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      "Reading this site\u2019s «fonts»\u2026"
+    );
+    unmount();
+    render(
+      <FontsPanel
+        faces={[]}
+        tokens={{ tokens: [] }}
+        readOnly
+        onOpenTokens={() => undefined}
+      />
+    );
+    expect(screen.getByRole("searchbox").getAttribute("placeholder")).toBe(
+      "Search «fonts»"
+    );
+    expect(
+      screen.getByText(
+        "You can view the site\u2019s «fonts» but not change them."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "No «fonts» on this site yet, so pages use the system font."
+      )
+    ).toBeTruthy();
+    expect(screen.getByText("Font «variables»")).toBeTruthy();
+    expect(
+      screen.getByText("No font «variables» yet. «variables» creates them.")
+    ).toBeTruthy();
   });
 
   it("titles the Help dialog from it", () => {

@@ -20,7 +20,8 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { settleTransitions } from "./support/axe-scan.mjs";
-import { test } from "./support/test";
+import { canvasBlock } from "./support/canvas-frame";
+import { ownSeat, test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
@@ -97,7 +98,7 @@ function railButton(page: Page, name: string) {
 
 /** Select the heading on the canvas, and wait for its inspector. */
 async function selectHeading(page: Page): Promise<void> {
-  await page.locator(`.nx-canvas [data-nx-node="${HEADING}"]`).first().click();
+  await canvasBlock(page, HEADING).first().click();
   await expect(page.locator("[data-block-card]")).toBeVisible();
 }
 
@@ -199,10 +200,7 @@ const SURFACES: ReadonlyArray<{
   {
     name: "a block's context menu",
     open: async page => {
-      await page
-        .locator(`.nx-canvas [data-nx-node="${HEADING}"]`)
-        .first()
-        .click({ button: "right" });
+      await canvasBlock(page, HEADING).first().click({ button: "right" });
       await expect(page.getByRole("menu")).toBeVisible();
     },
   },
@@ -261,19 +259,30 @@ async function scan(page: Page): Promise<Finding[]> {
 test.describe("every page builder surface meets WCAG 2.2 AA", () => {
   test.describe.configure({ timeout: 120_000 });
 
-  for (const scheme of ["light", "dark"] as const) {
-    for (const surface of SURFACES) {
-      test(`${surface.name}, ${scheme}`, async ({ page }) => {
-        await openEditor(page, scheme);
-        await surface.open(page);
+  SURFACES.forEach((surface, index) => {
+    /*
+     * Each surface reads through an account of its own. Every case opens the
+     * editor afresh, and an editor's load spends a share of the REST limit's
+     * per-user budget, so through the file's one account the twenty-first
+     * open met a 429 and an editor that never loaded. A seat per surface
+     * spends two opens of a budget, its light and dark scans.
+     */
+    test.describe(surface.name, () => {
+      ownSeat(index + 1);
 
-        const findings = await scan(page);
+      for (const scheme of ["light", "dark"] as const) {
+        test(`${surface.name}, ${scheme}`, async ({ page }) => {
+          await openEditor(page, scheme);
+          await surface.open(page);
 
-        expect(
-          findings,
-          `axe reported ${findings.length} violation(s) with ${surface.name} open, ${scheme}:\n${JSON.stringify(findings, null, 2)}`
-        ).toEqual([]);
-      });
-    }
-  }
+          const findings = await scan(page);
+
+          expect(
+            findings,
+            `axe reported ${findings.length} violation(s) with ${surface.name} open, ${scheme}:\n${JSON.stringify(findings, null, 2)}`
+          ).toEqual([]);
+        });
+      }
+    });
+  });
 });

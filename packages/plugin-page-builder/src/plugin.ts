@@ -33,7 +33,13 @@ import {
   registerClassUsageMaintenance,
   type CommittedWriteReconciler,
 } from "./class-usage-hook";
-import { ownIndexReader, usageCountReader } from "./class-usage-runtime";
+import { classUsageIndex } from "./class-usage-reconcile";
+import {
+  classUsageDocumentRowReader,
+  ownIndexReader,
+  usageCountReader,
+  usageRowReader,
+} from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
   classUsageIndexCollection,
@@ -88,7 +94,10 @@ import {
 } from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
-import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  type SharedStyleUsageKind,
+} from "./library-contract";
 import {
   componentLibraryRoute,
   DEFAULT_COMPONENT_STORE,
@@ -98,6 +107,7 @@ import {
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pagesSearchRoute } from "./pages-search-route";
+import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { retiredStore } from "./retired-store";
@@ -106,10 +116,24 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
+import {
+  LOCK_SHARED_STYLES_DECLARATION,
+  sharedStyleRoutes,
+} from "./shared-styles-routes";
+import {
+  resolveFontOptions,
+  type PageBuilderFontOptions,
+} from "./site-fonts/options";
+import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
-import { siteStyleSingle } from "./site-style-storage";
+import { referableClassIds } from "./site-style-record";
+import {
+  loadSiteStyle,
+  SITE_STYLE_SLUG,
+  siteStyleSingle,
+} from "./site-style-storage";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -117,10 +141,12 @@ import {
   type BackfillHost,
 } from "./usage-backfill-wiring";
 import { usageBookkeeping } from "./usage-bookkeeping";
+import { listDocumentsUsingEach } from "./usage-count";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
 } from "./usage-health-service";
+import { variantUseRoute } from "./variant-use-route";
 
 /**
  * What the plugin-owned `pages` collection is built with, resolved from the
@@ -460,6 +486,15 @@ export interface PageBuilderOptions {
    * Ignored without a `pagePreviewPath`: there is no preview to offer them on.
    */
   pagePreviewBreakpoints?: PreviewViewportsDeclaration | false;
+
+  /**
+   * Catalogue fonts in Design → Fonts. Adding one makes the SERVER download
+   * its files from the catalogue into the site's media, so published pages
+   * load fonts only from the site. The server reaches the two catalogue hosts
+   * (declared as this plugin's outbound hosts) and nothing else. `{ catalogue:
+   * false }` turns the catalogue off; uploading a font file still works.
+   */
+  fonts?: PageBuilderFontOptions;
 }
 
 /**
@@ -628,6 +663,24 @@ function isOrphanedSingle(
 
 /** How many registry rows one page of the collection listing asks for. */
 const REGISTRY_PAGE_SIZE = 100;
+
+/**
+ * What the font catalogue adds to the plugin: the two hosts its server may
+ * reach, its routes, and whether the host turned it off. Worked out once, so
+ * the plugin's definition spreads the parts rather than asking at each.
+ */
+function fontCatalogueParts(fonts: ReturnType<typeof resolveFontOptions>): {
+  off: boolean;
+  capabilities: { capabilities?: { net: { outbound: string[] } } };
+  routes: ReturnType<typeof siteFontRoutes>;
+} {
+  if (fonts === false) return { off: true, capabilities: {}, routes: [] };
+  return {
+    off: false,
+    capabilities: { capabilities: { net: { outbound: [...fonts.outbound] } } },
+    routes: siteFontRoutes({ fonts }),
+  };
+}
 
 /**
  * Every collection slug the registry holds, or `undefined` when it could not
@@ -847,6 +900,9 @@ export const pageBuilder = (
   // the defaults tier. The stored tier reaches the published route through
   // `loadSiteStyle`, which reads per request.
   const configStyle = resolveSiteStyle(opts.siteStyle);
+  // The font catalogue's hosts and caps, refused at boot when unusable, and
+  // what it adds to the plugin.
+  const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
 
   // The usage indexes' reconciler for a write made in a transaction the
   // caller owns, which their hooks skip. Set by `init`, read per request.
@@ -882,6 +938,10 @@ export const pageBuilder = (
     category: "content",
     tags: ["page-builder", "blocks", "visual-editor"],
     enabled: opts.enabled,
+    // The catalogue's two hosts, the only ones the server may reach, so an
+    // add's downloads go through `ctx.fetch` and are listed where a reviewer
+    // reads them.
+    ...fonts.capabilities,
     admin: {
       // How the plugin names itself wherever the admin lists it. Without this
       // the dashboard section and the plugins list fall back to `meta.name`,
@@ -970,6 +1030,23 @@ export const pageBuilder = (
         // a document composed against this store would be judged by
         // definitions it is not drawn with.
         composesDocuments: opts.componentReadiness !== false,
+        // The classes a page may add a reference to: the ones the compiler
+        // applies, from the code's defaults and the stored record of the
+        // Single as renamed, read per write so a style removed a moment ago
+        // is gone for the next save.
+        siteClassIds: async () => {
+          // Imported at call time, for the reason the readers above give.
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = await getCachedNextly();
+          const style = await loadSiteStyle({
+            nextly: { findSingle: args => nextly.findSingle(args) },
+            defaults: configStyle,
+            slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+          });
+          // Capped and resolved as the compiler reads the library, so a page
+          // may reference exactly the classes it applies.
+          return referableClassIds(style.classes ?? []);
+        },
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
           indexCollection: componentIndex,
@@ -1245,6 +1322,9 @@ export const pageBuilder = (
         patternLibraryRoute(),
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
+        // What the editor may offer this caller: saving a pattern, making a
+        // component or updating a pattern from a selection, and opening a
+        // component in its own view from the store definitions live in.
         patternCapabilityRoute(componentStoreOf(opts)),
         // What the component editor needs beside the component's own
         // document: the ids its live definition uses, and the count of
@@ -1295,6 +1375,27 @@ export const pageBuilder = (
             );
           },
         }),
+        // How many placements chose one of a component's variants, for the
+        // dialog that confirms deleting it: the usage index lists the hosts,
+        // and each host's stored forms are walked as the system.
+        variantUseRoute({
+          store: componentStoreOf(opts),
+          hosts: () => composition?.hostsOf,
+          readForm: async (host, form) => {
+            const row = await classUsageDocumentRowReader(
+              await requireInstalled().nextly()
+            )({
+              entity: host.slug,
+              entityKey: host.id,
+              locale: "",
+              variant: form,
+            });
+            return row !== null && typeof row === "object"
+              ? (row as Record<string, unknown>)[host.field]
+              : undefined;
+          },
+          limits: opts.limits ?? DEFAULT_LIMITS,
+        }),
         // Save a selection as a component, or convert it into one. Here
         // rather than left to the collection API for the reason the pattern
         // save is: the planner needs the server's block registry.
@@ -1320,6 +1421,10 @@ export const pageBuilder = (
         // with a Page Builder field, the composition stores left out), by
         // title, read as the author asking.
         pagesSearchRoute(componentStoreOf(opts)),
+        // The Pages panel's writes: create, duplicate, rename and delete a
+        // page, each as the author asking, in exactly the collections the
+        // search lists.
+        ...pagesWriteRoutes(componentStoreOf(opts)),
         // The one write that chooses the site's default Layout. A route rather
         // than an edit to the settings Single, because choosing a default has
         // preconditions (the Layout is published, the caller may publish
@@ -1340,6 +1445,55 @@ export const pageBuilder = (
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
+        // Design → Fonts' catalogue: read it, and add a family to the site.
+        ...fonts.routes,
+        // The Design panel's shared styles: lock and unlock one, how widely
+        // each is used and where, and removing the unused. Usage is read from
+        // the class usage index the installed host maintains.
+        ...sharedStyleRoutes({
+          configClassIds: new Set(
+            (configStyle.classes ?? []).map(entry => entry.id)
+          ),
+          usage: ctx => {
+            const index =
+              ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
+              CLASS_USAGE_INDEX_SLUG;
+            const kinds = new Map<string, SharedStyleUsageKind>([
+              [
+                componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                "components",
+              ],
+              [
+                ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+                "patterns",
+              ],
+              [ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG, "layouts"],
+            ]);
+            return {
+              health: () =>
+                usageHealthService(requireInstalled).read(
+                  classUsageIndex,
+                  index
+                ),
+              // One bounded read for a whole page of styles.
+              documentsUsingEach: async (classIds, health) =>
+                listDocumentsUsingEach({
+                  index: classUsageIndex,
+                  rows: usageRowReader(
+                    await requireInstalled().nextly(),
+                    index
+                  ),
+                  referenceIds: classIds,
+                  health,
+                }),
+              // Every other collection with a page builder field holds pages,
+              // as the editor's page search reads them.
+              kindOf: collection => kinds.get(collection) ?? "pages",
+            };
+          },
+        }),
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,
@@ -1355,6 +1509,10 @@ export const pageBuilder = (
           description:
             "Change the site's breakpoints, and choose its default Layout.",
         },
+        // Locking a shared style is its own grant, distinct from changing
+        // Design (`update-site-style`), so a lock protects a style from every
+        // Design manager who does not hold it. Asked by the lock route alone.
+        LOCK_SHARED_STYLES_DECLARATION,
       ],
 
       // No `publish` permission. One was declared here and nothing ever read
@@ -1374,9 +1532,13 @@ export const pageBuilder = (
         ...(opts.remotePatterns !== undefined ||
         opts.checklist !== undefined ||
         opts.limits !== undefined ||
-        opts.siteStyle !== undefined
+        opts.siteStyle !== undefined ||
+        fonts.off
           ? {
               clientConfig: {
+                // The Fonts tab offers no catalogue when the host turned it
+                // off, rather than one whose routes do not exist.
+                ...(fonts.off ? { fontCatalogue: false } : {}),
                 ...(opts.remotePatterns === undefined
                   ? {}
                   : { remotePatterns: opts.remotePatterns }),

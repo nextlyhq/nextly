@@ -140,7 +140,7 @@ import { UserFieldDefinitionService } from "../../domains/users/services/user-fi
 import { NextlyError, describeError } from "../../errors";
 import type { UserConfig } from "../../users/config/types";
 import { CliError, exitWithError } from "../errors";
-import { createContext, type CommandContext } from "../program";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
   getDialectDisplayName,
@@ -165,6 +165,7 @@ import {
   plainTextPasswordCleanup,
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
+import { commandRun } from "./command-run";
 import {
   storedPasswordsNotice,
   storedPasswordsOn,
@@ -2539,46 +2540,20 @@ export { splitSqlStatements };
 // pattern from F8 PR 5). Avoids re-implementing UUID v4 generation.
 
 /**
- * Register the migrate command with the program
- *
- * @param program - Commander program instance
+ * The action of `nextly migrate`, loaded when it runs.
  */
-export function registerMigrateCommand(program: Command): void {
-  program
-    .command("migrate")
-    .description("Run all pending database migrations")
-    .option("--dry-run", "Show what would be migrated without executing", false)
-    .option(
-      "--step <n>",
-      "Run only N migrations, plugin modules and app files together",
-      parseInt
-    )
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
-    .option(
-      "--repair-localization",
-      "Copy existing content into the translation tables of localized entities that have no record of transitioning (for installs that enabled localization before Nextly recorded it)",
-      false
-    )
-    .action(async (cmdOptions: MigrateCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+export async function migrateAction(
+  cmdOptions: MigrateCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateOptions = options;
 
-      const resolvedOptions: ResolvedMigrateOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
-
-      try {
-        await runMigrate(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  try {
+    await runMigrate(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateCommand } from "./migrate.command";
