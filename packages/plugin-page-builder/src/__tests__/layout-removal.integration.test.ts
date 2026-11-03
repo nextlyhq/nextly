@@ -1691,6 +1691,52 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
+      it("has the default repair finish a restore that stopped after its create, before it would fall back to the seed", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        expect(stopped).toBe(true);
+
+        // The next repair, as startup or the default job runs it, before any
+        // sweep has found the row stale.
+        expect(await ensure(t)).toBe("restored");
+
+        const restored = await restoredOnes();
+        expect(restored).toHaveLength(1);
+        expect((await settingsOf(t)).defaultLayout).toBe(
+          relationId(restored[0])
+        );
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
       it("keeps the copy when every address a restore could take is taken, and restores once one is free", async () => {
         const t = await boot();
         const other = await layout(t, "Other", "other");

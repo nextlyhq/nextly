@@ -291,7 +291,7 @@ async function sweepOne(
       await settleRemoval(deps, removal);
       return;
     case "restoring":
-      if (await resumeRestore(deps, removal)) return;
+      if ((await resumeRestore(deps, removal)) !== null) return;
       deps.warn(
         "[page-builder] a Layout's restore stopped part-way; check the Layouts list for a restored copy",
         { layoutId: removal.layoutId }

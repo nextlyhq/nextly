@@ -267,24 +267,25 @@ async function finishRestore(
 }
 
 /**
- * Finish a restore a request left at `restoring`, when its row records the
- * Layout it created. Answers whether it did; a row without one cannot tell
- * whether its create ran, and is the sweep's to settle.
+ * Finish a restore left at `restoring` whose row records the Layout it
+ * created, answering that Layout's id; `null` when the row records none, which
+ * cannot tell whether its create ran. The one resume path, for the sweep and
+ * for the default repair alike.
  */
 export async function resumeRestore(
   deps: RestoreDeps,
   removal: LayoutRemoval
-): Promise<boolean> {
+): Promise<string | null> {
   const restored = removal.copy?.restoredAs;
-  if (removal.copy === null || restored === undefined) return false;
-  await finishRestore(deps, removal, removal.copy, restored);
-  return true;
+  if (removal.copy === null || restored === undefined) return null;
+  return finishRestore(deps, removal, removal.copy, restored);
 }
 
 /**
  * The repair's half: the settings name `layoutId`, which no longer exists.
- * Restore it when its removal holds a copy and has not been settled; answer
- * the new id, or `null` when there is nothing to restore from. A Layout that
+ * Restore it when its removal holds a copy and has not been settled, or finish
+ * a restore of it that stopped after its create; answer the new id, or `null`
+ * when there is nothing to restore from. A Layout that
  * still exists is never written from a copy.
  */
 export async function restoreMissingDefault(
@@ -294,6 +295,10 @@ export async function restoreMissingDefault(
   if (await layoutExists(deps.nextly, deps.slugs, layoutId)) return null;
   const removal = await deps.store.removalOf(layoutId);
   if (removal === null) return null;
+  // A restore that stopped after its create is finished on the Layout it
+  // created, before the repair would fall back to the seed and leave it
+  // orphaned.
+  if (removal.step === "restoring") return resumeRestore(deps, removal);
   if (removal.step !== "final" && removal.step !== "removed") return null;
   return restoreFromCopy(deps, removal);
 }
