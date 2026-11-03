@@ -56,6 +56,9 @@ describe("IconChoiceField", () => {
     ]);
     // Marked, not checked: nothing is stored on this block.
     expect(marked[0]?.getAttribute("aria-checked")).toBe("false");
+    // Said as well as drawn: a screen reader otherwise hears every option
+    // unchecked and cannot tell which value applies.
+    expect(marked[0]?.getAttribute("aria-label")).toBe("Center, inherited");
   });
 
   it("rings More when the inherited value is one of its values", () => {

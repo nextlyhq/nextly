@@ -2060,6 +2060,20 @@ describe("where a control's value came from", () => {
     expect(swatch?.hasAttribute("data-empty")).toBe(true);
   });
 
+  it("opens the picker on the inherited colour it paints", () => {
+    // From the fallback, a small adjustment committed an unrelated colour.
+    mountCarded([fromCard({ value: "#336699" })], { color: true });
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
+    const picker = document.querySelector<HTMLElement>(
+      ".nx-style-inspector__picker"
+    );
+    const hex =
+      picker === null ? undefined : within(picker).getAllByRole("textbox")[0];
+    expect(
+      (hex as HTMLInputElement | undefined)?.value.toLowerCase()
+    ).toContain("336699");
+  });
+
   it("paints an inherited colour in its swatch, marked as inherited", () => {
     mountCarded([fromCard({ value: "#123456" })], { color: true });
     const swatch = document.querySelector<HTMLElement>(

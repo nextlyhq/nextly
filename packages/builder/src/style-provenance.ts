@@ -29,6 +29,7 @@ import {
   styleOrigin,
   BASE_BREAKPOINT,
   breakpointContexts,
+  statePropagatesToAncestors,
   outranksEntry,
   type BreakpointAxis,
   type BreakpointId,
@@ -470,9 +471,10 @@ export function inheritedProvenance(
     const found = styleProvenance({
       ...query,
       subject: { ...ancestor, ancestors: chain.slice(0, at) },
-      // The enclosing block's own value, as it shows while the element is in
-      // whichever state it is being edited in.
-      state: "base",
+      // The enclosing block in the state the canvas holds it in: a state the
+      // engine forces up the chain (hover, pressed) is the ancestor's too, and
+      // any other leaves it in its normal state.
+      ...ancestorState(query.state),
     });
     if (found.kind === "authored") {
       return {
@@ -484,6 +486,19 @@ export function inheritedProvenance(
     if (found.kind !== "unset") return found;
   }
   return pagePassesDown(query) ?? own;
+}
+
+/**
+ * The state an enclosing block is in while this element is edited in
+ * `state`, by the engine's own decision about which states the canvas forces
+ * up the chain, so the walk and the canvas cannot disagree.
+ */
+function ancestorState(
+  state: StyleState
+): Pick<StyleProvenanceQuery, "state" | "liveStates"> {
+  return statePropagatesToAncestors(state)
+    ? { state }
+    : { state: "base", liveStates: ["base"] };
 }
 
 /**

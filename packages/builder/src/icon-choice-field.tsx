@@ -64,7 +64,7 @@ import {
 import * as React from "react";
 
 import { InheritedValue } from "./inherited-value";
-import type { AlignmentGroup } from "./style-alignment-icons";
+import type { AlignmentGroup, AlignmentOption } from "./style-alignment-icons";
 
 /** The icons the mapping names, by their lucide export name. */
 const ICONS: Readonly<Record<string, LucideIcon>> = {
@@ -110,6 +110,20 @@ const STEPS: Readonly<Record<string, number>> = {
 };
 
 type CommitOutcome = "applied" | "refused" | "unchanged";
+
+/**
+ * An option's name, and its mark when it is the value inherited from another
+ * tier: drawn as a dashed ring and said in its name, since a screen reader
+ * otherwise hears every option unchecked and cannot tell which applies.
+ */
+function inheritedMark(
+  option: AlignmentOption,
+  inherited: string | undefined
+): { "aria-label": string; "data-inherited"?: "" } {
+  return option.value === inherited
+    ? { "aria-label": `${option.label}, inherited`, "data-inherited": "" }
+    : { "aria-label": option.label };
+}
 
 export function IconChoiceField({
   id,
@@ -203,10 +217,7 @@ export function IconChoiceField({
                       {...(stop ? { id } : {})}
                       role="radio"
                       aria-checked={checked}
-                      data-inherited={
-                        option.value === shownInherited ? "" : undefined
-                      }
-                      aria-label={option.label}
+                      {...inheritedMark(option, shownInherited)}
                       aria-invalid={invalid}
                       tabIndex={stop ? 0 : -1}
                       data-icon={option.icon}

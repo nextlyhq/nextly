@@ -150,6 +150,33 @@ describe("a value an enclosing block passes down", () => {
     expect(found.kind).toBe("unset");
   });
 
+  it("reads the enclosing block in the state the canvas forces on it too", () => {
+    // Hover and pressed are forced up the chain, so a hovered heading takes
+    // its section's hover colour; focus is not, so it takes the normal one.
+    const trace = traceOf({
+      base: { base: { color: "#0000ff" } },
+      hover: { base: { color: "#00ff00" } },
+      focus: { base: { color: "#ff00ff" } },
+    } as NodeStyles);
+    const inState = (state: "hover" | "focus") =>
+      inheritedProvenance({
+        trace,
+        subject: {
+          nodeId: "h1",
+          blockType: "core/heading",
+          ancestors: [{ nodeId: "s1", blockType: "core/section" }],
+        },
+        cssProperty: "color",
+        state,
+        breakpoint: "base",
+        liveBreakpoints: ["base"],
+      });
+    const hovered = inState("hover");
+    const focused = inState("focus");
+    expect(hovered.kind === "inherited" && hovered.entry.value).toBe("#00ff00");
+    expect(focused.kind === "inherited" && focused.entry.value).toBe("#0000ff");
+  });
+
   it("takes a page's value last, when no enclosing block sets one", () => {
     // The page's colour reaches every block through inheritance, and a page
     // declaration on the root lands on no block of its own.

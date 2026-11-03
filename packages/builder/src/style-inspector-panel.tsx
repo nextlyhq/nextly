@@ -4069,7 +4069,9 @@ function ColourPicker({
           // WRITTEN by being shown: the picker reports a colour only once the
           // author moves something, so opening it over a value it cannot
           // represent changes nothing.
-          color={shown ?? PICKER_FALLBACK}
+          // The colour the swatch paints, an inherited one included, so a
+          // small adjustment starts from what the author sees.
+          color={painted ?? PICKER_FALLBACK}
           showAlpha
           swatches={choices.map(choice => ({
             // The IDENTITY as the swatch id, which is what keeps the list
