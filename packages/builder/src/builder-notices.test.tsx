@@ -330,7 +330,7 @@ describe("a rename refused after the panel is gone", () => {
 
   /** Open hero's details and commit a new name in them. */
   async function renameTo(value: string): Promise<void> {
-    fireEvent.click(screen.getByRole("button", { name: /^hero, \.hero/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^hero, \.nx-c-hero/ }));
     const details = await screen.findByRole("dialog", { name: "hero" });
     const field = within(details).getByLabelText("Name");
     fireEvent.change(field, { target: { value } });

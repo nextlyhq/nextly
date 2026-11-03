@@ -7,7 +7,10 @@
  *
  * @module shared-style-details
  */
-import type { StyleCompileContext } from "@nextlyhq/blocks-engine";
+import {
+  namedClassName,
+  type StyleCompileContext,
+} from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -142,7 +145,7 @@ function NameField({
           }}
         />
         <p className="nx-vars-editor__code" id={`${id}-code`}>
-          {typed === "" ? row.className : `.${typed}`}
+          {typed === "" ? row.className : `.${namedClassName(typed)}`}
         </p>
         {typed === "" || typed === row.slug ? null : (
           // A class name is what hand-written CSS selects, so a change to it
@@ -178,6 +181,10 @@ function LockLine({
 }): React.JSX.Element | null {
   const { busy, refusal, run } = useRefusableWrite();
   const may = mayLock && access !== undefined && !row.inCode;
+  // A rename still being stored: a lock and a rename each write the whole
+  // list of styles, so a lock now could land over the rename and put the old
+  // name back. `name` is the one the rename is heading for.
+  const renaming = name !== row.name;
   if (!row.locked && !may) return null;
   return (
     <div className="nx-vars-editor__field">
@@ -192,11 +199,16 @@ function LockLine({
             variant="outline"
             size="sm"
             className="nx-vars-editor__button"
-            disabled={busy}
+            disabled={busy || renaming}
             onClick={() => void run(() => access.lock(row.id, !row.locked))}
           >
             {row.locked ? `Unlock ${name}` : `Lock ${name}`}
           </Button>
+          {renaming && !row.locked ? (
+            <p className="nx-shared-styles__meta">
+              Lock it once the new name is saved.
+            </p>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -238,6 +250,8 @@ interface UsesRead {
   readonly items: readonly SharedStyleUse[];
   readonly last: SharedStyleUsesPage | undefined;
   readonly page: number;
+  /** The last page that arrived; behind `page` while that one is coming. */
+  readonly loaded: number;
   readonly failed: boolean;
 }
 
@@ -250,6 +264,7 @@ function useUses(
     items: [],
     last: undefined,
     page: 1,
+    loaded: 0,
     failed: false,
   });
   React.useEffect(() => {
@@ -262,6 +277,7 @@ function useUses(
           ...current,
           items: [...current.items, ...answer.items],
           last: answer,
+          loaded: current.page,
         }));
       },
       () => {
@@ -271,8 +287,16 @@ function useUses(
     );
     return () => controller.abort();
   }, [access, id, read.page]);
+  // The next page follows the last one that arrived, and only once the one
+  // asked for has: a second press while a page is coming would otherwise
+  // abort it and append the page after it, losing a page of documents.
   const more = React.useCallback(
-    () => setRead(current => ({ ...current, page: current.page + 1 })),
+    () =>
+      setRead(current =>
+        current.loaded < current.page
+          ? current
+          : { ...current, page: current.loaded + 1 }
+      ),
     []
   );
   return { read, more };

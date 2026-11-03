@@ -53,11 +53,13 @@ const reachOf = (
 };
 
 describe("the rows", () => {
-  it("names a style by its label, and an older one by its slug", () => {
+  it("names a style by its label, an older one by its slug, and the class the page carries", () => {
     const rows = sharedStyleRows([card, hero], new Set());
+    // The class name is the one the compiler emits, prefix included, since
+    // that is what hand-written CSS has to select.
     expect(rows.map(row => [row.name, row.className])).toEqual([
-      ["Card", ".card"],
-      ["hero-banner", ".hero-banner"],
+      ["Card", ".nx-c-card"],
+      ["hero-banner", ".nx-c-hero-banner"],
     ]);
   });
 

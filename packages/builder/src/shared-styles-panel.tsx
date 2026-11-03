@@ -46,8 +46,12 @@ import {
 } from "./panel-actions";
 import { SharedStyleDetails } from "./shared-style-details";
 import {
+  inSharedStyleFilter,
   isUnused,
   renameSharedStyle,
+  sharedStyleFilterEmpty,
+  sharedStyleUse,
+  SHARED_STYLE_FILTERS,
   searchSharedStyles,
   sharedStylePreview,
   sharedStyleReachChip,
@@ -58,6 +62,7 @@ import {
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
+  type SharedStyleFilter,
   type SharedStyleReach,
   type SharedStyleRow,
   type SharedStylesUsage,
@@ -128,6 +133,13 @@ export interface SharedStylesPanelProps {
 /** How many rows mount before the author asks for more; also one usage read. */
 const PAGE_SIZE = 50;
 
+/**
+ * How long the rows on screen wait before their usage is asked again while
+ * some pages are still being counted, so the counts become whole, and Remove
+ * unused becomes possible, without reopening the tab.
+ */
+export const USAGE_RECOUNT_MS = 15_000;
+
 /** The words for a refusal that came with none. */
 const UNEXPLAINED_REFUSAL = "This shared style could not be renamed.";
 
@@ -186,6 +198,7 @@ export function SharedStylesPanel({
   pendingNames = NO_NAMES,
 }: SharedStylesPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
+  const [filter, setFilter] = React.useState<SharedStyleFilter>("all");
   const [pages, setPages] = React.useState(1);
   const [issue, setIssue] = React.useState<Issue | null>(null);
   const [openId, setOpenId] = React.useState<string | null>(null);
@@ -198,11 +211,15 @@ export function SharedStylesPanel({
     [rows, styleContext]
   );
   const found = searchSharedStyles(rows, query, row => texts.get(row.id) ?? "");
-  const shown = found.slice(0, pages * PAGE_SIZE);
-  const usage = useUsage(
-    access,
-    shown.map(row => row.id)
+  // Every style's usage is read, so each filter can be counted: the rows the
+  // search puts first, then the rest, fifty to a read.
+  const usage = useUsage(access, usageOrder(rows, found, pages));
+  const usageOf = (row: SharedStyleRow) =>
+    sharedStyleUse(pageBlocksOf(pageBlocks, row.id), usage.styles.get(row.id));
+  const filtered = found.filter(row =>
+    inSharedStyleFilter(row, filter, usageOf(row))
   );
+  const shown = filtered.slice(0, pages * PAGE_SIZE);
   const rename = useRename({
     library,
     onRename,
@@ -214,10 +231,8 @@ export function SharedStylesPanel({
 
   if (library === undefined) return <Unread absence={absence} />;
 
-  const blocksOf = (id: string): BlocksOnThisPage => ({
-    count: pageBlocks.counts.get(id) ?? 0,
-    complete: pageBlocks.complete,
-  });
+  const blocksOf = (id: string): BlocksOnThisPage =>
+    pageBlocksOf(pageBlocks, id);
   const writable = !readOnly && onRename !== undefined;
 
   return (
@@ -239,6 +254,22 @@ export function SharedStylesPanel({
           }}
         />
       </div>
+      {rows.length === 0 ? null : (
+        <FilterBar
+          rows={rows}
+          filter={filter}
+          onFilter={next => {
+            setFilter(next);
+            setPages(1);
+          }}
+          usageOf={usageOf}
+          exact={
+            usage.whole === true &&
+            pageBlocks.complete &&
+            rows.every(row => usage.styles.has(row.id))
+          }
+        />
+      )}
       <div className="nx-vars__body">
         <PanelNotes
           readOnly={readOnly}
@@ -257,7 +288,12 @@ export function SharedStylesPanel({
             blocksOf={blocksOf}
             onRemoved={() => search.current?.focus()}
           />
-          <StyleList rows={rows} found={found} query={query.trim()}>
+          <StyleList
+            rows={rows}
+            found={filtered}
+            filter={filter}
+            query={query.trim()}
+          >
             {shown.map(row => (
               <StyleRow
                 key={row.id}
@@ -284,12 +320,96 @@ export function SharedStylesPanel({
             ))}
           </StyleList>
           <ShowMore
-            hidden={found.length - shown.length}
+            hidden={filtered.length - shown.length}
             pageSize={PAGE_SIZE}
             onMore={() => setPages(count => count + 1)}
           />
         </section>
         <FloorNote whole={usage.whole} />
+      </div>
+    </div>
+  );
+}
+
+/** The blocks on the open page that carry one style. */
+function pageBlocksOf(
+  pageBlocks: PageClassBlocks,
+  id: string
+): BlocksOnThisPage {
+  return {
+    count: pageBlocks.counts.get(id) ?? 0,
+    complete: pageBlocks.complete,
+  };
+}
+
+/**
+ * The order usage is read in: the rows the search lists on screen first, so
+ * their counts arrive first, then every other style, so each filter can be
+ * counted.
+ */
+function usageOrder(
+  rows: readonly SharedStyleRow[],
+  found: readonly SharedStyleRow[],
+  pages: number
+): string[] {
+  const first = found.slice(0, pages * PAGE_SIZE).map(row => row.id);
+  const listed = new Set(first);
+  return [...first, ...rows.map(row => row.id).filter(id => !listed.has(id))];
+}
+
+/**
+ * All · Used · Unused · Locked, each with how many styles it holds. Used and
+ * Unused are counted only once every count is exact: while some pages are
+ * still being counted, or some usage is still being read, a number there
+ * would be a guess.
+ */
+function FilterBar({
+  rows,
+  filter,
+  onFilter,
+  usageOf,
+  exact,
+}: {
+  rows: readonly SharedStyleRow[];
+  filter: SharedStyleFilter;
+  onFilter: (filter: SharedStyleFilter) => void;
+  usageOf: (row: SharedStyleRow) => "used" | "unused" | undefined;
+  exact: boolean;
+}): React.JSX.Element {
+  const countOf = (candidate: SharedStyleFilter): number | undefined => {
+    if ((candidate === "used" || candidate === "unused") && !exact) {
+      return undefined;
+    }
+    return rows.filter(row => inSharedStyleFilter(row, candidate, usageOf(row)))
+      .length;
+  };
+  return (
+    <div className="nx-shared-styles__filters" role="group" aria-label="Show">
+      <div className="nx-vars__seg">
+        {SHARED_STYLE_FILTERS.map(({ filter: candidate, word }) => {
+          const count = countOf(candidate);
+          return (
+            <button
+              key={candidate}
+              type="button"
+              aria-pressed={filter === candidate}
+              aria-label={
+                count === undefined ? word : `${word} ${String(count)}`
+              }
+              onClick={() => onFilter(candidate)}
+            >
+              {word}
+              {count === undefined ? null : (
+                <span
+                  className="nx-shared-styles__filter-count"
+                  aria-hidden="true"
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -353,11 +473,14 @@ function PanelNotes({
 function StyleList({
   rows,
   found,
+  filter,
   query,
   children,
 }: {
   rows: readonly SharedStyleRow[];
+  /** The rows the search and the filter leave. */
   found: readonly SharedStyleRow[];
+  filter: SharedStyleFilter;
   query: string;
   children: React.ReactNode;
 }): React.JSX.Element {
@@ -371,7 +494,9 @@ function StyleList({
   if (found.length === 0) {
     return (
       <p className="nx-vars__empty">
-        {`No ${SHARED_STYLES_WORD} match “${query}”.`}
+        {filter === "all"
+          ? `No ${SHARED_STYLES_WORD} match “${query}”.`
+          : sharedStyleFilterEmpty(filter, query)}
       </p>
     );
   }
@@ -426,7 +551,9 @@ async function readUsage(
 
 /**
  * How widely the rows on screen are used: each id is read once, fifty to a
- * read, as rows come on screen; a row already read is not asked again.
+ * read, as rows come on screen; a row already read is not asked again while
+ * the counts are whole. While some pages are still being counted, every row
+ * on screen is asked again each {@link USAGE_RECOUNT_MS}, until they are.
  */
 function useUsage(
   access: SharedStylesAccess | undefined,
@@ -441,11 +568,25 @@ function useUsage(
   const known = React.useRef(state.styles);
   known.current = state.styles;
   const key = ids.join("\n");
+  const [recount, setRecount] = React.useState(0);
+  const recounted = React.useRef(recount);
+  React.useEffect(() => {
+    if (access === undefined || state.whole !== false || state.failed) return;
+    const timer = setTimeout(
+      () => setRecount(count => count + 1),
+      USAGE_RECOUNT_MS
+    );
+    return () => clearTimeout(timer);
+  }, [access, state.whole, state.failed, state.styles, recount]);
   React.useEffect(() => {
     if (access === undefined) return;
+    // A recount asks for every row on screen; otherwise only the rows that
+    // have come on screen since the last read.
+    const again = recounted.current !== recount;
+    recounted.current = recount;
     const unread = key
       .split("\n")
-      .filter(id => id !== "" && !known.current.has(id));
+      .filter(id => id !== "" && (again || !known.current.has(id)));
     if (unread.length === 0) return;
     const controller = new AbortController();
     readUsage(access, unread, controller.signal, read =>
@@ -461,7 +602,7 @@ function useUsage(
       }
     });
     return () => controller.abort();
-  }, [access, key]);
+  }, [access, key, recount]);
   return state;
 }
 

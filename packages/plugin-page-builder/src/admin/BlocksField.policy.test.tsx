@@ -1136,7 +1136,7 @@ describe("what the Shared styles tab says a style declares", () => {
     // Drawn without the routes: what a style declares is read from the
     // library alone.
     render(<RealSharedStylesPanel {...props} access={undefined} />);
-    fireEvent.click(screen.getByRole("button", { name: /^hero, \.hero/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^hero, \.nx-c-hero/ }));
     const details = await screen.findByRole("dialog", { name: "hero" });
     return (
       details.querySelector(".nx-shared-styles__declares")?.parentElement

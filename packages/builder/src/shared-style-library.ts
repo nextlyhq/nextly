@@ -11,7 +11,7 @@
  */
 import {
   MAX_NAMED_CLASS_NAME_LENGTH,
-  NAMED_CLASS_PREFIX,
+  namedClassName,
   tokenLabelIssue,
   type NamedClass,
   type NodeStyles,
@@ -74,7 +74,7 @@ export interface SharedStyleRow {
   /** The name an author gave it, or its slug when it has none. */
   readonly name: string;
   readonly slug: string;
-  /** The class name as developers read it: `.card`. */
+  /** The class the page carries, as hand-written CSS selects it: `.nx-c-card`. */
   readonly className: string;
   readonly locked: boolean;
   /** Supplied by the site's code: shown, never renamed, locked or removed. */
@@ -95,7 +95,7 @@ export function sharedStyleRows(
     id: entry.id,
     name: sharedStyleName(entry),
     slug: entry.slug,
-    className: `.${entry.slug}`,
+    className: `.${namedClassName(entry.slug)}`,
     locked: entry.locked === true,
     inCode: suppliedIds.has(entry.id),
     styles: entry.styles,
@@ -183,12 +183,7 @@ export function sharedStyleSearchText(
     entry => `${entry.property}: ${entry.value}`
   );
   return searchable(
-    [
-      row.name,
-      row.className,
-      `${NAMED_CLASS_PREFIX}${row.slug}`,
-      ...declarations,
-    ].join("\n")
+    [row.name, row.slug, row.className, ...declarations].join("\n")
   );
 }
 
@@ -356,9 +351,64 @@ export function isUnused(
   blocks: BlocksOnThisPage | undefined,
   reach: SharedStyleReach
 ): boolean {
-  const pageClear =
-    blocks !== undefined && blocks.complete && blocks.count === 0;
-  return pageClear && reach.complete && reach.documents === 0;
+  return (
+    sharedStyleUse(blocks, reach) === "unused" &&
+    blocks !== undefined &&
+    blocks.complete &&
+    reach.complete
+  );
+}
+
+/**
+ * Whether any use of a style has been counted: on a block of the open page or
+ * on a document in the index. "unused" says only that none has been counted;
+ * it is certain once every count is ({@link isUnused}). Undefined while the
+ * style's usage has not been read.
+ */
+export function sharedStyleUse(
+  blocks: BlocksOnThisPage | undefined,
+  reach: SharedStyleReach | undefined
+): "used" | "unused" | undefined {
+  if (reach === undefined) return undefined;
+  return (blocks?.count ?? 0) > 0 || reach.documents > 0 ? "used" : "unused";
+}
+
+/** Which styles the tab lists: every one, or those used, unused or locked. */
+export type SharedStyleFilter = "all" | "used" | "unused" | "locked";
+
+/** The filters in the order the tab offers them, with their words. */
+export const SHARED_STYLE_FILTERS: readonly {
+  readonly filter: SharedStyleFilter;
+  readonly word: string;
+}[] = [
+  { filter: "all", word: "All" },
+  { filter: "used", word: "Used" },
+  { filter: "unused", word: "Unused" },
+  { filter: "locked", word: "Locked" },
+];
+
+/**
+ * Whether a row belongs under a filter. A style whose usage has not been read
+ * yet is under neither Used nor Unused until it has.
+ */
+export function inSharedStyleFilter(
+  row: Pick<SharedStyleRow, "locked">,
+  filter: SharedStyleFilter,
+  use: "used" | "unused" | undefined
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "locked") return row.locked;
+  return use === filter;
+}
+
+/** What the tab says when a filter, with or without a search, lists nothing. */
+export function sharedStyleFilterEmpty(
+  filter: Exclude<SharedStyleFilter, "all">,
+  query: string
+): string {
+  const word = SHARED_STYLE_FILTERS.find(entry => entry.filter === filter);
+  const kind = `${(word?.word ?? filter).toLowerCase()} ${SHARED_STYLES_WORD}`;
+  return query === "" ? `No ${kind}.` : `No ${kind} match “${query}”.`;
 }
 
 /**

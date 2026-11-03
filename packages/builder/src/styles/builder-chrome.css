@@ -4242,7 +4242,8 @@ fieldset.nx-inspector__fields {
 /* The Shared styles tab: drawn with the Variables tab's rows and popover
    editor; these rules add the second line under a style's name, its lock,
    and the lists in its details. Every colour is an `--nx-*` property, so
-   light and dark need nothing more. */
+   light and dark need nothing more, and no text is set under `--text-xs`
+   (12px), the smallest size the editor reads. */
 
 .nx-shared-styles__row {
   grid-template-columns: 22px minmax(0, 1fr) auto auto auto;
@@ -4250,6 +4251,35 @@ fieldset.nx-inspector__fields {
 
 .nx-shared-styles__lead {
   font-size: var(--text-sm);
+}
+
+/* The filters close the search block, so the search row keeps no rule of
+   its own here. */
+.nx-shared-styles .nx-vars__search {
+  padding-bottom: 0.25rem;
+  border-bottom: 0;
+}
+
+/* All · Used · Unused · Locked under the search: the Variables tab's
+   segmented control, its segments sharing the panel's width. */
+.nx-shared-styles__filters {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--nx-border);
+}
+
+.nx-shared-styles__filters .nx-vars__seg {
+  display: flex;
+}
+
+.nx-shared-styles__filters .nx-vars__seg > button {
+  flex: 1 1 0;
+  text-align: center;
+}
+
+.nx-shared-styles__filter-count {
+  margin-inline-start: 0.25rem;
+  color: var(--nx-muted-foreground);
+  font-variant-numeric: tabular-nums;
 }
 
 .nx-shared-styles__names {
@@ -4263,7 +4293,7 @@ fieldset.nx-inspector__fields {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10.5px;
+  font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--nx-muted-foreground);
 }
@@ -4276,7 +4306,7 @@ fieldset.nx-inspector__fields {
 .nx-shared-styles__hint,
 .nx-shared-styles__reach {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--nx-muted-foreground);
 }
@@ -4293,12 +4323,12 @@ fieldset.nx-inspector__fields {
   margin: 0;
   padding: 0;
   list-style: none;
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .nx-shared-styles__declares {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: var(--text-xs);
   overflow-wrap: anywhere;
 }
 
