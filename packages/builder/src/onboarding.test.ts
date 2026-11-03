@@ -69,6 +69,10 @@ function register() {
         props: { text: { type: "text", inline: true } },
         defaultProps: { text: "" },
         example: { props: { text: "A section title" } },
+        // A variation placed with text of its own, as a plugin's may be.
+        editor: {
+          variations: [{ name: "hero", props: { text: "Hero title" } }],
+        },
       },
     ] as never,
     { source: "onboarding-test" }
@@ -160,6 +164,16 @@ describe("builderChecklist", () => {
     expect(step(documentOf([exampled("About us")]), "write-text")?.done).toBe(
       true
     );
+  });
+
+  it("does not count the text a block is placed with as one of its variations", () => {
+    const placed = {
+      id: "v",
+      type: "acme/exampled",
+      version: 1,
+      props: { text: "Hero title" },
+    } as BlockNode;
+    expect(step(documentOf([placed]), "write-text")?.done).toBe(false);
   });
 
   it("finds text on a NESTED block", () => {

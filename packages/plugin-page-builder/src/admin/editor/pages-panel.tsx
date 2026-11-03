@@ -18,6 +18,7 @@ import {
   navigateTo,
   readPluginRoute,
   useDocumentIdentity,
+  useDocumentStatus,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   AlertDialog,
@@ -135,6 +136,9 @@ function PagesPanel({
 }: PagesPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const list = usePagesList(query);
+  // The page being edited, as the editor knows it now: a save since the list
+  // was read can have given it unpublished changes the list doesn't show.
+  const liveStatus = useDocumentStatus();
   const [deleting, setDeleting] = React.useState<PageItem | null>(null);
   const [problem, setProblem] = React.useState<string | null>(null);
 
@@ -186,6 +190,7 @@ function PagesPanel({
           query={query}
           current={current}
           unsavedWork={unsavedWork}
+          liveStatus={liveStatus}
           actions={{ ...act, remove: setDeleting }}
         />
       </div>
@@ -388,12 +393,14 @@ function PageList({
   query,
   current,
   unsavedWork,
+  liveStatus,
   actions,
 }: {
   list: PagesList;
   query: string;
   current: PageReference | null;
   unsavedWork: boolean;
+  liveStatus: LiveStatus;
   actions: RowActions;
 }): React.JSX.Element {
   if (list.state === "failed") {
@@ -438,6 +445,7 @@ function PageList({
                 page={page}
                 editing={isCurrent(page, current)}
                 unsavedWork={unsavedWork}
+                liveStatus={liveStatus}
                 actions={actions}
               />
             ))}
@@ -495,12 +503,15 @@ function PageRow({
   page,
   editing,
   unsavedWork,
+  liveStatus,
   actions,
 }: {
   page: PageItem;
   editing: boolean;
   /** Whether the editor holds unsaved work, which only this page's row has. */
   unsavedWork: boolean;
+  /** The editor's own status for the page being edited. */
+  liveStatus: LiveStatus;
   actions: RowActions;
 }): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
@@ -549,6 +560,7 @@ function PageRow({
         page={page}
         editing={editing}
         unsavedHere={editing && unsavedWork}
+        liveStatus={editing ? liveStatus : null}
         actions={actions}
         onRename={() => (editing ? actions.settings(page) : setRenaming(true))}
       />
@@ -556,11 +568,15 @@ function PageRow({
   );
 }
 
+/** The editor's status for the document it has open, or null when it has none. */
+type LiveStatus = ReturnType<typeof useDocumentStatus>;
+
 /** A row's ⋯ menu, shown when the row is hovered or holds focus. */
 function RowMenu({
   page,
   editing,
   unsavedHere,
+  liveStatus,
   actions,
   onRename,
 }: {
@@ -568,6 +584,8 @@ function RowMenu({
   editing: boolean;
   /** Whether this is the page being edited, with work not yet saved. */
   unsavedHere: boolean;
+  /** The editor's status for this page, when it is the one being edited. */
+  liveStatus: LiveStatus;
   actions: RowActions;
   onRename: () => void;
 }): React.JSX.Element {
@@ -575,9 +593,13 @@ function RowMenu({
   // and a published page as published, so newer unpublished changes are left
   // behind; and never from the editor's unsaved work. Said under Duplicate,
   // so the author knows what the copy holds.
+  // The page being edited reads the editor's status, which follows a save
+  // made since the list was read; every other row reads the list.
   const copiesPublished =
-    page.status !== "draft" &&
-    (page.state === "changed" || page.pendingChange === true);
+    liveStatus !== null
+      ? liveStatus.status === "published" && liveStatus.hasWorkingDraft
+      : page.status !== "draft" &&
+        (page.state === "changed" || page.pendingChange === true);
   const copyNote = copiesPublished
     ? "Copies the published version, without your unpublished changes."
     : unsavedHere

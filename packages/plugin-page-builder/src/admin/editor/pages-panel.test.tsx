@@ -41,6 +41,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     return answer(read);
   },
   useDocumentIdentity: () => identity,
+  useDocumentStatus: () => liveStatus,
 }));
 
 const client = {
@@ -119,6 +120,8 @@ let editingPage = true;
 
 /** Whether the editor holds unsaved work, as the editor tells the panel. */
 let unsavedWork = false;
+/** The editor's status for the page it has open. */
+let liveStatus: { status: string; hasWorkingDraft: boolean } | null = null;
 
 /** The editor's mount of the panel, and what it asks of Settings. */
 function Harness() {
@@ -169,6 +172,7 @@ beforeEach(() => {
   identity = { kind: "collection", slug: "pages", documentId: "current" };
   editingPage = true;
   unsavedWork = false;
+  liveStatus = null;
   window.history.replaceState({}, "", "/");
 });
 afterEach(cleanup);
@@ -473,6 +477,16 @@ describe("a row's actions", () => {
       "Copies the last saved version, without your unsaved changes."
     );
     expect(entry.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("reads the page being edited from the editor, which knows of a draft saved since the list was read", async () => {
+    // The list read it as plainly published; a save since gave it changes.
+    identity = { kind: "collection", slug: "pages", documentId: "a" };
+    liveStatus = { status: "published", hasWorkingDraft: true };
+    const { description } = await duplicateFor(
+      item("a", "Home", { status: "published" })
+    );
+    expect(description).toBe(COPIES_PUBLISHED);
   });
 
   it("adds no note to another page's Duplicate while this one has unsaved work", async () => {

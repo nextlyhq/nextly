@@ -374,13 +374,38 @@ export type InsertTarget = PlacementTarget;
  * starting ones (Getting started's "Write something"). Spread, so the caller
  * owns its copy and cannot reach back into the definition.
  */
-export function insertionProps(
+function insertionProps(
   definition: Pick<AnyBlockDefinition, "defaultProps" | "example">
 ): Record<string, unknown> {
   return {
     ...(definition.defaultProps ?? {}),
     ...(definition.example?.props ?? {}),
   };
+}
+
+/** The props a block is placed with under one of its variations. */
+function variationProps(
+  base: Record<string, unknown>,
+  variation: { readonly props?: object }
+): Record<string, unknown> {
+  return { ...base, ...(variation.props ?? {}) };
+}
+
+/**
+ * Every set of props a block can be placed with: its own, then each
+ * variation's. The candidates the inserter offers, for anything that must
+ * tell an author's values from ones a block was placed with.
+ */
+export function insertionPropSets(
+  definition: Pick<AnyBlockDefinition, "defaultProps" | "example" | "editor">
+): Record<string, unknown>[] {
+  const base = insertionProps(definition);
+  return [
+    base,
+    ...(definition.editor?.variations ?? []).map(variation =>
+      variationProps(base, variation)
+    ),
+  ];
 }
 
 /**
@@ -473,7 +498,7 @@ export function catalogFrom(
         // plugin authors can actually write against.
         icon: editor?.icon,
         version: definition.version,
-        props: { ...defaults, ...(variation.props ?? {}) },
+        props: variationProps(defaults, variation),
       });
     }
   }

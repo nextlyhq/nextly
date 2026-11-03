@@ -31,7 +31,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { inlineTargets } from "./inline-text";
-import { insertionProps } from "./inserter";
+import { insertionPropSets } from "./inserter";
 
 /** One thing to do, and whether the page shows it has been done. */
 export interface ChecklistStep {
@@ -44,14 +44,19 @@ export interface ChecklistStep {
 }
 
 /**
- * The text a block starts with when it is placed, for one of its values: what
- * the inserter places it with, which an author has not written.
+ * The texts a block can start with when it is placed, for one of its values:
+ * what the inserter places it with, as itself or as any of its variations,
+ * none of which an author has written.
  */
-function startingText(node: BlockNode, prop: string): string {
+function startingTexts(node: BlockNode, prop: string): ReadonlySet<string> {
   const definition = getBlock(node.type);
-  const value =
-    definition === undefined ? undefined : insertionProps(definition)[prop];
-  return typeof value === "string" ? value.trim() : "";
+  if (definition === undefined) return new Set();
+  return new Set(
+    insertionPropSets(definition).flatMap(props => {
+      const value = props[prop];
+      return typeof value === "string" ? [value.trim()] : [];
+    })
+  );
 }
 
 /**
@@ -69,7 +74,7 @@ function hasAuthoredText(document: BlockDocument): boolean {
     // correct: there was nothing to type.
     found = inlineTargets(document, node.id).some(target => {
       const text = target.value.trim();
-      return text !== "" && text !== startingText(node, target.prop);
+      return text !== "" && !startingTexts(node, target.prop).has(text);
     });
   });
   return found;
