@@ -13,7 +13,7 @@ import type { OwnerRecord } from "../owner-registry";
 import {
   findUninstallDependents,
   pluginEntities,
-  type LiveForeignKey,
+  type LiveTable,
 } from "../uninstall-dependents";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 
@@ -57,11 +57,38 @@ function sources(
   };
 }
 
+/** A foreign key the database holds, on the table named. */
+interface LiveKey {
+  table: string;
+  name: string;
+  referencesTable: string;
+  referencesColumns: string[];
+}
+
+/** The live tables holding `keys`, each with only its keys read. */
+function keysOn(keys: LiveKey[]): LiveTable[] {
+  const tables = new Map<string, LiveTable>();
+  for (const { table, ...key } of keys) {
+    const spec: LiveTable = tables.get(table) ?? {
+      name: table,
+      foreignKeys: [],
+    };
+    spec.foreignKeys?.push({
+      ...key,
+      columns: [],
+      onDelete: "no action",
+      onUpdate: "no action",
+    });
+    tables.set(table, spec);
+  }
+  return [...tables.values()];
+}
+
 const find = (
   owned: OwnerRecord[],
   src: DependentsSources,
   recorded: OwnerRecord[] = [],
-  live: LiveForeignKey[] = []
+  live: LiveTable[] = []
 ) =>
   findUninstallDependents({
     pluginName: "fx",
@@ -71,7 +98,7 @@ const find = (
       table === "fx__notes" ? "fx-notes" : null,
     sources: src,
     recordedRowsOn: () => Promise.resolve(recorded),
-    liveForeignKeys: () => Promise.resolve(live),
+    liveSchema: () => Promise.resolve(live),
   });
 
 describe("findUninstallDependents", () => {
@@ -544,7 +571,7 @@ describe("findUninstallDependents", () => {
           elementName: "fk_fx_tag_note",
         }),
       ],
-      [
+      keysOn([
         live("sso__links", "fk_sso_note", "fx__notes"),
         // Nothing records it at all.
         live("app_links", "FK_APP_NOTE", "FX__NOTES"),
@@ -553,7 +580,7 @@ describe("findUninstallDependents", () => {
         // another table is not this uninstall's.
         live("fx__notes", "fk_fx_self", "fx__notes"),
         live("app_links", "fk_app_user", "users"),
-      ]
+      ])
     );
     expect(found).toEqual([
       {
@@ -601,7 +628,7 @@ describe("findUninstallDependents", () => {
         }),
       }),
       [],
-      [
+      keysOn([
         {
           table: "app_links",
           name: "fk_app_handle",
@@ -614,7 +641,7 @@ describe("findUninstallDependents", () => {
           referencesTable: "users",
           referencesColumns: ["fx_handle"],
         },
-      ]
+      ])
     );
     expect(found.map(dependent => dependent.name)).toEqual([
       "fk_sso_handle",
@@ -622,6 +649,199 @@ describe("findUninstallDependents", () => {
     ]);
     // The declared key keeps its declared owner.
     expect(found[0]?.owner).toContain('plugin "sso"');
+  });
+
+  it("judges a declared index and check by the definitions the database holds for them", async () => {
+    // sso changed both declarations in code and never migrated: the
+    // database's index and check still use the column fx contributed.
+    const users = {
+      name: "users",
+      columns: [],
+      indexes: [
+        { name: "users_lookup", columns: ["email"], unique: false },
+        { name: "users_email", columns: ["email"], unique: false },
+      ],
+      checks: [{ name: "ck_users_lookup", sql: "email <> ''" }],
+    };
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          specs: [users] as unknown as ExtensionSchemaRecord["specs"],
+          owners: new Map([["users", SSO]]),
+        }),
+      }),
+      [
+        row({
+          tableName: "users",
+          elementKind: "index",
+          elementName: "users_lookup",
+          ownerId: "sso",
+          migratedBy: "plugin:sso",
+        }),
+        row({
+          tableName: "users",
+          elementKind: "check",
+          elementName: "ck_users_lookup",
+          ownerId: "sso",
+          migratedBy: "plugin:sso",
+        }),
+      ],
+      [
+        {
+          name: "users",
+          indexes: [
+            { name: "USERS_LOOKUP", columns: ["fx_handle"], unique: false },
+            // CONTROL: one the database holds as declared is not counted.
+            { name: "users_email", columns: ["email"], unique: false },
+          ],
+          foreignKeys: [],
+          checks: [{ name: "ck_users_lookup", sql: "(fx_handle <> '')" }],
+        },
+      ]
+    );
+    expect(found).toEqual([
+      {
+        kind: "index",
+        name: "users_lookup",
+        table: "users",
+        owner:
+          'plugin "sso", which in the database still uses column "fx_handle", though its declaration does not',
+      },
+      {
+        kind: "check",
+        name: "ck_users_lookup",
+        table: "users",
+        owner:
+          'plugin "sso", which in the database still uses column "fx_handle", though its declaration does not',
+      },
+    ]);
+  });
+
+  it("counts a declared index whose definition the database's catalog was not read for", async () => {
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          specs: [
+            {
+              name: "users",
+              columns: [],
+              indexes: [
+                { name: "users_lookup", columns: ["email"], unique: false },
+              ],
+            },
+          ] as unknown as ExtensionSchemaRecord["specs"],
+          owners: new Map([["users", SSO]]),
+        }),
+      }),
+      [],
+      // Its keys and checks were read; its indexes were not.
+      [{ name: "users", foreignKeys: [], checks: [] }]
+    );
+    expect(found).toEqual([
+      expect.objectContaining({
+        kind: "index",
+        name: "users_lookup",
+        owner: expect.stringContaining("could not be read"),
+      }),
+    ]);
+  });
+
+  it("finds a live key its declaration names whose declaration references another table or column", async () => {
+    const key = (
+      name: string,
+      references: [string, string]
+    ): Record<string, unknown> => ({
+      name,
+      columns: ["ref"],
+      referencesTable: references[0],
+      referencesColumns: [references[1]],
+    });
+    const spec = (name: string, fk: Record<string, unknown>) => ({
+      name,
+      columns: [],
+      foreignKeys: [fk],
+    });
+    const found = await find(
+      [
+        row({}),
+        row({
+          tableName: "users",
+          elementKind: "column",
+          elementName: "fx_handle",
+        }),
+      ],
+      sources({
+        extension: schema({
+          specs: [
+            // Retargeted in code to its own table, never migrated.
+            spec("sso__links", key("fk_sso_note", ["sso__targets", "id"])),
+            // Retargeted in code to another column of users.
+            spec("sso__handles", key("fk_sso_handle", ["users", "email"])),
+            // CONTROL: declared as the database holds it, found once.
+            spec("sso__refs", key("fk_sso_ref", ["fx__notes", "id"])),
+          ] as unknown as ExtensionSchemaRecord["specs"],
+          owners: new Map([
+            ["sso__links", SSO],
+            ["sso__handles", SSO],
+            ["sso__refs", SSO],
+          ]),
+        }),
+      }),
+      [],
+      keysOn([
+        {
+          table: "sso__links",
+          name: "fk_sso_note",
+          referencesTable: "fx__notes",
+          referencesColumns: ["id"],
+        },
+        {
+          table: "sso__handles",
+          name: "FK_SSO_HANDLE",
+          referencesTable: "users",
+          referencesColumns: ["fx_handle"],
+        },
+        {
+          table: "sso__refs",
+          name: "fk_sso_ref",
+          referencesTable: "fx__notes",
+          referencesColumns: ["id"],
+        },
+      ])
+    );
+    expect(found).toEqual([
+      expect.objectContaining({ name: "fk_sso_ref", owner: 'plugin "sso"' }),
+      {
+        kind: "foreign key",
+        name: "fk_sso_note",
+        table: "sso__links",
+        owner:
+          'plugin "sso", declared to reference "sso__targets" (id), while the key the database holds references "fx__notes" (id)',
+      },
+      {
+        kind: "foreign key",
+        name: "FK_SSO_HANDLE",
+        table: "sso__handles",
+        owner:
+          'plugin "sso", declared to reference "users" (email), while the key the database holds references "users" (fx_handle)',
+      },
+    ]);
   });
 
   it("CONTROL: never counts the plugin's own schema", async () => {
@@ -709,7 +929,7 @@ describe("what the plugin owns", () => {
         ],
       }),
       recordedRowsOn: () => Promise.resolve([]),
-      liveForeignKeys: () => Promise.resolve([]),
+      liveSchema: () => Promise.resolve([]),
     });
     expect(found).toEqual([]);
   });
@@ -754,7 +974,7 @@ describe("what the plugin owns", () => {
         ],
       }),
       recordedRowsOn: () => Promise.resolve([]),
-      liveForeignKeys: () => Promise.resolve([]),
+      liveSchema: () => Promise.resolve([]),
     });
     expect(found).toEqual([
       expect.objectContaining({
@@ -822,7 +1042,7 @@ describe("what the plugin owns", () => {
         ],
       }),
       recordedRowsOn: () => Promise.resolve([]),
-      liveForeignKeys: () => Promise.resolve([]),
+      liveSchema: () => Promise.resolve([]),
     });
     expect(found).toEqual([
       expect.objectContaining({ kind: "relationship field", name: "appNote" }),
@@ -870,7 +1090,7 @@ describe("what the plugin owns", () => {
         ],
       }),
       recordedRowsOn: () => Promise.resolve([]),
-      liveForeignKeys: () => Promise.resolve([]),
+      liveSchema: () => Promise.resolve([]),
     });
     expect(found).toEqual([
       expect.objectContaining({ kind: "relationship field", name: "ssoNote" }),

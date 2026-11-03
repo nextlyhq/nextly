@@ -34,6 +34,8 @@ the plugin's schema, instead of dropping it after consent. That covers a column,
 foreign key or check the app or another plugin added to the plugin's tables, a key or a
 relationship field pointing into them, and an index or key using or referencing a column
 the plugin added to someone else's table. Dropping these would delete data that belongs to someone else.
+Each is judged by the definition the database holds, so one whose declaration changed in code
+but was never migrated still counts while the database's definition uses the plugin's schema.
 The refusal names each one and its owner. Remove them in their owner's code and migrate,
 or uninstall with `--keep-data`, which drops nothing.
 

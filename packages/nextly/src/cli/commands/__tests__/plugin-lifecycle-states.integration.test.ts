@@ -10,6 +10,9 @@
  * - an install, a full uninstall and a reinstall that reads and writes its
  *   table again;
  * - an uninstall keeping data, and a reinstall that finds the rows;
+ * - a full uninstall refused while the database still holds another owner's
+ *   earlier definitions, built by the production DDL, that use the plugin's
+ *   schema though their current declarations do not;
  * - a full uninstall stopped after its first committed drop, which the boot
  *   refuses until the uninstall is run again and finishes.
  */
@@ -20,6 +23,7 @@ import { buildExtensionSchema } from "../../../domains/schema/extension/build-ex
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
+import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import {
   countDeletions,
@@ -31,7 +35,12 @@ import {
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { assertBootPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
+import type {
+  Operation,
+  TableSpec,
+} from "../../../domains/schema/pipeline/diff/types";
 import { MYSQL_MIGRATE_LOCK_NAME } from "../../../domains/schema/pipeline/locks";
+import { generateStatements } from "../../../domains/schema/pipeline/sql-templates";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -56,6 +65,8 @@ const run = vi.hoisted(() => ({
     transaction: (...args: never[]) => Promise<unknown>;
   },
   plugin: undefined as unknown,
+  /** Plugins configured beside it. */
+  others: [] as unknown[],
   /** Runs after each adapter transaction commits, when set. */
   afterTransaction: undefined as (() => Promise<void>) | undefined,
 }));
@@ -64,7 +75,7 @@ vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => {
     const config = {
       db: { migrationsDir: "./migrations" },
-      plugins: [run.plugin],
+      plugins: [run.plugin, ...run.others],
     };
     return { config, appConfig: config, pluginConsent: undefined };
   },
@@ -114,6 +125,60 @@ const tags = defineTable("tags", {
   id: col.id(),
   label: col.shortText({ nullable: true }),
 });
+
+const AU = "@acme/au";
+
+/**
+ * Another plugin's tables as its code declares them now: an index and a
+ * check on `title`, and a key into its own `au__targets`.
+ */
+const auPosts = defineTable(
+  "posts",
+  { id: col.id(), title: col.shortText({ nullable: true }) },
+  {
+    indexes: [{ columns: ["title"] }],
+    checks: [{ name: "lookup", sql: "title <> ''" }],
+  }
+);
+const auTargets = defineTable("targets", { id: col.id() });
+const auLinks = defineTable(
+  "links",
+  { id: col.id(), noteId: col.shortText({ nullable: true }) },
+  {
+    foreignKeys: [
+      {
+        columns: ["noteId"],
+        references: { table: "au__targets", columns: ["id"] },
+      },
+    ],
+  }
+);
+const auPlugin = {
+  name: AU,
+  version: "1.0.0",
+  contributes: {
+    schema: { prefix: "au", tables: [auPosts, auTargets, auLinks] },
+  },
+};
+
+/** One of au's tables compiled for `dialect` by the real builder. */
+async function auSpec(dialect: Dialect, name: string): Promise<TableSpec> {
+  const built = await buildExtensionSchema({
+    dialect,
+    coreTableNames: CORE_TABLE_NAMES,
+    entities: [],
+    pluginPrefixes: new Map([[AU, "au"]]),
+    plugins: [
+      {
+        owner: { kind: "plugin", id: AU },
+        tables: [auPosts, auTargets, auLinks],
+      },
+    ],
+  });
+  const spec = built.specs.find(candidate => candidate.name === name);
+  if (!spec) throw new Error(`${name} was not compiled`);
+  return spec;
+}
 
 /** The plugin's tables compiled for every dialect by the real builder. */
 async function tablesByDialect(tables: ReturnType<typeof defineTable>[]) {
@@ -175,6 +240,7 @@ describe.each(getConfiguredTestDialects())(
       run.dialect = dialect;
       run.adapter = handle.adapter as unknown as typeof run.adapter;
       run.afterTransaction = undefined;
+      run.others = [];
       run.plugin = {
         name: PLUGIN,
         version: "1.0.0",
@@ -240,6 +306,42 @@ describe.each(getConfiguredTestDialects())(
 
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+    /** Runs the production DDL for `ops` against the test's database. */
+    async function applyDdl(
+      ops: Operation[],
+      tables: TableSpec[]
+    ): Promise<void> {
+      for (const statement of generateStatements(ops, dialect, tables)) {
+        for (const one of splitSqlStatements(statement, dialect)) {
+          await handle.adapter.executeQuery(one);
+        }
+      }
+    }
+
+    /** Records `rows` as owned, each by the plugin named. */
+    async function recordOwned(
+      rows: Array<{
+        owner: string;
+        table: string;
+        kind: "table" | "column" | "index" | "fk" | "check";
+        name: string;
+      }>
+    ): Promise<void> {
+      await new SchemaOwnersRepository(db(), dialect).upsert(
+        rows.map(row => ({
+          tableName: row.table,
+          elementKind: row.kind,
+          elementName: row.kind === "table" ? "" : row.name,
+          ownerKind: "plugin" as const,
+          ownerId: row.owner,
+          migratedBy: `plugin:${row.owner}`,
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active" as const,
+        }))
+      );
+    }
 
     async function writeNote(id: string): Promise<void> {
       await handle.adapter.executeQuery(
@@ -364,6 +466,91 @@ describe.each(getConfiguredTestDialects())(
       expect(await exists("lc__notes")).toBe(true);
       expect(await exists("lc__tags")).toBe(true);
       await expect(boot()).resolves.toBeUndefined();
+    });
+
+    it("refuses a full uninstall while the database's index and check on another owner's table still use a column it added, though their declarations do not", async () => {
+      await install();
+      const posts = await auSpec(dialect, "au__posts");
+      const title = posts.columns.find(column => column.name === "title");
+      const [index] = posts.indexes ?? [];
+      const [check] = posts.checks ?? [];
+      if (!title || !index || !check) throw new Error("au__posts incomplete");
+      // What the database holds: au's earlier index and check, over the
+      // column lc added to au's table, never migrated to the ones au's code
+      // declares now.
+      const live: TableSpec = {
+        ...posts,
+        columns: [...posts.columns, { ...title, name: "lc_flag" }],
+        indexes: [],
+        checks: [{ ...check, sql: check.sql.replace(/title/g, "lc_flag") }],
+      };
+      await applyDdl(
+        [
+          { type: "add_table", table: live },
+          {
+            type: "add_index",
+            tableName: live.name,
+            index: { ...index, columns: ["lc_flag"] },
+          },
+        ],
+        [{ ...live, indexes: [{ ...index, columns: ["lc_flag"] }] }]
+      );
+      await recordOwned([
+        { owner: AU, table: live.name, kind: "table", name: "" },
+        { owner: AU, table: live.name, kind: "index", name: index.name },
+        { owner: AU, table: live.name, kind: "check", name: check.name },
+        { owner: PLUGIN, table: live.name, kind: "column", name: "lc_flag" },
+      ]);
+      run.others = [auPlugin];
+
+      const refusal: unknown = await uninstall(false).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(refusal).toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+      });
+      const drifted = `(plugin "${AU}", which in the database still uses column "lc_flag", though its declaration does not)`;
+      const { publicMessage } = refusal as { publicMessage: string };
+      expect(publicMessage).toContain(
+        `index "${index.name}" on au__posts ${drifted}`
+      );
+      expect(publicMessage).toContain(
+        `check "${check.name}" on au__posts ${drifted}`
+      );
+
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await exists("lc__tags")).toBe(true);
+    });
+
+    it("refuses a full uninstall while a key declared by its name still points into one of its tables in the database, though its declaration points elsewhere", async () => {
+      await install();
+      const links = await auSpec(dialect, "au__links");
+      const [key] = links.foreignKeys ?? [];
+      if (!key) throw new Error("au__links has no key");
+      // What the database holds: au's key as it was before its declaration
+      // was retargeted to au__targets, never migrated.
+      const live: TableSpec = {
+        ...links,
+        foreignKeys: [
+          { ...key, referencesTable: "lc__notes", referencesColumns: ["id"] },
+        ],
+      };
+      await applyDdl([{ type: "add_table", table: live }], [live]);
+      await recordOwned([
+        { owner: AU, table: live.name, kind: "table", name: "" },
+      ]);
+      run.others = [auPlugin];
+
+      await expect(uninstall(false)).rejects.toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+        publicMessage: expect.stringContaining(
+          `foreign key "${key.name}" on au__links (plugin "${AU}", declared to reference "au__targets" (id), while the key the database holds references "lc__notes" (id))`
+        ),
+      });
+
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await exists("lc__tags")).toBe(true);
     });
 
     it("keeps its records while an index it added to the app's table survives its DOWNs, and forgets it once that is dropped", async () => {

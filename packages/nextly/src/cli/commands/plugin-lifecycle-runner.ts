@@ -828,9 +828,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
           new SchemaOwnersRepository(drizzleAdapter.getDrizzle(), dialect).read(
             [...tables]
           ),
-        // Every table's keys, through the schema pipeline's introspection: a
-        // key pointing in can sit on any table, its owner's or nobody's.
-        liveForeignKeys: async () => {
+        // Every table's indexes, keys and checks, through the schema
+        // pipeline's introspection: a key pointing in can sit on any table,
+        // its owner's or nobody's, and an element's definition is judged as
+        // the database holds it.
+        liveSchema: async () => {
           const { introspectLiveSnapshot } = await import(
             "../../domains/schema/pipeline/diff/introspect-live"
           );
@@ -839,14 +841,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
             dialect,
             await drizzleAdapter.listTables()
           );
-          return snapshot.tables.flatMap(table =>
-            (table.foreignKeys ?? []).map(key => ({
-              table: table.name,
-              name: key.name,
-              referencesTable: key.referencesTable,
-              referencesColumns: key.referencesColumns,
-            }))
-          );
+          return snapshot.tables;
         },
       });
     },

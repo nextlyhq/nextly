@@ -17,6 +17,10 @@
  *
  * Keys pointing in are read from the database's catalog too, so a key whose
  * declaration was removed from code while its constraint stayed is found.
+ * A declaration answers for an element only while the database's element
+ * matches it: an index, key or check whose declaration was changed in code
+ * but never migrated is judged by the definition the database holds, and
+ * one whose definition cannot be read is counted.
  *
  * The first three are the question a collection delete already asks
  * (`findCollectionDependents`), asked here over the plugin's tables. The
@@ -41,6 +45,7 @@ import {
 } from "../../collections/services/collection-dependents";
 import { enumCheckName } from "../extension/enum-check";
 import type { ExtensionIndex } from "../extension/types";
+import type { TableSpec } from "../pipeline/diff/types";
 import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
 import {
@@ -85,16 +90,25 @@ export interface UninstallDependentsInput {
   /** The owner rows recorded on these tables, every owner's. */
   recordedRowsOn: (tables: readonly string[]) => Promise<OwnerRecord[]>;
   /**
-   * Every foreign key the database holds now, on every table, as its catalog
-   * reports it: what reads a key whose declaration is gone but whose
-   * constraint is still there. Throws rather than answering "none" about a
-   * catalog it could not read.
+   * Every table the database holds now, with its indexes, foreign keys and
+   * checks as its catalog reports them: what reads a key whose declaration
+   * is gone but whose constraint is still there, and an element whose
+   * declaration changed in code while the database kept the old one. A
+   * dimension left `undefined` is one the catalog was not read for, and is
+   * taken as unknown, never as empty. Throws rather than answering "none"
+   * about a catalog it could not read. Read once per question.
    */
-  liveForeignKeys: () => Promise<readonly LiveForeignKey[]>;
+  liveSchema: () => Promise<readonly LiveTable[]>;
 }
 
+/** A table as the database's catalog reports it, with the elements on it. */
+export type LiveTable = Pick<
+  TableSpec,
+  "name" | "indexes" | "foreignKeys" | "checks"
+>;
+
 /** A foreign key the database holds, as its catalog reports it. */
-export interface LiveForeignKey {
+interface LiveForeignKey {
   /** The table the key is on. */
   table: string;
   name: string;
@@ -110,8 +124,11 @@ function isThePlugin(
   return owner.kind === "plugin" && owner.id === pluginName;
 }
 
-/** A compiled element, and the columns of the table it is asked about that it uses. */
-interface CompiledUser {
+/**
+ * An element as it is defined, compiled or live: the columns of the table it
+ * is asked about that it uses.
+ */
+interface ElementUse {
   kind: ElementOnTable["kind"];
   name: string;
   /** The table the element is on: the asked-about table, or one whose key points into it. */
@@ -123,8 +140,15 @@ interface CompiledUser {
    * there are read from it (`expressionMayName`).
    */
   expression?: string;
+}
+
+/** A compiled element, with the owner its declaration names. */
+interface CompiledUser extends ElementUse {
   owner: ElementOnTable["owner"];
 }
+
+/** A name as a database that may fold its case compares it. */
+const folded = (name: string): string => name.toLowerCase();
 
 /** A name a column could have that an expression could only spell as a word. */
 const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
@@ -143,10 +167,10 @@ function expressionMayName(expression: string, column: string): boolean {
   return words.some(word => word.toLowerCase() === column.toLowerCase());
 }
 
-/** Whether a compiled element uses `column`, by its columns or its expression. */
-function usesColumn(user: CompiledUser, column: string): boolean {
+/** Whether an element uses `column`, by its columns or its expression. */
+function usesColumn(user: ElementUse, column: string): boolean {
   return (
-    user.columns.includes(column) ||
+    user.columns.some(used => folded(used) === folded(column)) ||
     (user.expression !== undefined &&
       expressionMayName(user.expression, column))
   );
@@ -185,6 +209,69 @@ function indexExpression(index: {
 }
 
 /**
+ * How an index on `table` uses its columns, by its column list and any
+ * expression or predicate: one reading for a declared index and for one the
+ * database holds.
+ */
+function indexUse(
+  table: string,
+  index: {
+    name: string;
+    columns: readonly string[];
+    expression?: string;
+    where?: string;
+  }
+): ElementUse {
+  return {
+    kind: "index",
+    name: index.name,
+    table,
+    columns: index.columns,
+    expression: indexExpression(index),
+  };
+}
+
+/** How a check on `table` uses its columns: by its expression, which lists none. */
+function checkUse(
+  table: string,
+  check: { name: string; sql: string }
+): ElementUse {
+  return {
+    kind: "check",
+    name: check.name,
+    table,
+    columns: [],
+    expression: check.sql,
+  };
+}
+
+/**
+ * How a foreign key on `table` uses that table's columns: its own, and the
+ * ones it references when it points back into the table it is on.
+ */
+function keyUse(
+  table: string,
+  key: {
+    name: string;
+    columns: readonly string[];
+    referencesTable: string;
+    referencesColumns: readonly string[];
+  }
+): ElementUse {
+  return {
+    kind: "fk",
+    name: key.name,
+    table,
+    columns: [
+      ...key.columns,
+      ...(folded(key.referencesTable) === folded(table)
+        ? key.referencesColumns
+        : []),
+    ],
+  };
+}
+
+/**
  * The indexes on `table`, an entity's and a declared table's, by their
  * columns and any expression or predicate. An entity index declared without
  * a name is named as the compiler names it.
@@ -196,20 +283,15 @@ function indexUsers(
   nameIndex: IndexNamer
 ): CompiledUser[] {
   const onEntity = (schema.entityIndexes.get(table) ?? []).map(index => ({
-    kind: "index" as const,
-    name: index.name ?? nameIndex(table, index),
-    table,
-    columns: index.columns,
-    expression: indexExpression(index),
+    ...indexUse(table, {
+      ...index,
+      name: index.name ?? nameIndex(table, index),
+    }),
     owner: index.contributedBy ?? tableOwner,
   }));
   const spec = schema.specs.find(candidate => candidate.name === table);
   const declared = (spec?.indexes ?? []).map(index => ({
-    kind: "index" as const,
-    name: index.name,
-    table,
-    columns: index.columns,
-    expression: indexExpression(index),
+    ...indexUse(table, index),
     owner: contributorOf(schema, table, "index", index.name) ?? tableOwner,
   }));
   return [...onEntity, ...declared];
@@ -227,11 +309,7 @@ function checkUsers(
 ): CompiledUser[] {
   const spec = schema.specs.find(candidate => candidate.name === table);
   const declared = (spec?.checks ?? []).map(check => ({
-    kind: "check" as const,
-    name: check.name,
-    table,
-    columns: [],
-    expression: check.sql,
+    ...checkUse(table, check),
     owner: contributorOf(schema, table, "check", check.name) ?? tableOwner,
   }));
   const ofEnums = (schema.entityColumns.get(table) ?? [])
@@ -258,13 +336,7 @@ function keyUsers(
 ): CompiledUser[] {
   const spec = schema.specs.find(candidate => candidate.name === table);
   const own = (spec?.foreignKeys ?? []).map(key => ({
-    kind: "fk" as const,
-    name: key.name,
-    table,
-    columns: [
-      ...key.columns,
-      ...(key.referencesTable === table ? key.referencesColumns : []),
-    ],
+    ...keyUse(table, key),
     owner: contributorOf(schema, table, "fk", key.name) ?? tableOwner,
   }));
   const inbound = foreignKeysInto(schema, new Set([table])).map(key => ({
@@ -407,11 +479,73 @@ async function onItsTables(
 }
 
 /**
- * Compiled elements on a table that use one column the plugin contributed,
- * other than the plugin's own.
+ * The indexes, keys and checks the database holds on one table, by how each
+ * uses its columns, keyed by kind and by name as a database that may fold
+ * case compares them. `unread` names the kinds its catalog was not read for.
+ */
+interface LiveOnTable {
+  uses: ReadonlyMap<string, ElementUse>;
+  unread: ReadonlySet<ElementOnTable["kind"]>;
+}
+
+/** How `LiveOnTable` keys an element. */
+const liveKey = (kind: string, name: string): string =>
+  `${kind}\u0000${folded(name)}`;
+
+/** What the database holds on `table`; `undefined` when it holds no such table. */
+function liveOn(
+  live: readonly LiveTable[],
+  table: string
+): LiveOnTable | undefined {
+  const spec = live.find(candidate => folded(candidate.name) === folded(table));
+  if (spec === undefined) return undefined;
+  const uses = [
+    ...(spec.indexes ?? []).map(index => indexUse(table, index)),
+    ...(spec.foreignKeys ?? []).map(key => keyUse(table, key)),
+    ...(spec.checks ?? []).map(check => checkUse(table, check)),
+  ];
+  const unread = new Set<ElementOnTable["kind"]>();
+  if (spec.indexes === undefined) unread.add("index");
+  if (spec.foreignKeys === undefined) unread.add("fk");
+  if (spec.checks === undefined) unread.add("check");
+  return {
+    uses: new Map(uses.map(use => [liveKey(use.kind, use.name), use])),
+    unread,
+  };
+}
+
+/**
+ * Whether the database's element under a declaration that does not use
+ * `columnName` may use it all the same: a declaration changed in code and
+ * never migrated leaves the old definition in place, and dropping the
+ * column breaks that one. Said for the refusal, or `undefined` when the
+ * database's element does not use the column or is not there. One whose
+ * definition was not read may use it, so it counts. A key on another table
+ * pointing into this one is read by `liveKeysPointingIn`.
+ */
+function liveUseBeyond(
+  onTable: LiveOnTable | undefined,
+  user: ElementUse,
+  table: string,
+  columnName: string
+): string | undefined {
+  if (onTable === undefined || user.table !== table) return undefined;
+  if (onTable.unread.has(user.kind)) {
+    return `whose definition in the database could not be read, so it may use column "${columnName}"`;
+  }
+  const live = onTable.uses.get(liveKey(user.kind, user.name));
+  if (live === undefined || !usesColumn(live, columnName)) return undefined;
+  return `which in the database still uses column "${columnName}", though its declaration does not`;
+}
+
+/**
+ * Elements on a table that use one column the plugin contributed, other
+ * than the plugin's own: by their declarations, and by the definitions the
+ * database holds for them.
  */
 function compiledUsersOf(
   compiled: ReturnType<typeof compiledColumnUsers>,
+  onTable: LiveOnTable | undefined,
   pluginName: string,
   table: string,
   columnName: string,
@@ -419,12 +553,15 @@ function compiledUsersOf(
 ): void {
   for (const user of compiled.values()) {
     if (isThePlugin(user.owner, pluginName)) continue;
-    if (!usesColumn(user, columnName)) continue;
+    const how = usesColumn(user, columnName)
+      ? howItUses(user, table, columnName)
+      : liveUseBeyond(onTable, user, table, columnName);
+    if (how === undefined) continue;
     found.add({
       kind: kindName(user.kind),
       name: user.name,
       table: user.table,
-      owner: `${describeOwner(user.owner)}, ${howItUses(user, table, columnName)}`,
+      owner: `${describeOwner(user.owner)}, ${how}`,
     });
   }
 }
@@ -444,7 +581,9 @@ function howItUses(
 /**
  * A recorded index, key or check on the table that nothing compiled
  * describes: its owner is not configured, so which columns it uses cannot be
- * read. Counted, since the guard does not assume what it could not read.
+ * read. Counted, since the guard does not assume what it could not read. One
+ * a declaration does describe is left to `compiledUsersOf`, which judges it
+ * by that declaration and by the definition the database holds.
  */
 function undescribedOn(
   recorded: readonly ElementOnTable[],
@@ -484,6 +623,7 @@ function undescribedOn(
 async function onItsContributedColumns(
   input: UninstallDependentsInput,
   own: ReadonlySet<string>,
+  live: () => Promise<readonly LiveTable[]>,
   found: Found
 ): Promise<void> {
   const contributed = contributedColumnsOf(input.owned, own);
@@ -497,6 +637,7 @@ async function onItsContributedColumns(
       ...new Set(contributed.map(row => row.tableName)),
     ])
   );
+  const tables = await live();
   for (const column of contributed) {
     const columnName = column.elementName ?? "";
     const compiled = compiledColumnUsers(
@@ -506,6 +647,7 @@ async function onItsContributedColumns(
     );
     compiledUsersOf(
       compiled,
+      liveOn(tables, column.tableName),
       input.pluginName,
       column.tableName,
       columnName,
@@ -531,14 +673,14 @@ export async function findUninstallDependents(
 ): Promise<UninstallDependent[]> {
   const ownTables = ownTablesOf(input.owned);
   const found = new Found();
+  // One read of the catalog answers both live questions below.
+  let read: Promise<readonly LiveTable[]> | undefined;
+  const live = () => (read ??= input.liveSchema());
   await onItsTables(input, ownTables, found);
-  await onItsContributedColumns(input, new Set(ownTables), found);
-  await liveKeysPointingIn(input, new Set(ownTables), found);
+  await onItsContributedColumns(input, new Set(ownTables), live, found);
+  await liveKeysPointingIn(input, new Set(ownTables), live, found);
   return found.list;
 }
-
-/** A name as a database that may fold its case compares it. */
-const folded = (name: string): string => name.toLowerCase();
 
 /**
  * The live keys, on tables the uninstall does not drop, that point into the
@@ -571,32 +713,46 @@ function keysPointingIn(
 
 /**
  * Foreign keys the database holds that point into what the uninstall drops
- * and that nothing compiled declares: a declaration removed from code whose
- * constraint was never migrated away. Dropping its target strips the key on
- * PostgreSQL (`CASCADE`) and refuses part way on MySQL, so it counts like
- * a declared one. A declared key is found from its declaration, and is not
- * read a second time here. One whose ownership record names the plugin is
- * its own; any other is counted, and one with no record at all is counted
- * as having an owner nothing records: the guard does not assume an answer it
- * could not read.
+ * and that no compiled declaration accounts for. Dropping a key's target
+ * strips the key on PostgreSQL (`CASCADE`) and refuses part way on MySQL, so
+ * each counts like a declared one. Two kinds:
+ *
+ * - a key nothing compiled declares: a declaration removed from code whose
+ *   constraint was never migrated away. One whose ownership record names
+ *   the plugin is its own; any other is counted, and one with no record at
+ *   all is counted as having an owner nothing records: the guard does not
+ *   assume an answer it could not read;
+ * - a key a declaration names (its table and name) that references another
+ *   table or other columns than the database's key does: a declaration
+ *   retargeted in code and never migrated. Counted under the declaration's
+ *   owner, unless that is the plugin.
+ *
+ * A key whose declaration matches it is found from that declaration, and is
+ * not read a second time here.
  */
 async function liveKeysPointingIn(
   input: UninstallDependentsInput,
   own: ReadonlySet<string>,
+  live: () => Promise<readonly LiveTable[]>,
   found: Found
 ): Promise<void> {
   const contributed = contributedColumnsOf(input.owned, own);
   if (own.size === 0 && contributed.length === 0) return;
-  const pointing = keysPointingIn(
-    await input.liveForeignKeys(),
-    own,
-    contributed
-  );
+  const pointing = keysPointingIn(liveKeysOf(await live()), own, contributed);
   if (pointing.length === 0) return;
-  const undeclared = undeclaredKeys(
+  const { undeclared, retargeted } = unaccountedKeys(
     await input.sources.extensionSchema(),
     pointing
   );
+  for (const { key, declared } of retargeted) {
+    if (isThePlugin(declared.owner, input.pluginName)) continue;
+    found.add({
+      kind: "foreign key",
+      name: key.name,
+      table: key.table,
+      owner: `${describeOwner(declared.owner)}, declared to reference ${targetOf(declared)}, while the key the database holds references ${targetOf(key)}`,
+    });
+  }
   if (undeclared.length === 0) return;
   const recorded = elementsFromOwnerRows(
     await input.recordedRowsOn([...new Set(undeclared.map(key => key.table))])
@@ -616,6 +772,18 @@ async function liveKeysPointingIn(
   }
 }
 
+/** Every foreign key the live tables hold, with the table each is on. */
+function liveKeysOf(tables: readonly LiveTable[]): LiveForeignKey[] {
+  return tables.flatMap(table =>
+    (table.foreignKeys ?? []).map(key => ({
+      table: table.name,
+      name: key.name,
+      referencesTable: key.referencesTable,
+      referencesColumns: key.referencesColumns,
+    }))
+  );
+}
+
 /** The plugin's column rows on other owners' tables: the columns it contributed. */
 function contributedColumnsOf(
   owned: readonly OwnerRecord[],
@@ -626,21 +794,69 @@ function contributedColumnsOf(
   );
 }
 
-/** The live keys among `keys` that no compiled declaration names. */
-function undeclaredKeys(
-  schema: ExtensionSchemaRecord | null,
-  keys: readonly LiveForeignKey[]
-): LiveForeignKey[] {
-  const declared = new Set(
-    (schema?.specs ?? []).flatMap(spec =>
-      (spec.foreignKeys ?? []).map(
-        key => `${folded(spec.name)}\u0000${folded(key.name)}`
-      )
+/** What a key references: a table and its columns, in order. */
+interface KeyTarget {
+  referencesTable: string;
+  referencesColumns: readonly string[];
+}
+
+/** A key's target as the refusal names it. */
+const targetOf = (target: KeyTarget): string =>
+  `"${target.referencesTable}" (${target.referencesColumns.join(", ")})`;
+
+/** Whether two keys reference the same table and columns, in order. */
+function sameTarget(a: KeyTarget, b: KeyTarget): boolean {
+  return (
+    folded(a.referencesTable) === folded(b.referencesTable) &&
+    a.referencesColumns.length === b.referencesColumns.length &&
+    a.referencesColumns.every(
+      (column, at) => folded(column) === folded(b.referencesColumns[at] ?? "")
     )
   );
-  return keys.filter(
-    key => !declared.has(`${folded(key.table)}\u0000${folded(key.name)}`)
-  );
+}
+
+/** A live key whose declaration, found by its table and name, references something else. */
+interface RetargetedKey {
+  key: LiveForeignKey;
+  declared: KeyTarget & { owner: ElementOnTable["owner"] };
+}
+
+/**
+ * The live keys among `keys` that compiled declarations do not account
+ * for: those no declaration names by table and name, and those whose
+ * declaration references another table or other columns.
+ */
+function unaccountedKeys(
+  schema: ExtensionSchemaRecord | null,
+  keys: readonly LiveForeignKey[]
+): { undeclared: LiveForeignKey[]; retargeted: RetargetedKey[] } {
+  if (schema === null) return { undeclared: [...keys], retargeted: [] };
+  const declared = new Map<string, RetargetedKey["declared"]>();
+  for (const spec of schema.specs) {
+    for (const key of spec.foreignKeys ?? []) {
+      declared.set(`${folded(spec.name)}\u0000${folded(key.name)}`, {
+        referencesTable: key.referencesTable,
+        referencesColumns: key.referencesColumns,
+        // Its contributor's when it was added to another owner's table, as
+        // `foreignKeysInto` reads a declared key's owner.
+        owner: contributorOf(schema, spec.name, "fk", key.name) ??
+          schema.owners.get(spec.name) ?? { kind: "app" },
+      });
+    }
+  }
+  const undeclared: LiveForeignKey[] = [];
+  const retargeted: RetargetedKey[] = [];
+  for (const key of keys) {
+    const declaration = declared.get(
+      `${folded(key.table)}\u0000${folded(key.name)}`
+    );
+    if (declaration === undefined) {
+      undeclared.push(key);
+    } else if (!sameTarget(declaration, key)) {
+      retargeted.push({ key, declared: declaration });
+    }
+  }
+  return { undeclared, retargeted };
 }
 
 /** Who the ownership record names as a live key's owner, if it records one. */
