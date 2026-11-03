@@ -940,6 +940,12 @@ async function registerServicesOnce(
   // made outside a request record theirs into it, for every instance.
   installTagExpiryLedger(adapter);
 
+  // Published before the schema registry registers a single table, since registration already
+  // decides where translatable values are stored, and chosen here once: a reload refuses to change
+  // it. A site restarted over the database it laid out would otherwise register its tables as if
+  // the setting were off, naming translatable columns its main tables do not have.
+  setPerLanguageStorage(transformedConfig.perLanguageStorage === true);
+
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
@@ -1059,9 +1065,6 @@ async function registerServicesOnce(
   // ----------------------------------------
   // Layer 3: Domain Service Registrations
   // ----------------------------------------
-  // Published before any service registers, since registration already decides where translatable
-  // values are stored, and chosen here once: a reload refuses to change it.
-  setPerLanguageStorage(transformedConfig.perLanguageStorage === true);
   // Before any schema work: the push that follows would plan to drop translatable columns a
   // database laid out before the setting still holds on its main tables.
   if (transformedConfig.perLanguageStorage === true) {

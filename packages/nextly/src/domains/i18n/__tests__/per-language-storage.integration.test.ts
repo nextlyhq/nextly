@@ -35,7 +35,10 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { reconcileCompanionUniqueIndexes } from "../runtime/companion-unique-reconcile";
-import { perLanguageStorageEnabled } from "../per-language-storage";
+import {
+  perLanguageStorageEnabled,
+  setPerLanguageStorage,
+} from "../per-language-storage";
 
 let current: TestNextly | undefined;
 
@@ -411,6 +414,65 @@ describe.each(getConfiguredTestDialects())(
     );
 
     // A related entry is populated with its translatable values too, from its own companion.
+    // A site restarted over the database it laid out: the tables registered at boot, before any
+    // service, describe the per-language layout, so the entries it wrote read back.
+    it.runIf(dialect === "sqlite")(
+      "reads its entries back after a restart over the database it laid out",
+      async () => {
+        const folder = mkdtempSync(join(tmpdir(), "nextly-per-language-"));
+        const url = `file:${join(folder, "site.db")}`;
+        vi.stubEnv("DB_DIALECT", "sqlite");
+        vi.stubEnv("DATABASE_URL", url);
+        _resetEnvCache();
+        const onFile = async () =>
+          createAdapter({ type: "sqlite", url } as Parameters<
+            typeof createAdapter
+          >[0]);
+        const site = {
+          perLanguageStorage: true,
+          collections: [
+            defineCollection({
+              slug: "articles",
+              fields: [text({ name: "headline" }), number({ name: "views" })],
+            }),
+          ],
+        };
+        try {
+          const before = await createTestNextly({
+            ...site,
+            adapter: await onFile(),
+          });
+          const created = await before.nextly.create({
+            collection: "articles",
+            data: { headline: "Kept", views: 3 },
+          });
+          const id = (created.item as { id: string }).id;
+          await before.destroy();
+
+          // A new process starts with the setting unchosen, as this one did before its first boot.
+          setPerLanguageStorage(false);
+          current = await createTestNextly({
+            ...site,
+            adapter: await onFile(),
+          });
+          expect(
+            await current.nextly.findByID({ collection: "articles", id })
+          ).toMatchObject({ headline: "Kept", views: 3 });
+          // And through the table the boot registered for the adapter, which every read by table
+          // name goes through: it names only the columns the main table has.
+          const rows = await current.adapter.select<Record<string, unknown>>(
+            "dc_articles",
+            {}
+          );
+          expect(rows).toHaveLength(1);
+          expect(rows[0]).not.toHaveProperty("headline");
+        } finally {
+          _resetEnvCache();
+          rmSync(folder, { recursive: true, force: true });
+        }
+      }
+    );
+
     it("populates a related entry's translatable fields", async () => {
       current = await createTestNextly({
         dialect,
