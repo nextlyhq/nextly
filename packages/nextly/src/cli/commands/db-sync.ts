@@ -78,6 +78,7 @@ import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { exitWithError } from "../errors";
+import { CliError } from "../errors/cli-error";
 import {
   createContext,
   type CommandContext,
@@ -145,7 +146,8 @@ export interface DbSyncCommandOptions {
   autoSync?: boolean;
 
   /**
-   * Force auto-sync without data loss warnings
+   * The retired `-f/--force`, which had no effect: given, the run is refused
+   * before it starts.
    * @default false
    */
   force?: boolean;
@@ -498,6 +500,16 @@ export function exportDataLossConsent(
   env[ACCEPT_DATA_LOSS_ENV] = flag === true ? "1" : flag;
 }
 
+/** The refusal of `db:sync -f/--force`, which had no effect and is retired. */
+function retiredForce(): CliError {
+  return new CliError("INPUT_REFUSED", {
+    what: "db:sync's --force is retired: it had no effect, and is no longer accepted.",
+    why: "Nothing was changed. A sync asks at a terminal before a destructive change; --force never skipped that.",
+    next: "Run it again without -f/--force. Where nobody can be asked, consent to the drops with --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS).",
+    context: { reason: "retired-flag" },
+  });
+}
+
 /** The action of `nextly db:sync`, loaded when it runs. */
 export async function dbSyncAction(
   cmdOptions: DbSyncCommandOptions & {
@@ -509,6 +521,13 @@ export async function dbSyncAction(
 ) {
   const globalOpts = cmd.optsWithGlobals<GlobalOptions>();
   const context = createContext(globalOpts);
+
+  // `-f/--force` never changed what a sync does, so it is refused rather than
+  // honoured, before anything is read or changed, naming the consent a run
+  // that cannot be asked gives instead.
+  if (cmdOptions.force) {
+    exitWithError(context.logger, retiredForce());
+  }
 
   // Surface the flag as an env var so downstream modules (the
   // schema-change prompt, the auto-sync path) pick it up without

@@ -12,12 +12,19 @@
  */
 import * as clack from "@clack/prompts";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
+  ACCEPT_DATA_LOSS_ENV,
   deprecationNotices,
+  judgeDataLoss,
   resolveDataLossConsent,
   type DataLossConsent,
+  type DataLossVerdict,
+  type Deletion,
   type EarlierSpelling,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { CliError } from "../errors/cli-error";
+import { dataLossRefusal } from "../errors/index";
 
 /** What the option parser hands over for `--accept-data-loss [targets]`. */
 export type AcceptDataLossOption = string | boolean | undefined;
@@ -55,4 +62,60 @@ export async function askToDeleteInTerminal(
     initialValue: false,
   });
   return !clack.isCancel(answer) && answer;
+}
+
+/**
+ * The error a run ends with when the person at the terminal did not confirm
+ * a deletion: nothing changed, and it names the consent that deletes without
+ * asking. A refusal of the run as given, so it carries the input-refused code
+ * and exits 1, as a run with no consent and no terminal does.
+ */
+export function dataLossDeclined(): CliError {
+  return new CliError("INPUT_REFUSED", {
+    what: "Nothing was changed: the deletion was not confirmed.",
+    why: "The prompt that listed what would be deleted was not answered yes.",
+    next: `Run the command again and confirm, or give --accept-data-loss (or ${ACCEPT_DATA_LOSS_ENV}) to consent without being asked.`,
+    context: { reason: "data-loss-declined" },
+  });
+}
+
+/**
+ * Ends a run whose deletion was not allowed: a no at the terminal, or a
+ * refusal (no consent and nobody to ask, or a consent that leaves a deletion
+ * out). Returns only for a run that may proceed.
+ */
+export function requireConsented(verdict: DataLossVerdict): void {
+  if (verdict.kind === "declined") throw dataLossDeclined();
+  if (verdict.kind === "refused") throw dataLossRefusal(verdict);
+}
+
+/**
+ * The consent for a command that deleted without one until now, in its one
+ * release of grace. Covered, the run proceeds; where a person can be asked,
+ * they are, and a no ends the run. Where nobody can be asked (no terminal,
+ * `CI` set, or `--non-interactive`) and no consent was given, the run deletes
+ * as it always has, after `warn` says the next release needs the consent. A
+ * consent naming targets that leaves a deletion out is refused, as everywhere.
+ */
+export async function judgeDataLossWithGrace(args: {
+  command: string;
+  deletions: readonly Deletion[];
+  consent: DataLossConsent;
+  print: (line: string) => void;
+  warn: (message: string) => void;
+}): Promise<void> {
+  const verdict = await judgeDataLoss({
+    deletions: args.deletions,
+    consent: args.consent,
+    interactive: canPrompt(),
+    ask: askToDeleteInTerminal,
+    print: args.print,
+  });
+  if (verdict.kind === "refused" && verdict.reason === "needs-consent") {
+    args.warn(
+      `${args.command} deletes without the data-loss consent in this release only: the next release needs --accept-data-loss (or ${ACCEPT_DATA_LOSS_ENV}) for a run that cannot be asked.`
+    );
+    return;
+  }
+  requireConsented(verdict);
 }

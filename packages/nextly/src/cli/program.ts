@@ -49,6 +49,7 @@ import { registerUpgradeCommand } from "./commands/upgrade.command";
 import { registerWebhooksPruneCommand } from "./commands/webhooks-prune.command";
 import { createContext, type CommandContext } from "./context";
 import { CLI_MODES, setModeLineWriter } from "./environment";
+import { addExitCodesHelp } from "./exit-codes";
 
 export {
   createContext,
@@ -153,6 +154,9 @@ ${pc.bold("Documentation:")}
 
   // Register all commands
   registerCommands(program);
+  // Then end every command's help with what its exit status means: last, so
+  // the block follows any help text a command adds itself.
+  addExitCodesHelp(program);
 
   // Telemetry preAction/postAction hooks. We capture command_started before
   // the action runs and command_completed after it returns. The telemetry
@@ -253,14 +257,32 @@ function registerCommands(program: Command): void {
   registerUpgradeCommand(program);
 
   // Permissions commands
-  program.addCommand(createPermissionsCleanupCommand());
-  program.addCommand(createMediaCommand());
+  attachCommand(program, createPermissionsCleanupCommand());
+  attachCommand(program, createMediaCommand());
 
   // Plugin introspection (D48) — `nextly plugins list` / `info`.
   registerPluginsCommand(program);
 
   // Telemetry sub-command (status/enable/disable/reset)
   registerTelemetryCommand(program);
+}
+
+/**
+ * Adds `command`, built on its own, as `.command()` would have built it: with
+ * the program's settings (the pointer to `--help` after an error, sorted help,
+ * the suggestion, the output and exit handling). `addCommand` copies none of
+ * them, so a command attached that way, and every subcommand under it, would
+ * answer an error or `--help` differently from the rest.
+ */
+function attachCommand(program: Command, command: Command): void {
+  program.addCommand(command);
+  inheritSettings(command, program);
+}
+
+/** Gives `command` its parent's settings, then each subcommand its own parent's. */
+function inheritSettings(command: Command, parent: Command): void {
+  command.copyInheritedSettings(parent);
+  for (const child of command.commands) inheritSettings(child, command);
 }
 
 // ============================================================================

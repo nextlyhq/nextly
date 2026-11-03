@@ -8,10 +8,23 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import type { CommandContext } from "../../program";
 import { runMigrateFresh } from "../migrate-fresh";
 
 const connect = vi.hoisted(() => vi.fn());
+// The answer typed at the prompt, and whether the prompt was reached.
+const prompt = vi.hoisted(() => ({ answer: "no", asked: 0 }));
+
+vi.mock("node:readline", () => ({
+  createInterface: () => ({
+    question: (_question: string, answer: (typed: string) => void) => {
+      prompt.asked += 1;
+      answer(prompt.answer);
+    },
+    close: () => {},
+  }),
+}));
 
 // `../program` imports every command, `migrate` with its whole graph among
 // them; the commands under test need only its context factory.
@@ -86,12 +99,45 @@ async function fresh(options: Record<string, unknown>) {
   return { code, output: lines.join("\n") };
 }
 
+// A test worker's streams carry no `isTTY` of their own, so each run sets it
+// and the original descriptor is put back after.
+const ttyDescriptors = {
+  stdin: Object.getOwnPropertyDescriptor(process.stdin, "isTTY"),
+  stdout: Object.getOwnPropertyDescriptor(process.stdout, "isTTY"),
+};
+
+/** Sets both ends of the run to terminals, or not, until `restoreTerminal`. */
+function terminal(attached: boolean) {
+  for (const stream of [process.stdin, process.stdout]) {
+    Object.defineProperty(stream, "isTTY", {
+      value: attached,
+      configurable: true,
+    });
+  }
+}
+
+function restoreTerminal() {
+  for (const [stream, was] of [
+    [process.stdin, ttyDescriptors.stdin],
+    [process.stdout, ttyDescriptors.stdout],
+  ] as const) {
+    if (was) Object.defineProperty(stream, "isTTY", was);
+    else delete (stream as { isTTY?: boolean }).isTTY;
+  }
+}
+
 describe("migrate:fresh and the data-loss consent", () => {
   let savedEnv: string | undefined;
+  let savedCi: string | undefined;
 
   beforeEach(() => {
     savedEnv = process.env.NEXTLY_ACCEPT_DATA_LOSS;
     delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
+    savedCi = process.env.CI;
+    delete process.env.CI;
+    prompt.asked = 0;
+    prompt.answer = "no";
+    terminal(false);
     connect.mockReset();
     // Past the consent the run connects; stopping there keeps the test off
     // any database.
@@ -103,8 +149,40 @@ describe("migrate:fresh and the data-loss consent", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    restoreTerminal();
+    setNonInteractive(false);
     if (savedEnv === undefined) delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
     else process.env.NEXTLY_ACCEPT_DATA_LOSS = savedEnv;
+    if (savedCi === undefined) delete process.env.CI;
+    else process.env.CI = savedCi;
+  });
+
+  it("exits 1 when the prompt is declined, before connecting, naming the consent", async () => {
+    terminal(true);
+    const { code, output } = await fresh({});
+    expect(prompt.asked).toBe(1);
+    expect(code).toBe(1);
+    expect(connect).not.toHaveBeenCalled();
+    expect(output).toContain("the deletion was not confirmed");
+    expect(output).toContain("--accept-data-loss");
+  });
+
+  it("proceeds when the prompt is answered yes", async () => {
+    terminal(true);
+    prompt.answer = "yes";
+    await fresh({});
+    expect(prompt.asked).toBe(1);
+    expect(connect).toHaveBeenCalled();
+  });
+
+  it("does not ask a terminal under --non-interactive: it refuses, naming the consent", async () => {
+    terminal(true);
+    setNonInteractive(true);
+    const { code, output } = await fresh({});
+    expect(prompt.asked).toBe(0);
+    expect(code).toBe(1);
+    expect(connect).not.toHaveBeenCalled();
+    expect(output).toContain("(DATA_LOSS_CONSENT_REQUIRED)");
   });
 
   it("refuses with no terminal and no consent, before connecting, naming the consent", async () => {

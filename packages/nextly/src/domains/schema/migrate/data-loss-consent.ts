@@ -37,6 +37,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { countNonEmpty, countRows } from "../pipeline/classifier/count-helpers";
 
+import { canPrompt } from "./can-prompt";
+
 /** The consent's command-line spelling. */
 const ACCEPT_DATA_LOSS_FLAG = "--accept-data-loss";
 
@@ -499,7 +501,10 @@ export async function countDeletions(
   return counted;
 }
 
-/** Whether a person is there to answer: a terminal on both ends. */
+/**
+ * Whether a person is there to answer. The CLI's one answer to that,
+ * `canPrompt`: a terminal on both ends, no `--non-interactive`, `CI` unset.
+ */
 export function isInteractiveTerminal(): boolean {
-  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  return canPrompt();
 }

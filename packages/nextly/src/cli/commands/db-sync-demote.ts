@@ -20,6 +20,7 @@ import type { CommandContext } from "../program";
 // downstream code's expectation of `{ config, configPath, ... }`.
 import { loadConfig } from "../utils/config-loader";
 
+import { confirmationAnswered } from "./db-sync-promote";
 import { openCollectionRegistry } from "./db-sync-registry";
 
 async function loadNextlyConfig(cwd: string) {
@@ -63,9 +64,13 @@ export async function runDemote(
     serializeCollection({ slug, fields: fields as never[] }),
     `About to move '${slug}' to UI source`
   );
-  const confirm = await p.confirm({
-    message: "Write to dynamic_collections so the Schema Builder can edit it?",
-  });
+  // `--yes` answers the confirmation: write, without asking.
+  const confirm =
+    confirmationAnswered(context) ||
+    (await p.confirm({
+      message:
+        "Write to dynamic_collections so the Schema Builder can edit it?",
+    }));
   if (p.isCancel(confirm) || !confirm) {
     logger.info("Demote cancelled.");
     return;

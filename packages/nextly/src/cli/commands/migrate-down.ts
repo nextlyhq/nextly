@@ -39,8 +39,8 @@ import {
   type SchemaEventRow,
   truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
-  isInteractiveTerminal,
   judgeDataLoss,
   resolveDataLossConsent,
   type DataLossConsent,
@@ -96,6 +96,7 @@ import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
+  dataLossDeclined,
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
@@ -755,10 +756,9 @@ async function planAndGuard(
     deps,
     agreed === undefined
   );
-  if (targets.length === 0)
-    return { planned: [], deletions: [], declined: false };
+  if (targets.length === 0) return { planned: [], deletions: [] };
   const planned = await planRollback(targets, deps, reads);
-  if (deps.options.dryRun) return { planned, deletions: [], declined: false };
+  if (deps.options.dryRun) return { planned, deletions: [] };
 
   // Guards — evaluated up front for every target, before executing anything.
   for (const p of planned) {
@@ -802,15 +802,16 @@ async function planAndGuard(
       logContext: { reason: `data-loss-${verdict.reason}` },
     });
   }
-  return { planned, deletions, declined: verdict.kind === "declined" };
+  // A no at the terminal stops the run before anything is rolled back, and
+  // it exits 1 naming the consent, as a refusal does.
+  if (verdict.kind === "declined") throw dataLossDeclined();
+  return { planned, deletions };
 }
 
 /** A rollback's plan once every guard has passed, and what the operator agreed it deletes. */
 interface GuardedPlan {
   planned: PlannedDown[];
   deletions: Deletion[];
-  /** The terminal was asked and said no: nothing is rolled back. */
-  declined: boolean;
 }
 
 export async function migrateDownCore(
@@ -881,11 +882,6 @@ export async function migrateDownCore(
       }
       deps.logger.info(p.downSql);
     }
-    return { rolledBack: [] };
-  }
-
-  if (guarded.declined) {
-    deps.logger.info("Nothing was rolled back.");
     return { rolledBack: [] };
   }
 
@@ -1264,7 +1260,7 @@ export async function runMigrateDown(
               }),
           }
         : {}),
-      interactive: isInteractiveTerminal(),
+      interactive: canPrompt(),
       askToDelete: askToDeleteInTerminal,
     });
 

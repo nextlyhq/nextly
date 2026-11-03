@@ -16,6 +16,16 @@ import type { CommandContext } from "../program";
 
 import { openCollectionRegistry } from "./db-sync-registry";
 
+/**
+ * Whether `db:sync --yes` was given, answering the confirmation of
+ * `--promote` and `--demote` (neither is a data-loss consent). It arrives
+ * with the run's options, which the command's context carries.
+ */
+export function confirmationAnswered(context: CommandContext): boolean {
+  const options: Record<string, unknown> = { ...context.options };
+  return options.yes === true;
+}
+
 export async function runPromote(
   slug: string,
   context: CommandContext
@@ -36,15 +46,17 @@ export async function runPromote(
   const fields = (record.fields ?? []) as unknown[];
   const code = serializeCollection({ slug, fields: fields as never[] });
 
-  // 4. User confirmation flow.
-  const action = await p.select({
-    message: `Preview generated code for '${slug}'. Action?`,
-    options: [
-      { value: "preview", label: "Show preview" },
-      { value: "accept", label: "Append to nextly.config.ts" },
-      { value: "decline", label: "Cancel" },
-    ],
-  });
+  // 4. User confirmation flow. `--yes` answers it: append, without asking.
+  const action = confirmationAnswered(context)
+    ? "accept"
+    : await p.select({
+        message: `Preview generated code for '${slug}'. Action?`,
+        options: [
+          { value: "preview", label: "Show preview" },
+          { value: "accept", label: "Append to nextly.config.ts" },
+          { value: "decline", label: "Cancel" },
+        ],
+      });
 
   if (p.isCancel(action) || action === "decline") {
     logger.info("Promote cancelled.");

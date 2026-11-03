@@ -21,6 +21,7 @@ import type { Command } from "commander";
 
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../errors";
@@ -264,10 +265,20 @@ export async function upgradeAction(
           info: msg => context.logger.info(msg),
           warn: msg => context.logger.warn(msg),
         },
-        confirmDestructive: reasons =>
-          promptYesNo(
+        // Asked only where someone can answer. Otherwise the change is not
+        // confirmed, so the reconcile refuses before changing anything, and
+        // the run says why rather than waiting on input nobody will give.
+        confirmDestructive: reasons => {
+          if (!canPrompt()) {
+            context.logger.warn(
+              "This confirmation needs a terminal: --reconcile-core asks before each destructive change to Nextly's own tables, and no terminal is attached to ask (or --non-interactive was given, or CI is set). Nothing was changed."
+            );
+            return Promise.resolve(false);
+          }
+          return promptYesNo(
             `Reconcile core schema with these destructive operations?\n  - ${reasons.join("\n  - ")}\nProceed? [y/N]: `
-          ),
+          );
+        },
       });
     } else {
       await runUpgrade(
@@ -282,7 +293,8 @@ export async function upgradeAction(
             info: msg => context.logger.info(msg),
             warn: msg => context.logger.warn(msg),
           },
-          isTTY: Boolean(process.stdin.isTTY),
+          // The CLI's one answer to whether anyone can be asked.
+          isTTY: canPrompt(),
           promptConfirm: () =>
             promptYesNo("Have you backed up your database? [y/N]: "),
         }

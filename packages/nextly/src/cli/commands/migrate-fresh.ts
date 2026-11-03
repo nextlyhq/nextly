@@ -41,14 +41,12 @@ import { seedAll, type SeederResult } from "../../database/seeders/index";
 // F8 PR 2: was `DrizzlePushService` (legacy). Switched to the freshPushSchema
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
-import {
-  isInteractiveTerminal,
-  judgeDataLoss,
-} from "../../domains/schema/migrate/data-loss-consent";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import { judgeDataLoss } from "../../domains/schema/migrate/data-loss-consent";
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
-import { dataLossRefusal, exitWithError } from "../errors";
+import { exitWithError } from "../errors";
 import type { CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -62,6 +60,7 @@ import {
 } from "../utils/command-prerequisites";
 import {
   readDataLossConsent,
+  requireConsented,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
@@ -172,12 +171,12 @@ export async function runMigrateFresh(
   logger.warn("All data will be permanently lost.");
 
   // The data-loss consent decides, before the database is touched: covered,
-  // the run proceeds; at a terminal, it asks; otherwise it refuses at once
-  // rather than waiting on input nobody will give. What it deletes is every
-  // table, which no list of tables can be said to cover.
-  let verdict: Awaited<ReturnType<typeof judgeDataLoss>>;
+  // the run proceeds; where a person can be asked, it asks; otherwise it
+  // refuses at once rather than waiting on input nobody will give. A no at
+  // the prompt ends the run with exit 1, as a refusal does. What it deletes
+  // is every table, which no list of tables can be said to cover.
   try {
-    verdict = await judgeDataLoss({
+    const verdict = await judgeDataLoss({
       deletions: [
         { kind: "unnamed", description: "every table in the database" },
       ],
@@ -187,20 +186,13 @@ export async function runMigrateFresh(
         earlierFlags: options.force ? ["migrate:fresh --force"] : [],
         warn: message => logger.warn(message),
       }),
-      interactive: isInteractiveTerminal(),
+      interactive: canPrompt(),
       ask: question => confirmDestructiveAction(`${question} (yes/no): `),
       print: line => logger.warn(line),
     });
+    requireConsented(verdict);
   } catch (error) {
     exitWithError(logger, error);
-  }
-  if (verdict.kind === "declined") {
-    logger.newline();
-    logger.info("Operation cancelled.");
-    process.exit(0);
-  }
-  if (verdict.kind === "refused") {
-    exitWithError(logger, dataLossRefusal(verdict));
   }
 
   // Step 4: Connect to database

@@ -56,6 +56,7 @@ import { seedPermissions } from "../../database/seeders/permissions";
 import { seedSuperAdmin } from "../../database/seeders/super-admin";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { MetaService } from "../../domains/meta/services/meta-service";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   isFirstAdministratorTaken,
   superAdminRoleHeld,
@@ -244,7 +245,7 @@ export function firstAdminSetupFor(
 /** What the command reads from outside: its environment and its terminal. */
 export interface CreateAdminIo {
   env: Record<string, string | undefined>;
-  /** Whether a person can be asked: a terminal on both ends. */
+  /** Whether a person can be asked: `canPrompt`'s answer. */
   interactive: boolean;
   /** Ask for a value that is not echoed; `null` when the person cancels. */
   askSecret(message: string): Promise<string | null>;
@@ -414,7 +415,9 @@ function processIo(context: CommandContext): CreateAdminIo {
     p.isCancel(value) ? null : value;
   return {
     env: process.env,
-    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    // The CLI's one answer to whether anyone can be asked: `--non-interactive`
+    // and `CI` say no even at a terminal.
+    interactive: canPrompt(),
     askSecret: async message => answer(await p.password({ message })),
     ask: async message => answer(await p.text({ message })),
     connect: () => connectToInstall(context),

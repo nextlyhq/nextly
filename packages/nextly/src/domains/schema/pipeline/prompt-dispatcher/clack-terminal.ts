@@ -8,7 +8,8 @@
 // from the candidate pool so subsequent prompts only show options that
 // haven't been resolved yet.
 //
-// Non-TTY behavior: throws TTYRequiredError with actionable message.
+// Non-TTY behavior (no terminal, `--non-interactive` or `CI`, as
+// `canPrompt` answers): throws TTYRequiredError with actionable message.
 // The intentional v1 limitation per F4 Option E plan: code-first non-TTY
 // users get a clear error directing them to a TTY terminal.
 //
@@ -22,6 +23,7 @@ import * as clack from "@clack/prompts";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { consoleLogger } from "../../../../shared/types";
+import { canPrompt } from "../../migrate/can-prompt";
 import {
   deprecationNotices,
   judgeDataLoss,
@@ -44,10 +46,6 @@ import { PromptCancelledError, TTYRequiredError } from "./errors";
 // Re-export so callers that want to catch these errors can import from the
 // dispatcher module they already depend on.
 export { PromptCancelledError, TTYRequiredError };
-
-function hasTTY(): boolean {
-  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
-}
 
 /**
  * The drops the rename candidates leave in the plan: each candidate's source
@@ -188,7 +186,9 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       return { confirmedRenames: [], resolutions: [], proceed: true };
     }
 
-    if (!hasTTY()) {
+    // The CLI's one answer to whether anyone can be asked: no terminal,
+    // `--non-interactive` or `CI` all mean the prompts below are not shown.
+    if (!canPrompt()) {
       // A batch of nothing but column drops is the data-loss consent's to
       // judge: applied when covered, refused at once, naming the consent
       // that covers it, when not. Anything needing a real decision —
