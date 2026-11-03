@@ -15,6 +15,10 @@
  *
  * @module domains/schema/migrate/document-version-upgrade.integration.test
  */
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FreshDatabase } from "../../../__tests__/helpers/fresh-database";
@@ -38,6 +42,8 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import type { SingleMetadataService } from "../../singles/services/single-metadata-service";
+import { migrateCore } from "../../../cli/commands/migrate";
+import { ensureSchemaEventsTable } from "../events/schema-events-ddl";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 
@@ -293,6 +299,41 @@ async function rowsOf(
   );
 }
 
+/** A logger for `migrateCore` that prints nothing. */
+const silent = new Proxy(
+  {},
+  {
+    get: (_target, name) =>
+      name === "spinner" ? () => ({ stop: () => {} }) : () => {},
+  }
+) as Parameters<typeof migrateCore>[0]["logger"];
+
+/**
+ * `nextly migrate` with the app's own migration files, on the test's own
+ * adapter: running a file needs the whole adapter, which `migrateFresh`'s
+ * raw-statement stand-in is not.
+ */
+async function migrateWithFiles(t: TestNextly, dir: string): Promise<void> {
+  await migrateCore({
+    extensionSchema: undefined,
+    dialect: t.adapter.dialect as FreshDatabase["dialect"],
+    db: t.adapter.getDrizzle(),
+    adapter: t.adapter as unknown as Parameters<
+      typeof migrateCore
+    >[0]["adapter"],
+    migrationsDir: dir,
+    logger: silent,
+    lockMode: "fail-fast",
+    withLock: async (_adapter, _dialect, fn) => ({
+      ran: true,
+      value: await fn(),
+    }),
+    ensureLedger: async () => {
+      await ensureSchemaEventsTable(t.adapter);
+    },
+  });
+}
+
 /** Each registered entity's migration state and stored schema hash. */
 async function registryState(
   t: TestNextly
@@ -497,6 +538,27 @@ describe.each(getConfiguredTestDialects())(
       expect(read.plainBox).toMatchObject({ label: "Box" });
       expect(read.langBox).toMatchObject({ caption: "Caption" });
       expect(read._rev).toBe("1.en:1");
+    }, 240_000);
+    it("a migration file written after the columns finds them already there", async () => {
+      // A file generated once the columns exist may name them: a SQLite table
+      // rebuild copies every column the table has. The step therefore runs
+      // before the app's files as well as after them; after alone, the file
+      // would fail on an existing site that has not had them added yet.
+      const t = await boot(dialect);
+      await olderSite(t);
+      const dir = mkdtempSync(join(tmpdir(), "nextly-docver-file-"));
+      try {
+        writeFileSync(
+          join(dir, "0001_000000_reads_versions.sql"),
+          `UPDATE ${TABLES.codeCollection} SET _revision = _revision WHERE 1 = 0;\n`
+        );
+        await migrateWithFiles(t, dir);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+      expect(await columnsOf(t, TABLES.codeCollection)).toEqual(
+        expect.arrayContaining(PER_DOCUMENT_COLUMNS)
+      );
     }, 240_000);
   }
 );
