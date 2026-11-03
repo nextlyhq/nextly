@@ -682,6 +682,31 @@ describe.each(getConfiguredTestDialects())(
         expect((await allLayouts(t)).length).toBe(count);
       });
 
+      it("deletes a seed it could not record, through the Layout fence, leaving no extra Layout", async () => {
+        const t = await boot();
+        await forgetTheSeed(t, await person(t, "owner"));
+        // The settings write that would record the new seed fails once.
+        let armed = true;
+        t.hooks.register(
+          "beforeChange",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async context => {
+            const data = (context as { data?: Record<string, unknown> }).data;
+            if (!armed || relationId(data?.seededLayout) === null) return;
+            armed = false;
+            throw new Error("the settings write failed");
+          }
+        );
+
+        await expect(ensure(t)).rejects.toThrow();
+
+        expect(armed).toBe(false);
+        // The created seed is gone again: its delete passed the Layout guard.
+        expect(await allLayouts(t)).toHaveLength(0);
+        await ensure(t);
+        expect(await allLayouts(t)).toHaveLength(1);
+      });
+
       it("seeds exactly one Layout beside an authored 'Default (site)' when no seed was ever recorded, and adopts nothing", async () => {
         const t = await boot();
         await forgetTheSeed(t, await person(t, "owner"));

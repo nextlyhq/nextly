@@ -40,6 +40,7 @@ import {
 import { restoreMissingDefault } from "../layout-removal/restore";
 import { settleLayoutRemovals } from "../layout-removal/settle";
 import type { LayoutRemovalStore } from "../layout-removal/store";
+import { deleteUnrecordedLayout } from "../layout-removal/system-remove";
 
 import { seedSlug, seedTitle } from "./seed-names";
 import {
@@ -254,7 +255,8 @@ async function stillDefault(
  * Layouts list for good beside the next run's seed. So the created Layout is
  * deleted as the system (best effort, and logged when even that fails) and
  * the failure rethrown, which fails the run for the sweep to retry. The delete
- * passes the guard: the seed is not the default, since the write failed.
+ * goes through the Layout fence, as every Layout's delete must: the seed is
+ * not the default, since the write failed, and no page can name it yet.
  *
  * The seed is made the default only while the default is still `observed`,
  * the unusable one this run set out to replace; a make-default that landed
@@ -276,21 +278,23 @@ async function recordSeed(
         : {}),
     });
   } catch (error) {
-    await deps.nextly
-      .delete({
-        collection: deps.slugs.layouts,
-        id: created,
-        overrideAccess: true,
-      })
-      .catch((cleanup: unknown) => {
-        deps.warn(
-          "[page-builder] a seeded default Layout could not be recorded or removed; delete it by hand",
-          {
-            seededLayout: created,
-            error: cleanup instanceof Error ? cleanup.message : String(cleanup),
-          }
-        );
-      });
+    // Through the Layout fence, as every delete of a Layout must be.
+    await deleteUnrecordedLayout(
+      {
+        nextly: deps.nextly,
+        store: deps.removals,
+        layouts: deps.slugs.layouts,
+      },
+      created
+    ).catch((cleanup: unknown) => {
+      deps.warn(
+        "[page-builder] a seeded default Layout could not be recorded or removed; delete it by hand",
+        {
+          seededLayout: created,
+          error: cleanup instanceof Error ? cleanup.message : String(cleanup),
+        }
+      );
+    });
     throw error;
   }
 }
