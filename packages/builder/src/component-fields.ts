@@ -66,6 +66,13 @@ export interface ComponentFieldsHost {
    * component are not counted, so it is never said as a count of pages.
    */
   readonly reach?: { readonly count: number; readonly complete: boolean };
+  /**
+   * How many distinct pages and Singles a change to the component reaches:
+   * placed on them directly, inside another component, or in a Layout that
+   * wraps them. What the banner over the view says; `complete` false makes
+   * it a floor, said as "at least". Absent while the host has no count.
+   */
+  readonly pages?: { readonly count: number; readonly complete: boolean };
 }
 
 /** Why the ids a new field must avoid are not known, said to the author. */
