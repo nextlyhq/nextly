@@ -109,6 +109,17 @@ function isLiveSingle(
   return !isOrphanedSingle(row, declared);
 }
 
+/** The slugs of the live Singles on one page of the listing that the builder opens. */
+function builderSinglesIn(
+  rows: readonly unknown[],
+  declared: ReadonlySet<string> | undefined
+): string[] {
+  return rows
+    .filter(row => isLiveSingle(row, declared) && opensInBuilder(row))
+    .map(slugOf)
+    .filter((slug): slug is string => slug !== undefined);
+}
+
 /** Every live Single that holds a blocks field the builder opens, by slug. */
 async function singlesTheBuilderOpens(
   ctx: SiteStyleRouteContext
@@ -122,16 +133,7 @@ async function singlesTheBuilderOpens(
     });
     const { data, total } = listed as { data?: unknown; total?: unknown };
     if (!Array.isArray(data) || data.length === 0) break;
-    for (const row of data) {
-      const slug = slugOf(row);
-      if (
-        slug !== undefined &&
-        isLiveSingle(row, declared) &&
-        opensInBuilder(row)
-      ) {
-        slugs.push(slug);
-      }
-    }
+    slugs.push(...builderSinglesIn(data, declared));
     const read = page * SINGLES_PAGE_SIZE + data.length;
     if (typeof total !== "number" || read >= total) break;
   }
