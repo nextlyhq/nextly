@@ -406,11 +406,11 @@ describe("createPublicReader", () => {
     expect(seen).toEqual([undefined, undefined, undefined, undefined]);
   });
 
-  it("offers the two reads and nothing else", () => {
+  it("offers the three reads and nothing else", () => {
     const reader = createPublicReader({
       find: vi.fn(),
     } as unknown as Parameters<typeof createPublicReader>[0]);
-    expect(Object.keys(reader).sort()).toEqual(["count", "find"]);
+    expect(Object.keys(reader).sort()).toEqual(["count", "find", "findSingle"]);
     expect(Object.isFrozen(reader)).toBe(true);
   });
 });

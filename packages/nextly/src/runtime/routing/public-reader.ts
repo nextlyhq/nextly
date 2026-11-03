@@ -15,6 +15,10 @@
  * anonymous caller's: a field the public may not read can be neither filtered
  * nor sorted on, and never comes back in a row.
  *
+ * A Single a page shows is read through the same boundary: published, judged
+ * as the anonymous caller, with the same refusals, and never created by the
+ * read.
+ *
  * This is a contract a page builder relies on, not a sandbox: code that holds
  * the Direct API can still read whatever it is trusted to.
  *
@@ -26,8 +30,11 @@ import { runDetachedFromRequest } from "../../auth/caller-scope";
 import type { Nextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ListResult } from "../../direct-api/types/shared";
+import type { FindSingleArgs } from "../../direct-api/types/singles";
 import { filterShapeProblems } from "../../domains/collections/query/filter-shape";
 import { NextlyError } from "../../errors/nextly-error";
+
+import { isMissOrDenied } from "./miss-or-denied";
 
 /** The operators a list's filter row may use, each meaning the same on every database. */
 export const PUBLIC_FILTER_OPS = [
@@ -85,6 +92,26 @@ export type PublicCountQuery = Pick<
   "collection" | "filters" | "locale"
 >;
 
+/**
+ * What a page reads of one Single. Everything else a read could say is the
+ * reader's to fix, as for a list.
+ *
+ * @experimental
+ */
+export interface PublicSingleQuery {
+  slug: string;
+  /** The route's language; a different one is refused. */
+  locale?: string;
+  /**
+   * The fields the document carries, besides its id; none named means every
+   * public one. A relationship comes back as the related id.
+   */
+  select?: readonly string[];
+}
+
+/** One Single's document as the public sees it, or `null` when there is none to see. */
+export type PublicSingleResult = Record<string, unknown> | null;
+
 /** The public reads a page's data provider is given. Nothing else.
  *
  * @experimental
@@ -92,6 +119,13 @@ export type PublicCountQuery = Pick<
 export interface PublicReader {
   find(query: PublicReadQuery): Promise<PublicReadResult>;
   count(query: PublicCountQuery): Promise<number>;
+  /**
+   * One Single, published, with the fields the public may read. `null` when
+   * there is nothing a visitor may see: no document, one never published, or
+   * a Single the visitor may not read, all answered alike so the answer does
+   * not tell them apart. It never creates the Single's document.
+   */
+  findSingle(query: PublicSingleQuery): Promise<PublicSingleResult>;
 }
 
 /** What a route binds the reader to. */
@@ -99,6 +133,16 @@ export interface PublicReaderBinding {
   /** The route's language. Every read answers in it. */
   locale?: string;
 }
+
+/**
+ * The Direct API reads a public reader is made over. `findSingle` is
+ * optional so a route that hands over only `find` keeps working; such a
+ * reader refuses a Single's read.
+ *
+ * @experimental
+ */
+export type PublicReaderSource = Pick<Nextly, "find"> &
+  Partial<Pick<Nextly, "findSingle">>;
 
 const QUERY_KEYS: ReadonlySet<string> = new Set([
   "collection",
@@ -166,14 +210,31 @@ const QUERY_SHAPE = z.object({
   select: z.array(z.string()).optional(),
 });
 
-function assertShape(query: object): void {
-  const parsed = QUERY_SHAPE.safeParse(query);
+/**
+ * A Single's read, derived from a list's: the same language and selection,
+ * typed the same, and a slug in place of the collection.
+ */
+const SINGLE_SHAPE = QUERY_SHAPE.pick({ locale: true, select: true }).extend({
+  slug: z.string(),
+});
+
+/** The keys a Single's read may set: those of its shape, and no other. */
+const SINGLE_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(SINGLE_SHAPE.shape)
+);
+
+function assertShape(
+  query: object,
+  shape: z.ZodType = QUERY_SHAPE,
+  what = "A list query"
+): void {
+  const parsed = shape.safeParse(query);
   if (parsed.success) return;
   const issue = parsed.error.issues[0];
   const where = issue?.path.map(String).join(".") || "the query";
   refuse(
     "query-invalid",
-    `A list query's ${where} is not of the type it takes: ${issue?.message ?? "invalid"}.`,
+    `${what}'s ${where} is not of the type it takes: ${issue?.message ?? "invalid"}.`,
     { path: where }
   );
 }
@@ -209,29 +270,45 @@ const COUNT_KEYS: ReadonlySet<string> = new Set([
   "locale",
 ]);
 
-function assertCountKeys(query: object): void {
-  if (query === null || typeof query !== "object") {
-    refuse("query-invalid", "A count query must be an object.");
-  }
-  const extra = Object.keys(query).filter(key => !COUNT_KEYS.has(key));
+/**
+ * Refuse every key of `query` outside `allowed`, naming each: one refusal
+ * for the list, the count and the Single's reads, each saying it in its own
+ * words through `sentence`.
+ */
+function assertKnownKeys(
+  query: object,
+  allowed: ReadonlySet<string>,
+  sentence: (named: string) => string
+): void {
+  const extra = Object.keys(query).filter(key => !allowed.has(key));
   if (extra.length > 0) {
     refuse(
       "option-refused",
-      `A public count takes a collection, filters and a language only, not ${extra.map(key => `"${key}"`).join(", ")}.`,
+      sentence(extra.map(key => `"${key}"`).join(", ")),
       { keys: extra }
     );
   }
 }
 
-function assertQueryKeys(query: object): void {
-  const extra = Object.keys(query).filter(key => !QUERY_KEYS.has(key));
-  if (extra.length > 0) {
-    refuse(
-      "option-refused",
-      `A public list cannot set ${extra.map(key => `"${key}"`).join(", ")}: a page shows published entries and public fields only, to everyone.`,
-      { keys: extra }
-    );
+function assertCountKeys(query: object): void {
+  if (query === null || typeof query !== "object") {
+    refuse("query-invalid", "A count query must be an object.");
   }
+  assertKnownKeys(
+    query,
+    COUNT_KEYS,
+    named =>
+      `A public count takes a collection, filters and a language only, not ${named}.`
+  );
+}
+
+function assertQueryKeys(query: object): void {
+  assertKnownKeys(
+    query,
+    QUERY_KEYS,
+    named =>
+      `A public list cannot set ${named}: a page shows published entries and public fields only, to everyone.`
+  );
 }
 
 function assertWholeNumber(
@@ -324,14 +401,39 @@ function assertPublicQuery(
 /** The route's language binds every read on it. */
 function assertLocale(
   asked: string | undefined,
-  bound: string | undefined
+  bound: string | undefined,
+  what = "a list"
 ): void {
   if (bound === undefined || asked === undefined || asked === bound) return;
   refuse(
     "locale-mismatch",
-    `This page reads in "${bound}", so a list on it cannot read in "${asked}".`
+    `This page reads in "${bound}", so ${what} on it cannot read in "${asked}".`
   );
 }
+
+/**
+ * What decides who sees what on every public read, fixed: published only,
+ * judged by the anonymous caller's rules, with nothing related read.
+ *
+ * Every identity is present and undefined: the Direct API spreads the
+ * instance's defaults underneath a call, so a key left out would let an
+ * instance's own user, key scope, trust or field-rule user judge the read.
+ * One object for the list's read and the Single's, so the two cannot drift.
+ */
+const PUBLIC_BOUNDARY = {
+  // Relationships come back as ids: nothing related is read.
+  depth: 0,
+  status: "published",
+  overrideAccess: false,
+  user: undefined,
+  actor: undefined,
+  fieldAccessUser: undefined,
+  trusted: undefined,
+  req: undefined,
+  request: undefined,
+  context: undefined,
+  showHiddenFields: false,
+} as const;
 
 /** The fields each row carries, with its id; none named means every public one. */
 function selectOf(query: PublicReadQuery): FindArgs["select"] | undefined {
@@ -378,32 +480,78 @@ export function toPublicFind(
     offset,
     ...(locale === undefined ? {} : { locale }),
     ...(select === undefined ? {} : { select }),
-    // Relationships come back as ids: nothing related is read for a list.
-    depth: 0,
-    // The boundary, fixed: published only, the anonymous caller's rules,
-    // and no key a list cannot know the meaning of.
-    status: "published",
-    overrideAccess: false,
+    ...PUBLIC_BOUNDARY,
+    // No key a list cannot know the meaning of.
     unknownSort: "refuse",
-    // Every identity, present and undefined: the Direct API spreads the
-    // instance's defaults underneath a call, so a key left out would let an
-    // instance's own user, key scope, trust or field-rule user judge the read.
-    user: undefined,
-    actor: undefined,
-    fieldAccessUser: undefined,
-    trusted: undefined,
-    req: undefined,
-    request: undefined,
-    context: undefined,
-    showHiddenFields: false,
   } as FindArgs;
 }
 
-/** A reader bound to a route, over a Direct API's `find`.
+/** Refuse a Single's read a public page may not make, before anything is read. */
+function assertPublicSingleQuery(
+  query: PublicSingleQuery,
+  binding: PublicReaderBinding
+): void {
+  if (query === null || typeof query !== "object") {
+    refuse("query-invalid", "A Single query must be an object.");
+  }
+  assertKnownKeys(
+    query,
+    SINGLE_KEYS,
+    named =>
+      `A public Single read cannot set ${named}: a page shows published content and public fields only, to everyone.`
+  );
+  assertShape(query, SINGLE_SHAPE, "A Single query");
+  if (query.slug === "") {
+    refuse("single-missing", "A Single query must name a Single.");
+  }
+  assertLocale(query.locale, binding.locale, "a Single");
+  for (const field of query.select ?? []) {
+    assertFieldName(field, "A Single's fields");
+  }
+}
+
+/**
+ * The Single read a public Single query becomes. Pure: every refusal happens
+ * here, before anything is read. A Single with no document answers `null`
+ * rather than having one created: a page read must not write.
  *
- * `find` alone, so a page route can hand over the content reader it already
- * holds: a count is a one-row read of ids whose total is the answer, under the
- * same fixed options.
+ * @experimental
+ */
+export function toPublicFindSingle(
+  query: PublicSingleQuery,
+  binding: PublicReaderBinding = {}
+): FindSingleArgs & { createIfMissing: false } {
+  assertPublicSingleQuery(query, binding);
+  const locale = binding.locale ?? query.locale;
+  return {
+    slug: query.slug,
+    ...(locale === undefined ? {} : { locale }),
+    createIfMissing: false,
+    ...PUBLIC_BOUNDARY,
+  };
+}
+
+/**
+ * The document narrowed to its id and the fields named. A Single's read
+ * returns the whole document, so the selection is kept here; a field the
+ * read left out stays out.
+ */
+function selectedFrom(
+  document: Record<string, unknown>,
+  select: readonly string[] | undefined
+): Record<string, unknown> {
+  if (select === undefined || select.length === 0) return document;
+  const kept = new Set(["id", ...select]);
+  return Object.fromEntries(
+    Object.entries(document).filter(([key]) => kept.has(key))
+  );
+}
+
+/** A reader bound to a route, over a Direct API's `find` and `findSingle`.
+ *
+ * `find` alone is enough for lists, so a page route can hand over the content
+ * reader it already holds: a count is a one-row read of ids whose total is the
+ * answer, under the same fixed options. A Single's read needs `findSingle`.
  *
  * Each read runs detached from any request being served. A page rendered
  * while an API-key request is in flight must not be judged by that key: the
@@ -412,7 +560,7 @@ export function toPublicFind(
  * @experimental
  */
 export function createPublicReader(
-  nextly: Pick<Nextly, "find">,
+  nextly: PublicReaderSource,
   binding: PublicReaderBinding = {}
 ): PublicReader {
   const read = (args: FindArgs) =>
@@ -430,6 +578,28 @@ export function createPublicReader(
         toPublicFind({ ...query, limit: 1, select: ["id"] }, binding)
       );
       return result.meta.total;
+    },
+    async findSingle(query: PublicSingleQuery): Promise<PublicSingleResult> {
+      const args = toPublicFindSingle(query, binding);
+      const findSingle = nextly.findSingle;
+      if (findSingle === undefined) {
+        throw NextlyError.configuration({
+          logMessage:
+            "This public reader was made over a reader with no findSingle, so it cannot read a Single.",
+          logContext: { reason: "public-read-single-unsupported" },
+        });
+      }
+      try {
+        const document = await runDetachedFromRequest(() =>
+          findSingle.call(nextly, args)
+        );
+        return document === null ? null : selectedFrom(document, query.select);
+      } catch (error) {
+        // The Single route's answer: missing, unpublished and refused all
+        // read as nothing here, so the result does not tell them apart.
+        if (isMissOrDenied(error)) return null;
+        throw error;
+      }
     },
   });
 }

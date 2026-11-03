@@ -47,6 +47,7 @@ export {
   registerNextCacheRevalidator,
   nextlyTags,
   nextlySingleTags,
+  nextlySiteSettingsTags,
   entryIdTag,
   cachedFind,
   registerCachedRead,
@@ -126,6 +127,7 @@ export { requireNextly } from "./direct-api/nextly";
 export {
   createPublicReader,
   toPublicFind,
+  toPublicFindSingle,
   PUBLIC_FILTER_OPS,
 } from "./runtime/routing/public-reader";
 export type {
@@ -134,9 +136,27 @@ export type {
   PublicFilterOp,
   PublicReader,
   PublicReaderBinding,
+  PublicReaderSource,
   PublicReadQuery,
   PublicReadResult,
+  PublicSingleQuery,
+  PublicSingleResult,
 } from "./runtime/routing/public-reader";
+
+// What a binding on a published page reads besides a list, `@experimental`
+// with the reader: the site settings through their public allowlist (a write
+// to them expires `nextlySiteSettingsTags()`), and the field shapes a binding
+// is checked against, as the anonymous visitor may read them. Both load the
+// service container inside the call, so importing this entry loads neither.
+export {
+  readPublicSiteSettings,
+  type PublicSiteSettings,
+} from "./runtime/site-settings-read";
+export {
+  bindingFieldShapes,
+  type BindingFieldShape,
+  type BindingSourceRef,
+} from "./runtime/routing/binding-field-shapes";
 
 export {
   resolveContent,

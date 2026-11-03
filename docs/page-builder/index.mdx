@@ -342,6 +342,39 @@ Filter rows are typed `{ field, op, value }`, with `op` one of `equals`, `not_eq
 `gte`, `lt`, `lte`, `contains`, `in`, `not_in` and `exists`. `contains` ignores case for
 ASCII letters on every database; letters outside ASCII follow each database's own rules.
 
+### Singles, site settings and field shapes
+
+The same reader also reads one Single, as an anonymous visitor would:
+
+```ts
+const banner = await reader.findSingle({
+  slug: "banner",
+  select: ["headline"],
+});
+```
+
+It answers the published document with the fields the public may read, or `null` when there is
+nothing a visitor may see: no document yet, one never published, or a Single the visitor may not
+read. It never creates the Single's document. `select` keeps the id and the fields named; the
+read takes no other option, and refuses `status`, `draft`, `depth`, `populate` and the rest by
+name, as a list's read does.
+
+Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
+
+- `readPublicSiteSettings()` answers the site's `applicationName`, `siteUrl`, `logoUrl` and
+  `timezone` from the General Settings, each `null` until it is set. Nothing else in the settings
+  comes back: not the administrator's email, not the preview links' revocation counter, and not
+  a setting added later. Saving the settings expires the tag `nextlySiteSettingsTags()` names, so
+  tag a cached read with it and a page shows a new site name or time zone on its next request.
+- `bindingFieldShapes({ collection })` or `bindingFieldShapes({ single })` answers the fields a
+  visitor may read, each with its `type`, and where they apply `hasMany`, `relationTo`, the
+  select or radio `options`, and `dateOnly` or `monthOnly` for a date picked as a day or a month.
+  A field the visitor's field rules hide is left out, and so is one whose rule needs an entry to
+  decide. A source the visitor may not read, or one that does not exist, has no shapes
+  (`undefined`).
+
+The settings and the shapes read the process's running instance, as `requireNextly` does.
+
 <Callout type="warn">
 Field bindings inside a loop are stored but not resolved yet. Each repeated item shows
 the text its blocks were given in the editor, not the entry's own fields. See
