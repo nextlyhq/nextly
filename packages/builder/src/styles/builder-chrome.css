@@ -2536,13 +2536,70 @@
 }
 
 /*
- * The chosen tab's words in the panel's own text colour, with the accent left
- * to its underline. The accent as text measured 4.09:1 on the panel surface,
- * under the 4.5:1 that text this size needs; the underline still marks which
- * tab is chosen, and the words stay readable in both schemes.
+ * Content and Style as underlined tabs, set at the start of the panel: two
+ * views of one block, not a choice of value, so drawn unlike the segmented
+ * choices in the fields below. 12px semibold, the open tab in the panel's text
+ * colour over a 2px line, the other muted, and one 1px divider under the row.
+ * Unlayered, so these outrank the shared tabs' own utilities.
  */
-.nx-inspector__tabs [role="tab"][data-state="active"] {
+.nx-inspector__tablist {
+  display: flex;
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 1rem;
+  height: var(--nx-builder-control-height);
+  padding: 0;
+  border: 0;
+  /* The builder's border token, which a request for more contrast promotes. */
+  border-block-end: 1px solid var(--nx-builder-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+/*
+ * As tall as the row, so the whole 28px answers a click; its line sits over
+ * the divider rather than under it.
+ */
+.nx-inspector__tab {
+  flex: none;
+  height: auto;
+  margin: 0 0 -1px;
+  padding: 0;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--nx-builder-font-size);
+  font-weight: 600;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector__tab:hover {
+  color: var(--nx-foreground);
+}
+
+/*
+ * The open tab's words in the panel's own text colour, never the accent,
+ * which measured 4.09:1 as text on the panel surface, under the 4.5:1 text
+ * this size needs; its line is the foreground too, so it holds in both
+ * schemes.
+ */
+.nx-inspector__tab[data-state="active"] {
   color: var(--nx-builder-text, var(--nx-foreground));
+  border-block-end-color: var(--nx-foreground);
+}
+
+.nx-inspector__tab:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* Forced colours replace the palette: the open tab's line in a system colour. */
+@media (forced-colors: active) {
+  .nx-inspector__tab[data-state="active"] {
+    border-block-end-color: CanvasText;
+  }
 }
 
 .nx-style-inspector {
