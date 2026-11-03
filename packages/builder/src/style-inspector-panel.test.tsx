@@ -681,7 +681,7 @@ describe("controls", () => {
     expect(
       (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
         .value
-    ).toBe("12px");
+    ).toBe("12");
     // The same side of a DIFFERENT property is empty, which is what says the
     // read is addressed rather than by leaf name.
     expect(
@@ -838,7 +838,7 @@ describe("controls", () => {
     expect(
       (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
         .value
-    ).toBe("4px");
+    ).toBe("4");
   });
 
   it("offers every form the catalog declares, so an unset union is authorable", () => {
@@ -1141,12 +1141,13 @@ describe("controls", () => {
   it("hints at a value in words short enough to read inside the field", () => {
     // A hint cut off mid-word ("16px or 50%, or xx-sm…") tells the author
     // less than a short one. Keywords stay valid to type; the hint shows the
-    // form a value takes, not every value it may take.
+    // form a value takes, not every value it may take. A length shows its
+    // unit beside the field, so its hint is the number alone.
     mount({ typography: true, color: true });
 
     expect(
       (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
-    ).toBe("16px or 50%");
+    ).toBe("16");
     expect(fieldsOf("color").getByPlaceholderText("Name or hex")).toBeDefined();
   });
 
@@ -1739,7 +1740,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(field).toHaveProperty("value", "0px");
+    expect(field).toHaveProperty("value", "0");
   });
 
   it("offers a unit menu only where the value is one measurement", () => {
@@ -1832,7 +1833,7 @@ describe("what the arrow keys do and do not claim", () => {
     });
     // One op, not a commit of the draft followed by a step of the result.
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(field).toHaveProperty("value", "21px");
+    expect(field).toHaveProperty("value", "21");
   });
 
   it("leaves an arrow to the IME while a composition is in progress", () => {
@@ -1928,6 +1929,189 @@ describe("what the arrow keys do and do not claim", () => {
   });
 });
 
+describe("a length field's unit", () => {
+  /** Width inherited from a class `.card`, nothing stored on the box. */
+  function mountCardedWidth(value: string): void {
+    register({ dimensions: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              {
+                origin: { kind: "class", id: "cls-1", slug: "card" },
+                property: "width",
+                value,
+                state: "base",
+                breakpoint: BASE_BREAKPOINT,
+              },
+            ],
+          } as never
+        }
+      />
+    );
+  }
+
+  it("commits a bare number in the unit beside it, px unless another is chosen", () => {
+    // "24" was refused as "not a length".
+    const editor = mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: "24" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"24px"'
+    );
+  });
+
+  it("shows the unit menu while the field is empty, on px", () => {
+    mount({ dimensions: true });
+    const unit = fieldsOf("width").getByLabelText("Unit for Width");
+    expect(unit.textContent).toBe("px");
+  });
+
+  it("takes a unit chosen before a number is typed", () => {
+    const editor = mount({ dimensions: true });
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    // Nothing to write yet: the field is empty.
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: "2" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"2rem"'
+    );
+  });
+
+  it("shows a stored length's number in the field and its unit in the suffix", () => {
+    // "240px" in the field beside "px" said the unit twice.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "2rem" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
+    expect(width.value).toBe("2");
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "rem"
+    );
+    // A new number keeps the stored unit, not px.
+    fireEvent.change(width, { target: { value: "3" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"3rem"'
+    );
+  });
+
+  it("steps the number with the arrow keys in the unit shown", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "10px" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    fireEvent.keyDown(fieldsOf("width").getByLabelText("Width"), {
+      key: "ArrowUp",
+    });
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"11px"'
+    );
+  });
+
+  it("hints at what an unset size is, Auto or None, not a number that reads like a default", () => {
+    // "16" beside Width read as a real default; unset, a width is auto and a
+    // max width none.
+    mount({ dimensions: true });
+    const hint = (label: string, property: string) =>
+      (fieldsOf(property).getByLabelText(label) as HTMLInputElement)
+        .placeholder;
+    expect(hint("Width", "width")).toBe("Auto");
+    expect(hint("Height", "height")).toBe("Auto");
+    expect(hint("Max width", "maxWidth")).toBe("None");
+  });
+
+  it("hints at a number alone for a length whose unset value is not a word", () => {
+    // Margin allows `auto` but starts at 0, so its hint stays a number.
+    mount({ spacing: true });
+    const top = fieldsOf("padding").getByLabelText(
+      "Block start"
+    ) as HTMLInputElement;
+    expect(top.placeholder).not.toBe("Auto");
+  });
+
+  it("shows a stored keyword once, in the suffix, not again in the field", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "auto" } },
+    } as NodeStyles;
+    mount({ dimensions: true }, styles);
+    const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
+    expect(width.value).toBe("");
+    expect(width.placeholder).toBe("");
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "auto"
+    );
+  });
+
+  it("keeps the suffix for every bare number the commit will take", () => {
+    // ".5" is committed with the unit shown, so the unit stays shown.
+    mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: ".5" } });
+    expect(fieldsOf("width").queryByLabelText("Unit for Width")).not.toBeNull();
+  });
+
+  it("draws no unit beside an inherited value that is not a measurement", () => {
+    // An inherited "auto" or "clamp(…)" beside "px" read "auto px".
+    mountCardedWidth("clamp(1rem, 2vw, 3rem)");
+    expect(fieldsOf("width").queryByLabelText("Unit for Width")).toBeNull();
+  });
+
+  it("shows a unit chosen over a stored keyword, writing nothing until a number", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "auto" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "rem"
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("never shows an inherited length beside a different pending unit", () => {
+    // "2px" beside "rem" read as one value it is not.
+    mountCardedWidth("2px");
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    expect(width.placeholder).not.toContain("px");
+  });
+
+  it("offers the property's keywords after its units", () => {
+    const editor = mount({ dimensions: true });
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "auto" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"auto"'
+    );
+  });
+});
+
 describe("a side or a corner, in plain words", () => {
   const LTR = { writingMode: "horizontal-tb", direction: "ltr" };
   /** The visible names of one property's controls, on an element whose axes are known or not. */
@@ -1989,7 +2173,7 @@ describe("a side or a corner, in plain words", () => {
     const top = document.querySelector<HTMLInputElement>(
       '[data-property="border"] input'
     );
-    expect(top?.placeholder).toBe("1px");
+    expect(top?.placeholder).toBe("1");
   });
 
   it("names a radius's corners Top left and the rest", () => {

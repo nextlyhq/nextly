@@ -109,6 +109,7 @@ import {
 import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
 import { placedDefinition } from "./variant-picker";
+import { VisibleOn, type BreakpointsStatus } from "./visible-on";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -226,6 +227,14 @@ export interface InspectorPanelProps {
   cascade?: PageStyleCascade;
   /** The site's breakpoints, which decide which of those declarations are live. */
   breakpoints?: BreakpointSet;
+  /**
+   * Whether `breakpoints` is the site's own set yet: `loading` while the
+   * config's defaults stand in for the stored set being read, `unavailable`
+   * when that read failed. "Visible on" writes only once it is `ready`: a
+   * hide resolved against the wrong set is stored wrong. Defaults to
+   * `ready`, for a host whose breakpoints are known up front.
+   */
+  breakpointsStatus?: BreakpointsStatus;
   /**
    * The container the canvas compiled its breakpoints against, when it is
    * previewing rather than rendering at the browser's own width.
@@ -560,6 +569,7 @@ function SelectionInspector({
   inspectors,
   verbs,
   contentServices,
+  breakpointsStatus = "ready",
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
 }: Omit<
@@ -729,6 +739,9 @@ function SelectionInspector({
             onScreen={tab === "content"}
             reasonId={reasonId}
             fields={fields}
+            breakpoints={styleOnly.breakpoints}
+            breakpoint={breakpoint ?? BASE_BREAKPOINT}
+            breakpointsStatus={breakpointsStatus}
           />
         </TabsContent>
 
@@ -765,6 +778,9 @@ function ContentTab({
   onScreen,
   reasonId,
   fields,
+  breakpoints,
+  breakpoint,
+  breakpointsStatus,
 }: {
   block: BlockInspection;
   editor: EditorState;
@@ -778,6 +794,12 @@ function ContentTab({
   onScreen: boolean;
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
+  /** The site's breakpoints, for "Visible on". */
+  breakpoints: BreakpointSet | undefined;
+  /** The device being edited. */
+  breakpoint: BreakpointId;
+  /** Whether `breakpoints` is the site's own set yet. */
+  breakpointsStatus: BreakpointsStatus;
 }): React.JSX.Element {
   // Whether the Advanced section is open, so the panel inside it can be told
   // when it stops being on screen and settle its draft.
@@ -802,6 +824,17 @@ function ContentTab({
         services={services}
         reasonId={reasonId}
         fields={fields}
+      />
+      {/* Which devices the block shows on: after its own fields, before the
+          Advanced section, as the design draws the Content tab. */}
+      <VisibleOn
+        editor={editor}
+        nodeId={block.nodeId}
+        breakpoints={breakpoints}
+        editing={breakpoint}
+        status={breakpointsStatus}
+        heldBy={designLocked}
+        reasonId={reasonId}
       />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*

@@ -36,7 +36,10 @@
  *
  * A cursor carries each collection's position in its own read, so the next
  * page resumes every read where the merge stopped taking from it (see
- * `PagesSearchResponse`). Each returned page of a Draft/Published collection
+ * `PagesSearchResponse`). By title the merge takes the lowest head each time;
+ * by collection (`order=collection`, the Pages panel's grouped list) it takes
+ * each collection's pages in turn, the plugin's own Pages first. Each returned
+ * page of a Draft/Published collection
  * also says where it stands in publishing (`PageState`), from core's own
  * workflow filters read as the caller: two reads per collection, over the ids
  * on the page.
@@ -61,6 +64,7 @@ import {
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
+import { PAGES_SLUG } from "./collections/pages";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
   NO_MATCH,
@@ -89,6 +93,7 @@ import {
   type PageReference,
   type PageState,
   type PageStatus,
+  type PagesSearchOrder,
   type PagesSearchResponse,
 } from "./pages-search-contract";
 import { cappedLimit, optionalText, parseRouteQuery } from "./route-query";
@@ -116,6 +121,8 @@ export interface PagesSearchRequest {
   readonly exclude?: PageReference;
   /** Where an earlier page of the same search stopped; the first page when absent. */
   readonly before?: PagesCursor;
+  /** How the pages are ordered: by title, or by collection. */
+  readonly order: PagesSearchOrder;
 }
 
 /**
@@ -201,6 +208,7 @@ const querySchema = z.object({
     .transform(decodeCursor)
     .pipe(cursorShape)
     .optional(),
+  [PAGES_SEARCH_PARAMS.order]: z.enum(["title", "collection"]).optional(),
 });
 
 /**
@@ -223,6 +231,7 @@ export function parsePagesSearchQuery(url: string | URL): PagesSearchRequest {
     limit: query[PAGES_SEARCH_PARAMS.limit] ?? PAGES_SEARCH_LIMIT_DEFAULT,
     ...(exclude === undefined ? {} : { exclude }),
     ...(before === undefined ? {} : { before }),
+    order: query[PAGES_SEARCH_PARAMS.order] ?? "title",
   };
 }
 
@@ -268,12 +277,15 @@ export interface PageCollection {
 }
 
 /**
- * The collections a search reads, from the registry's records, in slug order,
- * each slug once.
+ * The collections a search reads, from the registry's records, each slug once:
+ * the plugin's own Pages (`primary`) first, then the others by the name their
+ * heading shows. The order a search by collection lists them in; a search by
+ * title does not depend on it.
  */
 function pageCollections(
   records: readonly unknown[],
-  stores: ReadonlySet<string>
+  stores: ReadonlySet<string>,
+  primary: string
 ): PageCollection[] {
   const found = new Map<string, PageCollection>();
   for (const value of records) {
@@ -282,7 +294,13 @@ function pageCollections(
       found.set(source.slug, source);
     }
   }
-  return [...found.values()].sort((a, b) => a.slug.localeCompare(b.slug));
+  const shown = (source: PageCollection) => source.pluralLabel ?? source.label;
+  return [...found.values()].sort(
+    (a, b) =>
+      Number(b.slug === primary) - Number(a.slug === primary) ||
+      shown(a).localeCompare(shown(b), "en", { sensitivity: "base" }) ||
+      byCodePoint(a.slug, b.slug)
+  );
 }
 
 /**
@@ -483,6 +501,8 @@ export interface PagesSearchReads {
   collections(): Promise<readonly unknown[]>;
   /** The plugin's composition stores, which hold blocks and are not pages. */
   stores(): ReadonlySet<string>;
+  /** The plugin's own pages collection, resolved: listed first by collection. */
+  pagesCollection(): string;
   /** One list read, AS THE CALLER. */
   find(args: PagesFindArgs): Promise<AsCallerPage>;
   /** Say, to the operator, that a collection was left out of a search and why. */
@@ -549,11 +569,18 @@ export async function readPagesSearch(
   request: PagesSearchRequest,
   reads: PagesSearchReads
 ): Promise<PagesSearchResponse> {
-  const sources = pageCollections(await reads.collections(), reads.stores());
+  const sources = pageCollections(
+    await reads.collections(),
+    reads.stores(),
+    reads.pagesCollection()
+  );
   const hits = await inTurns(sources, READS_AT_ONCE, source =>
     searchCollection(source, request, reads)
   );
-  const merged = mergeByTitle(hits, request.limit);
+  const merged =
+    request.order === "collection"
+      ? mergeByCollection(hits, request.limit)
+      : mergeByTitle(hits, request.limit);
   const items = await withStates(merged.items, sources, reads);
   return { items, meta: mergedMeta(request, sources, hits, merged.taken) };
 }
@@ -608,6 +635,32 @@ function mergeByTitle(lists: readonly CollectionHits[], limit: number): Merged {
     if (next === undefined) break;
     items.push(next.item);
     taken[next.list] = (taken[next.list] ?? 0) + 1;
+  }
+  return { items, taken };
+}
+
+/**
+ * The first `limit` items of several lists, in list order: each collection's
+ * pages together, in its database's title order, and the lists already in the
+ * order {@link pageCollections} gives them.
+ *
+ * It stops at a list that ran out while its collection has rows it did not
+ * read: those come before any later collection's, and the next page reads
+ * them on from where this one stopped.
+ */
+function mergeByCollection(
+  lists: readonly CollectionHits[],
+  limit: number
+): Merged {
+  const taken = lists.map(() => 0);
+  const items: PageItem[] = [];
+  for (const [index, list] of lists.entries()) {
+    for (const hit of list.hits) {
+      if (items.length >= limit) return { items, taken };
+      items.push(hit.item);
+      taken[index] = (taken[index] ?? 0) + 1;
+    }
+    if (list.more) break;
   }
   return { items, taken };
 }
@@ -1261,6 +1314,7 @@ function directPagesSearchReads(
   return {
     collections: () => registryRecords(ctx),
     stores: () => compositionStores(ctx, store),
+    pagesCollection: () => ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
     find: args => findAsCaller(ctx, args),
     warn: (message, context) => ctx.logger.warn(message, context),
   };

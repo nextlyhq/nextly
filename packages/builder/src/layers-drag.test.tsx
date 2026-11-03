@@ -63,6 +63,7 @@ import {
   LAYERS_TOUCH_HOLD_MS,
   LAYERS_TOUCH_TOLERANCE_PX,
 } from "./layers-drag";
+import { HoveredBlockProvider, useHoveredBlock } from "./hovered-block";
 import { LayersPanel } from "./layers-panel";
 
 const ROW = 28;
@@ -324,6 +325,30 @@ describe("dragging a Layers row", () => {
     ).toBe(false);
     release(container, X, 20);
     expect(source()).toBe(false);
+  });
+
+  it("lets the hover outline go as a drag starts, though no other row was entered", () => {
+    function Probe(): React.JSX.Element {
+      return <output data-testid="hovered">{useHoveredBlock() ?? ""}</output>;
+    }
+    const { container } = render(
+      <HoveredBlockProvider>
+        <Host
+          document={page([
+            node("a", "core/heading"),
+            node("b", "core/heading"),
+            node("c", "core/heading"),
+          ])}
+        />
+        <Probe />
+      </HoveredBlockProvider>
+    );
+    fireEvent.pointerOver(label("a"));
+    expect(screen.getByTestId("hovered").textContent).toBe("a");
+    press("a", 10);
+    moveTo(container, X, 20);
+    expect(screen.getByTestId("hovered").textContent).toBe("");
+    release(container, X, 20);
   });
 
   it("moves a row dragged down past another, as ONE undo step", () => {
