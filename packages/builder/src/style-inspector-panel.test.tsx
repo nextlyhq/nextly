@@ -965,6 +965,25 @@ describe("controls", () => {
     expect(screen.getByLabelText("Font style form")).toBeDefined();
   });
 
+  it("sets alignment with icons that follow the container's direction", () => {
+    // A column's main axis runs down the page, so "start" points up, not left.
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: { display: "flex", flexDirection: "column" },
+      },
+    } as NodeStyles;
+    const editor = mount({ layout: true }, styles);
+
+    const group = screen.getByRole("radiogroup", { name: "Justify content" });
+    const start = within(group).getByRole("radio", { name: "Start" });
+    expect(start.getAttribute("data-icon")).toBe("AlignVerticalJustifyStart");
+
+    fireEvent.click(within(group).getByRole("radio", { name: "Center" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"justifyContent":"center"'
+    );
+  });
+
   it("leaves a trailing decimal point for the catalog, rather than reading it as a number", () => {
     // CSS requires a digit AFTER a decimal point, so `1.` is a number followed
     // by a stray delimiter rather than a number. `Number("1.")` answers 1

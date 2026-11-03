@@ -82,6 +82,7 @@ import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
+import { IconChoiceField } from "./icon-choice-field";
 import {
   designIsWritable,
   designReadOnlyReason,
@@ -91,6 +92,7 @@ import {
 import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
 import type { SideOrientation } from "./side-orientation";
+import { alignmentGroupFor, flowOf, type Flow } from "./style-alignment-icons";
 import { BASELINE_WITHHELD_HINT } from "./style-baseline";
 import {
   activeTokenMode,
@@ -1199,39 +1201,49 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      <SideBoxFrame box={box}>
-        {box.controls.map(control => (
-          <StyleControlField
-            // The ADDRESS, not just the position: a host switching state or
-            // breakpoint leaves this field mounted, and where the old and new
-            // addresses hold the same value — both unset, most often — the
-            // synchronisation effect does not run either. An unfinished draft
-            // from the base breakpoint would then commit into the hover state.
-            key={[state, breakpoint, property.property, ...control.path].join(
-              "."
-            )}
-            control={control}
-            side={sideOf(box, control)}
-            label={
-              many
-                ? fieldLabel(control.path[control.path.length - 1] ?? "")
-                : property.label
-            }
-            summary={many ? undefined : property.summary}
-            propertyLabel={property.label}
-            clearOnly={!property.offered || control.withheld}
-            nodeId={nodeId}
-            state={state}
-            breakpoint={breakpoint}
-            editor={editor}
-            policy={policy}
-            tokens={tokens}
-            prefersDark={prefersDark}
-            provenanceOf={provenanceOf}
-            editing={editing}
-          />
-        ))}
-      </SideBoxFrame>
+      {/* The container's flow, which alignment icons are drawn in. */}
+      <AlignmentFlow.Provider
+        value={flowOf(
+          findNode(editor.document.nodes, nodeId)?.styles,
+          state,
+          breakpoint,
+          orientation?.direction === "rtl"
+        )}
+      >
+        <SideBoxFrame box={box}>
+          {box.controls.map(control => (
+            <StyleControlField
+              // The ADDRESS, not just the position: a host switching state or
+              // breakpoint leaves this field mounted, and where the old and new
+              // addresses hold the same value — both unset, most often — the
+              // synchronisation effect does not run either. An unfinished draft
+              // from the base breakpoint would then commit into the hover state.
+              key={[state, breakpoint, property.property, ...control.path].join(
+                "."
+              )}
+              control={control}
+              side={sideOf(box, control)}
+              label={
+                many
+                  ? fieldLabel(control.path[control.path.length - 1] ?? "")
+                  : property.label
+              }
+              summary={many ? undefined : property.summary}
+              propertyLabel={property.label}
+              clearOnly={!property.offered || control.withheld}
+              nodeId={nodeId}
+              state={state}
+              breakpoint={breakpoint}
+              editor={editor}
+              policy={policy}
+              tokens={tokens}
+              prefersDark={prefersDark}
+              provenanceOf={provenanceOf}
+              editing={editing}
+            />
+          ))}
+        </SideBoxFrame>
+      </AlignmentFlow.Provider>
     </div>
   );
 }
@@ -3447,6 +3459,24 @@ function ContrastNote({
   );
 }
 
+/** The edited container's flow; a row until a property says otherwise. */
+const AlignmentFlow = React.createContext<Flow>({
+  axis: "row",
+  reversed: false,
+  rtl: false,
+});
+
+/**
+ * The icon buttons a keyword control draws, when its property is one drawn as
+ * icons, in the flow of the container being edited.
+ */
+function useAlignmentGroup(control: StyleControl) {
+  const flow = React.useContext(AlignmentFlow);
+  return control.leaf.kind === "keyword"
+    ? alignmentGroupFor(control.leaf.cssProperty, control.leaf.values, flow)
+    : undefined;
+}
+
 /**
  * The control a leaf's kind resolves to.
  *
@@ -3492,6 +3522,21 @@ function ValueField({
   // Decided BEFORE the menu, because every keyword leaf resolves to the
   // `select` control kind — so a branch on that kind placed first would return
   // for all of them and the toggle could never be reached.
+  // Alignment and direction as icons that follow the container's flow.
+  const alignment = useAlignmentGroup(control);
+  if (alignment !== undefined) {
+    return (
+      <IconChoiceField
+        id={id}
+        labelledBy={labelledBy}
+        group={alignment}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   const toggle = toggleOptionsFor(control.leaf);
   if (toggle !== undefined && toggleShows(toggle, stored)) {
     return (
