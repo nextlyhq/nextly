@@ -17,10 +17,16 @@ afterEach(cleanup);
 const group = alignmentGroupFor(
   "justify-content",
   ["normal", "start", "center", "end", "space-between", "safe center"],
-  { axis: "row", reversed: false, rtl: false }
+  {
+    writingMode: "horizontal-tb",
+    rtl: false,
+    flex: true,
+    direction: "row",
+    wrapReversed: false,
+  }
 )!;
 
-function mount(stored?: string) {
+function mount(stored?: string, describedBy?: string) {
   const onCommit = vi.fn(() => "applied" as const);
   render(
     <>
@@ -31,7 +37,7 @@ function mount(stored?: string) {
         group={group}
         stored={stored}
         actionName="Justify content"
-        describedBy={undefined}
+        describedBy={describedBy}
         onCommit={onCommit}
       />
     </>
@@ -100,5 +106,53 @@ describe("IconChoiceField", () => {
         .getAllByRole("radio")
         .some(radio => radio.getAttribute("aria-checked") === "true")
     ).toBe(false);
+  });
+
+  it("shows a stored spelling neither the icons nor the list carry, in More", () => {
+    // The engine accepts spellings outside the catalogue's list, "inherit"
+    // among them; shown as unset, an active declaration would look absent.
+    mount("inherit");
+
+    expect(
+      screen.getByLabelText("More Justify content values").textContent
+    ).toContain("inherit");
+  });
+
+  it("clears from a button at the row's end, only while a value is set", () => {
+    const onCommit = mount("safe center");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear Justify content" })
+    );
+    expect(onCommit).toHaveBeenLastCalledWith(null);
+
+    cleanup();
+    mount();
+    expect(
+      screen.queryByRole("button", { name: "Clear Justify content" })
+    ).toBeNull();
+  });
+
+  it("marks every control invalid when the last value was refused", () => {
+    mount("center", "refusal");
+
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio.getAttribute("aria-invalid")).toBe("true");
+    }
+    const more = screen.getByLabelText("More Justify content values");
+    expect(more.getAttribute("aria-invalid")).toBe("true");
+    expect(more.getAttribute("aria-describedby")).toBe("refusal");
+  });
+
+  it("draws More as the strip's last segment, not on a line of its own", () => {
+    mount();
+
+    const strip = screen
+      .getByRole("radiogroup")
+      .closest(".nx-icon-choice__strip");
+    expect(strip).toBeTruthy();
+    expect(
+      strip?.contains(screen.getByLabelText("More Justify content values"))
+    ).toBe(true);
   });
 });

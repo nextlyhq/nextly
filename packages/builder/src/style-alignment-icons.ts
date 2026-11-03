@@ -25,16 +25,21 @@ import {
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
+import type { SideOrientation } from "./side-orientation";
 import { readStyleValue } from "./style-values";
 
 /** How the edited container lays its content out. */
 export interface Flow {
-  /** The main axis: `row` runs inline, `column` runs block. */
-  readonly axis: "row" | "column";
-  /** Whether the main axis runs backwards (`row-reverse`, `column-reverse`). */
-  readonly reversed: boolean;
-  /** Whether the element's inline direction is right to left. */
+  /** The element's `writing-mode`: which way its lines run. */
+  readonly writingMode: string;
+  /** Whether its inline direction is right to left. */
   readonly rtl: boolean;
+  /** Whether it is a flex container, so `flex-direction` and `flex-wrap` apply. */
+  readonly flex: boolean;
+  /** Its `flex-direction`, `row` when unset. */
+  readonly direction: string;
+  /** Whether its lines wrap in reverse, swapping the cross axis's ends. */
+  readonly wrapReversed: boolean;
 }
 
 /** One icon button: the value it stores, its name, and the icon drawn. */
@@ -45,6 +50,8 @@ export interface AlignmentOption {
   readonly icon: string;
   /** Drawn upside down, for a value whose icon has no reversed twin. */
   readonly flipped?: true;
+  /** Turned a quarter, for text that runs down the page. */
+  readonly rotated?: true;
 }
 
 /** A property's icon buttons, and the values it accepts that have none. */
@@ -53,17 +60,79 @@ export interface AlignmentGroup {
   readonly rest: readonly string[];
 }
 
-/** Which way a value's start and end point, when they point at all. */
-type Axis = "main" | "cross" | "inline" | "none";
+type Edge = "left" | "right" | "top" | "bottom";
 
-interface Entry {
-  readonly value: string;
-  readonly label: string;
-  /** The icon in a row, and in a column. */
-  readonly row: string;
-  readonly column: string;
-  readonly flipped?: true;
+/** An axis on the screen: which way it runs, and the edge it starts from. */
+interface Axis {
+  readonly horizontal: boolean;
+  readonly start: Edge;
 }
+
+const OPPOSITE: Readonly<Record<Edge, Edge>> = {
+  left: "right",
+  right: "left",
+  top: "bottom",
+  bottom: "top",
+};
+
+/** The axis lines run along: across in horizontal writing, down otherwise. */
+function inlineAxis(flow: Flow): Axis {
+  if (flow.writingMode.startsWith("horizontal")) {
+    return { horizontal: true, start: flow.rtl ? "right" : "left" };
+  }
+  const upward = flow.writingMode === "sideways-lr";
+  return {
+    horizontal: false,
+    start: upward !== flow.rtl ? "bottom" : "top",
+  };
+}
+
+/** The axis lines stack along: down the page, or across in vertical writing. */
+function blockAxis(flow: Flow): Axis {
+  if (flow.writingMode.startsWith("horizontal")) {
+    return { horizontal: false, start: "top" };
+  }
+  return {
+    horizontal: true,
+    start: flow.writingMode.endsWith("-lr") ? "left" : "right",
+  };
+}
+
+function reversed(axis: Axis, reverse: boolean): Axis {
+  return reverse ? { ...axis, start: OPPOSITE[axis.start] } : axis;
+}
+
+/**
+ * The main and cross axes. A flex container's main axis follows its
+ * direction and its cross axis its wrap; anything else aligns along its
+ * inline and block axes, whatever flex values it still stores.
+ */
+function axesOf(flow: Flow): { main: Axis; cross: Axis; inline: Axis } {
+  const inline = inlineAxis(flow);
+  const block = blockAxis(flow);
+  if (!flow.flex) return { main: inline, cross: block, inline };
+  const column = flow.direction.startsWith("column");
+  return {
+    main: reversed(
+      column ? block : inline,
+      flow.direction.endsWith("-reverse")
+    ),
+    cross: reversed(column ? inline : block, flow.wrapReversed),
+    inline,
+  };
+}
+
+/** Whether an axis starts at the end its icons draw as start: left or top. */
+function natural(axis: Axis): boolean {
+  return axis.start === "left" || axis.start === "top";
+}
+
+const ARROWS: Readonly<Record<Edge, string>> = {
+  right: "ArrowRight",
+  left: "ArrowLeft",
+  bottom: "ArrowDown",
+  top: "ArrowUp",
+};
 
 /** The icons whose start and end swap, both ways round. */
 const MIRRORED: Readonly<Record<string, string>> = Object.fromEntries(
@@ -73,18 +142,37 @@ const MIRRORED: Readonly<Record<string, string>> = Object.fromEntries(
     ["AlignStartHorizontal", "AlignEndHorizontal"],
     ["AlignStartVertical", "AlignEndVertical"],
     ["AlignLeft", "AlignRight"],
-    ["ArrowRight", "ArrowLeft"],
   ].flatMap(([a, b]) => [
     [a, b],
     [b, a],
   ])
 );
 
+interface Entry {
+  readonly value: string;
+  readonly label: string;
+  /** The icon along a horizontal axis, and along a vertical one. */
+  readonly horizontal: string;
+  readonly vertical: string;
+}
+
+function entry(
+  value: string,
+  label: string,
+  horizontal: string,
+  vertical: string
+): Entry {
+  return { value, label, horizontal, vertical };
+}
+
+/** Which axis a property's values point along. */
+type Along = "main" | "cross" | "inline";
+
 const GROUPS: Readonly<
-  Record<string, { axis: Axis; entries: readonly Entry[] }>
+  Record<string, { along: Along; entries: readonly Entry[] }>
 > = {
   "justify-content": {
-    axis: "main",
+    along: "main",
     entries: [
       entry(
         "start",
@@ -110,68 +198,52 @@ const GROUPS: Readonly<
         "AlignHorizontalSpaceBetween",
         "AlignVerticalSpaceBetween"
       ),
-      entry(
-        "space-around",
-        "Space around",
-        "AlignHorizontalSpaceAround",
-        "AlignVerticalSpaceAround"
-      ),
-      entry(
-        "space-evenly",
-        "Space evenly",
-        "AlignHorizontalDistributeCenter",
-        "AlignVerticalDistributeCenter"
-      ),
     ],
   },
+  // Items line up against an edge of the cross axis: along a vertical cross
+  // axis that edge is a horizontal line (top, middle, bottom).
   "align-items": {
-    axis: "cross",
+    along: "cross",
     entries: [
-      entry("start", "Start", "AlignStartHorizontal", "AlignStartVertical"),
-      entry("center", "Center", "AlignCenterHorizontal", "AlignCenterVertical"),
-      entry("end", "End", "AlignEndHorizontal", "AlignEndVertical"),
-      entry("stretch", "Stretch", "StretchVertical", "StretchHorizontal"),
+      entry("start", "Start", "AlignStartVertical", "AlignStartHorizontal"),
+      entry("center", "Center", "AlignCenterVertical", "AlignCenterHorizontal"),
+      entry("end", "End", "AlignEndVertical", "AlignEndHorizontal"),
+      entry("stretch", "Stretch", "StretchHorizontal", "StretchVertical"),
       entry("baseline", "Baseline", "Baseline", "Baseline"),
     ],
   },
   "align-content": {
-    axis: "cross",
+    along: "cross",
     entries: [
       entry(
         "start",
         "Start",
-        "AlignVerticalJustifyStart",
-        "AlignHorizontalJustifyStart"
+        "AlignHorizontalJustifyStart",
+        "AlignVerticalJustifyStart"
       ),
       entry(
         "center",
         "Center",
-        "AlignVerticalJustifyCenter",
-        "AlignHorizontalJustifyCenter"
+        "AlignHorizontalJustifyCenter",
+        "AlignVerticalJustifyCenter"
       ),
       entry(
         "end",
         "End",
-        "AlignVerticalJustifyEnd",
-        "AlignHorizontalJustifyEnd"
+        "AlignHorizontalJustifyEnd",
+        "AlignVerticalJustifyEnd"
       ),
       entry(
         "space-between",
         "Space between",
-        "AlignVerticalSpaceBetween",
-        "AlignHorizontalSpaceBetween"
+        "AlignHorizontalSpaceBetween",
+        "AlignVerticalSpaceBetween"
       ),
-      entry(
-        "space-around",
-        "Space around",
-        "AlignVerticalSpaceAround",
-        "AlignHorizontalSpaceAround"
-      ),
-      entry("stretch", "Stretch", "StretchVertical", "StretchHorizontal"),
+      entry("stretch", "Stretch", "StretchHorizontal", "StretchVertical"),
     ],
   },
   "text-align": {
-    axis: "inline",
+    along: "inline",
     entries: [
       entry("start", "Start", "AlignLeft", "AlignLeft"),
       entry("center", "Center", "AlignCenter", "AlignCenter"),
@@ -179,49 +251,65 @@ const GROUPS: Readonly<
       entry("justify", "Justify", "AlignJustify", "AlignJustify"),
     ],
   },
-  "flex-direction": {
-    axis: "inline",
-    entries: [
-      entry("row", "Row", "ArrowRight", "ArrowRight"),
-      entry("row-reverse", "Row, reversed", "ArrowLeft", "ArrowLeft"),
-      entry("column", "Column", "ArrowDown", "ArrowDown"),
-      entry("column-reverse", "Column, reversed", "ArrowUp", "ArrowUp"),
-    ],
-  },
-  "flex-wrap": {
-    axis: "none",
-    entries: [
-      entry("nowrap", "No wrap", "ArrowRightToLine", "ArrowRightToLine"),
-      entry("wrap", "Wrap", "WrapText", "WrapText"),
-      {
-        ...entry("wrap-reverse", "Wrap, reversed", "WrapText", "WrapText"),
-        flipped: true,
-      },
-    ],
-  },
 };
 
-function entry(
-  value: string,
-  label: string,
-  row: string,
-  column: string
-): Entry {
-  return { value, label, row, column };
+/** The four directions, each an arrow the way it runs on the screen. */
+function directionOptions(
+  values: readonly string[],
+  flow: Flow
+): AlignmentOption[] {
+  const inline = inlineAxis(flow);
+  const block = blockAxis(flow);
+  const options: AlignmentOption[] = [
+    { value: "row", label: "Row", icon: ARROWS[OPPOSITE[inline.start]] },
+    {
+      value: "row-reverse",
+      label: "Row, reversed",
+      icon: ARROWS[inline.start],
+    },
+    { value: "column", label: "Column", icon: ARROWS[OPPOSITE[block.start]] },
+    {
+      value: "column-reverse",
+      label: "Column, reversed",
+      icon: ARROWS[block.start],
+    },
+  ];
+  return options.filter(option => values.includes(option.value));
 }
 
-/**
- * Whether start and end trade places for this axis in this flow: along the
- * main axis when it is reversed, and along a horizontal one in a
- * right-to-left element. Both at once cancel out.
- */
-function swaps(axis: Axis, flow: Flow): boolean {
-  const horizontal =
-    axis === "inline" ||
-    (axis === "main" && flow.axis === "row") ||
-    (axis === "cross" && flow.axis === "column");
-  const reversed = axis === "main" && flow.reversed;
-  return (flow.rtl && horizontal) !== reversed;
+const WRAPS: readonly AlignmentOption[] = [
+  { value: "nowrap", label: "No wrap", icon: "ArrowRightToLine" },
+  { value: "wrap", label: "Wrap", icon: "WrapText" },
+  {
+    value: "wrap-reverse",
+    label: "Wrap, reversed",
+    icon: "WrapText",
+    flipped: true,
+  },
+];
+
+/** The icon buttons for one aligned property, in this flow. */
+function alignedOptions(
+  group: { along: Along; entries: readonly Entry[] },
+  values: readonly string[],
+  flow: Flow
+): AlignmentOption[] {
+  const axis = axesOf(flow)[group.along];
+  const swap = !natural(axis);
+  // Text running down the page draws the horizontal icons turned a quarter.
+  const rotated = group.along === "inline" && !axis.horizontal;
+  return group.entries
+    .filter(candidate => values.includes(candidate.value))
+    .map(candidate => {
+      const drawn =
+        axis.horizontal || rotated ? candidate.horizontal : candidate.vertical;
+      return {
+        value: candidate.value,
+        label: candidate.label,
+        icon: swap ? (MIRRORED[drawn] ?? drawn) : drawn,
+        ...(rotated ? { rotated: true as const } : {}),
+      };
+    });
 }
 
 /**
@@ -234,60 +322,63 @@ export function alignmentGroupFor(
   values: readonly string[],
   flow: Flow
 ): AlignmentGroup | undefined {
-  const group = Object.hasOwn(GROUPS, cssProperty)
-    ? GROUPS[cssProperty]
-    : undefined;
-  if (group === undefined) return undefined;
-  const swap = swaps(group.axis, flow);
-  const options = group.entries
-    .filter(candidate => values.includes(candidate.value))
-    .map(candidate => {
-      const drawn = flow.axis === "row" ? candidate.row : candidate.column;
-      const icon = swap ? (MIRRORED[drawn] ?? drawn) : drawn;
-      return {
-        value: candidate.value,
-        label: candidate.label,
-        icon,
-        ...(candidate.flipped === undefined ? {} : { flipped: true as const }),
-      };
-    });
+  let options: AlignmentOption[];
+  if (cssProperty === "flex-direction") {
+    options = directionOptions(values, flow);
+  } else if (cssProperty === "flex-wrap") {
+    options = WRAPS.filter(option => values.includes(option.value));
+  } else if (Object.hasOwn(GROUPS, cssProperty)) {
+    const group = GROUPS[cssProperty];
+    if (group === undefined) return undefined;
+    options = alignedOptions(group, values, flow);
+  } else {
+    return undefined;
+  }
   const iconed = new Set(options.map(option => option.value));
   return { options, rest: values.filter(value => !iconed.has(value)) };
 }
 
 /**
- * The flow of the container being edited: its own `flex-direction` where the
- * author is editing (this state, this breakpoint), else the nearest wider
- * place it is set (the unstyled state, then the base breakpoint), else a row,
- * which is what CSS lays out when nothing says otherwise.
+ * The flow of the container being edited.
  *
- * @param styles - the node's stored styles
+ * As the canvas lays it out, when the element was measured: that answers for
+ * a class, an intermediate breakpoint and a grid alike, which storage alone
+ * cannot. Otherwise from what the node stores where the author is editing
+ * (this state, this breakpoint), else the nearest wider place, else CSS's
+ * defaults: a row, in no flex container, written left to right.
+ *
+ * @param styles - the node's stored styles, the fallback
  * @param state - the edited state
  * @param breakpoint - the edited breakpoint
- * @param rtl - whether the element's inline direction is right to left
+ * @param measured - the element's computed axes and layout, when known
  */
 export function flowOf(
   styles: NodeStyles | undefined,
   state: StyleState,
   breakpoint: string,
-  rtl: boolean
+  measured: SideOrientation | undefined
 ): Flow {
-  const at = (where: StyleState, tier: string) =>
-    readStyleValue(styles, {
-      state: where,
-      breakpoint: tier,
-      property: "flexDirection",
-      path: [],
-    });
-  const stored =
-    at(state, breakpoint) ??
-    at("base", breakpoint) ??
-    at(state, BASE_BREAKPOINT) ??
-    at("base", BASE_BREAKPOINT);
-  const direction = typeof stored === "string" ? stored : "row";
+  const at = (property: string) => {
+    const read = (where: StyleState, tier: string) =>
+      readStyleValue(styles, {
+        state: where,
+        breakpoint: tier,
+        property,
+        path: [],
+      });
+    const value =
+      read(state, breakpoint) ??
+      read("base", breakpoint) ??
+      read(state, BASE_BREAKPOINT) ??
+      read("base", BASE_BREAKPOINT);
+    return typeof value === "string" ? value : undefined;
+  };
+  const display = measured?.display ?? at("display") ?? "";
   return {
-    axis: direction.startsWith("column") ? "column" : "row",
-    reversed: direction.endsWith("-reverse"),
-    rtl,
+    writingMode: measured?.writingMode ?? "horizontal-tb",
+    rtl: measured?.direction === "rtl",
+    flex: display === "flex" || display === "inline-flex",
+    direction: measured?.flexDirection ?? at("flexDirection") ?? "row",
+    wrapReversed: (measured?.flexWrap ?? at("flexWrap")) === "wrap-reverse",
   };
 }

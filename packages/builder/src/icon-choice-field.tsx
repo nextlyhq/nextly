@@ -55,9 +55,11 @@ import {
   ArrowUp,
   Baseline,
   Circle,
+  MoreHorizontal,
   StretchHorizontal,
   StretchVertical,
   WrapText,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -155,74 +157,121 @@ export function IconChoiceField({
     choose(target);
   };
 
+  // A refused value marks every control, so whichever is focused says so.
+  const invalid = describedBy === undefined ? undefined : true;
+  // A stored spelling neither the icons nor the list carry (the engine
+  // accepts "inherit" and other spellings): listed first in More, as stored,
+  // so an active declaration never reads as unset.
+  const unknown =
+    current !== undefined && chosen === -1 && !group.rest.includes(current)
+      ? current
+      : undefined;
+  const more = unknown === undefined ? group.rest : [unknown, ...group.rest];
+
   return (
-    <div className="nx-icon-choice">
-      <TooltipProvider delayDuration={300}>
-        <div
-          id={id}
-          role="radiogroup"
-          aria-labelledby={labelledBy}
-          aria-describedby={describedBy}
-          className="nx-icon-choice__group"
-        >
-          {options.map((option, index) => {
-            const checked = index === chosen;
-            const Icon = ICONS[option.icon] ?? Circle;
-            return (
-              <Tooltip key={option.value}>
-                <TooltipTrigger asChild>
-                  <button
-                    ref={button => {
-                      buttons.current[index] = button;
-                    }}
-                    type="button"
-                    role="radio"
-                    aria-checked={checked}
-                    aria-label={option.label}
-                    // One stop for the group: the chosen icon, else the first.
-                    tabIndex={index === Math.max(chosen, 0) ? 0 : -1}
-                    data-icon={option.icon}
-                    className="nx-icon-choice__option"
-                    onClick={() => onCommit(checked ? null : option.value)}
-                    onKeyDown={event => onKeyDown(event, index)}
-                  >
-                    <Icon
-                      size={16}
-                      aria-hidden="true"
-                      {...(option.flipped === true
-                        ? { className: "nx-icon-choice__flipped" }
-                        : {})}
-                    />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>{option.label}</TooltipContent>
-              </Tooltip>
-            );
-          })}
+    <TooltipProvider delayDuration={300}>
+      <div className="nx-icon-choice">
+        {/* One strip: the icons, then More as its last segment. */}
+        <div className="nx-icon-choice__strip">
+          <div
+            id={id}
+            role="radiogroup"
+            aria-labelledby={labelledBy}
+            aria-describedby={describedBy}
+            className="nx-icon-choice__group"
+          >
+            {options.map((option, index) => {
+              const checked = index === chosen;
+              const Icon = ICONS[option.icon] ?? Circle;
+              return (
+                <Tooltip key={option.value}>
+                  <TooltipTrigger asChild>
+                    <button
+                      ref={button => {
+                        buttons.current[index] = button;
+                      }}
+                      type="button"
+                      role="radio"
+                      aria-checked={checked}
+                      aria-label={option.label}
+                      aria-invalid={invalid}
+                      // One stop for the group: the chosen icon, else the first.
+                      tabIndex={index === Math.max(chosen, 0) ? 0 : -1}
+                      data-icon={option.icon}
+                      className="nx-icon-choice__option"
+                      onClick={() => onCommit(checked ? null : option.value)}
+                      onKeyDown={event => onKeyDown(event, index)}
+                    >
+                      <Icon
+                        size={16}
+                        aria-hidden="true"
+                        {...(iconClass(option) === undefined
+                          ? {}
+                          : { className: iconClass(option) })}
+                      />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{option.label}</TooltipContent>
+                </Tooltip>
+              );
+            })}
+          </div>
+          {more.length === 0 ? null : (
+            <OtherValues
+              values={more}
+              current={current}
+              actionName={actionName}
+              describedBy={describedBy}
+              onCommit={onCommit}
+            />
+          )}
         </div>
-      </TooltipProvider>
-      {group.rest.length === 0 ? null : (
-        <OtherValues
-          values={group.rest}
-          current={current}
-          actionName={actionName}
-          onCommit={onCommit}
-        />
-      )}
-    </div>
+        {/* Clearing at the row's end while a value is set: an icon still
+            chosen can be pressed again, a value in More cannot. */}
+        {current === undefined ? null : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="nx-icon-choice__clear"
+                aria-label={`Clear ${actionName}`}
+                onClick={() => onCommit(null)}
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Clear</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    </TooltipProvider>
   );
 }
 
-/** The values the icons do not draw, as a list beside them. */
+/** The class an icon is drawn with: turned upside down, or a quarter. */
+function iconClass(
+  option: AlignmentGroup["options"][number]
+): string | undefined {
+  if (option.flipped === true) return "nx-icon-choice__flipped";
+  if (option.rotated === true) return "nx-icon-choice__rotated";
+  return undefined;
+}
+
+/**
+ * The values the icons do not draw, as the strip's last segment: "⋯" until one
+ * of them is the value, then that value's own spelling.
+ */
 function OtherValues({
   values,
   current,
   actionName,
+  describedBy,
   onCommit,
 }: {
   values: readonly string[];
   current: string | undefined;
   actionName: string;
+  describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const value =
@@ -232,8 +281,12 @@ function OtherValues({
       <SelectTrigger
         className="nx-icon-choice__more"
         aria-label={`More ${actionName} values`}
+        aria-describedby={describedBy}
+        aria-invalid={describedBy === undefined ? undefined : true}
       >
-        <SelectValue placeholder="More" />
+        <SelectValue
+          placeholder={<MoreHorizontal size={16} aria-hidden="true" />}
+        />
       </SelectTrigger>
       <SelectContent>
         {values.map(other => (

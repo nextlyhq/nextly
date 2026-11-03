@@ -74,6 +74,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import { X } from "lucide-react";
 import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
@@ -83,13 +84,13 @@ import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
-import { IconChoiceField } from "./icon-choice-field";
 import {
   FontChoicesContext,
   FontFamilyField,
   fontFamilyShowable,
   type FontChoices,
 } from "./font-family-field";
+import { IconChoiceField } from "./icon-choice-field";
 import {
   designIsWritable,
   designReadOnlyReason,
@@ -1477,7 +1478,7 @@ function StylePropertyFields({
           findNode(editor.document.nodes, nodeId)?.styles,
           state,
           breakpoint,
-          orientation?.direction === "rtl"
+          orientation
         )}
       >
         {/* A folded union's one control, read where the value field is drawn;
@@ -2679,8 +2680,11 @@ function SelectField({
           type="button"
           onClick={() => onCommit(null)}
           aria-label={`Clear ${actionName}`}
+          title="Clear"
         >
-          Clear
+          {/* An icon, not the word: beside a list in a narrow column, the
+              word ran to the panel's edge. */}
+          <X size={14} aria-hidden="true" />
         </button>
       )}
     </div>
@@ -3960,11 +3964,13 @@ function ContrastNote({
   );
 }
 
-/** The edited container's flow; a row until a property says otherwise. */
+/** The edited container's flow; CSS's defaults until it is measured or read. */
 const AlignmentFlow = React.createContext<Flow>({
-  axis: "row",
-  reversed: false,
+  writingMode: "horizontal-tb",
   rtl: false,
+  flex: false,
+  direction: "row",
+  wrapReversed: false,
 });
 
 /**
