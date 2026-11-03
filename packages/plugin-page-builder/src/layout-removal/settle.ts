@@ -77,7 +77,9 @@ export type SettleOutcome =
   /** A promotion raced an unpublish: the default repair puts the default right. */
   | "left-to-repair"
   /** Another run restored it, or the default moved on meanwhile. */
-  | "moved-on";
+  | "moved-on"
+  /** The scan after the write could not read every page: left to the sweep. */
+  | "unchecked";
 
 /** What the check after the write needs beyond a restore. */
 export type SettleDeps = RestoreDeps & {
@@ -163,11 +165,15 @@ async function clearOne(
  * since no write changes it without publishing its draft. Never throws: a page
  * that cannot be cleared is logged, and the page's own after-write look, or the
  * site default it draws, covers it.
+ *
+ * Answers the pages whose live row names the Layout, and whether the scan
+ * read every page: one that did not (a page still there that could not be
+ * read, or a scan that failed) leaves the removal for the sweep to try again.
  */
 async function clearPagesLeftOnIt(
   deps: SettleDeps,
   removal: LayoutRemoval
-): Promise<PageReference[]> {
+): Promise<{ live: PageReference[]; complete: boolean }> {
   const live: PageReference[] = [];
   try {
     const scan = await scanLayoutReferences({
@@ -192,16 +198,23 @@ async function clearPagesLeftOnIt(
         );
       }
     }
+    if (!scan.complete) {
+      deps.warn(
+        "[page-builder] the check after a Layout removal could not read every page; the removal is kept and the sweep will try again",
+        { layoutId: removal.layoutId, unread: [...scan.unread] }
+      );
+    }
+    return { live, complete: scan.complete };
   } catch (error) {
     deps.warn(
-      "[page-builder] the pages a Layout removal left could not all be checked",
+      "[page-builder] the pages a Layout removal left could not all be checked; the removal is kept and the sweep will try again",
       {
         layoutId: removal.layoutId,
         error: error instanceof Error ? error.message : String(error),
       }
     );
+    return { live, complete: false };
   }
-  return live;
 }
 
 /**
@@ -219,8 +232,11 @@ export async function settleRemoval(
   deps: SettleDeps,
   removal: LayoutRemoval
 ): Promise<SettledRemoval> {
-  const live = await clearPagesLeftOnIt(deps, removal);
-  return { outcome: await settleDefault(deps, removal), live };
+  const cleared = await clearPagesLeftOnIt(deps, removal);
+  // Not settled while a page went unread: the row and its copy stay, and the
+  // sweep runs this check again.
+  if (!cleared.complete) return { outcome: "unchecked", live: cleared.live };
+  return { outcome: await settleDefault(deps, removal), live: cleared.live };
 }
 
 /** The default half of the check after the write. */

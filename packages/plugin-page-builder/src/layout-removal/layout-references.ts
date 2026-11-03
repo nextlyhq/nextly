@@ -63,10 +63,15 @@ export interface PageReference {
 
 /** What one scan found. */
 export interface ReferenceScan {
-  /** One entry per page, in the order found. */
+  /** One entry per page still there, in the order found. */
   readonly references: readonly PageReference[];
-  /** False when the budget ran out before every page was read. */
+  /**
+   * False when the budget ran out before every page was read, or a page still
+   * there could not be read.
+   */
   readonly complete: boolean;
+  /** The pages still there whose working draft could not be read. */
+  readonly unread: readonly string[];
 }
 
 /** A row's string field, or the empty string. */
@@ -96,18 +101,62 @@ export async function confirmedGone(
   id: string
 ): Promise<boolean> {
   try {
+    return !(await existingIds(nextly, pages, [id])).has(id);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Which of `ids` are pages that exist now, listed as the system asking for
+ * nothing but their ids, in chunks ({@link idChunks}). The one existence check
+ * a scan and a by-id read both use. Raises when a listing fails.
+ */
+async function existingIds(
+  nextly: Pick<Nextly, "find">,
+  pages: string,
+  ids: readonly string[]
+): Promise<Set<string>> {
+  const there = new Set<string>();
+  for (const chunk of idChunks(ids)) {
     const found = await nextly.find({
       collection: pages,
-      where: { id: { equals: id } },
+      where: { id: { in: chunk } },
       status: "all",
-      limit: 1,
+      limit: chunk.length,
       depth: 0,
       select: { id: true },
       overrideAccess: true,
     });
-    return found.items.length === 0;
+    for (const row of found.items) {
+      const id = relationId(row);
+      if (id !== null) there.add(id);
+    }
+  }
+  return there;
+}
+
+/**
+ * The pages `found` that still exist: a page listed as naming the Layout and
+ * deleted since names nothing. When the check itself fails every page is kept,
+ * so a fault never lets a removal through.
+ */
+async function stillThere(
+  nextly: Pick<Nextly, "find">,
+  pages: string,
+  found: ReadonlyMap<string, PageReference>
+): Promise<PageReference[]> {
+  const references = [...found.values()];
+  if (references.length === 0) return references;
+  try {
+    const there = await existingIds(
+      nextly,
+      pages,
+      references.map(reference => reference.id)
+    );
+    return references.filter(reference => there.has(reference.id));
   } catch {
-    return false;
+    return references;
   }
 }
 
@@ -151,9 +200,9 @@ async function workingDraftsNaming(
   collection: string,
   pages: readonly { id: string; title: string }[],
   layoutId: string
-): Promise<{ naming: { id: string; title: string }[]; unchecked: boolean }> {
+): Promise<{ naming: { id: string; title: string }[]; unread: string[] }> {
   const naming: { id: string; title: string }[] = [];
-  let unchecked = false;
+  const unread: string[] = [];
   for (let at = 0; at < pages.length; at += DRAFT_READS_AT_ONCE) {
     const batch = pages.slice(at, at + DRAFT_READS_AT_ONCE);
     const drafts = await Promise.all(
@@ -176,8 +225,8 @@ async function workingDraftsNaming(
       )
     );
     drafts.forEach((draft, index) => {
-      if (draft === UNCHECKED) unchecked = true;
       const page = batch[index];
+      if (draft === UNCHECKED && page !== undefined) unread.push(page.id);
       if (
         page !== undefined &&
         isWorkingDraft(draft) &&
@@ -187,7 +236,7 @@ async function workingDraftsNaming(
       }
     });
   }
-  return { naming, unchecked };
+  return { naming, unread };
 }
 
 /**
@@ -266,7 +315,14 @@ export async function scanLayoutReferences(args: {
       return spent >= budget && hasNext ? "stop" : undefined;
     },
   });
-  if (!rowsDone) return { references: [...found.values()], complete: false };
+  const unreadIds: string[] = [];
+  if (!rowsDone) {
+    return {
+      references: await stillThere(nextly, pages, found),
+      complete: false,
+      unread: unreadIds,
+    };
+  }
 
   // Every published page's working draft, read one at a time.
   const draftsDone = await walkPages({
@@ -305,14 +361,21 @@ export async function scanLayoutReferences(args: {
       for (const draft of drafts.naming) {
         found.set(draft.id, { ...draft, place: "draft" });
       }
+      unreadIds.push(...drafts.unread);
       // Incomplete when a row went unread: on this page past the budget, on a
       // page after it, or a page still there whose draft could not be read.
-      return drafts.unchecked || unread > 0 || (spent >= budget && hasNext)
+      return drafts.unread.length > 0 ||
+        unread > 0 ||
+        (spent >= budget && hasNext)
         ? "stop"
         : undefined;
     },
   });
-  return { references: [...found.values()], complete: draftsDone };
+  return {
+    references: await stillThere(nextly, pages, found),
+    complete: draftsDone,
+    unread: unreadIds,
+  };
 }
 
 /**
