@@ -516,6 +516,7 @@ export function CompactDocumentActionBar({
         documentItems={options}
         dangerItems={danger}
         wideMenu
+        menuClassName={COMPACT_MENU_CLASS}
       />
     );
   }
@@ -552,11 +553,14 @@ function DocumentMenu({
   documentItems,
   dangerItems,
   wideMenu,
+  menuClassName,
 }: {
   narrowItems: readonly NarrowMenuItem[];
   documentItems: Bound[];
   dangerItems: Bound[];
   wideMenu: boolean;
+  /** Extra classes for the menu, for a surface with its own density. */
+  menuClassName?: string;
 }) {
   return (
     <DropdownMenu>
@@ -572,7 +576,7 @@ function DocumentMenu({
           <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className={menuClassName}>
         {narrowItems.map(item => (
           <DropdownMenuItem
             key={item.id}

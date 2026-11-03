@@ -4775,14 +4775,15 @@ fieldset.nx-inspector__fields {
   align-items: center;
   justify-content: center;
   min-width: 3.5rem;
-  /* The editor's control height, as every control in the top bar is. */
-  height: var(--nx-builder-control-height);
-  padding: 0 var(--nx-builder-control-padding-x);
+  /* The editor's control height, as every control in the top bar is, with
+     the scale's values as fallbacks for the control drawn on its own. */
+  height: var(--nx-builder-control-height, 1.75rem);
+  padding: 0 var(--nx-builder-control-padding-x, 0.5rem);
   border: 1px solid var(--nx-border);
   border-radius: 0.375rem;
   background: var(--nx-background);
   color: var(--nx-foreground);
-  font-size: var(--nx-builder-font-size);
+  font-size: var(--nx-builder-font-size, 0.75rem);
   /* The digits change as the canvas resizes, and a proportional face makes the
      control shift width while an author is reading it. */
   font-variant-numeric: tabular-nums;

@@ -135,7 +135,9 @@ export function CanvasZoomControl({
   const canZoomIn = !Object.is(writeZoom(zoomIn), writeZoom(zoom));
 
   return (
-    // Each step button and the menu at the editor's control height.
+    // Each step button and the menu at the editor's control height, with the
+    // scale's own values as fallbacks for a page that draws this control
+    // outside the editor, where the density tokens aren't declared.
     <div className="nx-zoom-stepper flex items-center gap-0.5">
       {/*
         A stepper AROUND the menu, not instead of it. The menu names the modes
@@ -152,7 +154,7 @@ export function CanvasZoomControl({
         disabled={!canZoomOut}
         aria-label="Zoom out"
         title="Zoom out"
-        className="focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height)] items-center justify-center rounded disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
+        className="focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height,1.75rem)] items-center justify-center rounded disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
       >
         <Minus className="size-3.5" aria-hidden="true" />
       </button>
@@ -221,7 +223,7 @@ export function CanvasZoomControl({
         disabled={!canZoomIn}
         aria-label="Zoom in"
         title="Zoom in"
-        className="focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height)] items-center justify-center rounded disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
+        className="focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height,1.75rem)] items-center justify-center rounded disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
       >
         <Plus className="size-3.5" aria-hidden="true" />
       </button>
