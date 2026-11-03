@@ -96,12 +96,25 @@ describe("a field's provenance dot", () => {
 });
 
 describe("a jump to another tier's value", () => {
-  it("starts where its control does rather than centred under it", () => {
-    expect(
-      ruleBody(
-        '.nx-style-inspector .nx-inspector__field > [data-action="jump"]'
-      )
-    ).toContain("justify-self: start");
+  it("sits under the label, where every other source is named", () => {
+    // "From H2 defaults" sat under the label and "From Desktop" under the
+    // control, on a row of its own. Under the label, beside a control that
+    // spans both lines, it costs no row.
+    expect(FLAT).toContain(
+      '.nx-style-inspector .nx-inspector__field > [data-action="jump"] { grid-column: 1; grid-row: 2; justify-self: start; }'
+    );
+    expect(FLAT).toContain(
+      '.nx-style-inspector .nx-inspector__field:has(> [data-action="jump"]) > :not(label, [data-action="jump"], .nx-inspector__error) { grid-row: 1 / span 2; }'
+    );
+  });
+
+  it("follows the control again where the row stacks", () => {
+    const narrow = atRuleBodies(
+      "@container nx-inspector-fields (max-width: 17rem)"
+    ).join(" ");
+    expect(narrow).toContain(
+      '.nx-style-inspector .nx-inspector__field:has(> [data-action="jump"]) > :not(label, [data-action="jump"], .nx-inspector__error) { grid-row: auto; }'
+    );
   });
 });
 

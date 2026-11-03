@@ -4422,9 +4422,21 @@ fieldset.nx-inspector__fields {
   grid-column: 2 / -1;
 }
 
-/* The jump starts where its control does, rather than centred under it. */
+/*
+ * A jump to the tier a value comes from names that source ("From Desktop"),
+ * so it sits where every other source is named: under the label. The
+ * control and its reset span both lines beside it, so it costs no row.
+ */
 .nx-style-inspector .nx-inspector__field > [data-action="jump"] {
+  grid-column: 1;
+  grid-row: 2;
   justify-self: start;
+}
+
+.nx-style-inspector
+  .nx-inspector__field:has(> [data-action="jump"])
+  > :not(label, [data-action="jump"], .nx-inspector__error) {
+  grid-row: 1 / span 2;
 }
 
 /*
@@ -4463,6 +4475,17 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
   .nx-style-inspector .nx-inspector__field > * {
     grid-column: 1;
+  }
+
+  /* Stacked, the jump follows its control again, across the row. */
+  .nx-style-inspector
+    .nx-inspector__field:has(> [data-action="jump"])
+    > :not(label, [data-action="jump"], .nx-inspector__error) {
+    grid-row: auto;
+  }
+
+  .nx-style-inspector .nx-inspector__field > [data-action="jump"] {
+    grid-row: auto;
   }
 
   .nx-style-inspector .nx-inspector__field > label,

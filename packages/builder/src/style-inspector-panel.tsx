@@ -169,6 +169,8 @@ import {
   type StyleProvenance,
 } from "./style-provenance";
 import {
+  isLogicalSide,
+  physicalCornerName,
   physicalSideName,
   sideBoxFor,
   sideOf,
@@ -1552,9 +1554,7 @@ function StylePropertyFields({
                     side={sideOf(box, control)}
                     label={
                       many
-                        ? fieldLabel(
-                            control.path[control.path.length - 1] ?? ""
-                          )
+                        ? positionLabel(control, orientation)
                         : property.label
                     }
                     summary={many ? undefined : property.summary}
@@ -1606,6 +1606,31 @@ function placeChoices(
       inline.filter(choice => choice.path.join(".") === path.join(".")),
     toggled,
   };
+}
+
+/** Axes to name sides by when the canvas has not said: horizontal, left to right. */
+const ASSUMED_AXES: SideOrientation = {
+  writingMode: "horizontal-tb",
+  direction: "ltr",
+};
+
+/**
+ * A control's name within its property: a side or a corner in plain words
+ * ("Top", "Bottom left"), as the element's axes place it, rather than CSS's
+ * logical words ("Block start", "End start"); any other position by its key.
+ */
+function positionLabel(
+  control: StyleControl,
+  orientation: SideOrientation | undefined
+): string {
+  const key = control.path[control.path.length - 1] ?? "";
+  const axes = orientation ?? ASSUMED_AXES;
+  const plain =
+    (isLogicalSide(key) ? physicalSideName(key, axes) : undefined) ??
+    physicalCornerName(key, axes);
+  return plain === undefined
+    ? fieldLabel(key)
+    : plain.charAt(0).toUpperCase() + plain.slice(1);
 }
 
 /** How an author says which form they mean to write a value in. */
@@ -4847,6 +4872,8 @@ const FIXED_PLACEHOLDER: Partial<Record<StyleLeaf["kind"], string>> = {
 function dimensionHint(
   leaf: Extract<StyleLeaf, { kind: "dimension" }>
 ): string {
+  // A line's width as a line is usually drawn: "16px" read as a heavy frame.
+  if (/^(border|outline)(-.+)?-width$/.test(leaf.cssProperty)) return "1px";
   return leaf.allowPercentage === true ? "16px or 50%" : "16px";
 }
 
