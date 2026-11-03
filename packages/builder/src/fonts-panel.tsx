@@ -37,6 +37,7 @@ import {
 import { Plus, Search } from "lucide-react";
 import * as React from "react";
 
+import { EDITOR_WORDS } from "./editor-words";
 import { FontCatalogueView, type FontCatalogue } from "./font-catalogue-view";
 import {
   cutName,
@@ -89,6 +90,17 @@ export interface FontsPanelProps {
   onRemoveFamily?: (family: SiteFamily) => Promise<string | undefined>;
   /** The Google Fonts catalogue, when the host offers one. */
   catalogue?: FontCatalogue;
+}
+
+/**
+ * The tab's place names inside a sentence, from the editor's one catalogue of
+ * them, so a rename of the tab moves its sentences with it.
+ */
+function words(): { fonts: string; variables: string } {
+  return {
+    fonts: EDITOR_WORDS.fonts.toLowerCase(),
+    variables: EDITOR_WORDS.variables.toLowerCase(),
+  };
 }
 
 /** What the tab shows: the site's fonts, or the catalogue in their place. */
@@ -192,6 +204,7 @@ function FontsList({
       labelOf(row).toLowerCase().includes(needle) ||
       row.token.name.toLowerCase().includes(needle)
   );
+  const { fonts } = words();
   const openUpload =
     upload === undefined ? undefined : () => setUploading(true);
 
@@ -205,8 +218,8 @@ function FontsList({
         <Input
           ref={search}
           type="search"
-          aria-label="Search fonts"
-          placeholder="Search fonts"
+          aria-label={`Search ${fonts}`}
+          placeholder={`Search ${fonts}`}
           value={query}
           onChange={event => setQuery(event.target.value)}
         />
@@ -214,7 +227,7 @@ function FontsList({
       <div className="nx-vars__body">
         {readOnly ? (
           <p className="nx-vars__note">
-            You can view the site&rsquo;s fonts but not change them.
+            {`You can view the site’s ${fonts} but not change them.`}
           </p>
         ) : null}
         <Popover open={uploading} onOpenChange={setUploading} modal>
@@ -284,6 +297,7 @@ function Unread({
   absence: "pending" | "failed";
 }): React.JSX.Element {
   const failed = absence === "failed";
+  const { fonts } = words();
   return (
     <div className="nx-vars nx-fonts">
       <div className="nx-vars__body">
@@ -292,8 +306,8 @@ function Unread({
           role={failed ? "alert" : "status"}
         >
           {failed
-            ? "This site’s fonts could not be read, so none can be shown or changed. Reload to try again."
-            : "Reading this site’s fonts…"}
+            ? `This site’s ${fonts} could not be read, so none can be shown or changed. Reload to try again.`
+            : `Reading this site’s ${fonts}…`}
         </p>
       </div>
     </div>
@@ -374,10 +388,11 @@ function SiteFamilies({
   onUpload: (() => void) | undefined;
 }): React.JSX.Element {
   const [openKey, setOpenKey] = React.useState<string | null>(null);
+  const { fonts } = words();
   if (families.length === 0 && searching) {
     return (
       <p className="nx-vars__empty">
-        No fonts on this site match this search.
+        {`No ${fonts} on this site match this search.`}
         {onBrowse === undefined ? null : (
           <button
             type="button"
@@ -393,7 +408,7 @@ function SiteFamilies({
   if (families.length === 0) {
     return (
       <p className="nx-vars__empty">
-        No fonts on this site yet, so pages use the system font.
+        {`No ${fonts} on this site yet, so pages use the system font.`}
         {onBrowse === undefined ? null : (
           <button
             type="button"
@@ -652,12 +667,12 @@ function FontVariables({
     <section className="nx-vars__group" aria-labelledby="nx-fonts-variables">
       <div className="nx-vars__group-head">
         <h3 className="nx-vars__group-name" id="nx-fonts-variables">
-          Font variables
+          {`Font ${words().variables}`}
         </h3>
       </div>
       {rows.length === 0 ? (
         <p className="nx-vars__empty">
-          No font variables yet. Variables creates them.
+          {`No font ${words().variables} yet. ${EDITOR_WORDS.variables} creates them.`}
         </p>
       ) : (
         <ul className="nx-vars__list">
@@ -729,7 +744,7 @@ function VariableRow({
                 className="nx-vars__link"
                 onClick={onOpenTokens}
               >
-                Edit in Variables
+                {`Edit in ${EDITOR_WORDS.variables}`}
               </button>
             </>
           )}

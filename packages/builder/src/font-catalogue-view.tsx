@@ -24,6 +24,7 @@ import {
 import { ArrowLeft, Search } from "lucide-react";
 import * as React from "react";
 
+import { EDITOR_WORDS } from "./editor-words";
 import { ChoiceMenu } from "./font-choice-menu";
 import {
   licenceName,
@@ -199,11 +200,11 @@ export function FontCatalogueView({
           variant="ghost"
           size="sm"
           className="nx-fonts-catalogue__back"
-          aria-label="Back to this site’s fonts"
+          aria-label={`Back to this site’s ${EDITOR_WORDS.fonts.toLowerCase()}`}
           onClick={onBack}
         >
           <ArrowLeft aria-hidden="true" size={14} />
-          Fonts
+          {EDITOR_WORDS.fonts}
         </Button>
         <h3 className="nx-fonts-catalogue__title">Google Fonts</h3>
       </div>
