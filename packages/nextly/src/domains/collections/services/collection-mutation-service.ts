@@ -2490,6 +2490,34 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * A write's top-level payload as its caller sent it, for the validators of
+   * a field inside a field-group instance, which `PluginFieldValidateArgs.data`
+   * promises the write: the processed data with what the write lifted out of
+   * it put back, its relations and field groups (`lifted`) and, for a
+   * translation, the language's values and status, which the language split
+   * moves to the companion row.
+   */
+  private writtenPayload(
+    finalData: Record<string, unknown>,
+    lifted: ReadonlyArray<Record<string, unknown>>,
+    localized:
+      | {
+          localizedFieldValues: Record<string, unknown>;
+          companionData: Record<string, unknown>;
+        }
+      | null
+      | undefined
+  ): Record<string, unknown> {
+    const status = localized?.companionData._status;
+    return Object.assign(
+      { ...finalData },
+      localized?.localizedFieldValues,
+      typeof status === "string" ? { status } : {},
+      ...lifted
+    );
+  }
+
+  /**
    * The entry write a validation is for, reading on the connection this write
    * uses: `tx` inside a transaction, the pool before one opens.
    *
@@ -6775,8 +6803,12 @@ export class CollectionMutationService extends BaseService {
               entry.id as string,
               tx,
               params.locale,
-              // The payload as written, before its relations were lifted out of it.
-              { ...finalData, ...manyToManyData, ...componentFieldData }
+              // The payload as sent, with what the write lifted out of it put back.
+              this.writtenPayload(
+                finalData,
+                [manyToManyData, componentFieldData],
+                localizedWrite
+              )
             ),
           });
         }
@@ -11645,8 +11677,12 @@ export class CollectionMutationService extends BaseService {
                   params.entryId,
                   tx,
                   params.locale,
-                  // The payload as written, before its relations were lifted out of it.
-                  { ...finalData, ...manyToManyData, ...attemptComponentData }
+                  // The payload as sent, with what the write lifted out of it put back.
+                  this.writtenPayload(
+                    finalData,
+                    [manyToManyData, attemptComponentData],
+                    localizedUpdate
+                  )
                 ),
               }
             );
@@ -15075,8 +15111,12 @@ export class CollectionMutationService extends BaseService {
             (entry as { id: string }).id,
             tx,
             localizedWrite?.writeLocale,
-            // The payload as written, before its relations were lifted out of it.
-            { ...finalData, ...manyToManyData, ...componentFieldData }
+            // The payload as sent, with what the write lifted out of it put back.
+            this.writtenPayload(
+              finalData,
+              [manyToManyData, componentFieldData],
+              localizedWrite
+            )
           ),
         });
         return entry;
@@ -16211,8 +16251,12 @@ export class CollectionMutationService extends BaseService {
             entryId,
             tx,
             localizedUpdate?.writeLocale,
-            // The payload as written, before its relations were lifted out of it.
-            { ...finalData, ...manyToManyData, ...componentFieldData }
+            // The payload as sent, with what the write lifted out of it put back.
+            this.writtenPayload(
+              finalData,
+              [manyToManyData, componentFieldData],
+              localizedUpdate
+            )
           ),
         });
         // Which media items the entry uses now, from what this update stored.

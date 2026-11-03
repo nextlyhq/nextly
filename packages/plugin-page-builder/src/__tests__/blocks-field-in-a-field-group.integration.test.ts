@@ -144,6 +144,45 @@ async function refusalCodes(write: Promise<unknown>): Promise<string[]> {
   }
 }
 
+/**
+ * A component published two deep, with a pending draft one deep: which form a
+ * save is judged against decides whether a page placing it fits.
+ */
+async function seedSwing(t: TestNextly): Promise<string> {
+  const swinging = await t.nextly.create({
+    collection: COMPONENTS_SLUG,
+    data: {
+      title: "swing",
+      slug: "swing",
+      status: "published",
+      content: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [box("s1", [heading("s2")])],
+      },
+    },
+    overrideAccess: true,
+  });
+  const id = String(swinging.item.id);
+  await t.nextly.update({
+    collection: COMPONENTS_SLUG,
+    id,
+    data: {
+      content: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [heading("s1")],
+      },
+    },
+    overrideAccess: true,
+  });
+  return id;
+}
+
+/** Three boxes deep around a placing: past the limit only in its published form. */
+const pagePlacing = (componentId: string) =>
+  pageOf([box("p1", [box("p2", [box("p3", [placing("i1", componentId)])])])]);
+
 describe.each(getConfiguredTestDialects())(
   "a blocks field inside a field-group instance (%s)",
   (dialect: TestDialect) => {
@@ -214,35 +253,7 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       deep = String(created.item.id);
-      // Published two deep, with a pending draft one deep: which form a save
-      // is judged against decides whether a page placing it fits.
-      const swinging = await t.nextly.create({
-        collection: COMPONENTS_SLUG,
-        data: {
-          title: "swing",
-          slug: "swing",
-          status: "published",
-          content: {
-            formatVersion: DOCUMENT_FORMAT_VERSION,
-            kind: "component",
-            nodes: [box("s1", [heading("s2")])],
-          },
-        },
-        overrideAccess: true,
-      });
-      swing = String(swinging.item.id);
-      await t.nextly.update({
-        collection: COMPONENTS_SLUG,
-        id: swing,
-        data: {
-          content: {
-            formatVersion: DOCUMENT_FORMAT_VERSION,
-            kind: "component",
-            nodes: [heading("s1")],
-          },
-        },
-        overrideAccess: true,
-      });
+      swing = await seedSwing(t);
     });
 
     afterAll(async () => {
@@ -275,8 +286,7 @@ describe.each(getConfiguredTestDialects())(
     it("judges a publish against the published forms of the components it places", async () => {
       // Three boxes deep: the swing's published form (two deep) passes the
       // limit, its pending draft (one deep) ends at it.
-      const page = () =>
-        pageOf([box("p1", [box("p2", [box("p3", [placing("i1", swing)])])])]);
+      const page = () => pagePlacing(swing);
       const save = (status: string) =>
         t.nextly.create({
           collection: "posters" as never,
@@ -425,6 +435,71 @@ describe.each(getConfiguredTestDialects())(
       // Brought back to its starting design, it saves.
       card.slots!.body![0]!.props.align = "left";
       expect(await refusalCodes(save())).toEqual([]);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a blocks field inside a field-group instance, in a translation (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    let swing = "";
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } })],
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "herobox",
+            fields: [text({ name: "title" }), blocks("content")],
+          }),
+        ],
+        collections: [
+          {
+            slug: "billboards",
+            status: true,
+            localized: true,
+            fields: [
+              { name: "title", type: "text", localized: true },
+              fieldGroup({ name: "hero", component: "herobox" }),
+            ],
+          } as never,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      swing = await seedSwing(t);
+    });
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("judges a German publish against the published forms of the components it places", async () => {
+      const created = await t.nextly.create({
+        collection: "billboards" as never,
+        data: { title: "Board", status: "draft" } as never,
+        overrideAccess: true,
+      });
+      const id = String(created.item.id);
+      // In German, the status this write leaves is the language's own, kept
+      // apart from the row; the field group's validators are still told it.
+      const save = (status: string) =>
+        t.nextly.update({
+          collection: "billboards" as never,
+          id,
+          locale: "de",
+          data: {
+            title: "Tafel",
+            status,
+            hero: { content: pagePlacing(swing) },
+          } as never,
+          overrideAccess: true,
+        });
+
+      expect(await refusalCodes(save("published"))).toEqual(["depth-exceeded"]);
+      // CONTROL: a German draft is judged against the drafts alone, and fits.
+      expect(await refusalCodes(save("draft"))).toEqual([]);
     });
   }
 );
