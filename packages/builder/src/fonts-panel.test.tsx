@@ -575,6 +575,9 @@ describe("uploading a font file", () => {
     fireEvent.change(screen.getByLabelText("From"), {
       target: { value: "300" },
     });
+    fireEvent.change(screen.getByLabelText("To"), {
+      target: { value: "700" },
+    });
     confirmRights();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Upload" }));

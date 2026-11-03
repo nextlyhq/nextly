@@ -383,12 +383,14 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
         const read = await readCatalogue(ctx);
         const total = read.families.length;
         // Every family on one page: the editor filters and pages the list
-        // itself, so it reads the catalogue once.
+        // itself, so it reads the catalogue once. An empty catalogue has no
+        // page, as any empty list reports, and the page size stays usable.
+        const limit = Math.max(total, 1);
         const meta: FontCatalogueList["meta"] = {
           total,
           page: 1,
-          limit: total,
-          totalPages: 1,
+          limit,
+          totalPages: Math.ceil(total / limit),
           hasNext: false,
           hasPrev: false,
           previewBase: read.previewBase,
@@ -454,7 +456,9 @@ async function bodyOf(req: Request): Promise<unknown> {
     if (chunk.done) break;
     total += chunk.value.byteLength;
     if (total > MAX_ADD_BODY_BYTES) {
-      await reader.cancel().catch(() => undefined);
+      // Cancelled without waiting: the body may be one half of a copy, whose
+      // cancel settles only once the other half is cancelled too.
+      void reader.cancel().catch(() => undefined);
       throw bodyTooLarge();
     }
     chunks.push(chunk.value);

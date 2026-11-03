@@ -685,19 +685,20 @@ describe.each(getConfiguredTestDialects())(
           controller.enqueue(new TextEncoder().encode(" ".repeat(64 * 1024)));
         },
       });
-      const answer = addRoute?.handler(
-        new Request(`${ORIGIN}/x`, {
-          method: "POST",
-          body: endless,
-          duplex: "half",
-        } as RequestInit),
-        {
-          self: { collections: {}, singles: {} },
-          user: null,
-          caller: { can: async () => true },
-          fetch: (input, init) => fetch(input, init),
-        }
-      );
+      const request = new Request(`${ORIGIN}/x`, {
+        method: "POST",
+        body: endless,
+        duplex: "half",
+      } as RequestInit);
+      // Copied first, as a boundary in front of a route may: the copy's half
+      // of the body is never read, so waiting on a cancel would wait forever.
+      void request.clone();
+      const answer = addRoute?.handler(request, {
+        self: { collections: {}, singles: {} },
+        user: null,
+        caller: { can: async () => true },
+        fetch: (input, init) => fetch(input, init),
+      });
       const refusal: unknown = await Promise.race([
         answer?.then(
           () => "answered",
@@ -707,6 +708,23 @@ describe.each(getConfiguredTestDialects())(
       ]);
       expect(NextlyError.isValidation(refusal)).toBe(true);
       expect(catalogue.asked).toEqual([]);
+    });
+
+    it("answers an empty catalogue as a list with no pages", async () => {
+      const t = await boot();
+      const cookie = await designer(t);
+      catalogue.json("/v1/fonts?type=google", []);
+      const read = await call(
+        "GET",
+        plugin("site", "fonts", "catalogue"),
+        cookie
+      );
+      expect(read.status).toBe(200);
+      expect(read.body).toMatchObject({
+        items: [],
+        meta: { total: 0, totalPages: 0, hasNext: false, hasPrev: false },
+      });
+      expect((read.body.meta as { limit: number }).limit).toBeGreaterThan(0);
     });
 
     it("refuses an answer that is not a woff2 file, by its type or by its bytes", async () => {
