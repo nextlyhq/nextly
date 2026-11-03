@@ -228,8 +228,25 @@ describe("a side's value fits its cell", () => {
 
   it("sets a value centred in even-width digits, with the cell's edge to itself", () => {
     const value = ruleBody(`${BOX} input[data-slot="input"]`);
-    expect(value).toContain("padding-inline: 0.25rem");
+    // 2px each side: at 12px "0.95rem" is about 46px, and the spacing box
+    // has room for cells of about 53px, nested two rings deep.
+    expect(value).toContain("padding-inline: 0.125rem");
     expect(value).toContain("text-align: center");
     expect(value).toContain("font-variant-numeric: tabular-nums");
+  });
+});
+
+describe("the spacing box's rings give their sides the room", () => {
+  it("sizes both rings' side columns for a seven-character value", () => {
+    // The margin ring's centre is the padding ring, at its own width; the
+    // padding ring's centre is a small square. Both rings' side cells are
+    // 3.3rem, which "0.95rem" fits at 12px.
+    expect(ruleBody(`${BOX}[data-ring="margin"]`)).toContain(
+      "grid-template-columns: minmax(3.3rem, 1fr) auto minmax(3.3rem, 1fr)"
+    );
+    expect(ruleBody(`${BOX}[data-ring="padding"]`)).toContain(
+      // As the formatter wraps it.
+      "grid-template-columns: minmax(3.3rem, 1fr) minmax(1rem, auto) minmax( 3.3rem, 1fr )"
+    );
   });
 });

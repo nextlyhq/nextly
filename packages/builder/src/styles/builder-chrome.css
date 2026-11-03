@@ -2430,8 +2430,11 @@
   /* Given up here and taken back by the first button, so a seam is one border. */
   border-inline-start-width: 0;
   background: var(--nx-background);
-  color: var(--nx-foreground);
+  /* Muted and lighter than the chosen one, so the choice is told by its words
+     as well as its fill. */
+  color: var(--nx-muted-foreground);
   font: inherit;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -2462,10 +2465,22 @@
  * state a screen reader reads, so styling from that attribute keeps what is
  * seen and what is announced reading off one value.
  */
+/*
+ * The chosen one in the panel's text colour at 600, beside the others' muted
+ * 500: the accent fill alone measured about 1.7:1 against the unselected
+ * background in dark, under 3:1.
+ */
 .nx-style-inspector__toggle > button[aria-pressed="true"],
 .nx-style-inspector__toggle > button[aria-checked="true"] {
   background: var(--nx-accent);
-  color: var(--nx-accent-foreground);
+  color: var(--nx-foreground);
+  font-weight: 600;
+}
+
+/* A step lighter in dark, so its fill is told from the panel's black too. */
+.dark .nx-style-inspector__toggle > button[aria-pressed="true"],
+.dark .nx-style-inspector__toggle > button[aria-checked="true"] {
+  background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground));
 }
 
 /*
@@ -6097,11 +6112,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * both and reads better with them on one line.
  */
 /*
- * A side's value centred in even-width digits, the cell's padding kept small,
- * so values up to seven characters ("0.95rem") fit a 3.5rem cell whole.
+ * A side's value centred in even-width digits, the cell's padding kept to
+ * 2px a side, so values up to seven characters ("0.95rem", about 46px at
+ * 12px) fit a 3.3rem cell whole.
  */
 .nx-style-inspector__side-box input[data-slot="input"] {
-  padding-inline: 0.25rem;
+  padding-inline: 0.125rem;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -6157,8 +6173,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   border-radius: var(--radius-md);
 }
 
+/*
+ * Both rings' side cells are 3.3rem, which a seven-character value
+ * ("0.95rem") fits at 12px: the margin ring's centre is the padding ring at
+ * its own width, the padding ring's a small square, so the box's width goes
+ * to the sides.
+ */
 .nx-style-inspector__side-box[data-ring="margin"] {
-  grid-template-columns: minmax(3rem, 1fr) minmax(0, 2.6fr) minmax(3rem, 1fr);
+  grid-template-columns: minmax(3.3rem, 1fr) auto minmax(3.3rem, 1fr);
   border: 1px dashed var(--nx-builder-border);
 }
 
@@ -6167,9 +6189,10 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 .nx-style-inspector__side-box[data-ring="padding"] {
-  /* Equal columns, so its top and bottom sides, in the middle one, have the
-     room its left and right have. */
-  grid-template-columns: repeat(3, minmax(2.75rem, 1fr));
+  grid-template-columns: minmax(3.3rem, 1fr) minmax(1rem, auto) minmax(
+      3.3rem,
+      1fr
+    );
   border: 1px solid var(--nx-builder-border);
   background: var(--nx-builder-surface-raised);
 }
