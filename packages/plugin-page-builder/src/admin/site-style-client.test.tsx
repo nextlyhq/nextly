@@ -105,6 +105,7 @@ const {
   SiteStyleHistoryContext,
   useFontCatalogueClient,
   useSaveSiteStyle,
+  useSaveSpacingMode,
   useSiteStyle,
 } = await import("./site-style-client");
 
@@ -185,6 +186,38 @@ describe("reading the site style", () => {
 
     expect(result.current.pending).toBe(true);
     expect(result.current.siteStyle.breakpoints?.viewport).toHaveLength(2);
+  });
+});
+
+describe("saving the space between blocks", () => {
+  it("writes the model through its route, then reads the style again", async () => {
+    // Reading again is what moves the canvas: it compiles from that read.
+    const { result } = renderHook(() => useSaveSpacingMode());
+    let verdict;
+    await act(async () => {
+      verdict = await result.current.save("classic");
+    });
+    expect(verdict).toEqual({ saved: true });
+    expect(routeWrites).toEqual([
+      {
+        plugin: "@nextlyhq/plugin-page-builder",
+        path: "/site/style/spacing-mode",
+        body: { mode: "classic" },
+      },
+    ]);
+    expect(writes).toEqual([]);
+    expect(refetches).toBe(1);
+  });
+
+  it("answers a refusal in the route's words and reads nothing again", async () => {
+    writeBehaviour = () => Promise.reject(new Error("Not allowed."));
+    const { result } = renderHook(() => useSaveSpacingMode());
+    let verdict;
+    await act(async () => {
+      verdict = await result.current.save("gaps");
+    });
+    expect(verdict).toMatchObject({ saved: false });
+    expect(refetches).toBe(0);
   });
 });
 

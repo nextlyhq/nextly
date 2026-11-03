@@ -15,6 +15,10 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const can = vi.hoisted(() => ({ update: true }));
+const spacing = vi.hoisted(() => ({
+  saved: [] as string[],
+  answer: { saved: true } as { saved: boolean; issue?: string },
+}));
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) =>
@@ -24,6 +28,12 @@ vi.mock("@nextlyhq/plugin-sdk/client", () => ({
 vi.mock("../site-style-client", () => ({
   useSaveSiteStyle: () => ({
     save: vi.fn(() => Promise.resolve({ saved: true, issues: [] })),
+  }),
+  useSaveSpacingMode: () => ({
+    save: (mode: string) => {
+      spacing.saved.push(mode);
+      return Promise.resolve(spacing.answer);
+    },
   }),
   useFontCatalogueClient: () => ({
     load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),
@@ -60,7 +70,13 @@ beforeAll(() => {
  * the Variables tab reading from it. The tab is the panel's own state here,
  * as the shell keeps it.
  */
-function Studio({ start }: { start: string }): React.JSX.Element {
+function Studio({
+  start,
+  spacingMode = "classic",
+}: {
+  start: string;
+  spacingMode?: "classic" | "gaps";
+}): React.JSX.Element {
   const [current, choose] = React.useState<string | null>(start);
   return (
     <DesignPanel
@@ -78,6 +94,7 @@ function Studio({ start }: { start: string }): React.JSX.Element {
           }}
           supplied={undefined}
           pending={false}
+          spacingMode={spacingMode}
         >
           {tabs}
         </TokensStudio>
@@ -134,6 +151,53 @@ describe("the Variables studio", () => {
     expect(
       within(header).getByRole("button", { name: "Import or export" })
     ).toBeTruthy();
+  });
+});
+
+describe("the space between blocks", () => {
+  const classic = () =>
+    screen.getByRole("radio", { name: /From each block’s margins/ });
+  const gaps = () =>
+    screen.getByRole("radio", { name: /From the container’s gap/ });
+
+  it("shows the site's model above the spacing variables", () => {
+    can.update = true;
+    renderStudio();
+    const group = screen.getByRole("radiogroup", {
+      name: "Space between blocks",
+    });
+    expect(group).toBeTruthy();
+    expect((classic() as HTMLInputElement).checked).toBe(true);
+    expect((gaps() as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("saves a choice and shows it at once", async () => {
+    can.update = true;
+    spacing.saved.length = 0;
+    spacing.answer = { saved: true };
+    renderStudio();
+    fireEvent.click(gaps());
+    expect(spacing.saved).toEqual(["gaps"]);
+    expect((gaps() as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("puts the stored model back and says why when the save is refused", async () => {
+    can.update = true;
+    spacing.saved.length = 0;
+    spacing.answer = { saved: false, issue: "Not allowed here." };
+    renderStudio();
+    fireEvent.click(gaps());
+    expect(await screen.findByText("Not allowed here.")).toBeTruthy();
+    expect((classic() as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("offers no other model to a role that may not change the site style", () => {
+    can.update = false;
+    spacing.saved.length = 0;
+    renderStudio();
+    expect((gaps() as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(gaps());
+    expect(spacing.saved).toEqual([]);
   });
 });
 

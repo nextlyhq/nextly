@@ -32,6 +32,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/site-style-client
  */
+import type { SpacingMode } from "@nextlyhq/blocks-engine";
 import {
   apiErrorMessage,
   readPluginRoute,
@@ -51,7 +52,9 @@ import {
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINTS_ROUTE_PATH,
+  SPACING_MODE_ROUTE_PATH,
   type SiteBreakpointsRequest,
+  type SpacingModeResult,
 } from "../library-contract";
 import {
   SITE_FONTS_CATALOGUE_ROUTE_PATH,
@@ -202,6 +205,48 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
  */
 export function refusalWords(reason: unknown, fallback: string): string {
   return apiErrorMessage(reason, fallback);
+}
+
+/** What saving the site's spacing model answers. */
+export interface SpacingModeSave {
+  /** Whether the model is now stored; the refusal's words when it is not. */
+  readonly save: (
+    mode: SpacingMode
+  ) => Promise<{ saved: true } | { saved: false; issue: string }>;
+}
+
+/**
+ * Save the site's spacing model through its route, then read the style again.
+ *
+ * The model lives beside the Single rather than in it, so the Single's own
+ * write path cannot carry it; the editor's style read answers it, and reading
+ * that again is what moves the canvas onto the new model.
+ */
+export function useSaveSpacingMode(): SpacingModeSave {
+  const { refetch } = useStoredSiteStyle();
+  const save = useCallback<SpacingModeSave["save"]>(
+    async mode => {
+      try {
+        await writePluginRoute<SpacingModeResult>({
+          plugin: PAGE_BUILDER_PLUGIN_NAME,
+          path: SPACING_MODE_ROUTE_PATH,
+          body: { mode },
+        });
+        await refetch();
+        return { saved: true };
+      } catch (reason) {
+        return {
+          saved: false,
+          issue: refusalWords(
+            reason,
+            "The space between blocks was not changed."
+          ),
+        };
+      }
+    },
+    [refetch]
+  );
+  return { save };
 }
 
 /**

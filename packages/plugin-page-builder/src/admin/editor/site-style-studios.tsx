@@ -18,6 +18,7 @@ import {
   type FontFaceDef,
   type NamedClass,
   type SiteTokenSet,
+  type SpacingMode,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -61,7 +62,11 @@ import {
   type SiteStyleData,
 } from "../../site-style";
 import { useSharedStylesClient } from "../shared-styles-client";
-import { useFontCatalogueClient, useSaveSiteStyle } from "../site-style-client";
+import {
+  useFontCatalogueClient,
+  useSaveSiteStyle,
+  useSaveSpacingMode,
+} from "../site-style-client";
 import { useShown } from "../use-shown";
 
 import { useDesignHeaderSlot } from "./design-panel";
@@ -164,10 +169,16 @@ export function TokensStudio({
   merged,
   supplied,
   pending,
+  spacingMode,
   children,
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
   merged: SiteTokenSet | undefined;
+  /**
+   * The site's spacing model as the canvas compiles under it, or `undefined`
+   * while the style has not been read, when the choice is not offered.
+   */
+  spacingMode?: SpacingMode;
   /** What the site's own code supplies, which the stored tier layers over. */
   supplied: SiteTokenSet | undefined;
   /** Whether the read is still in flight, as against having failed. */
@@ -211,6 +222,8 @@ export function TokensStudio({
    */
   const [edits, show, shownNow] = useShown<SiteTokenSet | null>(null);
   const [issue, setIssue] = useState<string | undefined>(undefined);
+  // The spacing choice reports a refusal on the same line an edit does.
+  const spacing = useSpacingModeChoice(spacingMode, setIssue);
   /*
    * The last set a save is KNOWN to have stored, and what a refused edit falls
    * back to — not "whatever was on screen before it", which after an earlier
@@ -268,6 +281,7 @@ export function TokensStudio({
     onChange: commit,
     currentTokens,
     header,
+    ...spacing,
   };
 
   return (
@@ -279,6 +293,33 @@ export function TokensStudio({
       {children}
     </VariablesStudio.Provider>
   );
+}
+
+/**
+ * The "Space between blocks" choice: what it shows and what choosing does.
+ *
+ * Shown as chosen at once, then saved; a refusal puts the stored answer back
+ * and says why. The canvas follows once the save has landed and the style is
+ * read again, so it never draws a model the site does not hold.
+ */
+function useSpacingModeChoice(
+  stored: SpacingMode | undefined,
+  report: (issue: string | undefined) => void
+): Pick<TokensPanelProps, "spacingMode" | "onSpacingModeChange"> {
+  const { save } = useSaveSpacingMode();
+  const [chosen, setChosen] = useState<SpacingMode | null>(null);
+  if (stored === undefined) return {};
+  return {
+    spacingMode: chosen ?? stored,
+    onSpacingModeChange: mode => {
+      setChosen(mode);
+      report(undefined);
+      void save(mode).then(result => {
+        setChosen(null);
+        if (!result.saved) report(result.issue);
+      });
+    },
+  };
 }
 
 /** The tokens studio's state, for the Variables tab inside it. */

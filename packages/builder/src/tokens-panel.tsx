@@ -33,6 +33,7 @@ import {
   tokenIdentity,
   type SiteToken,
   type SiteTokenSet,
+  type SpacingMode,
   type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
@@ -61,6 +62,7 @@ import { createPortal } from "react-dom";
 
 import { ShowMore } from "./panel-actions";
 import { usePrefersDark } from "./prefers-dark";
+import { SpacingModeChoice } from "./spacing-mode-choice";
 import { colourHexOf, colourPairOf } from "./style-colour";
 import {
   addVariable,
@@ -122,6 +124,13 @@ export interface TokensPanelProps {
    * the controls, and what an import or export reports, to the host.
    */
   header?: VariablesHeader;
+  /**
+   * The site's spacing model, shown as "Space between blocks" above the
+   * spacing variables. Absent, the choice is not drawn.
+   */
+  spacingMode?: SpacingMode;
+  /** A new spacing model. The host saves it, as it saves an edit. */
+  onSpacingModeChange?: (mode: SpacingMode) => void;
 }
 
 /** The Design panel's header controls, and the preview mode they choose. */
@@ -206,6 +215,8 @@ function VariablesView({
   headerActions,
   header,
   placed,
+  spacingMode,
+  onSpacingModeChange,
 }: TokensPanelProps & {
   header: VariablesHeader;
   /** Whether this view draws the header's controls and reports itself. */
@@ -259,34 +270,45 @@ function VariablesView({
           <p className="nx-vars__note">No variables match this search.</p>
         ) : (
           shown.map(group => (
-            <Group
-              key={group.group}
-              group={group.group}
-              heading={group.heading}
-              entries={group.entries}
-              searching={needle !== ""}
-              readOnly={readOnly}
-              openKey={openKey}
-              onAdd={add}
-            >
-              {(entry: VariableEntry) => (
-                <VariableRow
-                  key={entry.row.key}
-                  entry={entry}
-                  tokens={tokens}
-                  mode={mode}
-                  suppliedOf={identity => suppliedFor(supplied, identity)}
+            <React.Fragment key={group.group}>
+              {/* Above the spacing variables, the model they space by. */}
+              {group.group === "spacing" &&
+              spacingMode !== undefined &&
+              onSpacingModeChange !== undefined ? (
+                <SpacingModeChoice
+                  mode={spacingMode}
+                  onChange={onSpacingModeChange}
                   readOnly={readOnly}
-                  open={openKey === entry.row.key}
-                  onOpenChange={open => toggle(entry.row.key, open)}
-                  onChange={onChange}
-                  onRemoved={() => {
-                    forget(entry.row.key);
-                    search.current?.focus();
-                  }}
                 />
-              )}
-            </Group>
+              ) : null}
+              <Group
+                group={group.group}
+                heading={group.heading}
+                entries={group.entries}
+                searching={needle !== ""}
+                readOnly={readOnly}
+                openKey={openKey}
+                onAdd={add}
+              >
+                {(entry: VariableEntry) => (
+                  <VariableRow
+                    key={entry.row.key}
+                    entry={entry}
+                    tokens={tokens}
+                    mode={mode}
+                    suppliedOf={identity => suppliedFor(supplied, identity)}
+                    readOnly={readOnly}
+                    open={openKey === entry.row.key}
+                    onOpenChange={open => toggle(entry.row.key, open)}
+                    onChange={onChange}
+                    onRemoved={() => {
+                      forget(entry.row.key);
+                      search.current?.focus();
+                    }}
+                  />
+                )}
+              </Group>
+            </React.Fragment>
           ))
         )}
       </div>
