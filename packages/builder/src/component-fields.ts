@@ -422,7 +422,7 @@ export function removalSentences(
         : ` This component is placed directly in ${where}.`;
   const placements =
     removing.kind === "field"
-      ? `When you publish this component, every page that set this field loses its value.${pages}`
+      ? `When you publish this component, every use of it that set this field loses its value.${pages}`
       : `When you publish this component, the blocks each page added here are removed.${pages}`;
   const variants = edit.prunedVariants.map(variant => ({
     variant: variant.variant,

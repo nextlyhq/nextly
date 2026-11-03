@@ -324,7 +324,7 @@ describe("removing a field", () => {
         { count: 3, complete: false }
       ).placements
     ).toMatch(
-      /^When you publish this component, every page that set this field loses its value\. .*placed directly in at least 3 documents\.$/
+      /^When you publish this component, every use of it that set this field loses its value\. .*placed directly in at least 3 documents\.$/
     );
     expect(
       removalSentences(planned, { kind: "field" }, { count: 1, complete: true })

@@ -196,7 +196,7 @@ test.describe("a component's exposed fields", () => {
     });
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText(
-      "every page that set this field loses its value"
+      "every use of it that set this field loses its value"
     );
     await expect(dialog).toContainText(
       "Night: loses its value, and with nothing left it shows the defaults"

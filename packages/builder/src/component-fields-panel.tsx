@@ -218,14 +218,14 @@ const TOGGLE_WORDS = {
   prop: {
     label: (property: string) => `Let each page change ${property}`,
     off: (property: string) =>
-      `Turn this on to let every page that uses the component set its own ${property.toLowerCase()}.`,
-    on: "Each page can change this. Turn off to use the component’s value everywhere.",
+      `Turn this on to let each use of the component, on any page, set its own ${property.toLowerCase()}.`,
+    on: "Each use can change this. Turn off to use the component’s value everywhere.",
   },
   visibility: {
     label: (block: string) => `Let each page hide ${block}`,
     off: (block: string) =>
-      `Turn this on to let every page that uses the component hide this ${block.toLowerCase()}.`,
-    on: "Each page can hide this. Turn off to show it on every page.",
+      `Turn this on to let each use of the component, on any page, hide this ${block.toLowerCase()}.`,
+    on: "Each use can hide this. Turn off to show it everywhere.",
   },
 } as const;
 
@@ -299,6 +299,9 @@ function ExposedFieldName({
   label: string;
   inputRef?: React.Ref<HTMLInputElement>;
 }): React.JSX.Element {
+  // The hint is said with the name input as its description, so it reaches
+  // a keyboard or screen-reader user too; the title keeps it on hover.
+  const hintId = `${React.useId()}-hint`;
   return (
     <div className="nx-expose__field">
       <span
@@ -309,11 +312,15 @@ function ExposedFieldName({
         <Component size={13} />
         Field
       </span>
+      <span id={hintId} className="nx-sr-only">
+        {FIELD_HINT}
+      </span>
       <FieldName
         inputRef={inputRef}
         binding={binding}
         field={field}
         label={label}
+        describedBy={hintId}
         className="nx-expose__name-input"
       />
     </div>
@@ -444,7 +451,7 @@ export function VisibilityExposeControl({
         <p className="nx-expose__shown">
           <span className="nx-expose__shown-label">Shown</span>
           <span className="nx-expose__shown-value">
-            {field === undefined ? "On every page" : "Each page chooses"}
+            {field === undefined ? "On every page" : "Each use chooses"}
           </span>
         </p>
         <ExposeToggle
@@ -481,12 +488,15 @@ function FieldName({
   field,
   label,
   inputRef,
+  describedBy,
   className,
 }: {
   binding: ComponentFieldsBinding;
   field: ExposedProperty;
   label: string;
   inputRef?: React.Ref<HTMLInputElement>;
+  /** The id of text that says more about the name, read with the input. */
+  describedBy?: string;
   /** How the name is drawn: flat in the list, dashed under a property. */
   className: string;
 }): React.JSX.Element {
@@ -512,6 +522,7 @@ function FieldName({
         className={className}
         value={draft}
         aria-label={label}
+        aria-describedby={describedBy}
         onChange={event => setDraft(event.target.value)}
         onBlur={send}
         onKeyDown={event => {

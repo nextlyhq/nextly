@@ -271,7 +271,7 @@ describe("the icon's words, in plain terms", () => {
       name: "Let each page change Title",
     });
     expect(tooltipOf(toggle)).toBe(
-      "Turn this on to let every page that uses the component set its own title."
+      "Turn this on to let each use of the component, on any page, set its own title."
     );
     // No native title beside it: two tooltips would draw over each other.
     expect(toggle.getAttribute("title")).toBeNull();
@@ -289,7 +289,25 @@ describe("the icon's words, in plain terms", () => {
     });
     expect(pressed.getAttribute("aria-pressed")).toBe("true");
     expect(tooltipOf(pressed)).toBe(
-      "Each page can change this. Turn off to use the component’s value everywhere."
+      "Each use can change this. Turn off to use the component’s value everywhere."
+    );
+  });
+
+  it("describes the Field name to a keyboard or screen-reader user, not only on hover", () => {
+    mount(component(), "c1");
+    fireEvent.click(
+      within(exposeRow("title")).getByRole("button", {
+        name: "Let each page change Title",
+      })
+    );
+    const name = within(exposeRow("title")).getByRole("textbox", {
+      name: "Name pages see for Title",
+    });
+    const hint = document.getElementById(
+      name.getAttribute("aria-describedby") ?? ""
+    );
+    expect(hint?.textContent).toBe(
+      "The name each page’s editor shows for this field."
     );
   });
 
@@ -299,14 +317,14 @@ describe("the icon's words, in plain terms", () => {
       name: "Let each page hide Card",
     });
     expect(tooltipOf(toggle)).toBe(
-      "Turn this on to let every page that uses the component hide this card."
+      "Turn this on to let each use of the component, on any page, hide this card."
     );
     expect(screen.getByText("On every page")).toBeTruthy();
     fireEvent.click(toggle);
-    expect(screen.getByText("Each page chooses")).toBeTruthy();
+    expect(screen.getByText("Each use chooses")).toBeTruthy();
     expect(
       tooltipOf(screen.getByRole("button", { name: "Let each page hide Card" }))
-    ).toBe("Each page can hide this. Turn off to show it on every page.");
+    ).toBe("Each use can hide this. Turn off to show it everywhere.");
   });
 
   it("says nothing of placements or exposing in the view an author reads", () => {
