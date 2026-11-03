@@ -1,5 +1,6 @@
 import {
   DEFAULT_LIMITS,
+  usableNamedClasses,
   type DocumentLimits,
   type RemotePattern,
 } from "@nextlyhq/blocks-engine";
@@ -121,7 +122,11 @@ import {
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
-import { siteStyleSingle } from "./site-style-storage";
+import {
+  loadSiteStyle,
+  SITE_STYLE_SLUG,
+  siteStyleSingle,
+} from "./site-style-storage";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -984,6 +989,23 @@ export const pageBuilder = (
         // a document composed against this store would be judged by
         // definitions it is not drawn with.
         composesDocuments: opts.componentReadiness !== false,
+        // The classes a page may add a reference to: the ones the compiler
+        // applies, from the code's defaults and the stored record of the
+        // Single as renamed, read per write so a style removed a moment ago
+        // is gone for the next save.
+        siteClassIds: async () => {
+          // Imported at call time, for the reason the readers above give.
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = await getCachedNextly();
+          const style = await loadSiteStyle({
+            nextly: { findSingle: args => nextly.findSingle(args) },
+            defaults: configStyle,
+            slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+          });
+          return new Set(
+            usableNamedClasses(style.classes ?? []).map(entry => entry.id)
+          );
+        },
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
           indexCollection: componentIndex,

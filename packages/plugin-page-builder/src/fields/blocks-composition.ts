@@ -196,6 +196,12 @@ export interface CompositionSetup {
    * store is still refused for containing itself.
    */
   readonly composesDocuments: boolean;
+  /**
+   * The ids of the classes the site defines, its code's and its stored ones,
+   * read per write. A write adding a reference to any other is refused.
+   * Absent where the site style cannot be read, and then nothing is refused.
+   */
+  readonly siteClassIds?: () => Promise<ReadonlySet<string>>;
 }
 
 /** Which document a write is to: a collection or a single, its slug, an id. */
