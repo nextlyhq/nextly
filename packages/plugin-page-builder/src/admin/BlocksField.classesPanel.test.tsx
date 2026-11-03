@@ -109,6 +109,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+/*
+ * A designer. The variables studio surrounds every Design tab, so it is drawn
+ * here too, and it asks whether the variables may be changed.
+ */
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 /** Asking the stored style again, as the editor does after a save. */
 const refetchStoredStyle = async () => ({ isError: false });
 // The stored site style arrives through the editor's one read, the plugin's
@@ -165,6 +173,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
    * a rejection into per-field messages. Answering none exercises the branch

@@ -116,7 +116,8 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
     },
     props: {
       as: {
-        label: "HTML tag",
+        label: "Element type",
+        display: "menu",
         type: "select",
         options: ["div", "section", "article"],
       },

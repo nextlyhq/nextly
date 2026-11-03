@@ -43,7 +43,8 @@ export const section: BlockDefinition<ContainerProps, PageContext> =
     },
     props: {
       as: {
-        label: "HTML tag",
+        label: "Element type",
+        display: "menu",
         type: "select",
         options: ["section", "header", "footer", "main"],
       },

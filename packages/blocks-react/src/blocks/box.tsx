@@ -47,7 +47,8 @@ export const box: BlockDefinition<ContainerProps, PageContext> = defineBlock({
   },
   props: {
     as: {
-      label: "HTML tag",
+      label: "Element type",
+      display: "menu",
       type: "select",
       options: ["div", "article", "aside"],
     },

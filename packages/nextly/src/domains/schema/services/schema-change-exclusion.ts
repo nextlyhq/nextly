@@ -15,25 +15,24 @@
  * the state rather than holding it. Taken at the request layer it would have to be restated for
  * every transport that reaches the same operation.
  *
- * ## What this depth does NOT cover, and why that is not a reason to move it
+ * ## Where the service is not the depth
  *
- * The transports do not all converge here yet, so wrapping a service method does not protect every
- * way of invoking it. `shared/builder-access.ts` enumerates the schema-changing operations in
- * `BUILDER_METHODS`; the exclusion reaches the ones whose transports already route through a
- * metadata service, and not the rest. Two shapes are open today:
+ * Not every Schema Builder save reaches a metadata service, so wrapping a service method does not
+ * protect every way of invoking the change. `shared/builder-access.ts` enumerates the
+ * schema-changing operations in `BUILDER_METHODS`. Two shapes do the work themselves, and each
+ * takes this same exclusion at the one depth where its read, its DDL and its registry write meet,
+ * rather than a lock of its own:
  *
- * - a dispatcher handler that does the schema work itself instead of calling a service, which is
- *   how the Admin's confirmed apply saves singles. The field-group apply took the same shape and
- *   now takes this exclusion at the handler, because its divergence guard reads a status that a
- *   concurrent write changes: a handler doing the work itself still has ONE depth where the read,
- *   the DDL and the registry write meet, and that is where the lock belongs;
+ * - a dispatcher handler that does the schema work itself instead of calling a service: the
+ *   confirmed applies of collections, Singles and field groups, and the user-field changes, whose
+ *   definition write and `user_ext` sync are one change;
  * - a standalone route that writes the registry row directly, which changes what describes storage
- *   without touching storage, so nothing about it is visible in DDL.
+ *   without touching storage: the published collection and Single schema routes and the user-field
+ *   routes. They issue no DDL, so they take the lock where its table exists and never create it.
  *
- * Convergence is its own work, and until it lands an exclusion here is incomplete rather than
- * wrong: it is taken at the only depth where the two halves of a schema change are written
- * together, and the uncovered paths need to REACH that depth rather than to grow a second lock
- * site each. Counting what is covered means reading `BUILDER_METHODS`, not this comment.
+ * A path that converges on a service later inherits the decision from it; until then the exclusion
+ * is taken where that path's two halves are written together, never as a second lock site beside
+ * this one.
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";

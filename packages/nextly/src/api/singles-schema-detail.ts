@@ -24,6 +24,7 @@ import type { FieldConfig } from "@nextly/collections";
 
 import { getService } from "../di";
 import { SCHEMA_CHANGE_PERMISSIONS } from "../domains/auth/system-write-policy";
+import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import {
   coerceBuilderMaxPerDoc,
@@ -211,19 +212,6 @@ export const PATCH = withErrorHandler(
       }
     }
 
-    if (Object.keys(adminOverrides).length > 0) {
-      // As stored, past the registry row cache: the overrides merge into it, so a cached row
-      // would write back an admin setting another instance changed a moment ago.
-      const existing = await registry.getSingleForWrite(slug);
-      if (!existing) {
-        throw NextlyError.notFound({ logContext: { entity: "Single", slug } });
-      }
-      updateData.admin = {
-        ...(existing.admin || {}),
-        ...adminOverrides,
-      };
-    }
-
     // Version history toggle, normalized to the resolved config the registry
     // column holds; off writes null. Mirrors the collection detail route.
     // Retention without the on/off switch is ambiguous — the resolver needs to
@@ -263,10 +251,40 @@ export const PATCH = withErrorHandler(
       updateData.webhooks = resolveBuilderWebhooks(body.webhooks === true);
     }
 
-    // Update Single (source: "ui" to enforce locking rules)
-    const updated = await registry.updateSingle(slug, updateData, {
-      source: "ui",
-    });
+    // The read of the stored admin settings and the row write hold the schema lock together,
+    // refused at once while a migration holds it: the row describes storage a migration could be
+    // moving. Everything above reads the request alone and is decided before the lock is taken.
+    const updated = await withSchemaChangeExcluded(
+      {
+        adapter: getService("adapter"),
+        logger: getService("logger"),
+        label: `update single "${slug}"`,
+        // This route writes the registry row alone; any table change comes from the next migrate.
+        // It issues no DDL, so it must not create the lock table on a role without DDL rights.
+        issuesDdl: false,
+      },
+      async () => {
+        if (Object.keys(adminOverrides).length > 0) {
+          // As stored, past the registry row cache: the overrides merge into it, so a cached row
+          // would write back an admin setting another instance changed a moment ago.
+          const existing = await registry.getSingleForWrite(slug);
+          if (!existing) {
+            throw NextlyError.notFound({
+              logContext: { entity: "Single", slug },
+            });
+          }
+          updateData.admin = {
+            ...(existing.admin || {}),
+            ...adminOverrides,
+          };
+        }
+
+        // Update Single (source: "ui" to enforce locking rules)
+        return registry.updateSingle(slug, updateData, {
+          source: "ui",
+        });
+      }
+    );
 
     // Update endpoint: canonical mutation envelope so the admin gets a
     // server-authored toast message alongside the refreshed Single.
@@ -294,7 +312,19 @@ export const DELETE = withErrorHandler(
     const { slug } = await context.params;
     const registry = await getSingleRegistry();
 
-    await registry.deleteSingle(slug, { force: true });
+    // The registry's read of the Single and its removal hold the schema lock together, refused at
+    // once while a migration holds it.
+    await withSchemaChangeExcluded(
+      {
+        adapter: getService("adapter"),
+        logger: getService("logger"),
+        label: `delete single "${slug}"`,
+        // This route removes rows alone; it issues no DDL, so it must not create the lock table on
+        // a role without DDL rights.
+        issuesDdl: false,
+      },
+      () => registry.deleteSingle(slug, { force: true })
+    );
 
     return new Response(null, { status: 204 });
   }

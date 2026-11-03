@@ -218,6 +218,28 @@ export {
 export { DocumentSaveIndicator, DocumentPrimaryAction } from "@nextlyhq/admin";
 
 /**
+ * How a document view restores its own field from a recovery point
+ * (@experimental).
+ *
+ * Without it, the admin restores a recovery point by drawing the view afresh
+ * over the restored values, and the view's own history starts again, so the
+ * restore can't be undone. A view that registers `useDocumentRestore` is asked
+ * first: the admin resets every OTHER field to the recovery point and calls
+ * `restore` with this field's recovered value, unparsed, and the view applies
+ * it as one edit of its own, which the author can undo. Returning false
+ * declines (a value the view can't apply as an edit), and the admin restores
+ * the old way. One handler per view; it does nothing outside a document view.
+ *
+ * Experimental while the first view that uses it (the Page Builder) settles.
+ * Adding it changes no existing export; the intent is to keep the name and the
+ * handler's shape stable.
+ */
+export {
+  useDocumentRestore,
+  type DocumentRestoreHandler,
+} from "@nextlyhq/admin";
+
+/**
  * The entry's remaining fields, drawn for a takeover surface (@experimental).
  *
  * A field whose type is registered as a TAKEOVER covers the whole form, so an
