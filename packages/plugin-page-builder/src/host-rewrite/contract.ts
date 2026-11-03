@@ -119,8 +119,9 @@ export interface LeftHost {
  *
  * `finished` is false when the call stopped at its budget, or when a write
  * re-queued a document: call it again and it resumes. Every list is about
- * THIS call, except that a call on a run already done reports the documents
- * the run recorded as left (Layouts naming the component among them). The run's own record of every document it left, and why, is its
+ * THIS call. A call on a run that is done, but left documents, reads them
+ * again (they may have been resolved since) and walks everything once more.
+ * The run's own record of every document it left, and why, is its
  * progress (`ProgressStore.all`), which the final walk rewrites for every
  * document it reads.
  *
@@ -153,18 +154,4 @@ export function documentKeyOf(
   return host.kind === "single"
     ? ["single", host.slug].join(KEY_SEPARATOR)
     : ["collection", host.slug, host.id ?? ""].join(KEY_SEPARATOR);
-}
-
-/**
- * The document a key names, as an address with no field path; `undefined` for
- * a key this module did not make.
- */
-export function hostOfDocumentKey(key: string): HostAddress | undefined {
-  const [kind, slug, id] = key.split(KEY_SEPARATOR);
-  if (slug === undefined || slug === "") return undefined;
-  if (kind === "single") return { kind, slug, path: [] };
-  if (kind !== "collection") return undefined;
-  return id === undefined || id === ""
-    ? { kind, slug, path: [] }
-    : { kind, slug, id, path: [] };
 }

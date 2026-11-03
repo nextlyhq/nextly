@@ -442,25 +442,58 @@ describe("rewriting every host of a component", () => {
     });
   });
 
-  it("records what blocks it outside the walk before it is done, for later calls", async () => {
+  it("records what blocks it outside the walk before it is done", async () => {
     const s = site({ a: { published: { copies: 0 } } });
     s.outside.push({
       host: { kind: "collection", slug: "layouts", id: "l1", path: ["areas"] },
       reason: "layout",
       detail: "Main",
     });
+    let recordedWhenDone: string | undefined;
+    s.hooks.afterAdvance = () => {
+      if (s.run().phase === "done") {
+        recordedWhenDone = s.progress.get("collection\u001Flayouts\u001Fl1");
+      }
+    };
 
     const first = await rewriteHosts(s.deps, args);
-    const later = await rewriteHosts(s.deps, args);
 
     expect(first.finished).toBe(true);
-    expect(s.run().phase).toBe("done");
-    expect(later.left).toEqual([
-      {
-        host: { kind: "collection", slug: "layouts", id: "l1", path: [] },
-        reason: "layout",
-      },
-    ]);
+    expect(recordedWhenDone).toBe("left");
+  });
+
+  it("reads a finished run's left hosts again when asked once more", async () => {
+    const s = site({
+      a: { published: { copies: 1 }, draft: { copies: 1 }, live: true },
+    });
+    const first = await rewriteHosts(s.deps, args);
+    expect(first.left).toContainEqual(
+      expect.objectContaining({ reason: "pending-draft" })
+    );
+    // The author publishes the converted draft.
+    const held = s.stored.get("a");
+    if (held !== undefined) {
+      held.published = held.draft;
+      held.draft = null;
+    }
+
+    const later = await rewriteHosts(s.deps, args);
+
+    expect(later.finished).toBe(true);
+    expect(later.left).toEqual([]);
+    expect(s.progress.get("doc:a")).toBe("unchanged");
+  });
+
+  it("CONTROL: a finished run with nothing left reads nothing more", async () => {
+    const s = site({ a: { published: { copies: 1 } } });
+    await rewriteHosts(s.deps, args);
+    const read: string[] = [];
+    s.hooks.afterRead = id => read.push(id);
+
+    const later = await rewriteHosts(s.deps, args);
+
+    expect(later.finished).toBe(true);
+    expect(read).toEqual([]);
   });
 
   it("leaves a host the step refuses, and one it cannot read", async () => {

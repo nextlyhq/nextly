@@ -82,18 +82,7 @@ export interface RewriteSite {
   /** A collection's registry record (its fields and localization). */
   readonly resolveCollection: (slug: string) => Promise<unknown>;
   /** Every Single holding blocks, with its fields, or `undefined` when unreadable. */
-  readonly singles: () => Promise<
-    | readonly {
-        readonly slug: string;
-        readonly fields?: unknown;
-        /**
-         * The Single's localization master switch, which a blocks field with
-         * no flag of its own inherits; every language is walked when it is on.
-         */
-        readonly localized?: boolean;
-      }[]
-    | undefined
-  >;
+  readonly singles: () => Promise<readonly SingleToWalk[] | undefined>;
   /** The site's configured languages. */
   readonly locales: () => readonly string[];
   /** The RESOLVED slug Layouts are stored under. */
@@ -106,6 +95,49 @@ export interface RewriteSite {
   readonly componentId: string;
   /** Who the writes are made as, resolved from the caller's own request. */
   readonly identity: () => Promise<WriteIdentity>;
+}
+
+/** A Single as the walk reads it. */
+export interface SingleToWalk {
+  readonly slug: string;
+  readonly fields?: unknown;
+  /** The Single's localization master switch. */
+  readonly localized?: boolean;
+  /**
+   * Whether which of its fields store per language is unknown: its fields'
+   * own flags were not available. Every field is then read in every language.
+   */
+  readonly languagesUnknown?: boolean;
+}
+
+/**
+ * A Single as the walk reads it, from what the registry lists and, for one
+ * declared in code, its declaration.
+ *
+ * The registry's listing carries neither a Single's localization switch nor a
+ * field's own `localized` flag. A Single declared in code takes both from its
+ * declaration, fields included. A Single made in the admin has none, so on a
+ * site with languages every one of its fields is read in every language: a
+ * shared value is read once per language and converted once, rather than a
+ * translation being missed.
+ */
+export function singleToWalk(
+  listed: { readonly slug: string; readonly fields?: unknown },
+  declaration: { fields?: unknown; localized?: unknown } | undefined,
+  localizedSite: boolean
+): SingleToWalk {
+  if (declaration !== undefined) {
+    return {
+      slug: listed.slug,
+      fields: declaration.fields ?? listed.fields,
+      localized: declaration.localized === true,
+    };
+  }
+  return {
+    ...listed,
+    localized: localizedSite,
+    languagesUnknown: localizedSite,
+  };
 }
 
 /** Where the walk is: a group (collections, then Singles), a slug, an id. */
@@ -150,25 +182,41 @@ export function siteHostSource(site: RewriteSite): HostSource {
   return {
     documents: cursor => walkDocuments(site, collection, cursorFrom(cursor)),
     cursorOf: document => JSON.stringify(cursorOfDocument(document)),
-    hinted: async () => {
-      const found: HostDocument[] = [];
-      for (const hint of await site.hints()) {
-        const hosts = hostsOf(
-          { kind: "collection", slug: hint.slug, id: hint.id },
-          await collection(hint.slug),
-          site.locales()
-        );
-        if (hosts.length > 0) {
-          found.push({
-            key: documentKeyOf({ kind: "collection", ...hint }),
-            hosts,
-          });
-        }
-      }
-      return found;
-    },
+    hinted: () => hintedDocuments(site, collection),
     outside: () => layoutsNaming(site),
   };
+}
+
+/**
+ * The documents the usage index names, to visit first. A hint and nothing
+ * more: an index that cannot be read, or a row naming a collection that has
+ * since been removed or renamed, is skipped rather than stopping the run,
+ * because the walk over the live registry that follows reaches every document
+ * anyway. Only a failure of that walk stops a run.
+ */
+async function hintedDocuments(
+  site: RewriteSite,
+  collection: (slug: string) => Promise<unknown>
+): Promise<HostDocument[]> {
+  let hints: readonly { readonly slug: string; readonly id: string }[];
+  try {
+    hints = await site.hints();
+  } catch {
+    return [];
+  }
+  const found: HostDocument[] = [];
+  for (const hint of hints) {
+    let declaration: unknown;
+    try {
+      declaration = await collection(hint.slug);
+    } catch {
+      continue;
+    }
+    const at = { kind: "collection" as const, slug: hint.slug, id: hint.id };
+    const hosts = hostsOf(at, declaration, site.locales());
+    if (hosts.length > 0) found.push({ key: documentKeyOf(at), hosts });
+  }
+  return found;
 }
 
 /** Where a document sits in the walk. */
@@ -289,11 +337,23 @@ function hostsOf(
   const reach = blocksFieldReach(
     declaration as { fields?: unknown; localized?: unknown }
   );
+  // Every field in every language when which ones are translated is unknown.
+  const everyField =
+    (declaration as { languagesUnknown?: unknown } | null)?.languagesUnknown ===
+    true;
   const languages = (localized: boolean): (string | undefined)[] =>
-    localized && locales.length > 0 ? [...locales] : [undefined];
+    (everyField || localized) && locales.length > 0
+      ? [...locales]
+      : [undefined];
   return [
     ...reach.fields.flatMap(field => fieldHosts(at, field, languages)),
-    ...(reach.unreachable ? scanHosts(at, languages) : []),
+    ...(reach.unreachable
+      ? scanHosts(
+          at,
+          languages,
+          reach.fields.map(field => field.path)
+        )
+      : []),
   ];
 }
 
@@ -323,13 +383,16 @@ function fieldHosts(
 /** The hosts scanning the whole row, for blocks no fixed path reaches. */
 function scanHosts(
   at: Pick<HostAddress, "kind" | "slug" | "id">,
-  languages: Languages
+  languages: Languages,
+  /** The paths the walk reaches directly, which the scan leaves out. */
+  excluded: readonly (readonly string[])[]
 ): HostCandidate[] {
   const hosts: HostCandidate[] = [];
   for (const locale of languages(true)) {
     hosts.push({
       host: { ...at, path: [], ...inLanguage(locale) },
       access: "scan",
+      excluded,
     });
   }
   return hosts;
@@ -404,27 +467,29 @@ async function readRow(
   host: HostAddress,
   read: "all" | "public" | "draft"
 ): Promise<Record<string, unknown> | null> {
-  const options = readOptions(host, read);
   try {
-    const row =
-      host.kind === "single"
-        ? await nextly.findSingle({
-            slug: host.slug,
-            createIfMissing: false,
-            ...options,
-          })
-        : await nextly.findByID({
-            collection: host.slug,
-            id: host.id ?? "",
-            ...options,
-          });
-    return typeof row === "object" && row !== null
-      ? (row as Record<string, unknown>)
-      : null;
+    const row = await fetchRow(nextly, host, readOptions(host, read));
+    return isRecord(row) ? row : null;
   } catch (error) {
     if (NextlyError.isNotFound(error)) return null;
     throw error;
   }
+}
+
+/** One by-id read of a host's row: a Single by its slug, an entry by its id. */
+function fetchRow(
+  nextly: RewriteDirectApi,
+  host: HostAddress,
+  options: ReturnType<typeof readOptions>
+): Promise<unknown> {
+  return host.kind === "single"
+    ? nextly.findSingle({ slug: host.slug, createIfMissing: false, ...options })
+    : nextly.findByID({ collection: host.slug, id: host.id ?? "", ...options });
+}
+
+/** Whether a read answered with a row. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 /** The options one read of a host is made with, as the system. */

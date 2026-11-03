@@ -14,6 +14,7 @@ import { and, eq, inArray } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
+  type PluginTransaction,
 } from "@nextlyhq/plugin-sdk/schema";
 
 import { componentDeletionHosts, componentDeletions } from "../schema/tables";
@@ -58,13 +59,45 @@ function stateOf(value: string): HostState {
     : "pending";
 }
 
+/** The table operations a record is written through: `ctx.db`, or a transaction. */
+type ProgressHandle = Pick<
+  PluginTransaction,
+  "select" | "table" | "update" | "insert"
+>;
+
+/**
+ * Write one document's row, whether or not it exists yet: an update, and an
+ * insert when it matched nothing.
+ */
+async function writeRow(
+  handle: ProgressHandle,
+  runId: string,
+  documentKey: string,
+  set: { state: HostState; reason: string | null }
+): Promise<void> {
+  const h = handle.table(componentDeletionHosts);
+  const where = and(eq(h.deletionId, runId), eq(h.hostKey, documentKey));
+  if (where === undefined) return;
+  if ((await handle.update(componentDeletionHosts, set).where(where)) > 0) {
+    return;
+  }
+  await handle.insert(componentDeletionHosts, {
+    deletionId: runId,
+    hostKey: documentKey,
+    ...set,
+  });
+}
+
 /** The progress store over the plugin's own `ctx.db`. */
 export function progressStore(
-  db: Pick<PluginDatabase, "select" | "table" | "update" | "insert">,
+  db: Pick<
+    PluginDatabase,
+    "select" | "table" | "update" | "insert" | "transaction"
+  >,
   dialect: Dialect
 ): ProgressStore {
-  const h = db.table(componentDeletionHosts);
   const all = async (runId: string): Promise<HostProgress[]> => {
+    const h = db.table(componentDeletionHosts);
     const rows = await db
       .select(componentDeletionHosts)
       .where(eq(h.deletionId, runId))
@@ -83,19 +116,12 @@ export function progressStore(
     reason?: string
   ): Promise<void> => {
     const set = { state, reason: reason ?? null };
-    const where = and(eq(h.deletionId, runId), eq(h.hostKey, documentKey));
-    if (where === undefined) return;
-    if ((await db.update(componentDeletionHosts, set).where(where)) > 0) return;
     try {
-      await db.insert(componentDeletionHosts, {
-        deletionId: runId,
-        hostKey: documentKey,
-        ...set,
-      });
+      await writeRow(db, runId, documentKey, set);
     } catch (error) {
       // Another writer inserted the row first: write over it instead.
       if (!isUniqueViolation(dialect, error)) throw error;
-      await db.update(componentDeletionHosts, set).where(where);
+      await writeRow(db, runId, documentKey, set);
     }
   };
 
@@ -112,10 +138,19 @@ export function progressStore(
       // Only a delete run fences references, so only its documents are
       // re-queued for holding one.
       for (const run of runs.filter(row => row.purpose !== "strip-retired")) {
-        await record(run.id, documentKey, "pending");
-        await db
-          .update(componentDeletions, { phase: "converting", cursor: null })
-          .where(eq(r.id, run.id));
+        // ONE transaction: a pending row with the run left in its final walk,
+        // or done, would never be visited again, so the two land together or
+        // neither does.
+        await db.transaction(async tx => {
+          await writeRow(tx, run.id, documentKey, {
+            state: "pending",
+            reason: null,
+          });
+          const t = tx.table(componentDeletions);
+          await tx
+            .update(componentDeletions, { phase: "converting", cursor: null })
+            .where(eq(t.id, run.id));
+        });
       }
     },
   };

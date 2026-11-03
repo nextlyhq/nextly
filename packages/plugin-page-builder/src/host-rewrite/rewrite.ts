@@ -23,7 +23,6 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import {
   documentKeyOf,
-  hostOfDocumentKey,
   type HostAddress,
   type HostForm,
   type HostStep,
@@ -50,6 +49,8 @@ export type HostAccess =
 export interface HostCandidate {
   readonly host: HostAddress;
   readonly access: HostAccess;
+  /** For a `scan`: the paths whose values have hosts of their own. */
+  readonly excluded?: readonly (readonly string[])[];
 }
 
 /** One document and its hosts: every blocks field, in every language. */
@@ -196,18 +197,21 @@ export async function rewriteHosts(
       },
     });
   }
-  const walk: Walk = {
-    deps,
-    args,
-    run,
-    tally: { rewritten: [], unchanged: [], left: [], caught: [], visited: 0 },
+  const tally: Tally = {
+    rewritten: [],
+    unchanged: [],
+    left: [],
+    caught: [],
+    visited: 0,
   };
-  if (args.dryRun === true) return report(walk, await dryWalk(walk));
-  if (run.phase === "done") {
-    walk.tally.left.push(...(await recordedLeft(deps, run)));
-    return report(walk, true);
+  if (args.dryRun === true) {
+    const dry: Walk = { deps, args, run, tally };
+    return report(dry, await dryWalk(dry));
   }
-  if (run.phase === "converting" && !(await convertingWalk(walk))) {
+  const resumed = run.phase === "done" ? await retryLeft(deps, run) : run;
+  const walk: Walk = { deps, args, run: resumed ?? run, tally };
+  if (resumed === null) return report(walk, true);
+  if (walk.run.phase === "converting" && !(await convertingWalk(walk))) {
     return report(walk, false);
   }
   return report(walk, await finalWalk(walk));
@@ -319,33 +323,26 @@ async function finalWalk(walk: Walk): Promise<boolean> {
   return deps.fence.advance(run.id, "final", "done", null);
 }
 
-/** The documents a finished run recorded as left, as its later calls report them. */
-async function recordedLeft(
+/**
+ * A finished run asked again. With nothing left, there is nothing to do, and
+ * `null` says so. With documents it left, those may since have been resolved
+ * (a draft published or discarded, a Layout edited), so each is marked pending
+ * and the run goes back to its converting walk, which reads them again, and
+ * then to a final walk over everything. Answers the run as it now stands.
+ */
+async function retryLeft(
   deps: RewriteDeps,
   run: DeletionRun
-): Promise<LeftHost[]> {
-  return (await deps.progress.all(run.id)).flatMap(row => {
-    if (row.state !== "left") return [];
-    const host = hostOfDocumentKey(row.documentKey);
-    return host === undefined
-      ? []
-      : [{ host, reason: leftReasonOf(row.reason) }];
-  });
-}
-
-/** A recorded reason, read strictly; one this cannot name reads as unreadable. */
-function leftReasonOf(reason: string | null): LeftReason {
-  const known: readonly LeftReason[] = [
-    "refused",
-    "pending-draft",
-    "not-permitted",
-    "unreadable",
-    "unaddressable",
-    "changed",
-    "write-refused",
-    "layout",
-  ];
-  return known.find(name => name === reason) ?? "unreadable";
+): Promise<DeletionRun | null> {
+  const left = (await deps.progress.all(run.id)).filter(
+    row => row.state === "left"
+  );
+  if (left.length === 0) return null;
+  for (const row of left) {
+    await deps.progress.record(run.id, row.documentKey, "pending");
+  }
+  await deps.fence.advance(run.id, "done", "converting", null);
+  return { ...run, phase: "converting", cursor: null };
 }
 
 /** One document: every host in it, then its recorded state. */
@@ -574,10 +571,12 @@ async function scannedHost(
   ];
   for (const { form, value } of forms) {
     if (value.kind === "absent") continue;
-    const found = await scannedOutcomes(step, value.value, {
-      host: candidate.host,
-      form,
-    });
+    const found = await scannedOutcomes(
+      step,
+      value.value,
+      { host: candidate.host, form },
+      candidate.excluded
+    );
     if (found !== "unchanged") return { kind: "left", reason: found };
   }
   return { kind: "unchanged" };

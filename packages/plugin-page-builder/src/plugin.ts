@@ -92,7 +92,11 @@ import {
   componentDeleteRewriteService,
   type RewriteInstall,
 } from "./host-rewrite/service";
-import type { RewriteDirectApi } from "./host-rewrite/site";
+import {
+  singleToWalk,
+  type RewriteDirectApi,
+  type SingleToWalk,
+} from "./host-rewrite/site";
 import {
   layoutChoicesRoute,
   pageCollectionRoute,
@@ -849,13 +853,6 @@ function rewriteInstallFor(
   };
 }
 
-/** A Single as the rewrite walks it: its slug, its fields, its master switch. */
-interface SingleWithBlocks {
-  slug: string;
-  fields?: unknown;
-  localized?: boolean;
-}
-
 /**
  * Every live Single whose declaration holds a blocks field, with its fields
  * and its localization master switch, or `undefined` when the registry cannot
@@ -864,47 +861,22 @@ interface SingleWithBlocks {
  */
 async function singlesDeclaringBlocks(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
-): Promise<SingleWithBlocks[] | undefined> {
+): Promise<SingleToWalk[] | undefined> {
   const declared = declaredSingleSlugs(ctx);
   const configured = configuredSingles(ctx);
   const localizedSite = (ctx.config.localization?.locales.length ?? 0) > 0;
-  const found: SingleWithBlocks[] = [];
+  const found: SingleToWalk[] = [];
   for await (const rows of singlesRegistryPages(ctx)) {
     if (rows === UNREADABLE_PAGE) return undefined;
     const page = singlesDeclaringBlocksIn(rows, declared);
     if (page === undefined) return undefined;
     for (const single of page) {
       found.push(
-        withLocalization(single, configured.get(single.slug), localizedSite)
+        singleToWalk(single, configured.get(single.slug), localizedSite)
       );
     }
   }
   return found;
-}
-
-/**
- * A Single with the switch that decides which languages store its blocks.
- *
- * Read from the Single's own declaration in code, with its fields, because the
- * registry's listing carries neither the master switch nor a field's own
- * `localized` flag. A Single made in the admin has no declaration here, so
- * whether it is translated cannot be told: on a site with languages it is
- * walked in every one of them, which reads a shared value once per language
- * and converts it once, rather than missing a translation.
- */
-function withLocalization(
-  single: { slug: string; fields?: unknown },
-  declaration: { fields?: unknown; localized?: unknown } | undefined,
-  localizedSite: boolean
-): SingleWithBlocks {
-  if (declaration !== undefined) {
-    return {
-      slug: single.slug,
-      fields: declaration.fields ?? single.fields,
-      localized: declaration.localized === true,
-    };
-  }
-  return { ...single, localized: localizedSite };
 }
 
 /** The Singles declared in code, by slug, as the site's config states them. */

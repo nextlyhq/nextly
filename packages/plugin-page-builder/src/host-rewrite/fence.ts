@@ -255,6 +255,18 @@ export async function fenceIssues(
   const placed = componentReferencesIn(judged.document, judged.maxNodes);
   if (placed.complete && placed.ids.length === 0) return [];
   const fenced = await judged.fenced();
+  // Neither side read to the end: the components the document places beyond
+  // its surveyed prefix are unknown, and so is which ones are fenced. An empty
+  // prefix proves nothing, so the write is refused as it stands.
+  if (fenced.kind === "unreadable" && !placed.complete) {
+    return [
+      {
+        path: judged.path,
+        code: COMPONENT_BEING_DELETED,
+        message: UNCHECKABLE,
+      },
+    ];
+  }
   const candidates = fencedAmong(placed, fenced);
   if (candidates.length === 0) return [];
 
@@ -320,6 +332,10 @@ function holds(form: unknown, componentId: string, maxNodes: number): boolean {
 }
 
 /** The refusal's words. */
+/** The refusal when neither the fence nor the whole document could be read. */
+const UNCHECKABLE =
+  "Whether this content adds a component that is being deleted could not be checked, so it cannot be saved right now. Try again in a moment.";
+
 function fencedMessage(componentId: string, unread: boolean): string {
   return unread
     ? `Whether component "${componentId}" is being deleted could not be checked, so it cannot be added here right now. Try again in a moment.`

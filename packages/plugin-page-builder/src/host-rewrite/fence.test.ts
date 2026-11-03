@@ -182,4 +182,26 @@ describe("the fence on every write", () => {
 
     expect(issues.map(issue => issue.code)).toEqual([COMPONENT_BEING_DELETED]);
   });
+
+  it("refuses when neither the fence nor the whole document could be read", async () => {
+    // The copy sits past the one node surveyed, so the surveyed prefix places
+    // nothing at all.
+    const document = page("other", "card");
+    document.nodes = [
+      { id: "t", type: "core/text", version: 1, props: {} },
+      ...document.nodes,
+    ];
+
+    const issues = await fenceIssues({
+      document,
+      write: writeOver({ draft: page() }),
+      path: "content",
+      nextStatus: undefined,
+      localized: false,
+      maxNodes: 1,
+      fenced: async () => ({ kind: "unreadable" }),
+    });
+
+    expect(issues.map(issue => issue.code)).toEqual([COMPONENT_BEING_DELETED]);
+  });
 });

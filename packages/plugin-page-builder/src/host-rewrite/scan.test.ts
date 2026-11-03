@@ -77,4 +77,33 @@ describe("scanning a row for blocks values", () => {
 
     expect(await scannedOutcomes(step, row, form)).toBe("unchanged");
   });
+
+  it("hands a document-shaped value with no format version to the step", async () => {
+    const judged: unknown[] = [];
+    const malformed = { kind: "page", nodes: placing.nodes };
+
+    await scannedOutcomes(
+      doc => {
+        judged.push(doc);
+        return { kind: "unchanged" };
+      },
+      { rows: [{ body: malformed }] },
+      form
+    );
+
+    expect(judged).toEqual([malformed]);
+  });
+
+  it("leaves out the paths that have hosts of their own", async () => {
+    const row = {
+      content: placing,
+      rows: [{ body: { ...placing, nodes: [] } }],
+    };
+
+    expect(await scannedOutcomes(step, row, form, [["content"]])).toBe(
+      "unchanged"
+    );
+    // CONTROL: the same row, nothing left out.
+    expect(await scannedOutcomes(step, row, form)).toBe("unaddressable");
+  });
 });

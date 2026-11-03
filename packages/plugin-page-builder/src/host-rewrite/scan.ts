@@ -24,13 +24,19 @@ export type ScanOutcome = "unchanged" | "unaddressable" | "unreadable";
  * Hand every blocks value in `row` to `step`. `unaddressable` when the step
  * would change or refuses one; `unreadable` when the row could not be searched
  * to the end.
+ *
+ * `excluded` names the paths whose values have hosts of their own (the
+ * fields the walk reads and writes directly); they are left out, so a value
+ * a real run rewrites through its own host is not also reported here as one
+ * no path reaches.
  */
 export async function scannedOutcomes(
   step: HostStep,
   row: unknown,
-  form: StoredForm
+  form: StoredForm,
+  excluded: readonly (readonly string[])[] = []
 ): Promise<ScanOutcome> {
-  const found = documentsWithin(row);
+  const found = documentsWithin(withoutPaths(row, excluded));
   if (found === null) return "unreadable";
   for (const document of found) {
     const outcome = await step(document, form);
@@ -74,18 +80,46 @@ function documentsWithin(row: unknown): unknown[] | null {
  * neither, and is searched through like any other: the blocks value it holds
  * may sit beside that array.
  *
- * A value naming a `formatVersion` that the check refuses (a newer format,
- * say) is still handed to the step rather than searched through, so the step
- * refuses it as unreadable: searching its insides would read a document this
- * version cannot read as if it were ordinary data.
+ * A value that names a document's envelope (a `formatVersion` or a `kind`
+ * beside its `nodes`) and that the check refuses (a newer format, a missing
+ * version) is still handed to the step rather than searched through, so the
+ * step refuses it as unreadable: searching its insides would read a document
+ * this version cannot read as if it were ordinary data.
  */
 function isBlocksValue(value: unknown): boolean {
   const decoded = typeof value === "string" ? parsedOrNull(value) : value;
   if (!isPlainRecord(decoded) || !Array.isArray(decoded.nodes)) return false;
   return (
     documentRefusal(decoded) === undefined ||
-    Object.hasOwn(decoded, "formatVersion")
+    Object.hasOwn(decoded, "formatVersion") ||
+    Object.hasOwn(decoded, "kind")
   );
+}
+
+/** `row` without the values at these paths; the row itself is not changed. */
+function withoutPaths(
+  row: unknown,
+  paths: readonly (readonly string[])[]
+): unknown {
+  let out = row;
+  for (const path of paths) out = withoutPath(out, path);
+  return out;
+}
+
+/** A copy of `value` without the value at `path`, copied only along it. */
+function withoutPath(value: unknown, path: readonly string[]): unknown {
+  const [head, ...rest] = path;
+  if (
+    head === undefined ||
+    !isPlainRecord(value) ||
+    !Object.hasOwn(value, head)
+  ) {
+    return value;
+  }
+  const copy: Record<string, unknown> = { ...value };
+  if (rest.length === 0) delete copy[head];
+  else copy[head] = withoutPath(value[head], rest);
+  return copy;
 }
 
 /** Stored JSON text decoded, or `null` when it is not JSON. */
