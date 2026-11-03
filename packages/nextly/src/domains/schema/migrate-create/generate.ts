@@ -19,8 +19,8 @@
 // Returns null when no operations remain (after rename collapsing) and no
 // entity's settings changed: a settings change alone is written as a
 // migration with no table statements, beside its snapshot.
-// CLI exits with code 2 in that case ("no changes detected" — distinct
-// from exit 1 for actual errors so CI scripts can tell apart).
+// The CLI then says "No schema changes detected" and exits 0, since nothing
+// to do is a finished run; a failure exits 1.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -286,7 +286,7 @@ function operationTableName(op: Operation): string {
 
 /**
  * Run the migrate:create orchestration. Returns null if no operations
- * remain (config matches latest snapshot — exit code 2 in the CLI).
+ * remain (config matches latest snapshot; the CLI exits 0 for that).
  */
 export async function generateMigration(
   args: GenerateArgs
