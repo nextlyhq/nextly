@@ -895,6 +895,8 @@ function useHistoryStacks(): {
   pop: (from: "undo" | "redo") => HistoryEntry | undefined;
   remove: (entry: HistoryEntry) => void;
   withdraw: (origin: HistoryStep, dropped: HistoryEntry | undefined) => void;
+  /** A replay of the step took effect; the branch it ended is gone. */
+  settle: (origin: HistoryStep) => void;
 } {
   const undoStack = useRef<HistoryEntry[]>([]);
   const redoStack = useRef<HistoryEntry[]>([]);
