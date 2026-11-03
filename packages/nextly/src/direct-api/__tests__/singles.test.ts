@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { runAsPrincipal } from "../../auth/principal-scope";
 import type { Nextly } from "../nextly";
 
 import { setupTestNextly, type TestMocks } from "./helpers/test-setup";
@@ -363,6 +364,25 @@ describe("Direct API - Singles Operations", () => {
       expect(result.limit).toBe(5);
       expect(result.offset).toBe(5);
       expect(result.totalDocs).toBe(10);
+    });
+
+    it("refuses an offset without a limit before any registry read, principal or not", async () => {
+      const principal = {
+        kind: "test:person",
+        id: "p1",
+        attributes: {},
+      } as never;
+
+      // Made as a person, the call would read the registry for the allowlist
+      // before the paginated list; the refusal must come first, so even that
+      // read never happens.
+      await runAsPrincipal(principal, async () => {
+        await expect(nextly.findSingles({ offset: 10 })).rejects.toMatchObject({
+          code: "INVALID_INPUT",
+        });
+      });
+
+      expect(mocks.singleRegistryService.listSingles).not.toHaveBeenCalled();
     });
 
     it("should pass migrationStatus and locked filters", async () => {

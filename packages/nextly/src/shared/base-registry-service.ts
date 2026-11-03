@@ -159,6 +159,35 @@ export interface SchemaSyncSubject {
   webhooks?: unknown;
 }
 
+/**
+ * A registry list paginates or it does not: an `offset` that skips rows needs
+ * the `limit` that bounds the page. The refusal lives before any query,
+ * because the query builder emits `OFFSET` as its own clause: SQLite and MySQL
+ * refuse a bare `OFFSET` in SQL — a dialect-grammar database error — while
+ * PostgreSQL silently returns the unbounded tail. One contract, refused once,
+ * on every dialect. An offset of 0 skips nothing and is not a refusal.
+ *
+ * Exported because a caller that reads the registry BEFORE its paginated list —
+ * `findSingles` building a principal's allowlist, most notably — owes the same
+ * refusal before those reads, so a refused call issues no query at all.
+ */
+export function assertPaginationIsComplete(
+  options?: BaseListOptions,
+  resourceType?: string
+): void {
+  if (
+    options?.offset !== undefined &&
+    options.offset !== 0 &&
+    options.limit === undefined
+  ) {
+    throw NextlyError.invalidInput({
+      message:
+        "An offset requires a limit: pass limit alongside offset to paginate.",
+      logContext: { resourceType, offset: options.offset },
+    });
+  }
+}
+
 export abstract class BaseRegistryService<
   TRecord extends BaseRegistryRecord,
   TMigrationStatus extends string = string,
@@ -302,26 +331,9 @@ export abstract class BaseRegistryService<
     return this.getRecordBySlug(slug, this.adapter.getDrizzle());
   }
 
-  /**
-   * A registry list paginates or it does not: an `offset` that skips rows needs
-   * the `limit` that bounds the page. The refusal lives here, before any query,
-   * because the query builder emits `OFFSET` as its own clause: SQLite and MySQL
-   * refuse a bare `OFFSET` in SQL — a dialect-grammar database error — while
-   * PostgreSQL silently returns the unbounded tail. One contract, refused once,
-   * on every dialect. An offset of 0 skips nothing and is not a refusal.
-   */
+  /** The registry list boundary's share of the pagination contract; see {@link assertPaginationIsComplete}. */
   protected assertPaginationIsComplete(options?: BaseListOptions): void {
-    if (
-      options?.offset !== undefined &&
-      options.offset !== 0 &&
-      options.limit === undefined
-    ) {
-      throw NextlyError.invalidInput({
-        message:
-          "An offset requires a limit: pass limit alongside offset to paginate.",
-        logContext: { resourceType: this.resourceType, offset: options.offset },
-      });
-    }
+    assertPaginationIsComplete(options, this.resourceType);
   }
 
   /**
