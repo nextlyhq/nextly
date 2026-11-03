@@ -30,9 +30,10 @@ import {
   type PluginDatabase,
 } from "@nextlyhq/plugin-sdk/schema";
 
-import { formsChangedBy } from "../component-cycle-guard";
 import { readStoredForms } from "../fields/lock-baselines";
 import { componentDeletionHosts, componentDeletions } from "../schema/tables";
+
+import { formsAWriteChanges } from "./lifecycle";
 
 /** The issue code a write adding a reference to a fenced component carries. */
 export const COMPONENT_BEING_DELETED = "COMPONENT_BEING_DELETED";
@@ -300,7 +301,7 @@ async function storedFormsOrNothing(
     const read = await readStoredForms(
       judged.write,
       judged.path,
-      formsChangedBy(judged.nextStatus),
+      formsAWriteChanges(judged.nextStatus),
       judged.localized
     );
     if (!read.readable) return null;

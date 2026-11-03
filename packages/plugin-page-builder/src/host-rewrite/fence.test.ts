@@ -169,4 +169,17 @@ describe("the fence on every write", () => {
 
     expect(issues.map(issue => issue.code)).toEqual([COMPONENT_BEING_DELETED]);
   });
+
+  it("judges a write naming a public state by any other name against the live row too", async () => {
+    // `live` is this site's public state. Read by its spelling, a publish
+    // would be judged against the draft alone, which holds the reference.
+    const issues = await judge(
+      page("card"),
+      writeOver({ draft: page("card"), published: page() }),
+      fencing("card"),
+      { nextStatus: "live" }
+    );
+
+    expect(issues.map(issue => issue.code)).toEqual([COMPONENT_BEING_DELETED]);
+  });
 });

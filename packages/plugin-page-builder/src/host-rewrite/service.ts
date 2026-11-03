@@ -14,6 +14,7 @@
 import {
   registryBlockSource,
   registryNestingSource,
+  type BlockDocument,
   type DefinitionsById,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
@@ -27,7 +28,11 @@ import {
 } from "../component-store-source";
 import { readingAsUser } from "../library-route";
 
-import { componentDeleteStep } from "./component-delete-step";
+import {
+  componentDeleteStep,
+  definitionsAlikeInEveryLanguage,
+  type DefinitionsAnswer,
+} from "./component-delete-step";
 import type { RewriteReport, StoredForm } from "./contract";
 import { fenceStore, type DeletionRun, type RunPurpose } from "./fence";
 import { progressStore, type HostProgress } from "./progress";
@@ -208,45 +213,87 @@ function rewriteAsCaller(
 /**
  * The definitions a host's copies are converted from: each placed component's
  * PUBLISHED definition, which is what visitors are drawn, in the host's
- * language. The component being deleted falls back to its working draft when
- * it was never published, so its copies are converted from what an editor
- * sees rather than refused.
+ * language.
+ *
+ * A host shared by every language is drawn, in each language, from that
+ * language's definition. So on a site with languages, its definitions are
+ * read in every one of them, and the host is converted only when they agree;
+ * otherwise it is refused and left. That needs no knowledge of whether the
+ * component store is translated: an untranslated store reads alike in every
+ * language.
  */
 async function definitionsFor(
   installed: RewriteInstall,
   componentId: string,
   ids: readonly string[],
   form: StoredForm
+): Promise<DefinitionsAnswer> {
+  const locales = installed.site.locales();
+  if (form.host.locale !== undefined || locales.length === 0) {
+    return {
+      kind: "definitions",
+      byId: await definitionsIn(installed, componentId, ids, form.host.locale),
+    };
+  }
+  const byLanguage: DefinitionsById[] = [];
+  for (const locale of locales) {
+    byLanguage.push(await definitionsIn(installed, componentId, ids, locale));
+  }
+  return definitionsAlikeInEveryLanguage(byLanguage, ids);
+}
+
+/**
+ * The published definitions in one language. The component being deleted
+ * falls back to its working draft when it was never published, so its copies
+ * are converted from what an editor sees rather than refused.
+ */
+async function definitionsIn(
+  installed: RewriteInstall,
+  componentId: string,
+  ids: readonly string[],
+  locale: string | undefined
 ): Promise<DefinitionsById> {
   const nextly = await installed.site.nextly();
   const published = await publishedStoreSource(nextly, {
     collection: installed.store.collection,
     field: installed.store.field,
-    locale: form.host.locale,
+    locale,
     reading: AS_THE_SYSTEM,
   })(ids);
-  if (published.has(componentId) || !ids.includes(componentId))
+  if (published.has(componentId) || !ids.includes(componentId)) {
     return published;
-  let draft: unknown;
+  }
+  const draft = await draftDefinition(installed, componentId, locale);
+  return draft === null
+    ? published
+    : new Map([...published, [componentId, draft]]);
+}
+
+/** A component's working draft definition, or `null` when there is none. */
+async function draftDefinition(
+  installed: RewriteInstall,
+  componentId: string,
+  locale: string | undefined
+): Promise<BlockDocument | null> {
+  const nextly = await installed.site.nextly();
+  let row: unknown;
   try {
-    draft = await nextly.findByID({
+    row = await nextly.findByID({
       collection: installed.store.collection,
       id: componentId,
       draft: true,
       status: "all",
       depth: 0,
       overrideAccess: true,
-      ...(form.host.locale === undefined ? {} : { locale: form.host.locale }),
+      ...(locale === undefined ? {} : { locale }),
     });
   } catch (error) {
     // A component that is gone has no draft to convert from either; the step
     // then refuses its copies rather than inventing their blocks.
-    if (NextlyError.isNotFound(error)) return published;
+    if (NextlyError.isNotFound(error)) return null;
     throw error;
   }
-  const document = asDocument(
-    (draft as Record<string, unknown> | null)?.[installed.store.field]
+  return asDocument(
+    (row as Record<string, unknown> | null)?.[installed.store.field]
   );
-  if (document === null) return published;
-  return new Map([...published, [componentId, document]]);
 }

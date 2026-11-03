@@ -19,12 +19,18 @@ import {
 import { layoutReferencesOf } from "../layout-component-usage";
 
 import { documentKeyOf, type HostAddress, type LeftHost } from "./contract";
-import { HOST_CHANGED, writeExpecting } from "./expectations";
+import {
+  HOST_CHANGED,
+  writeExpecting,
+  type StoredExpectation,
+} from "./expectations";
+import { PUBLIC_STATES } from "./lifecycle";
 import type {
   HostCandidate,
   HostDocument,
   HostReader,
   HostSource,
+  HostWrite,
   HostWriter,
   ReadValue,
   WriteResult,
@@ -263,7 +269,18 @@ async function* entriesOf(
   }
 }
 
-/** A document's hosts: every blocks field in every language it stores. */
+/**
+ * A document's hosts: every blocks field in every language it stores.
+ *
+ * A top-level field stores per language exactly when its own flag and the
+ * declaration's switch say so, as core classifies it. Anything deeper (a
+ * field under a named group, or one only a scan of the row reaches, behind a
+ * repeater or a field group) is walked in EVERY configured language: core
+ * stores a localized field group's values per language even under a parent
+ * that is not translated, and which of them it localizes is not on a surface
+ * a plugin can read. Those hosts are only read and judged, never written, so
+ * reading a shared value once per language costs reads and nothing else.
+ */
 function hostsOf(
   at: Pick<HostAddress, "kind" | "slug" | "id">,
   declaration: unknown,
@@ -274,30 +291,53 @@ function hostsOf(
   );
   const languages = (localized: boolean): (string | undefined)[] =>
     localized && locales.length > 0 ? [...locales] : [undefined];
+  return [
+    ...reach.fields.flatMap(field => fieldHosts(at, field, languages)),
+    ...(reach.unreachable ? scanHosts(at, languages) : []),
+  ];
+}
+
+/** The languages a host is read in, given whether it stores per language. */
+type Languages = (localized: boolean) => (string | undefined)[];
+
+/** One reached field's hosts: written at the top level, read anywhere deeper. */
+function fieldHosts(
+  at: Pick<HostAddress, "kind" | "slug" | "id">,
+  field: {
+    readonly path: readonly string[];
+    readonly descriptor: { readonly localized: boolean };
+  },
+  languages: Languages
+): HostCandidate[] {
   const hosts: HostCandidate[] = [];
-  for (const field of reach.fields) {
-    for (const locale of languages(field.descriptor.localized)) {
-      hosts.push({
-        host: {
-          ...at,
-          path: field.path,
-          ...(locale === undefined ? {} : { locale }),
-        },
-        access: field.path.length === 1 ? "write" : "read",
-      });
-    }
-  }
-  if (reach.unreachable) {
-    const localized =
-      (declaration as { localized?: unknown } | null)?.localized === true;
-    for (const locale of languages(localized)) {
-      hosts.push({
-        host: { ...at, path: [], ...(locale === undefined ? {} : { locale }) },
-        access: "scan",
-      });
-    }
+  const topLevel = field.path.length === 1;
+  for (const locale of languages(!topLevel || field.descriptor.localized)) {
+    hosts.push({
+      host: { ...at, path: field.path, ...inLanguage(locale) },
+      access: topLevel ? "write" : "read",
+    });
   }
   return hosts;
+}
+
+/** The hosts scanning the whole row, for blocks no fixed path reaches. */
+function scanHosts(
+  at: Pick<HostAddress, "kind" | "slug" | "id">,
+  languages: Languages
+): HostCandidate[] {
+  const hosts: HostCandidate[] = [];
+  for (const locale of languages(true)) {
+    hosts.push({
+      host: { ...at, path: [], ...inLanguage(locale) },
+      access: "scan",
+    });
+  }
+  return hosts;
+}
+
+/** A host's language, when it has one. */
+function inLanguage(locale: string | undefined): { locale?: string } {
+  return locale === undefined ? {} : { locale };
 }
 
 /** The Layouts naming the component, each reported as left. */
@@ -364,29 +404,19 @@ async function readRow(
   host: HostAddress,
   read: "all" | "public" | "draft"
 ): Promise<Record<string, unknown> | null> {
-  const inLocale =
-    host.locale === undefined
-      ? {}
-      : { locale: host.locale, fallbackLocale: false as const };
-  const shared = {
-    depth: 0,
-    overrideAccess: true,
-    status: read === "public" ? ("published" as const) : ("all" as const),
-    ...inLocale,
-    ...(read === "draft" ? { draft: true } : {}),
-  };
+  const options = readOptions(host, read);
   try {
     const row =
       host.kind === "single"
         ? await nextly.findSingle({
             slug: host.slug,
             createIfMissing: false,
-            ...shared,
+            ...options,
           })
         : await nextly.findByID({
             collection: host.slug,
             id: host.id ?? "",
-            ...shared,
+            ...options,
           });
     return typeof row === "object" && row !== null
       ? (row as Record<string, unknown>)
@@ -395,6 +425,19 @@ async function readRow(
     if (NextlyError.isNotFound(error)) return null;
     throw error;
   }
+}
+
+/** The options one read of a host is made with, as the system. */
+function readOptions(host: HostAddress, read: "all" | "public" | "draft") {
+  return {
+    depth: 0,
+    overrideAccess: true,
+    status: read === "public" ? PUBLIC_STATES : ("all" as const),
+    ...(host.locale === undefined
+      ? {}
+      : { locale: host.locale, fallbackLocale: false as const }),
+    ...(read === "draft" ? { draft: true } : {}),
+  };
 }
 
 /** The value at a path of a row; the whole row for the empty path. */
@@ -410,6 +453,33 @@ function valueAt(
   return value === undefined || value === null
     ? { kind: "absent" }
     : { kind: "value", value };
+}
+
+/**
+ * What a write's validation must find before it may land.
+ *
+ * A save depends on the one form it was computed from. A publish depends on
+ * more: the live row it was computed from, and the absence of a pending
+ * draft, since a publish would put a draft created meanwhile live, the
+ * author's other changes with it. With no pending draft the draft form reads
+ * as the live row, so it must hash the same; and the draft's absence is asked
+ * as such, because a draft that leaves this field alone hashes the same too.
+ */
+function expectationFor(
+  nextly: RewriteDirectApi,
+  write: HostWrite
+): StoredExpectation {
+  if (write.mode !== "publish") {
+    return { host: write.host, forms: [write.expected] };
+  }
+  return {
+    host: write.host,
+    forms: [write.expected, { form: "draft", hash: write.expected.hash }],
+    noPendingDraft: async () => {
+      const pending = await readRow(nextly, write.host, "draft");
+      return pending === null || pending._isWorkingDraft !== true;
+    },
+  };
 }
 
 /** Writes a host as the person running the rewrite, checked against what was read. */
@@ -435,7 +505,7 @@ export function siteHostWriter(
     const inLocale =
       write.host.locale === undefined ? {} : { locale: write.host.locale };
     try {
-      await writeExpecting({ host: write.host, ...write.expected }, () =>
+      await writeExpecting(expectationFor(nextly, write), () =>
         write.host.kind === "single"
           ? nextly.updateSingle({
               slug: write.host.slug,

@@ -30,14 +30,30 @@ import { storedHash } from "./stored-hash";
 /** The issue code a write refused by the check carries. */
 export const HOST_CHANGED = "HOST_CHANGED_DURING_REWRITE";
 
+/** What one stored form must still hold: the hash of the value read. */
+export interface FormExpectation {
+  readonly form: HostForm;
+  /** The hash of the value read, by {@link storedHash}. */
+  readonly hash: string;
+}
+
 /** What one rewrite write expects to find stored. */
 export interface StoredExpectation {
   /** The host written. */
   readonly host: HostAddress;
-  /** The stored form the hash was read from. */
-  readonly form: HostForm;
-  /** The hash of the value read, by {@link storedHash}. */
-  readonly hash: string;
+  /**
+   * Every stored form the write depends on, each with the hash it must still
+   * have. A publish names both: the live row it was computed from, and the
+   * draft form, which with no pending draft reads as that same live row.
+   */
+  readonly forms: readonly FormExpectation[];
+  /**
+   * For a publish, whether the document still has no pending working draft.
+   * A draft that leaves this field alone reads, on the draft form, exactly as
+   * the live row does, and a publish would put it live; so its absence is
+   * asked as such, in the same validation, rather than inferred from a hash.
+   */
+  readonly noPendingDraft?: () => Promise<boolean>;
 }
 
 /** The context, once a rewrite in this process has asked for it. */
@@ -86,6 +102,24 @@ export async function changedSinceRead(
     return undefined;
   }
   const field = expected.host.path[0] ?? path;
+  for (const form of expected.forms) {
+    if (!(await holdsStill(write, field, form))) return changedIssue(path);
+  }
+  if (
+    expected.noPendingDraft !== undefined &&
+    !(await expected.noPendingDraft())
+  ) {
+    return changedIssue(path);
+  }
+  return undefined;
+}
+
+/** Whether one stored form still holds the value the rewrite read. */
+async function holdsStill(
+  write: PluginFieldWrite,
+  field: string,
+  expected: FormExpectation
+): Promise<boolean> {
   const read = await write.readStored(
     write.kind === "single"
       ? { single: write.slug, field, form: expected.form }
@@ -97,7 +131,11 @@ export async function changedSinceRead(
         }
   );
   const now = await storedHash(read.kind === "value" ? read.value : undefined);
-  if (now === expected.hash) return undefined;
+  return now === expected.hash;
+}
+
+/** The refusal a write that lost the race carries. */
+function changedIssue(path: string): ChangedIssue {
   return {
     path,
     code: HOST_CHANGED,

@@ -33,8 +33,9 @@ describe("the compare-and-swap on a rewrite's own write", () => {
   it("refuses the write when the stored value changed since it was read", async () => {
     const expected = {
       host,
-      form: "draft" as const,
-      hash: await storedHash({ nodes: [] }),
+      forms: [
+        { form: "draft" as const, hash: await storedHash({ nodes: [] }) },
+      ],
     };
 
     const issue = await writeExpecting(expected, () =>
@@ -47,8 +48,9 @@ describe("the compare-and-swap on a rewrite's own write", () => {
   it("lets the write through when the stored value is the one read", async () => {
     const expected = {
       host,
-      form: "draft" as const,
-      hash: await storedHash({ nodes: [] }),
+      forms: [
+        { form: "draft" as const, hash: await storedHash({ nodes: [] }) },
+      ],
     };
 
     const issue = await writeExpecting(expected, () =>
@@ -61,8 +63,7 @@ describe("the compare-and-swap on a rewrite's own write", () => {
   it("judges no other write: another document, another field, or outside the call", async () => {
     const expected = {
       host,
-      form: "draft" as const,
-      hash: await storedHash("x"),
+      forms: [{ form: "draft" as const, hash: await storedHash("x") }],
     };
 
     const other = await writeExpecting(expected, () =>
@@ -86,5 +87,57 @@ describe("the compare-and-swap on a rewrite's own write", () => {
       await storedHash({ a: [1, 2] })
     );
     expect(await storedHash(undefined)).toBe(await storedHash(null));
+  });
+
+  it("refuses a publish when a draft appeared, even one that leaves this field alone", async () => {
+    const hash = await storedHash({ nodes: [] });
+    let pending = false;
+    const expected = {
+      host,
+      forms: [
+        { form: "published" as const, hash },
+        { form: "draft" as const, hash },
+      ],
+      noPendingDraft: async () => !pending,
+    };
+
+    const before = await writeExpecting(expected, () =>
+      changedSinceRead(writeOf({ nodes: [] }), "content")
+    );
+    // An author saves a draft that changes only the title.
+    pending = true;
+    const after = await writeExpecting(expected, () =>
+      changedSinceRead(writeOf({ nodes: [] }), "content")
+    );
+
+    expect(before).toBeUndefined();
+    expect(after?.code).toBe(HOST_CHANGED);
+  });
+
+  it("checks every form it names, not only the first", async () => {
+    const write: PluginFieldWrite = {
+      ...writeOf({ nodes: [] }),
+      readStored: async target => ({
+        kind: "value",
+        value:
+          target.form === "draft"
+            ? { nodes: [{ id: "draft" }] }
+            : { nodes: [] },
+      }),
+    };
+    const hash = await storedHash({ nodes: [] });
+
+    const issue = await writeExpecting(
+      {
+        host,
+        forms: [
+          { form: "published", hash },
+          { form: "draft", hash },
+        ],
+      },
+      () => changedSinceRead(write, "content")
+    );
+
+    expect(issue?.code).toBe(HOST_CHANGED);
   });
 });

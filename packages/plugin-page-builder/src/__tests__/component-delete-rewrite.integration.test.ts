@@ -85,6 +85,8 @@ interface Switches {
   };
   /** Fail the next update of this note as if the process stopped. */
   crashOn?: string;
+  /** Run once, on the `atRead`-th read of this page by id. */
+  onPageRead?: { id: string; atRead: number; run: () => Promise<void> };
 }
 
 /**
@@ -108,6 +110,17 @@ function harness(
         if (typeof id !== "string") return;
         switches.onNoteRead = undefined;
         await run(id);
+      });
+      let pageReads = 0;
+      ctx.hooks.on("afterRead", "pages", async context => {
+        const hold = switches.onPageRead;
+        const data = (context as { data?: unknown }).data;
+        if (hold === undefined || Array.isArray(data)) return;
+        if ((data as { id?: unknown } | undefined)?.id !== hold.id) return;
+        pageReads += 1;
+        if (pageReads !== hold.atRead) return;
+        switches.onPageRead = undefined;
+        await hold.run();
       });
       ctx.hooks.on("beforeChange", NOTES, async context => {
         const hold = switches.holdAfterValidation;
@@ -728,6 +741,67 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await svc.progress(cardId, "delete")).map(row => row.documentKey)
       ).toContain(documentKeyOf({ kind: "collection", slug: NOTES, id }));
+    });
+
+    it("does not publish a draft an author saved between the rewrite's read and its write", async () => {
+      const switches: Switches = {};
+      const { t, cookie } = await boot(switches);
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Live",
+          slug: `live-${String(Math.random()).slice(2, 10)}`,
+          status: "published",
+          content: pageDoc([copyOf("i1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      const pageId = String(created.item.id);
+      await open(cookie, cardId);
+      // The rewrite reads the live row and finds no draft (its second read);
+      // the author then saves a draft that changes only the title.
+      switches.onPageRead = {
+        id: pageId,
+        atRead: 2,
+        run: async () => {
+          await t.nextly.update({
+            collection: "pages",
+            id: pageId,
+            data: { title: "Author draft" },
+            overrideAccess: true,
+          });
+        },
+      };
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      const live = (await t.nextly.findByID({
+        collection: "pages",
+        id: pageId,
+        overrideAccess: true,
+        status: "all",
+        depth: 0,
+      })) as unknown as { title: string; content: unknown };
+      // The draft stayed a draft: its title is not live.
+      expect(live.title).toBe("Live");
+      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
+      const draft = (await t.nextly.findByID({
+        collection: "pages",
+        id: pageId,
+        overrideAccess: true,
+        status: "all",
+        depth: 0,
+        draft: true,
+      })) as unknown as { title: string };
+      expect(draft.title).toBe("Author draft");
+      expect(copies(await nodesOf(t, "pages", pageId, true), cardId)).toBe(0);
+      expect(reports.at(-1)?.left).toContainEqual(
+        expect.objectContaining({
+          host: expect.objectContaining({ id: pageId }),
+          reason: "pending-draft",
+        })
+      );
     });
   }
 );

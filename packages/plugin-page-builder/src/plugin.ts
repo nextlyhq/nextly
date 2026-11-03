@@ -805,16 +805,20 @@ function installContext(
 
 /**
  * What the component-delete rewrite reads the installed site through: the
- * live registries, the Direct API (imported at call time, for the reason
- * `installContext` gives), the Layouts, and the usage index as a hint.
+ * live registries, the Direct API (through the SDK, at call time), the
+ * Layouts, and the usage index as a hint.
  */
 function rewriteInstallFor(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
   opts: PageBuilderOptions,
   composition: CompositionSetup
 ): RewriteInstall {
-  const nextly = async (): Promise<RewriteDirectApi> =>
-    (await import("nextly/runtime")).requireNextly();
+  // The booted instance through the SDK, the plugin's stable surface, imported
+  // at call time for the reason `defaultLayoutDeps` gives.
+  const nextly = async (): Promise<RewriteDirectApi> => {
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    return getCachedNextly();
+  };
   return {
     db: ctx.db,
     dialect: ctx.dialect,

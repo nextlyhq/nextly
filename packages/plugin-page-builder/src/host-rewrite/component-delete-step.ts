@@ -14,6 +14,7 @@
 import {
   componentReferencesIn,
   inlineComponentInstances,
+  sameStoredValue,
   stillReferences,
   type DefinitionsById,
   type DocumentLimits,
@@ -25,6 +26,14 @@ import {
 import { asDocument } from "../component-store-source";
 
 import type { HostStep, StoredForm } from "./contract";
+
+/**
+ * The definitions a form's copies are converted from, or why they cannot be
+ * settled: a refusal leaves the host as it is, with the reason.
+ */
+export type DefinitionsAnswer =
+  | { readonly kind: "definitions"; readonly byId: DefinitionsById }
+  | { readonly kind: "refuse"; readonly reason: string };
 
 /** What the step reads its definitions and rules from. */
 export interface ComponentDeleteStepArgs {
@@ -38,7 +47,7 @@ export interface ComponentDeleteStepArgs {
   readonly definitions: (
     componentIds: readonly string[],
     form: StoredForm
-  ) => Promise<DefinitionsById>;
+  ) => Promise<DefinitionsAnswer>;
   /** The site's nesting rules. */
   readonly nesting: NestingSource;
   /** The block definitions, for the locks their slots declare. */
@@ -69,10 +78,13 @@ export function componentDeleteStep(args: ComponentDeleteStepArgs): HostStep {
 
     const placed = componentReferencesIn(document, args.limits.maxNodes);
     const definitions = await args.definitions(placed.ids, form);
+    if (definitions.kind === "refuse") {
+      return { kind: "refuse", reason: definitions.reason };
+    }
     const inlined = inlineComponentInstances(
       document,
       args.componentId,
-      definitions,
+      definitions.byId,
       args.nesting,
       args.blocks,
       args.limits
@@ -117,3 +129,39 @@ const REASONS: Partial<Record<InlineProblem, string>> = {
 /** The words for a refusal without words of its own. */
 const GENERIC =
   "The copy of the component cannot be turned into plain blocks here.";
+
+/** Why a shared host is not converted when its definitions differ by language. */
+const DIFFERS_BY_LANGUAGE =
+  "This content is shared by every language, and the component it uses is defined differently in some of them, so one set of plain blocks cannot stand in for it everywhere. Make the definitions match, or replace the copy by hand.";
+
+/**
+ * The definitions a value shared by every language is converted from: the
+ * ones read in each language, when they agree for every component asked for;
+ * otherwise a refusal.
+ *
+ * Each language draws a shared placement from the definition in its own
+ * language, so converting it from one of them would change what the others
+ * show. Agreement means each component is present in every language or in
+ * none, and stored alike wherever it is present.
+ *
+ * @experimental
+ */
+export function definitionsAlikeInEveryLanguage(
+  byLanguage: readonly DefinitionsById[],
+  componentIds: readonly string[]
+): DefinitionsAnswer {
+  const [first, ...rest] = byLanguage;
+  if (first === undefined) return { kind: "definitions", byId: new Map() };
+  for (const id of componentIds) {
+    const held = first.get(id);
+    for (const other of rest) {
+      const there = other.get(id);
+      const alike =
+        held === undefined
+          ? there === undefined
+          : there !== undefined && sameStoredValue(held, there);
+      if (!alike) return { kind: "refuse", reason: DIFFERS_BY_LANGUAGE };
+    }
+  }
+  return { kind: "definitions", byId: first };
+}

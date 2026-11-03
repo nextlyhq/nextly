@@ -10,9 +10,7 @@
  *
  * @module host-rewrite/scan
  */
-import { isPlainRecord } from "@nextlyhq/blocks-engine";
-
-import { asDocument } from "../component-store-source";
+import { documentRefusal, isPlainRecord } from "@nextlyhq/blocks-engine";
 
 import type { HostStep, StoredForm } from "./contract";
 
@@ -42,9 +40,9 @@ export async function scannedOutcomes(
 }
 
 /**
- * Every value in `row` shaped like a blocks document, outermost first, or
- * `null` when the search ran past its bound. A document's own nodes are not
- * searched again: what it places is the step's to judge.
+ * Every blocks document in `row`, or `null` when the search ran past its
+ * bound. A document's own nodes are not searched again: what it places is the
+ * step's to judge. Any other value is searched through, whatever keys it has.
  */
 function documentsWithin(row: unknown): unknown[] | null {
   const found: unknown[] = [];
@@ -54,7 +52,7 @@ function documentsWithin(row: unknown): unknown[] | null {
     visited += 1;
     if (visited > MOST_VALUES_SEARCHED) return null;
     const value = stack.pop();
-    if (value !== row && asDocument(value) !== null) {
+    if (value !== row && isBlocksValue(value)) {
       found.push(value);
       continue;
     }
@@ -68,4 +66,33 @@ function documentsWithin(row: unknown): unknown[] | null {
     for (const item of inner) stack.push(item);
   }
   return found;
+}
+
+/**
+ * Whether a value is a blocks document, by the engine's own whole-document
+ * check, or claims to be one. A record that merely has a `nodes` array is
+ * neither, and is searched through like any other: the blocks value it holds
+ * may sit beside that array.
+ *
+ * A value naming a `formatVersion` that the check refuses (a newer format,
+ * say) is still handed to the step rather than searched through, so the step
+ * refuses it as unreadable: searching its insides would read a document this
+ * version cannot read as if it were ordinary data.
+ */
+function isBlocksValue(value: unknown): boolean {
+  const decoded = typeof value === "string" ? parsedOrNull(value) : value;
+  if (!isPlainRecord(decoded) || !Array.isArray(decoded.nodes)) return false;
+  return (
+    documentRefusal(decoded) === undefined ||
+    Object.hasOwn(decoded, "formatVersion")
+  );
+}
+
+/** Stored JSON text decoded, or `null` when it is not JSON. */
+function parsedOrNull(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
 }

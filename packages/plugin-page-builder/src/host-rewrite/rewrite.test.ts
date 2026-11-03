@@ -46,6 +46,25 @@ interface StoredHost {
   access: HostAccess;
 }
 
+/** Whether a host still holds what a write was computed from. */
+async function stillAsRead(
+  held: StoredHost,
+  write: HostWrite
+): Promise<boolean> {
+  const now =
+    write.expected.form === "draft" && held.draft !== null
+      ? held.draft
+      : held.published;
+  return (await storedHash(now)) === write.expected.hash;
+}
+
+/** Store a write where it lands: live for a publish or a row with no draft. */
+function store(held: StoredHost, write: HostWrite): void {
+  const value = write.value as Value;
+  if (write.mode === "publish" || held.draft === null) held.published = value;
+  else held.draft = value;
+}
+
 /** A site of hosts, one per document, keyed by document id. */
 function site(hosts: Record<string, Partial<StoredHost>>) {
   const stored = new Map<string, StoredHost>(
@@ -152,17 +171,9 @@ function site(hosts: Record<string, Partial<StoredHost>>) {
       if (denied.has(write.host.id ?? "")) return { kind: "forbidden" };
       const held = stored.get(write.host.id ?? "");
       if (held === undefined) throw new Error("no such host");
-      const now =
-        write.expected.form === "draft" && held.draft !== null
-          ? held.draft
-          : held.published;
-      if ((await storedHash(now)) !== write.expected.hash)
-        return { kind: "changed" };
+      if (!(await stillAsRead(held, write))) return { kind: "changed" };
       writes.push(write);
-      const value = write.value as Value;
-      if (write.mode === "publish" || held.draft === null)
-        held.published = value;
-      else held.draft = value;
+      store(held, write);
       return { kind: "written" };
     },
   };

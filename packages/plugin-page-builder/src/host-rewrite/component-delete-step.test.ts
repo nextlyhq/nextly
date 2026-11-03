@@ -12,7 +12,10 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { componentDeleteStep } from "./component-delete-step";
+import {
+  componentDeleteStep,
+  definitionsAlikeInEveryLanguage,
+} from "./component-delete-step";
 import type { StoredForm } from "./contract";
 
 const text = (id: string, mark: string): BlockNode => ({
@@ -52,7 +55,7 @@ function stepWith(definitions: ReadonlyMap<string, BlockDocument>) {
     componentId: "card",
     definitions: async ids => {
       asked.push([...ids]);
-      return definitions;
+      return { kind: "definitions" as const, byId: definitions };
     },
     nesting: { parentsOf: () => undefined },
     blocks: { get: () => undefined },
@@ -122,5 +125,60 @@ describe("the component-delete step", () => {
       (await step({ ...page([copy("i1", "card")]), formatVersion: 999 }, form))
         .kind
     ).toBe("refuse");
+  });
+
+  it("refuses, with the reason given, when its definitions cannot be settled", async () => {
+    const step = componentDeleteStep({
+      componentId: "card",
+      definitions: async () => ({
+        kind: "refuse",
+        reason: "differs by language",
+      }),
+      nesting: { parentsOf: () => undefined },
+      blocks: { get: () => undefined },
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect(await step(page([copy("i1", "card")]), form)).toEqual({
+      kind: "refuse",
+      reason: "differs by language",
+    });
+  });
+});
+
+describe("definitions for a value every language shares", () => {
+  const german: BlockDocument = {
+    ...card,
+    nodes: [text("c1", "karte")],
+  };
+
+  it("uses them when every language defines each component alike", () => {
+    const answer = definitionsAlikeInEveryLanguage(
+      [new Map([["card", card]]), new Map([["card", structuredClone(card)]])],
+      ["card", "missing"]
+    );
+
+    expect(answer).toEqual({
+      kind: "definitions",
+      byId: new Map([["card", card]]),
+    });
+  });
+
+  it("refuses when one language defines a component differently", () => {
+    const answer = definitionsAlikeInEveryLanguage(
+      [new Map([["card", card]]), new Map([["card", german]])],
+      ["card"]
+    );
+
+    expect(answer.kind).toBe("refuse");
+  });
+
+  it("refuses when a component is defined in one language and not another", () => {
+    const answer = definitionsAlikeInEveryLanguage(
+      [new Map(), new Map([["card", card]])],
+      ["card"]
+    );
+
+    expect(answer.kind).toBe("refuse");
   });
 });
