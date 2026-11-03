@@ -302,9 +302,9 @@ describe.each(getConfiguredTestDialects())(
       expect(all.totalDocs).toBe(1);
 
       // A page past the end, where no Single is read: its total must not
-      // count the protected Single. (No `search` here: the registry's search
-      // is ILIKE, which SQLite and MySQL do not have; and a limit beside the
-      // offset, which SQLite requires.)
+      // count the protected Single. (No `search` here: this probe pins the
+      // page-past-the-end total alone; the registry's search has its own
+      // suite.)
       const probe = await t.nextly.findSingles({
         principal: member,
         limit: 10,

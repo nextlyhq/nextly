@@ -196,7 +196,7 @@ export abstract class BaseRegistryService<
   /** Table name prefix for this domain (e.g., "dc_", "single_", "comp_"). */
   protected abstract readonly tableNamePrefix: string;
 
-  /** Column names to search via ILIKE when `search` is provided in list options. */
+  /** Column names the registry's search matches case-insensitively, as literal text, when `search` is provided in list options. */
   protected abstract getSearchColumns(): string[];
 
   /** Deserialize a raw DB row into the typed record. */
@@ -303,9 +303,32 @@ export abstract class BaseRegistryService<
   }
 
   /**
+   * A registry list paginates or it does not: an `offset` that skips rows needs
+   * the `limit` that bounds the page. The refusal lives here, before any query,
+   * because the query builder emits `OFFSET` as its own clause: SQLite and MySQL
+   * refuse a bare `OFFSET` in SQL — a dialect-grammar database error — while
+   * PostgreSQL silently returns the unbounded tail. One contract, refused once,
+   * on every dialect. An offset of 0 skips nothing and is not a refusal.
+   */
+  protected assertPaginationIsComplete(options?: BaseListOptions): void {
+    if (
+      options?.offset !== undefined &&
+      options.offset !== 0 &&
+      options.limit === undefined
+    ) {
+      throw NextlyError.invalidInput({
+        message:
+          "An offset requires a limit: pass limit alongside offset to paginate.",
+        logContext: { resourceType: this.resourceType, offset: options.offset },
+      });
+    }
+  }
+
+  /**
    * Get all records, optionally filtered by source, migration status, and locked.
    */
   protected async getAllRecords(options?: BaseListOptions): Promise<TRecord[]> {
+    this.assertPaginationIsComplete(options);
     const conditions = this.buildFilterConditions(options);
     return this.selectRecords({
       where: conditions.length > 0 ? { and: conditions } : undefined,
@@ -376,6 +399,7 @@ export abstract class BaseRegistryService<
   protected async listRecords(
     options?: BaseListOptions
   ): Promise<BaseListResult<TRecord>> {
+    this.assertPaginationIsComplete(options);
     // Short-circuit when the caller passed an explicit empty allowlist
     // (e.g. a user with no read permissions on any record). Returning early
     // keeps `total` honest, avoids hitting the DB with a no-op query, and
