@@ -1625,6 +1625,9 @@ function ShellRegions({
           openPanel={openPanel}
           isAvailable={isAvailable}
           onSelect={selectPanel}
+          // The panel keys answer only for the shell that is showing and that
+          // the author is in, the check F6 and mod+\ already make.
+          claimsKeys={() => active && claimsKeys()}
         />
 
         <ResizablePanelGroup

@@ -201,6 +201,64 @@ describe("the rail's panel keys", () => {
     expect(railItem("Design").getAttribute("aria-pressed")).toBe(before);
   });
 
+  it("answers for the editor the author is in, with two on the page", () => {
+    // The shortcut manager hands a key to the binding registered last, which
+    // is the second editor's: without the shell's own check, a key pressed in
+    // the first switched panels in the second.
+    stubContainerFits(true);
+    const shell = (label: string) => (
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        renderPanel={panel => <p>{panel} panel</p>}
+        inspector={<button type="button">{label} inspector control</button>}
+      />
+    );
+    render(shell("first"));
+    render(shell("second"));
+    const [first, second] = screen
+      .getAllByRole("navigation", { name: "Editor panels" })
+      .map(rail => within(rail).getByRole("button", { name: "Layers" }));
+    screen.getByRole("button", { name: "first inspector control" }).focus();
+
+    fireEvent.keyDown(document.activeElement ?? document, { key: "l" });
+
+    expect(first?.getAttribute("aria-pressed")).toBe("true");
+    expect(second?.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("passes the key on from an editor behind its narrow-window notice", () => {
+    // That editor stays mounted to keep its slots, so its keys stay
+    // registered; registered last, it took the key from the editor the author
+    // can see.
+    observedWidth = MIN_SHELL_WIDTH + 160;
+    render(
+      <BuilderShell
+        store={memoryStore()}
+        renderPanel={panel => <p>{panel} panel</p>}
+      >
+        <p>wide canvas</p>
+      </BuilderShell>
+    );
+    act(() => {
+      observedWidth = MIN_SHELL_WIDTH - 100;
+    });
+    render(
+      <BuilderShell
+        store={memoryStore()}
+        renderPanel={panel => <p>{panel} panel</p>}
+      >
+        <p>narrow canvas</p>
+      </BuilderShell>
+    );
+    expect(screen.queryAllByText(/needs more width/i)).toHaveLength(1);
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(document.body, { key: "l" });
+
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("names each panel's key on its item, for its tooltip and assistive technology", () => {
     renderShell();
     expect(railItem("Add").getAttribute("aria-keyshortcuts")).toBe("A");

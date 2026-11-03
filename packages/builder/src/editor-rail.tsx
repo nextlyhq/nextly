@@ -1,11 +1,11 @@
 /**
  * The editor's left rail: the daily tools at the top, Settings and Help at the
- * bottom, each with its name under its icon.
+ * bottom, each an icon named by its tooltip (with its key) and its accessible
+ * name, so the canvas keeps the width labels would take.
  *
- * Named, not icon-only: an author new to the editor should not have to hover
- * every icon to find Layers. And a panel the host cannot fill yet is left out
- * rather than drawn disabled, so the rail only ever offers what works; it
- * grows as the panels behind it are built.
+ * A panel the host cannot fill yet is left out rather than drawn disabled, so
+ * the rail only ever offers what works; it grows as the panels behind it are
+ * built.
  *
  * @module editor-rail
  */
@@ -26,7 +26,7 @@ import {
   Plus,
   Settings,
 } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 
 import { EDITOR_WORDS } from "./editor-words";
 import { RAIL_GROUPS, RAIL_WIDTH, type LeftPanel } from "./shell-state";
@@ -118,12 +118,20 @@ function RailItem({
  * The panels' single keys: each opens its panel, or closes it when it is the
  * one open, as clicking its item does. Never while text is being typed and
  * never with a modifier held, so an author typing on the canvas or in a field
- * never switches panels.
+ * never switches panels. And only while `claims` says the key is this rail's,
+ * so a rail hidden behind its editor's narrow-window notice, or beside a second
+ * editor the author is in, passes the key on rather than switching panels in an
+ * editor nobody is looking at.
  */
 function usePanelKeys(
   panels: readonly LeftPanel[],
-  onSelect: (panel: LeftPanel) => void
+  onSelect: (panel: LeftPanel) => void,
+  claims: (() => boolean) | undefined
 ): void {
+  // Read at press time through a ref: the manager asks `when` then, and a
+  // predicate captured at registration would answer for an older render.
+  const latest = React.useRef(claims);
+  latest.current = claims;
   useShortcuts(
     panels.flatMap(panel => {
       const { label, key } = PANEL_CHROME[panel];
@@ -134,6 +142,7 @@ function usePanelKeys(
               keys: key,
               description: `Open or close ${label}`,
               whenTyping: false,
+              when: () => latest.current?.() ?? true,
               run: () => onSelect(panel),
             },
           ];
@@ -161,6 +170,12 @@ export interface EditorRailProps {
   onSettings?: (button: HTMLElement) => void;
   /** Whether the Settings dialog is open, shown as the item pressed. */
   settingsOpen?: boolean;
+  /**
+   * Whether a panel key pressed now is this rail's to answer: the shell's own
+   * check that it is showing and the author is in it. Absent, the keys answer
+   * whenever nothing is being typed.
+   */
+  claimsKeys?: () => boolean;
 }
 
 export function EditorRail({
@@ -171,10 +186,12 @@ export function EditorRail({
   railRef,
   onSettings,
   settingsOpen = false,
+  claimsKeys,
 }: EditorRailProps): React.JSX.Element {
   usePanelKeys(
     [...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom].filter(isAvailable),
-    onSelect
+    onSelect,
+    claimsKeys
   );
   const item = (panel: LeftPanel) => {
     const { label, Icon, key } = PANEL_CHROME[panel];
