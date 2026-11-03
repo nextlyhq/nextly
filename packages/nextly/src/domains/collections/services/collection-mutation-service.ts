@@ -9762,6 +9762,20 @@ export class CollectionMutationService extends BaseService {
       // Who the write is made as, for each instance's own field rules: the
       // caller and trust the entry's own fields are judged with.
       access: this.fieldGroupAccess(params),
+      // The held write, on its transaction and in its language, so a field
+      // inside an instance that reads the library, as a blocks field does to
+      // judge its composition, judges it now. Without it that field judges
+      // nothing, and a held value past the composition rules is saved, to be
+      // refused only when someone publishes it. Its payload is the draft, as
+      // a draft: a held edit of a live entry keeps the live status, and a
+      // field judging by status would otherwise judge it as going live.
+      write: this.validationWrite(
+        params.collectionName,
+        params.entryId,
+        tx,
+        draftLocale ?? undefined,
+        { ...draftDocument, status: "draft" }
+      ),
     });
   }
 
