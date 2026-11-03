@@ -3,7 +3,12 @@
  * definitions: what each field holds, and only the fields the visitor's
  * reader allows.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../../domains/schema/field-types/field-type-registry";
 
 import {
   bindingFieldShapes,
@@ -12,6 +17,10 @@ import {
 } from "../binding-field-shapes";
 
 const everyone = async () => true;
+
+afterEach(() => {
+  clearFieldTypes();
+});
 
 describe("fieldShapesOf", () => {
   it("says what each field holds", async () => {
@@ -169,6 +178,107 @@ describe("fieldShapesOf", () => {
       hero: false,
       byline: false,
     });
+  });
+
+  it("follows one component's fields, judged by that component's own rules from its top level", async () => {
+    const asked: string[] = [];
+    const readable = vi.fn(
+      async (
+        path: readonly string[],
+        within?: { component: string; path: readonly string[] }
+      ) => {
+        asked.push(
+          within === undefined
+            ? path.join(".")
+            : `${path.join(".")} in ${within.component}:${within.path.join(".")}`
+        );
+        return within?.path.join(".") !== "secret";
+      }
+    );
+    // As the fields are expanded: the component's own fields grafted on.
+    const shapes = await fieldShapesOf(
+      [
+        {
+          name: "card",
+          type: "component",
+          component: "pss_card",
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "secret", type: "text" },
+            {
+              name: "box",
+              type: "group",
+              fields: [{ name: "tag", type: "text" }],
+            },
+          ],
+        },
+      ],
+      readable
+    );
+    expect(shapes).toEqual([
+      {
+        name: "card",
+        type: "component",
+        fields: [
+          { name: "heading", type: "text" },
+          {
+            name: "box",
+            type: "group",
+            fields: [{ name: "tag", type: "text" }],
+          },
+        ],
+      },
+    ]);
+    expect(asked).toEqual([
+      "card",
+      "card.heading in pss_card:heading",
+      "card.secret in pss_card:secret",
+      "card.box in pss_card:box",
+      "card.box.tag in pss_card:box.tag",
+    ]);
+  });
+
+  it("does not follow a dynamic zone, whose members differ by instance", async () => {
+    const shapes = await fieldShapesOf(
+      [
+        {
+          name: "zone",
+          type: "fieldGroup",
+          components: ["pss_card", "pss_quote"],
+          repeatable: true,
+          fields: [
+            {
+              name: "#pss_card",
+              type: "group",
+              fields: [{ name: "heading", type: "text" }],
+            },
+          ],
+        },
+      ],
+      everyone
+    );
+    expect(shapes).toEqual([
+      { name: "zone", type: "fieldGroup", hasMany: true },
+    ]);
+  });
+
+  it("gives a contributed field type the storage primitive it registered, and a built-in none", async () => {
+    registerFieldType({
+      type: "pss-rating",
+      storage: "number",
+      component: "plugin/pss-rating",
+    });
+    const shapes = await fieldShapesOf(
+      [
+        { name: "score", type: "pss-rating" },
+        { name: "title", type: "text" },
+      ],
+      everyone
+    );
+    expect(shapes).toEqual([
+      { name: "score", type: "pss-rating", storage: "number" },
+      { name: "title", type: "text" },
+    ]);
   });
 
   it("never offers a password, whatever the reader says", async () => {

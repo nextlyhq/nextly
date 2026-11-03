@@ -15,8 +15,14 @@
  */
 import { z } from "zod";
 
+import type { FieldStoragePrimitive } from "../../collections/fields/catalog";
 import type { FieldConfig } from "../../collections/fields/types";
 import type { DatePickerAppearance } from "../../collections/fields/types/date";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupFieldType,
+} from "../../domains/field-groups/storage/field-group-field-type";
+import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import { isListField } from "../../domains/versions/diff/field-cardinality";
 import { NextlyError } from "../../errors/nextly-error";
 import { addressableFields } from "../../shared/addressable-fields";
@@ -55,12 +61,38 @@ export interface BindingFieldShape {
    * instant, read in the site's time zone.
    */
   readonly timeOnly?: true;
-  /** A group's own fields, each judged as this one is. */
+  /**
+   * The storage primitive a plugin-contributed field type persists as, from
+   * the field-type registry, so the binding catalog can judge the field by
+   * it as `BindingEndpoint.storage`. Absent for a built-in type.
+   */
+  readonly storage?: FieldStoragePrimitive;
+  /**
+   * A group's own fields, or the fields of the one component a component
+   * field holds, each judged as this one is: a component's by that
+   * component's own rules.
+   */
   readonly fields?: readonly BindingFieldShape[];
 }
 
-/** Whether the visitor may read the field at this path of names. */
-export type FieldReadable = (path: readonly string[]) => Promise<boolean>;
+/**
+ * Where a field inside a component sits: the component whose rules it is
+ * filed under, and its path of names from that component's top level.
+ */
+export interface ComponentLevel {
+  component: string;
+  path: readonly string[];
+}
+
+/**
+ * Whether the visitor may read the field at this path of names from the
+ * source's top level; `within` says where it sits in a component, when it
+ * does.
+ */
+export type FieldReadable = (
+  path: readonly string[],
+  within?: ComponentLevel
+) => Promise<boolean>;
 
 const REF = z.union([
   z.object({ collection: z.string().min(1) }).strict(),
@@ -177,20 +209,57 @@ function storedAtThisLevel(container: { type?: unknown }): boolean {
   return container.type === "group";
 }
 
+/** A plugin-contributed type's storage primitive; nothing for a built-in, which the registry does not hold. */
+function storageOf(field: StoredField): Pick<BindingFieldShape, "storage"> {
+  const contributed = getFieldType(field.type);
+  return contributed === undefined ? {} : { storage: contributed.storage };
+}
+
+/**
+ * The level a container's children are judged at, as their parent: a
+ * group's, the group's own place (`within`, which already names it); one
+ * component's, that component's top level. `null` for a container whose
+ * children are not part of its shape: a dynamic zone, whose members differ by
+ * instance, and anything else.
+ */
+function childLevelOf(
+  field: StoredField,
+  stored: unknown,
+  within: ComponentLevel | undefined
+): { within: ComponentLevel | undefined } | null {
+  if (field.type === "group") return { within };
+  if (!isFieldGroupFieldType(field.type)) return null;
+  const { single, many } = extractFieldGroupReferences(stored);
+  if (single === undefined || (many?.length ?? 0) > 0) return null;
+  return { within: { component: single, path: [] } };
+}
+
 async function shapeOf(
   field: StoredField,
+  stored: unknown,
   path: readonly string[],
-  readable: FieldReadable
+  readable: FieldReadable,
+  within: ComponentLevel | undefined
 ): Promise<BindingFieldShape> {
-  // A group stores its fields inside its own value, so a binding may follow
-  // them; any other container's fields are not part of its shape.
+  // A group stores its fields inside its own value, and a component field
+  // holds its component's, grafted on when the fields were expanded, so a
+  // binding may follow either; no other container's fields are in its shape.
+  const level = childLevelOf(field, stored, within);
   const nested =
-    field.type === "group" && field.fields !== undefined
-      ? { fields: await fieldShapesOf(field.fields, readable, path) }
+    level !== null && field.fields !== undefined
+      ? {
+          fields: await fieldShapesOf(
+            field.fields,
+            readable,
+            path,
+            level.within
+          ),
+        }
       : {};
   return Object.freeze({
     name: field.name,
     type: field.type,
+    ...storageOf(field),
     ...manyOf(field),
     ...(field.relationTo === undefined ? {} : { relationTo: field.relationTo }),
     ...optionsOf(field),
@@ -210,7 +279,8 @@ async function shapeOf(
 export async function fieldShapesOf(
   fields: readonly unknown[],
   readable: FieldReadable,
-  parent: readonly string[] = []
+  parent: readonly string[] = [],
+  within?: ComponentLevel
 ): Promise<BindingFieldShape[]> {
   const shapes: BindingFieldShape[] = [];
   for (const stored of addressableFields(fields, {
@@ -219,8 +289,15 @@ export async function fieldShapesOf(
     const parsed = STORED_FIELD.safeParse(stored);
     if (!parsed.success || NEVER_READ.has(parsed.data.type)) continue;
     const path = [...parent, parsed.data.name];
-    if (!(await readable(path))) continue;
-    shapes.push(await shapeOf(parsed.data, path, readable));
+    const own =
+      within === undefined
+        ? undefined
+        : {
+            component: within.component,
+            path: [...within.path, parsed.data.name],
+          };
+    if (!(await readable(path, own))) continue;
+    shapes.push(await shapeOf(parsed.data, stored, path, readable, own));
   }
   return shapes;
 }

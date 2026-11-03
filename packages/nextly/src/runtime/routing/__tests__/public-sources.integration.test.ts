@@ -9,7 +9,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   date,
   defineCollection,
+  defineFieldGroup,
   defineSingle,
+  fieldGroup,
   group,
   select,
   text,
@@ -17,6 +19,7 @@ import {
 import { withRuleLanguage } from "../../../auth/access/rule-language";
 import { runAsPrincipal } from "../../../auth/principal-scope";
 import { container } from "../../../di/container";
+import { writeFieldGroupType } from "../../../domains/field-groups/storage/field-group-type-key";
 import { makePrincipal } from "../../../plugins/principals/principal";
 import {
   createTestNextly,
@@ -35,6 +38,9 @@ import { createPublicReader, type PublicSourceReader } from "../public-reader";
 const POSTS = "pss_posts";
 const CLOSED = "pss_closed";
 const INTL = "pss_intl";
+const PAGES = "pss_pages";
+const CARD = "pss_card";
+const QUOTE = "pss_quote";
 const BANNER = "pss_banner";
 const UNPUBLISHED = "pss_unpublished";
 const NEVER_WRITTEN = "pss_never_written";
@@ -75,7 +81,44 @@ const singles = () => [
   }),
 ];
 
+/** Two components, each with a field declared hidden; the card one ruled out too. */
+const fieldGroups = () => [
+  defineFieldGroup({
+    slug: CARD,
+    fields: [
+      text({ name: "heading" }),
+      text({ name: "cardHidden", admin: { hidden: true } }),
+      text({ name: "cardSecret", access: { read: () => false } }),
+    ],
+  }),
+  defineFieldGroup({
+    slug: QUOTE,
+    fields: [
+      text({ name: "line" }),
+      text({ name: "quoteHidden", admin: { hidden: true } }),
+    ],
+  }),
+];
+
+/** A component instance in a dynamic zone, marked with its component's type. */
+function typed(type: string, data: Record<string, unknown>) {
+  const instance = { ...data };
+  writeFieldGroupType(instance, type);
+  return instance;
+}
+
 const collections = () => [
+  // One component, and a dynamic zone holding either.
+  defineCollection({
+    slug: PAGES,
+    status: true,
+    access: { read: () => true },
+    fields: [
+      text({ name: "title" }),
+      fieldGroup({ name: "card", component: CARD }),
+      fieldGroup({ name: "zone", components: [CARD, QUOTE], repeatable: true }),
+    ],
+  }),
   defineCollection({
     slug: POSTS,
     status: true,
@@ -161,6 +204,7 @@ describe.each(getConfiguredTestDialects())(
         localization: { locales: ["en", "fr"], defaultLocale: "en" },
         collections: collections(),
         singles: singles(),
+        fieldGroups: fieldGroups(),
       });
       await t.nextly.updateSingle({
         slug: BANNER,
@@ -189,6 +233,26 @@ describe.each(getConfiguredTestDialects())(
           },
         });
       }
+      await t.nextly.create({
+        collection: PAGES,
+        data: {
+          title: "Page",
+          card: {
+            heading: "Card heading",
+            cardHidden: "c-hid",
+            cardSecret: "c-sec",
+          },
+          zone: [
+            typed(QUOTE, { line: "Quote line", quoteHidden: "q-hid" }),
+            typed(CARD, {
+              heading: "Zone heading",
+              cardHidden: "z-hid",
+              cardSecret: "z-sec",
+            }),
+          ],
+          status: "published",
+        },
+      });
       reader = createPublicReader(t.nextly);
     });
 
@@ -268,6 +332,26 @@ describe.each(getConfiguredTestDialects())(
         for (const item of items) {
           expect(item).not.toHaveProperty("adminOnly");
           expect(item.seo).toEqual({ summary: "s" });
+        }
+      });
+
+      it("leave out a field declared hidden inside a component and inside a dynamic zone", async () => {
+        const trusted = JSON.stringify(
+          (await t.nextly.find({ collection: PAGES, limit: 10 })).items
+        );
+        // The control: each hidden component value is stored and read back.
+        for (const value of ["c-hid", "q-hid", "z-hid"]) {
+          expect(trusted).toContain(value);
+        }
+
+        const { items } = await reader.find({ collection: PAGES, limit: 10 });
+        const shown = JSON.stringify(items);
+        for (const value of ["c-hid", "q-hid", "z-hid"]) {
+          expect(shown).not.toContain(value);
+        }
+        // What is not hidden still shows, in each component and zone member.
+        for (const value of ["Card heading", "Quote line", "Zone heading"]) {
+          expect(shown).toContain(value);
         }
       });
 
@@ -380,6 +464,15 @@ describe.each(getConfiguredTestDialects())(
         // rule's answer for a visitor.
         expect(names).toContain("title");
         expect(names).not.toContain("memberNote");
+      });
+
+      it("follows a component's fields, judged by its own rules, and not a dynamic zone's", async () => {
+        const shapes = await bindingFieldShapes({ collection: PAGES });
+        const card = shapes?.find(shape => shape.name === "card");
+        expect(card?.fields?.map(shape => shape.name)).toEqual(["heading"]);
+        const zone = shapes?.find(shape => shape.name === "zone");
+        expect(zone).toMatchObject({ hasMany: true });
+        expect(zone).not.toHaveProperty("fields");
       });
 
       it("leaves out the fields declared hidden", async () => {

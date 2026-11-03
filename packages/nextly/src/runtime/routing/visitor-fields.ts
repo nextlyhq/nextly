@@ -26,14 +26,14 @@ import {
   type FieldFunctions,
 } from "../../shared/lib/field-level-registry";
 
-import type { FieldReadable } from "./binding-field-shapes";
+import type { ComponentLevel, FieldReadable } from "./binding-field-shapes";
 import {
-  declaredFields,
+  expandedFields,
   hiddenFieldPaths,
   type SourceEntity,
 } from "./declared-fields";
 
-/** A source's stored field definitions, and which of them the visitor may read. */
+/** A source's field definitions, components expanded, and which of them the visitor may read. */
 export interface VisitorFields {
   fields: readonly unknown[];
   readable: FieldReadable;
@@ -73,39 +73,72 @@ async function visitorReads(slug: string): Promise<boolean> {
   return verdict.refusal === "only-matching-entries";
 }
 
+/** The rules one entity files its fields' rules under, and what they judge. */
+interface RuleLevel {
+  registered: Record<string, FieldFunctions> | undefined;
+  caller: Parameters<typeof readableWithoutEntry>[1];
+}
+
+/**
+ * Whether each field along `names`, from `level`, lets the visitor read it
+ * with no entry given. Only a field's own rule is asked at each step, so a
+ * group with one hidden child still shows its others.
+ */
+async function readableAlong(
+  level: RuleLevel,
+  names: readonly string[]
+): Promise<boolean> {
+  let fields = level.registered;
+  for (const name of names) {
+    const field =
+      fields !== undefined && Object.hasOwn(fields, name)
+        ? fields[name]
+        : undefined;
+    const rule = field?.access?.read;
+    if (
+      rule !== undefined &&
+      !(await readableWithoutEntry({ access: { read: rule } }, level.caller))
+    ) {
+      return false;
+    }
+    fields = field?.fields;
+  }
+  return true;
+}
+
 /**
  * The visitor's answer for one field path: a hidden field never, and
- * otherwise each field along the path must let the visitor read it with no
- * entry given. Only a field's own rule is asked at each step, so a group with
- * one hidden child still shows its others.
+ * otherwise the field's rules where they are filed. A field inside a
+ * component is judged by that component's own rules, from its place in the
+ * component; the field holding the component was judged when it was reached.
  */
 function fieldReader(
   source: SourceEntity,
   hidden: ReadonlySet<string>
 ): FieldReadable {
-  const caller = {
-    grants: callerAccessGrants(undefined),
-    target: fieldRuleTarget(source.kind, source.slug),
+  // One grants resolver for every level, so the visitor is read once.
+  const grants = callerAccessGrants(undefined);
+  const levelOf = (
+    kind: SourceEntity["kind"] | "fieldGroup",
+    slug: string
+  ) => ({
+    registered: getFieldFunctions(kind, slug),
+    caller: { grants, target: fieldRuleTarget(kind, slug) },
+  });
+  const own = levelOf(source.kind, source.slug);
+  const components = new Map<string, RuleLevel>();
+  const componentLevel = (slug: string): RuleLevel => {
+    const known = components.get(slug);
+    if (known !== undefined) return known;
+    const level = levelOf("fieldGroup", slug);
+    components.set(slug, level);
+    return level;
   };
-  const registered = getFieldFunctions(source.kind, source.slug);
-  return async path => {
+  return async (path: readonly string[], within?: ComponentLevel) => {
     if (hidden.has(path.join("."))) return false;
-    let level: Record<string, FieldFunctions> | undefined = registered;
-    for (const name of path) {
-      const field =
-        level !== undefined && Object.hasOwn(level, name)
-          ? level[name]
-          : undefined;
-      const rule = field?.access?.read;
-      if (
-        rule !== undefined &&
-        !(await readableWithoutEntry({ access: { read: rule } }, caller))
-      ) {
-        return false;
-      }
-      level = field?.fields;
-    }
-    return true;
+    return within === undefined
+      ? readableAlong(own, path)
+      : readableAlong(componentLevel(within.component), within.path);
   };
 }
 
@@ -117,7 +150,7 @@ export async function visitorFields(
   source: SourceEntity
 ): Promise<VisitorFields | undefined> {
   await getCachedNextly();
-  const fields = await declaredFields(source);
+  const fields = await expandedFields(source);
   if (fields === undefined || !(await visitorReads(source.slug))) {
     return undefined;
   }
