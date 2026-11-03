@@ -123,6 +123,42 @@ export async function tableHasRows(
  * instead, so the caller has to deal with the referrers first either way.
  */
 /**
+ * The functions the database defines outside its system catalogs, lower-cased:
+ * the ones a statement calling them may run code through that the statement
+ * does not show. PostgreSQL's from every schema but `pg_catalog` and
+ * `information_schema`, MySQL's stored functions in the current database;
+ * SQLite defines none in SQL.
+ */
+export async function readUserFunctions(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<Set<string>> {
+  const names = new Set<string>();
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT DISTINCT p.proname AS name
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+            AND n.nspname NOT LIKE 'pg\\_%'`
+    )) as { rows: { name: string }[] };
+    for (const row of result.rows) names.add(row.name.toLowerCase());
+    return names;
+  }
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{ ROUTINE_NAME: string }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT ROUTINE_NAME
+            FROM information_schema.ROUTINES
+            WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'FUNCTION'`
+      )
+    );
+    for (const row of rows) names.add(row.ROUTINE_NAME.toLowerCase());
+  }
+  return names;
+}
+
+/**
  * What the live table says about these columns: which hold a NULL today, and
  * which are not there at all.
  *

@@ -847,6 +847,12 @@ async function downDeletions(
     // cascade is refused unless the consent has no targets.
     cascadeFrom: table => facts?.cascadeFrom(table),
     truncateCascadeFrom: table => facts?.truncateCascadeFrom(table),
+    nulledBy: table => facts?.nulledBy(table),
+    // Without a reader, a SELECT calling any function counts as one that
+    // may delete.
+    ...(facts?.userFunctions === undefined
+      ? {}
+      : { userFunctions: facts.userFunctions }),
     // The columns as the targets before this one leave them.
     liveColumns: p.liveColumns ?? facts?.liveColumns ?? new Map(),
     // The types as read before the rollback, so a rebuild that carries a

@@ -601,12 +601,16 @@ export async function judgeStatements(
         refused.push({ file, message: refusal.message });
       }
       // What the section deletes, read from its statements as the run reads
-      // them. This check has no database, so no foreign key or live column is
-      // known: the deletions named are the ones the statements name, and the
-      // run itself also judges what a row removal cascades to.
+      // them. This check has no database, so no foreign key, live column or
+      // function is known: the deletions named are the ones the statements
+      // name, a rebuild it cannot see is left to the run (unless it carries
+      // everything), and the run itself judges what a removal reaches.
       const deletions = fileDeletions(statements, dialect, {
         cascadeFrom: () => [],
         truncateCascadeFrom: () => [],
+        nulledBy: () => [],
+        userFunctions: new Set(),
+        unseenRebuild: "deferred",
         liveColumns: new Map(),
       });
       if (deletions.length > 0) destructive.push({ file, section, deletions });

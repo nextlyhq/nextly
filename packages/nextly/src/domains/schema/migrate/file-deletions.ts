@@ -35,6 +35,8 @@
  *
  * @module domains/schema/migrate/file-deletions
  */
+import { createHash } from "node:crypto";
+
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { LiveColumns } from "../ownership/drop-guard";
@@ -42,8 +44,12 @@ import {
   introspectLiveSnapshot,
   introspectTableNames,
 } from "../pipeline/diff/introspect-live";
+import type { ForeignKeySpec } from "../pipeline/diff/types";
 import { queryLiveColumnTypes } from "../pipeline/live-column-types";
-import { readReferencingTables } from "../pipeline/live-table-facts";
+import {
+  readReferencingTables,
+  readUserFunctions,
+} from "../pipeline/live-table-facts";
 
 import type { Deletion } from "./data-loss-consent";
 import type { QuotedToken } from "./split-sql";
@@ -63,6 +69,25 @@ export interface DeletionFacts {
    * foreign key referencing it, whatever its ON DELETE action, transitively). Undefined when unreadable.
    */
   truncateCascadeFrom(table: string): readonly string[] | undefined;
+  /**
+   * Every column (lower-cased) a row removal in `table` blanks through ON DELETE SET NULL or SET
+   * DEFAULT foreign keys, in `table` and in every table its cascades reach, read with
+   * `cascadeFrom` from the same reading. Undefined when unreadable; always empty on SQLite.
+   */
+  nulledBy(table: string): readonly NulledColumn[] | undefined;
+  /**
+   * The functions a SELECT may call that run code the statement does not show: lower-cased names
+   * of the user-defined functions (outside the system catalogs). Undefined when unreadable, when
+   * a SELECT calling anything is judged as one that may delete.
+   */
+  userFunctions?: ReadonlySet<string>;
+  /**
+   * How a SQLite rebuild of a table whose live columns are unknown is judged: `"drop"` (the
+   * default) as the drop of the table, `"deferred"` (`migrate:check`, which reads no database)
+   * as a deletion the run itself judges, or nothing when the copy carries every column the twin
+   * declares and every row.
+   */
+  unseenRebuild?: "drop" | "deferred";
   /** The live columns of the tables a SQLite rebuild in the file rebuilds (drop-guard's `readLiveColumns`). */
   liveColumns: LiveColumns;
   /**
@@ -82,23 +107,51 @@ type Token = string | QuotedToken;
 interface FactSource {
   cascadeFrom(table: string): readonly string[] | undefined;
   truncateCascadeFrom(table: string): readonly string[] | undefined;
+  nulledBy(table: string): readonly NulledColumn[] | undefined;
+  /** Whether a SELECT calling `name` may run code that deletes. */
+  mayDeleteThrough(name: string): boolean;
+  unseenRebuild: "drop" | "deferred";
   liveColumns(table: string): ReadonlySet<string> | undefined;
   liveType(table: string, column: string): string | undefined;
 }
+
+/** A column whose values a row removal elsewhere blanks. */
+export interface NulledColumn {
+  table: string;
+  column: string;
+}
+
+/** What a foreign key a run adds does to its rows when a referenced row goes. */
+type KeyAction = "cascade" | "set null" | "set default" | "none";
 
 /** How a removal of rows reaches other tables. */
 type Reach = "delete" | "truncate" | "none";
 
 /** What one statement does that can delete data, or change which name means which table. */
 type Step =
-  | { kind: "create"; table: string }
+  | { kind: "create"; table: string; temporary?: boolean }
   | { kind: "drop"; table: string }
+  | { kind: "add-column"; table: string; column: string }
+  | {
+      kind: "add-key";
+      table: string;
+      columns: string[];
+      references: string;
+      onDelete: KeyAction;
+    }
+  | { kind: "create-function"; name: string }
+  | {
+      kind: "calls";
+      names: string[];
+      description: string;
+      fingerprint?: string;
+    }
   | { kind: "rows"; table: string; reach: Reach }
   | { kind: "column"; table: string; column: string }
   | { kind: "drop-column"; table: string; column: string }
   | { kind: "rename-table"; from: string; to: string }
   | { kind: "rename-column"; table: string; from: string; to: string }
-  | { kind: "unread"; description: string };
+  | { kind: "unread"; description: string; fingerprint?: string };
 
 /** Words whose presence in an unread statement's code means it may delete. */
 const DELETING_WORDS = new Set(["DROP", "DELETE", "TRUNCATE", "REPLACE"]);
@@ -270,6 +323,9 @@ function readStatement(statement: string, dialect: SupportedDialect): Step[] {
   if (cursor.accept("ALTER", "TABLE")) {
     return readAlterTable(cursor, tokens, dialect);
   }
+  // MariaDB's ALTER IGNORE drops the rows a new unique key would refuse.
+  if (cursor.accept("ALTER", "IGNORE")) return [unread(tokens)];
+  if (first === "SELECT") return readSelect(tokens);
   if (cursor.accept("DELETE")) return readDelete(cursor, tokens);
   if (cursor.accept("TRUNCATE")) return readTruncate(cursor, tokens, dialect);
   const dialectForm = readDialectForm(cursor, tokens, dialect);
@@ -339,8 +395,11 @@ function readDialectForm(
  * deletes nothing now.
  */
 function readCreate(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
-  if (cursor.accept("OR", "REPLACE")) {
-    cursor.accept("TEMPORARY");
+  const replacing = cursor.accept("OR", "REPLACE");
+  if (cursor.accept("FUNCTION")) return readCreateFunction(cursor);
+  if (replacing) {
+    // A temporary table replaces only a temporary one of the same name.
+    if (cursor.accept("TEMPORARY")) return readCreateTemporary(cursor);
     if (!cursor.accept("TABLE")) return [];
     const table = cursor.name();
     return table === undefined
@@ -350,11 +409,59 @@ function readCreate(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
           { kind: "create", table },
         ];
   }
-  if (!cursor.accept("TEMPORARY")) cursor.accept("TEMP");
+  if (cursor.accept("TEMPORARY") || cursor.accept("TEMP")) {
+    return readCreateTemporary(cursor);
+  }
   if (!cursor.accept("TABLE")) return [];
   if (cursor.accept("IF", "NOT", "EXISTS")) return [];
   const table = cursor.name();
   return table === undefined ? [] : [{ kind: "create", table }];
+}
+
+/**
+ * A temporary table: it holds only what the run puts in it, and shadows a
+ * live table of its name until it is dropped.
+ */
+function readCreateTemporary(cursor: StatementCursor): Step[] {
+  if (!cursor.accept("TABLE")) return [];
+  if (cursor.accept("IF", "NOT", "EXISTS")) return [];
+  const table = cursor.name();
+  return table === undefined
+    ? []
+    : [{ kind: "create", table, temporary: true }];
+}
+
+/** A function the run defines, which a later SELECT may call. */
+function readCreateFunction(cursor: StatementCursor): Step[] {
+  const name = cursor.name();
+  return name === undefined ? [] : [{ kind: "create-function", name }];
+}
+
+/** First letters of a function's name, as the tokenizer upper-cases it. */
+const FUNCTION_NAME = /^[A-Z_][A-Z0-9_$.]*$/;
+
+/**
+ * The functions a SELECT calls, by the names it writes them with, lower-cased:
+ * a word directly before `(`. Whether one may delete is a fact about the
+ * database (`mayDeleteThrough`), asked by the walk.
+ */
+function readSelect(tokens: readonly Token[]): Step[] {
+  const names = tokens.flatMap((token, at) =>
+    typeof token === "string" &&
+    FUNCTION_NAME.test(token) &&
+    tokens[at + 1] === "("
+      ? [token.toLowerCase()]
+      : []
+  );
+  return names.length === 0
+    ? []
+    : [
+        {
+          kind: "calls",
+          names,
+          description: `${labelOf(tokens)} (calls a function, may delete data)`,
+        },
+      ];
 }
 
 /**
@@ -518,7 +625,7 @@ function readAlterClause(
   table: string,
   dialect: SupportedDialect
 ): Step[] | undefined {
-  if (clause.accept("ADD")) return [];
+  if (clause.accept("ADD")) return readAddClause(clause, table);
   if (clause.accept("DROP")) return readDropClause(clause, table);
   if (clause.accept("RENAME")) return readRenameClause(clause, table, dialect);
   if (clause.accept("ALTER")) return readAlterColumn(clause, table);
@@ -527,6 +634,95 @@ function readAlterClause(
     if (mysql !== null) return mysql;
   }
   return saysDelete(clause.rest()) ? undefined : [];
+}
+
+/** What may follow `ADD` that is not a column. */
+const ADDED_NOT_COLUMNS = new Set([
+  "CONSTRAINT",
+  "INDEX",
+  "KEY",
+  "UNIQUE",
+  "PRIMARY",
+  "FOREIGN",
+  "CHECK",
+  "FULLTEXT",
+  "SPATIAL",
+  "PARTITION",
+  "EXCLUDE",
+]);
+
+/**
+ * An ALTER TABLE `ADD` clause: a column the run makes (its values are the
+ * run's own), and any foreign key it adds with an ON DELETE action, which a
+ * later removal of rows in the same run follows. Undefined for a key whose
+ * referenced table cannot be named.
+ */
+function readAddClause(
+  clause: StatementCursor,
+  table: string
+): Step[] | undefined {
+  if (clause.accept("CONSTRAINT")) clause.name();
+  if (clause.accept("FOREIGN", "KEY")) return readAddedKey(clause, table);
+  const next = clause.peek();
+  const column =
+    clause.accept("COLUMN") ||
+    typeof next !== "string" ||
+    !ADDED_NOT_COLUMNS.has(next);
+  if (!column) return [];
+  clause.acceptCondition();
+  const name = clause.name();
+  if (name === undefined) return [];
+  const key = readReferences(clause, table, [name]);
+  return key === undefined
+    ? undefined
+    : [{ kind: "add-column", table, column: name }, ...key];
+}
+
+/** `FOREIGN KEY [name] (columns) REFERENCES …`, after `FOREIGN KEY`. */
+function readAddedKey(
+  clause: StatementCursor,
+  table: string
+): Step[] | undefined {
+  // MySQL may name the key's index before its columns.
+  if (!clause.isWord("(")) clause.name();
+  if (!clause.accept("(")) return undefined;
+  const columns = readNames(clause);
+  if (columns === undefined || !clause.accept(")")) return undefined;
+  return readReferences(clause, table, columns);
+}
+
+/**
+ * The key `columns` of `table` hold, when the rest of the clause says
+ * `REFERENCES parent … ON DELETE action`: nothing without a REFERENCES or an
+ * action that touches rows, undefined when the parent cannot be named.
+ */
+function readReferences(
+  clause: StatementCursor,
+  table: string,
+  columns: string[]
+): Step[] | undefined {
+  const rest = clause.rest();
+  const at = rest.indexOf("REFERENCES");
+  if (at === -1) return [];
+  const references = new StatementCursor(rest.slice(at + 1)).name();
+  if (references === undefined) return undefined;
+  const onDelete = keyAction(rest.slice(at + 1));
+  return onDelete === "none"
+    ? []
+    : [{ kind: "add-key", table, columns, references, onDelete }];
+}
+
+/** The ON DELETE action a key's clause names; none when it names none. */
+function keyAction(tokens: readonly Token[]): KeyAction {
+  for (let at = 0; at + 2 < tokens.length; at += 1) {
+    if (tokens[at] !== "ON" || tokens[at + 1] !== "DELETE") continue;
+    const action = tokens[at + 2];
+    if (action === "CASCADE") return "cascade";
+    if (action !== "SET") return "none";
+    if (tokens[at + 3] === "NULL") return "set null";
+    return tokens[at + 3] === "DEFAULT" ? "set default" : "none";
+  }
+  return "none";
 }
 
 /**
@@ -547,8 +743,9 @@ function readMysqlAlterClause(
       : [{ kind: "column", table, column }];
   }
   if (clause.accept("CHANGE")) return readChangeColumn(clause, table);
-  // Converting the table's character set rewrites every text column.
-  if (clause.isWord("CONVERT")) return undefined;
+  // Converting the table's character set rewrites every text column, and
+  // discarding the tablespace leaves the table without its data file.
+  if (clause.isWord("CONVERT") || clause.isWord("DISCARD")) return undefined;
   if (clause.accept("TRUNCATE", "PARTITION")) {
     return [{ kind: "rows", table, reach: "none" }];
   }
@@ -897,6 +1094,20 @@ class FileWalk {
   private readonly origins = new Map<string, string | null>();
   /** Per live table, its columns as the list has left them. */
   private readonly columnNames = new Map<string, ColumnNames>();
+  /** Per live table, the columns the list added, by the names they have now. */
+  private readonly madeColumns = new Map<string, Set<string>>();
+  /** Each temporary table's name, with what the name reached before it. */
+  private readonly shadowed = new Map<string, string | null | undefined>();
+  /** The functions the list defines. */
+  private readonly functions = new Set<string>();
+  /** The foreign keys with an ON DELETE action the list added, in order. */
+  private readonly addedKeys: {
+    parent: string;
+    child: string;
+    live: boolean;
+    columns: string[];
+    onDelete: KeyAction;
+  }[] = [];
 
   constructor(private readonly facts: FactSource) {}
 
@@ -938,7 +1149,7 @@ class FileWalk {
   private emit(deletion: Deletion): void {
     const key =
       deletion.kind === "unnamed"
-        ? `unnamed:${deletion.description}`
+        ? `unnamed:${deletion.description}:${deletion.fingerprint ?? ""}`
         : deletion.kind === "column"
           ? `column:${deletion.table}.${deletion.column}`
           : `${deletion.kind}:${deletion.table}`;
@@ -951,72 +1162,171 @@ class FileWalk {
   apply(step: Step): void {
     switch (step.kind) {
       case "create":
-        this.origins.set(step.table, null);
-        return;
-      case "drop": {
-        const table = this.origin(step.table);
-        if (table !== null) this.emit({ kind: "table", table });
-        this.origins.set(step.table, null);
-        return;
-      }
-      case "rows": {
-        const table = this.origin(step.table);
-        if (table !== null) this.removeRows(table, step.reach);
-        return;
-      }
-      case "column": {
-        const table = this.origin(step.table);
-        if (table === null) return;
-        this.emit({
-          kind: "column",
-          table,
-          column: this.columnOrigin(table, step.column),
-        });
-        return;
-      }
-      case "drop-column": {
-        const table = this.origin(step.table);
-        if (table === null) return;
-        const column = this.columnOrigin(table, step.column);
-        this.emit({ kind: "column", table, column });
-        const names = this.columnsOf(table);
-        names.renamed.delete(step.column);
-        names.away.add(column);
-        return;
-      }
+        return this.create(step.table, step.temporary === true);
+      case "drop":
+        return this.drop(step.table);
+      case "rows":
+        return this.removeRows(step.table, step.reach);
+      case "column":
+        return this.changeColumn(step.table, step.column);
+      case "drop-column":
+        return this.dropColumn(step.table, step.column);
+      case "add-column":
+        return this.addColumn(step.table, step.column);
+      case "add-key":
+        return this.addKey(step);
       case "rename-table":
-        this.origins.set(step.to, this.origin(step.from));
-        this.origins.set(step.from, null);
+        return this.renameTable(step.from, step.to);
+      case "rename-column":
+        return this.renameColumn(step.table, step.from, step.to);
+      case "create-function":
+        this.functions.add(step.name);
         return;
-      case "rename-column": {
-        const table = this.origin(step.table);
-        if (table === null) return;
-        const column = this.columnOrigin(table, step.from);
-        const names = this.columnsOf(table);
-        names.renamed.delete(step.from);
-        if (step.to === column) {
-          names.away.delete(column);
-        } else {
-          names.renamed.set(step.to, column);
-          names.away.add(column);
-        }
-        return;
-      }
+      case "calls":
+        return this.call(step);
       case "unread":
-        this.emit({ kind: "unnamed", description: step.description });
-        return;
+        return this.emit(unnamedOf(step));
     }
   }
 
-  /** A removal of `table`'s rows, and of the rows its foreign keys reach. */
-  private removeRows(table: string, reach: Reach): void {
-    this.emit({ kind: "rows", table });
+  /** The name a table goes by in the walk's keys: its live table, or the run's own name. */
+  private identity(name: string): string {
+    return this.origin(name) ?? name;
+  }
+
+  /** Whether `column` of live `table` is one the list itself added. */
+  private made(table: string, column: string): boolean {
+    return this.madeColumns.get(table)?.has(column) === true;
+  }
+
+  private create(table: string, temporary: boolean): void {
+    // A temporary table shadows the name until it is dropped again.
+    if (temporary) this.shadowed.set(table, this.origins.get(table));
+    this.origins.set(table, null);
+  }
+
+  private drop(name: string): void {
+    if (this.shadowed.has(name)) {
+      // Dropping a temporary table loses only what the run put in it, and
+      // the name reaches what it reached before again.
+      const before = this.shadowed.get(name);
+      this.shadowed.delete(name);
+      if (before === undefined) this.origins.delete(name);
+      else this.origins.set(name, before);
+      return;
+    }
+    const table = this.origin(name);
+    if (table !== null) this.emit({ kind: "table", table });
+    this.origins.set(name, null);
+  }
+
+  private changeColumn(name: string, column: string): void {
+    const table = this.origin(name);
+    if (table === null || this.made(table, column)) return;
+    this.emit({
+      kind: "column",
+      table,
+      column: this.columnOrigin(table, column),
+    });
+  }
+
+  private dropColumn(name: string, column: string): void {
+    const table = this.origin(name);
+    if (table === null) return;
+    if (this.made(table, column)) {
+      this.madeColumns.get(table)?.delete(column);
+      return;
+    }
+    const live = this.columnOrigin(table, column);
+    this.emit({ kind: "column", table, column: live });
+    const names = this.columnsOf(table);
+    names.renamed.delete(column);
+    names.away.add(live);
+  }
+
+  private addColumn(name: string, column: string): void {
+    const table = this.origin(name);
+    if (table === null) return;
+    const made = this.madeColumns.get(table) ?? new Set<string>();
+    made.add(column);
+    this.madeColumns.set(table, made);
+  }
+
+  private addKey(step: Extract<Step, { kind: "add-key" }>): void {
+    const child = this.origin(step.table);
+    this.addedKeys.push({
+      parent: this.identity(step.references),
+      child: this.identity(step.table),
+      live: child !== null,
+      columns:
+        child === null
+          ? step.columns
+          : step.columns.map(column => this.columnOrigin(child, column)),
+      onDelete: step.onDelete,
+    });
+  }
+
+  private renameTable(from: string, to: string): void {
+    this.origins.set(to, this.origin(from));
+    this.origins.set(from, null);
+  }
+
+  private renameColumn(name: string, from: string, to: string): void {
+    const table = this.origin(name);
+    if (table === null) return;
+    if (this.made(table, from)) {
+      this.madeColumns.get(table)?.delete(from);
+      this.addColumn(name, to);
+      return;
+    }
+    const column = this.columnOrigin(table, from);
+    const names = this.columnsOf(table);
+    names.renamed.delete(from);
+    if (to === column) {
+      names.away.delete(column);
+    } else {
+      names.renamed.set(to, column);
+      names.away.add(column);
+    }
+  }
+
+  /** A SELECT calling a function the run defined, or one that may delete. */
+  private call(step: Extract<Step, { kind: "calls" }>): void {
+    const deleting = step.names.some(
+      name => this.functions.has(name) || this.facts.mayDeleteThrough(name)
+    );
+    if (deleting) this.emit(unnamedOf(step));
+  }
+
+  /**
+   * A removal of the rows of the table `name` means, and of what its foreign
+   * keys reach: the live keys as read before the run, and the keys the list
+   * itself added before this statement, from a table the list made as well.
+   */
+  private removeRows(name: string, reach: Reach): void {
+    const table = this.origin(name);
+    if (table !== null) this.emit({ kind: "rows", table });
     if (reach === "none") return;
+    const queue = [{ table: this.identity(name), askLive: table !== null }];
+    const visited = new Set<string>();
+    for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+      if (visited.has(next.table)) continue;
+      visited.add(next.table);
+      const live = next.askLive ? this.reachLive(next.table, reach) : [];
+      // A live table its keys reach may be one the list added a key to.
+      queue.push(...live.map(other => ({ table: other, askLive: false })));
+      queue.push(...this.reachAdded(next.table, reach));
+    }
+  }
+
+  /** What the live keys of `table` reach, named; the tables reached. */
+  private reachLive(table: string, reach: Reach): readonly string[] {
     const reached =
       reach === "delete"
         ? this.facts.cascadeFrom(table)
         : this.facts.truncateCascadeFrom(table);
-    if (reached === undefined) {
+    const nulled = reach === "delete" ? this.facts.nulledBy(table) : [];
+    if (reached === undefined || nulled === undefined) {
       // Fails closed: tables nobody could read cannot be named, so only
       // consent without targets covers them.
       this.emit({
@@ -1026,9 +1336,39 @@ class FileWalk {
             ? `rows removed from tables ${table}'s foreign keys cascade to, which could not be read`
             : `rows removed from tables TRUNCATE ${table} CASCADE also empties, which could not be read`,
       });
-      return;
+      return [];
     }
     for (const other of reached) this.emit({ kind: "rows", table: other });
+    for (const { table: on, column } of nulled) {
+      this.emit({ kind: "column", table: on, column });
+    }
+    return reached;
+  }
+
+  /**
+   * What the keys the list added on `table` do: a cascade (or a TRUNCATE
+   * CASCADE, whatever the action) removes a live child's rows, a SET NULL or
+   * SET DEFAULT blanks its key columns. Returns the children to follow on.
+   */
+  private reachAdded(
+    table: string,
+    reach: Reach
+  ): { table: string; askLive: boolean }[] {
+    const follow: { table: string; askLive: boolean }[] = [];
+    for (const key of this.addedKeys) {
+      if (key.parent !== table) continue;
+      if (reach === "truncate" || key.onDelete === "cascade") {
+        if (key.live) this.emit({ kind: "rows", table: key.child });
+        follow.push({ table: key.child, askLive: key.live });
+      } else if (key.live) {
+        // A column the list added holds only the list's own values.
+        for (const column of key.columns) {
+          if (this.made(key.child, column)) continue;
+          this.emit({ kind: "column", table: key.child, column });
+        }
+      }
+    }
+    return follow;
   }
 
   /**
@@ -1069,6 +1409,28 @@ class FileWalk {
   }
 
   /**
+   * A rebuild of a table whose live columns are unknown: the drop it then is,
+   * unless the facts defer it to the run (`migrate:check`), which names it as
+   * one the run judges, and nothing when its copy carries every column the
+   * twin declares, by the same name, and every row.
+   */
+  private rebuildUnseen(
+    rebuild: Rebuild,
+    statements: readonly string[],
+    table: string
+  ): void {
+    if (this.facts.unseenRebuild === "drop") {
+      this.emit({ kind: "table", table });
+      return;
+    }
+    if (carriesEverything(rebuild, statements)) return;
+    this.emit({
+      kind: "unnamed",
+      description: `${table} rebuilt (may delete data, checked at run time)`,
+    });
+  }
+
+  /**
    * A rebuild, judged at its drop by what it does to its table: each live
    * column the twin does not carry, or carries converted, and the rows when
    * the copy does not take them all. A table whose live columns could not
@@ -1082,7 +1444,7 @@ class FileWalk {
     if (table === null) return;
     const live = this.facts.liveColumns(table);
     if (live === undefined || live.size === 0) {
-      this.emit({ kind: "table", table });
+      this.rebuildUnseen(rebuild, statements, table);
       return;
     }
     const copy =
@@ -1110,6 +1472,23 @@ class FileWalk {
   }
 }
 
+/** Whether a rebuild's one copy takes every row, and fills every twin column from a column of its name. */
+function carriesEverything(
+  rebuild: Rebuild,
+  statements: readonly string[]
+): boolean {
+  if (rebuild.copies.length !== 1) return false;
+  const copy = readCopy(
+    statements[rebuild.copies[0]],
+    rebuild.twin,
+    rebuild.columns
+  );
+  if (copy?.from !== rebuild.table || !copy.allRows) return false;
+  return rebuild.columns.every(
+    column => copy.filled.get(column.name) === column.name
+  );
+}
+
 /**
  * The twin column a rebuild carries the column now named `current` into:
  * the one the copy fills from it, or, without a copy to read, the twin's
@@ -1122,6 +1501,33 @@ function carriedAs(
 ): string | undefined {
   if (filled === undefined) return declared.has(current) ? current : undefined;
   return [...filled].find(([, source]) => source === current)?.[0];
+}
+
+/** The deletion an unread statement, or a call that may delete, stands for. */
+function unnamedOf(
+  step: Extract<Step, { kind: "unread" | "calls" }>
+): Deletion {
+  return {
+    kind: "unnamed",
+    description: step.description,
+    ...(step.fingerprint === undefined
+      ? {}
+      : { fingerprint: step.fingerprint }),
+  };
+}
+
+/**
+ * An unread step names the statement it was judged from by its whole text,
+ * strings and bodies included, so agreeing to one statement before the lock
+ * never agrees to a different one under it, and two different statements
+ * under one label stay two deletions.
+ */
+function fingerprinted(step: Step, statement: string): Step {
+  if (step.kind !== "unread" && step.kind !== "calls") return step;
+  return {
+    ...step,
+    fingerprint: createHash("sha256").update(statement).digest("hex"),
+  };
 }
 
 /** Every step of the list, with each SQLite rebuild judged as one. */
@@ -1148,10 +1554,30 @@ function walk(
     const rebuild = byDrop.get(at);
     if (rebuild !== undefined) file.rebuild(rebuild, statements);
     else if (!owned.has(at)) {
-      for (const step of readStatement(statement, dialect)) file.apply(step);
+      for (const step of readStatement(statement, dialect)) {
+        file.apply(fingerprinted(step, statement));
+      }
     }
   });
   return file.found;
+}
+
+/** Functions every database has that change no table's rows. */
+const EXEMPT_FUNCTIONS = new Set(["setval", "nextval", "currval"]);
+
+/**
+ * Whether a SELECT calling `name` may run code that deletes: a function the
+ * database defines outside its system catalogs. A name qualified by another
+ * schema, or any name when the functions could not be read, may.
+ */
+function mayDeleteThrough(
+  name: string,
+  userFunctions: ReadonlySet<string> | undefined
+): boolean {
+  if (EXEMPT_FUNCTIONS.has(name) || name.startsWith("pg_catalog."))
+    return false;
+  if (userFunctions === undefined || name.includes(".")) return true;
+  return userFunctions.has(name);
 }
 
 /** The questions a walk asks, answered from facts read once. */
@@ -1159,6 +1585,9 @@ function factSource(facts: DeletionFacts): FactSource {
   return {
     cascadeFrom: table => facts.cascadeFrom(table),
     truncateCascadeFrom: table => facts.truncateCascadeFrom(table),
+    nulledBy: table => facts.nulledBy(table),
+    mayDeleteThrough: name => mayDeleteThrough(name, facts.userFunctions),
+    unseenRebuild: facts.unseenRebuild ?? "drop",
     liveColumns: table => facts.liveColumns.get(table),
     liveType: (table, column) => facts.liveColumnTypes?.get(table)?.get(column),
   };
@@ -1232,8 +1661,9 @@ async function reachedFrom(
   dialect: SupportedDialect,
   root: string,
   every: boolean
-): Promise<string[]> {
+): Promise<{ rows: string[]; nulled: NulledColumn[] }> {
   const reached = new Map<string, string>([[root.toLowerCase(), root]]);
+  const nulled: NulledColumn[] = [];
   const queue = [root];
   for (
     let parent = queue.shift();
@@ -1246,19 +1676,9 @@ async function reachedFrom(
       const snapshot = await introspectLiveSnapshot(db, dialect, referencing);
       const parentKey = parent.toLowerCase();
       children = referencing.filter(name => {
-        const spec = snapshot.tables.find(
-          table => table.name.toLowerCase() === name.toLowerCase()
-        );
-        if (spec?.foreignKeys === undefined) {
-          throw NextlyError.internal({
-            logContext: { reason: "foreign keys not read", table: name },
-          });
-        }
-        return spec.foreignKeys.some(
-          key =>
-            key.referencesTable.toLowerCase() === parentKey &&
-            key.onDelete === "cascade"
-        );
+        const keys = keysTo(snapshot, name, parentKey);
+        nulled.push(...nulledColumns(name, keys));
+        return keys.some(key => key.onDelete === "cascade");
       });
     }
     for (const child of children) {
@@ -1268,7 +1688,43 @@ async function reachedFrom(
     }
   }
   reached.delete(root.toLowerCase());
-  return [...reached.keys()].sort();
+  return { rows: [...reached.keys()].sort(), nulled };
+}
+
+/** The foreign keys of table `name` that reference `parent` (lower-cased); throws when they were not read. */
+function keysTo(
+  snapshot: Awaited<ReturnType<typeof introspectLiveSnapshot>>,
+  name: string,
+  parent: string
+): ForeignKeySpec[] {
+  const spec = snapshot.tables.find(
+    table => table.name.toLowerCase() === name.toLowerCase()
+  );
+  if (spec?.foreignKeys === undefined) {
+    throw NextlyError.internal({
+      logContext: { reason: "foreign keys not read", table: name },
+    });
+  }
+  return spec.foreignKeys.filter(
+    key => key.referencesTable.toLowerCase() === parent
+  );
+}
+
+/** The columns of table `name` its SET NULL and SET DEFAULT keys blank, lower-cased. */
+function nulledColumns(
+  name: string,
+  keys: readonly ForeignKeySpec[]
+): NulledColumn[] {
+  return keys
+    .filter(
+      key => key.onDelete === "set null" || key.onDelete === "set default"
+    )
+    .flatMap(key =>
+      key.columns.map(column => ({
+        table: name.toLowerCase(),
+        column: column.toLowerCase(),
+      }))
+    );
 }
 
 /** Reads, once and read-only, every fact `fileDeletions` will ask about these statements. Never throws for an unreadable fact: it answers undefined. */
@@ -1282,6 +1738,7 @@ export async function readDeletionFacts(
   const cascade = new Set<string>();
   const truncate = new Set<string>();
   const rebuilt = new Set<string>();
+  let calls = false;
   walk(statements, dialect, {
     cascadeFrom: table => {
       cascade.add(table);
@@ -1291,6 +1748,15 @@ export async function readDeletionFacts(
       truncate.add(table);
       return [];
     },
+    nulledBy: table => {
+      cascade.add(table);
+      return [];
+    },
+    mayDeleteThrough: () => {
+      calls = true;
+      return false;
+    },
+    unseenRebuild: "drop",
     liveColumns: table => {
       rebuilt.add(table);
       return undefined;
@@ -1305,14 +1771,17 @@ export async function readDeletionFacts(
     const live = await introspectTableNames(db, dialect, asked);
     return new Map(live.map(name => [name.toLowerCase(), name]));
   });
-  const cascades = new Map<string, readonly string[] | undefined>();
+  const cascades = new Map<
+    string,
+    { rows: string[]; nulled: NulledColumn[] } | undefined
+  >();
   for (const table of cascade) {
     // The runner applies every SQLite unit with foreign-key enforcement off
     // (`withSqliteForeignKeysOff`), so no cascade fires there, whatever the
     // connection's own setting: a removal that would orphan rows is refused
     // by the unit's `PRAGMA foreign_key_check` instead.
     if (dialect === "sqlite") {
-      cascades.set(table, []);
+      cascades.set(table, { rows: [], nulled: [] });
       continue;
     }
     const live = spellings?.get(table);
@@ -1330,9 +1799,13 @@ export async function readDeletionFacts(
       table,
       live === undefined || dialect !== "postgresql"
         ? undefined
-        : await settle(() => reachedFrom(db, dialect, live, true))
+        : (await settle(() => reachedFrom(db, dialect, live, true)))?.rows
     );
   }
+  // Read only when a SELECT in the list calls a function at all.
+  const userFunctions = calls
+    ? await settle(() => readUserFunctions(db, dialect))
+    : new Set<string>();
 
   const rebuiltLive = [...rebuilt].flatMap(table => {
     const live = spellings?.get(table);
@@ -1363,8 +1836,10 @@ export async function readDeletionFacts(
   );
 
   return {
-    cascadeFrom: table => cascades.get(table.toLowerCase()),
+    cascadeFrom: table => cascades.get(table.toLowerCase())?.rows,
+    nulledBy: table => cascades.get(table.toLowerCase())?.nulled,
     truncateCascadeFrom: table => truncates.get(table.toLowerCase()),
+    ...(userFunctions === undefined ? {} : { userFunctions }),
     liveColumns,
     liveColumnTypes,
   };

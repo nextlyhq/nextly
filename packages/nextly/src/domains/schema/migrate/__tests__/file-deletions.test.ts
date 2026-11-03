@@ -10,6 +10,8 @@
  * cascades a removal of rows reaches (or names nothing when they cannot be
  * read), and one that counts an UPDATE as a deletion.
  */
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
@@ -18,6 +20,7 @@ import {
   fileDeletions,
   runDeletions,
   type DeletionFacts,
+  type NulledColumn,
 } from "../file-deletions";
 
 /** What the fake database answers, every name lower-case. */
@@ -28,6 +31,12 @@ interface Facts {
   truncate?: Record<string, readonly string[] | undefined>;
   /** Per table, each live column and its declared type as SQLite reports it. */
   columns?: Record<string, Record<string, string>>;
+  /** Per table, the columns a DELETE blanks through SET NULL keys; as `cascade`. */
+  nulled?: Record<string, readonly NulledColumn[] | undefined>;
+  /** The user-defined functions, or "unreadable"; none when left out. */
+  functions?: readonly string[] | "unreadable";
+  /** Judge a rebuild of an unseen table as `migrate:check` does. */
+  deferred?: boolean;
 }
 
 /** Live facts answering exactly from `facts`, with no case folding. */
@@ -36,9 +45,16 @@ function fake(facts: Facts = {}): DeletionFacts {
     (map: Record<string, readonly string[] | undefined> | undefined) =>
     (table: string) => (map !== undefined && table in map ? map[table] : []);
   const tables = Object.entries(facts.columns ?? {});
+  const nulled = facts.nulled;
   return {
     cascadeFrom: answer(facts.cascade),
     truncateCascadeFrom: answer(facts.truncate),
+    nulledBy: table =>
+      nulled !== undefined && table in nulled ? nulled[table] : [],
+    ...(facts.functions === "unreadable"
+      ? {}
+      : { userFunctions: new Set(facts.functions ?? []) }),
+    ...(facts.deferred === true ? { unseenRebuild: "deferred" as const } : {}),
     liveColumns: new Map(
       tables.map(([table, columns]) => [table, new Set(Object.keys(columns))])
     ),
@@ -67,6 +83,12 @@ const rows = (name: string): Deletion => ({ kind: "rows", table: name });
 const unnamed = (description: string): Deletion => ({
   kind: "unnamed",
   description,
+});
+/** The deletion an unread statement stands for, fingerprinted by its text. */
+const unreadAs = (description: string, statement: string): Deletion => ({
+  kind: "unnamed",
+  description,
+  fingerprint: createHash("sha256").update(statement).digest("hex"),
 });
 
 describe("tables dropped", () => {
@@ -386,6 +408,173 @@ describe("SQLite rebuilds", () => {
   });
 });
 
+describe("foreign keys and columns the list itself adds", () => {
+  it("follows a cascade key an earlier statement adds, naming the live child's rows", () => {
+    for (const dialect of ["postgresql", "mysql"] as const) {
+      expect(
+        read(dialect, [
+          "ALTER TABLE comments ADD CONSTRAINT fk FOREIGN KEY (post_id) REFERENCES posts (id) ON DELETE CASCADE",
+          "DELETE FROM posts WHERE draft",
+        ])
+      ).toEqual([rows("posts"), rows("comments")]);
+    }
+  });
+
+  it("names the key columns a SET NULL or SET DEFAULT key blanks, live or added", () => {
+    expect(
+      read("postgresql", ["DELETE FROM authors"], {
+        nulled: { authors: [{ table: "posts", column: "author_id" }] },
+      })
+    ).toEqual([rows("authors"), column("posts", "author_id")]);
+    expect(
+      read("postgresql", [
+        "ALTER TABLE posts ADD COLUMN editor_id integer REFERENCES authors (id) ON DELETE SET NULL",
+        "DELETE FROM authors",
+      ])
+    ).toEqual([rows("authors")]);
+    expect(
+      read("mysql", [
+        "ALTER TABLE posts ADD FOREIGN KEY fk_editor (editor_id) REFERENCES authors (id) ON DELETE SET DEFAULT",
+        "DELETE FROM authors",
+      ])
+    ).toEqual([rows("authors"), column("posts", "editor_id")]);
+  });
+
+  it("follows an added cascade from a table the list made into a live child", () => {
+    expect(
+      read("postgresql", [
+        "CREATE TABLE drafts (id integer PRIMARY KEY)",
+        "ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (draft_id) REFERENCES drafts (id) ON DELETE CASCADE",
+        "DELETE FROM drafts",
+      ])
+    ).toEqual([rows("posts")]);
+  });
+
+  it("ignores a key added before nothing removes rows, and one that does nothing on delete", () => {
+    expect(
+      read("postgresql", [
+        "DELETE FROM posts",
+        "ALTER TABLE comments ADD CONSTRAINT fk FOREIGN KEY (post_id) REFERENCES posts (id) ON DELETE CASCADE",
+        "ALTER TABLE tags ADD CONSTRAINT fk FOREIGN KEY (post_id) REFERENCES posts (id) ON DELETE RESTRICT",
+      ])
+    ).toEqual([rows("posts")]);
+  });
+
+  it("asks nothing for a column the list adds and drops again, renamed or not", () => {
+    expect(
+      read("postgresql", [
+        "ALTER TABLE posts ADD COLUMN tmp text",
+        "ALTER TABLE posts RENAME COLUMN tmp TO scratch",
+        "ALTER TABLE posts DROP COLUMN scratch",
+        "ALTER TABLE posts ADD COLUMN IF NOT EXISTS other text",
+        "ALTER TABLE posts ALTER COLUMN other TYPE integer",
+      ])
+    ).toEqual([]);
+    expect(read("postgresql", ["ALTER TABLE posts DROP COLUMN tmp"])).toEqual([
+      column("posts", "tmp"),
+    ]);
+  });
+
+  it("gives a name back to its live table once the temporary table shadowing it is dropped", () => {
+    expect(
+      read("postgresql", [
+        "CREATE TEMP TABLE posts AS SELECT * FROM posts WHERE draft",
+        "DELETE FROM posts",
+        "DROP TABLE posts",
+        "DELETE FROM posts WHERE id = 1",
+      ])
+    ).toEqual([rows("posts")]);
+  });
+});
+
+describe("MySQL statements that drop rows or data without saying so", () => {
+  it("reads ALTER IGNORE TABLE and DISCARD TABLESPACE as statements that may delete", () => {
+    const ignore = "ALTER IGNORE TABLE users ADD UNIQUE INDEX (email)";
+    const discard = "ALTER TABLE users DISCARD TABLESPACE";
+    expect(read("mysql", [ignore, discard])).toEqual([
+      unreadAs(
+        "ALTER IGNORE TABLE USERS ADD UNIQUE INDEX (not read, may delete data)",
+        ignore
+      ),
+      unreadAs(
+        "ALTER TABLE USERS DISCARD TABLESPACE (not read, may delete data)",
+        discard
+      ),
+    ]);
+  });
+});
+
+describe("SELECT calling a function", () => {
+  const purge = "SELECT purge_old_posts()";
+  const label = "SELECT PURGE_OLD_POSTS (calls a function, may delete data)";
+
+  it("stands for a call to a user-defined function, which runs code, with a fingerprinted deletion", () => {
+    expect(
+      read("postgresql", [purge], { functions: ["purge_old_posts"] })
+    ).toEqual([unreadAs(label, purge)]);
+  });
+
+  it("asks nothing for a built-in, setval, or a pg_catalog call", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "SELECT count(*) FROM posts",
+          "SELECT setval('posts_id_seq', 10)",
+          "SELECT pg_catalog.set_config('search_path', '', false)",
+        ],
+        { functions: ["purge_old_posts"] }
+      )
+    ).toEqual([]);
+  });
+
+  it("stands for a call to a function the list itself defines, and for any call when the functions were not read", () => {
+    const create =
+      "CREATE OR REPLACE FUNCTION purge_old_posts() RETURNS void AS $$ DELETE FROM posts $$ LANGUAGE sql";
+    expect(read("postgresql", [create, purge])).toEqual([
+      unreadAs(label, purge),
+    ]);
+    expect(read("postgresql", [purge], { functions: "unreadable" })).toEqual([
+      unreadAs(label, purge),
+    ]);
+  });
+});
+
+describe("a rebuild migrate:check cannot see", () => {
+  const rebuild = (copy: string) => [
+    "CREATE TABLE `__new_posts` (`id` integer PRIMARY KEY, `title` text NOT NULL)",
+    copy,
+    "DROP TABLE `posts`",
+    "ALTER TABLE `__new_posts` RENAME TO `posts`",
+  ];
+
+  it("asks nothing when the copy carries every declared column and every row", () => {
+    expect(
+      read(
+        "sqlite",
+        rebuild(
+          'INSERT INTO `__new_posts`("id", "title") SELECT "id", "title" FROM `posts`'
+        ),
+        { deferred: true }
+      )
+    ).toEqual([]);
+  });
+
+  it("names it as one the run judges otherwise, never as the drop of the table", () => {
+    expect(
+      read(
+        "sqlite",
+        rebuild(
+          'INSERT INTO `__new_posts`("id", "title") SELECT "id", "title" FROM `posts` WHERE "id" > 1'
+        ),
+        { deferred: true }
+      )
+    ).toEqual([
+      unnamed("posts rebuilt (may delete data, checked at run time)"),
+    ]);
+  });
+});
+
 describe("a run of files", () => {
   // The rebuild the generator writes when a field of posts becomes required.
   const rebuildPosts = [
@@ -472,8 +661,24 @@ describe("statements not read", () => {
         "CALL purge_posts()",
       ])
     ).toEqual([
-      unnamed("DO (not read, may delete data)"),
-      unnamed("CALL PURGE_POSTS (not read, may delete data)"),
+      unreadAs(
+        "DO (not read, may delete data)",
+        "DO $$ BEGIN EXECUTE 'DROP TABLE ' || 'posts'; END $$"
+      ),
+      unreadAs(
+        "CALL PURGE_POSTS (not read, may delete data)",
+        "CALL purge_posts()"
+      ),
+    ]);
+  });
+
+  it("keeps two different unread statements under one label apart, and one statement read twice as one", () => {
+    const keep = "DO $$ BEGIN DELETE FROM drafts WHERE false; END $$";
+    const purge = "DO $$ BEGIN DELETE FROM posts; END $$";
+    const found = read("postgresql", [keep, purge, keep]);
+    expect(found).toEqual([
+      unreadAs("DO (not read, may delete data)", keep),
+      unreadAs("DO (not read, may delete data)", purge),
     ]);
   });
 
@@ -497,16 +702,23 @@ describe("statements not read", () => {
         "GRANT SELECT ON posts TO reader",
       ])
     ).toEqual([
-      unnamed("DROP TYPE MOOD CASCADE (not read, may delete data)"),
-      unnamed(
-        "ALTER TYPE ADDRESS DROP ATTRIBUTE ZIP (not read, may delete data)"
+      unreadAs(
+        "DROP TYPE MOOD CASCADE (not read, may delete data)",
+        "DROP TYPE mood CASCADE"
+      ),
+      unreadAs(
+        "ALTER TYPE ADDRESS DROP ATTRIBUTE ZIP (not read, may delete data)",
+        "ALTER TYPE address DROP ATTRIBUTE zip"
       ),
     ]);
   });
 
   it("reads MySQL's DROP SCHEMA, which drops a database's tables, as unread, and PostgreSQL's as a definition", () => {
     expect(read("mysql", ["DROP SCHEMA archive"])).toEqual([
-      unnamed("DROP SCHEMA ARCHIVE (not read, may delete data)"),
+      unreadAs(
+        "DROP SCHEMA ARCHIVE (not read, may delete data)",
+        "DROP SCHEMA archive"
+      ),
     ]);
     expect(read("postgresql", ["DROP SCHEMA archive"])).toEqual([]);
   });
@@ -519,8 +731,14 @@ describe("statements not read", () => {
         "ALTER TABLE archive.posts ADD COLUMN body text",
       ])
     ).toEqual([
-      unnamed("DROP TABLE ARCHIVE.POSTS (not read, may delete data)"),
-      unnamed('DELETE FROM "archive" . "pages" (not read, may delete data)'),
+      unreadAs(
+        "DROP TABLE ARCHIVE.POSTS (not read, may delete data)",
+        "DROP TABLE archive.posts"
+      ),
+      unreadAs(
+        'DELETE FROM "archive" . "pages" (not read, may delete data)',
+        'DELETE FROM "archive"."pages"'
+      ),
     ]);
   });
 });

@@ -90,6 +90,38 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     120_000
   );
 
+  it.runIf(dialect !== "sqlite")(
+    "reads the columns a SET NULL key blanks, and the user-defined functions a SELECT may call",
+    async () => {
+      const author = `${P}_author`;
+      const byline = `${P}_byline`;
+      const purge = `${P}_purge`;
+      await adapter.executeQuery(
+        `CREATE TABLE ${author} (id integer PRIMARY KEY)`
+      );
+      await adapter.executeQuery(
+        `CREATE TABLE ${byline} (id integer PRIMARY KEY, author_id integer, FOREIGN KEY (author_id) REFERENCES ${author} (id) ON DELETE SET NULL)`
+      );
+      await adapter.executeQuery(
+        dialect === "postgresql"
+          ? `CREATE FUNCTION ${purge}() RETURNS integer AS 'SELECT 1' LANGUAGE sql`
+          : `CREATE FUNCTION ${purge}() RETURNS integer DETERMINISTIC NO SQL RETURN 1`
+      );
+      const facts = await readDeletionFacts(adapter.getDrizzle(), dialect, [
+        `DELETE FROM ${author}`,
+        `SELECT ${purge}()`,
+      ]);
+      expect(facts.nulledBy(author)).toEqual([
+        { table: byline, column: "author_id" },
+      ]);
+      // Rows of the referencing table stay: SET NULL is not a cascade.
+      expect(facts.cascadeFrom(author)).toEqual([]);
+      expect(facts.userFunctions?.has(purge)).toBe(true);
+      expect(facts.userFunctions?.has("count")).toBe(false);
+    },
+    120_000
+  );
+
   it.runIf(dialect === "postgresql")(
     "reads what TRUNCATE ... CASCADE empties: every referencing table, the key's action aside",
     async () => {
