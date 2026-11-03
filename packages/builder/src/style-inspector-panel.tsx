@@ -73,10 +73,7 @@ import {
   SelectSeparator,
   SelectTrigger,
   SelectValue,
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
 } from "@nextlyhq/ui";
 import { ChevronDown, RotateCcw } from "lucide-react";
 import * as React from "react";
@@ -85,6 +82,7 @@ import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { ChoiceList } from "./choice-list";
+import { ChromeTooltip } from "./chrome-tooltip";
 import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
@@ -2472,24 +2470,21 @@ function ResetAction({
         : `Reset to ${sourceLabel(revealed)}`;
   return (
     <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            className="nx-style-inspector__breakpoint-action"
-            data-action="reset"
-            {...commitsFor(fieldId)}
-            onClick={onReset}
-            aria-label={named}
-          >
-            {/* An icon at the row's end, where a "Reset to unset" line under
+      <ChromeTooltip content={tip}>
+        <button
+          type="button"
+          className="nx-style-inspector__breakpoint-action"
+          data-action="reset"
+          {...commitsFor(fieldId)}
+          onClick={onReset}
+          aria-label={named}
+        >
+          {/* An icon at the row's end, where a "Reset to unset" line under
                 every set control made each one two rows. The words are its
                 tooltip and, in full, its name. */}
-            <RotateCcw size={14} aria-hidden="true" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>{tip}</TooltipContent>
-      </Tooltip>
+          <RotateCcw size={14} aria-hidden="true" />
+        </button>
+      </ChromeTooltip>
     </TooltipProvider>
   );
 }

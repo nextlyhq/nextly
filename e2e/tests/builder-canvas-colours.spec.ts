@@ -489,6 +489,20 @@ test.describe("selecting a block", () => {
     expect(await anchorOf(), "the fixture anchors the card").toBe(
       "--page-card"
     );
+    // The page's image draws once its file arrives, and moves what is below
+    // it: measured after, so the only thing that can move the title is the
+    // selection.
+    await expect
+      .poll(() =>
+        canvasFrame(page)
+          .locator(".nx-canvas img")
+          .evaluateAll(
+            images =>
+              images.length > 0 &&
+              images.every(image => (image as HTMLImageElement).complete)
+          )
+      )
+      .toBe(true);
     const before = await title.boundingBox();
 
     await card.click();

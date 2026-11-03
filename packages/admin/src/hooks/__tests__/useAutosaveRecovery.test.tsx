@@ -304,6 +304,144 @@ describe("useAutosaveRecovery", () => {
     );
   });
 
+  it("keeps a Not now pressed before the account is known, once it is", async () => {
+    // The recovery read can answer before the signed-in account does: the
+    // put-off waits for it rather than being stored under no one.
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    signedIn.id = "author-1";
+    first.rerender();
+    first.unmount();
+
+    // The editor loaded again, the account known from the start.
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(again.result.current.recovery.offer).toBeNull();
+  });
+
+  it("keeps a Not now held for the account with the document it was pressed on", async () => {
+    // The editor can move to another document before the account is known:
+    // the put-off belongs to the first, and must not land on the second.
+    const OTHER = { ...SCOPE, entryId: "e2" };
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const moving = renderHook(
+      ({ scope }: { scope: VersionScope }) => useRecoveryHarness(scope),
+      { wrapper, initialProps: { scope: SCOPE as VersionScope } }
+    );
+    await waitFor(() =>
+      expect(moving.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => moving.result.current.recovery.dismiss());
+    moving.rerender({ scope: OTHER });
+    signedIn.id = "author-1";
+    moving.rerender({ scope: OTHER });
+    moving.unmount();
+
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(first.result.current.recovery.offer).toBeNull();
+    first.unmount();
+
+    const second = renderRecovery(OTHER);
+    await waitFor(() =>
+      expect(second.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("keeps a held Not now while the account is still unknown, across a move and back", async () => {
+    const OTHER = { ...SCOPE, entryId: "e2" };
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const moving = renderHook(
+      ({ scope }: { scope: VersionScope }) => useRecoveryHarness(scope),
+      { wrapper, initialProps: { scope: SCOPE as VersionScope } }
+    );
+    await waitFor(() =>
+      expect(moving.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => moving.result.current.recovery.dismiss());
+    moving.rerender({ scope: OTHER });
+    moving.rerender({ scope: SCOPE });
+
+    await waitFor(() =>
+      expect(moving.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(moving.result.current.recovery.offer).toBeNull();
+  });
+
+  it("keeps a Not now pressed before the account is known across a reload", async () => {
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    // Reloaded before the account answered.
+    first.unmount();
+
+    signedIn.id = "author-1";
+    const again = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(again.result.current.recovery.isResolved).toBe(true)
+    );
+    expect(again.result.current.recovery.offer).toBeNull();
+  });
+
+  it("keeps every Not now pressed before the account is known, not only the last", async () => {
+    const OTHER = { ...SCOPE, entryId: "e2" };
+    getSpy.mockResolvedValue({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    signedIn.id = null;
+    for (const scope of [SCOPE, OTHER]) {
+      const one = renderRecovery(scope);
+      await waitFor(() =>
+        expect(one.result.current.recovery.offer).not.toBeNull()
+      );
+      act(() => one.result.current.recovery.dismiss());
+      one.unmount();
+    }
+
+    signedIn.id = "author-1";
+    for (const scope of [SCOPE, OTHER]) {
+      const back = renderRecovery(scope);
+      await waitFor(() =>
+        expect(back.result.current.recovery.isResolved).toBe(true)
+      );
+      expect(back.result.current.recovery.offer).toBeNull();
+      back.unmount();
+    }
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },
