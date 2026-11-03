@@ -1075,11 +1075,14 @@ export function SharedStylesStudio({
   pageBlocks,
   styleContext,
   suppliedClassIds,
+  tokens,
 }: {
   classes: ClassSurface;
   pageBlocks: PageClassBlocks;
   styleContext: StyleCompileContext;
   suppliedClassIds: readonly string[] | undefined;
+  /** The site's variables as the canvas draws them, for the rows' preview tile. */
+  tokens: SiteTokenSet | undefined;
 }): React.JSX.Element {
   const mayChange = useCan("update-site-style");
   const access = useSharedStylesClient();
@@ -1089,6 +1092,7 @@ export function SharedStylesStudio({
       absence={classes.absence}
       suppliedClassIds={suppliedClassIds}
       styleContext={styleContext}
+      tokens={tokens}
       pageBlocks={pageBlocks}
       readOnly={!mayChange}
       access={access}

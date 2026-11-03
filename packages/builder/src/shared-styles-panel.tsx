@@ -25,7 +25,11 @@
  *
  * @module shared-styles-panel
  */
-import type { NamedClass, StyleCompileContext } from "@nextlyhq/blocks-engine";
+import type {
+  NamedClass,
+  SiteTokenSet,
+  StyleCompileContext,
+} from "@nextlyhq/blocks-engine";
 import {
   Input,
   Popover,
@@ -44,12 +48,14 @@ import {
   ShowMore,
   useRefusableWrite,
 } from "./panel-actions";
+import { usePrefersDark } from "./prefers-dark";
 import { HoldReason, SharedStyleDetails } from "./shared-style-details";
 import {
   inSharedStyleFilter,
   isUnused,
   renameSharedStyle,
   sharedStyleFilterEmpty,
+  sharedStylePageTile,
   sharedStyleUse,
   SHARED_STYLE_FILTERS,
   searchSharedStyles,
@@ -69,6 +75,7 @@ import {
   type SharedStylesUsage,
   type SharedStyleUsesPage,
 } from "./shared-style-library";
+import { activeTokenMode } from "./style-colour";
 
 /** What the host answers a rename with. */
 export type ClassRenameOutcome =
@@ -110,6 +117,11 @@ export interface SharedStylesPanelProps {
   suppliedClassIds?: readonly string[];
   /** The context the page compiles with, so summaries match the page. */
   styleContext?: StyleCompileContext;
+  /**
+   * The site's variables, so each row's preview is drawn on the site's page
+   * colours. Absent: a neutral tile.
+   */
+  tokens?: SiteTokenSet;
   /** The blocks on the open page carrying each style. */
   pageBlocks: PageClassBlocks;
   /** Shown, never changed: no rename and no removal. A lock is its own right. */
@@ -205,6 +217,7 @@ export function SharedStylesPanel({
   absence = "pending",
   suppliedClassIds,
   styleContext,
+  tokens,
   pageBlocks,
   readOnly = false,
   access,
@@ -212,6 +225,7 @@ export function SharedStylesPanel({
   currentRenameAttempt,
   pendingNames = NO_NAMES,
 }: SharedStylesPanelProps): React.JSX.Element {
+  const page = usePageTile(tokens);
   const [query, setQuery] = React.useState("");
   const [filter, setFilter] = React.useState<SharedStyleFilter>("all");
   const [pages, setPages] = React.useState(1);
@@ -256,25 +270,16 @@ export function SharedStylesPanel({
   const held = Object.keys(pendingNames).length > 0;
 
   return (
-    <div
-      className="nx-vars nx-shared-styles"
-      data-read-only={readOnly ? "" : undefined}
-    >
-      <div className="nx-vars__search">
-        <Search aria-hidden="true" size={16} />
-        <Input
-          ref={search}
-          type="search"
-          aria-label={`Search ${SHARED_STYLES_WORD}`}
-          placeholder="Search by name, property or value"
-          value={query}
-          onChange={event => {
-            setQuery(event.target.value);
-            setPages(1);
-          }}
-        />
-      </div>
-      {rows.length === 0 ? null : (
+    <div className="nx-vars nx-shared-styles" {...readOnlyMark(readOnly)}>
+      <SearchBox
+        ref={search}
+        query={query}
+        onQuery={next => {
+          setQuery(next);
+          setPages(1);
+        }}
+      />
+      {rows.length > 0 && (
         <FilterBar
           rows={rows}
           filter={filter}
@@ -283,12 +288,7 @@ export function SharedStylesPanel({
             setPages(1);
           }}
           usageOf={usageOf}
-          exact={
-            usage.whole === true &&
-            pageBlocks.complete &&
-            // A count is exact only once every style's reach is complete.
-            rows.every(row => usage.styles.get(row.id)?.complete === true)
-          }
+          exact={countsExact(usage, pageBlocks, rows)}
         />
       )}
       <div className="nx-vars__body">
@@ -337,6 +337,7 @@ export function SharedStylesPanel({
                     search.current?.focus();
                   },
                 }}
+                page={page}
                 open={openId === row.id}
                 onOpenChange={open => setOpenId(open ? row.id : null)}
               />
@@ -351,6 +352,57 @@ export function SharedStylesPanel({
         <FloorNote whole={usage.whole} />
       </div>
     </div>
+  );
+}
+
+/** The tab's read-only mark, for the styles that draw a read-only tab. */
+function readOnlyMark(readOnly: boolean): { "data-read-only"?: "" } {
+  return readOnly ? { "data-read-only": "" } : {};
+}
+
+/** The search over every style, by name, property or value. */
+function SearchBox({
+  ref,
+  query,
+  onQuery,
+}: {
+  ref: React.Ref<HTMLInputElement>;
+  query: string;
+  onQuery: (query: string) => void;
+}): React.JSX.Element {
+  return (
+    <div className="nx-vars__search">
+      <Search aria-hidden="true" size={16} />
+      <Input
+        ref={ref}
+        type="search"
+        aria-label={`Search ${SHARED_STYLES_WORD}`}
+        placeholder="Search by name, property or value"
+        value={query}
+        onChange={event => onQuery(event.target.value)}
+      />
+    </div>
+  );
+}
+
+/** The page each row's preview is drawn on, in the mode the canvas shows. */
+function usePageTile(tokens: SiteTokenSet | undefined): React.CSSProperties {
+  return sharedStylePageTile(tokens, activeTokenMode(usePrefersDark()));
+}
+
+/**
+ * Whether Used and Unused can be counted: every page counted, the open page
+ * read in full, and every style's reach complete.
+ */
+function countsExact(
+  usage: UsageState,
+  pageBlocks: PageClassBlocks,
+  rows: readonly SharedStyleRow[]
+): boolean {
+  return (
+    usage.whole === true &&
+    pageBlocks.complete &&
+    rows.every(row => usage.styles.get(row.id)?.complete === true)
   );
 }
 
@@ -750,16 +802,23 @@ function StyleRow({
   row,
   name,
   details,
+  page,
   open,
   onOpenChange,
 }: {
   row: SharedStyleRow;
   name: string;
   details: RowDetails;
+  /** The site's page colours, which the row's preview is drawn on. */
+  page: React.CSSProperties;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const sentence = sharedStyleReachSentence(details.blocks, details.reach);
+  // A name that can't be changed is not focused, and so not selected, on
+  // open: selected text reads as editable. The details take focus instead.
+  const fixed = details.readOnly || row.locked || row.inCode;
+  const content = React.useRef<HTMLDivElement>(null);
   return (
     <li>
       <Popover open={open} onOpenChange={onOpenChange} modal>
@@ -776,6 +835,7 @@ function StyleRow({
               name={name}
               reach={details.reach}
               styleContext={details.styleContext}
+              page={page}
             />
           </button>
         </PopoverTrigger>
@@ -783,8 +843,17 @@ function StyleRow({
           side="right"
           align="start"
           sideOffset={12}
-          className="nx-vars-editor"
+          className="nx-vars-editor nx-shared-styles__editor"
           aria-label={name}
+          ref={content}
+          onOpenAutoFocus={
+            fixed
+              ? event => {
+                  event.preventDefault();
+                  content.current?.focus();
+                }
+              : undefined
+          }
         >
           <SharedStyleDetails
             {...details}
@@ -804,20 +873,24 @@ function RowContent({
   name,
   reach,
   styleContext,
+  page,
 }: {
   row: SharedStyleRow;
   name: string;
   reach: SharedStyleReach | undefined;
   styleContext: StyleCompileContext | undefined;
+  page: React.CSSProperties;
 }): React.JSX.Element {
   return (
     <>
-      <span
-        className="nx-vars__specimen nx-shared-styles__lead"
-        aria-hidden="true"
-        style={sharedStylePreview(row.styles, styleContext)}
-      >
-        Aa
+      {/* The page under the preview, so its colours read as on the site. */}
+      <span className="nx-shared-styles__tile" aria-hidden="true" style={page}>
+        <span
+          className="nx-vars__specimen nx-shared-styles__lead"
+          style={sharedStylePreview(row.styles, styleContext)}
+        >
+          Aa
+        </span>
       </span>
       <span className="nx-shared-styles__names">
         <span className="nx-vars__name" title={name}>
@@ -924,7 +997,7 @@ function RemoveUnusedHead({
           side="right"
           align="start"
           sideOffset={12}
-          className="nx-vars-editor"
+          className="nx-vars-editor nx-shared-styles__editor"
           aria-label={`Remove unused ${SHARED_STYLES_WORD}`}
         >
           <RemoveUnused
@@ -1095,7 +1168,8 @@ function ConfirmUnused({
       aria-label={`Remove ${unusedCount(count)}`}
     >
       <p>{`Remove ${unusedCount(count)}? No page uses them.`}</p>
-      <ul className="nx-shared-styles__uses">
+      {/* Stacked, so a long name and its class both read in full. */}
+      <ul className="nx-shared-styles__uses nx-shared-styles__uses--stacked">
         {left.map(row => (
           <li key={row.id}>
             <span className="nx-shared-styles__use-title">{row.name}</span>

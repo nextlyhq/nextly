@@ -615,6 +615,12 @@ export function editorPanelRenderer({
                 suppliedClassIds={configSiteStyle?.classes?.map(
                   entry => entry.id
                 )}
+                // The same variables the Fonts tab reads, as the canvas draws.
+                tokens={renderedTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
               />
             ),
             fonts: () => (

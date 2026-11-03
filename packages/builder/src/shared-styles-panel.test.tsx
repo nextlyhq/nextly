@@ -197,6 +197,28 @@ describe("the list", () => {
   });
 });
 
+describe("the row's preview", () => {
+  it("draws a style's colours on a tile that stands for the site's page", async () => {
+    await panel({ tokens: { tokens: [] } });
+    const card = row(/^Card, \.nx-c-card/);
+    const tile = card.querySelector<HTMLElement>(".nx-shared-styles__tile");
+    // The engine's default page, in light mode: white, with near-black text.
+    expect(tile?.style.backgroundColor).toBe("rgb(255, 255, 255)");
+    expect(tile?.style.color).toBe("rgb(17, 24, 39)");
+    const specimen = tile?.querySelector<HTMLElement>(".nx-vars__specimen");
+    expect(specimen?.style.color).toBe("rgb(17, 34, 51)");
+  });
+
+  it("keeps the neutral tile when the site's variables are not to hand", async () => {
+    await panel();
+    const tile = row(/^Card, \.nx-c-card/).querySelector<HTMLElement>(
+      ".nx-shared-styles__tile"
+    );
+    expect(tile).not.toBeNull();
+    expect(tile?.style.backgroundColor).toBe("");
+  });
+});
+
 describe("counts", () => {
   it("reads the rows on screen first, then every other style, fifty at a time and each once", async () => {
     const many: NamedClass[] = Array.from({ length: 61 }, (_, n) => ({
@@ -621,6 +643,19 @@ describe("renaming", () => {
     expect(within(details).getByRole("alert").textContent).toBe(
       "The site refused it."
     );
+  });
+
+  it("does not select a name that can't be changed when its details open", async () => {
+    await panel({ library: [{ ...CARD, locked: true }, HERO] });
+    const locked = await open(/^Card, \.nx-c-card/, "Card");
+    expect(document.activeElement).not.toBe(
+      within(locked).getByLabelText("Name")
+    );
+    cleanup();
+    // CONTROL: a name that can be changed is focused, ready to type over.
+    await panel({ library: [CARD, HERO] });
+    const open_ = await open(/^Card, \.nx-c-card/, "Card");
+    expect(document.activeElement).toBe(within(open_).getByLabelText("Name"));
   });
 
   it("keeps a locked style's name, and says why", async () => {

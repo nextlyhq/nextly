@@ -4628,7 +4628,25 @@ fieldset.nx-inspector__fields {
   grid-template-columns: 22px minmax(0, 1fr) auto auto auto;
 }
 
+/* The preview's tile, which stands for the site's page: its background and
+   text colours set inline when the tab has the site's variables, else this
+   neutral page with a border. The style's own colours are drawn on it, so a
+   dark text or a white background shows as it would on a page. */
+.nx-shared-styles__tile {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  overflow: hidden;
+  color: var(--nx-foreground);
+  background: var(--nx-page-background);
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
 .nx-shared-styles__lead {
+  align-items: center;
+  width: 100%;
+  height: 100%;
   font-size: var(--text-sm);
 }
 
@@ -4732,6 +4750,62 @@ fieldset.nx-inspector__fields {
   color: var(--nx-muted-foreground);
   cursor: not-allowed;
   text-decoration: none;
+}
+
+/* No text in the tab under --text-xs. These classes are the Variables and
+   Fonts tabs' too, so they are raised here only, leaving those tabs as they
+   are. The editor is portalled out of the tab, so it is scoped by its own
+   class. */
+.nx-shared-styles .nx-vars__chip,
+.nx-shared-styles .nx-vars__group-name,
+.nx-shared-styles__editor .nx-vars-editor__code {
+  font-size: var(--text-xs);
+}
+
+/* A style's details and Remove unused fit inside the window: the body
+   scrolls, with the name kept at its top. The fallback covers a popover
+   Radix has not measured yet. */
+[data-slot="popover-content"].nx-shared-styles__editor {
+  display: flex;
+  flex-direction: column;
+  max-height: var(--radix-popover-content-available-height, 100vh);
+}
+
+.nx-shared-styles__editor > .nx-vars-editor__body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.nx-shared-styles__details-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  background: var(--nx-popover);
+}
+
+/* Remove unused names each style over its class, wrapped rather than cut, so
+   a long name reads in full in the 240px editor. */
+.nx-shared-styles__uses--stacked li {
+  flex-direction: column;
+  gap: 0;
+}
+
+.nx-shared-styles__uses--stacked .nx-shared-styles__use-title,
+.nx-shared-styles__uses--stacked .nx-shared-styles__class {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* A name that can't be changed reads as text rather than as a field. */
+.nx-shared-styles__editor input[readonly] {
+  cursor: default;
+  background: var(--nx-muted);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 /* The details and the add editor: the family in itself, then its sample. */

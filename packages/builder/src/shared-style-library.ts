@@ -15,6 +15,7 @@ import {
   tokenLabelIssue,
   type NamedClass,
   type NodeStyles,
+  type SiteTokenSet,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
@@ -24,6 +25,8 @@ import {
   usableSiteClasses,
 } from "./class-library";
 import { EDITOR_WORDS } from "./editor-words";
+import type { TokenMode } from "./font-library";
+import { colourHexOf } from "./style-colour";
 
 /** The kinds of document a shared style is counted on. */
 export type SharedStyleKind = "pages" | "components" | "patterns" | "layouts";
@@ -240,6 +243,32 @@ export function sharedStylePreview(
     preview[key] = entry.value;
   }
   return preview;
+}
+
+/**
+ * The tile a row's "Aa" is drawn on: the site's page, its background and text
+ * colours in the mode the canvas shows, so a style's own colours read as they
+ * do on a page rather than against the panel. Resolved through the colour
+ * controls' own reading of the site's variables ({@link colourHexOf}), by the
+ * identities the engine gives the page's two colours.
+ *
+ * Empty without the site's variables, or for a colour that cannot be read:
+ * the tile then keeps its neutral look.
+ */
+export function sharedStylePageTile(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode
+): { backgroundColor?: string; color?: string } {
+  const backgroundColor = colourHexOf(
+    { $token: "color.background" },
+    tokens,
+    mode
+  );
+  const color = colourHexOf({ $token: "color.text" }, tokens, mode);
+  return {
+    ...(backgroundColor === undefined ? {} : { backgroundColor }),
+    ...(color === undefined ? {} : { color }),
+  };
 }
 
 const KIND_WORDS: Record<SharedStyleKind, readonly [string, string]> = {

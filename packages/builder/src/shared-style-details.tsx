@@ -76,14 +76,17 @@ export function SharedStyleDetails(
   const holdId = React.useId();
   const heldBy = props.held ? holdId : undefined;
   return (
-    <div className="nx-vars-editor__body">
-      <NameField
-        row={row}
-        name={name}
-        fixed={readOnly || row.locked || row.inCode}
-        issue={props.issue}
-        onRename={props.onRename}
-      />
+    <div className="nx-vars-editor__body nx-shared-styles__details">
+      {/* Kept at the top while the rest scrolls inside the window's height. */}
+      <div className="nx-shared-styles__details-head">
+        <NameField
+          row={row}
+          name={name}
+          fixed={readOnly || row.locked || row.inCode}
+          issue={props.issue}
+          onRename={props.onRename}
+        />
+      </div>
       <HoldReason
         // Said once, above the controls it holds, which both point to.
         held={props.held && holdsAControl(props, removal)}
