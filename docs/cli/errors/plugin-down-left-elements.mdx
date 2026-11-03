@@ -1,0 +1,23 @@
+---
+title: PLUGIN_DOWN_LEFT_ELEMENTS
+description: "A plugin's DOWN migrations ran and left a column, index, foreign key or check it added to another owner's table in place, so the uninstall was not recorded."
+---
+
+## Cause
+
+A plugin's DOWN migrations ran and left a column, index, foreign key or check it added to another owner's table in place, so the uninstall was not recorded.
+
+A full uninstall drops the plugin's tables and everything it added to other owners' tables. After its DOWN statements ran, an element the What line names was still there. The migrations are recorded as rolled back, but the plugin is not recorded as uninstalled, and its ownership records and migration history are kept: forgetting them would leave the element with no recorded owner, and a later install would add it a second time.
+
+## Fix
+
+- Drop the element the What line names, then run `nextly plugins uninstall <name>` again to record the uninstall.
+
+## Example
+
+```text
+✗ @acme/seo's DOWN migrations ran but left index "seo_idx_slug" on pages in place, so it was not recorded as uninstalled and its records were kept.
+  Why:  Its DOWN statements were to drop everything it added to other owners' tables, and one did not. Its migrations are recorded as rolled back, and its ownership records are kept so the element stays known as its own.
+  Next: Drop it, then run the uninstall again to record it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-down-left-elements  (PLUGIN_DOWN_LEFT_ELEMENTS)
+```

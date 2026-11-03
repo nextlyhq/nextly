@@ -173,9 +173,14 @@ async function moduleStatuses(): Promise<string[]> {
   );
 }
 
+/** The distinct states of the plugin's owner rows. */
 async function ownerStates(): Promise<string[]> {
   const rows = await new SchemaOwnersRepository(db.drizzle, "sqlite").read();
-  return [...new Set(rows.map(row => row.state))];
+  return [
+    ...new Set(
+      rows.filter(row => row.ownerId === PLUGIN).map(row => row.state)
+    ),
+  ];
 }
 
 const uninstall = () =>
@@ -262,7 +267,8 @@ describe("plugins uninstall with a table still there after its DOWNs ran", () =>
     sqlite.exec("DROP TABLE ul__tags");
     await uninstall();
 
-    expect(await ownerStates()).toEqual(["uninstalled"]);
+    // Recorded uninstalled, and forgotten: its owner rows are gone.
+    expect(await ownerStates()).toEqual([]);
     expect(tableNames()).not.toContain("ul__notes");
     expect(tableNames()).not.toContain("ul__tags");
   });
