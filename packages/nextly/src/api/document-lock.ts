@@ -65,14 +65,28 @@ import { withErrorHandler } from "./with-error-handler";
  * should know which of the two they are waiting on. The maker's name is read
  * through `peopleById`, the one lookup that names a person, and only for a
  * key: a session already carries it.
+ *
+ * 🔴 A key's label is cut to fit the lock row's label column. The column is as
+ * wide as the widest name, and the suffix makes a long name's label wider, so
+ * uncut it failed the claim on PostgreSQL and MySQL while SQLite stored it.
+ * Cut by code point, so no character is split in half.
  */
 async function holderLabel(auth: AuthContext): Promise<string> {
   if (auth.authMethod === "api-key") {
     const maker = (await peopleById([auth.userId])).get(auth.userId)?.name;
-    return maker ? `${maker}'s API key` : "An API key";
+    if (!maker) return "An API key";
+    const suffix = "'s API key";
+    const room = OWNER_LABEL_LENGTH - suffix.length;
+    return `${Array.from(maker).slice(0, room).join("")}${suffix}`;
   }
   return auth.userName || auth.userEmail || "Someone";
 }
+
+/**
+ * The lock row's `owner_label` column width on PostgreSQL and MySQL
+ * (`schemas/document-lock`), which a stored label must fit.
+ */
+const OWNER_LABEL_LENGTH = 255;
 
 async function getDocumentLockService(): Promise<DocumentLockService> {
   await getCachedNextly();

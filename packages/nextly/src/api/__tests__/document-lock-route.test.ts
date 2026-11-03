@@ -203,6 +203,23 @@ describe("document lock route", () => {
       expect.anything()
     );
 
+    // A maker whose name is as long as a name may be: the label still fits
+    // the 255-character column the claim is stored in, whole characters only.
+    peopleById.mockResolvedValueOnce(
+      new Map([
+        [
+          "maker",
+          { kind: "person", id: "maker", name: `${"N".repeat(244)}😀😀` },
+        ],
+      ])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    const long = (service.acquire.mock.lastCall?.[1] as { ownerLabel: string })
+      .ownerLabel;
+    expect(Array.from(long)).toHaveLength(255);
+    expect(long).toBe(`${"N".repeat(244)}😀's API key`);
+
     // A maker with no name, or whose name could not be read.
     peopleById.mockResolvedValueOnce(
       new Map([["maker", { kind: "person", id: "maker", name: null }]])

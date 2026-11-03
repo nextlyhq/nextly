@@ -154,6 +154,19 @@ describe.each(getConfiguredTestDialects())(
       expect(holder?.ownerLabel).toBe("Ana's API key");
     });
 
+    it("names a key whose maker has the longest name a person may have, within the label's column", async () => {
+      // 🔴 The label column is 255 characters on PostgreSQL and MySQL, as wide
+      // as the widest name, and a key's label adds "'s API key" to that name.
+      // Unbounded, the claim failed on those two and passed on SQLite.
+      const longest = "N".repeat(255);
+      const { key, ref } = await boot("lock-apikey-longname", longest);
+
+      const holder = await claimAndRead(key, ref);
+
+      expect(holder?.ownerLabel).toMatch(/^N+'s API key$/);
+      expect(holder?.ownerLabel?.length).toBe(255);
+    });
+
     it("names a key whose maker has no name as an API key", async () => {
       const { key, ref } = await boot("lock-apikey-nameless", null);
 
