@@ -233,31 +233,20 @@ describe("React describing a window handed over as a prop", () => {
 });
 
 describe("the canvas on a page holding a cross-origin frame", () => {
-  it("states its document and window, and still fits the device to the region", async () => {
+  it("states its document and window, and its later commits still run their effects", async () => {
     const loaded = await load();
     const { React, Canvas, CANVAS_ROOT_CLASS } = loaded;
-    const scales: number[] = [];
     const { host, root } = mount(loaded);
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "r", type: "acme/reader", version: 1, props: {} }],
+    } as never;
+    const sheet = { css: "", classes: {} } as never;
 
     await React.act(async () => {
       root.render(
-        React.createElement(Canvas, {
-          document: {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "r", type: "acme/reader", version: 1, props: {} }],
-          } as never,
-          siteStyles: {
-            css: "",
-            classes: {},
-            breakpoints: {
-              viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-              container: [],
-            },
-          } as never,
-          preview: { container: "nx-preview-viewport", width: 1280 },
-          onScale: (scale: number) => scales.push(scale),
-        })
+        React.createElement(Canvas, { document: page, siteStyles: sheet })
       );
     });
 
@@ -266,21 +255,19 @@ describe("the canvas on a page holding a cross-origin frame", () => {
     expect(reader?.dataset.document).toBe("true");
     expect(reader?.dataset.window).toBe("true");
 
-    // And the canvas still answers the room it is given: a 1280px device in a
-    // 640px region is drawn at half size.
-    const canvasRoot = host.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
-    const region = FakeResizeObserver.all.find(observer =>
-      observer.observed.includes(host)
-    );
-    expect(region).toBeDefined();
+    // And React finished that commit: a later one still runs its effects, so
+    // a root reporter handed over after the environment arrived is told.
+    const reported: unknown[] = [];
     await React.act(async () => {
-      region?.callback(
-        [{ contentBoxSize: [{ inlineSize: 640, blockSize: 700 }] } as never],
-        region as never
+      root.render(
+        React.createElement(Canvas, {
+          document: page,
+          siteStyles: sheet,
+          onRoot: (element: HTMLDivElement | null) => reported.push(element),
+        })
       );
     });
-    expect(scales.at(-1)).toBe(0.5);
-    expect(String((canvasRoot?.style as { zoom?: string }).zoom)).toBe("0.5");
+    expect(reported).toContain(host.querySelector(`.${CANVAS_ROOT_CLASS}`));
     await React.act(async () => {
       root.unmount();
     });

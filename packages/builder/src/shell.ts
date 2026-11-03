@@ -91,7 +91,33 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  * from a server module while the writer lives behind the boundary — two halves
  * of one contract that could then be versioned apart.
  */
-export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
+export {
+  CANVAS_ROOT_CLASS,
+  Canvas,
+  DropRefusal,
+  nodeIdFromEvent,
+} from "./canvas";
+
+/**
+ * @experimental The frame the canvas is drawn in, and how the code around the
+ * canvas learns about it.
+ *
+ * `CanvasFrame` is both the component and the type `useCanvasFrame` answers
+ * with: what the frame is, its document and window, its painted scale and
+ * viewport, and the point mapping between it and the editor. The provider
+ * goes ABOVE the editor's shell, so the panels, the toolbar and the keys
+ * outside the canvas see the frame the canvas registers into it.
+ *
+ * `CanvasMarks` draws the selection and the drop container over the page.
+ */
+export {
+  CanvasFrame,
+  CANVAS_FRAME_TITLE_PREFIX,
+  canvasFrameTitle,
+} from "./canvas-frame";
+export type { CanvasFrameProps } from "./canvas-frame";
+export { CanvasFrameProvider, useCanvasFrame } from "./canvas-frame-context";
+export { CanvasMarks } from "./canvas-marks";
 
 /**
  * @experimental Hold the editor's shortcuts while something modal is over it.
@@ -108,7 +134,7 @@ export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
  * Alt+Arrow reach the page behind the dialog.
  */
 export { useModalKeyboardHold } from "./modal-keyboard-hold";
-export type { CanvasPreview, CanvasProps } from "./canvas";
+export type { CanvasProps } from "./canvas";
 // The regions of a page's Layout, drawn locked around the page on the canvas.
 export type { CanvasRegion } from "./canvas-regions";
 export { REGION_ATTRIBUTE } from "./canvas-regions";
@@ -219,6 +245,7 @@ export {
   editedBreakpointAtWidth,
   editingBreakpointOf,
   offeredTiers,
+  previewHeight,
   previewWidth,
   selectableTiers,
   widthForBreakpoint,

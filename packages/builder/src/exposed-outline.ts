@@ -4,7 +4,7 @@
  * A component's own design and the fields it exposes look alike on the page,
  * so the editor marks the second: while a placement is selected, each element
  * that draws one of its exposed values carries {@link EXPOSED_ATTRIBUTE}, and
- * the chrome's stylesheet outlines it, dashed, in the accent a component
+ * the canvas marks outline it, dashed, in the accent a component
  * wears. The composed page's exposure map says which those are, so the marks
  * are exactly the values a double-click edits or the panel lists.
  *

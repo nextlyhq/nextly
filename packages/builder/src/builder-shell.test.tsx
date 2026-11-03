@@ -2494,3 +2494,67 @@ describe("the shell's keys inside the canvas's frame", () => {
     frame.remove();
   });
 });
+
+describe("the canvas region around a canvas in a frame", () => {
+  it("hands focus on into the frame, and is no tab stop of its own", () => {
+    /*
+     * F6 focuses the canvas region; the page is in the frame, so focus has to
+     * go on into it. A region that stayed a tab stop as well would trap Tab:
+     * Shift+Tab out of the frame would land on it and be sent straight back.
+     */
+    const frame = document.createElement("iframe");
+    stubContainerFits(true);
+    const { getByRole } = render(
+      <CanvasFrameProvider frame={frame}>
+        <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+          <span />
+        </BuilderShell>
+      </CanvasFrameProvider>
+    );
+    const region = getByRole("region", { name: "Canvas" });
+    // The frame inside the region, as `CanvasFrame` draws it there.
+    region.append(frame);
+    expect(region.tabIndex).toBe(-1);
+    act(() => region.focus());
+    expect(document.activeElement).toBe(frame);
+  });
+
+  it("is a tab stop of its own while the painted frame overflows it, so the keyboard can scroll it", () => {
+    /*
+     * At a zoom past the region, the region itself scrolls the painted frame,
+     * and arrow keys inside the frame scroll only the frame's own page. So
+     * while it overflows, the region keeps focus when it gets it, and Tab goes
+     * on into the frame from there.
+     */
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(2000);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+    const frame = document.createElement("iframe");
+    stubContainerFits(true);
+    const { getByRole } = render(
+      <CanvasFrameProvider frame={frame}>
+        <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+          <span />
+        </BuilderShell>
+      </CanvasFrameProvider>
+    );
+    const region = getByRole("region", { name: "Canvas" });
+    region.append(frame);
+    expect(region.tabIndex).toBe(0);
+    act(() => region.focus());
+    expect(document.activeElement).toBe(region);
+    vi.restoreAllMocks();
+  });
+
+  it("stays a tab stop over a canvas in the editor's own document", () => {
+    stubContainerFits(true);
+    const { getByRole } = render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <span />
+      </BuilderShell>
+    );
+    const region = getByRole("region", { name: "Canvas" });
+    expect(region.tabIndex).toBe(0);
+    act(() => region.focus());
+    expect(document.activeElement).toBe(region);
+  });
+});

@@ -38,11 +38,13 @@ const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 const seen: {
   inspector: Record<string, unknown> | undefined;
   canvas: Record<string, unknown> | undefined;
+  frame: Record<string, unknown> | undefined;
   switcher: Record<string, unknown> | undefined;
   layers: Record<string, unknown> | undefined;
 } = {
   inspector: undefined,
   canvas: undefined,
+  frame: undefined,
   switcher: undefined,
   layers: undefined,
 };
@@ -131,6 +133,12 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BreakpointSwitcher: record("switcher"),
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
+    // Recorded and passed through: the canvas renders inside the frame, which
+    // is what is sized to the device.
+    CanvasFrame: (props: Record<string, unknown>): React.JSX.Element => {
+      seen.frame = props;
+      return <>{props.children as React.ReactNode}</>;
+    },
     BlockKeyboardActions: passthrough,
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
@@ -294,26 +302,9 @@ function openEditor(): { rerender: () => void } {
   };
 }
 
-/** The box inputs the canvas was handed. */
-function box(): {
-  container?: string;
-  width?: number;
-  onMeasured?: (width: number | undefined) => void;
-} {
-  return (seen.canvas?.preview ?? {}) as {
-    container?: string;
-    width?: number;
-    onMeasured?: (width: number | undefined) => void;
-  };
-}
-
-/** What the canvas reports its box actually measured. */
-function measure(width: number | undefined): void {
-  const report = box().onMeasured;
-  if (report === undefined) throw new Error("the canvas was given no reporter");
-  React.act(() => {
-    report(width);
-  });
+/** The size the canvas's frame was handed. */
+function box(): { width?: number } {
+  return (seen.frame ?? {}) as { width?: number };
 }
 
 /** What the author asks the switcher for. */
@@ -331,6 +322,7 @@ function choose(breakpoint: string): void {
 beforeEach(() => {
   seen.inspector = undefined;
   seen.canvas = undefined;
+  seen.frame = undefined;
   seen.switcher = undefined;
   clientConfig = { siteStyle: SITE };
   storedDevice = null;
@@ -340,21 +332,16 @@ afterEach(() => {
   cleanup();
 });
 
-describe("the container the canvas is compiled against", () => {
-  it("gives the canvas the reporter the zoom control reads", () => {
+describe("the sheet the canvas is compiled with", () => {
+  it("gives the canvas's frame the reporter the zoom control reads", () => {
     /*
-     * The scale the canvas paints at is reported back so the control can name
+     * The scale the frame paints at is reported back so the control can name
      * it — including while FITTING, where it is derived from a region only the
-     * canvas measures.
-     *
-     * Asserted on the CANVAS's own props rather than inside `preview`, because
-     * that is exactly where it was wrong: an extra key on an inferred object is
-     * accepted and ignored rather than refused, so the reporter never ran and
-     * the control sat at 100% while the canvas zoomed.
+     * frame measures.
      */
     openEditor();
 
-    expect(seen.canvas?.onScale).toBeTypeOf("function");
+    expect(seen.frame?.onScale).toBeTypeOf("function");
   });
 
   it("tells the layers panel that the move keystrokes are bound", () => {
@@ -376,32 +363,27 @@ describe("the container the canvas is compiled against", () => {
     expect(seen.layers?.moveHints).toBe(true);
   });
 
-  it("tells the inspector about the SAME one it compiled with", () => {
+  it("compiles the page as published, with no preview container", () => {
     /*
-     * The panel decides whether the window may answer for which tiers are live.
-     * Given a name the canvas did not compile with — or given none while the
-     * canvas compiled with one — it evaluates `@media` rules a container-query
-     * compile never wrote, and a wide admin window around a narrow canvas then
-     * reports the desktop tier live while the box is painting tablet.
+     * The canvas is a frame at the device's own size, so `@media` and the
+     * site's container queries answer for the device exactly as on the
+     * published page. A preview compile would rewrite them for a box the
+     * frame no longer establishes, and every container rule would match
+     * nothing.
      *
-     * Asserted as equality AND as present, because two `undefined`s are equal
-     * and would pass a comparison alone while nothing was previewing at all.
+     * Asserted with the control that the context is there at all, so an
+     * absent one does not pass for a published compile.
      */
     openEditor();
 
     const context = (
       seen.canvas?.render as {
-        styleContext?: { previewContainer?: string };
+        styleContext?: { previewContainer?: string; breakpoints?: unknown };
       }
     )?.styleContext;
-    expect(context?.previewContainer).toBeTypeOf("string");
-    expect(seen.inspector?.previewContainer).toBe(context?.previewContainer);
-    /*
-     * And the BOX establishes that same container. The sheet's rules name it;
-     * an element establishing a different one — or none — leaves every preview
-     * rule matching nothing, with the sheet valid and the canvas resizing.
-     */
-    expect(box().container).toBe(context?.previewContainer);
+    expect(context?.breakpoints).toBeDefined();
+    expect(context?.previewContainer).toBeUndefined();
+    expect(seen.inspector?.previewContainer).toBeUndefined();
   });
 });
 
@@ -456,9 +438,9 @@ describe("the device being edited", () => {
     openEditor();
 
     choose("base");
-    measure(900);
 
     expect(seen.inspector?.breakpoint).toBe("base");
+    expect(box().width).toBe(1280);
   });
 
   it("edits a narrower device only once it is chosen", () => {
@@ -466,7 +448,6 @@ describe("the device being edited", () => {
     openEditor();
 
     choose("tablet");
-    measure(900);
 
     expect(seen.inspector?.breakpoint).toBe("tablet");
     expect(seen.inspector?.liveBreakpoints).toContain("tablet");
@@ -507,7 +488,7 @@ describe("a device the site stops offering", () => {
     expect(box().width).toBe(1280);
   });
 
-  it("stops simulating when the site removes its last breakpoint", () => {
+  it("shows Desktop when the site removes its last breakpoint", () => {
     const view = openEditor();
     choose("tablet");
 
@@ -517,7 +498,8 @@ describe("a device the site stops offering", () => {
     view.rerender();
 
     expect(seen.inspector?.breakpoint).toBe("base");
-    expect(box().width).toBeUndefined();
+    // Nothing to simulate, so the page is shown as a laptop would show it.
+    expect(box().width).toBe(1280);
   });
 
   it("follows a breakpoint whose bound is edited", () => {
@@ -562,19 +544,11 @@ describe("a device the site stops offering", () => {
   });
 });
 
-describe("a site with nothing to simulate", () => {
-  it("stays PUBLISHED when no viewport tier is emitted", () => {
+describe("a site whose only breakpoints are container ones", () => {
+  it("is compiled as published, so its container rules still answer", () => {
     /*
-     * A preview compile rewrites every CONTAINER-axis rule to
-     * `@container nx-not-previewable (width < 0px)`, which matches nothing.
-     * That is the engine refusing to answer a question a preview box cannot —
-     * a container query resolves against an element's own query container —
-     * and it is the right trade when there are viewport tiers to gain.
-     *
-     * With none, the same price is paid for nothing: a site whose only
-     * breakpoints are container ones would have every one of them silently
-     * stop matching on the canvas while they keep working on the published
-     * page.
+     * Its container queries resolve against the page's own containers in the
+     * frame, exactly as on the published page.
      */
     clientConfig = {
       siteStyle: {
@@ -588,35 +562,13 @@ describe("a site with nothing to simulate", () => {
     openEditor();
 
     const context = (
-      seen.canvas?.render as { styleContext?: { previewContainer?: string } }
+      seen.canvas?.render as {
+        styleContext?: { previewContainer?: string; breakpoints?: unknown };
+      }
     )?.styleContext;
+    expect(context?.breakpoints).toBeDefined();
     expect(context?.previewContainer).toBeUndefined();
-    expect(seen.canvas?.preview).toBeUndefined();
-    expect(seen.inspector?.previewContainer).toBeUndefined();
-  });
-
-  it("PREVIEWS when the site emits a viewport tier alongside a container one", () => {
-    /*
-     * The control. Without it, a mount that never previewed would satisfy the
-     * case above — and the whole feature would be off with every assertion
-     * about it still green.
-     */
-    clientConfig = {
-      siteStyle: {
-        breakpoints: {
-          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-          container: [{ id: "narrow", label: "Narrow", maxWidth: 400 }],
-        },
-      },
-    };
-
-    openEditor();
-
-    const context = (
-      seen.canvas?.render as { styleContext?: { previewContainer?: string } }
-    )?.styleContext;
-    expect(context?.previewContainer).toBeTypeOf("string");
-    expect(box().container).toBe(context?.previewContainer);
+    expect(box().width).toBe(1280);
   });
 });
 

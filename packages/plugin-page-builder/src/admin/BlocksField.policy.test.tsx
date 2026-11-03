@@ -159,6 +159,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BreakpointManager: nothing,
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
+    // Passed through: the canvas renders inside its frame, which jsdom never
+    // loads a page into.
+    CanvasFrame: ({
+      children,
+    }: {
+      children?: React.ReactNode;
+    }): React.JSX.Element => <>{children}</>,
     ClassManagerPanel: record("classes"),
     BlockKeyboardActions: passthrough,
     /*
