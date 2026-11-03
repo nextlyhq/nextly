@@ -101,7 +101,7 @@ describe("a jump to another tier's value", () => {
     // control, on a row of its own. Under the label, beside a control that
     // spans both lines, it costs no row.
     expect(FLAT).toContain(
-      '.nx-style-inspector .nx-inspector__field > [data-action="jump"] { grid-column: 1; grid-row: 2; justify-self: start; }'
+      '.nx-style-inspector .nx-inspector__field > [data-action="jump"] { grid-column: 1; grid-row: 2; justify-self: start; padding-inline: 0; }'
     );
     expect(FLAT).toContain(
       '.nx-style-inspector .nx-inspector__field:has(> [data-action="jump"]) > :not(label, [data-action="jump"], .nx-inspector__error) { grid-row: 1 / span 2; }'
