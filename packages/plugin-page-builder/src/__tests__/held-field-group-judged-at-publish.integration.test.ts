@@ -186,6 +186,7 @@ describe.each(getConfiguredTestDialects())(
     let t: TestNextly;
     let deep = "";
     let swing = "";
+    const seen: Record<string, unknown>[] = [];
 
     beforeAll(async () => {
       t = await createTestNextly({
@@ -195,7 +196,17 @@ describe.each(getConfiguredTestDialects())(
         fieldGroups: [
           defineFieldGroup({
             slug: "herobox",
-            fields: [text({ name: "title" }), blocks("content")],
+            fields: [
+              text({
+                name: "title",
+                // What a field inside the instance is shown as the write.
+                validate: (_value: unknown, args: { data: unknown }) => {
+                  seen.push(args.data as Record<string, unknown>);
+                  return true;
+                },
+              } as never),
+              blocks("content"),
+            ],
           }),
         ],
         collections: [
@@ -297,6 +308,22 @@ describe.each(getConfiguredTestDialects())(
       expect(await refusalCodes(hold(id, { content: page }))).toEqual([]);
       expect(await refusalCodes(publish(id))).toEqual([]);
       expect(await liveHero(id)).toMatchObject({ kind: "page" });
+    });
+
+    it("shows a field inside the held instance the patch as sent", async () => {
+      // As an ordinary update shows it: the fields the save sent, with the
+      // instance, and no status the save did not send.
+      const id = await livePoster();
+      seen.length = 0;
+      expect(
+        await refusalCodes(hold(id, { title: "Held", content: pageOf([]) }))
+      ).toEqual([]);
+      const shown = seen.at(-1);
+      expect(shown).toBeDefined();
+      expect(Object.hasOwn(shown ?? {}, "status")).toBe(false);
+      // The host's own title was not sent, so it is not shown as sent.
+      expect(Object.hasOwn(shown ?? {}, "title")).toBe(false);
+      expect(shown?.hero).toMatchObject({ title: "Held" });
     });
 
     it("refuses a held save whose instance composes past the limit in every form", async () => {

@@ -1454,6 +1454,18 @@ function markedDraft(draft: Record<string, unknown>): Record<string, unknown> {
   return { ...draft, _isWorkingDraft: true };
 }
 
+/**
+ * The update's patch without the stamp the write adds to it: `updatedAt` is
+ * set by the write, never sent, so a validator is not shown it as sent.
+ */
+function sentFields(
+  updatePayload: Record<string, unknown>
+): Record<string, unknown> {
+  const sent = { ...updatePayload };
+  delete sent.updatedAt;
+  return sent;
+}
+
 export class CollectionMutationService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
@@ -9766,15 +9778,19 @@ export class CollectionMutationService extends BaseService {
       // inside an instance that reads the library, as a blocks field does to
       // judge its composition, judges it now. Without it that field judges
       // nothing, and a held value past the composition rules is saved, to be
-      // refused only when someone publishes it. Its payload is the draft, as
-      // a draft: a held edit of a live entry keeps the live status, and a
-      // field judging by status would otherwise judge it as going live.
+      // refused only when someone publishes it. Its payload is the patch as
+      // sent, as an ordinary update hands it: a status it did not send stays
+      // absent, which a field judging by status reads as no publish.
       write: this.validationWrite(
         params.collectionName,
         params.entryId,
         tx,
         draftLocale ?? undefined,
-        { ...draftDocument, status: "draft" }
+        this.writtenPayload(
+          sentFields(ctx.updatePayload),
+          [ctx.manyToManyData, ctx.componentFieldData],
+          null
+        )
       ),
     });
   }
