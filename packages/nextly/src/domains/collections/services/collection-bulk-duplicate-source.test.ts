@@ -31,6 +31,7 @@ function build(source: CollectionServiceResult) {
   const createEntry = vi.fn<CreateEntry>().mockResolvedValue({
     success: true,
     statusCode: 201,
+    message: "Created",
     data: { id: "copy" },
   });
   const service = new CollectionBulkService(
@@ -46,6 +47,7 @@ function build(source: CollectionServiceResult) {
 const DRAFT: CollectionServiceResult = {
   success: true,
   statusCode: 200,
+  message: "Found",
   data: { id: "src", title: "Draft", status: "draft" },
 };
 
