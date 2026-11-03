@@ -46,6 +46,10 @@ function guard(stored: LayoutRemoval | null, page: PageRead = null) {
   const removalOf = vi.fn(async (id: string) =>
     stored !== null && stored.layoutId === id ? stored : null
   );
+  // The same fence, read on a caller's transaction rather than the pool.
+  const inTransactionRead = vi.fn(async (id: string) =>
+    stored !== null && stored.layoutId === id ? stored : null
+  );
   const store = { removalOf } as unknown as LayoutRemovalStore;
   const updates: Record<string, unknown>[] = [];
   const logged: { message: string; detail: unknown }[] = [];
@@ -66,6 +70,8 @@ function guard(stored: LayoutRemoval | null, page: PageRead = null) {
     },
     pages: "pages",
     store: () => store,
+    inTransaction: executor =>
+      executor === undefined ? null : { removalOf: inTransactionRead },
     warn: (message, detail) => {
       logged.push({ message, detail });
     },
@@ -75,7 +81,7 @@ function guard(stored: LayoutRemoval | null, page: PageRead = null) {
     if (handler === undefined) throw new Error(`no ${type} handler`);
     return handler({ req: { nextly }, ...context });
   };
-  return { run, removalOf, nextly, updates, logged };
+  return { run, removalOf, inTransactionRead, nextly, updates, logged };
 }
 
 async function refusal(work: unknown): Promise<unknown> {
@@ -195,17 +201,18 @@ describe("a page update", () => {
     expect(layoutMessage(error)).toBe(pageLayoutRefusal("unpublished"));
   });
 
-  it("reads nothing inside a caller's transaction, leaving the write to the field's floor", async () => {
-    const { run, removalOf } = guard(row());
-    const data = { layout: FENCED };
-    await expect(
+  it("refuses a fenced Layout inside a caller's transaction, read on that transaction, never the pool", async () => {
+    const { run, removalOf, inTransactionRead } = guard(row());
+    const error = await refusal(
       run("beforeUpdate", {
         operation: "update",
-        data,
+        data: { layout: FENCED },
         originalData: { id: "p1" },
         executor: {},
       })
-    ).resolves.toBeUndefined();
+    );
+    expect(layoutMessage(error)).toBe(pageLayoutRefusal("removing"));
+    expect(inTransactionRead).toHaveBeenCalledWith(FENCED);
     expect(removalOf).not.toHaveBeenCalled();
   });
 });
@@ -233,6 +240,14 @@ describe("the layout field's floor", () => {
 
   it("fails closed when the fence cannot be read", async () => {
     expect(await floor(null, true)(FENCED)).toBe(pageLayoutRefusal("removing"));
+  });
+
+  it("fails closed when the fence read does not answer in time, rather than waiting on it", async () => {
+    const stalled = layoutFenceFloor(
+      () => ({ removalOf: () => new Promise<never>(() => {}) }),
+      { timeoutMs: 20 }
+    );
+    expect(await stalled(FENCED)).toBe(pageLayoutRefusal("removing"));
   });
 
   it("passes everything before the plugin is installed, with no fence to read", async () => {

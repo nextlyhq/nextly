@@ -1099,6 +1099,39 @@ describe.each(getConfiguredTestDialects())(
         expect(await pageLayout(t, home)).toBe(other);
       });
 
+      it("judges a batch page write on the batch's own transaction, refusing a Layout being removed", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        const free = await layout(t, "Free", "free");
+        const home = await page(t, "Home", { status: "draft" });
+        await fenced(other);
+        const inTime = <T>(work: Promise<T>): Promise<T> =>
+          Promise.race([
+            work,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("the batch hung")), 15_000)
+            ),
+          ]);
+
+        const allowed = await inTime(
+          entriesService(t).updateEntries(
+            { collectionName: PAGES_SLUG, overrideAccess: true },
+            [{ id: home, data: { layout: free } }]
+          )
+        );
+        const refused = await inTime(
+          entriesService(t).updateEntries(
+            { collectionName: PAGES_SLUG, overrideAccess: true },
+            [{ id: home, data: { layout: other } }]
+          )
+        );
+
+        expect(allowed.successful, JSON.stringify(allowed)).toBe(1);
+        expect(refused.failed, JSON.stringify(refused)).toBe(1);
+        expect(JSON.stringify(refused.errors)).toContain("VALIDATION_ERROR");
+        expect(await pageLayout(t, home)).toBe(free);
+      });
+
       it("refuses a batch that skips hooks, through the field's floor, read from inside the batch's transaction", async () => {
         const t = await boot();
         const other = await layout(t, "Other", "other");

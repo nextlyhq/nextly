@@ -75,6 +75,7 @@ export function installDefaultLayout(ctx: InstallContext): DefaultLayoutSetup {
     ctx,
     pages: setup.pagesSlug,
     store: () => setup.removals,
+    inTransaction: executor => fenceOnExecutor(ctx.db, executor),
     warn: setup.warn,
   });
   return setup;

@@ -20,9 +20,19 @@
  *
  * The `layout` field's own `validate` (`layoutFenceFloor`) refuses ANY value
  * naming a fenced Layout. Hook-running writes reach it only with a value they
- * change, since the hook drops an unchanged one; a write that skips hooks, or
- * runs inside a caller's transaction where the hook reads nothing, meets it
- * with every value it sends. A fence that cannot be read refuses.
+ * change, since the hook drops an unchanged one; a write that skips hooks
+ * meets it with every value it sends. A fence that cannot be read, or does
+ * not answer in time, refuses.
+ *
+ * ## Inside a caller's transaction
+ *
+ * Core's batch writers run these hooks inside a transaction they own and hand
+ * them its `executor`. The hook reads the fence on that executor, never the
+ * pool, which would check out a second connection that may wait on the one
+ * the transaction holds; and it refuses ANY value naming a fenced Layout,
+ * since what the page already names cannot be read there safely. The floor is
+ * handed no transaction, so its own read goes through the pool; it is bounded
+ * in time and refuses rather than waiting on the transaction it is part of.
  *
  * ## A write already in flight when the fence went up
  *
@@ -82,6 +92,13 @@ export interface PageReferenceGuardArgs {
   /** The RESOLVED pages slug: a host may rename it. */
   pages: string;
   store: () => LayoutRemovalStore;
+  /**
+   * The fence read on a caller's transaction, from the executor core hands the
+   * hooks it runs inside one; `null` when the executor is not one it can use.
+   */
+  inTransaction: (
+    executor: unknown
+  ) => Pick<LayoutRemovalStore, "removalOf"> | null;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -162,8 +179,10 @@ async function refuseAddedReference(
   if (typeof data !== "object" || data === null) return undefined;
   if (!Object.hasOwn(data, "layout")) return undefined;
   const next = relationId((data as { layout?: unknown }).layout);
-  // No read inside a caller's transaction: the field's floor refuses there.
-  if (next === null || hook.executor !== undefined) return undefined;
+  if (next === null) return undefined;
+  if (hook.executor !== undefined) {
+    return judgeInTransaction(hook.executor, next, args);
+  }
   const removal = await args.store().removalOf(next);
   if (removal === null) return undefined;
   const stored = creating ? null : await storedLayoutOf(hook, args.pages);
@@ -171,6 +190,24 @@ async function refuseAddedReference(
   const kept: Record<string, unknown> = { ...data };
   delete kept.layout;
   return kept;
+}
+
+/**
+ * The before-write check inside a caller's transaction: the fence read on the
+ * transaction's own connection, and any value naming a fenced Layout refused,
+ * since what the page already names cannot be read there safely. An executor
+ * it cannot read through leaves the write to the floor.
+ */
+async function judgeInTransaction(
+  executor: unknown,
+  next: string,
+  args: PageReferenceGuardArgs
+): Promise<undefined> {
+  const fence = args.inTransaction(executor);
+  if (fence === null) return undefined;
+  const removal = await fence.removalOf(next);
+  if (removal !== null) throw refusal(removal);
+  return undefined;
 }
 
 /** Whether a removal is past the point where it can still stop. */
@@ -277,27 +314,47 @@ export function registerPageReferenceGuard(args: PageReferenceGuardArgs): void {
   );
 }
 
+/** How long the floor waits for the fence before refusing. */
+const FLOOR_READ_TIMEOUT_MS = 5000;
+
+/** `read`, or a rejection once `ms` pass without an answer. */
+function withinTime<T>(read: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("the fence did not answer")), ms);
+  });
+  return Promise.race([read, late]).finally(() => clearTimeout(timer));
+}
+
 /**
  * The `layout` field's floor, by the rule in the module docblock. `store` is
  * read per call: the field is declared before the plugin is installed, and
  * until it is there is no fence to read, so every value passes.
+ *
+ * The read is bounded in time. A field's check is handed no transaction, so
+ * inside a caller's one it reads through the pool; where the transaction holds
+ * the only free connection that read would wait on itself. A fence that does
+ * not answer in time refuses, as one that cannot be read does.
  */
 export function layoutFenceFloor(
-  store: () => Pick<LayoutRemovalStore, "removalOf"> | undefined
+  store: () => Pick<LayoutRemovalStore, "removalOf"> | undefined,
+  options: { timeoutMs?: number } = {}
 ): (value: unknown) => Promise<string | true> {
+  const timeoutMs = options.timeoutMs ?? FLOOR_READ_TIMEOUT_MS;
   return async value => {
     const id = relationId(value);
     if (id === null) return true;
     const fence = store();
     if (fence === undefined) return true;
     try {
-      const removal = await fence.removalOf(id);
+      const removal = await withinTime(fence.removalOf(id), timeoutMs);
       return removal === null
         ? true
         : pageLayoutRefusal(fencedStateOf(removal));
     } catch {
-      // Unreadable: refused, so a write that skips hooks cannot slip a page
-      // onto a Layout being removed while the fence is out of reach.
+      // Unreadable, or not in time: refused, so a write that skips hooks
+      // cannot slip a page onto a Layout being removed while the fence is out
+      // of reach.
       return pageLayoutRefusal("removing");
     }
   };
