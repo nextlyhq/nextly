@@ -14,6 +14,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
@@ -333,11 +334,7 @@ async function storedProps(
   request: APIRequestContext,
   id: string
 ): Promise<Record<string, unknown>> {
-  const response = await request.get(`${ENTRIES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: { id: string; content?: { nodes?: unknown[] } }[];
-  };
-  const nodes = body.items.find(item => item.id === id)?.content?.nodes ?? [];
+  const nodes = await storedPageNodes(request, ENTRIES, id);
   const find = (list: unknown[]): Record<string, unknown> | undefined => {
     for (const each of list as {
       id: string;

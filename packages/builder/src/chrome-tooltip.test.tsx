@@ -9,7 +9,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { importedSpecifiers } from "@nextlyhq/module-specifiers";
+import { moduleSpecifierRefs } from "@nextlyhq/module-specifiers";
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import {
   act,
@@ -157,39 +157,42 @@ describe("the builder's chrome tooltips", () => {
     let byName = 0;
     walk(parseSource(text, file).program, (node: AstNode) => {
       if (
-        (node.type === "ImportDeclaration" ||
-          node.type === "ExportNamedDeclaration") &&
-        node.source?.value === "@nextlyhq/ui"
+        (node.type !== "ImportDeclaration" &&
+          node.type !== "ExportNamedDeclaration") ||
+        node.source?.value !== "@nextlyhq/ui"
       ) {
-        const specifiers = node.specifiers ?? [];
-        if (specifiers.some(one => one.type === "ImportNamespaceSpecifier")) {
-          return;
-        }
-        byName += 1;
-        // A type-only import draws nothing: `import type { … }` reaches no
-        // tooltip at runtime, so its names are not parts this module uses.
-        if (node.type === "ImportDeclaration" && node.importKind === "type") {
-          return;
-        }
-        for (const specifier of specifiers) {
-          if (
-            specifier.type === "ImportSpecifier" &&
-            specifier.importKind === "type"
-          ) {
-            continue;
-          }
-          const name =
-            specifier.type === "ImportSpecifier"
-              ? nameOf(specifier.imported)
-              : specifier.type === "ExportSpecifier"
-                ? nameOf(specifier.local)
-                : "";
-          if (PARTS.has(name)) found.push(name);
-        }
+        return;
+      }
+      // A type-only declaration draws nothing: `import type` and `export type`
+      // reach no tooltip at runtime, and the reader below does not count them.
+      const kind =
+        node.type === "ImportDeclaration" ? node.importKind : node.exportKind;
+      if (kind === "type") return;
+      const specifiers = node.specifiers ?? [];
+      if (specifiers.some(one => one.type === "ImportNamespaceSpecifier")) {
+        return;
+      }
+      byName += 1;
+      for (const specifier of specifiers) {
+        const typeOnly =
+          (specifier.type === "ImportSpecifier" &&
+            specifier.importKind === "type") ||
+          (specifier.type === "ExportSpecifier" &&
+            specifier.exportKind === "type");
+        if (typeOnly) continue;
+        const name =
+          specifier.type === "ImportSpecifier"
+            ? nameOf(specifier.imported)
+            : specifier.type === "ExportSpecifier"
+              ? nameOf(specifier.local)
+              : "";
+        if (PARTS.has(name)) found.push(name);
       }
     });
-    const loads = importedSpecifiers(text, file).filter(
-      specifier => specifier === "@nextlyhq/ui"
+    // Every runtime load the repository's reader finds; type-only references
+    // (`typeof import()`, `import type * as`) erase at build and draw nothing.
+    const loads = moduleSpecifierRefs(text, file).filter(
+      ref => ref.specifier === "@nextlyhq/ui" && !ref.typeOnly
     ).length;
     if (loads > byName) found.push("loaded another way");
     return found;
