@@ -1066,11 +1066,15 @@ async function registerServicesOnce(
   // ----------------------------------------
   // Layer 3: Domain Service Registrations
   // ----------------------------------------
-  // Before any schema work: the push that follows would plan to drop translatable columns a
-  // database laid out before the setting still holds on its main tables.
-  if (transformedConfig.perLanguageStorage === true) {
-    await refuseMixedStorageInConfig(adapter, transformedConfig);
-  }
+  // Before any schema work, a database laid out for the other choice of the setting is refused:
+  // with it on, the push that follows would plan to drop translatable columns a database laid out
+  // before the setting still holds on its main tables; with it off, reads would ask main tables
+  // for columns the setting kept per language.
+  await refuseMixedStorageInConfig(
+    adapter,
+    transformedConfig,
+    transformedConfig.perLanguageStorage === true
+  );
   const ctx: RegistrationContext = {
     adapter,
     adapterDrizzleDb,
@@ -5050,7 +5054,9 @@ function handleUnresolvedExtends(
  */
 async function refuseMixedStorageInConfig(
   adapter: DrizzleAdapter,
-  config: NextlyServiceConfig
+  config: NextlyServiceConfig,
+  // Which layout the setting chooses: a database laid out in the other is refused.
+  perLanguage: boolean
 ): Promise<void> {
   const [
     { refuseMixedStorage },
@@ -5133,5 +5139,5 @@ async function refuseMixedStorageInConfig(
       // Not readable yet: nothing in it was laid out before the setting.
     }
   }
-  await refuseMixedStorage(adapter, entities);
+  await refuseMixedStorage(adapter, entities, perLanguage);
 }

@@ -56,13 +56,21 @@ function translatableColumns(
 }
 
 /**
- * Refuses the boot when any entity not marked translatable still keeps translatable columns on its
- * main table, naming each one and its columns. An entity whose table does not exist yet is laid
- * out per language when it is created, so it is not a refusal.
+ * Refuses the boot when the database keeps an entity not marked translatable in the other layout
+ * than the setting chooses, naming each one and its columns.
+ *
+ * - With the setting on (`perLanguage`): its translatable columns still on its main table. An
+ *   entity whose table does not exist yet is laid out per language when it is created, so it is
+ *   not a refusal.
+ * - With it off: its translatable values only in its per-language table, as the setting laid
+ *   them out, so its main table has none of those columns to read. A per-language table left
+ *   beside a main table that holds the columns again, as turning translation off leaves one, is
+ *   not a refusal.
  */
 export async function refuseMixedStorage(
   adapter: LayoutAdapter,
-  entities: readonly LaidOutEntity[]
+  entities: readonly LaidOutEntity[],
+  perLanguage = true
 ): Promise<void> {
   const candidates = entities
     .filter(entity => entity.localized !== true)
@@ -72,6 +80,10 @@ export async function refuseMixedStorage(
     }))
     .filter(({ columns }) => columns.length > 0);
   if (candidates.length === 0) return;
+  if (!perLanguage) {
+    await refuseValuesKeptPerLanguage(adapter, candidates);
+    return;
+  }
 
   const snapshot = await introspectLiveSnapshot(
     adapter.getDrizzle(),
@@ -104,6 +116,58 @@ export async function refuseMixedStorage(
         kind: entity.kind,
         slug: entity.slug,
         columns: onMain,
+      })),
+    },
+  });
+}
+
+/**
+ * The refusal with the setting off: an entity whose translatable values are only in its
+ * per-language table, so reading its main table would ask for columns it does not have.
+ */
+async function refuseValuesKeptPerLanguage(
+  adapter: LayoutAdapter,
+  candidates: readonly { entity: LaidOutEntity; columns: string[] }[]
+): Promise<void> {
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    candidates.flatMap(({ entity }) => [
+      entity.tableName,
+      `${entity.tableName}_locales`,
+    ])
+  );
+  const columnsOf = (name: string) => {
+    const live = snapshot.tables.find(table => table.name === name);
+    return live ? new Set(live.columns.map(column => column.name)) : null;
+  };
+  const found = candidates.flatMap(({ entity, columns }) => {
+    const main = columnsOf(entity.tableName);
+    const companion = columnsOf(`${entity.tableName}_locales`);
+    if (!main || !companion) return [];
+    const perLanguageOnly = columns.filter(
+      column => companion.has(column) && !main.has(column)
+    );
+    return perLanguageOnly.length > 0 ? [{ entity, perLanguageOnly }] : [];
+  });
+  if (found.length === 0) return;
+  const named = found
+    .map(
+      ({ entity, perLanguageOnly }) =>
+        `the ${entity.kind} "${entity.slug}" (${perLanguageOnly.join(", ")})`
+    )
+    .join("; ");
+  throw new NextlyError({
+    code: "NEXTLY_PER_LANGUAGE_STORAGE_MIXED",
+    publicMessage:
+      `experimental.perLanguageStorage is off, but this database keeps the translatable values ` +
+      `of ${named} only in their per-language tables, as the setting laid them out. A site never ` +
+      `serves both layouts: turn the setting back on.`,
+    logContext: {
+      entities: found.map(({ entity, perLanguageOnly }) => ({
+        kind: entity.kind,
+        slug: entity.slug,
+        columns: perLanguageOnly,
       })),
     },
   });

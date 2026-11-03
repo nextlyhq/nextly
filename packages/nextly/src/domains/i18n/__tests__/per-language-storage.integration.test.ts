@@ -473,6 +473,61 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A database laid out with the setting on keeps an untranslated collection's translatable
+    // values only in its per-language table. Booting it with the setting off is refused, naming
+    // them, rather than reading columns its main table does not have.
+    it.runIf(dialect === "sqlite")(
+      "refuses to boot with the setting off over a database it laid out per language",
+      async () => {
+        const folder = mkdtempSync(join(tmpdir(), "nextly-per-language-"));
+        const url = `file:${join(folder, "site.db")}`;
+        vi.stubEnv("DB_DIALECT", "sqlite");
+        vi.stubEnv("DATABASE_URL", url);
+        _resetEnvCache();
+        const onFile = async () =>
+          createAdapter({ type: "sqlite", url } as Parameters<
+            typeof createAdapter
+          >[0]);
+        const collections = [
+          defineCollection({
+            slug: "articles",
+            fields: [text({ name: "headline" }), number({ name: "views" })],
+          }),
+        ];
+        try {
+          const before = await createTestNextly({
+            collections,
+            perLanguageStorage: true,
+            adapter: await onFile(),
+          });
+          await before.nextly.create({
+            collection: "articles",
+            data: { headline: "Kept", views: 3 },
+          });
+          await before.destroy();
+
+          let refused: unknown;
+          try {
+            current = await createTestNextly({
+              collections,
+              adapter: await onFile(),
+            });
+          } catch (error) {
+            refused = error;
+          }
+          expect(
+            NextlyError.isCode(refused, "NEXTLY_PER_LANGUAGE_STORAGE_MIXED")
+          ).toBe(true);
+          expect((refused as Error).message).toMatch(
+            /the collection "articles" \(headline\)/
+          );
+        } finally {
+          _resetEnvCache();
+          rmSync(folder, { recursive: true, force: true });
+        }
+      }
+    );
+
     it("populates a related entry's translatable fields", async () => {
       current = await createTestNextly({
         dialect,
