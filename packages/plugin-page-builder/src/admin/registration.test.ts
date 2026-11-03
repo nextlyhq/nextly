@@ -34,6 +34,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     Object.assign(registered, map);
   },
   registerKnownPlugin: () => undefined,
+  // The list actions and the import bar the entry also registers; their own
+  // behaviour is tested beside them.
+  registerRowAction: () => undefined,
+  writePluginRoute: () => Promise.resolve(undefined),
+  isApiError: () => false,
+  navigateTo: () => undefined,
 }));
 
 describe("the admin entry's component registration", () => {
