@@ -163,7 +163,21 @@ describe.each(getConfiguredTestDialects())(
     });
 
     async function boot(): Promise<TestNextly> {
-      current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+      // The site defines the class a case applies, so a refusal there is the
+      // lock's alone: a page save naming a class the site lacks is refused
+      // for that reason too.
+      current = await createTestNextly({
+        dialect,
+        plugins: [
+          pageBuilder({
+            siteStyle: {
+              classes: [
+                { id: "promo", slug: "promo", orderIndex: 0, styles: {} },
+              ],
+            },
+          }),
+        ],
+      });
       registerLockedBlocks();
       return current;
     }

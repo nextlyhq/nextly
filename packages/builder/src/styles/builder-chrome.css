@@ -2241,6 +2241,53 @@
 }
 
 /*
+ * The cue over the site's own layout around the canvas, on a page the site
+ * serves. The layout is inert in the page, so the cue answers the pointer in
+ * its place: a not-allowed cursor, the tooltip, and on hover a tag in the
+ * admin's words saying what it is. Nothing is drawn at rest beyond the page's
+ * own fading, so the page stays the focus.
+ */
+.nx-site-chrome-cue {
+  position: absolute;
+  pointer-events: auto;
+  cursor: not-allowed;
+}
+
+.nx-site-chrome-cue[hidden] {
+  display: none;
+}
+
+.nx-site-chrome-cue__tag {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-site-chrome-cue:hover {
+  box-shadow: inset 0 0 0 1px var(--nx-builder-border);
+}
+
+.nx-site-chrome-cue:hover .nx-site-chrome-cue__tag {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-site-chrome-cue__tag {
+    transition: none;
+  }
+}
+
+/*
  * Chrome that takes presses claims them back. Weighted as one class and
  * stated before the chrome's own rules, so a piece of chrome that declares
  * `pointer-events: none` for itself — a notice, the appenders' container —

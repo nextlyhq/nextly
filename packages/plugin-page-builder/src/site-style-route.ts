@@ -19,8 +19,9 @@
  * Asked through `ctx.caller.can`, the framework's own answer for a session or
  * an API key, before anything is read. The update questions are type-level
  * (`anyEntry`): an update rule limited to the entries a row filter matches
- * counts, since such an author may edit some of those documents. Nobody else: not an anonymous caller,
- * and not one who may only read those documents.
+ * counts, since such an author may edit some of those documents. Nobody
+ * else: not an anonymous caller, and not one who may only read those
+ * documents.
  *
  * ## What it answers
  *
