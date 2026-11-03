@@ -250,6 +250,13 @@ export async function readLayoutChoices(
       canUpdateLayouts,
       more:
         (listing as { meta?: { hasNext?: unknown } }).meta?.hasNext === true,
+      // The rows the list read itself returned, which for a search are the
+      // ones its query matched by the database's own collation. The page's
+      // Layout and the default, added whatever the query, are not among them.
+      matched: listed.flatMap(row => {
+        const id = rowId(row);
+        return id === null ? [] : [id];
+      }),
       // A region has edits not live when ANY component it draws does: the
       // one it names, or one that component places, however deep.
       regionComponents: Object.fromEntries(

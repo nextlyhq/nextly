@@ -391,32 +391,27 @@ function useLayoutSearch(
   const options = !searching
     ? view.options
     : found.kind === "ready" && answered
-      ? matchingOptions(stored, found, search)
+      ? matchingOptions(stored, found)
       : [];
   return { typed, setTyped, searching, answered, failed, options, retry };
 }
 
 /**
- * The options a search found: only the Layouts whose title holds the query.
+ * The options a search found: exactly the rows the server says matched.
  *
  * The answer also carries rows the route adds whatever the query (the page's
  * own Layout and the default), and the view adds the default and "No header
  * or footer" to every list; none of those matched, so none is a result, and
- * "No Layouts match" can say so. Matched as the route matches: the query
- * anywhere in the title, ignoring case. The current choice stays in the
- * trigger.
+ * "No Layouts match" can say so. Which rows matched is the server's answer
+ * alone: the database compares by its own collation ("cafe" finds "Café" on
+ * one dialect), which no comparison here could repeat. The current choice
+ * stays in the trigger.
  */
 function matchingOptions(
   stored: { layout: unknown; noHeaderFooter: boolean },
-  found: Extract<LayoutChoicesState, { kind: "ready" }>,
-  search: string
+  found: Extract<LayoutChoicesState, { kind: "ready" }>
 ): PickerOption[] {
-  const query = search.toLowerCase();
-  const matched = new Set(
-    found.choices.items
-      .filter(item => item.title.toLowerCase().includes(query))
-      .map(item => layoutValue(item.id))
-  );
+  const matched = new Set(found.choices.meta.matched.map(layoutValue));
   return layoutPickerView(stored, found).options.filter(option =>
     matched.has(option.value)
   );

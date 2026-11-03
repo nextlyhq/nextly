@@ -80,6 +80,7 @@ const choices: LayoutChoicesResponse = {
     layoutsCollection: "layouts",
     canUpdateLayouts: true,
     more: false,
+    matched: [],
     defaultUnreadable: false,
     regionComponents: {},
     regionDefinitions: {},
@@ -246,7 +247,12 @@ describe("the page's Layout picker", () => {
     };
     const searched = {
       items: [layout(0), layout(230)],
-      meta: { ...choices.meta, defaultLayout: "l0", more: false },
+      meta: {
+        ...choices.meta,
+        defaultLayout: "l0",
+        more: false,
+        matched: ["l230"],
+      },
     };
     identity.mockImplementation(() => ({ kind: "collection", slug: "pages" }));
     read.mockImplementation(({ path }) => {
@@ -368,7 +374,12 @@ describe("the page's Layout picker", () => {
               regions: [],
             },
           ],
-          meta: { ...choices.meta, defaultLayout: "l0", more: false },
+          meta: {
+            ...choices.meta,
+            defaultLayout: "l0",
+            more: false,
+            matched: [],
+          },
         },
       },
       "zzz"
@@ -379,6 +390,44 @@ describe("the page's Layout picker", () => {
     expect(
       screen.getByRole("combobox", { name: "Layout" }).textContent
     ).toContain("Site default (Layout 0)");
+  });
+
+  it("keeps the rows the server matched, however their titles compare here", async () => {
+    // A database collation matches "cafe" to "Café"; a client comparison
+    // would not. The server's word is the one kept. The default is added to
+    // the answer whatever the query, and is not a match.
+    await searchCapped(
+      {
+        data: {
+          items: [
+            {
+              id: "l0",
+              title: "Layout 0",
+              published: true,
+              draftChangesNotLive: false,
+              regions: [],
+            },
+            {
+              id: "cafe",
+              title: "Café",
+              published: true,
+              draftChangesNotLive: false,
+              regions: [],
+            },
+          ],
+          meta: {
+            ...choices.meta,
+            defaultLayout: "l0",
+            more: false,
+            matched: ["cafe"],
+          },
+        },
+      },
+      "cafe"
+    );
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Café"]);
   });
 
   it("says a search failed and offers to try again, with no stale options", async () => {

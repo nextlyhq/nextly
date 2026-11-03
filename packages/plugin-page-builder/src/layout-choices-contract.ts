@@ -144,6 +144,13 @@ export interface LayoutChoicesResponse {
      */
     readonly more: boolean;
     /**
+     * The ids of the rows the list itself returned: for a search, the ones
+     * whose title the database matched to the query. Rows added whatever the
+     * query (the page's selected Layout and the default) are not here, so a
+     * search shows exactly what matched.
+     */
+    readonly matched: readonly string[];
+    /**
      * Facts about the region components of the selected Layout and the
      * default, by id, telling of a draft only to a caller who may see the
      * component's working draft (update or publish it). A region has draft

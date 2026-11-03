@@ -480,6 +480,26 @@ describe("readLayoutChoices", () => {
     expect(found.meta.more).toBe(false);
   });
 
+  it("marks only the rows its search matched, not the ones it adds whatever the query", async () => {
+    const layouts = Array.from({ length: 250 }, (_, i) =>
+      layoutRow(`l${String(i).padStart(3, "0")}`, `Layout ${i}`)
+    );
+    const { nextly } = fake({ ...store, layouts, defaultLayout: "l000" });
+    // The page's own Layout and the default are added to the answer; neither
+    // holds the query in its title.
+    const found = await readLayoutChoices(
+      context(),
+      nextly,
+      asked("l007", DEFAULT_COMPONENT_STORE, { search: "Layout 230" })
+    );
+    expect(found.items.map(item => item.id).sort()).toEqual([
+      "l000",
+      "l007",
+      "l230",
+    ]);
+    expect(found.meta.matched).toEqual(["l230"]);
+  });
+
   it("sends definitions only for the Layouts a page can be drawn inside", async () => {
     // 200 Layouts, each with a header of its own.
     const layouts = Array.from({ length: 200 }, (_, i) =>
