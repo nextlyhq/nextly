@@ -16,12 +16,13 @@
 
 import {
   clearBlocks,
+  getBlock,
   hasBlock,
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { previewStateClass } from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { createBlockResolver, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1045,6 +1046,56 @@ describe("the space a container puts between its children", () => {
     );
     const { container } = mountStacked("a");
     expect(labels(container)).toEqual(["18"]);
+  });
+
+  it("names the container through the resolver the canvas renders with", () => {
+    // A container only the canvas's own resolver knows: nothing registers it
+    // in the process registry, so asking that registry finds no `childGap`
+    // and would call the gap the child's own margin.
+    stubLayoutBoxes(true);
+    registerStack();
+    const resolver = createBlockResolver([
+      {
+        name: "acme/private-stack",
+        version: 1,
+        description: "A stack only this canvas knows.",
+        example: { props: {} },
+        editor: { label: "Private stack" },
+        childGap: "1rem",
+        slots: { children: {} },
+        render: ({
+          className,
+          renderSlot,
+        }: {
+          className: string;
+          renderSlot: (name: string) => React.ReactNode;
+        }) => React.createElement("div", { className }, renderSlot("children")),
+      },
+      getBlock("acme/item"),
+    ] as never);
+    const document = {
+      ...STACKED,
+      nodes: [{ ...STACKED.nodes[0], type: "acme/private-stack" }],
+    } as unknown as BlockDocument;
+    stubByElement(id =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: "16px" }
+          : undefined
+    );
+    const editor = { ...editorOf("b"), document } as EditorState;
+    const { container } = render(
+      <Canvas
+        document={document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="b"
+        selectedIds={["b"]}
+        render={{ blocks: resolver }}
+        overlay={<SpacingOverlay editor={editor} blocks={resolver} />}
+      />
+    );
+    expect(labels(container)).toEqual(["16 · Gap · from Private stack"]);
   });
 
   it("leaves a flex container's child margin alone, since flex spaces with gap", () => {

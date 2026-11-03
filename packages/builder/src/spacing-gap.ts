@@ -27,7 +27,6 @@
 
 import {
   findNode,
-  getBlock,
   NAMED_CLASS_PREFIX,
   NODE_CLASS_PREFIX,
   CONTENT_WIDTH_CLASS,
@@ -82,11 +81,14 @@ function spacesWithGap(display: string): boolean {
 /**
  * The name of the container whose gap this block's block-start margin is, or
  * `undefined` when the margin is the block's own (or there is none to name).
+ *
+ * `lookup` is the resolver the canvas renders with, so the container's
+ * `childGap` is read from the same definition that drew the page.
  */
 export function gapOwnerOf(
   block: Element,
   document: BlockDocument,
-  lookup: (type: string) => AnyBlockDefinition | undefined = getBlock
+  lookup: (type: string) => AnyBlockDefinition | undefined
 ): string | undefined {
   // `> * + *`: the first child is never spaced by its container.
   if (block.previousElementSibling === null) return undefined;

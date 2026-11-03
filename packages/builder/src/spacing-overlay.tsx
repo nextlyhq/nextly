@@ -62,6 +62,7 @@
  * @module spacing-overlay
  */
 
+import { registeredBlocks, type BlockResolver } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import { clipPathOf, scaleCornerRadii } from "./border-radii";
@@ -169,6 +170,13 @@ export interface SpacingOverlayProps {
    * moving. A host that draws tiers or scopes must pass this.
    */
   scrub?: SpacingScrubContext;
+  /**
+   * The block resolver the canvas renders with, which is what decides whether a
+   * container spaces its children. The renderer's own default when omitted,
+   * the process registry, so the overlay asks the same source the page was
+   * drawn from.
+   */
+  blocks?: BlockResolver;
 }
 
 /**
@@ -547,7 +555,11 @@ export function SpacingOverlay({
   editor,
   hidden = false,
   scrub = RESTING_BASE,
+  blocks,
 }: SpacingOverlayProps): React.JSX.Element | null {
+  // The renderer's default when the host names none, so a canvas drawn with
+  // the process registry is asked about through that same registry.
+  const resolver = React.useMemo(() => blocks ?? registeredBlocks(), [blocks]);
   const layer = React.useRef<HTMLDivElement | null>(null);
   const [bands, setBands] = React.useState<readonly SpacingBand[]>([]);
   /*
@@ -764,7 +776,7 @@ export function SpacingOverlay({
      * every reading above, because answering it takes the block's own classes
      * away for one synchronous read.
      */
-    const gapFrom = gapOwnerOf(block, document);
+    const gapFrom = gapOwnerOf(block, document, type => resolver.get(type));
     const gapSide = blockStartSide(style.writingMode);
     const attributed = (bands: readonly SpacingBand[]): SpacingBand[] =>
       bands.map(band =>
@@ -831,10 +843,10 @@ export function SpacingOverlay({
         },
       }
     );
-    // The document is read for one thing: which container a gap belongs to,
-    // so a block moved into another container is named against the right
-    // one. The rendered tree is still read as it stands whenever this runs.
-  }, [selectedId, document]);
+    // The document and the resolver are read for one thing: which container a
+    // gap belongs to, so a block moved into another container is named against
+    // the right one. The rendered tree is still read as it stands.
+  }, [selectedId, document, resolver]);
 
   // A zoom, or a page loading into the frame, moves the block on screen while
   // nothing in the document changes.
