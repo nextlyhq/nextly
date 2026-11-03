@@ -61,6 +61,7 @@ import {
   type LayoutPage,
   type LayoutRecord,
 } from "./layout-component-usage";
+import { unpublishes } from "./unpublish-write";
 
 /** How many Layouts one page of the scan asks for. */
 const SCAN_PAGE_SIZE = 100;
@@ -122,10 +123,14 @@ export function registerLayoutComponentGuard(args: {
   // them sets is the status judged. It still runs before the write. A hook
   // a plugin cannot follow (an admin-configured `beforeChange`, or a field's
   // own hook on `status`) is judged by no plugin guard today.
-  args.ctx.hooks.on("beforeChange", args.componentsCollection, async context => {
-    if (!unpublishes(context)) return;
-    await refuseWhileALayoutNamesIt(args, context, UNPUBLISHING);
-  });
+  args.ctx.hooks.on(
+    "beforeChange",
+    args.componentsCollection,
+    async context => {
+      if (!unpublishes(context)) return;
+      await refuseWhileALayoutNamesIt(args, context, UNPUBLISHING);
+    }
+  );
 }
 
 /** How a refusal names the write it refuses. */
@@ -149,43 +154,6 @@ const UNPUBLISHING: Removal = {
   alone: "Unpublish it",
   doing: "unpublishing",
 };
-
-/**
- * Whether this update unpublishes a published component.
- *
- * Any explicit status other than `published` does, whatever its type, as
- * core's own lifecycle gate reads it: a value a dialect would coerce into the
- * status column takes the row out of `published` all the same. A save that
- * leaves the status out, or sets it to `undefined` (which core strips), keeps
- * the published row live and stores a pending edit beside it. A create has no
- * stored row, so it unpublishes nothing.
- */
-function unpublishes(context: unknown): boolean {
-  const hook = context as {
-    operation?: unknown;
-    data?: unknown;
-    originalData?: unknown;
-  } | null;
-  if (hook?.operation !== undefined && hook.operation !== "update") {
-    return false;
-  }
-  const data = hook?.data;
-  if (typeof data !== "object" || data === null) return false;
-  const next = (data as { status?: unknown }).status;
-  return (
-    statusOf(hook?.originalData) === "published" &&
-    Object.hasOwn(data, "status") &&
-    next !== undefined &&
-    next !== "published"
-  );
-}
-
-/** A row's `status`, or undefined when the row does not carry one. */
-function statusOf(row: unknown): string | undefined {
-  if (typeof row !== "object" || row === null) return undefined;
-  const status = (row as { status?: unknown }).status;
-  return typeof status === "string" ? status : undefined;
-}
 
 /** One delete or unpublish, refused or allowed to proceed. */
 async function refuseWhileALayoutNamesIt(

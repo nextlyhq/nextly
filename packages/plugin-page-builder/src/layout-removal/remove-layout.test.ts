@@ -1,0 +1,657 @@
+/**
+ * Remove Layout's steps, and the sweep that finishes a removal left part-way,
+ * against an in-memory site and fence.
+ *
+ * The fence here keeps the stored one's rules (one row per Layout, every step
+ * change a compare-and-set on token and step), so the route's decisions can be
+ * watched one at a time: when the default is read, what stops a removal, what
+ * the write carries, and what a race leaves behind. What the table holds on
+ * each dialect, and the guard and the route together over REST, are the
+ * integration suite's (`__tests__/layout-removal.integration.test.ts`).
+ *
+ * @module layout-removal/remove-layout.test
+ */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { describe, expect, it } from "vitest";
+
+import type { DefaultLayoutDirectApi } from "../default-layout/store";
+
+import { scanLayoutReferences } from "./layout-references";
+import {
+  LAYOUT_REMOVAL_CONTEXT_KEY,
+  VERSION_MOVED,
+} from "./layout-removal-guard";
+import { removeLayout, type RemoveLayoutDeps } from "./remove-layout";
+import { settleLayoutRemovals } from "./settle";
+import {
+  mayTakeOver,
+  REMOVAL_LEASE_MS,
+  type LayoutRemoval,
+  type LayoutRemovalStore,
+} from "./store";
+import {
+  ALREADY_BEING_REMOVED,
+  CHANGED_WHILE_REMOVING,
+  KEPT_AS_DEFAULT,
+  NOT_PUBLISHED,
+} from "./words";
+
+type Row = Record<string, unknown> & { id: string };
+
+/** The fence, in memory, with the stored one's compare-and-set rules. */
+function memoryStore(): LayoutRemovalStore & {
+  rows: Map<string, LayoutRemoval>;
+} {
+  const rows = new Map<string, LayoutRemoval>();
+  const put = (removal: LayoutRemoval, patch: Partial<LayoutRemoval>) => {
+    rows.set(removal.layoutId, { ...removal, ...patch, updatedAt: new Date() });
+  };
+  const held = (layoutId: string, token: string, step: string) => {
+    const removal = rows.get(layoutId);
+    return removal !== undefined &&
+      removal.token === token &&
+      removal.step === step
+      ? removal
+      : undefined;
+  };
+  return {
+    rows,
+    removalOf: async id => rows.get(id) ?? null,
+    mark: async ({ layoutId, action, token, startedBy, now }) => {
+      const existing = rows.get(layoutId);
+      if (existing !== undefined && !mayTakeOver(existing, now)) {
+        return { kind: "busy", removal: existing };
+      }
+      rows.set(layoutId, {
+        layoutId,
+        action,
+        step: "marked",
+        token,
+        startedBy,
+        pagesLeft: null,
+        copy: null,
+        copyVersion: null,
+        settledAt: null,
+        updatedAt: now,
+      });
+      return { kind: "marked" };
+    },
+    advance: async ({ layoutId, token, from, to, set = {} }) => {
+      const removal = held(layoutId, token, from);
+      if (removal === undefined) return false;
+      put(removal, { step: to, ...set });
+      return true;
+    },
+    settle: async (layoutId, token, from = "removed") => {
+      const removal = held(layoutId, token, from);
+      if (removal === undefined) return false;
+      put(removal, { step: "removed", settledAt: new Date(), copy: null });
+      return true;
+    },
+    stop: async (layoutId, token) => {
+      if (rows.get(layoutId)?.token !== token) return false;
+      rows.delete(layoutId);
+      return true;
+    },
+    releaseTombstone: async layoutId => {
+      const removal = rows.get(layoutId);
+      if (removal?.step === "removed" && removal.action === "unpublish") {
+        rows.delete(layoutId);
+      }
+    },
+    unsettled: async () =>
+      [...rows.values()].filter(removal => removal.settledAt === null),
+  };
+}
+
+/** One site: its Layouts, their drafts, its pages and its default. */
+interface Site {
+  layouts: Map<string, Row>;
+  layoutDrafts: Map<string, Row>;
+  pages: Row[];
+  pageDrafts: Map<string, Row>;
+  /** Pages the remover may not read. */
+  hidden: Set<string>;
+  defaultLayout: string | null;
+  /** Called when the default is read, before it answers. */
+  onDefaultRead?: () => void;
+  /** Called with each delete or update of a Layout, before it lands. */
+  onLayoutWrite?: (args: Record<string, unknown>) => void;
+  writes: Record<string, unknown>[];
+  created: number;
+}
+
+function site(): Site {
+  return {
+    layouts: new Map([
+      [
+        "landing",
+        {
+          id: "landing",
+          title: "Landing",
+          slug: "landing",
+          status: "published",
+          areas: [{ id: "row-1", area: "header", component: "c-1" }],
+          updatedAt: "2026-11-01T10:00:00.000Z",
+        },
+      ],
+    ]),
+    layoutDrafts: new Map(),
+    pages: [],
+    pageDrafts: new Map(),
+    hidden: new Set(),
+    defaultLayout: "seed",
+    writes: [],
+    created: 0,
+  };
+}
+
+/** A page of `items`, as the Direct API pages a list. */
+function paged(items: Row[], args: Record<string, unknown>) {
+  const limit = Number(args.limit ?? 10);
+  const page = Number(args.page ?? 1);
+  return {
+    items: items.slice((page - 1) * limit, page * limit),
+    meta: { hasNext: page * limit < items.length },
+  };
+}
+
+/** The `where` a call filters by: an id, an id list, or a Layout. */
+function filterBy(items: Row[], where: unknown): Row[] {
+  const w = (where ?? {}) as Record<string, { equals?: unknown; in?: unknown }>;
+  return items.filter(
+    item =>
+      (w.id?.equals === undefined || item.id === w.id.equals) &&
+      (!Array.isArray(w.id?.in) || w.id.in.includes(item.id)) &&
+      (w.layout?.equals === undefined || item.layout === w.layout.equals)
+  );
+}
+
+/** The Direct API over `s`, as much of it as a removal calls. */
+function directApi(s: Site): DefaultLayoutDirectApi {
+  const api = {
+    find: async (args: Record<string, unknown>) => {
+      if (args.collection === "layouts") {
+        let items = filterBy([...s.layouts.values()], args.where);
+        if (args.status === "published") {
+          items = items.filter(row => row.status === "published");
+        }
+        return paged(items, args);
+      }
+      let items = filterBy(s.pages, args.where);
+      if (args.status === "published") {
+        items = items.filter(row => row.status === "published");
+      }
+      if (args.overrideAccess === false) {
+        items = items.filter(row => !s.hidden.has(row.id));
+      }
+      return paged(items, args);
+    },
+    findByID: async (args: { collection: string; id: string }) => {
+      const drafts =
+        args.collection === "layouts" ? s.layoutDrafts : s.pageDrafts;
+      const draft = drafts.get(args.id);
+      if (draft !== undefined) return { ...draft, _isWorkingDraft: true };
+      return args.collection === "layouts"
+        ? (s.layouts.get(args.id) ?? null)
+        : (s.pages.find(page => page.id === args.id) ?? null);
+    },
+    findSingle: async () => {
+      s.onDefaultRead?.();
+      return { defaultLayout: s.defaultLayout };
+    },
+    updateSingle: async (args: { data: { defaultLayout?: string | null } }) => {
+      if (args.data.defaultLayout !== undefined) {
+        s.defaultLayout = args.data.defaultLayout;
+      }
+      return {};
+    },
+    create: async (args: { data: Record<string, unknown> }) => {
+      s.created += 1;
+      const id = `restored-${String(s.created)}`;
+      s.layouts.set(id, {
+        ...args.data,
+        id,
+        updatedAt: new Date().toISOString(),
+      });
+      return { item: { id } };
+    },
+    update: async (args: Record<string, unknown>) => {
+      const id = String(args.id);
+      const data = args.data as Record<string, unknown>;
+      if (args.context !== undefined) {
+        s.onLayoutWrite?.(args);
+        s.writes.push(args);
+      }
+      const live = s.layouts.get(id);
+      if (live === undefined) throw NextlyError.notFound();
+      if (data.status === undefined) {
+        s.layoutDrafts.set(id, { ...live, ...data, id });
+      } else {
+        s.layouts.set(id, { ...live, ...data });
+      }
+      return { item: { id } };
+    },
+    delete: async (args: Record<string, unknown>) => {
+      s.onLayoutWrite?.(args);
+      s.writes.push(args);
+      s.layouts.delete(String(args.id));
+      return { deleted: true };
+    },
+  };
+  return api as unknown as DefaultLayoutDirectApi;
+}
+
+const PERSON = {
+  overrideAccess: false as const,
+  user: { id: "author", role: "editor" },
+};
+
+function deps(
+  s: Site,
+  store = memoryStore()
+): RemoveLayoutDeps & {
+  store: ReturnType<typeof memoryStore>;
+  warned: string[];
+} {
+  const warned: string[] = [];
+  let tokens = 0;
+  return {
+    nextly: directApi(s),
+    store,
+    slugs: { layouts: "layouts", settings: "settings", pages: "pages" },
+    person: { userId: "author", as: PERSON as never },
+    warn: message => warned.push(message),
+    warned,
+    now: () => new Date(),
+    newToken: () => {
+      tokens += 1;
+      return `token-${String(tokens)}`;
+    },
+  };
+}
+
+async function refusal(work: Promise<unknown>): Promise<unknown> {
+  try {
+    await work;
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+const remove = (
+  d: RemoveLayoutDeps,
+  action: "delete" | "unpublish" = "delete",
+  dryRun = false
+) => removeLayout(d, { layoutId: "landing", action, dryRun });
+
+describe("Remove Layout, with nothing in the way", () => {
+  it("deletes the Layout as the person, carrying the row's token, and settles the row", async () => {
+    const s = site();
+    const d = deps(s);
+
+    const answer = await remove(d);
+
+    expect(answer.message).toBe("The Layout was deleted.");
+    expect(s.layouts.has("landing")).toBe(false);
+    const [written] = s.writes;
+    expect(written).toMatchObject({ overrideAccess: false, user: PERSON.user });
+    const removal = d.store.rows.get("landing");
+    expect(written?.context).toEqual({
+      [LAYOUT_REMOVAL_CONTEXT_KEY]: removal?.token,
+    });
+    // Settled: the copy is dropped once the check after the write passed.
+    expect(removal).toMatchObject({ step: "removed", copy: null });
+    expect(removal?.settledAt).toBeInstanceOf(Date);
+  });
+
+  it("unpublishes it and keeps the row as a tombstone", async () => {
+    const s = site();
+    const d = deps(s);
+
+    await remove(d, "unpublish");
+
+    expect(s.layouts.get("landing")?.status).toBe("draft");
+    expect(d.store.rows.get("landing")).toMatchObject({
+      step: "removed",
+      action: "unpublish",
+    });
+  });
+
+  it("refuses an unpublish of a Layout that is not published, writing nothing", async () => {
+    const s = site();
+    const landing = s.layouts.get("landing");
+    if (landing !== undefined) landing.status = "draft";
+    const d = deps(s);
+
+    const error = await refusal(remove(d, "unpublish"));
+
+    expect((error as Error).message).toBe(NOT_PUBLISHED);
+    expect(d.store.rows.size).toBe(0);
+  });
+});
+
+describe("a dry run", () => {
+  it("answers the default and the pages, naming only the readable ones, and writes nothing", async () => {
+    const s = site();
+    s.defaultLayout = "landing";
+    s.pages.push(
+      { id: "p1", title: "Home", status: "published", layout: "landing" },
+      { id: "p2", title: "Secret", status: "draft", layout: "landing" }
+    );
+    s.hidden.add("p2");
+    const d = deps(s);
+
+    const answer = await remove(d, "delete", true);
+
+    expect(answer.item.check).toEqual({
+      isDefault: true,
+      pages: [{ id: "p1", title: "Home" }],
+      unreadable: 1,
+      complete: true,
+      pagesCollection: "pages",
+    });
+    expect(d.store.rows.size).toBe(0);
+    expect(s.layouts.has("landing")).toBe(true);
+  });
+});
+
+describe("what stops a removal", () => {
+  it("refuses the default, reading it only after the fence is up, and takes the fence down", async () => {
+    const s = site();
+    s.defaultLayout = "landing";
+    const d = deps(s);
+    // The order D23 depends on: a promotion committing before this read is
+    // seen; one committing after it finds the fence.
+    const fencedAtRead: boolean[] = [];
+    s.onDefaultRead = () => fencedAtRead.push(d.store.rows.has("landing"));
+
+    const error = await refusal(remove(d));
+
+    expect((error as Error).message).toContain("Choose another default first");
+    expect(fencedAtRead[0]).toBe(true);
+    expect(d.store.rows.size).toBe(0);
+    expect(s.layouts.has("landing")).toBe(true);
+  });
+
+  it.each([
+    ["a live page", { status: "published", layout: "landing" }, null],
+    ["an unpublished page", { status: "draft", layout: "landing" }, null],
+    [
+      "a published page's working draft only",
+      { status: "published", layout: null },
+      { layout: "landing" },
+    ],
+  ])(
+    "refuses while %s names it, changing nothing",
+    async (_label, page, draft) => {
+      const s = site();
+      s.pages.push({ id: "p1", title: "Home", ...page });
+      if (draft !== null) s.pageDrafts.set("p1", { id: "p1", ...draft });
+      const d = deps(s);
+
+      const error = await refusal(remove(d));
+
+      expect((error as Error).message).toBe(
+        '1 page uses this Layout: "Home". Choose another Layout for it first.'
+      );
+      expect(d.store.rows.size).toBe(0);
+      expect(s.layouts.has("landing")).toBe(true);
+      expect(s.writes).toHaveLength(0);
+    }
+  );
+
+  it("refuses when the scan runs out of budget, saying 'at least'", async () => {
+    const s = site();
+    for (let i = 0; i < 5; i += 1) {
+      s.pages.push({
+        id: `p${String(i)}`,
+        title: `P${String(i)}`,
+        status: "published",
+        layout: null,
+      });
+    }
+    s.pages.push({
+      id: "p9",
+      title: "Last",
+      status: "published",
+      layout: "landing",
+    });
+    const d = { ...deps(s), budget: 3 };
+
+    const error = await refusal(remove(d));
+
+    expect((error as Error).message).toContain("can't be removed yet");
+    expect(s.layouts.has("landing")).toBe(true);
+  });
+
+  it("refuses a second removal while the first holds the fence", async () => {
+    const s = site();
+    const d = deps(s);
+    await d.store.mark({
+      layoutId: "landing",
+      action: "delete",
+      token: "other",
+      startedBy: null,
+      now: new Date(),
+    });
+
+    const error = await refusal(remove(d));
+
+    expect((error as Error).message).toBe(ALREADY_BEING_REMOVED);
+    // The other request's fence is left as it was.
+    expect(d.store.rows.get("landing")?.token).toBe("other");
+  });
+
+  it("takes the fence down when the person may not write, and passes the refusal on", async () => {
+    const s = site();
+    s.onLayoutWrite = () => {
+      throw NextlyError.forbidden();
+    };
+    const d = deps(s);
+
+    const error = await refusal(remove(d));
+
+    expect(NextlyError.isCode(error, "FORBIDDEN")).toBe(true);
+    expect(d.store.rows.size).toBe(0);
+  });
+});
+
+describe("a Layout that changes while it is removed", () => {
+  const moved = () =>
+    NextlyError.conflict({ logContext: { reason: VERSION_MOVED } });
+
+  it("takes the copy again and removes it", async () => {
+    const s = site();
+    let refusals = 1;
+    s.onLayoutWrite = () => {
+      if (refusals-- > 0) {
+        s.layoutDrafts.set("landing", {
+          id: "landing",
+          title: "Edited",
+          updatedAt: "2026-11-01T11:00:00.000Z",
+        });
+        throw moved();
+      }
+    };
+    const d = deps(s);
+    const copies: unknown[] = [];
+    const advance = d.store.advance;
+    d.store.advance = async change => {
+      if (change.to === "final") copies.push(change.set?.copy);
+      return advance(change);
+    };
+
+    await remove(d);
+
+    expect(s.layouts.has("landing")).toBe(false);
+    expect(copies).toHaveLength(2);
+    // The second copy holds the edit the first did not.
+    expect(copies[1]).toMatchObject({ draft: { title: "Edited" } });
+  });
+
+  it("gives up after three copies, saying to try again, and takes the fence down", async () => {
+    const s = site();
+    s.onLayoutWrite = () => {
+      throw moved();
+    };
+    const d = deps(s);
+
+    const error = await refusal(remove(d));
+
+    expect((error as Error).message).toBe(CHANGED_WHILE_REMOVING);
+    expect(s.layouts.has("landing")).toBe(true);
+    expect(d.store.rows.size).toBe(0);
+  });
+});
+
+describe("a promotion landing between the last look at the default and the write", () => {
+  it("restores a deleted Layout from its copy under a new id and points the default at it", async () => {
+    const s = site();
+    s.layoutDrafts.set("landing", {
+      id: "landing",
+      title: "Landing (edited)",
+      areas: [],
+      updatedAt: "2026-11-01T10:30:00.000Z",
+    });
+    s.onLayoutWrite = () => {
+      s.defaultLayout = "landing";
+    };
+    const d = deps(s);
+
+    const error = await refusal(remove(d));
+
+    expect((error as Error).message).toBe(KEPT_AS_DEFAULT);
+    expect(s.layouts.has("landing")).toBe(false);
+    const restored = s.layouts.get("restored-1");
+    expect(restored).toMatchObject({
+      title: "Landing",
+      slug: "landing",
+      status: "published",
+      // The repeater row's own id is the deleted Layout's, and is dropped.
+      areas: [{ area: "header", component: "c-1" }],
+    });
+    // Its working draft is a working draft again, not its published form.
+    expect(s.layoutDrafts.get("restored-1")).toMatchObject({
+      title: "Landing (edited)",
+    });
+    expect(s.defaultLayout).toBe("restored-1");
+    expect(d.store.rows.get("landing")).toMatchObject({
+      step: "removed",
+      copy: null,
+    });
+  });
+
+  it("leaves an unpublish to the default repair, since undoing it would publish the draft", async () => {
+    const s = site();
+    s.onLayoutWrite = () => {
+      s.defaultLayout = "landing";
+    };
+    const d = deps(s);
+
+    const answer = await remove(d, "unpublish");
+
+    expect(answer.message).toBe("The Layout was unpublished.");
+    expect(s.created).toBe(0);
+    expect(d.warned.some(m => m.includes("default repair"))).toBe(true);
+  });
+});
+
+describe("the scan", () => {
+  it("counts a published page's working draft only when it is one", async () => {
+    const s = site();
+    s.pages.push(
+      { id: "p1", title: "A", status: "published", layout: null },
+      { id: "p2", title: "B", status: "published", layout: null }
+    );
+    // p1 has a working draft naming the Layout; p2's by-id read falls back to
+    // its live row, which names none.
+    s.pageDrafts.set("p1", { id: "p1", layout: "landing" });
+
+    const scan = await scanLayoutReferences({
+      nextly: directApi(s),
+      pages: "pages",
+      layoutId: "landing",
+    });
+
+    expect(scan).toEqual({
+      references: [{ id: "p1", title: "A", place: "draft" }],
+      complete: true,
+    });
+  });
+});
+
+describe("the sweep", () => {
+  const stale = () => new Date(Date.now() + REMOVAL_LEASE_MS + 60_000);
+
+  async function leftAt(
+    store: ReturnType<typeof memoryStore>,
+    step: LayoutRemoval["step"],
+    copy: LayoutRemoval["copy"] = null
+  ) {
+    await store.mark({
+      layoutId: "landing",
+      action: "delete",
+      token: "stopped",
+      startedBy: null,
+      now: new Date(),
+    });
+    const removal = store.rows.get("landing");
+    if (removal !== undefined)
+      store.rows.set("landing", { ...removal, step, copy });
+  }
+
+  it.each(["marked", "checked"] as const)(
+    "clears a row left at %s past the lease, which changed nothing",
+    async step => {
+      const s = site();
+      const d = deps(s);
+      await leftAt(d.store, step);
+
+      await settleLayoutRemovals({ ...d, now: stale });
+
+      expect(d.store.rows.size).toBe(0);
+      expect(s.layouts.has("landing")).toBe(true);
+    }
+  );
+
+  it("leaves a row inside its lease to the request that holds it", async () => {
+    const s = site();
+    const d = deps(s);
+    await leftAt(d.store, "marked");
+
+    await settleLayoutRemovals(d);
+
+    expect(d.store.rows.get("landing")?.step).toBe("marked");
+  });
+
+  it("clears a final row whose delete never landed", async () => {
+    const s = site();
+    const d = deps(s);
+    await leftAt(d.store, "final");
+
+    await settleLayoutRemovals({ ...d, now: stale });
+
+    expect(d.store.rows.size).toBe(0);
+    expect(s.layouts.has("landing")).toBe(true);
+  });
+
+  it("finishes a final row whose delete landed, restoring it when the default names it", async () => {
+    const s = site();
+    const d = deps(s);
+    const live = s.layouts.get("landing");
+    await leftAt(d.store, "final", {
+      live: { ...live, id: "landing" },
+      draft: null,
+    });
+    s.layouts.delete("landing");
+    s.defaultLayout = "landing";
+
+    await settleLayoutRemovals({ ...d, now: stale });
+
+    expect(s.defaultLayout).toBe("restored-1");
+    expect(d.store.rows.get("landing")).toMatchObject({ step: "removed" });
+    expect(d.store.rows.get("landing")?.settledAt).toBeInstanceOf(Date);
+  });
+});

@@ -1,0 +1,387 @@
+/**
+ * Remove Layout: the one way a Layout is deleted or unpublished.
+ *
+ * ## The steps, in order
+ *
+ * 1. **Dry run.** Read the default and scan the pages; answer what stands in
+ *    the way, writing nothing.
+ * 2. **Mark.** Insert the fence row. From now on the Layout cannot become the
+ *    default, and nothing else can delete or unpublish it.
+ * 3. **Check the default**, read AFTER the mark committed: a promotion that
+ *    committed first is seen here, and one that commits later sees the mark
+ *    and refuses itself. The default is refused, saying to choose another.
+ * 4. **Final scan**, under the fence. Any page naming the Layout stops the
+ *    removal, live rows included: nothing here moves a page, so a removal
+ *    with pages would change how those pages look with nobody asked. An
+ *    unfinished scan stops it too.
+ * 5. **Copy.** The default is read once more, then the Layout's live row and
+ *    working draft are stored with their version on the row, at `final`.
+ * 6. **Remove**, as the person, through the Direct API, so their own rights
+ *    decide. The write carries the row's token, which the guard requires.
+ *    When the Layout changed since the copy, the guard refuses and the copy is
+ *    taken again, a bounded number of times.
+ * 7. **Settle**: the check after the write (`settle.ts`).
+ *
+ * Every step change is a compare-and-set on the row's token, so a request a
+ * later one took over changes nothing. Anything that stops the removal before
+ * its write takes the fence down again.
+ *
+ * @module layout-removal/remove-layout
+ */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+
+import { DEFAULT_LAYOUT_REFUSAL } from "../default-layout/default-layout-guard";
+import {
+  readLayoutSettings,
+  type DefaultLayoutDirectApi,
+  type DefaultLayoutSlugs,
+} from "../default-layout/store";
+
+import { readLayoutCopy } from "./layout-copy";
+import {
+  readableTitles,
+  scanLayoutReferences,
+  type PersonReads,
+} from "./layout-references";
+import {
+  LAYOUT_REMOVAL_CONTEXT_KEY,
+  VERSION_MOVED,
+} from "./layout-removal-guard";
+import type { RestoreDeps } from "./restore";
+import { settleRemoval } from "./settle";
+import type { RemovalAction } from "./store";
+import {
+  ALREADY_BEING_REMOVED,
+  CHANGED_WHILE_REMOVING,
+  KEPT_AS_DEFAULT,
+  NOT_PUBLISHED,
+  pagesUseItRefusal,
+} from "./words";
+
+/** How many times a removal takes its copy again for a Layout that changed. */
+const COPY_ATTEMPTS = 3;
+
+/** What one removal needs. */
+export interface RemoveLayoutDeps extends RestoreDeps {
+  readonly nextly: DefaultLayoutDirectApi;
+  readonly slugs: DefaultLayoutSlugs & { readonly pages: string };
+  /** The person removing it: who is recorded, and how their writes run. */
+  readonly person: { readonly userId: string | null; readonly as: PersonReads };
+  readonly now: () => Date;
+  readonly newToken: () => string;
+  /** The scan's page-read budget; the default is `PAGE_READ_BUDGET`. */
+  readonly budget?: number;
+}
+
+/** One request to remove a Layout. */
+export interface RemoveRequest {
+  readonly layoutId: string;
+  readonly action: RemovalAction;
+  readonly dryRun: boolean;
+}
+
+/** What stands in the way of a removal, as the person may see it. */
+export interface RemovalCheck {
+  readonly isDefault: boolean;
+  readonly pages: readonly { readonly id: string; readonly title: string }[];
+  readonly unreadable: number;
+  readonly complete: boolean;
+  /** The pages collection, as renamed, so a page can be linked to. */
+  readonly pagesCollection: string;
+}
+
+/** What the route answers with, inside the mutation envelope's `item`. */
+export interface RemoveResult {
+  readonly layoutId: string;
+  readonly action: RemovalAction;
+  readonly dryRun: boolean;
+  /** Present on a dry run. */
+  readonly check?: RemovalCheck;
+}
+
+/** The answer: the envelope's message and item. */
+export interface RemoveAnswer {
+  readonly message: string;
+  readonly item: RemoveResult;
+}
+
+/** A conflict an author can act on. */
+function conflict(message: string, reason: string, layoutId: string): Error {
+  return NextlyError.conflict({
+    reason: "state",
+    message,
+    logContext: { reason, layoutId },
+  });
+}
+
+/** Refuse a Layout that does not exist, or an unpublish of one not published. */
+async function requireRemovable(
+  deps: RemoveLayoutDeps,
+  request: RemoveRequest
+): Promise<void> {
+  const found = await deps.nextly.find({
+    collection: deps.slugs.layouts,
+    where: { id: { equals: request.layoutId } },
+    status: "all",
+    limit: 1,
+    depth: 0,
+    select: { status: true },
+    overrideAccess: true,
+  });
+  const row = found.items[0] as { status?: unknown } | undefined;
+  if (row === undefined) throw NextlyError.notFound();
+  if (request.action === "unpublish" && row.status !== "published") {
+    throw conflict(
+      NOT_PUBLISHED,
+      "layout-removal-not-published",
+      request.layoutId
+    );
+  }
+}
+
+/** The pages naming the Layout, as the person may see them. */
+async function checkPages(
+  deps: RemoveLayoutDeps,
+  layoutId: string
+): Promise<Omit<RemovalCheck, "isDefault">> {
+  const scan = await scanLayoutReferences({
+    nextly: deps.nextly,
+    pages: deps.slugs.pages,
+    layoutId,
+    ...(deps.budget === undefined ? {} : { budget: deps.budget }),
+  });
+  const named = await readableTitles({
+    nextly: deps.nextly,
+    pages: deps.slugs.pages,
+    references: scan.references,
+    asPerson: deps.person.as,
+  });
+  return {
+    pages: named.readable,
+    unreadable: named.unreadable,
+    complete: scan.complete,
+    pagesCollection: deps.slugs.pages,
+  };
+}
+
+/** Whether the settings Single names `layoutId` as the default now. */
+async function isDefault(
+  deps: RemoveLayoutDeps,
+  layoutId: string
+): Promise<boolean> {
+  return (
+    (await readLayoutSettings(deps.nextly, deps.slugs)).defaultLayout ===
+    layoutId
+  );
+}
+
+/** Step 1: what would stop the removal, writing nothing. */
+async function dryRun(
+  deps: RemoveLayoutDeps,
+  request: RemoveRequest
+): Promise<RemoveAnswer> {
+  const check: RemovalCheck = {
+    isDefault: await isDefault(deps, request.layoutId),
+    ...(await checkPages(deps, request.layoutId)),
+  };
+  const blocked =
+    check.isDefault ||
+    check.pages.length + check.unreadable > 0 ||
+    !check.complete;
+  return {
+    message: blocked
+      ? "This Layout can't be removed yet."
+      : "This Layout can be removed.",
+    item: { ...request, check },
+  };
+}
+
+/** Step 2: put the fence up, or say another removal holds it. */
+async function mark(
+  deps: RemoveLayoutDeps,
+  request: RemoveRequest,
+  token: string
+): Promise<void> {
+  const marked = await deps.store.mark({
+    layoutId: request.layoutId,
+    action: request.action,
+    token,
+    startedBy: deps.person.userId,
+    now: deps.now(),
+  });
+  if (marked.kind === "busy") {
+    throw conflict(
+      ALREADY_BEING_REMOVED,
+      "layout-removal-busy",
+      request.layoutId
+    );
+  }
+}
+
+/** Steps 3 and 5's default check: refuse while the Layout is the default. */
+async function refuseIfDefault(
+  deps: RemoveLayoutDeps,
+  layoutId: string
+): Promise<void> {
+  if (await isDefault(deps, layoutId)) {
+    throw conflict(DEFAULT_LAYOUT_REFUSAL, "layout-removal-default", layoutId);
+  }
+}
+
+/** Move the row on, or refuse: another request took the fence over. */
+async function advanceOrRefuse(
+  deps: RemoveLayoutDeps,
+  change: Parameters<RemoveLayoutDeps["store"]["advance"]>[0]
+): Promise<void> {
+  if (!(await deps.store.advance(change))) {
+    throw conflict(
+      ALREADY_BEING_REMOVED,
+      "layout-removal-taken-over",
+      change.layoutId
+    );
+  }
+}
+
+/** Step 4: refuse while any page names the Layout, or the scan stopped short. */
+async function finalScan(
+  deps: RemoveLayoutDeps,
+  layoutId: string
+): Promise<void> {
+  const pages = await checkPages(deps, layoutId);
+  if (pages.complete && pages.pages.length + pages.unreadable === 0) return;
+  throw conflict(
+    pagesUseItRefusal({
+      titles: pages.pages.map(page => page.title),
+      unreadable: pages.unreadable,
+      complete: pages.complete,
+    }),
+    "layout-removal-pages-use-it",
+    layoutId
+  );
+}
+
+/** Step 6's write, as the person, carrying the row's token. */
+async function write(
+  deps: RemoveLayoutDeps,
+  request: RemoveRequest,
+  token: string
+): Promise<void> {
+  const common = {
+    collection: deps.slugs.layouts,
+    id: request.layoutId,
+    ...deps.person.as,
+    context: { [LAYOUT_REMOVAL_CONTEXT_KEY]: token },
+  };
+  if (request.action === "delete") {
+    await deps.nextly.delete(common);
+  } else {
+    await deps.nextly.update({ ...common, data: { status: "draft" } });
+  }
+}
+
+/** Whether the guard refused because the Layout changed since the copy. */
+function versionMoved(error: unknown): boolean {
+  return (
+    NextlyError.isCode(error, "CONFLICT") &&
+    error.logContext?.reason === VERSION_MOVED
+  );
+}
+
+/** Steps 5 and 6: take the copy and write, again if the Layout moved. */
+async function copyThenRemove(
+  deps: RemoveLayoutDeps,
+  request: RemoveRequest,
+  token: string
+): Promise<void> {
+  const { layoutId } = request;
+  for (let attempt = 0; attempt < COPY_ATTEMPTS; attempt += 1) {
+    await refuseIfDefault(deps, layoutId);
+    const taken = await readLayoutCopy(
+      deps.nextly,
+      deps.slugs.layouts,
+      layoutId
+    );
+    if (taken === null) throw NextlyError.notFound();
+    await advanceOrRefuse(deps, {
+      layoutId,
+      token,
+      from: attempt === 0 ? "checked" : "final",
+      to: "final",
+      set: { copy: taken.copy, copyVersion: taken.version },
+    });
+    try {
+      await write(deps, request, token);
+      return;
+    } catch (error) {
+      if (!versionMoved(error)) throw error;
+    }
+  }
+  throw conflict(
+    CHANGED_WHILE_REMOVING,
+    "layout-removal-kept-changing",
+    layoutId
+  );
+}
+
+/** Step 7: the check after the write. */
+async function settle(
+  deps: RemoveLayoutDeps,
+  request: RemoveRequest,
+  token: string
+): Promise<RemoveAnswer> {
+  const { layoutId } = request;
+  const moved = await deps.store.advance({
+    layoutId,
+    token,
+    from: "final",
+    to: "removed",
+  });
+  const removal = moved ? await deps.store.removalOf(layoutId) : null;
+  // A row moved by anyone else after the write is the repair restoring it.
+  if (removal === null || removal.token !== token) {
+    throw conflict(
+      KEPT_AS_DEFAULT,
+      "layout-removal-restored-elsewhere",
+      layoutId
+    );
+  }
+  if ((await settleRemoval(deps, removal)) === "restored") {
+    throw conflict(KEPT_AS_DEFAULT, "layout-removal-raced-promotion", layoutId);
+  }
+  return {
+    message:
+      request.action === "delete"
+        ? "The Layout was deleted."
+        : "The Layout was unpublished.",
+    item: { ...request },
+  };
+}
+
+/** Remove one Layout by the steps in the module docblock. */
+export async function removeLayout(
+  deps: RemoveLayoutDeps,
+  request: RemoveRequest
+): Promise<RemoveAnswer> {
+  await requireRemovable(deps, request);
+  if (request.dryRun) return dryRun(deps, request);
+
+  const token = deps.newToken();
+  await mark(deps, request, token);
+  try {
+    await refuseIfDefault(deps, request.layoutId);
+    await advanceOrRefuse(deps, {
+      layoutId: request.layoutId,
+      token,
+      from: "marked",
+      to: "checked",
+    });
+    await finalScan(deps, request.layoutId);
+    await copyThenRemove(deps, request, token);
+  } catch (error) {
+    // Nothing was removed: take this request's fence down. Fenced by token,
+    // so a fence another request took over is left as it is.
+    await deps.store.stop(request.layoutId, token).catch(() => false);
+    throw error;
+  }
+  return settle(deps, request, token);
+}

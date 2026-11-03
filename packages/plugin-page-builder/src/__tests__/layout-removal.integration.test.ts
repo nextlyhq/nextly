@@ -1,0 +1,896 @@
+/**
+ * Remove Layout against a real instance: the route over REST as a signed-in
+ * person, the fence in the plugin's own table, and the guards that leave it
+ * the only way a Layout is deleted or unpublished.
+ *
+ * What only a server can show: that the fence row's compare-and-set steps hold
+ * on each dialect; that a plain delete or unpublish, a forged fence row and a
+ * scheduled release are all refused; that a promotion racing a removal, in
+ * either order, ends with one published default and no page changed; and that
+ * a Layout deleted from under a promotion is restored from its copy, by the
+ * route or later by the repair, without ever overwriting a Layout that exists.
+ *
+ * Races are injected with the instance's own hook registry: a test hook is
+ * registered after the plugin's, so on one phase it runs after the plugin's
+ * guards, at the moment the other write would land in a real race.
+ *
+ * @module __tests__/layout-removal.integration.test
+ */
+
+// Set before the harness boots: the routes verify the session with it.
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "@nextlyhq/plugin-sdk/testing";
+import { ServiceContainer } from "nextly";
+import { buildClaims, signAccessToken } from "nextly/auth";
+import { createDynamicHandlers } from "nextly/runtime";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { LAYOUTS_SLUG } from "../collections/layouts";
+import { PAGES_SLUG } from "../collections/pages";
+import { ensureDefaultLayout } from "../default-layout/ensure-default";
+import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
+import {
+  readLayoutSettings,
+  relationId,
+  writeLayoutSettings,
+} from "../default-layout/store";
+import { readLayoutCopy } from "../layout-removal/layout-copy";
+import { LAYOUT_REMOVAL_CONTEXT_KEY } from "../layout-removal/layout-removal-guard";
+import {
+  layoutRemovalStore,
+  type LayoutRemovalStore,
+} from "../layout-removal/store";
+import {
+  BEING_REMOVED_NOT_DEFAULT,
+  KEPT_AS_DEFAULT,
+  REMOVE_LAYOUT_REFUSAL,
+} from "../layout-removal/words";
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+import { pageBuilder } from "../plugin";
+
+const SLUGS = {
+  layouts: LAYOUTS_SLUG,
+  settings: PAGE_BUILDER_SETTINGS_SLUG,
+} as const;
+
+const ORIGIN = "http://localhost";
+const CSRF = "c".repeat(64);
+
+interface Answer {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+async function refusalOf(write: Promise<unknown>): Promise<unknown> {
+  try {
+    await write;
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** The refusal's message in an error envelope. */
+function told(answer: Answer): string {
+  const error = answer.body.error as { message?: unknown } | undefined;
+  return typeof error?.message === "string" ? error.message : "";
+}
+
+/**
+ * A plugin that depends on the page builder, which is what lets it reach the
+ * page builder's tables through its own `ctx.db`: the test's way to read the
+ * fence, and to write the rows a stopped request or a forger would leave.
+ */
+function probePlugin(holder: { store?: LayoutRemovalStore }): PluginDefinition {
+  return definePlugin({
+    name: "@test/layout-removal-probe",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+    init(ctx) {
+      holder.store = layoutRemovalStore(ctx.db, ctx.dialect);
+    },
+  });
+}
+
+describe.each(getConfiguredTestDialects())(
+  "Remove Layout (%s)",
+  (dialect: TestDialect) => {
+    let current: TestNextly | undefined;
+    const probe: { store?: LayoutRemovalStore } = {};
+
+    afterEach(async () => {
+      await current?.destroy();
+      current = undefined;
+      probe.store = undefined;
+    });
+
+    function fence(): LayoutRemovalStore {
+      if (probe.store === undefined) throw new Error("the probe did not boot");
+      return probe.store;
+    }
+
+    function ensure(t: TestNextly) {
+      return ensureDefaultLayout({
+        nextly: t.nextly,
+        slugs: SLUGS,
+        removals: fence(),
+        warn: () => {},
+      });
+    }
+
+    async function boot(): Promise<TestNextly> {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder(), probePlugin(probe)],
+        seedPublic: true,
+      });
+      await ensure(current);
+      return current;
+    }
+
+    async function layout(
+      t: TestNextly,
+      title: string,
+      slug: string,
+      status: "published" | "draft" = "published"
+    ): Promise<string> {
+      const created = await t.nextly.create({
+        collection: LAYOUTS_SLUG,
+        data: { title, slug, areas: [], status },
+        overrideAccess: true,
+      });
+      return String(created.item.id);
+    }
+
+    async function page(
+      t: TestNextly,
+      title: string,
+      data: Record<string, unknown>
+    ): Promise<string> {
+      const created = await t.nextly.create({
+        collection: PAGES_SLUG,
+        data: { title, slug: title.toLowerCase(), ...data },
+        overrideAccess: true,
+      });
+      return String(created.item.id);
+    }
+
+    async function layoutRow(
+      t: TestNextly,
+      id: string
+    ): Promise<Record<string, unknown> | undefined> {
+      const found = await t.nextly.find({
+        collection: LAYOUTS_SLUG,
+        where: { id: { equals: id } },
+        status: "all",
+        limit: 1,
+        depth: 0,
+        overrideAccess: true,
+      });
+      return found.items[0] as Record<string, unknown> | undefined;
+    }
+
+    function settingsOf(t: TestNextly) {
+      return readLayoutSettings(t.nextly, SLUGS);
+    }
+
+    async function person(t: TestNextly, name: string): Promise<string> {
+      const created = await t.nextly.users.create({
+        email: `${name}@example.com`,
+        password: "Password123!",
+        data: { name, isActive: true },
+      });
+      return created.item.id;
+    }
+
+    async function sessionOf(t: TestNextly, userId: string): Promise<string> {
+      const user = await t.nextly.users.findByID({ id: userId });
+      if (user === null) throw new Error(`no user ${userId}`);
+      const token = await signAccessToken(
+        buildClaims({
+          userId,
+          email: user.email,
+          name: user.name ?? "",
+          image: null,
+          roleIds: [],
+          sessionEpoch: 0,
+        }),
+        process.env.NEXTLY_SECRET ?? ""
+      );
+      return `nextly_session=${token}`;
+    }
+
+    /** POST one of the plugin's routes as the session's owner. */
+    async function post(
+      cookie: string,
+      sub: string[],
+      body: unknown
+    ): Promise<Answer> {
+      const handlers = createDynamicHandlers();
+      const url = `${ORIGIN}/api/plugins/${PAGE_BUILDER_PLUGIN_NAME}/${sub.join("/")}`;
+      const response = await handlers.POST(
+        new Request(url, {
+          method: "POST",
+          headers: {
+            cookie: `${cookie}; nextly_csrf=${CSRF}`,
+            "x-csrf-token": CSRF,
+            origin: ORIGIN,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(body),
+        }),
+        {
+          params: Promise.resolve({
+            params: ["plugins", ...PAGE_BUILDER_PLUGIN_NAME.split("/"), ...sub],
+          }),
+        }
+      );
+      const text = await response.text();
+      return {
+        status: response.status,
+        body: (text === "" ? {} : JSON.parse(text)) as Record<string, unknown>,
+      };
+    }
+
+    const remove = (
+      cookie: string,
+      id: string,
+      action: "delete" | "unpublish",
+      dryRun?: boolean
+    ) =>
+      post(cookie, ["layouts", id, "remove"], {
+        action,
+        ...(dryRun === undefined ? {} : { dryRun }),
+      });
+
+    const makeDefault = (cookie: string, id: string, dryRun?: boolean) =>
+      post(
+        cookie,
+        ["layouts", id, "make-default"],
+        dryRun === undefined ? {} : { dryRun }
+      );
+
+    /** The instance's first user, its super admin, and a session for them. */
+    async function owner(t: TestNextly) {
+      const id = await person(t, "owner");
+      return { id, cookie: await sessionOf(t, id) };
+    }
+
+    describe("with nothing in the way", () => {
+      it("deletes a Layout no page names, and leaves its row settled", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+        expect(await layoutRow(t, other)).toBeUndefined();
+        const row = await fence().removalOf(other);
+        expect(row).toMatchObject({
+          step: "removed",
+          action: "delete",
+          copy: null,
+        });
+        expect(row?.settledAt).toBeInstanceOf(Date);
+      });
+
+      it("unpublishes one, keeping its row until it is published again", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+
+        const answer = await remove(cookie, other, "unpublish");
+
+        expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+        expect((await layoutRow(t, other))?.status).toBe("draft");
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          action: "unpublish",
+        });
+
+        await t.nextly.update({
+          collection: LAYOUTS_SLUG,
+          id: other,
+          data: { status: "published" },
+          overrideAccess: true,
+        });
+        expect(await fence().removalOf(other)).toBeNull();
+        expect((await makeDefault(cookie, other)).status).toBe(200);
+      });
+
+      it("answers a dry run with what stands in the way, and writes nothing", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", {
+          layout: other,
+          status: "published",
+        });
+
+        const answer = await remove(cookie, other, "delete", true);
+
+        expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+        expect((answer.body.item as { check?: unknown }).check).toEqual({
+          isDefault: false,
+          pages: [{ id: home, title: "Home" }],
+          unreadable: 0,
+          complete: true,
+          pagesCollection: PAGES_SLUG,
+        });
+        expect(await fence().removalOf(other)).toBeNull();
+        expect(await layoutRow(t, other)).toBeDefined();
+      });
+    });
+
+    describe("what stops it", () => {
+      it.each([
+        ["a published page", { status: "published" }, false],
+        ["an unpublished page", { status: "draft" }, false],
+        [
+          "a published page's working draft alone",
+          { status: "published" },
+          true,
+        ],
+      ])(
+        "refuses while %s names the Layout, and changes nothing",
+        async (_label, state, draftOnly) => {
+          const t = await boot();
+          const { cookie } = await owner(t);
+          const other = await layout(t, "Other", "other");
+          const home = await page(t, "Home", {
+            ...state,
+            ...(draftOnly ? {} : { layout: other }),
+          });
+          if (draftOnly) {
+            // A save without a status keeps the live row and stores the edit
+            // beside it: only the working draft names the Layout.
+            await t.nextly.update({
+              collection: PAGES_SLUG,
+              id: home,
+              data: { layout: other },
+              overrideAccess: true,
+            });
+          }
+
+          const answer = await remove(cookie, other, "delete");
+
+          expect(answer.status).toBe(409);
+          expect(told(answer)).toBe(
+            '1 page uses this Layout: "Home". Choose another Layout for it first.'
+          );
+          expect((await layoutRow(t, other))?.status).toBe("published");
+          expect(await fence().removalOf(other)).toBeNull();
+          const stored = await t.nextly.findByID({
+            collection: PAGES_SLUG,
+            id: home,
+            draft: true,
+            depth: 0,
+            overrideAccess: true,
+          });
+          expect(relationId(stored?.layout)).toBe(other);
+        }
+      );
+
+      it("refuses the site's default, saying to choose another first", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const fallback = String((await settingsOf(t)).defaultLayout);
+
+        const answer = await remove(cookie, fallback, "delete");
+
+        expect(answer.status).toBe(409);
+        expect(told(answer)).toContain("Choose another default first");
+        expect((await layoutRow(t, fallback))?.status).toBe("published");
+        expect(await fence().removalOf(fallback)).toBeNull();
+      });
+
+      it("refuses a person who may not delete Layouts before reading anything", async () => {
+        const t = await boot();
+        await owner(t);
+        const reader = await person(t, "reader");
+        const other = await layout(t, "Other", "other");
+        const permissions = await t.nextly.permissions.find({ limit: 500 });
+        const read = permissions.items.find(p => p.slug === "read-layouts");
+        if (read === undefined) throw new Error("read-layouts is not seeded");
+        const role = await t.nextly.roles.create({
+          data: {
+            name: "Reader",
+            slug: "layout-reader",
+            permissionIds: [read.id],
+          },
+        });
+        const assigned = await new ServiceContainer(
+          t.adapter
+        ).userRoles.assignRoleToUser(reader, role.item.id);
+        expect(assigned.success).toBe(true);
+
+        const answer = await remove(
+          await sessionOf(t, reader),
+          other,
+          "delete"
+        );
+
+        expect(answer.status).toBe(403);
+        expect(await layoutRow(t, other)).toBeDefined();
+      });
+    });
+
+    describe("the only way", () => {
+      it("refuses a plain delete and a plain unpublish, naming Remove Layout", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+
+        const deleted = await refusalOf(
+          t.nextly.delete({
+            collection: LAYOUTS_SLUG,
+            id: other,
+            overrideAccess: true,
+          })
+        );
+        const unpublished = await refusalOf(
+          t.nextly.update({
+            collection: LAYOUTS_SLUG,
+            id: other,
+            data: { status: "draft" },
+            overrideAccess: true,
+          })
+        );
+
+        expect(messageOf(deleted)).toBe(REMOVE_LAYOUT_REFUSAL);
+        expect(messageOf(unpublished)).toBe(REMOVE_LAYOUT_REFUSAL);
+        expect((await layoutRow(t, other))?.status).toBe("published");
+      });
+
+      it("lets an edit that unpublishes nothing through", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+
+        await t.nextly.update({
+          collection: LAYOUTS_SLUG,
+          id: other,
+          data: { title: "Renamed", status: "published" },
+          overrideAccess: true,
+        });
+
+        expect((await layoutRow(t, other))?.title).toBe("Renamed");
+      });
+
+      it("refuses a delete carrying a token a forged row holds, written straight to the table", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        const copy = await readLayoutCopy(t.nextly, LAYOUTS_SLUG, other);
+        const forged = "forged00-0000-4000-8000-000000000000";
+        await fence().mark({
+          layoutId: other,
+          action: "delete",
+          token: forged,
+          startedBy: null,
+          now: new Date(),
+        });
+        await fence().advance({
+          layoutId: other,
+          token: forged,
+          from: "marked",
+          to: "checked",
+        });
+        await fence().advance({
+          layoutId: other,
+          token: forged,
+          from: "checked",
+          to: "final",
+          set: { copy: copy?.copy ?? null, copyVersion: copy?.version ?? null },
+        });
+
+        // Without the token, the row alone admits nothing.
+        const plain = await refusalOf(
+          t.nextly.delete({
+            collection: LAYOUTS_SLUG,
+            id: other,
+            overrideAccess: true,
+          })
+        );
+        const guessed = await refusalOf(
+          t.nextly.delete({
+            collection: LAYOUTS_SLUG,
+            id: other,
+            overrideAccess: true,
+            context: { [LAYOUT_REMOVAL_CONTEXT_KEY]: "guessed" },
+          })
+        );
+
+        expect(messageOf(plain)).toBe(REMOVE_LAYOUT_REFUSAL);
+        expect(messageOf(guessed)).toBe(REMOVE_LAYOUT_REFUSAL);
+        expect(await layoutRow(t, other)).toBeDefined();
+        // The positive control: the row's own token at its final step, with
+        // the version unchanged, is exactly what the route's write carries.
+        await t.nextly.delete({
+          collection: LAYOUTS_SLUG,
+          id: other,
+          overrideAccess: true,
+          context: { [LAYOUT_REMOVAL_CONTEXT_KEY]: forged },
+        });
+        expect(await layoutRow(t, other)).toBeUndefined();
+      });
+
+      it("refuses a scheduled release that unpublishes a Layout at the drain, and keeps the release", async () => {
+        const t = await boot();
+        const { id: author } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const release = await t.nextly.releases.create({
+          title: "Take it down",
+        });
+        await t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: LAYOUTS_SLUG,
+          entryId: other,
+          locale: null,
+          action: "unpublish",
+          userId: author,
+        });
+
+        const ran = await t.nextly.releases.publishNow({ id: release.id });
+
+        expect(ran.state).toBe("scheduled");
+        expect((await layoutRow(t, other))?.status).toBe("published");
+      });
+    });
+
+    describe("make default and the fence", () => {
+      it("refuses a Layout being removed, in a dry run too", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        await fence().mark({
+          layoutId: other,
+          action: "delete",
+          token: "running0-0000-4000-8000-000000000000",
+          startedBy: null,
+          now: new Date(),
+        });
+        const before = (await settingsOf(t)).defaultLayout;
+
+        const dry = await makeDefault(cookie, other, true);
+        const real = await makeDefault(cookie, other);
+
+        expect(dry.status).toBe(409);
+        expect(told(dry)).toBe(BEING_REMOVED_NOT_DEFAULT);
+        expect(real.status).toBe(409);
+        expect((await settingsOf(t)).defaultLayout).toBe(before);
+      });
+
+      it("refuses a Layout an unpublish removal took down, even once it is published past the hooks", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        expect((await remove(cookie, other, "unpublish")).status).toBe(200);
+        // Published again by a batch that skips hooks, so the tombstone is
+        // not dropped: the fence still stands.
+        const entries = (
+          t.getService("collectionsHandler") as unknown as {
+            getEntryService(): {
+              updateEntries(
+                params: { collectionName: string; overrideAccess?: boolean },
+                entries: { id: string; data: Record<string, unknown> }[],
+                options?: { skipHooks?: boolean }
+              ): Promise<{ successful: number }>;
+            };
+          }
+        ).getEntryService();
+        const published = await entries.updateEntries(
+          { collectionName: LAYOUTS_SLUG, overrideAccess: true },
+          [{ id: other, data: { status: "published" } }],
+          { skipHooks: true }
+        );
+        expect(published.successful).toBe(1);
+        expect((await layoutRow(t, other))?.status).toBe("published");
+
+        const answer = await makeDefault(cookie, other);
+
+        expect(answer.status).toBe(409);
+        expect(told(answer)).toBe(BEING_REMOVED_NOT_DEFAULT);
+      });
+    });
+
+    describe("a promotion racing a removal", () => {
+      it("is refused when it arrives after the fence is up, and the removal goes ahead with the default unchanged", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const before = (await settingsOf(t)).defaultLayout;
+        const other = await layout(t, "Other", "other");
+        const kept = await layout(t, "Kept", "kept");
+        const home = await page(t, "Home", {
+          layout: kept,
+          status: "published",
+        });
+        let promoted = 0;
+        let armed = true;
+        t.hooks.register("beforeDelete", LAYOUTS_SLUG, async context => {
+          if (
+            !armed ||
+            relationId((context as { data?: unknown }).data) !== other
+          )
+            return;
+          armed = false;
+          promoted = (await makeDefault(cookie, other)).status;
+        });
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(promoted).toBe(409);
+        expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+        expect((await settingsOf(t)).defaultLayout).toBe(before);
+        expect(await layoutRow(t, other)).toBeUndefined();
+        const stored = await t.nextly.findByID({
+          collection: PAGES_SLUG,
+          id: home,
+          depth: 0,
+          overrideAccess: true,
+        });
+        expect(relationId(stored?.layout)).toBe(kept);
+      });
+
+      it("stops the removal when the promotion committed first, leaving both as they were", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        // The removal starts right after the promotion's write commits and
+        // before the promotion's own check after it.
+        let removal: Answer | undefined;
+        let armed = true;
+        t.hooks.register(
+          "afterUpdate",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async context => {
+            const data = (context as { data?: Record<string, unknown> }).data;
+            if (!armed || relationId(data?.defaultLayout) !== other) return;
+            armed = false;
+            removal = await remove(cookie, other, "delete");
+          }
+        );
+
+        const promoted = await makeDefault(cookie, other);
+
+        expect(removal?.status).toBe(409);
+        expect(told(removal ?? { status: 0, body: {} })).toContain(
+          "Choose another default first"
+        );
+        expect(promoted.status).toBe(200);
+        expect((await settingsOf(t)).defaultLayout).toBe(other);
+        expect((await layoutRow(t, other))?.status).toBe("published");
+        expect(await fence().removalOf(other)).toBeNull();
+      });
+
+      it("refuses the promotion whose check came before the fence and whose write came after the removal, putting the old default back", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const before = (await settingsOf(t)).defaultLayout;
+        const other = await layout(t, "Other", "other");
+        // The promotion reads the settings after its fence check and before
+        // its write: the whole removal lands in that gap.
+        let removal: Answer | undefined;
+        let armed = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (!armed) return;
+            armed = false;
+            removal = await remove(cookie, other, "delete");
+          }
+        );
+
+        armed = true;
+        const promoted = await makeDefault(cookie, other);
+
+        expect(removal?.status, JSON.stringify(removal?.body)).toBe(200);
+        expect(promoted.status).toBe(409);
+        expect((await settingsOf(t)).defaultLayout).toBe(before);
+        expect((await layoutRow(t, String(before)))?.status).toBe("published");
+        expect(await layoutRow(t, other)).toBeUndefined();
+      });
+
+      it("puts the old default back when the fence went up after the promotion's check and before its check after the write", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const before = (await settingsOf(t)).defaultLayout;
+        const other = await layout(t, "Other", "other");
+        // A removal marks the Layout right after the promotion's write
+        // commits; the Layout is still published, so only the fence tells.
+        let armed = true;
+        t.hooks.register(
+          "afterUpdate",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async context => {
+            const data = (context as { data?: Record<string, unknown> }).data;
+            if (!armed || relationId(data?.defaultLayout) !== other) return;
+            armed = false;
+            await fence().mark({
+              layoutId: other,
+              action: "delete",
+              token: "marking0-0000-4000-8000-000000000000",
+              startedBy: null,
+              now: new Date(),
+            });
+          }
+        );
+
+        const promoted = await makeDefault(cookie, other);
+
+        expect(promoted.status).toBe(409);
+        expect(told(promoted)).toBe(BEING_REMOVED_NOT_DEFAULT);
+        expect((await settingsOf(t)).defaultLayout).toBe(before);
+        expect((await layoutRow(t, other))?.status).toBe("published");
+      });
+
+      it("restores a Layout deleted under a promotion that committed after the removal's last look, under a new id, and points the default at it", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const bystander = await layout(t, "Bystander", "bystander");
+        // A promotion that passed its own checks before the fence went up,
+        // committing between the removal's last read of the default and its
+        // delete, and never reaching its own check after.
+        let armed = true;
+        t.hooks.register("beforeDelete", LAYOUTS_SLUG, async context => {
+          if (
+            !armed ||
+            relationId((context as { data?: unknown }).data) !== other
+          )
+            return;
+          armed = false;
+          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        });
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(answer.status).toBe(409);
+        expect(told(answer)).toBe(KEPT_AS_DEFAULT);
+        expect(await layoutRow(t, other)).toBeUndefined();
+        const restored = String((await settingsOf(t)).defaultLayout);
+        expect(restored).not.toBe(other);
+        expect(await layoutRow(t, restored)).toMatchObject({
+          title: "Other",
+          slug: "other",
+          status: "published",
+        });
+        expect((await layoutRow(t, bystander))?.title).toBe("Bystander");
+      });
+
+      it("leaves an unpublish under such a promotion to the repair, which points the default at the seed", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const seed = String((await settingsOf(t)).seededLayout);
+        const other = await layout(t, "Other", "other");
+        let armed = true;
+        t.hooks.register("beforeUpdate", LAYOUTS_SLUG, async context => {
+          const original = (context as { originalData?: unknown }).originalData;
+          if (!armed || relationId(original) !== other) return;
+          armed = false;
+          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        });
+
+        const answer = await remove(cookie, other, "unpublish");
+
+        expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+        expect((await layoutRow(t, other))?.status).toBe("draft");
+        await ensure(t);
+        expect((await settingsOf(t)).defaultLayout).toBe(seed);
+      });
+    });
+
+    describe("the repair after a removal that stopped", () => {
+      /** The token of the removal these cases leave stopped. */
+      const token = "stopped0-0000-4000-8000-000000000000";
+
+      /** A delete removal taken to its final step, copy and all, then stopped. */
+      async function stoppedAtFinal(t: TestNextly, id: string) {
+        const copy = await readLayoutCopy(t.nextly, LAYOUTS_SLUG, id);
+        await fence().mark({
+          layoutId: id,
+          action: "delete",
+          token,
+          startedBy: null,
+          now: new Date(),
+        });
+        await fence().advance({
+          layoutId: id,
+          token,
+          from: "marked",
+          to: "checked",
+        });
+        await fence().advance({
+          layoutId: id,
+          token,
+          from: "checked",
+          to: "final",
+          set: { copy: copy?.copy ?? null, copyVersion: copy?.version ?? null },
+        });
+      }
+
+      /**
+       * The same, then its delete exactly as the route makes it: the state a
+       * process that exited after the delete leaves.
+       */
+      async function deletedThenStopped(t: TestNextly, id: string) {
+        await stoppedAtFinal(t, id);
+        await t.nextly.delete({
+          collection: LAYOUTS_SLUG,
+          id,
+          overrideAccess: true,
+          context: { [LAYOUT_REMOVAL_CONTEXT_KEY]: token },
+        });
+      }
+
+      it("restores the default from the copy under a new id", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+
+        expect(await ensure(t)).toBe("restored");
+
+        const restored = String((await settingsOf(t)).defaultLayout);
+        expect(restored).not.toBe(other);
+        expect(await layoutRow(t, restored)).toMatchObject({
+          title: "Other",
+          status: "published",
+        });
+        // Once: a second run finds a usable default and restores nothing.
+        expect(await ensure(t)).toBe("kept");
+      });
+
+      it("never writes a copy over a Layout that still exists", async () => {
+        const t = await boot();
+        const seed = String((await settingsOf(t)).seededLayout);
+        // An unpublished Layout whose delete removal stopped at its final
+        // step, before the delete: its row holds a copy, and the Layout is
+        // still there. The default names it, so the default is unusable.
+        const other = await layout(t, "Other", "other", "draft");
+        await stoppedAtFinal(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const count = (
+          await t.nextly.find({
+            collection: LAYOUTS_SLUG,
+            status: "all",
+            limit: 50,
+            overrideAccess: true,
+          })
+        ).items.length;
+
+        expect(await ensure(t)).toBe("repointed");
+
+        expect((await settingsOf(t)).defaultLayout).toBe(seed);
+        expect(
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              status: "all",
+              limit: 50,
+              overrideAccess: true,
+            })
+          ).items
+        ).toHaveLength(count);
+        expect(await layoutRow(t, other)).toMatchObject({
+          title: "Other",
+          status: "draft",
+        });
+      });
+    });
+  }
+);

@@ -92,6 +92,7 @@ import {
 } from "./layout-choices-route";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
+import { removeLayoutRoute } from "./layout-removal/remove-route";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import {
   componentLibraryRoute,
@@ -1351,6 +1352,11 @@ export const pageBuilder = (
         // preconditions (the Layout is published, the caller may publish
         // Layouts) that a plain Single write cannot state.
         makeDefaultRoute(),
+        // Remove Layout: the one way a Layout is deleted or unpublished, fenced
+        // and checked so no page and not the site's default is taken from
+        // under it. The Layout's own delete and unpublish refuse every write
+        // that does not come through here.
+        removeLayoutRoute(),
         // The Layouts an author may choose for a page, with the published
         // regions the editor draws around it, read as the author from the
         // component store the editor's library reads, under the bounds the
