@@ -57,6 +57,7 @@ import {
   CornerLeftUp,
   Ellipsis,
   LayoutTemplate,
+  Lock,
   RefreshCw,
   Replace,
   Trash2,
@@ -73,6 +74,8 @@ import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasContentRect, overlaySpaceOf } from "./geometry-dom";
 import { useBlockActionsContext } from "./keyboard-actions";
+import { layerLabel } from "./layers";
+import { lockBlockingEdit } from "./locking";
 import { useSelectionActions } from "./selection-actions";
 import {
   toolbarPlacement,
@@ -359,6 +362,20 @@ export function BlockToolbar({
 
   if (hidden || actions.length === 0) return null;
 
+  // The selected block's Layers lock, its own or one around it, said on the
+  // bar itself: the canvas draws nothing else that tells a locked block from
+  // any other, and the dimmed buttons only say why one at a time.
+  const holder =
+    selectedId === null || selectedIds.length > 1
+      ? undefined
+      : lockBlockingEdit(document, selectedId);
+  const lockNote =
+    holder === undefined
+      ? undefined
+      : holder.id === selectedId
+        ? "Locked"
+        : `Locked by ${layerLabel(holder)}`;
+
   return (
     <div
       ref={bar}
@@ -380,6 +397,14 @@ export function BlockToolbar({
       }
       onKeyDown={onKeyDown}
     >
+      {lockNote === undefined ? null : (
+        // Text, not a control: it takes no tab stop in the bar's one roving
+        // stop, and a screen reader reads it with the bar.
+        <span className="nx-block-toolbar__lock" data-lock-note="">
+          <Lock size={12} aria-hidden="true" />
+          {lockNote}
+        </span>
+      )}
       {buttons.map((action, index) => {
         const Icon = ICONS[action.id];
         const describedBy =

@@ -133,10 +133,12 @@ test.describe("making a component from a selection", () => {
     await expect(await block(page, "hero-title")).toHaveCount(0);
     await expect(await block(page, "hero-body")).toBeVisible();
 
-    // One undo puts the heading back, and redo converts it again.
-    await page.keyboard.press("ControlOrMeta+z");
+    // One undo puts the heading back, and redo converts it again. Control, not
+    // ControlOrMeta: the editor reads `mod` from the platform the browser
+    // reports, and this suite's device reports Windows on every host.
+    await page.keyboard.press("Control+z");
     await expect(await block(page, "hero-title")).toBeVisible();
-    await page.keyboard.press("ControlOrMeta+Shift+z");
+    await page.keyboard.press("Control+Shift+z");
     await expect(await block(page, "hero-title")).toHaveCount(0);
 
     await save(page, pageId);

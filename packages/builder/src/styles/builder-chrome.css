@@ -1382,6 +1382,17 @@
 }
 
 /*
+ * A choice that may not be changed here, under a lock or in a read-only area,
+ * as the admin draws every disabled control: at half strength with a cursor
+ * that says the press will not land. The taken side keeps its fill, so what is
+ * chosen stays readable, but no longer reads as a live control.
+ */
+.nx-style-inspector__toggle > button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/*
  * A prop the panel cannot draw is dimmed rather than hidden — present, and
  * visibly not one of the things an author can change here.
  */
@@ -2050,6 +2061,17 @@
 }
 
 /*
+ * A lock, the block's own or one it is held by from a block around it, in the
+ * row's own ink rather than the muted badge colour. The row sets that ink for
+ * each state it can be in (the text colour at rest and on hover, the accent's
+ * foreground when selected), so the icon meets non-text contrast wherever the
+ * row is drawn. The two locks differ by stroke weight, set on the icon.
+ */
+.nx-layer-row__badge[data-lock] {
+  color: inherit;
+}
+
+/*
  * A block's mark, wherever one is drawn.
  *
  * `flex: none` for the same reason the badge has it: the mark is a fixed-size
@@ -2075,6 +2097,28 @@
  * and a deep selection would otherwise grow it and shrink the canvas every time
  * an author selected something nested.
  */
+/*
+ * The bar's two halves: the trail at the start, the hint at the end, as the
+ * agreed design draws it. The trail gives way first, scrolling rather than
+ * pushing the hint off the bar.
+ */
+.nx-bottom-bar {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.nx-bottom-bar__hint {
+  flex: none;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--nx-builder-text-muted);
+  white-space: nowrap;
+}
+
 .nx-breadcrumb {
   display: flex;
   align-items: center;
@@ -2205,6 +2249,37 @@
 
 .nx-block-toolbar__button[aria-disabled="true"]:hover {
   background: none;
+}
+
+/*
+ * The selected block's Layers lock, said at the start of its bar: a lock icon
+ * and "Locked", or "Locked by" the block whose lock covers it. In the bar's own
+ * ink, so it reads on the dark bar in either theme, and set apart from the
+ * buttons by a rule in that ink rather than by a fill.
+ */
+.nx-block-toolbar__lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline: 0.375rem 0.5rem;
+  margin-inline-end: 0.125rem;
+  border-inline-end: 1px solid
+    color-mix(in srgb, var(--nx-builder-ink-text) 25%, transparent);
+  color: var(--nx-builder-ink-text);
+  /* The type scale is declared inline, so its custom property can be absent
+     at runtime; the fallback is the same step. */
+  font-size: var(--text-xs, 0.75rem);
+  white-space: nowrap;
+}
+
+/*
+ * A selected block locked in Layers, by its own lock or one around it: the
+ * selection ring is dashed, so the canvas says it is held before anything is
+ * tried on it. Only a canvas node carries the lock mark, so the node marker is
+ * not repeated here; this still outranks the selection ring's own rule.
+ */
+.nx-canvas [data-nx-locked][data-nx-selected] {
+  outline-style: dashed;
 }
 
 /*

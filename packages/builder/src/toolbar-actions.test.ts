@@ -16,12 +16,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyOps,
   saveAsPatternRefusal,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
 import { compositionRefusalReason } from "./composition-refusal";
+import { layersLockRefusalFor } from "./lock-refusal";
+import { selectionDuplication } from "./selection-ops";
 
 import {
   depthMoveActions,
@@ -234,9 +237,9 @@ describe("toolbarActions", () => {
     const actions = toolbarActions(document, "a");
 
     expect(actionOf(actions, "move-down").enabled).toBe(false);
-    expect(actionOf(actions, "move-down").reason).toBe("This block is locked.");
+    expect(actionOf(actions, "move-down").reason).toBe("Heading is locked.");
     expect(actionOf(actions, "delete").enabled).toBe(false);
-    expect(actionOf(actions, "delete").reason).toBe("This block is locked.");
+    expect(actionOf(actions, "delete").reason).toBe("Heading is locked.");
   });
 
   it("a lock does NOT stop a duplicate", () => {
@@ -250,21 +253,105 @@ describe("toolbarActions", () => {
     );
   });
 
-  it("a lock INSIDE a block stops its delete but not its move", () => {
-    // THE case that separates asking the two lock rules from reading
-    // `node.locked` once: delete destroys the subtree, a move carries it
-    // intact. Both halves are asserted, so a toolbar that used one answer for
-    // both fails here whichever answer it picked.
+  it.each([
+    ["a locked block", "a", [node("a", "acme/heading", { locked: true })]],
+    [
+      "a block holding a locked one",
+      "outer",
+      [box("outer", [node("kid", "acme/heading", { locked: true })])],
+    ],
+    [
+      "a block inside a locked one",
+      "kid",
+      [box("outer", [node("kid")], { locked: true, name: "Hero" })],
+    ],
+  ])(
+    "offers Duplicate for %s exactly when its ops apply",
+    (_case, selectedId, nodes) => {
+      // The bar asks the editor's own question of the very ops the verb
+      // applies, so an offered Duplicate never fails in silence and a dimmed
+      // one says why.
+      const document = documentOf(nodes);
+      const action = actionOf(
+        toolbarActions(document, selectedId, undefined, undefined, true, ops =>
+          layersLockRefusalFor(document, ops)
+        ),
+        "duplicate"
+      );
+      const plan = selectionDuplication(document, [selectedId]);
+      const applies = (): boolean => {
+        try {
+          applyOps(document, plan?.ops ?? []);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      expect(action.enabled).toBe(applies());
+    }
+  );
+
+  it("a lock INSIDE a block stops its delete and its move", () => {
+    // THE case that separates asking the lock rule from reading `node.locked`
+    // once: a locked block does not move or disappear until it is unlocked,
+    // and moving or deleting the block around it would do both to it. The op
+    // layer refuses either, so the toolbar offers neither, naming the block.
     const document = documentOf([
       box("outer", [node("kid", "acme/heading", { locked: true })]),
       node("after"),
     ]);
     const actions = toolbarActions(document, "outer");
 
-    expect(actionOf(actions, "move-down").enabled).toBe(true);
+    expect(actionOf(actions, "move-down").enabled).toBe(false);
+    expect(actionOf(actions, "move-down").reason).toBe(
+      "Heading inside this block is locked."
+    );
     expect(actionOf(actions, "delete").enabled).toBe(false);
     expect(actionOf(actions, "delete").reason).toBe(
       "Heading inside this block is locked."
+    );
+  });
+
+  it("a lock AROUND a block stops its move and its delete, naming the holder", () => {
+    // The block itself is unlocked, but it sits inside a locked one, which
+    // covers it: moving or deleting it out would change what that lock keeps.
+    const document = documentOf([
+      box("outer", [node("kid"), node("sibling")], {
+        locked: true,
+        name: "Hero",
+      }),
+    ]);
+    const actions = toolbarActions(document, "kid");
+
+    expect(actionOf(actions, "move-down").enabled).toBe(false);
+    expect(actionOf(actions, "move-down").reason).toBe(
+      "This block is inside Hero, which is locked."
+    );
+    expect(actionOf(actions, "delete").enabled).toBe(false);
+    expect(actionOf(actions, "delete").reason).toBe(
+      "This block is inside Hero, which is locked."
+    );
+  });
+
+  it("dims a duplicate the lock around the block would refuse, through the editor's question", () => {
+    // A copy goes beside the original, inside the locked block. The verb asks
+    // the editor's lock question, which now answers for a Layers lock too.
+    const document = documentOf([
+      box("outer", [node("kid")], { locked: true, name: "Hero" }),
+    ]);
+    const actions = toolbarActions(
+      document,
+      "kid",
+      undefined,
+      undefined,
+      true,
+      ops => layersLockRefusalFor(document, ops)
+    );
+
+    expect(actionOf(actions, "duplicate").enabled).toBe(false);
+    expect(actionOf(actions, "duplicate").reason).toBe(
+      "Hero is locked. Unlock it to add blocks to it."
     );
   });
 
@@ -530,6 +617,49 @@ describe("detach, duplicate and update a pattern", () => {
     );
 
     expect(actionOf(actions, "duplicate-component").enabled).toBe(false);
+    expect(actionOf(actions, "duplicate-component").reason).toBe(
+      "Component instance is locked."
+    );
+  });
+
+  it("dims Duplicate for a placement inside a locked block, naming that block", () => {
+    const actions = toolbarActions(
+      documentOf([
+        box("hold", [placed("p")], { locked: true, name: "Promo area" }),
+      ]),
+      "p",
+      ["p"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    );
+
+    expect(actionOf(actions, "duplicate-component")).toMatchObject({
+      enabled: false,
+      reason: "This block is inside Promo area, which is locked.",
+    });
+  });
+
+  it("offers Duplicate for a placement whose slot content holds a locked block", () => {
+    // The re-point edits the placement's own props and carries its content
+    // with it, so a lock inside that content does not hold it, as it would a
+    // move or a delete.
+    const holding = node("p", "nextly/component-instance", {
+      props: { componentId: "card" },
+      slots: { extra: [node("pinned", "acme/heading", { locked: true })] },
+    });
+    const actions = toolbarActions(
+      documentOf([holding]),
+      "p",
+      ["p"],
+      anyParent,
+      true,
+      undefined,
+      offer
+    );
+
+    expect(actionOf(actions, "duplicate-component").enabled).toBe(true);
   });
 
   it("offers Update a pattern for a savable run, dimmed without the grant", () => {
@@ -775,9 +905,7 @@ describe("toolbarActions for MORE than one block", () => {
     const actions = toolbarActions(document, "a", ["a", "b"]);
 
     expect(actionOf(actions, "delete").enabled).toBe(false);
-    expect(actionOf(actions, "delete").reason).toBe(
-      "Pinned is locked. Unlock it to delete."
-    );
+    expect(actionOf(actions, "delete").reason).toBe("Pinned is locked.");
     // Still duplicable: the originals stay where they are.
     expect(actionOf(actions, "duplicate").enabled).toBe(true);
   });

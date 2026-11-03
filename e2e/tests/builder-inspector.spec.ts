@@ -358,7 +358,7 @@ test.describe("the inspector", () => {
     await expect(content.getByLabel("Text")).toBeEnabled();
 
     await page.getByRole("button", { name: "Actions for Heading" }).click();
-    await page.getByRole("menuitem", { name: "Lock" }).click();
+    await page.getByRole("menuitem", { name: "Lock", exact: true }).click();
 
     await expect(page.locator('[data-lock="layers"]')).toContainText("Locked");
     await expect(content.getByLabel("Text")).toBeDisabled();

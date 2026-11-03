@@ -41,8 +41,10 @@ import type {
   ExposedPropertyType,
   ExposedSlot,
 } from "./document";
+import { lockedAncestorOf } from "./layers-lock";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
+import { insertKeepingLocks } from "./locked-insert";
 import {
   boundedLimit,
   surveyDocument,
@@ -1956,7 +1958,8 @@ function replaceOps(
   }
 
   const refusal =
-    lockRefusal(saved.selected) ?? removableRefusal(document, saved.selected);
+    lockRefusal(document.nodes, saved.selected) ??
+    removableRefusal(document, saved.selected);
   if (refusal !== undefined) return refusal;
 
   const position = replacementPosition(saved.at);
@@ -2241,7 +2244,8 @@ export function planInsertPattern(
     // a locked subtree and a malformed node for the same reasons an insert
     // does. Only that target deletes anything; a positional insert adds.
     (target === "document"
-      ? (lockRefusal(document.nodes) ?? shapeRefusal(document.nodes))
+      ? (lockRefusal(document.nodes, document.nodes) ??
+        shapeRefusal(document.nodes))
       : undefined);
   if (refusal !== undefined) return refusal;
 
@@ -2502,12 +2506,24 @@ function destinationOf(
 
   const parent = findNode(document.nodes, target.parentId);
   if (parent === undefined) return { problem: "unknown" };
+  // A run put into a locked block, or into a block inside one, changes what
+  // that lock protects, and the op layer refuses the insert.
+  if (holdsLayersLock(document.nodes, parent)) {
+    return { problem: "destination-locked" };
+  }
   return {
     place: {
       at: target,
       where: { kind: "slot", parentType: parent.type, slot: target.slot },
     },
   };
+}
+
+/** Whether a block is locked in Layers, itself or by a block around it. */
+function holdsLayersLock(nodes: BlockNode[], block: BlockNode): boolean {
+  return (
+    block.locked === true || lockedAncestorOf(nodes, block.id) !== undefined
+  );
 }
 
 /** The first id this document holds twice, or `undefined`. */
@@ -2577,9 +2593,18 @@ function duplicateDomIdRefusal(
  * {@link insertOps} — but a lock on the page is content an author protected,
  * and a remove refuses it for a reason no re-ordering of the group can satisfy.
  */
-function lockRefusal(roots: readonly BlockNode[]): PlanRefusal | undefined {
+function lockRefusal(
+  nodes: BlockNode[],
+  roots: readonly BlockNode[]
+): PlanRefusal | undefined {
   for (const root of roots) {
-    if (lockedWithin(root) !== undefined) {
+    // Inside the run, and around it: taking a block out of a locked one
+    // changes what that lock protects as surely as deleting a locked block,
+    // and the op layer refuses both.
+    if (
+      lockedWithin(root) !== undefined ||
+      lockedAncestorOf(nodes, root.id) !== undefined
+    ) {
       return { problem: "destination-locked" };
     }
   }
@@ -2898,7 +2923,8 @@ export function planDetach(
   // own subtree is not among them — that content is moving, not being copied
   // beside itself, and treating it as taken renames the author's own anchors.
   const locked =
-    lockRefusal([located.node]) ?? removableRefusal(document, [located.node]);
+    lockRefusal(document.nodes, [located.node]) ??
+    removableRefusal(document, [located.node]);
   if (locked !== undefined) return locked;
 
   const removal: BuilderOp = { kind: "remove", id: located.node.id };
@@ -3465,19 +3491,8 @@ function withoutResolverMarkers(nodes: readonly BlockNode[]): BlockNode[] {
  *
  * ## A locked block arrives unlocked and is locked once it has landed
  *
- * `applyOp` refuses an insert whose subtree arrives locked, because the inverse
- * of an insert is a remove and a remove refuses a locked subtree — so such an
- * insert could never be undone. That rule is right, and taken literally it made
- * a whole supported flow impossible: saving a selection containing a locked
- * block succeeds, the stored pattern keeps the lock, and the pattern was then
- * insertable nowhere. A library row nothing can place is worse than either
- * refusing the save or dropping the lock without saying so.
- *
- * So the lock is neither carried on the insert nor discarded: the nodes arrive
- * unlocked and an update locks them where they landed. The group ends in the
- * state the pattern described, and it stays undoable because inverses are
- * recorded in undo order — the unlock runs before the remove, so the remove
- * never meets a locked node.
+ * Through `insertKeepingLocks`, the one sequence every copy into a document
+ * uses: a pattern's locked block is placeable, and its undo still works.
  */
 function insertOps(
   roots: readonly BlockNode[],
@@ -3489,9 +3504,8 @@ function insertOps(
     target === "document"
       ? document.nodes.map(node => ({ kind: "remove", id: node.id }))
       : [];
-  const { nodes, lockedIds } = withoutLocks(roots);
   const start = place.at === null ? 0 : place.at.index;
-  nodes.forEach((node, offset) => {
+  const placed = roots.map((node, offset) => {
     const at: OpPosition =
       place.at === null || place.at.parentId === undefined
         ? { index: start + offset }
@@ -3500,39 +3514,9 @@ function insertOps(
             slot: place.at.slot,
             index: start + offset,
           };
-    ops.push({ kind: "insert", node, at });
+    return { node, at };
   });
-  for (const id of lockedIds) {
-    ops.push({ kind: "update", id, patch: { locked: true } });
-  }
-  return ops;
-}
-
-/** A forest with every lock removed, and the ids that carried one. */
-interface UnlockedForest {
-  readonly nodes: BlockNode[];
-  readonly lockedIds: readonly string[];
-}
-
-/**
- * Take the locks off, remembering where they were.
- *
- * Through the shared forest rewrite rather than a walk of its own: a
- * hand-rolled traversal has to re-learn what that one already knows about a
- * cycle entry, a malformed entry and a malformed slot value, and a planner
- * editing one field has no business deciding any of them.
- *
- * Only `locked` moves; every other field is carried across untouched.
- */
-function withoutLocks(roots: readonly BlockNode[]): UnlockedForest {
-  const lockedIds: string[] = [];
-  const nodes = mapForest([...roots], node => {
-    if (node.locked !== true) return node;
-    lockedIds.push(node.id);
-    const { locked: _locked, ...rest } = node;
-    return rest;
-  });
-  return { nodes, lockedIds };
+  return [...ops, ...insertKeepingLocks(placed)];
 }
 
 /**

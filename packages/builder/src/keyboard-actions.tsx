@@ -715,7 +715,9 @@ export function useBlockKeyboardActions({
       // whole section around it.
       const lockedNode = lockBlockingMove(editorNow.document, selectedId);
       if (lockedNode !== undefined) {
-        announce(refusalAnnouncement(lockedBlockWording(lockedNode)));
+        announce(
+          refusalAnnouncement(lockedBlockWording(lockedNode, selectedId))
+        );
         return;
       }
 
@@ -795,10 +797,9 @@ export function useBlockKeyboardActions({
    */
   const selectParent = React.useCallback(() => {
     const editorNow = latest.current;
-    const path = pathTo(editorNow.document, editorNow.selectedId);
-    const parent = path[path.length - 2];
+    const parent = parentOf(editorNow.document, editorNow.selectedId);
     if (parent === undefined) return;
-    editorNow.select(parent.id);
+    editorNow.select(parent);
   }, []);
 
   const bindings = React.useMemo(
@@ -983,7 +984,8 @@ export function useBlockKeyboardActions({
     [
       {
         keys: "Escape",
-        description: "Clear the block selection",
+        description:
+          "Select the block holding this one, or clear the selection",
         // The one case the editor declines. `when` rather than a branch in
         // `run`, because declining has to leave the key UNCONSUMED for the
         // dialog to receive it, and a binding that runs has already taken it.
@@ -996,9 +998,13 @@ export function useBlockKeyboardActions({
           const outcome = escapeOutcome(
             typeof document === "undefined" ? undefined : document
           );
-          if (outcome !== "deselect") return;
+          if (outcome !== "navigate-selection") return;
           if (editorNow.selectedId === null) return;
-          editorNow.select(null);
+          // Up a level: the block holding the selection, the same answer
+          // "Select parent" gives, or nothing once the selection is at the top.
+          editorNow.select(
+            parentOf(editorNow.document, editorNow.selectedId) ?? null
+          );
         },
       },
     ],
@@ -1186,6 +1192,19 @@ export function useBlockKeyboardActions({
     selectionActions,
     depthMoves,
   };
+}
+
+/**
+ * The block holding `id`, read from the same trail the breadcrumb draws, or
+ * nothing for a top-level block or a selection the document no longer holds.
+ * "Select parent" and Escape both ask this, so they cannot name two parents.
+ */
+function parentOf(
+  document: EditorState["document"],
+  id: string | null
+): string | undefined {
+  const path = pathTo(document, id);
+  return path[path.length - 2]?.id;
 }
 
 /**

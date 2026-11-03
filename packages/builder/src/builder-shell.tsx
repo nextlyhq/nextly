@@ -1656,7 +1656,7 @@ function ShellRegions({
         No `aria-label`. A `<footer>` nested inside a section is `generic`, and
         `aria-label` is PROHIBITED on that role — so the name was not announced
         and the element was invalid. Nothing is lost: the breadcrumb inside
-        names itself ("Selected block's ancestors"), which is the thing a
+        names itself ("Current location"), which is the thing a
         reader actually lands on.
       */}
       <footer className="border-[color:var(--nx-builder-border)] text-[color:var(--nx-builder-text-muted)] flex h-8 shrink-0 items-center gap-2 border-t px-3 text-xs">

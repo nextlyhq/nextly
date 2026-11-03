@@ -59,6 +59,7 @@ import {
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
   LOCKED_ATTRIBUTE,
+  lockMarksOf,
   SELECTED_ATTRIBUTE,
   contextMenuTargetOf,
   DropRefusal,
@@ -1564,6 +1565,54 @@ describe("the drag in flight is drawn on the canvas", () => {
     const locked = container.querySelectorAll(`[${LOCKED_ATTRIBUTE}]`);
     expect(locked).toHaveLength(1);
     expect(locked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
+  });
+
+  it("marks a block's own lock and a lock it is held by from around it apart", async () => {
+    // A block inside a locked one is locked too: it is marked `inherited`,
+    // so the canvas can say so without claiming a lock of its own. The marks
+    // come from one walk of the document; the element carries the value.
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          locked: true,
+          slots: {
+            children: [
+              {
+                id: "inner",
+                type: "acme/box",
+                version: 1,
+                props: {},
+                slots: {
+                  children: [
+                    { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        { id: "free", type: "acme/leaf", version: 1, props: {} },
+      ],
+    };
+    expect([...lockMarksOf(page as never)]).toEqual([
+      ["box", "own"],
+      ["inner", "inherited"],
+      ["leaf", "inherited"],
+    ]);
+
+    const { container } = draw(undefined, page);
+    await act(async () => undefined);
+    expect(
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="box"]`)
+        ?.getAttribute(LOCKED_ATTRIBUTE)
+    ).toBe("own");
   });
 
   it("clears a drag mark from an element that has LOST its node id", async () => {

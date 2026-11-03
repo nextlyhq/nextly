@@ -122,6 +122,24 @@ export const SELECTED_ATTRIBUTE = "data-nx-selected";
  */
 export const LOCKED_ATTRIBUTE = "data-nx-locked";
 
+/** How a block is locked in Layers: by its own lock, or by one around it. */
+export type LockMark = "own" | "inherited";
+
+/**
+ * Every locked block's mark, from one walk: a block's own lock, else the lock
+ * of a block it sits inside, carried down rather than climbed per block.
+ */
+export function lockMarksOf(document: BlockDocument): Map<string, LockMark> {
+  const marks = new Map<string, LockMark>();
+  walkNodes(document.nodes, (node, parent) => {
+    if (isLocked(node)) marks.set(node.id, "own");
+    else if (parent !== undefined && marks.has(parent.id)) {
+      marks.set(node.id, "inherited");
+    }
+  });
+  return marks;
+}
+
 /**
  * Marks every element drawing the block currently being dragged.
  *
@@ -677,7 +695,7 @@ function useCanvasMarkers(
   page: React.ReactNode,
   forcedState: StyleState | undefined,
   drag: CanvasDragState | undefined,
-  lockedIds: ReadonlySet<string>
+  lockedIds: ReadonlyMap<string, LockMark>
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -812,7 +830,11 @@ function useCanvasMarkers(
         // rather than from the document per element: this walk re-runs on every
         // change to the rendered tree, and a tree search per element would make
         // that quadratic on a large page.
-        setFlag(element, LOCKED_ATTRIBUTE, id !== null && lockedIds.has(id));
+        setMark(
+          element,
+          LOCKED_ATTRIBUTE,
+          id === null ? undefined : lockedIds.get(id)
+        );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
         }
@@ -956,6 +978,20 @@ function ownedByCanvas(element: Element, container: HTMLElement): boolean {
  * rule, and four copies of it are four chances for the guard to be dropped
  * from whichever copy is edited next.
  */
+/**
+ * Set an attribute to a value, or remove it for `undefined`, writing only when
+ * it changes, for the reason {@link setFlag} gives.
+ */
+function setMark(
+  element: Element,
+  attribute: string,
+  value: string | undefined
+): void {
+  if (element.getAttribute(attribute) === (value ?? null)) return;
+  if (value === undefined) element.removeAttribute(attribute);
+  else element.setAttribute(attribute, value);
+}
+
 function setFlag(element: Element, attribute: string, wanted: boolean): void {
   if (wanted === element.hasAttribute(attribute)) return;
   if (wanted) element.setAttribute(attribute, "");
@@ -1669,15 +1705,10 @@ export function Canvas({
   /*
    * The locked nodes, collected in ONE traversal per document rather than asked
    * per element inside the marker walk, which re-runs on every change to the
-   * rendered tree.
+   * rendered tree: `own` for a block locked itself, `inherited` for one inside
+   * a locked block, which the lock covers too.
    */
-  const lockedIds = useMemo(() => {
-    const ids = new Set<string>();
-    walkNodes(document.nodes, node => {
-      if (isLocked(node)) ids.add(node.id);
-    });
-    return ids;
-  }, [document]);
+  const lockedIds = useMemo(() => lockMarksOf(document), [document]);
 
   useCanvasMarkers(
     root,
