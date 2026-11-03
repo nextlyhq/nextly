@@ -74,6 +74,15 @@ export interface ReferenceScan {
   readonly unread: readonly string[];
 }
 
+/**
+ * Whether a scan stopped only because its budget ran out: incomplete, with
+ * every page it reached read. Reading again from the first page with the same
+ * budget stops at the same place, so a retry cannot finish it.
+ */
+export function stoppedAtBudget(scan: ReferenceScan): boolean {
+  return !scan.complete && scan.unread.length === 0;
+}
+
 /** A row's string field, or the empty string. */
 function textOf(row: unknown, key: string): string {
   if (typeof row !== "object" || row === null) return "";

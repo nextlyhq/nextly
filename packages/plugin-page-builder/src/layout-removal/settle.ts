@@ -55,6 +55,7 @@ import {
 import {
   idChunks,
   scanLayoutReferences,
+  stoppedAtBudget,
   type PageReference,
   type ReferenceScan,
 } from "./layout-references";
@@ -78,7 +79,7 @@ export type SettleOutcome =
   | "left-to-repair"
   /** Another run restored it, or the default moved on meanwhile. */
   | "moved-on"
-  /** The scan after the write could not read every page: left to the sweep. */
+  /** The scan after the write could not read a page: left to the sweep. */
   | "unchecked";
 
 /** What the check after the write needs beyond a restore. */
@@ -87,6 +88,8 @@ export type SettleDeps = RestoreDeps & {
     Pick<DefaultLayoutDirectApi, "find" | "findByID">;
   /** The RESOLVED pages slug. */
   readonly pagesSlug: string;
+  /** The scans' page-read budget; the default is the scan's own. */
+  readonly budget?: number;
 };
 
 /**
@@ -101,10 +104,8 @@ export type SettleDeps = RestoreDeps & {
 export async function undoUnpublishIfPagesNameIt(
   deps: Pick<
     SettleDeps,
-    "nextly" | "slugs" | "pagesSlug" | "store" | "warn"
-  > & {
-    readonly budget?: number;
-  },
+    "nextly" | "slugs" | "pagesSlug" | "store" | "warn" | "budget"
+  >,
   layoutId: string,
   token: string
 ): Promise<ReferenceScan | null> {
@@ -166,20 +167,25 @@ async function clearOne(
  * that cannot be cleared is logged, and the page's own after-write look, or the
  * site default it draws, covers it.
  *
- * Answers the pages whose live row names the Layout, and whether the scan
- * read every page: one that did not (a page still there that could not be
- * read, or a scan that failed) leaves the removal for the sweep to try again.
+ * Answers the pages whose live row names the Layout, and whether the check
+ * is done: a scan that did not read every page (a page still there that could
+ * not be read, or a scan that failed) leaves the removal for the sweep to try
+ * again. A scan that stopped at its budget is done, logged, since every retry
+ * would stop at the same page; the scan before the write read every page, and
+ * a page past the budget left on the Layout draws the site default in its
+ * place.
  */
 async function clearPagesLeftOnIt(
   deps: SettleDeps,
   removal: LayoutRemoval
-): Promise<{ live: PageReference[]; complete: boolean }> {
+): Promise<{ live: PageReference[]; done: boolean }> {
   const live: PageReference[] = [];
   try {
     const scan = await scanLayoutReferences({
       nextly: deps.nextly,
       pages: deps.pagesSlug,
       layoutId: removal.layoutId,
+      ...(deps.budget === undefined ? {} : { budget: deps.budget }),
     });
     for (const reference of scan.references) {
       if (reference.place === "live") {
@@ -198,13 +204,20 @@ async function clearPagesLeftOnIt(
         );
       }
     }
+    if (stoppedAtBudget(scan)) {
+      deps.warn(
+        "[page-builder] the check after a Layout removal stopped at its page-read budget; pages past it were not checked, and one left on the Layout draws the site default in its place",
+        { layoutId: removal.layoutId }
+      );
+      return { live, done: true };
+    }
     if (!scan.complete) {
       deps.warn(
         "[page-builder] the check after a Layout removal could not read every page; the removal is kept and the sweep will try again",
         { layoutId: removal.layoutId, unread: [...scan.unread] }
       );
     }
-    return { live, complete: scan.complete };
+    return { live, done: scan.complete };
   } catch (error) {
     deps.warn(
       "[page-builder] the pages a Layout removal left could not all be checked; the removal is kept and the sweep will try again",
@@ -213,7 +226,7 @@ async function clearPagesLeftOnIt(
         error: error instanceof Error ? error.message : String(error),
       }
     );
-    return { live, complete: false };
+    return { live, done: false };
   }
 }
 
@@ -235,7 +248,7 @@ export async function settleRemoval(
   const cleared = await clearPagesLeftOnIt(deps, removal);
   // Not settled while a page went unread: the row and its copy stay, and the
   // sweep runs this check again.
-  if (!cleared.complete) return { outcome: "unchecked", live: cleared.live };
+  if (!cleared.done) return { outcome: "unchecked", live: cleared.live };
   return { outcome: await settleDefault(deps, removal), live: cleared.live };
 }
 

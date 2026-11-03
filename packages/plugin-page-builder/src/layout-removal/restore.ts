@@ -46,7 +46,7 @@ const SLUG_ATTEMPTS = 5;
 export interface RestoreDeps {
   readonly nextly: Pick<
     DefaultLayoutDirectApi,
-    "create" | "update" | "findSingle" | "updateSingle"
+    "create" | "update" | "find" | "findSingle" | "updateSingle"
   >;
   readonly store: LayoutRemovalStore;
   readonly slugs: DefaultLayoutSlugs;
@@ -203,7 +203,9 @@ async function createOrRelease(
 /**
  * Restore the Layout `removal` deleted, if the default still names it and the
  * row can be claimed. Answers the new id, or `null` when there was nothing to
- * restore here (no copy, another run claimed it, or the default moved on).
+ * restore here (no copy, another run claimed it, the default moved on, or
+ * the Layout it created could no longer be a default by the time the default
+ * was written).
  *
  * The new id is recorded on the row (`copy.restoredAs`) as soon as the create
  * succeeds, before anything else is written, so a restore that stops after
@@ -239,21 +241,48 @@ export async function restoreFromCopy(
 }
 
 /**
+ * Settle a restore whose Layout can no longer be a default (deleted or
+ * unpublished since it was created), without pointing the default at it; the
+ * default is left to the repair's own fallback. Answers `null`, as a restore
+ * that restored nothing.
+ */
+async function abandonRestore(
+  deps: RestoreDeps,
+  removal: LayoutRemoval,
+  restored: string
+): Promise<null> {
+  await deps.store.settle(removal.layoutId, removal.token, "restoring");
+  deps.warn(
+    "[page-builder] the Layout a restore created was deleted or unpublished since, so the restore was not finished; the default falls back to the site's own",
+    { removedLayout: removal.layoutId, restoredLayout: restored }
+  );
+  return null;
+}
+
+/**
  * The rest of a restore once its Layout exists: the working draft saved onto
- * it, the default pointed at it while it still names the deleted Layout, and
- * the row settled. Each step can run again with the same result.
+ * it, the default pointed at it while it still names the deleted Layout and
+ * the Layout is still published, and the row settled. Each step can run again
+ * with the same result. Answers `null` when the Layout can no longer be a
+ * default ({@link abandonRestore}).
  */
 async function finishRestore(
   deps: RestoreDeps,
   removal: LayoutRemoval,
   copy: LayoutCopy,
   restored: string
-): Promise<string> {
+): Promise<string | null> {
   if (copy.draft !== null) await restoreDraft(deps, restored, copy);
   // Re-read just before writing: a newer choice of default made meanwhile is
   // kept, and the restored Layout is then simply one more Layout.
   const latest = await readLayoutSettings(deps.nextly, deps.slugs);
   if (latest.defaultLayout === removal.layoutId) {
+    // Checked here, right before the write: no removal fences the restored
+    // Layout while its restore runs, so another removal may have unpublished
+    // or deleted it since any earlier look.
+    if (!(await isUsableDefault(deps.nextly, deps.slugs, restored))) {
+      return abandonRestore(deps, removal, restored);
+    }
     await writeLayoutSettings(deps.nextly, deps.slugs, {
       defaultLayout: restored,
       defaultLayoutChangedBy: null,
@@ -278,18 +307,15 @@ async function finishRestore(
  * default is left to the repair's own fallback.
  */
 export async function resumeRestore(
-  deps: RestoreDeps & { readonly nextly: Pick<DefaultLayoutDirectApi, "find"> },
+  deps: RestoreDeps,
   removal: LayoutRemoval
 ): Promise<string | null> {
   const restored = removal.copy?.restoredAs;
   if (removal.copy === null || restored === undefined) return null;
+  // Looked at before its draft is written onto it, as well as before the
+  // default is pointed at it.
   if (!(await isUsableDefault(deps.nextly, deps.slugs, restored))) {
-    await deps.store.settle(removal.layoutId, removal.token, "restoring");
-    deps.warn(
-      "[page-builder] the Layout a stopped restore created was deleted or unpublished since, so the restore was not finished; the default falls back to the site's own",
-      { removedLayout: removal.layoutId, restoredLayout: restored }
-    );
-    return null;
+    return abandonRestore(deps, removal, restored);
   }
   return finishRestore(deps, removal, removal.copy, restored);
 }
@@ -302,7 +328,7 @@ export async function resumeRestore(
  * still exists is never written from a copy.
  */
 export async function restoreMissingDefault(
-  deps: RestoreDeps & { readonly nextly: Pick<DefaultLayoutDirectApi, "find"> },
+  deps: RestoreDeps,
   layoutId: string
 ): Promise<string | null> {
   if (await layoutExists(deps.nextly, deps.slugs, layoutId)) return null;
