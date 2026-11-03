@@ -25,7 +25,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly/config";
+import { defineCollection, group, text } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -94,6 +94,23 @@ const notes = defineCollection({
   slug: NOTES,
   fields: [text({ name: "title" })],
 });
+
+/** A collection whose Page Builder field sits inside a named group. */
+const LANDINGS = "landings";
+
+const landings = defineCollection({
+  slug: LANDINGS,
+  fields: [
+    text({ name: "title" }),
+    group({ name: "hero", fields: [blocks({ name: "body" })] } as never),
+  ],
+});
+
+/**
+ * A collection the registry holds whose table was never created: its schema
+ * change is still pending, as when a blocks field is added and not migrated.
+ */
+const GHOSTS = "ghosts";
 
 /** The Direct API calls this suite makes staff and content with. */
 interface Direct {
@@ -185,7 +202,7 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
-        collections: [articles, notes],
+        collections: [articles, notes, landings],
         plugins: [pageBuilder()],
       });
       const direct = t.nextly as unknown as Direct;
@@ -199,6 +216,22 @@ describe.each(getConfiguredTestDialects())(
           name: "Owner",
           isActive: true,
         },
+      });
+      // Registered past the schema pipeline, so it has a registry row and no
+      // table. Before the keys, so its read permission is seeded and granted.
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        registerCollection(data: Record<string, unknown>): Promise<unknown>;
+      };
+      await registry.registerCollection({
+        slug: GHOSTS,
+        labels: { singular: "Ghost", plural: "Ghosts" },
+        tableName: GHOSTS,
+        fields: [
+          { name: "title", type: "text" },
+          { name: "content", type: "blocks" },
+        ],
+        source: "ui",
+        migrationStatus: "pending",
       });
       const seeded = await direct.permissions.find({ limit: 500 });
 
@@ -232,6 +265,8 @@ describe.each(getConfiguredTestDialects())(
         `read-${PAGES}`,
         `read-${ARTICLES}`,
         `read-${NOTES}`,
+        `read-${LANDINGS}`,
+        `read-${GHOSTS}`,
       ]);
       outsider = await keyHolding([`read-${PAGES}`, `read-${NOTES}`]);
       titleBlind = await keyHolding([`read-${PAGES}`, `read-${ARTICLES}`]);
@@ -264,6 +299,12 @@ describe.each(getConfiguredTestDialects())(
       await direct.create({
         collection: NOTES,
         data: { title: "Alpha note" },
+      });
+      // A landing whose group was stored without the Page Builder field, as a
+      // row saved before the field was added holds it.
+      await direct.create({
+        collection: LANDINGS,
+        data: { title: "Grouped yy", hero: {} },
       });
       // Titles whose order depends on case: by code point, SQLite's order,
       // "Qx Zulu" < "Qx mango" < "qx apple"; ignoring case, "qx apple" first.
@@ -338,10 +379,11 @@ describe.each(getConfiguredTestDialects())(
         expect(answer.items).toHaveLength(2);
         expect(answer.meta.limit).toBe(2);
         // Every match: three pages, the named article, the fillers, the two
-        // "Qx" articles and the four "zq" ones. Exact here, because the two
-        // rows read from each collection were all openable and every match
-        // not read is counted (an upper bound in general, see the contract).
-        expect(answer.meta.total).toBe(3 + 1 + FILLER + 2 + 4);
+        // "Qx" articles, the four "zq" ones and the one landing. Exact here,
+        // because the rows read from each collection were all openable and
+        // every match not read is counted (an upper bound in general, see the
+        // contract).
+        expect(answer.meta.total).toBe(3 + 1 + FILLER + 2 + 4 + 1);
         expect(answer.meta.hasNext).toBe(true);
       });
 
@@ -429,6 +471,47 @@ describe.each(getConfiguredTestDialects())(
       it("CONTROL: a caller who may read the field is offered the same article", async () => {
         const answer = await search({ q: "alpha" }, reader);
         expect(answer.items.map(item => item.id)).toContain(alphaArticleId);
+      });
+    });
+
+    describe("a Page Builder field inside a group", () => {
+      it("lists a page whose group holds no value for the field yet", async () => {
+        const answer = await search({ q: "grouped" }, reader);
+
+        expect(
+          answer.items.map(item => [item.collection, item.field, item.title])
+        ).toEqual([[LANDINGS, "hero.body", "Grouped yy"]]);
+      });
+    });
+
+    describe("a collection whose schema is not live", () => {
+      it("is not read while its migration is pending, so the search still answers", async () => {
+        const answer = await search({ q: "alpha" }, reader);
+
+        expect(answer.items.map(item => item.collection)).toEqual([
+          ARTICLES,
+          PAGES,
+        ]);
+      });
+
+      it("is left out alone when its read fails anyway, and the others still answer", async () => {
+        // The registry now claims a table that does not exist, so the read
+        // reaches the database and fails there.
+        const registry = t.getService(
+          "collectionRegistryService"
+        ) as unknown as {
+          updateMigrationStatus(slug: string, status: string): Promise<void>;
+        };
+        await registry.updateMigrationStatus(GHOSTS, "applied");
+        try {
+          const answer = await search({ q: "alpha" }, reader);
+          expect(answer.items.map(item => item.collection)).toEqual([
+            ARTICLES,
+            PAGES,
+          ]);
+        } finally {
+          await registry.updateMigrationStatus(GHOSTS, "pending");
+        }
       });
     });
 

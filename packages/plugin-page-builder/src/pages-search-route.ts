@@ -186,9 +186,10 @@ function pageCollections(
 /**
  * One registry record as a page collection, or `undefined` when it is not one.
  *
- * A record counts when it declares a blocks field at an addressable path and
- * is not one of `stores`, the plugin's composition stores. A record whose slug
- * cannot be read is skipped: there is no collection to address. Where a
+ * A record counts when its schema is live, it declares a blocks field at an
+ * addressable path and it is not one of `stores`, the plugin's composition
+ * stores. A record whose slug cannot be read is skipped: there is no
+ * collection to address. Where a
  * collection declares several blocks fields, its pages are listed once, under
  * the first: a page is one result however many fields it has.
  */
@@ -200,6 +201,7 @@ function pageCollectionOf(
   const record = value as Record<string, unknown>;
   const slug = slugOf(record);
   if (slug === undefined || stores.has(slug)) return undefined;
+  if (!schemaIsLive(record)) return undefined;
   // The editor's own reading of which blocks fields it opens (top level or
   // inside groups, by form path), and the field's own kinds: a field that
   // holds only components or patterns does not make its rows pages.
@@ -217,6 +219,25 @@ function pageCollectionOf(
     // switch only when it is a real boolean.
     lifecycle: resolvedCollectionView(record).status === true,
   };
+}
+
+/**
+ * The registry's `migrationStatus` values under which a collection's table is
+ * known to match its schema: `synced` (a code-first collection, synced at
+ * boot) and `applied` (a change whose migration ran and whose table was
+ * verified). `pending`, `generated` and `failed` mean the schema may name a
+ * column the table lacks yet, so reading it would fail.
+ */
+const LIVE_SCHEMA_STATES: ReadonlySet<string> = new Set(["synced", "applied"]);
+
+/**
+ * Whether a registry record's schema is live, by core's own `migrationStatus`.
+ * A record that carries none is read: nothing says it is not live, and a read
+ * that fails anyway drops only that collection (see `searchCollection`).
+ */
+function schemaIsLive(record: Record<string, unknown>): boolean {
+  const state = record.migrationStatus;
+  return typeof state !== "string" || LIVE_SCHEMA_STATES.has(state);
 }
 
 /** A record's slug, when it has a usable one. */
@@ -250,6 +271,8 @@ export interface PagesSearchReads {
   stores(): ReadonlySet<string>;
   /** One list read, AS THE CALLER. */
   find(args: PagesFindArgs): Promise<AsCallerPage>;
+  /** Say, to the operator, that a collection was left out of a search and why. */
+  warn(message: string, context: Record<string, unknown>): void;
 }
 
 /** What one collection contributes: its first rows by title, and its match count. */
@@ -395,6 +418,28 @@ function byCodePoint(a: string, b: string): number {
  * the collection changes nothing about an answer that is empty either way.
  */
 async function searchCollection(
+  source: PageCollection,
+  request: PagesSearchRequest,
+  reads: PagesSearchReads
+): Promise<CollectionHits> {
+  // One collection that cannot be read — a table out of step with its
+  // schema, a hook that throws — must not hide every healthy one, so its
+  // failure leaves just it out, and is told to the operator rather than the
+  // caller, whose answer names nothing it could not see.
+  try {
+    return await readCollection(source, request, reads);
+  } catch (error) {
+    reads.warn("[page-builder] A collection was left out of a pages search.", {
+      collection: source.slug,
+      code: NextlyError.is(error) ? error.code : undefined,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return NO_HITS;
+  }
+}
+
+/** One collection's part of the search, any failure left to the caller. */
+async function readCollection(
   source: PageCollection,
   request: PagesSearchRequest,
   reads: PagesSearchReads
@@ -625,18 +670,20 @@ function topKeyOf(path: string): string {
 /**
  * Whether a row carries the field at `path`, or core withheld it.
  *
- * A withheld field is ABSENT from the row, not empty: a readable field with
- * no value still comes back, as `null`. Along a group path, a group with no
- * value has nothing beneath it to withhold, so it reads as carried.
+ * Core withholds a field by DELETING its key from the row (there is no
+ * marker), at the field's own level, inside a group as at the top. Only the
+ * top-level key is evidence: it is a column the read selected, so it comes
+ * back (as `null` when empty) unless it was withheld. Below it, an absent key
+ * is also what a group stored before the field existed holds, so it says
+ * nothing, and the page is listed: an editor that opens on a field it then
+ * shows empty costs less than a page the author can open never being offered.
  */
 function holdsField(row: unknown, path: string): boolean {
-  let at: unknown = row;
-  for (const step of path.split(".")) {
-    if (typeof at !== "object" || at === null) return true;
-    if (!Object.hasOwn(at, step)) return false;
-    at = (at as Record<string, unknown>)[step];
-  }
-  return true;
+  return (
+    typeof row === "object" &&
+    row !== null &&
+    Object.hasOwn(row, topKeyOf(path))
+  );
 }
 
 /** A row's stored status, when it is one the lifecycle holds. */
@@ -672,6 +719,7 @@ const REGISTRY_PAGE_SIZE = 100;
 /** The route context this reads: who is asking, its own slugs, and the registry. */
 interface PagesSearchRouteContext {
   readonly caller: PluginRouteContext["caller"];
+  readonly logger: Pick<PluginRouteContext["logger"], "warn">;
   readonly self: {
     readonly collections: Readonly<Record<string, string | undefined>>;
   };
@@ -742,6 +790,7 @@ function directPagesSearchReads(
         ].filter((slug): slug is string => slug !== undefined)
       ),
     find: args => findAsCaller(ctx, args),
+    warn: (message, context) => ctx.logger.warn(message, context),
   };
 }
 

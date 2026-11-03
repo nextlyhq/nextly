@@ -182,12 +182,14 @@ function readsOver(
   stores: string[] = []
 ) {
   const find = vi.fn(answer);
+  const warn = vi.fn();
   const reads: PagesSearchReads = {
     collections: async () => records,
     stores: () => new Set(stores),
     find,
+    warn,
   };
-  return { reads, find };
+  return { reads, find, warn };
 }
 
 const request = (
@@ -614,20 +616,52 @@ describe("what core refuses", () => {
     ]);
   });
 
-  it("does not swallow a validation error about something else", async () => {
-    const { reads } = readsOver([record("pages")], async () => {
-      throw NextlyError.validation({
-        errors: [
-          { path: "where.other", code: "FIELD_NOT_FILTERABLE", message: "x" },
-        ],
-      });
-    });
+  it("drops a collection whose read fails for another reason, tells the operator, and answers from the rest", async () => {
+    const { reads, warn } = readsOver(
+      [record("pages"), record("landing")],
+      async args => {
+        if (args.collection === "landing") {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "where.other",
+                code: "FIELD_NOT_FILTERABLE",
+                message: "x",
+              },
+            ],
+          });
+        }
+        return rows([{ id: "p1", title: "Healthy" }]);
+      }
+    );
 
-    // With a search, because there a refusal read as the title's is answered
-    // with an EMPTY list: only a rethrow tells the two readings apart.
-    await expect(
-      readPagesSearch(request({ search: "a" }), reads)
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    // With a search, where a refusal misread as the title's is ALSO an empty
+    // answer for that collection: only the operator's notice tells them apart.
+    const answer = await readPagesSearch(request({ search: "a" }), reads);
+
+    expect(answer.items.map(item => item.id)).toEqual(["p1"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      collection: "landing",
+      code: "VALIDATION_ERROR",
+    });
+  });
+
+  it("drops a collection whose table cannot be read, and answers from the rest", async () => {
+    const { reads, warn } = readsOver(
+      [record("pages"), record("landing")],
+      async args => {
+        if (args.collection === "landing") {
+          throw new Error("no such column: landing.content");
+        }
+        return rows([{ id: "p1", title: "Healthy" }]);
+      }
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(answer.items.map(item => item.collection)).toEqual(["pages"]);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({ collection: "landing" });
   });
 });
 
@@ -740,5 +774,63 @@ describe("rows whose Page Builder field is withheld row by row", () => {
     expect(answer.items.map(item => item.id)).toEqual(["b", "c"]);
     // Two openable among the four read, and six matches not read.
     expect(answer.meta.total).toBe(8);
+  });
+});
+
+describe("a collection whose schema is not live", () => {
+  it("is read only when the registry says its table matches its schema", async () => {
+    const { reads, find } = readsOver(
+      ["synced", "applied", "pending", "generated", "failed", undefined].map(
+        state => ({
+          ...record(`c-${state ?? "unstated"}`),
+          ...(state === undefined ? {} : { migrationStatus: state }),
+        })
+      ),
+      async () => rows([])
+    );
+
+    await readPagesSearch(request(), reads);
+
+    expect(readCollections(find).sort()).toEqual([
+      "c-applied",
+      "c-synced",
+      "c-unstated",
+    ]);
+  });
+});
+
+describe("a Page Builder field inside a group", () => {
+  const grouped = record("landing", {
+    fields: [
+      { name: "title", type: "text" },
+      {
+        name: "hero",
+        type: "group",
+        fields: [{ name: "body", type: "blocks" }],
+      },
+    ],
+  });
+
+  it("lists a page whose group predates the field, which core cannot tell from a withheld one", async () => {
+    const { reads } = readsOver([grouped], async () =>
+      withheldRows([{ id: "l1", title: "Older", hero: {} }])
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(answer.items.map(item => item.id)).toEqual(["l1"]);
+  });
+
+  it("leaves out a page whose group core withheld, the key it selected", async () => {
+    const { reads } = readsOver([grouped], async () =>
+      withheldRows([
+        { id: "l1", title: "Open", hero: { body: null } },
+        { id: "l2", title: "Withheld" },
+      ])
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(answer.items.map(item => item.id)).toEqual(["l1"]);
   });
 });
