@@ -4812,6 +4812,47 @@ fieldset.nx-inspector__fields {
   inset-inline-end: 0;
 }
 
+/*
+ * A token, or a value no control here edits, as a side of the box: its name
+ * cut to the side's width, and its Clear shown over the box while the side is
+ * pointed at or focused, as the side's other actions are. Faded rather than
+ * hidden, so Clear stays in the tab order and reveals itself when reached.
+ */
+.nx-spacing-box .nx-style-inspector__token {
+  min-inline-size: 0;
+  flex-wrap: nowrap;
+}
+
+.nx-spacing-box .nx-style-inspector__token > span {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-spacing-box .nx-style-inspector__token > button {
+  position: absolute;
+  z-index: 2;
+  /* Flush with the side, no gap: a pointer moving down to Clear stays over
+     the field the whole way, so its hover holds and Clear stays shown. */
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: var(--nx-popover);
+  box-shadow: var(--shadow-md);
+}
+
+.nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button,
+.nx-spacing-box
+  .nx-inspector__field:focus-within
+  .nx-style-inspector__token
+  > button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 @container nx-inspector-fields (max-width: 18rem) {
   .nx-style-inspector__side-box {
     display: flex;
@@ -4832,6 +4873,13 @@ fieldset.nx-inspector__fields {
      its action and any refusal sit in the row's flow below it. */
   .nx-spacing-box .nx-inspector__field {
     max-inline-size: none;
+  }
+
+  .nx-spacing-box .nx-inspector__field .nx-style-inspector__token > button {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+    box-shadow: none;
   }
 
   .nx-spacing-box .nx-style-inspector__breakpoint-action,
