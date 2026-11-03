@@ -3104,6 +3104,78 @@ describe("a per-side property is drawn as a box", () => {
   const frameOf = (box: HTMLElement | null) =>
     box?.querySelector(".nx-style-inspector__side-box") as HTMLElement | null;
 
+  /** The one spacing box, margin around padding, in the element's axes. */
+  function mountSpacingBox(orientation: {
+    writingMode: string;
+    direction: string;
+  }) {
+    register({ spacing: true });
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel editor={editor} sideOrientation={orientation} />
+    );
+    return {
+      editor,
+      box: document.querySelector(".nx-spacing-box") as HTMLElement | null,
+    };
+  }
+
+  it("draws margin and padding as ONE box, padding inside margin", () => {
+    // The design's box model: margin the outer ring, padding the inner, the
+    // element in the middle, rather than two separate crosses of fields.
+    const { box } = mountSpacingBox(LTR);
+
+    expect(document.querySelectorAll(".nx-spacing-box")).toHaveLength(1);
+    const margin = box?.querySelector('[data-ring="margin"]');
+    const padding = margin?.querySelector('[data-ring="padding"]');
+    expect(padding).toBeTruthy();
+    expect(margin?.querySelectorAll(":scope > [data-side]")).toHaveLength(4);
+    expect(padding?.querySelectorAll(":scope > [data-side]")).toHaveLength(4);
+  });
+
+  it("names each side in plain words for the element's axes", () => {
+    // "Margin top" rather than "Block start": the box is drawn because the
+    // element's axes are known, and in them the sides have physical names.
+    const { box } = mountSpacingBox(LTR);
+    const within_ = within(box as HTMLElement);
+
+    expect(within_.getByLabelText("Margin top")).toBeDefined();
+    expect(within_.getByLabelText("Margin left")).toBeDefined();
+    expect(within_.getByLabelText("Padding right")).toBeDefined();
+    expect(within_.getByLabelText("Padding bottom")).toBeDefined();
+  });
+
+  it("mirrors the inline names on a right-to-left element", () => {
+    const { box } = mountSpacingBox({
+      writingMode: "horizontal-tb",
+      direction: "rtl",
+    });
+    const field = within(box as HTMLElement).getByLabelText("Padding right");
+
+    expect(field.closest("[data-side]")?.getAttribute("data-side")).toBe(
+      "inlineStart"
+    );
+  });
+
+  it("commits a side typed with its unit, and keeps each side compact", () => {
+    // No unit menu in the box: a side takes "12px" or "2rem" as typed, and a
+    // short dash says it is unset rather than a hint that cannot fit.
+    const { editor, box } = mountSpacingBox(LTR);
+    const field = within(box as HTMLElement).getByLabelText(
+      "Padding top"
+    ) as HTMLInputElement;
+
+    expect(box?.querySelector(".nx-style-inspector__unit")).toBeNull();
+    expect(field.placeholder).toBe("–");
+
+    fireEvent.change(field, { target: { value: "12px" } });
+    fireEvent.blur(field);
+
+    const ops = JSON.stringify(editor.applyAll.mock.calls[0]?.[0]);
+    expect(ops).toContain("padding");
+    expect(ops).toContain('"blockStart":"12px"');
+  });
+
   it("marks each side with WHICH side it is, not with its position", () => {
     /*
      * The property the stylesheet places on. The heading, a form selector and
