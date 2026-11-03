@@ -15,6 +15,8 @@ import {
   DialogHeader,
   DialogTitle,
   detectApplePlatform,
+  Label,
+  Switch,
   useActiveShortcuts,
 } from "@nextlyhq/ui";
 import * as React from "react";
@@ -73,6 +75,43 @@ function ShortcutList({ rows }: { rows: readonly ShortcutRow[] }) {
   );
 }
 
+/** The rail's single-letter panel keys: whether they are on, and the switch. */
+export interface PanelKeysSetting {
+  on: boolean;
+  onChange: (on: boolean) => void;
+}
+
+/**
+ * The switch for the panel keys, beside the list that shows them: a key with
+ * no modifier can be set off by speech input or a stray press, so an author
+ * can turn them off (WCAG 2.1.4).
+ */
+function PanelKeysSwitch({
+  setting,
+}: {
+  setting: PanelKeysSetting;
+}): React.JSX.Element {
+  const id = React.useId();
+  const hintId = React.useId();
+  return (
+    <div className="flex items-start justify-between gap-4 text-sm">
+      <div className="space-y-0.5">
+        <Label htmlFor={id}>Single-letter shortcuts</Label>
+        <p id={hintId} className="text-xs text-muted-foreground">
+          A, L, P, C and D open panels. Turn them off if you use speech input or
+          press them by accident.
+        </p>
+      </div>
+      <Switch
+        id={id}
+        aria-describedby={hintId}
+        checked={setting.on}
+        onCheckedChange={setting.onChange}
+      />
+    </div>
+  );
+}
+
 export interface HelpDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -84,12 +123,15 @@ export interface HelpDialogProps {
    * left focus on the page's body and a keyboard author back at the top.
    */
   returnFocus?: () => HTMLElement | null;
+  /** The panel keys' switch, where the editor has them. */
+  panelKeys?: PanelKeysSetting;
 }
 
 export function HelpDialog({
   open,
   onOpenChange,
   returnFocus,
+  panelKeys,
 }: HelpDialogProps): React.JSX.Element {
   useModalKeyboardHold("builder-help-modal", open);
   // Every binding in effect, the editor's and the page's around it: a
@@ -123,6 +165,9 @@ export function HelpDialog({
               ...PLATFORM_KEYS,
             ]}
           />
+          {panelKeys === undefined ? null : (
+            <PanelKeysSwitch setting={panelKeys} />
+          )}
           <section aria-label="Documentation" className="space-y-2">
             <h2 className="text-sm font-semibold">Documentation</h2>
             <ul className="space-y-1 text-sm">

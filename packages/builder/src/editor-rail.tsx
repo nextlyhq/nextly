@@ -176,6 +176,11 @@ export interface EditorRailProps {
    * whenever nothing is being typed.
    */
   claimsKeys?: () => boolean;
+  /**
+   * Whether the panel keys are on. Off, none is registered and no item names
+   * one; on when absent.
+   */
+  keysOn?: boolean;
 }
 
 export function EditorRail({
@@ -187,14 +192,20 @@ export function EditorRail({
   onSettings,
   settingsOpen = false,
   claimsKeys,
+  keysOn = true,
 }: EditorRailProps): React.JSX.Element {
   usePanelKeys(
-    [...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom].filter(isAvailable),
+    keysOn
+      ? [...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom].filter(isAvailable)
+      : [],
     onSelect,
     claimsKeys
   );
   const item = (panel: LeftPanel) => {
-    const { label, Icon, key } = PANEL_CHROME[panel];
+    const { label, Icon } = PANEL_CHROME[panel];
+    // A key that is off is not offered in the tooltip or to assistive
+    // technology either.
+    const key = keysOn ? PANEL_CHROME[panel].key : undefined;
     return (
       <li key={panel} className="flex justify-center">
         <RailItem

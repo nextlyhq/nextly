@@ -36,6 +36,7 @@ import {
   EMPTY_ELEMENTS_ATTRIBUTE,
   fitsFullShell,
   MIN_SHELL_WIDTH,
+  readPreferences,
   type PreferenceStore,
 } from "./shell-state";
 
@@ -257,6 +258,45 @@ describe("the rail's panel keys", () => {
     fireEvent.keyDown(document.body, { key: "l" });
 
     expect(railItem("Layers").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("keeps focus in the editor when a key closes the panel holding it", () => {
+    // The panel unmounts the control holding focus; left there, focus fell to
+    // the page body, where a second editor on the page would claim no key.
+    renderShell({
+      renderPanel: panel => <button type="button">{panel} control</button>,
+    });
+    fireEvent.keyDown(document.body, { key: "l" });
+    screen.getByRole("button", { name: "layers control" }).focus();
+
+    fireEvent.keyDown(document.activeElement ?? document, { key: "l" });
+
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("false");
+    expect(document.activeElement).not.toBe(document.body);
+    expect(
+      document.activeElement?.closest(".nx-builder-chrome")
+    ).not.toBeNull();
+  });
+
+  it("can be turned off in Help, and then none answers or is offered", async () => {
+    // A key with no modifier can be set off by speech input; WCAG 2.1.4 asks
+    // for a way to turn it off.
+    const store = memoryStore();
+    renderShell({ store, renderPanel: panel => <p>{panel} panel</p> });
+    fireEvent.click(railItem("Help"));
+    const keys = await screen.findByRole("switch", {
+      name: "Single-letter shortcuts",
+    });
+    expect(keys.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(keys);
+    fireEvent.keyDown(document.activeElement ?? document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.keyDown(document.body, { key: "l" });
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("false");
+    expect(railItem("Layers").hasAttribute("aria-keyshortcuts")).toBe(false);
+    expect(readPreferences(store).panelKeys).toBe(false);
   });
 
   it("names each panel's key on its item, for its tooltip and assistive technology", () => {

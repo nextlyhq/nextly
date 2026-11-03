@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The editor's left rail shows icons only, 48px wide, each named by a tooltip (its name and key) and its accessible name, which gives the canvas back the width the labels took. A, L, P, C and D open or close Add, Layers, Pages, Components and Design when nothing is being typed and no modifier is held, and the Help dialog lists them.
+The editor's left rail shows icons only, 48px wide, each named by a tooltip (its name and key) and its accessible name, which gives the canvas back the width the labels took. A, L, P, C and D open or close Add, Layers, Pages, Components and Design when nothing is being typed and no modifier is held, in the editor the author is in, and the Help dialog lists them, with a switch that turns them off.

@@ -263,6 +263,14 @@ export interface ShellPreferences {
    * checking how the page really looks needs a way to take it away.
    */
   showEmptyElements: boolean;
+  /**
+   * Whether the rail's single-letter keys (A, L, P, C, D) open its panels.
+   *
+   * ON by default, and a preference because a key with no modifier can be
+   * set off by speech input or a stray press: WCAG 2.1.4 asks that such a
+   * shortcut can be turned off. Help holds the switch, beside the keys.
+   */
+  panelKeys: boolean;
 }
 
 /**
@@ -338,6 +346,7 @@ export const DEFAULT_PREFERENCES: ShellPreferences = {
   editingBreakpoint: null,
   layouts: {},
   showEmptyElements: true,
+  panelKeys: true,
 };
 
 /**
@@ -525,6 +534,9 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
     // stored false, written while it did, is read as shown: otherwise an author
     // who once hid them would have no way to bring them back.
     showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
+    // On unless a stored false says otherwise, which covers every preference
+    // written before the keys could be turned off.
+    panelKeys: record.panelKeys !== false,
   };
 }
 
