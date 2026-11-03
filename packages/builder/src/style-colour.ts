@@ -84,8 +84,15 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
+import { typeScaleProperty } from "./tokens-studio";
+
 /**
- * One token a colour control may offer, in the three forms it is needed in.
+ * One site variable a control may offer, in the forms it is needed in.
+ *
+ * Every kind, not only colours: a font size, a spacing step and a shadow are
+ * offered through this same record, so "which variables does the site have
+ * here" is answered once for every field. The swatch fields are filled for a
+ * colour and left `undefined` for the rest.
  *
  * The split between {@link identity} and {@link name} is the whole point of the
  * type and is not a convenience. A stored `{ $token }` holds the IDENTITY:
@@ -101,7 +108,7 @@ import { toHex } from "@nextlyhq/ui/color";
  * failure `SiteToken.id` was added to prevent, reintroduced by the control that
  * writes the reference.
  */
-export interface ColourToken {
+export interface SiteVariable {
   /** What a reference STORES, and what a rename never changes. */
   readonly identity: string;
   /** What the author reads and edits. Free to change. */
@@ -116,8 +123,8 @@ export interface ColourToken {
   readonly pair: ColourPairValues;
   /** What the token holds, so a leaf can be asked whether it admits one. */
   readonly kind: TokenKind;
-  /** The literal this token holds, as the site recorded it. */
-  readonly colour: string;
+  /** The literal this token holds in the mode asked for, as the site recorded it. */
+  readonly value: string;
   /**
    * The colour a preset swatch may be PAINTED with, or `undefined` when this
    * package cannot resolve one.
@@ -143,7 +150,7 @@ export interface ColourPairValues {
  *
  * A token with no dark value shows its light one for dark, because that is
  * what the page does: no dark declaration is written for it. Resolved with an
- * empty table, for the reason {@link colourTokenOf} gives.
+ * empty table, for the reason {@link siteVariableOf} gives.
  */
 export function colourPairOf(token: SiteToken): ColourPairValues {
   return {
@@ -170,9 +177,11 @@ export function activeTokenMode(prefersDark: boolean): TokenMode {
 }
 
 /**
- * The tokens a colour control may offer at this leaf.
+ * The variables a control may offer at this leaf: a colour field's colours, a
+ * font size's type sizes and lengths, a shadow's shadows.
  *
- * Both halves of the filter are the ENGINE's answer rather than this module's.
+ * The first two halves of the filter are the ENGINE's answer rather than this
+ * module's.
  * Which kinds a leaf admits is `leaf.tokenKinds`, taken from the catalog, so a
  * leaf that admits no token offers no picker without a rule being written here;
  * and a token's own `kind` is what the site recorded. A control that offered a
@@ -190,14 +199,27 @@ export function activeTokenMode(prefersDark: boolean): TokenMode {
  * resolves. A dark-only preview would be a second question and is not this
  * control's.
  */
-export function colourTokensFor(
+export function variablesFor(
   leaf: StyleLeaf,
   tokens: SiteTokenSet | undefined,
   mode: TokenMode = "light"
-): readonly ColourToken[] {
-  return offeredTokens(tokens, mode).filter(token =>
-    leaf.tokenKinds.includes(token.kind)
+): readonly SiteVariable[] {
+  return offeredTokens(tokens, mode).filter(
+    token =>
+      leaf.tokenKinds.includes(token.kind) &&
+      // A type size is a length, and so is its paired line height, and both
+      // carry the same name: offering either where the other belongs would
+      // list "Display" twice in a font size field, one of them the wrong
+      // value. Each is offered where it is made for, and every other length
+      // everywhere a length is taken.
+      madeFor(token, leaf)
   );
+}
+
+/** Whether a variable made for one CSS property is offered at this leaf. */
+function madeFor(token: SiteVariable, leaf: StyleLeaf): boolean {
+  const property = typeScaleProperty(token);
+  return property === undefined || property === leaf.cssProperty;
 }
 
 /**
@@ -224,14 +246,14 @@ export function colourTokensFor(
 function offeredTokens(
   tokens: SiteTokenSet | undefined,
   mode: TokenMode
-): readonly ColourToken[] {
+): readonly SiteVariable[] {
   if (tokens === undefined) return [];
-  const byMode = cache.get(tokens) ?? new Map<TokenMode, ColourToken[]>();
+  const byMode = cache.get(tokens) ?? new Map<TokenMode, SiteVariable[]>();
   const hit = byMode.get(mode);
   if (hit !== undefined) return hit;
   const resolved = resolveSiteTokens(tokens);
   const built = emittableTokens(resolved, mode).map(token =>
-    colourTokenOf(token, mode)
+    siteVariableOf(token, mode)
   );
   byMode.set(mode, built);
   cache.set(tokens, byMode);
@@ -247,7 +269,7 @@ function offeredTokens(
  * engine's own `memoizeTokenLookup` is: these are immutable props, so a set
  * that is the same object is the same data.
  */
-const cache = new WeakMap<SiteTokenSet, Map<TokenMode, ColourToken[]>>();
+const cache = new WeakMap<SiteTokenSet, Map<TokenMode, SiteVariable[]>>();
 
 /**
  * The tokens the canvas will actually declare a custom property for.
@@ -368,9 +390,9 @@ function kindMatches(token: SiteToken, mode: TokenMode): boolean {
  * a collision the reader cannot see would be explaining a distinction that is
  * not on screen.
  */
-export function colourTokenLabel(
-  token: ColourToken,
-  among: readonly ColourToken[]
+export function variableLabel(
+  token: SiteVariable,
+  among: readonly SiteVariable[]
 ): string {
   const shared = among.some(
     other => other.label === token.label && other.identity !== token.identity
@@ -385,23 +407,23 @@ export function colourTokenLabel(
  * applied once: a second copy is one edit from storing the NAME, which compiles
  * to a custom property nothing declares and loses the style with no symptom.
  */
-function colourTokenOf(token: SiteToken, mode: TokenMode): ColourToken {
+function siteVariableOf(token: SiteToken, mode: TokenMode): SiteVariable {
   // `light` is required and `dark` is not, so a token defined only for light
   // resolves to it in either mode — which is what the canvas does too: no dark
   // declaration is emitted for it, so the light one goes on applying.
-  const colour = token.values[mode] ?? token.values.light;
+  const value = token.values[mode] ?? token.values.light;
   return {
     identity: tokenIdentity(token),
     name: token.name,
     label: tokenDisplayLabel(token),
     pair: colourPairOf(token),
     kind: token.kind,
-    colour,
+    value,
     // Resolved with an EMPTY table, which is what stops this recursing: a token
     // whose value is itself a reference would otherwise re-enter the lookup that
     // is building this record. Unresolvable then means unpainted, which is the
     // honest answer for a value this package cannot follow.
-    swatch: colourHexOf(colour, undefined),
+    swatch: colourHexOf(value, undefined),
   };
 }
 
@@ -418,11 +440,11 @@ function colourTokenOf(token: SiteToken, mode: TokenMode): ColourToken {
  * warning rather than an error in the engine's own issue table, so the value
  * goes on compiling and the control must go on showing it.
  */
-export function colourTokenFor(
+export function variableFor(
   identity: string,
   tokens: SiteTokenSet | undefined,
   mode: TokenMode = "light"
-): ColourToken | undefined {
+): SiteVariable | undefined {
   // The OFFERED projection, not the raw set. Searching the raw set resolved a
   // reference the canvas never declares — an imported document naming a token
   // the emitter rejects painted its value anyway — and, for two identities that
@@ -476,7 +498,7 @@ function resolvedColourOf(
   // {@link colourShowable} routes on — so what counts as a token here and what
   // the panel sends to a colour control cannot drift apart.
   if (isTokenRef(value)) {
-    return colourTokenFor(value.$token, tokens, mode)?.colour;
+    return variableFor(value.$token, tokens, mode)?.value;
   }
   return undefined;
 }

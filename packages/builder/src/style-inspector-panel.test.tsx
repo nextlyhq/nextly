@@ -1191,10 +1191,14 @@ describe("controls", () => {
     // `margin` both have a block start, so a name built from the side alone
     // says the same thing twice.
     expect(
-      screen.getByRole("button", { name: "Clear Padding block start" })
+      screen.getByRole("button", {
+        name: "Remove space.4 from Padding block start",
+      })
     ).toBeDefined();
     expect(
-      screen.getByRole("button", { name: "Clear Margin block start" })
+      screen.getByRole("button", {
+        name: "Remove space.2 from Margin block start",
+      })
     ).toBeDefined();
   });
 
@@ -1303,7 +1307,9 @@ describe("controls", () => {
     expect(padding.queryByDisplayValue("space.4")).toBeNull();
 
     fireEvent.click(
-      padding.getByRole("button", { name: "Clear Padding block start" })
+      padding.getByRole("button", {
+        name: "Remove space.4 from Padding block start",
+      })
     );
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);

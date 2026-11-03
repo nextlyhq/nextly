@@ -33,6 +33,7 @@ import {
   findNode,
   isRawColour,
   isTokenRef,
+  tokenKindsForProperty,
   trimCssWhitespace,
   walkNodes,
   type BreakpointId,
@@ -117,15 +118,15 @@ import {
   activeTokenMode,
   colourHexOf,
   colourShowable,
-  colourTokenFor,
-  colourTokenLabel,
-  colourTokensFor,
+  variableFor,
+  variableLabel,
+  variablesFor,
   contrastAtLeaf,
   contrastObscuredAbove,
   contrastObscuredIn,
   contrastPartnerOf,
   contrastRatioText,
-  type ColourToken,
+  type SiteVariable,
 } from "./style-colour";
 import type {
   StyleControl,
@@ -178,6 +179,8 @@ import {
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
+import { tokenForTypedName, variablePlaceholder } from "./style-variables";
+import { VariableChip, VariableChoice } from "./variable-choice";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 
 /**
@@ -2496,6 +2499,9 @@ function ControlValue({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // Read before any branch, as hooks must be: a folded union offers the
+  // variables either of its arms takes.
+  const fold = React.useContext(FoldedUnion);
   if (clearOnly) {
     return (
       <RetainedValue
@@ -2545,14 +2551,42 @@ function ControlValue({
       />
     );
   }
+  /*
+   * A held variable, by name in place of the typed value, with the ◇ beside it
+   * to choose another. Every reference reaches this, including one at a leaf
+   * that takes no variable or to a variable the site no longer has: the chip
+   * still names it and removes it, and the ◇ draws only where a choice exists.
+   * Typing over a reference is not offered, because the text would store the
+   * variable's NAME as a literal, which compiles to nothing.
+   */
   if (isTokenRef(stored)) {
+    const identity = stored.$token;
     return (
-      <TokenValue
-        labelledBy={labelledBy}
-        label={actionName}
-        name={stored.$token}
-        onClear={() => onCommit(null)}
-      />
+      <div className="nx-style-inspector__numeric">
+        <VariableChip
+          tokens={tokens}
+          identity={identity}
+          label={actionName}
+          labelledBy={labelledBy}
+          onClear={() => {
+            // Removing the variable puts the typed field back in the chip's
+            // place, and the ✕ that held focus is gone: focus goes to that
+            // field once it is drawn, rather than falling to the page.
+            if (onCommit(null) === "refused") return;
+            requestAnimationFrame(() => {
+              document.getElementById(id)?.focus();
+            });
+          }}
+        />
+        <VariableChoice
+          leaf={variableLeafOf(control.leaf, fold)}
+          tokens={tokens}
+          bound
+          current={identity}
+          label={actionName}
+          onPick={picked => onCommit({ $token: picked })}
+        />
+      </div>
     );
   }
   // A value the editing surface below cannot represent. Drawing it anyway is
@@ -2578,6 +2612,7 @@ function ControlValue({
       control={control}
       stored={stored}
       actionName={actionName}
+      tokens={tokens}
       describedBy={describedBy}
       onCommit={onCommit}
     />
@@ -2585,45 +2620,14 @@ function ControlValue({
 }
 
 /**
- * A stored design-token reference, which is a value no text field can edit.
- *
- * Shown by name with a way to remove it rather than as editable text: `{$token}`
- * is one value spelled as an object, and typing over it would store the token's
- * NAME as a literal — a value that looks right in the field and compiles to
- * nothing. Choosing a token is the token picker's job and it does not exist
- * yet, so what is offered here is the honest half: see it, or clear it.
+ * The leaf a field's variables are offered for: the control's own, or, for a
+ * folded union drawn as one field, the same leaf taking every kind either arm
+ * takes, so a line height offers a number variable and a length one alike.
  */
-function TokenValue({
-  labelledBy,
-  label,
-  name,
-  onClear,
-}: {
-  /** The id of the label element that names this value. */
-  labelledBy: string;
-  label: string;
-  name: string;
-  onClear: () => void;
-}): React.JSX.Element {
-  return (
-    // Named by the property's own label, and given a role that can CARRY a
-    // name: a bare paragraph maps to the ARIA `paragraph` role, which prohibits
-    // one, so `aria-labelledby` on it may be dropped outright. The button is
-    // named for the PROPERTY as well, because a panel with several
-    // token-valued properties otherwise offers a column of buttons all called
-    // "Clear" and a screen-reader user cannot tell which style each removes.
-    <p
-      className="nx-style-inspector__token"
-      role="group"
-      aria-labelledby={labelledBy}
-      tabIndex={-1}
-    >
-      <span>{name}</span>
-      <button type="button" onClick={onClear} aria-label={`Clear ${label}`}>
-        Clear
-      </button>
-    </p>
-  );
+function variableLeafOf(leaf: StyleLeaf, fold: Fold | undefined): StyleLeaf {
+  return fold === undefined
+    ? leaf
+    : { ...leaf, tokenKinds: tokenKindsForProperty(fold.property) };
 }
 
 /**
@@ -2638,7 +2642,7 @@ function TokenValue({
  * action that removes it. `note` is what tells them WHICH of the three, since
  * only the first has a notice of its own beside the property.
  *
- * Named for the property for the same reason the token control is — several of
+ * Named for the property for the same reason the variable chip is — several of
  * these on one panel would otherwise be a column of identical "Clear" buttons.
  */
 function RetainedValue({
@@ -2660,7 +2664,7 @@ function RetainedValue({
   return (
     <>
       {/*
-        `group` for the reason {@link TokenValue} carries one: the ARIA
+        `group` for the reason the variable chip carries one: the ARIA
         `paragraph` role a bare paragraph maps to prohibits an accessible name.
 
         The note is pointed AT rather than left beside: it is the only thing
@@ -2773,24 +2777,48 @@ const FoldedUnion = React.createContext<Fold | undefined>(undefined);
 function FoldedField({
   id,
   fold,
+  leaf,
   stored,
+  actionName,
+  tokens,
   describedBy,
   onCommit,
 }: {
   id: string;
   fold: Fold;
+  /** The leaf the field's variables are offered for; see `variableLeafOf`. */
+  leaf: StyleLeaf;
   stored: StyleValue | undefined;
+  actionName: string;
+  tokens: SiteTokenSet | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The site's variables for this property, at the field's end: a fold has
+  // no unit menu to hold them.
+  const variables = (
+    <VariableChoice
+      leaf={leaf}
+      tokens={tokens}
+      bound={false}
+      current={undefined}
+      label={actionName}
+      onPick={identity => onCommit({ $token: identity })}
+    />
+  );
   if (fold.kind === "number-or-length") {
     return (
-      <LengthOrNumberField
-        id={id}
-        stored={stored}
-        describedBy={describedBy}
-        onCommit={onCommit}
-      />
+      <div className="nx-style-inspector__numeric">
+        <LengthOrNumberField
+          id={id}
+          leaf={leaf}
+          stored={stored}
+          tokens={tokens}
+          describedBy={describedBy}
+          onCommit={onCommit}
+        />
+        {variables}
+      </div>
     );
   }
   return (
@@ -2800,6 +2828,7 @@ function FoldedField({
       stored={stored}
       describedBy={describedBy}
       onCommit={onCommit}
+      after={variables}
     />
   );
 }
@@ -2811,12 +2840,15 @@ function OptionSelect({
   stored,
   describedBy,
   onCommit,
+  after,
 }: {
   id: string;
   options: readonly FoldedOption[];
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /** What follows the list in its row: the site's variables, where offered. */
+  after?: React.ReactNode;
 }): React.JSX.Element {
   const current = storedKey(stored) ?? "";
   return (
@@ -2843,6 +2875,7 @@ function OptionSelect({
           ))}
         </SelectContent>
       </Select>
+      {after}
     </div>
   );
 }
@@ -2854,19 +2887,29 @@ function OptionSelect({
  */
 function LengthOrNumberField({
   id,
+  leaf,
   stored,
+  tokens,
   describedBy,
   onCommit,
 }: {
   id: string;
+  /** The leaf the field's variables are offered for, both arms' kinds. */
+  leaf: StyleLeaf;
   stored: StyleValue | undefined;
+  tokens: SiteTokenSet | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const { draft, setDraft } = useDraft(stored);
   const commit = () => {
     if (draft === storedText(stored)) return;
-    if (onCommit(lineHeightFromText(draft)) === "unchanged") {
+    // A variable's name typed here is that variable, asked before the text is
+    // read as a number or a length, as every text field asks it.
+    const named = tokenForTypedName(leaf, tokens, draft);
+    const value =
+      named === undefined ? lineHeightFromText(draft) : { $token: named };
+    if (onCommit(value) === "unchanged") {
       setDraft(storedText(stored));
     }
   };
@@ -2874,7 +2917,7 @@ function LengthOrNumberField({
     <Input
       id={id}
       value={draft}
-      placeholder="1.5, 24px or 150%"
+      placeholder={variablePlaceholder(leaf, tokens, "1.5, 24px or 150%")}
       aria-describedby={describedBy}
       aria-invalid={describedBy === undefined ? undefined : true}
       onChange={event => setDraft(event.target.value)}
@@ -3463,13 +3506,13 @@ const PICKER_FALLBACK = "#000000";
  * an affordance on top, and it reports nothing until the author moves it.
  *
  * **A token reference is EDITABLE here rather than read-only**, which is the
- * other half of what this control adds. `TokenValue` shows a reference and
- * offers only Clear because choosing a token had nowhere to happen; a colour
- * control has the site's table, so it shows the token's CURRENT name and lets
- * the author swap it, replace it with a literal, or remove it.
+ * other half of what this control adds: it shows the token's CURRENT name on
+ * its own trigger, with its swatch, and lets the author swap it, replace it
+ * with a literal, or remove it. Every other field shows a held variable as the
+ * chip beside its ◇ instead.
  *
  * **A token is stored by IDENTITY, never by the name shown.** The two differ
- * after a rename, and `ColourToken` carries both for that reason — the list
+ * after a rename, and `SiteVariable` carries both for that reason — the list
  * hands back the variable it was given, so the identity travels with it and
  * the label never reaches the document.
  *
@@ -3513,7 +3556,7 @@ function ColourField({
 
   const reference = isTokenRef(stored) ? stored.$token : null;
   const mode = activeTokenMode(prefersDark);
-  const choices = colourTokensFor(control.leaf, tokens, mode);
+  const choices = variablesFor(control.leaf, tokens, mode);
   // What the picker composed, written once the gesture is over. Compared
   // against the stored text so closing a picker nobody moved writes nothing.
   // What the picker has produced and not yet written. Held in a ref as well as
@@ -3683,6 +3726,7 @@ function ColourField({
             stored={stored}
             draft={draft}
             setDraft={setDraft}
+            tokens={tokens}
             describedBy={describes}
             // The REFUSAL alone. `describes` also carries the contrast verdict,
             // which is supplementary text and never a complaint.
@@ -3739,7 +3783,7 @@ function ColourPicker({
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
   shown: string | undefined;
-  choices: readonly ColourToken[];
+  choices: readonly SiteVariable[];
   /** Whether the site's variables have arrived; until then the list waits. */
   tokensRead: boolean;
   /** The identity the value refers to, or `null` for a value or none. */
@@ -3989,7 +4033,7 @@ function CustomColour({
 interface ColourChoice {
   readonly key: string;
   readonly label: string;
-  readonly token: ColourToken;
+  readonly token: SiteVariable;
 }
 
 /**
@@ -4002,7 +4046,7 @@ function ColourVariables({
   current,
   onPick,
 }: {
-  choices: readonly ColourToken[];
+  choices: readonly SiteVariable[];
   /** Whether the site's variables have arrived. */
   read: boolean;
   /** The identity the value refers to, marked in the list. */
@@ -4038,7 +4082,7 @@ function ColourVariables({
     // this name: two under one name with equal colours are otherwise
     // indistinguishable, and choosing either stores an identity the author
     // could not have predicted.
-    label: colourTokenLabel(token, choices),
+    label: variableLabel(token, choices),
     token,
   }));
   return (
@@ -4083,7 +4127,7 @@ function ColourVariables({
  * rather than an error — the value goes on compiling — so showing the stored
  * string is more use than showing an empty space.
  *
- * Separate from {@link colourTokenLabel} because that one answers about a token
+ * Separate from {@link variableLabel} because that one answers about a token
  * in hand, and this one has to find the token first, or account for there being
  * none.
  */
@@ -4091,11 +4135,11 @@ function storedTokenLabel(
   reference: string | null,
   tokens: SiteTokenSet | undefined,
   mode: TokenMode,
-  among: readonly ColourToken[]
+  among: readonly SiteVariable[]
 ): string {
   if (reference === null) return "";
-  const token = colourTokenFor(reference, tokens, mode);
-  return token === undefined ? reference : colourTokenLabel(token, among);
+  const token = variableFor(reference, tokens, mode);
+  return token === undefined ? reference : variableLabel(token, among);
 }
 
 /**
@@ -4248,6 +4292,7 @@ function ValueField({
   control,
   stored,
   actionName,
+  tokens,
   describedBy,
   onCommit,
 }: {
@@ -4258,6 +4303,8 @@ function ValueField({
   stored: StyleValue | undefined;
   /** What this control's clear action removes, named for the property. */
   actionName: string;
+  /** The site's variables, which a field offers where its property takes one. */
+  tokens: SiteTokenSet | undefined;
   /**
    * The id of the message explaining why this control's last value was refused,
    * or `undefined` when nothing was. Also what marks the control invalid: the
@@ -4279,7 +4326,10 @@ function ValueField({
       <FoldedField
         id={id}
         fold={fold}
+        leaf={variableLeafOf(control.leaf, fold)}
         stored={stored}
+        actionName={actionName}
+        tokens={tokens}
         describedBy={describedBy}
         onCommit={onCommit}
       />
@@ -4331,6 +4381,7 @@ function ValueField({
       control={control}
       stored={stored}
       actionName={actionName}
+      tokens={tokens}
       describedBy={describedBy}
       onCommit={onCommit}
     />
@@ -4417,12 +4468,14 @@ function NumericField({
   control,
   stored,
   actionName,
+  tokens,
   describedBy,
   onCommit,
 }: {
   id: string;
   control: StyleControl;
   stored: StyleValue | undefined;
+  tokens: SiteTokenSet | undefined;
   /**
    * This control's own name, position included.
    *
@@ -4478,6 +4531,7 @@ function NumericField({
         stored={stored}
         draft={draft}
         setDraft={setDraft}
+        tokens={tokens}
         describedBy={describedBy}
         invalid={describedBy !== undefined}
         onCommit={onCommit}
@@ -4533,6 +4587,16 @@ function NumericField({
           </SelectContent>
         </Select>
       ) : null}
+      {/* The site's variables for this field, after its unit; nothing where
+          the site has none the property takes. */}
+      <VariableChoice
+        leaf={control.leaf}
+        tokens={tokens}
+        bound={false}
+        current={undefined}
+        label={actionName}
+        onPick={identity => onCommit({ $token: identity })}
+      />
     </div>
   );
 }
@@ -4550,6 +4614,7 @@ function TextField({
   stored,
   draft,
   setDraft,
+  tokens,
   describedBy,
   invalid,
   onCommit,
@@ -4568,6 +4633,8 @@ function TextField({
    */
   draft: string;
   setDraft: (value: string) => void;
+  /** The site's variables, so a variable's name typed here picks it. */
+  tokens: SiteTokenSet | undefined;
   /**
    * Everything describing this field: a refusal message, a contrast verdict, or
    * both.
@@ -4601,8 +4668,18 @@ function TextField({
     // non-breaking space would read as empty and DELETE the declaration —
     // where the engine treats it as a value and refuses it.
     const emptied = trimCssWhitespace(draft) === "";
+    // A variable's name typed in, "Display" or "Text", is that variable, asked
+    // BEFORE the text is read as a value: read first, the word is refused as
+    // "not a length" or stored as a literal no page can use.
+    const named = emptied
+      ? undefined
+      : tokenForTypedName(control.leaf, tokens, draft);
     const outcome = onCommit(
-      emptied ? null : committedValue(control.kind, draft)
+      emptied
+        ? null
+        : named === undefined
+          ? committedValue(control.kind, draft)
+          : { $token: named }
     );
     // The document did not move because it already holds this value in another
     // spelling: `01`, `+1` and `1e0` all commit as the `1` that is stored. The
@@ -4617,7 +4694,7 @@ function TextField({
     <Input
       id={id}
       value={draft}
-      placeholder={compact ? "–" : placeholderFor(control)}
+      placeholder={compact ? "–" : hintFor(control, tokens)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
@@ -4849,6 +4926,23 @@ function dimensionHint(
 function numberHint(leaf: Extract<StyleLeaf, { kind: "number" }>): string {
   if (leaf.min === undefined || leaf.max === undefined) return "a number";
   return `${leaf.min} to ${leaf.max}`;
+}
+
+/**
+ * The hint a text field shows: the form its leaf takes, and for a length or a
+ * number, that a variable may be chosen where the site has one. A colour's
+ * list leads with its variables already, and a free value's hint names no
+ * form a variable could be the other half of.
+ */
+function hintFor(
+  control: StyleControl,
+  tokens: SiteTokenSet | undefined
+): string {
+  const base = placeholderFor(control);
+  const { leaf } = control;
+  return leaf.kind === "dimension" || leaf.kind === "number"
+    ? variablePlaceholder(leaf, tokens, base)
+    : base;
 }
 
 /** A hint at the form this leaf takes, from the catalog rather than a list here. */

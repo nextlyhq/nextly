@@ -2539,6 +2539,103 @@
 }
 
 /*
+ * The ◇ beside a field whose property takes a site variable, which opens the
+ * list of them. At least 24px square, WCAG 2.2's minimum target.
+ */
+.nx-variable-choice {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-variable-choice:hover,
+.nx-variable-choice[data-state="open"] {
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-variable-choice:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
+/*
+ * Shown while the field is pointed at or holds focus, and always while it
+ * holds a variable or its list is open. Faded rather than removed, so the ◇
+ * stays in the tab order and shows itself when Tab reaches it.
+ */
+.nx-style-inspector__numeric .nx-variable-choice,
+.nx-style-inspector__select .nx-variable-choice {
+  opacity: 0;
+}
+
+.nx-style-inspector__numeric:hover .nx-variable-choice,
+.nx-style-inspector__numeric:focus-within .nx-variable-choice,
+.nx-style-inspector__select:hover .nx-variable-choice,
+.nx-style-inspector__select:focus-within .nx-variable-choice,
+.nx-variable-choice[data-bound],
+.nx-variable-choice[data-state="open"] {
+  opacity: 1;
+}
+
+/*
+ * The same list opened from a unit menu's "Use a variable…", sized as the
+ * popover is; two parts, to outrank the menu's own width and padding.
+ */
+[role="menu"].nx-variable-choice__menu {
+  display: flex;
+  flex-direction: column;
+  width: 18rem;
+  padding: 0;
+}
+
+/* A variable's row in the list: its sample, its name, then its value. */
+.nx-variable-choice__option {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nx-variable-choice__sample {
+  display: flex;
+  align-items: center;
+  min-inline-size: 0;
+}
+
+/* A length drawn to scale; its width is set on the element, up to 64px. */
+.nx-variable-choice__bar {
+  block-size: 0.375rem;
+  min-inline-size: 1px;
+  border-radius: 999px;
+  background: var(--nx-muted-foreground);
+}
+
+/* A name cut with an ellipsis, in the list and on a held variable's chip. */
+.nx-variable-choice__name,
+.nx-variable-chip__text {
+  min-inline-size: 0;
+  overflow: hidden;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-variable-choice__value,
+.nx-variable-chip__value {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--nx-muted-foreground);
+}
+
+/*
  * The breakpoint actions on a control: reset here, or go to the tier a value
  * came from.
  *
@@ -5515,6 +5612,46 @@ fieldset.nx-inspector__fields {
 }
 
 /*
+ * A side's ◇, over the side rather than under its value, so a box of eight
+ * sides does not grow a row for a control most of them are not using.
+ * Flush with the side, so a pointer moving up to it stays over the field
+ * the whole way and the field's hover holds.
+ */
+.nx-style-inspector__side-box .nx-style-inspector__numeric {
+  position: relative;
+}
+
+.nx-style-inspector__side-box .nx-variable-choice {
+  position: absolute;
+  z-index: 2;
+  inset-block-end: 100%;
+  inset-inline-end: 0;
+  background: var(--nx-popover);
+  box-shadow: var(--shadow-md);
+}
+
+/* A side shows a held variable by name only; its value would not fit. */
+.nx-style-inspector__side-box .nx-variable-chip__value {
+  display: none;
+}
+
+/*
+ * A side of a box shows its ◇ only while pointed at or focused, held
+ * variable or not: kept in view over a box of eight sides, it would cover
+ * the side above it for good. After the rule that keeps a held variable's ◇
+ * in view, which this outranks by order for a side.
+ */
+[data-side] .nx-variable-choice {
+  opacity: 0;
+}
+
+[data-side]:hover .nx-variable-choice,
+[data-side]:focus-within .nx-variable-choice,
+[data-side] .nx-variable-choice[data-state="open"] {
+  opacity: 1;
+}
+
+/*
  * Below the width where three columns of a control can be read, the box gives
  * up and becomes rows.
  *
@@ -5724,6 +5861,12 @@ fieldset.nx-inspector__fields {
     position: static;
     opacity: 1;
     pointer-events: auto;
+    box-shadow: none;
+  }
+
+  .nx-style-inspector__side-box .nx-variable-choice {
+    position: static;
+    background: none;
     box-shadow: none;
   }
 

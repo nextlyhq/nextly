@@ -560,6 +560,20 @@ const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
   other: "Other",
 };
 
+/**
+ * Every group with its heading, in the order the Design panel lists them, for
+ * a list elsewhere that groups variables the same way.
+ */
+export function variableGroupHeadings(): readonly {
+  group: VariableGroup;
+  heading: string;
+}[] {
+  return VARIABLE_GROUPS.map(group => ({
+    group,
+    heading: VARIABLE_GROUP_LABELS[group],
+  }));
+}
+
 /** The code-name prefixes of a type size and of its line height. */
 const SIZE_PREFIX = "font-size.";
 const LINE_HEIGHT_PREFIX = "line-height.";
@@ -568,24 +582,38 @@ const LINE_HEIGHT_PREFIX = "line-height.";
 const SPACING_PREFIXES = ["space.", "spacing.", "gap.", "radius."];
 
 /**
+ * The CSS property a type-scale variable is made for: `font-size` for a type
+ * size, `line-height` for its paired line height, or `undefined` for any other
+ * variable.
+ *
+ * Read from the code name, as the Design panel groups by it, and asked here
+ * once so the panel's "Type scale" group and the inspector's offer of a type
+ * size only where text is sized cannot disagree about what a type size is.
+ */
+export function typeScaleProperty(token: {
+  name: string;
+  kind: TokenKind;
+}): "font-size" | "line-height" | undefined {
+  if (token.kind !== "dimension" && token.kind !== "number") return undefined;
+  if (token.name.startsWith(SIZE_PREFIX)) return "font-size";
+  if (token.name.startsWith(LINE_HEIGHT_PREFIX)) return "line-height";
+  return undefined;
+}
+
+/**
  * Which group a variable belongs in: by kind for colours and shadows, and by
  * its code name for the lengths, since a size, a gap and a radius are all
  * dimensions.
+ *
+ * Exported so the inspector's variable list groups exactly as Design does.
  */
-function variableGroupOf(token: {
+export function variableGroupOf(token: {
   name: string;
   kind: TokenKind;
 }): VariableGroup {
   if (token.kind === "color") return "colours";
   if (token.kind === "shadow") return "spacing";
-  const lengthish = token.kind === "dimension" || token.kind === "number";
-  if (
-    lengthish &&
-    (token.name.startsWith(SIZE_PREFIX) ||
-      token.name.startsWith(LINE_HEIGHT_PREFIX))
-  ) {
-    return "type";
-  }
+  if (typeScaleProperty(token) !== undefined) return "type";
   if (
     token.kind === "dimension" &&
     SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
@@ -648,9 +676,9 @@ export function variableGroups(
       ...(lineHeight === undefined ? {} : { lineHeight }),
     });
   }
-  return VARIABLE_GROUPS.map(group => ({
+  return variableGroupHeadings().map(({ group, heading }) => ({
     group,
-    heading: VARIABLE_GROUP_LABELS[group],
+    heading,
     entries: (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row)),
   }));
 }
