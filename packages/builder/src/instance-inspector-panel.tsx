@@ -55,6 +55,7 @@ import {
   Link2,
   Lock,
   PenLine,
+  RotateCcw,
   SquarePen,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -88,9 +89,11 @@ import { VariantPicker } from "./variant-picker";
  * source the resolver adds later is a build failure here until it has words.
  */
 const SOURCE_LABEL: Readonly<Record<ExposedRow["source"], string>> = {
-  definition: "Inherited",
+  // In the editor's words for a component: where the value comes from, said
+  // as a quiet line rather than an internal term in capitals.
+  definition: "From the component",
   variant: "From variant",
-  instance: "Overridden",
+  instance: "Set on this page",
 };
 
 /**
@@ -111,7 +114,7 @@ const SOURCE_ICON: Readonly<
 
 /** The words a row's badge shows: its source, or "Cleared". */
 function sourceBadgeLabel(row: Pick<ExposedRow, "source" | "cleared">): string {
-  return row.cleared ? "Cleared" : SOURCE_LABEL[row.source];
+  return row.cleared ? "Cleared on this page" : SOURCE_LABEL[row.source];
 }
 
 /**
@@ -280,13 +283,13 @@ export function InstanceInspectorPanel({
          * the definition has a screen.
          */
         <p className="nx-inspector__note">
-          This component exposes nothing to edit here. Its content is edited on
-          the component itself, from the Components screen.
+          This component has no fields to change on this page. Use Edit
+          component to change its content.
         </p>
       ) : (
         <section aria-labelledby={headingId}>
           <h3 id={headingId} className="nx-inspector__heading">
-            Exposed properties
+            Fields
           </h3>
           <HeldByLock reasonId={locked ? lockedReasonId : undefined}>
             <div className="nx-inspector__fields">
@@ -388,16 +391,18 @@ function ExposedField({
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="icon"
+              className="nx-inspector__exposed-reset"
               // Named for the row, because six rows each offering "Reset"
-              // are six identical controls to a screen reader. "Inherited"
-              // rather than "the component's", because under a variant the
-              // value a reset returns to is the variant's.
-              aria-label={`Reset ${row.label} to inherited value`}
-              title="Reset to inherited value"
+              // are six identical controls to a screen reader. Not "to the
+              // component's value": under a variant the value a reset returns
+              // to is the variant's, and undoing this page's change is true
+              // either way.
+              aria-label={`Reset ${row.label}`}
+              title="Undo this page's change"
               onClick={() => onReset(row.id)}
             >
-              Reset
+              <RotateCcw size={14} aria-hidden="true" />
             </Button>
           ) : null}
         </div>

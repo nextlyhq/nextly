@@ -1287,30 +1287,29 @@
 }
 
 /*
- * Where a row's value came from, as a badge the author reads beside it. Quiet
- * for an inherited value, which is the ordinary state; the accent for an
- * override, because that is the row whose reset undoes THEIR edit; and a
- * dashed outline for a cleared one, which is a value deliberately absent
- * rather than one nobody set.
+ * Where a row's value came from, as a quiet line under the field ("From the
+ * component", "Set on this page") in sentence case at the panel's small size,
+ * where a 10px capitalised tag read as an internal term. Muted for the
+ * ordinary state; the accent for a value set on this page, the row whose
+ * reset undoes the author's own edit; and a dashed outline for a cleared one,
+ * a value deliberately absent rather than one nobody set.
  */
 .nx-inspector__source {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0 0.375rem;
+  padding: 0;
   border-radius: 999px;
-  font-size: 0.625rem;
-  font-weight: 500;
-  line-height: 1.6;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: 1.4;
   color: var(--nx-muted-foreground);
-  background: var(--nx-muted);
+  background: transparent;
 }
 
 .nx-inspector__source-icon {
-  width: 0.6875rem;
-  height: 0.6875rem;
+  width: 0.75rem;
+  height: 0.75rem;
   flex: none;
 }
 
@@ -1322,16 +1321,14 @@
   color: var(--nx-destructive);
 }
 
-.nx-inspector__source[data-source="instance"] {
-  color: var(--nx-primary);
-  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
-}
-
+/*
+ * Set or cleared on this page: the accent, in the same quiet line. A cleared
+ * value is told from an inherited one by its words and its icon, not by
+ * colour or an outline.
+ */
+.nx-inspector__source[data-source="instance"],
 .nx-inspector__source[data-source="cleared"] {
   color: var(--nx-primary);
-  background: transparent;
-  outline: 1px dashed color-mix(in oklch, var(--nx-primary) 50%, transparent);
-  outline-offset: -1px;
 }
 
 /*

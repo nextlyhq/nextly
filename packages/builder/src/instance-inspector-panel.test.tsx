@@ -242,8 +242,8 @@ describe("what a selected instance is shown as", () => {
     mount(instance(), header({ exposed: [] }));
 
     expect(
-      screen.getByText(/exposes nothing to edit here/).textContent
-    ).toContain("Components screen");
+      screen.getByText(/has no fields to change on this page/).textContent
+    ).toContain("Edit component");
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
@@ -346,7 +346,7 @@ describe("where a value came from, and the way back", () => {
   it("badges an inherited row as inherited and offers it no reset", () => {
     mount(instance());
 
-    expect(screen.getAllByText("Inherited").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("From the component").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /^Reset/ })).toBeNull();
   });
 
@@ -355,10 +355,10 @@ describe("where a value came from, and the way back", () => {
     // menu is the one whose users had to ask where it was.
     const editor = mount(instance({ overrides: { title: "Acme" } }));
 
-    expect(screen.getByText("Overridden")).toBeDefined();
+    expect(screen.getByText("Set on this page")).toBeDefined();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset Title to inherited value",
+        name: "Reset Title",
       })
     );
 
@@ -369,13 +369,13 @@ describe("where a value came from, and the way back", () => {
   it("badges a cleared row as cleared, shows it empty, and still offers the reset", () => {
     mount(instance({ overrides: { title: { $unset: true } } }));
 
-    expect(screen.getByText("Cleared")).toBeDefined();
+    expect(screen.getByText("Cleared on this page")).toBeDefined();
     expect(
       (screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value
     ).toBe("");
     expect(
       screen.getByRole("button", {
-        name: "Reset Title to inherited value",
+        name: "Reset Title",
       })
     ).toBeDefined();
   });
@@ -597,7 +597,7 @@ describe("a link and a visibility exposure", () => {
         .getByRole("checkbox", { name: "Newsletter form" })
         .getAttribute("aria-checked")
     ).toBe("false");
-    expect(screen.getByText("Cleared")).toBeDefined();
+    expect(screen.getByText("Cleared on this page")).toBeDefined();
   });
 
   it("offers the reset on a visibility override, which returns it to the component's rule", () => {
@@ -605,7 +605,7 @@ describe("a link and a visibility exposure", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset Newsletter form to inherited value",
+        name: "Reset Newsletter form",
       })
     );
 
@@ -673,6 +673,21 @@ describe("two options the control once spelled alike", () => {
       componentId: "header",
       overrides: { tone: "" },
     });
+  });
+});
+
+describe("the panel's words", () => {
+  it("calls the rows Fields, where it said Exposed properties", () => {
+    mount(instance());
+    expect(screen.getByRole("heading", { name: "Fields" })).toBeDefined();
+    expect(screen.queryByText(/Exposed properties/i)).toBeNull();
+  });
+
+  it("resets with an icon named for its row, not a word button", () => {
+    mount(instance({ overrides: { title: "Hello" } }));
+    const reset = screen.getByRole("button", { name: "Reset Title" });
+    expect(reset.textContent).toBe("");
+    expect(reset.getAttribute("title")).toBe("Undo this page's change");
   });
 });
 
@@ -845,12 +860,12 @@ describe("rows with no control", () => {
 
     expect(
       screen.queryByRole("button", {
-        name: "Reset Title to inherited value",
+        name: "Reset Title",
       })
     ).toBeNull();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset Headline to inherited value",
+        name: "Reset Headline",
       })
     );
     expect(appliedProps(editor)).toStrictEqual({ componentId: "header" });
@@ -991,8 +1006,8 @@ describe("telling cleared from inherited, and the way back", () => {
     ];
     const cleared = badges.find(b => b.dataset.source === "cleared");
     const inherited = badges.find(b => b.dataset.source === "definition");
-    expect(cleared?.textContent).toBe("Cleared");
-    expect(inherited?.textContent).toBe("Inherited");
+    expect(cleared?.textContent).toBe("Cleared on this page");
+    expect(inherited?.textContent).toBe("From the component");
     // Shape as well as words: never colour alone.
     const iconOf = (badge: HTMLElement | undefined) =>
       badge?.querySelector("svg")?.getAttribute("class") ?? "";
@@ -1003,9 +1018,7 @@ describe("telling cleared from inherited, and the way back", () => {
 
   it("names the reset for the inherited value, which under a variant is the variant's", () => {
     mount(instance({ overrides: { title: "Mine" } }));
-    expect(
-      screen.getByRole("button", { name: "Reset Title to inherited value" })
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Reset Title" })).toBeDefined();
   });
 });
 
@@ -1021,7 +1034,7 @@ describe("a placement locked in Layers", () => {
     const field = screen.getByRole("textbox", { name: "Title" });
     expect(field.closest("fieldset")?.disabled).toBe(true);
     const reset = screen.getByRole("button", {
-      name: "Reset Title to inherited value",
+      name: "Reset Title",
     });
     expect(reset.closest("fieldset")?.disabled).toBe(true);
     // The card's menu, which holds Unlock, stays live.
@@ -1162,7 +1175,7 @@ describe("a row a lock the component sets holds", () => {
         ?.disabled
     ).toBe(true);
     const reset = screen.getByRole("button", {
-      name: "Reset Title to inherited value",
+      name: "Reset Title",
     });
     expect(reset.closest("fieldset[disabled]")).toBeNull();
     expect((reset as HTMLButtonElement).disabled).toBe(false);
