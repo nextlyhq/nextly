@@ -187,7 +187,7 @@ const PAIRED: SiteTokenSet = {
 };
 
 /** Open the picker from whichever trigger the row draws. */
-function openPicker(name = /^Colour for Color/): void {
+function openPicker(name = /^Colour for Colour/): void {
   fireEvent.click(screen.getByRole("button", { name }));
 }
 
@@ -238,7 +238,7 @@ describe("the picker leads with the site's colour variables", () => {
   it("shows the chosen variable's swatch and name on the trigger", () => {
     mount(styles({ $token: "color.brand" }), PAIRED);
     const trigger = screen.getByRole("button", {
-      name: "Colour for Color: Brand",
+      name: "Colour for Colour: Brand",
     });
     expect(trigger.textContent).toContain("Brand");
     expect(trigger.style.getPropertyValue("--nx-swatch")).toBe("#1d2b6b");
@@ -356,8 +356,8 @@ describe("a colour leaf draws a colour control", () => {
     // A colour leaf used to fall through to a plain text field, so the swatch
     // beside it is the regression this holds: the control is a colour surface
     // rather than a string box that happens to hold a colour.
-    expect(swatch("Colour for Color")).toBeDefined();
-    expect(screen.getByRole("textbox", { name: "Color" })).toHaveProperty(
+    expect(swatch("Colour for Colour")).toBeDefined();
+    expect(screen.getByRole("textbox", { name: "Colour" })).toHaveProperty(
       "value",
       "#3b82f6"
     );
@@ -366,7 +366,7 @@ describe("a colour leaf draws a colour control", () => {
   it("paints the swatch with the colour the value resolves to", () => {
     mount(styles("#3b82f6"));
     expect(
-      swatch("Colour for Color").style.getPropertyValue("--nx-swatch")
+      swatch("Colour for Colour").style.getPropertyValue("--nx-swatch")
     ).toBe("#3b82f6");
   });
 
@@ -374,10 +374,10 @@ describe("a colour leaf draws a colour control", () => {
     // `oklch()` is a valid colour the engine stores and `parseColor` declines.
     // The swatch must not guess, and the text must not be rewritten.
     mount(styles("oklch(0.7 0.1 200)"));
-    const button = swatch("Colour for Color");
+    const button = swatch("Colour for Colour");
     expect(button.style.getPropertyValue("--nx-swatch")).toBe("");
     expect(button.getAttribute("data-empty")).toBe("");
-    expect(screen.getByRole("textbox", { name: "Color" })).toHaveProperty(
+    expect(screen.getByRole("textbox", { name: "Colour" })).toHaveProperty(
       "value",
       "oklch(0.7 0.1 200)"
     );
@@ -389,13 +389,13 @@ describe("a colour leaf draws a colour control", () => {
     // page does not have.
     mount(styles("var(--site-color-primary)"));
     expect(
-      swatch("Colour for Color").style.getPropertyValue("--nx-swatch")
+      swatch("Colour for Colour").style.getPropertyValue("--nx-swatch")
     ).toBe("");
   });
 
   it("commits a typed colour on blur", () => {
     const editor = mount(styles("#3b82f6"));
-    const field = screen.getByRole("textbox", { name: "Color" });
+    const field = screen.getByRole("textbox", { name: "Colour" });
     fireEvent.change(field, { target: { value: "#ff0000" } });
     expect(editor.applyAll).not.toHaveBeenCalled();
     fireEvent.blur(field);
@@ -404,7 +404,7 @@ describe("a colour leaf draws a colour control", () => {
 
   it("CLEARS rather than storing an empty colour", () => {
     const editor = mount(styles("#3b82f6"));
-    const field = screen.getByRole("textbox", { name: "Color" });
+    const field = screen.getByRole("textbox", { name: "Colour" });
     fireEvent.change(field, { target: { value: "" } });
     fireEvent.blur(field);
     const op = editor.applyAll.mock.calls[0]?.[0]?.[0] as { patch?: unknown };
@@ -421,7 +421,7 @@ describe("a stored token reference", () => {
     // every reference — see-it-or-clear-it, with no way to choose another. The
     // swatch is what says a colour reference is now editable.
     mount(styles({ $token: "color.ink" }));
-    expect(swatch("Colour for Color: Ink")).toBeDefined();
+    expect(swatch("Colour for Colour: Ink")).toBeDefined();
   });
 
   it("shows the token's CURRENT name, not the identity the document holds", () => {
@@ -438,7 +438,7 @@ describe("a stored token reference", () => {
   it("paints the swatch with the colour the token resolves to", () => {
     mount(styles({ $token: "color.ink" }));
     expect(
-      swatch("Colour for Color: Ink").style.getPropertyValue("--nx-swatch")
+      swatch("Colour for Colour: Ink").style.getPropertyValue("--nx-swatch")
     ).toBe("#111111");
   });
 
@@ -459,7 +459,7 @@ describe("a stored token reference", () => {
 
   it("offers a clear that removes the reference", () => {
     const editor = mount(styles({ $token: "color.ink" }));
-    fireEvent.click(screen.getByRole("button", { name: "Clear Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Colour" }));
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 });
@@ -477,7 +477,7 @@ describe("the contrast readout", () => {
     ).toBeGreaterThan(0);
     // Still editable: a low ratio is a warning about a valid value, never a
     // refusal. The same position Gutenberg's contrast checker takes.
-    expect(screen.getByRole("textbox", { name: "Color" })).toHaveProperty(
+    expect(screen.getByRole("textbox", { name: "Colour" })).toHaveProperty(
       "value",
       "#777777"
     );
@@ -511,9 +511,9 @@ describe("the contrast readout", () => {
     mount(styles("#000000", "#ffffff"));
     fireEvent.click(screen.getByRole("button", { name: /^Background/ }));
     expect(
-      screen.getByRole("textbox", { name: "Background color" })
+      screen.getByRole("textbox", { name: "Background colour" })
     ).toHaveProperty("value", "#ffffff");
-    expect(swatch("Colour for Background color")).toBeDefined();
+    expect(swatch("Colour for Background colour")).toBeDefined();
     expect(screen.getAllByText(/Contrast 21\.0:1/).length).toBeGreaterThan(0);
   });
 });
@@ -525,12 +525,12 @@ describe("a value no colour surface can represent", () => {
     // value goes on compiling — and the one action that would remove it, Clear,
     // is the one the field does not offer.
     mount(styles({ value: "#fff" }));
-    expect(screen.queryByRole("textbox", { name: "Color" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Colour" })).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Colour for Color" })
+      screen.queryByRole("button", { name: "Colour for Colour" })
     ).toBeNull();
     // Shown, and removable.
-    expect(screen.getByRole("button", { name: "Clear Color" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Clear Colour" })).toBeDefined();
     expect(screen.getByText(/"value"/)).toBeDefined();
   });
 
@@ -539,7 +539,7 @@ describe("a value no colour surface can represent", () => {
     // nothing else, or every colour would fall back to read-only.
     mount(styles("#3b82f6"));
     expect(
-      screen.getByRole("button", { name: "Colour for Color" })
+      screen.getByRole("button", { name: "Colour for Colour" })
     ).toBeDefined();
   });
 });
@@ -553,9 +553,9 @@ describe("the contrast verdict is reachable from the control it describes", () =
     expect(note).not.toBeNull();
     const noteId = note?.getAttribute("id");
     expect(noteId).toBeTruthy();
-    const field = screen.getByRole("textbox", { name: "Color" });
+    const field = screen.getByRole("textbox", { name: "Colour" });
     const swatchButton = screen.getByRole("button", {
-      name: "Colour for Color",
+      name: "Colour for Colour",
     });
     expect(field.getAttribute("aria-describedby")).toContain(noteId as string);
     expect(swatchButton.getAttribute("aria-describedby")).toContain(
@@ -567,7 +567,7 @@ describe("the contrast verdict is reachable from the control it describes", () =
     mount(styles("#000000"));
     expect(
       screen
-        .getByRole("textbox", { name: "Color" })
+        .getByRole("textbox", { name: "Colour" })
         .getAttribute("aria-describedby")
     ).toBeNull();
   });
@@ -590,7 +590,7 @@ describe("a picker gesture is ONE editor operation", () => {
     // The same rule the text fields follow: an op per keystroke would make one
     // undo remove one character.
     const editor = mount(styles("#3b82f6"));
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
 
     /*
      * The SURFACE, not the hex field. The field used to stand in for a drag
@@ -627,7 +627,7 @@ describe("the contrast readout keeps up with the picker", () => {
     expect(screen.getAllByText(/Contrast 21\.0:1/).length).toBeGreaterThan(0);
 
     // Type a low-contrast colour without committing it.
-    fireEvent.change(screen.getByRole("textbox", { name: "Color" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Colour" }), {
       target: { value: "#f0f0f0" },
     });
 
@@ -645,14 +645,14 @@ describe("a contrast verdict is not a complaint", () => {
     // invalidity from having a description announced a perfectly good colour
     // with a passing 21:1 result as invalid.
     mount(styles("#000000", "#ffffff"));
-    const field = screen.getByRole("textbox", { name: "Color" });
+    const field = screen.getByRole("textbox", { name: "Colour" });
     // Described...
     expect(field.getAttribute("aria-describedby")).toBeTruthy();
     // ...and still valid.
     expect(field.getAttribute("aria-invalid")).toBeNull();
     expect(
       screen
-        .getByRole("button", { name: "Colour for Color" })
+        .getByRole("button", { name: "Colour for Colour" })
         .getAttribute("aria-invalid")
     ).toBeNull();
   });
@@ -717,7 +717,7 @@ describe("the picker can replace a stored token with a literal", () => {
     // Before any movement the surface shows the token's colour.
     expect(
       screen
-        .getByRole("button", { name: /^Colour for Color/ })
+        .getByRole("button", { name: /^Colour for Colour/ })
         .style.getPropertyValue("--nx-swatch")
     ).toBe("#111111");
 
@@ -734,7 +734,7 @@ describe("the picker can replace a stored token with a literal", () => {
     // The swatch now follows the draft rather than snapping back to the token.
     expect(
       screen
-        .getByRole("button", { name: /^Colour for Color/ })
+        .getByRole("button", { name: /^Colour for Colour/ })
         .style.getPropertyValue("--nx-swatch")
     ).toBe("#ff0000");
   });
@@ -748,14 +748,14 @@ describe("a picker gesture survives the field being replaced", () => {
     // field without firing `onOpenChange`. Unflushed, the whole gesture is
     // discarded silently.
     const editor = mount(styles("#3b82f6"));
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
     // The PICKER's hex field, not the control's own. Taking the first textbox
     // picks up the main field, whose draft commits on blur and never reaches
     // the pending gesture — so the assertion below would hold whether or not
     // the flush exists.
     const hex = screen
       .getAllByRole("textbox")
-      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
+      .find(input => input !== screen.getByRole("textbox", { name: "Colour" }));
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
@@ -773,7 +773,7 @@ describe("a picker gesture survives the field being replaced", () => {
     // The positive control: unmounting must not manufacture an edit, or every
     // click through the inspector would write a history entry.
     const editor = mount(styles("#3b82f6"));
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
     cleanup();
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
@@ -786,11 +786,11 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
     // is dropped as the preset commits, the unmount write lands the older hex
     // on top of the token just picked and the reference becomes a literal.
     const editor = mount(styles("#3b82f6"));
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
 
     const hex = screen
       .getAllByRole("textbox")
-      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
+      .find(input => input !== screen.getByRole("textbox", { name: "Colour" }));
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
@@ -827,7 +827,7 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
     // it rather than per keystroke.
     fireEvent.blur(hex);
 
-    fireEvent.click(screen.getByRole("button", { name: "Clear Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear Colour" }));
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     cleanup();
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -845,10 +845,10 @@ describe("a superseded gesture stays superseded even when the choice is refused"
     // Every write is refused: `apply` answering null is the store declining.
     editor.applyAll.mockReturnValue(null);
 
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
     const hex = screen
       .getAllByRole("textbox")
-      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
+      .find(input => input !== screen.getByRole("textbox", { name: "Colour" }));
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
@@ -898,7 +898,7 @@ describe("clearing a token while the picker is open", () => {
     // The real interaction: a pointer press on the button dismisses the popover
     // — Radix listens for that on the document — and the click follows. One
     // intent, however many events it takes.
-    const clear = screen.getByRole("button", { name: "Clear Color" });
+    const clear = screen.getByRole("button", { name: "Clear Colour" });
     fireEvent.pointerDown(clear);
     fireEvent.click(clear);
     await settle();
@@ -945,7 +945,7 @@ describe("the route a real editor takes to the colour control", () => {
     // assertion below run against the wrong panel.
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
     // The site's own token, reachable only if the set travelled the whole way.
     expect(screen.getByRole("option", { name: "Ink" })).toBeDefined();
   });
@@ -957,11 +957,11 @@ describe("a dismissal that is NOT a superseding control", () => {
     // every outside interaction suppressed, clicking anywhere off the picker
     // would silently discard what the author had just done.
     const editor = mount(styles("#3b82f6"));
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
     await settle();
     const hex = screen
       .getAllByRole("textbox")
-      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
+      .find(input => input !== screen.getByRole("textbox", { name: "Colour" }));
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
@@ -1103,7 +1103,7 @@ describe("two tokens under one name are told apart", () => {
     render(
       <StyleInspectorPanel editor={editorFor(document_)} tokens={clashing} />
     );
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
 
     // Identical colours, so the swatches themselves cannot tell them apart.
     expect(
@@ -1148,7 +1148,7 @@ describe("a malformed stored document does not take the Style tab down", () => {
       // A live panel, not an error boundary's remains: the control for this
       // leaf is still drawn and still operable.
       expect(
-        screen.getByRole("button", { name: "Colour for Color" })
+        screen.getByRole("button", { name: "Colour for Colour" })
       ).toBeDefined();
     });
   }
@@ -1172,7 +1172,7 @@ describe("a malformed stored document does not take the Style tab down", () => {
     // The guard must skip the broken tier, not abandon the read. A document
     // with one bad address and one good one must still show the good value.
     render_with({ base: { base: { color: "#3b82f6" } }, hover: null });
-    expect(screen.getByRole("textbox", { name: "Color" })).toHaveProperty(
+    expect(screen.getByRole("textbox", { name: "Colour" })).toHaveProperty(
       "value",
       "#3b82f6"
     );
@@ -1280,7 +1280,7 @@ describe("a Reset beside a picker mid-gesture", () => {
 
   /** Move the picker without committing, leaving a gesture pending. */
   const dragTo = async (hex: string): Promise<void> => {
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
     // Radix arms its outside-pointerdown listener in a `setTimeout`. Until that
     // has run nothing can dismiss the popover, so a case that presses a button
     // outside it asserts against a picker that never closed.
@@ -1320,7 +1320,7 @@ describe("a Reset beside a picker mid-gesture", () => {
      * the thing in question.
      */
     const editor = mountWithResets([{ property: "color" }]);
-    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
     await settle();
 
     const picker = within(screen.getByRole("dialog")).getAllByRole(
@@ -1349,7 +1349,7 @@ describe("a Reset beside a picker mid-gesture", () => {
     await dragTo("#ff0000");
     expect(editor.applyAll).not.toHaveBeenCalled();
 
-    const reset = resetFor("Color");
+    const reset = resetFor("Colour");
     fireEvent.pointerDown(reset);
     fireEvent.click(reset);
     await settle();
@@ -1380,7 +1380,7 @@ describe("a Reset beside a picker mid-gesture", () => {
     // `focusin` on the document and decides from `document.activeElement` —
     // dispatched at the button, the listener sees focus still inside the
     // popover and dismisses nothing.
-    resetFor("Color").focus();
+    resetFor("Colour").focus();
     await settle();
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1403,7 +1403,7 @@ describe("a Reset beside a picker mid-gesture", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
 
     // Secondary button: no click follows, and `onReset` never runs.
-    fireEvent.pointerDown(resetFor("Color"), { button: 2 });
+    fireEvent.pointerDown(resetFor("Colour"), { button: 2 });
     await settle();
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1448,7 +1448,7 @@ describe("a Reset beside a picker mid-gesture", () => {
       expect(editor.applyAll).not.toHaveBeenCalled();
 
       // No click: on this platform the press opens a menu instead.
-      fireEvent.pointerDown(resetFor("Color"), { button: 0, ctrlKey: true });
+      fireEvent.pointerDown(resetFor("Colour"), { button: 0, ctrlKey: true });
       await settle();
 
       expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1478,7 +1478,7 @@ describe("a Reset beside a picker mid-gesture", () => {
       const editor = mountWithResets([{ property: "color" }]);
       await dragTo("#ff0000");
 
-      const reset = resetFor("Color");
+      const reset = resetFor("Colour");
       fireEvent.pointerDown(reset, { button: 0, ctrlKey: true });
       fireEvent.click(reset, { ctrlKey: true });
       await settle();
@@ -1518,7 +1518,7 @@ describe("a Reset beside a picker mid-gesture", () => {
       .filter(button => button.dataset.action === "reset");
     // Two, or the case is not about one control's Reset versus another's.
     expect(resets).toHaveLength(2);
-    const mine = resetFor("Color");
+    const mine = resetFor("Colour");
     const other = resets.find(button => button !== mine);
     expect(other).toBeDefined();
     if (other === undefined) return;
