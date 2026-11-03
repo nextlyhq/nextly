@@ -530,7 +530,8 @@ export interface BlockDefinition<
    * carries no outer margin of its own, so the space between two blocks belongs
    * to whatever holds them; the compiler writes it as a top margin on every
    * child after the first, and as `gap` once the container is made flex or
-   * grid. Anything an author sets on a child wins over it.
+   * grid. In block flow an author's top margin on a child replaces it; under
+   * flex or grid the gap stays and that margin adds to it, as CSS margins do.
    */
   childGap?: string | 0 | TokenRef;
   /**

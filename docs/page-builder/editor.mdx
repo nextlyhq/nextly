@@ -170,21 +170,35 @@ block that holds them:
 
 Each value is a variable under **Design → Variables**, and most grow with the screen:
 
-| Variable           | What it sets                                  |
-| ------------------ | --------------------------------------------- |
-| `space.stack`      | The gap between blocks in a container         |
-| `space.section-y`  | A section's padding above and below           |
-| `space.gutter`     | A section's padding at the sides              |
-| `space.columns`    | The gap between columns and gallery images    |
-| `space.card`       | A card's padding                              |
-| `space.paragraph`  | The space between paragraphs of rich text     |
-| `button.padding-y` | A button's padding above and below its label  |
-| `button.padding-x` | A button's padding at the sides of its label  |
+| Variable           | What it sets                                 |
+| ------------------ | -------------------------------------------- |
+| `space.stack`      | The gap between blocks in a container        |
+| `space.section-y`  | A section's padding above and below          |
+| `space.gutter`     | A section's padding at the sides             |
+| `space.columns`    | The gap between columns and gallery images   |
+| `space.card`       | A card's padding                             |
+| `space.paragraph`  | The space between paragraphs of rich text    |
+| `button.padding-y` | A button's padding above and below its label |
+| `button.padding-x` | A button's padding at the sides of its label |
 
 Spacing you set on a block (its margin, padding or gap in **Style → Spacing**, or
-through a shared style) always wins over these. With a block selected, the canvas
-shows the space above it from its container as **Gap · from Section** (or the
-container's name), not as the block's own margin.
+through a shared style) always wins over these defaults on that block. A margin above
+a block meets its container's gap in one of two ways, depending on the container's
+layout:
+
+- In normal flow, the block's own top margin **replaces** the gap: a 40px margin
+  under a 20px gap leaves 40px.
+- In flex or grid, the gap is the container's `gap`, and a margin on a block **adds**
+  to it, as margins do in CSS: the same block sits 60px below its neighbour. To change
+  the spacing of a flex or grid container, set its gap rather than a margin on each
+  block.
+
+A block hidden on a device still counts as a block above the next one. When every
+block above it is hidden, the first block shown in a normal-flow container keeps the
+gap above it; give that block a top margin of 0 on that device to remove it.
+
+With a block selected, the canvas shows the space above it from its container as
+**Gap · from Section** (or the container's name), not as the block's own margin.
 
 ## The bottom bar
 

@@ -1758,6 +1758,15 @@ function documentNodes(
  * The first child is left alone so the gap never reaches the container's own
  * outer edge, which is what keeps a block from carrying space it did not ask
  * for into whatever holds it.
+ *
+ * A selector reads siblings in the markup, not boxes on screen, so a child
+ * hidden at a breakpoint still counts as one before the next. When every child
+ * before it is hidden there, the first child shown keeps the gap. Hiding is a
+ * `display: none` written on the hidden node's own class under a width query,
+ * which leaves nothing a sibling selector can read; telling the two apart
+ * would take a rule per width band per run of hidden siblings, across both
+ * breakpoint axes. An author's top margin of zero on that child, at that
+ * breakpoint, removes the space.
  */
 const FLOW_CHILDREN = "> * + *";
 
