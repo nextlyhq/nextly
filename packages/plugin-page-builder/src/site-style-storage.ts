@@ -21,6 +21,7 @@
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
 
+import type { StoredSiteStyle } from "./library-contract";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import {
   checkStoredBreakpoints,
@@ -220,7 +221,50 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
  * document's slug is the plugin's to know.
  */
 export interface SiteStyleReader {
-  findSingle(args: { slug: string }): Promise<unknown>;
+  findSingle(args: {
+    slug: string;
+    overrideAccess?: boolean;
+  }): Promise<unknown>;
+}
+
+/**
+ * The stored document's four sections exactly as stored, each `null` where
+ * nothing is stored, and nothing else the row carries (its id, timestamps or
+ * any field a host added).
+ */
+function storedSiteStyleOf(doc: unknown): StoredSiteStyle {
+  const record =
+    typeof doc === "object" && doc !== null
+      ? (doc as Record<string, unknown>)
+      : {};
+  return {
+    tokens: record.tokens ?? null,
+    fonts: record.fonts ?? null,
+    classes: record.classes ?? null,
+    breakpoints: record.breakpoints ?? null,
+  };
+}
+
+/**
+ * The stored site style, read past the Single's own read permission.
+ *
+ * The one server-side read of the document: the published render layers it
+ * over the defaults ({@link loadSiteStyle}) and the editor's route answers it
+ * as it is. Past the permission because every published page already compiles
+ * it into the CSS a visitor is served; who may ask for it through a route is
+ * that route's decision, made before this runs.
+ */
+export async function readStoredSiteStyle(args: {
+  nextly: SiteStyleReader;
+  /** The Single's RESOLVED slug, where a host renamed it. */
+  slug?: string;
+}): Promise<StoredSiteStyle> {
+  return storedSiteStyleOf(
+    await args.nextly.findSingle({
+      slug: args.slug ?? SITE_STYLE_SLUG,
+      overrideAccess: true,
+    })
+  );
 }
 
 /**
@@ -242,8 +286,8 @@ export async function loadSiteStyle(args: {
   /** The Single's RESOLVED slug, where a host renamed it. */
   slug?: string;
 }): Promise<SiteStyleData> {
-  const doc = await args.nextly.findSingle({
-    slug: args.slug ?? SITE_STYLE_SLUG,
-  });
-  return resolveSiteStyle(args.defaults, readSiteStyleRecord(doc));
+  return resolveSiteStyle(
+    args.defaults,
+    readSiteStyleRecord(await readStoredSiteStyle(args))
+  );
 }

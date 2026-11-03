@@ -119,6 +119,7 @@ import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
+import { siteStyleRoute } from "./site-style-route";
 import { siteStyleSingle } from "./site-style-storage";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
@@ -1413,6 +1414,9 @@ export const pageBuilder = (
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
+        // The editor's read of the stored site style, for anyone who may
+        // edit something the builder opens: the canvas cannot draw without it.
+        siteStyleRoute(componentStoreOf(opts)),
         // Design → Fonts' catalogue: read it, and add a family to the site.
         ...fonts.routes,
       ],
