@@ -272,20 +272,16 @@ const LATEST_UNLOADED: DocumentLockAffordances = {
 };
 
 /**
- * The same, for someone who may only read the document: nothing to hold back,
- * but what they read may be out of date.
+ * The notice for someone who may only read the document: nothing more to hold
+ * back, but what they read may be out of date.
  */
-export const READER_LATEST_UNLOADED: DocumentLockAffordances = {
-  readOnly: true,
-  actionsDisabled: true,
-  notice: {
-    tone: "unloaded",
-    message:
-      "We couldn't load the latest version of this document, so what you see may be out of date.",
-    takeOverLabel: null,
-    accessRequest: null,
-    retryLabel: "Try again",
-  },
+export const READER_LATEST_UNLOADED: DocumentLockNotice = {
+  tone: "unloaded",
+  message:
+    "We couldn't load the latest version of this document, so what you see may be out of date.",
+  takeOverLabel: null,
+  accessRequest: null,
+  retryLabel: "Try again",
 };
 
 /**

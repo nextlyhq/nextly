@@ -73,7 +73,11 @@ export interface DocumentLockSurfaceOptions extends UseDocumentLockOptions {
 
 /** A load of the latest document, asked for on a gain or by trying again. */
 interface GainLoad {
-  readonly phase: "loading" | "failed";
+  /**
+   * `answered` once the reload resolves: its reads may still be settling, or
+   * be read again, before they reach the document.
+   */
+  readonly phase: "loading" | "answered" | "failed";
   /** When the document on screen had been read as the load was asked for. */
   readonly from: number | undefined;
   /** Which load this is, so a late answer to an earlier one changes nothing. */
@@ -103,7 +107,10 @@ function latestLoad(
   // Trying again shows as loading, though the reads still carry the failure
   // they are retrying.
   if (pending === "loading") return "loading";
-  return pending === "failed" || latest.failed ? "failed" : "current";
+  if (pending === "failed" || latest.failed) return "failed";
+  // Answered, and its reads not on screen yet: still loading, unless a read
+  // made since fails, which the line above has said.
+  return pending === "answered" ? "loading" : "current";
 }
 
 /**
@@ -132,11 +139,14 @@ function useGainLoad(
     if (reads === undefined) return;
     const attempt = (attempts.current += 1);
     setLoad({ phase: "loading", from: reads.readAt, attempt });
-    reads.reload().catch(() => {
+    const settle = (phase: GainLoad["phase"]) =>
       setLoad(current =>
-        current?.attempt === attempt ? { ...current, phase: "failed" } : current
+        current?.attempt === attempt ? { ...current, phase } : current
       );
-    });
+    reads.reload().then(
+      () => settle("answered"),
+      () => settle("failed")
+    );
   }, []);
 
   useEffect(() => {
@@ -163,12 +173,15 @@ function readOnlyAffordances(
   holder: DocumentLockHolder | null | undefined,
   load: LatestDocumentLoad
 ): DocumentLockAffordances {
-  // A reader writes nothing, so a failed read holds nothing back; it is still
-  // said, since what they read may be out of date.
-  if (load === "failed") return READER_LATEST_UNLOADED;
-  return because === "removed-from-code"
-    ? READ_ONLY_REMOVED_FROM_CODE
-    : readerAffordances(holder);
+  const reader =
+    because === "removed-from-code"
+      ? READ_ONLY_REMOVED_FROM_CODE
+      : readerAffordances(holder);
+  // A reader edits nothing, so a failed read holds back nothing more than
+  // they had; it is still said, since what they read may be out of date.
+  return load === "failed"
+    ? { ...reader, notice: READER_LATEST_UNLOADED }
+    : reader;
 }
 
 export function useDocumentLockSurface({

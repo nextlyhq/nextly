@@ -306,6 +306,25 @@ describe("loading the latest document before a gain unlocks the form", () => {
     expect(result.current.notice).toBeNull();
   });
 
+  it("says the load failed when the reads it started fail after it answered", async () => {
+    // The reload resolved, but its two reads disagreed and are being read
+    // again, and that read fails. Still loading would offer no way out.
+    const { reload, settles } = deferredReload();
+    const { result, rerender } = mount(reload);
+    useDocumentLock.mockReturnValue(gained());
+    rerender({ readAt: 1 });
+    await act(async () => {
+      settles[0].resolve();
+    });
+    rerender({ readAt: 1 });
+    expect(result.current.notice?.tone).toBe("loading");
+
+    rerender({ readAt: 1, failed: true });
+    expect(result.current.readOnly).toBe(true);
+    expect(result.current.notice?.tone).toBe("unloaded");
+    expect(result.current.notice?.retryLabel).toBe("Try again");
+  });
+
   it("does not unlock a failed load because a later beat renews the claim", async () => {
     // A renewal says the claim is still this editor's. It says nothing about
     // whether the copy on screen is the current one.

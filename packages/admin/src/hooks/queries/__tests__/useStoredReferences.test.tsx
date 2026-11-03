@@ -373,4 +373,71 @@ describe("useWithStoredReferences", () => {
     // Unchanged, so the form is not reset.
     expect(result.current.document).toBe(onScreen);
   });
+
+  it("keeps the time it was read while either read is still being fetched", () => {
+    // A read on its way says nothing yet about the document on screen; moving
+    // the time then would unlock a form over the copy from before.
+    const { result, rerender } = renderHook(
+      (props: { populated: never }) =>
+        useWithStoredReferences({
+          fields: FIELDS,
+          documentKey: DOCUMENT,
+          populated: props.populated,
+          stored: read(storedV1, { dataUpdatedAt: 12 }),
+          scope: "e",
+        }),
+      { initialProps: { populated: read(populatedV1, { dataUpdatedAt: 10 }) } }
+    );
+    expect(result.current.latest.readAt).toBe(10);
+
+    rerender({
+      populated: read(populatedV1, { dataUpdatedAt: 20, isFetching: true }),
+    });
+    expect(result.current.latest.readAt).toBe(10);
+  });
+
+  describe("reading the document again", () => {
+    const options = { cancelRefetch: true, throwOnError: true };
+
+    function withRefetches(
+      refetchPopulated: () => Promise<unknown>,
+      refetchStored: () => Promise<unknown>
+    ) {
+      return renderHook(() =>
+        useWithStoredReferences({
+          fields: FIELDS,
+          documentKey: DOCUMENT,
+          populated: read(populatedV1, { refetch: vi.fn(refetchPopulated) }),
+          stored: read(storedV1, { refetch: vi.fn(refetchStored) }),
+          scope: "e",
+        })
+      );
+    }
+
+    it("reads both, replacing reads on their way, and resolves when both do", async () => {
+      const populated = vi.fn(() => Promise.resolve());
+      const stored = vi.fn(() => Promise.resolve());
+      const { result } = withRefetches(populated, stored);
+
+      await expect(result.current.latest.reload()).resolves.toBeDefined();
+      expect(populated).toHaveBeenCalledWith(options);
+      expect(stored).toHaveBeenCalledWith(options);
+    });
+
+    it.each([
+      ["the populated read", "populated"],
+      ["the stored read", "stored"],
+    ])("rejects when %s fails", async (_name, failing) => {
+      const refused = () => Promise.reject(new Error("unreachable"));
+      const fine = () => Promise.resolve();
+      const { result } = withRefetches(
+        failing === "populated" ? refused : fine,
+        failing === "stored" ? refused : fine
+      );
+
+      await expect(result.current.latest.reload()).rejects.toThrow(
+        "unreachable"
+      );
+    });
+  });
 });
