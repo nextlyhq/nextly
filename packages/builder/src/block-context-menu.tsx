@@ -123,8 +123,13 @@ import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
+import { useCanvasFrame } from "./canvas-frame-context";
+import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
-import { useBlockActionsContext } from "./keyboard-actions";
+import {
+  useBlockActionsContext,
+  useDepthMoveActions,
+} from "./keyboard-actions";
 import { useSelectionActions } from "./selection-actions";
 
 /**
@@ -137,6 +142,21 @@ const TRANSPARENT_WRAPPER: React.CSSProperties = { display: "contents" };
 
 /** Where the menu's own verbs end and the editor-wide ones would begin. */
 const DESTRUCTIVE: ReadonlySet<string> = new Set(["delete"]);
+
+/**
+ * Whether the verb at `index` opens the group of menu-only verbs (the
+ * component verbs), which sit apart from the structural ones above them.
+ */
+function startsMenuGroup(
+  actions: readonly { readonly inMenu?: true }[],
+  index: number
+): boolean {
+  return (
+    index > 0 &&
+    actions[index]?.inMenu === true &&
+    actions[index - 1]?.inMenu !== true
+  );
+}
 
 export interface BlockContextMenuProps {
   /** The editor whose selection the verbs act on. */
@@ -162,6 +182,33 @@ export function BlockContextMenu({
   const actions = useSelectionActions(editor);
   const run = React.useMemo(() => blockActionRunners(verbs), [verbs]);
 
+  /*
+   * Move in and Move out, after Move down: the menu's way to every move a
+   * Layers drag makes, for an author who does not drag. Run through the same
+   * verb as Alt+ArrowRight and Alt+ArrowLeft, which judges the move by the
+   * placement rule and the locks and says why when it refuses.
+   */
+  // Judged by the provider with the position function the move verb runs,
+  // component definitions included, so an item is offered exactly when
+  // pressing it would move.
+  const depth = useDepthMoveActions();
+  const entries = React.useMemo(
+    () =>
+      actions.flatMap(action => {
+        const own = { ...action, run: run[action.id] };
+        return action.id !== "move-down"
+          ? [own]
+          : [
+              own,
+              ...depth.map(move => ({
+                ...move,
+                run: () => verbs.move(move.direction),
+              })),
+            ];
+      }),
+    [actions, run, verbs, depth]
+  );
+
   const select = editor.select;
   /*
    * What the last press was aimed at, remembered rather than acted on.
@@ -171,19 +218,42 @@ export function BlockContextMenu({
    * update here would rerender the canvas on every contact.
    */
   const pressedTarget = React.useRef<string | null>(null);
+  const canvas = useCanvasFrame();
   const noteTarget = React.useCallback(
-    (event: React.SyntheticEvent<HTMLDivElement>) => {
+    (event: React.MouseEvent<HTMLDivElement>) => {
       /*
        * This wrapper's OWN canvas, which is the outermost one beneath it. A
        * canvas nested inside a block of that canvas is deeper, so it is not
        * what `querySelector` returns — and a block belonging to it is refused
        * here rather than answered for by this menu.
+       *
+       * A canvas in a frame is not beneath the wrapper in the DOM, only in
+       * the component tree, which is how its events reach this handler; it
+       * is the outermost canvas in the frame's document.
        */
-      const root = event.currentTarget.querySelector(`.${CANVAS_ROOT_CLASS}`);
+      const root =
+        event.currentTarget.querySelector(`.${CANVAS_ROOT_CLASS}`) ??
+        (canvas.frame === null
+          ? null
+          : (canvas.document?.querySelector(`.${CANVAS_ROOT_CLASS}`) ?? null));
       pressedTarget.current =
         root === null ? null : contextMenuTargetOf(event.target, root);
+      /*
+       * The menu opens where the press was, read from this event's client
+       * coordinates. A press inside the frame reports them in the FRAME's
+       * viewport while the menu is drawn in the editor's, so they are carried
+       * across here, before the trigger's own handler reads them.
+       */
+      if (
+        canvas.frame !== null &&
+        isElement(event.target) &&
+        event.target.ownerDocument !== event.currentTarget.ownerDocument
+      ) {
+        const at = canvas.toHost({ x: event.clientX, y: event.clientY });
+        Object.assign(event, { clientX: at.x, clientY: at.y });
+      }
     },
-    []
+    [canvas]
   );
   const opened = React.useCallback(
     (open: boolean) => {
@@ -204,7 +274,10 @@ export function BlockContextMenu({
   );
 
   return (
-    <ContextMenu onOpenChange={opened}>
+    // Not modal: a modal menu marks the editor around it aria-hidden while its
+    // controls stay focusable (axe: aria-hidden-focus). Escape, a click
+    // outside and Tab still close it.
+    <ContextMenu modal={false} onOpenChange={opened}>
       <ContextMenuTrigger asChild>
         <div
           style={TRANSPARENT_WRAPPER}
@@ -222,9 +295,11 @@ export function BlockContextMenu({
       */}
       {selectedId === null ? null : (
         <ContextMenuContent aria-label="Block actions">
-          {actions.map(action => (
+          {entries.map((action, index) => (
             <React.Fragment key={action.id}>
-              {DESTRUCTIVE.has(action.id) ? <ContextMenuSeparator /> : null}
+              {DESTRUCTIVE.has(action.id) || startsMenuGroup(entries, index) ? (
+                <ContextMenuSeparator />
+              ) : null}
               <ContextMenuItem
                 disabled={!action.enabled}
                 // Stacked once there is a reason, so the explanation sits under
@@ -235,7 +310,7 @@ export function BlockContextMenu({
                     : "flex-col items-start gap-0.5"
                 }
                 onSelect={() => {
-                  run[action.id]();
+                  action.run();
                 }}
               >
                 <span>{action.label}</span>

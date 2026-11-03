@@ -120,6 +120,24 @@ export type {
 // singleton and not that reader. Pass the reader for those.
 export { requireNextly } from "./direct-api/nextly";
 
+// The reader a published page's lists read through: published entries and
+// public fields only, whatever the list asks. `@experimental` until the page
+// builder's data lists ship on it.
+export {
+  createPublicReader,
+  toPublicFind,
+  PUBLIC_FILTER_OPS,
+} from "./runtime/routing/public-reader";
+export type {
+  PublicCountQuery,
+  PublicFilter,
+  PublicFilterOp,
+  PublicReader,
+  PublicReaderBinding,
+  PublicReadQuery,
+  PublicReadResult,
+} from "./runtime/routing/public-reader";
+
 export {
   resolveContent,
   isReservedPath,

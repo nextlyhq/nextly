@@ -281,6 +281,33 @@ interface PluginWrite<TBody> {
  * only the origin and ignores the header, so sending it always costs nothing
  * and the author does not have to know which rule the route chose.
  */
+/**
+ * Write to a plugin route once, outside React, and reject when it is refused.
+ *
+ * The write half of `readPluginRoute`, for a caller that needs the refusal at
+ * the moment it awaits: a save that hands per-field reasons back to the
+ * surface that asked, which `usePluginRouteMutation` reports only on the next
+ * render. The same session handling and CSRF token as the hook, and a refusal
+ * rejects with the admin's parsed error. Nothing is cached or invalidated.
+ *
+ * Answers `undefined` for a route that answered with nothing.
+ */
+export function writePluginRoute<TResult extends object | null>({
+  plugin,
+  path,
+  mount,
+  method = "POST",
+  body,
+}: Pick<PluginRouteWrite, "plugin" | "path" | "method" | "mount"> & {
+  body?: unknown;
+}): Promise<TResult | undefined> {
+  return sendTo<TResult>(
+    method,
+    pluginRouteFullPath(plugin, path, mount),
+    body
+  );
+}
+
 async function sendTo<TResult>(
   method: PluginRouteMethod,
   route: string,

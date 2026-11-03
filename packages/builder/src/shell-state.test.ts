@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The shell's decisions, asserted where they can be measured.
  *
@@ -6,7 +7,7 @@
  * zero-sized, so an assertion about a panel's width passes whatever the CSS
  * does — and is verified in a real browser instead.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   CANVAS_GUTTER,
@@ -22,6 +23,8 @@ import {
   PANEL_BOUNDS,
   RAIL_WIDTH,
   readPreferences,
+  SHELL_PREFERENCES_KEY,
+  userPreferenceStore,
   writePreferences,
 } from "./shell-state";
 import type { PreferenceStore, ShellPreferences } from "./shell-state";
@@ -164,18 +167,22 @@ describe("preferences round-trip", () => {
     // than passing on a default that a read which drops it also produces.
     leftPanelView: "fonts",
     leftPinned: false,
+    // Both non-default, so the round trip carries a hidden side.
+    leftPanelHidden: true,
+    inspectorHidden: true,
     layouts: {
       "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
     },
-    // Non-default like its neighbours above, so the round trip below actually
-    // exercises this field rather than passing on the strength of a default
-    // that both the write and a no-op read would agree on.
-    showEmptyElements: false,
+    // Always shown: the editor no longer offers to hide empty containers, so
+    // there is no other value a round trip could carry.
+    showEmptyElements: true,
     // Non-default for the same reason, and FIXED rather than fit: fit is the
     // default, and it is also what a read falls back to when it cannot make
     // sense of what was stored — so a round trip carrying fit would pass
     // whether the value survived or was discarded.
     zoom: { kind: "fixed", scale: 1.5 },
+    // Non-default as well: null, the base breakpoint, is the default.
+    editingBreakpoint: "tablet",
   };
 
   it("restores what was written", () => {
@@ -194,6 +201,17 @@ describe("preferences round-trip", () => {
     for (const bad of [undefined, "1.5", 0, 99, null]) {
       const store = memoryStore(JSON.stringify({ ...stored, zoom: bad }));
       expect(readPreferences(store).zoom).toEqual(DEFAULT_PREFERENCES.zoom);
+    }
+  });
+
+  it("starts on the base breakpoint when the stored device is not a name", () => {
+    // Preferences from before there was a device have no such field; an empty
+    // or non-string value names no breakpoint either.
+    for (const bad of [undefined, "", 3, null]) {
+      const store = memoryStore(
+        JSON.stringify({ ...stored, editingBreakpoint: bad })
+      );
+      expect(readPreferences(store).editingBreakpoint).toBeNull();
     }
   });
 
@@ -238,11 +256,14 @@ describe("preferences round-trip", () => {
       leftPanel: "layers",
       leftPanelView: null,
       leftPinned: DEFAULT_PREFERENCES.leftPinned,
+      leftPanelHidden: false,
+      inspectorHidden: false,
       layouts: { "canvas,inspector": { canvas: 70, inspector: 30 } },
       // Absent from the stored JSON above, so it falls back the same way
       // `leftPinned` does here rather than surfacing as `undefined`.
       showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
       zoom: DEFAULT_PREFERENCES.zoom,
+      editingBreakpoint: DEFAULT_PREFERENCES.editingBreakpoint,
     });
   });
 
@@ -274,12 +295,14 @@ describe("the show-empty-elements preference", () => {
     expect(readPreferences(store).showEmptyElements).toBe(true);
   });
 
-  it("reads a stored false", () => {
+  it("reads a stored false as shown, so no empty container disappears", () => {
+    // The control that wrote false is gone, and an author who once hid empty
+    // containers would have no way to bring them back.
     const store = {
       read: () => JSON.stringify({ showEmptyElements: false }),
       write: () => undefined,
     };
-    expect(readPreferences(store).showEmptyElements).toBe(false);
+    expect(readPreferences(store).showEmptyElements).toBe(true);
   });
 
   it("falls back to the default for a non-boolean", () => {
@@ -292,20 +315,8 @@ describe("the show-empty-elements preference", () => {
     expect(readPreferences(store).showEmptyElements).toBe(true);
   });
 
-  it("round-trips through a write", () => {
-    let written = "";
-    const store = {
-      read: () => written,
-      write: (v: string) => {
-        written = v;
-      },
-    };
-    writePreferences(store, {
-      ...DEFAULT_PREFERENCES,
-      showEmptyElements: false,
-    });
-    expect(readPreferences(store).showEmptyElements).toBe(false);
-  });
+  // No round trip of a stored false: hiding empty containers was removed
+  // with its control, so a false written then reads back as shown (above).
 });
 
 describe("the rail's items, in the order an author meets them", () => {
@@ -333,9 +344,10 @@ describe("the rail's items, in the order an author meets them", () => {
  * not dropped as unknown, which would close the panel an author left open.
  */
 describe("preferences saved before panels had parts", () => {
-  it("load whole, with no part chosen", () => {
-    // Written by the editor before the Design panel's tabs existed: no
-    // leftPanelView, and an old panel id. Every other preference must survive.
+  it("load whole, with no part chosen and Desktop as the device", () => {
+    // Written by the editor before the Design panel's tabs and the stored
+    // device existed: no leftPanelView, no editingBreakpoint. Every other
+    // preference must survive.
     const yesterday = {
       leftPanel: "layers",
       leftPinned: false,
@@ -349,11 +361,14 @@ describe("preferences saved before panels had parts", () => {
       leftPanel: "layers",
       leftPanelView: null,
       leftPinned: false,
+      leftPanelHidden: false,
+      inspectorHidden: false,
       zoom: { kind: "fixed", scale: 1.5 },
+      editingBreakpoint: null,
       layouts: {
         "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
       },
-      showEmptyElements: false,
+      showEmptyElements: true,
     });
   });
 });
@@ -389,5 +404,60 @@ describe("a panel stored under an id from before the rail was relabelled", () =>
       memoryStore(JSON.stringify({ leftPanel: "design", leftPanelView: 4 }))
     );
     expect(read.leftPanelView).toBeNull();
+  });
+});
+
+describe("preferences kept per signed-in user", () => {
+  // The shell's preferences as a browser stored them before they were kept
+  // per user, under the one key every author on the browser shared.
+  const LEGACY = JSON.stringify({ ...DEFAULT_PREFERENCES, zoom: 1.5 });
+
+  beforeEach(() => window.localStorage.clear());
+
+  it("keeps two users of one browser apart", () => {
+    userPreferenceStore("ada").write("ada's");
+    userPreferenceStore("grace").write("grace's");
+    expect(userPreferenceStore("ada").read()).toBe("ada's");
+    expect(userPreferenceStore("grace").read()).toBe("grace's");
+  });
+
+  it("stores each user's under the shell's key with their id", () => {
+    userPreferenceStore("ada").write("ada's");
+    expect(window.localStorage.getItem(`${SHELL_PREFERENCES_KEY}:ada`)).toBe(
+      "ada's"
+    );
+  });
+
+  it("moves the record from before, once, to the first user who loads it", () => {
+    window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);
+    expect(userPreferenceStore("ada").read()).toBe(LEGACY);
+    expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBeNull();
+    // The next author starts from the defaults rather than inheriting it.
+    expect(userPreferenceStore("grace").read()).toBeNull();
+    expect(userPreferenceStore("ada").read()).toBe(LEGACY);
+  });
+
+  it("keeps a user's own record over the one from before", () => {
+    window.localStorage.setItem(`${SHELL_PREFERENCES_KEY}:ada`, "ada's");
+    window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);
+    expect(userPreferenceStore("ada").read()).toBe("ada's");
+    // Left for an author who has no record of their own yet.
+    expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBe(LEGACY);
+  });
+
+  it("is the same store for the same user, so a host may call it on every render", () => {
+    // A new store each time reads as a store swap, and the shell reloads.
+    expect(userPreferenceStore("ada")).toBe(userPreferenceStore("ada"));
+    expect(userPreferenceStore("ada")).not.toBe(userPreferenceStore("grace"));
+    expect(userPreferenceStore(null)).toBe(userPreferenceStore(null));
+  });
+
+  it("remembers nothing for no one", () => {
+    // Unknown, signed out or unread: nothing is kept for a guess.
+    window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);
+    const store = userPreferenceStore(null);
+    store.write("whose?");
+    expect(store.read()).toBeNull();
+    expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBe(LEGACY);
   });
 });

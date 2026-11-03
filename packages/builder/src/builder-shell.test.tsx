@@ -25,8 +25,11 @@ import * as React from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useShortcuts } from "@nextlyhq/ui";
+
 import { useNoticeQueue, useNoticeSink } from "./builder-notices";
-import { BuilderShell } from "./builder-shell";
+import { BuilderShell, type SettingsDialogState } from "./builder-shell";
+import { CanvasFrameProvider } from "./canvas-frame-context";
 import { CommandPalette } from "./command-palette";
 import {
   DEFAULT_PREFERENCES,
@@ -427,6 +430,132 @@ describe("Help", () => {
   });
 });
 
+describe("Settings, as the host's dialog", () => {
+  /** A host's Settings: a dialog while open, recording what it was handed. */
+  function settingsHost() {
+    const handed: SettingsDialogState[] = [];
+    const renderSettings = (dialog: SettingsDialogState) => {
+      handed.push(dialog);
+      return dialog.open ? (
+        <div role="dialog" aria-label="Settings">
+          <button type="button" onClick={() => dialog.onOpenChange(false)}>
+            Done
+          </button>
+        </div>
+      ) : null;
+    };
+    return { handed, renderSettings };
+  }
+
+  it("opens the host's dialog from the rail, shown pressed, and never as a panel", () => {
+    const { renderSettings } = settingsHost();
+    renderShell({ renderSettings });
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const item = within(rail).getByRole("button", { name: "Settings" });
+    expect(item.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(item);
+
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+    expect(item.getAttribute("aria-pressed")).toBe("true");
+    // No left panel opened for it: the dialog is the whole of Settings.
+    expect(item.getAttribute("data-rail-action")).toBe("settings");
+    expect(
+      within(rail).getAllByRole("button", { name: "Settings" })
+    ).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(item.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("hands the dialog the rail's item to return focus to", () => {
+    const { handed, renderSettings } = settingsHost();
+    renderShell({ renderSettings });
+    const item = screen.getByRole("button", { name: "Settings" });
+    fireEvent.click(item);
+    expect(handed.at(-1)?.returnFocus()).toBe(item);
+  });
+
+  it("opens from a host's request once per count, and not again on a re-render", () => {
+    const { renderSettings } = settingsHost();
+    const { rerender } = renderShell({
+      renderSettings,
+      openSettingsRequest: { count: 1 },
+    });
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    // The same request again is not a new one: closed stays closed.
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 1 }}
+      />
+    );
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+
+    rerender(
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        openSettingsRequest={{ count: 2 }}
+      />
+    );
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+  });
+
+  it("holds a request that arrives while the window is too narrow, and opens once it fits", async () => {
+    // A dialog there would trap focus over the notice and its way out. Read
+    // from what the shell hands the host: a real dialog portals out of the
+    // hidden regions, so "open" is the trap whatever this stand-in shows.
+    const { handed, renderSettings } = settingsHost();
+    const shell = (request?: { count: number }) => (
+      <BuilderShell
+        onExit={() => undefined}
+        store={memoryStore()}
+        renderSettings={renderSettings}
+        {...(request === undefined ? {} : { openSettingsRequest: request })}
+      />
+    );
+    const request = { count: 1 };
+    const { rerender } = render(shell());
+    act(() => stubContainerFits(false));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("navigation", { name: "Editor panels" })
+      ).toBeNull()
+    );
+
+    const before = handed.length;
+    rerender(shell(request));
+    await new Promise(settle => setTimeout(settle, 20));
+    expect(handed.slice(before).some(dialog => dialog.open)).toBe(false);
+
+    act(() => stubContainerFits(true));
+    rerender(shell(request));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy()
+    );
+  });
+
+  it("closes when the editor gives way to its narrow-window notice", async () => {
+    const { renderSettings } = settingsHost();
+    renderShell({ renderSettings });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    act(() => stubContainerFits(false));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
+    );
+  });
+});
+
 describe("a panel's view", () => {
   function renderWithView(store = memoryStore()) {
     const seen: Array<string | null> = [];
@@ -611,15 +740,13 @@ describe("opening the Add panel from outside the shell", () => {
      * has only been scheduled: the newest preferences this shell has seen are
      * still the defaults. A token applied there computes its write from those
      * defaults and persists them, so the author's panel widths and their
-     * `showEmptyElements` are gone — from the store and from the state — while
+     * zoom are gone — from the store and from the state — while
      * the panel they asked for opens and everything on screen looks right.
      *
      * Every stored field is asserted, plus the panel: a test asserting only
      * that the panel opened passes against exactly that loss, and one
      * asserting only the record passes against a token that never applies at
-     * all. `showEmptyElements` is additionally read off the chrome attribute,
-     * because the store and the state are two separate casualties and the
-     * record alone cannot tell them apart.
+     * all.
      */
     stubContainerFits(true);
     const layouts = { "canvas,panel": { canvas: 3, panel: 1 } };
@@ -627,7 +754,7 @@ describe("opening the Add panel from outside the shell", () => {
       JSON.stringify({
         ...DEFAULT_PREFERENCES,
         leftPinned: false,
-        showEmptyElements: false,
+        zoom: 1.5,
         layouts,
       })
     );
@@ -642,15 +769,10 @@ describe("opening the Add panel from outside the shell", () => {
     );
 
     expect(screen.getByText("add panel")).toBeTruthy();
-    // Queried rather than assumed present: a selector that matched nothing
-    // would make the attribute assertion pass on `undefined`.
-    const chrome = document.querySelector(".nx-builder-chrome");
-    expect(chrome).not.toBeNull();
-    expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
     expect(JSON.parse(store.value as string)).toMatchObject({
       leftPanel: "add",
       leftPinned: false,
-      showEmptyElements: false,
+      zoom: 1.5,
       layouts,
     });
   });
@@ -694,7 +816,7 @@ describe("opening the Add panel from outside the shell", () => {
      * arrives in, the newest preferences this shell has seen are still the
      * OUTGOING store's. A token applied there computes its write from those and
      * persists them through the new store, so one workspace's saved layout and
-     * `showEmptyElements` replace another's. A count of reads cannot see this:
+     * zoom replace another's. A count of reads cannot see this:
      * it is already nonzero from the first store and a swap only takes it
      * higher, so the window is exactly where the count looks safest.
      *
@@ -710,8 +832,9 @@ describe("opening the Add panel from outside the shell", () => {
     const first = memoryStore(
       JSON.stringify({
         ...DEFAULT_PREFERENCES,
+        leftPanel: "layers",
         leftPinned: false,
-        showEmptyElements: false,
+        zoom: 1.5,
         layouts: firstLayouts,
       })
     );
@@ -719,7 +842,6 @@ describe("opening the Add panel from outside the shell", () => {
       JSON.stringify({
         ...DEFAULT_PREFERENCES,
         leftPinned: true,
-        showEmptyElements: true,
         layouts: secondLayouts,
       })
     );
@@ -733,12 +855,7 @@ describe("opening the Add panel from outside the shell", () => {
     );
     // The first store's read has landed before the swap, which is what makes
     // this a test about the SECOND store rather than about a cold mount.
-    expect(document.querySelector(".nx-builder-chrome")).not.toBeNull();
-    expect(
-      document
-        .querySelector(".nx-builder-chrome")
-        ?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)
-    ).toBe("hidden");
+    expect(screen.getByText("layers panel")).toBeTruthy();
 
     rerender(
       <BuilderShell
@@ -753,17 +870,10 @@ describe("opening the Add panel from outside the shell", () => {
     expect(JSON.parse(second.value as string)).toMatchObject({
       leftPanel: "add",
       leftPinned: true,
-      showEmptyElements: true,
+      // The incoming store's own zoom, not the outgoing store's 1.5.
+      zoom: "fit",
       layouts: secondLayouts,
     });
-    // The state the author sees, not only the bytes: the attribute is absent
-    // when empty containers are shown, so the outgoing store's `false` reaching
-    // this render would put it back.
-    expect(
-      document
-        .querySelector(".nx-builder-chrome")
-        ?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)
-    ).toBeNull();
   });
 
   it("does not reopen a manually closed panel when the SAME token survives an unrelated effect re-run", () => {
@@ -886,13 +996,10 @@ describe("preferences", () => {
     expect(screen.queryByText(/panel$/)).toBeNull();
   });
 
-  it("restores a stored showEmptyElements even when every other field matches the default", () => {
-    // The restore-on-load effect gates on `shallowEqualPreferences`, which
-    // compares fields one at a time. A field that comparator does not name
-    // reads as "unchanged" for any two records differing only in it — so a
-    // fresh session, with no panel ever opened and no layout ever dragged,
-    // matches the default on every field THIS store record sets except this
-    // one, and is exactly the case where a missing clause drops it silently.
+  it("shows empty containers even when a stored preference hid them", () => {
+    // The top bar no longer offers to hide them, so an author who once did
+    // would have no way back. A stored false is read as shown: no placeholder
+    // disappears, and the chrome never carries the hiding attribute.
     const store = memoryStore(
       JSON.stringify({ ...DEFAULT_PREFERENCES, showEmptyElements: false })
     );
@@ -900,38 +1007,18 @@ describe("preferences", () => {
     render(<BuilderShell onExit={vi.fn()} store={store} />);
 
     // Queried rather than assumed present: a selector that matched nothing
-    // would make the attribute assertion below pass on `undefined`, which is
-    // not the property under test.
+    // would make the attribute assertion below pass on `undefined`.
     const chrome = document.querySelector(".nx-builder-chrome");
     expect(chrome).not.toBeNull();
-    expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
+    expect(chrome?.hasAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe(false);
   });
 
-  it("offers a labelled control for showEmptyElements, reflecting its state", () => {
-    // By NAME and by role, the same way the exit button above is asserted —
-    // an unlabelled control for a visibility affordance would repeat the exact
-    // failure this feature exists to fix.
+  it("offers no control to hide empty containers", () => {
     renderShell();
-
-    const toggle = screen.getByRole("switch", {
-      name: "Show empty containers",
-    });
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-  });
-
-  it("writes showEmptyElements through the store when the control is toggled", () => {
-    const store = memoryStore();
-    stubContainerFits(true);
-    render(<BuilderShell onExit={vi.fn()} store={store} />);
-
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Show empty containers" })
-    );
-
-    expect(store.value).not.toBeNull();
-    expect(JSON.parse(store.value as string)).toMatchObject({
-      showEmptyElements: false,
-    });
+    expect(
+      screen.queryByRole("switch", { name: "Show empty containers" })
+    ).toBeNull();
+    expect(screen.queryByText("Show empty containers")).toBeNull();
   });
 
   it("does not re-invoke onShowEmptyElementsChange when only the host's callback identity changes", () => {
@@ -966,12 +1053,9 @@ describe("preferences", () => {
     );
     expect(second).not.toHaveBeenCalled();
 
-    // Toggling the preference must still reach the LATEST callback, proving
-    // the ref is read fresh rather than pinned to the first render's closure.
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Show empty containers" })
-    );
-    expect(second).toHaveBeenCalledWith(false);
+    // The value no longer changes (empty containers are always shown), so
+    // there is no later report for the latest callback to receive; the half
+    // that matters for a host's render loop is the one above.
     expect(first).toHaveBeenCalledTimes(1);
   });
 });
@@ -1107,8 +1191,14 @@ describe("the server render and the first client render agree", () => {
     //
     // The rail is plain markup the library never touches, so its `aria-pressed`
     // reflects the preferences the server actually rendered with.
-    expect(markup).toContain('aria-pressed="false"');
-    expect(markup).not.toContain('aria-pressed="true"');
+    // Read off the rail alone: the top bar's side-panel buttons are pressed
+    // whenever a side is shown, which says nothing about the stored panel.
+    const rail =
+      /<nav[^>]*aria-label="Editor panels"[^>]*>[\s\S]*?<\/nav>/.exec(
+        markup
+      )?.[0] ?? "";
+    expect(rail).toContain('aria-pressed="false"');
+    expect(rail).not.toContain('aria-pressed="true"');
     // The control: this render really did produce a shell, so the assertions
     // above are not passing on empty output.
     expect(markup).toContain("Exit editor");
@@ -1151,6 +1241,30 @@ describe("F6 region cycling", () => {
   });
 });
 
+describe("F6 and the top bar", () => {
+  it("reaches the top bar, as the first area after the inspector", () => {
+    // The top bar holds the editor's own controls (exit, undo, devices,
+    // zoom, the side toggles): a keyboard author must be able to land there
+    // without tabbing through the whole canvas.
+    renderShell({ inspector: <p>inspector body</p> });
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    inspector.focus();
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    const header = document.querySelector(
+      'header[aria-label="Editor actions"]'
+    );
+    expect(header).not.toBeNull();
+    expect(document.activeElement).toBe(header);
+
+    fireEvent.keyDown(document, { key: "F6" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+});
+
 describe("which shell F6 belongs to", () => {
   /**
    * The binding is registered on the document, so every mounted shell sees
@@ -1189,17 +1303,18 @@ describe("which shell F6 belongs to", () => {
 
     fireEvent.keyDown(document, { key: "F6" });
 
+    // Entering from nowhere lands on the first area, the top bar.
     expect(document.activeElement).toBe(
-      screen.getByRole("navigation", { name: "Editor panels" })
+      document.querySelector('header[aria-label="Editor actions"]')
     );
   });
 
-  it("answers from the chrome header, which is in no region", () => {
-    // The header holds the exit button and whatever the host puts in the top
-    // bar — the breakpoint switcher, here — and it is a SIBLING of the region
-    // container rather than inside one. Asking the regions who owns the key
-    // therefore rejected the shell from its own chrome, so F6 did nothing
-    // while focus sat on a control that is plainly inside the editor.
+  it("answers from a control in the top bar, and moves on to the rail", () => {
+    // The top bar holds the exit button and whatever the host puts there
+    // (the device buttons, here). It is the first area F6 cycles through, so
+    // from a control inside it the next press reaches the rail. It once sat
+    // outside every area, and F6 then did nothing from a control plainly
+    // inside the editor.
     renderShell({
       renderPanel: panel => <p>{panel} panel</p>,
       topBar: <button type="button">Desktop</button>,
@@ -1249,8 +1364,9 @@ describe("which shell F6 belongs to", () => {
 
     fireEvent.keyDown(document, { key: "F6" });
 
+    // Entering from nowhere lands on the first area, the top bar.
     expect(document.activeElement).toBe(
-      screen.getByRole("navigation", { name: "Editor panels" })
+      document.querySelector('header[aria-label="Editor actions"]')
     );
   });
 
@@ -1293,7 +1409,13 @@ describe("which shell F6 belongs to", () => {
     (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.keyDown(document, { key: "F6" });
 
-    expect(document.activeElement).toBe(rails[0]);
+    // Entering from nowhere lands on the first area, the top bar, of the one
+    // usable shell (the other's header is behind its notice).
+    const usableHeader = rails[0]
+      ?.closest(".nx-builder-chrome")
+      ?.querySelector('header[aria-label="Editor actions"]');
+    expect(usableHeader).toBeTruthy();
+    expect(document.activeElement).toBe(usableHeader);
   });
 
   it("declines that entry when a second shell makes it ambiguous", () => {
@@ -1745,6 +1867,49 @@ describe("F6 from a focused drag handle", () => {
       (document.activeElement as HTMLElement | null)?.getAttribute("aria-label")
     ).toBeTruthy();
   });
+
+  it("recognises a separator built by another realm", () => {
+    // The same press, with the shell rendered into an iframe's document. Its
+    // separator carries that window's constructors, so a check made with this
+    // realm's `HTMLElement` declines it and the handle keeps F6 for itself.
+    stubContainerFits(true);
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    // Removed however the test ends: a frame left holding focus would be the
+    // active element for every case after this one.
+    try {
+      const inner = frame.contentDocument;
+      if (inner === null) throw new Error("the iframe has no document");
+      // The panel library builds its observer from the element's own window,
+      // which jsdom gives none; the same driven stub as this realm's.
+      Reflect.set(
+        frame.contentWindow ?? {},
+        "ResizeObserver",
+        DrivenResizeObserver
+      );
+      const container = inner.createElement("div");
+      inner.body.appendChild(container);
+      render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />, {
+        container,
+      });
+
+      const separator = within(container).getAllByRole("separator")[0];
+      expect(separator).toBeDefined();
+      if (separator === undefined) return;
+      // The control: the handle really is foreign to this realm.
+      expect(separator instanceof HTMLElement).toBe(false);
+      separator.focus();
+      // Identity as a boolean: a failing `toBe` cannot print another realm's node.
+      expect(inner.activeElement === separator).toBe(true);
+
+      fireEvent.keyDown(separator, { key: "F6" });
+
+      expect(inner.activeElement === separator).toBe(false);
+      expect(inner.activeElement?.getAttribute("aria-label")).toBeTruthy();
+    } finally {
+      frame.remove();
+    }
+  });
 });
 
 describe("telling the host which zoom the shell is holding", () => {
@@ -1884,5 +2049,577 @@ describe("where the notice region sits", () => {
     expect(
       suppressed(document.querySelector('[data-slot="builder-overlay-host"]'))
     ).not.toBeNull();
+  });
+});
+
+describe("the device being edited", () => {
+  /** A shell whose host asks for devices and records what the shell reports. */
+  function deviceShell(store = memoryStore()) {
+    stubContainerFits(true);
+    const devices: Array<string | null> = [];
+    const zooms: unknown[] = [];
+    const shell = (
+      request?: { breakpoint: string | null; count: number },
+      extra: Partial<Parameters<typeof BuilderShell>[0]> = {}
+    ) => (
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        onZoomChange={zoom => zooms.push(zoom)}
+        onEditingBreakpointChange={device => devices.push(device)}
+        {...(request === undefined
+          ? {}
+          : { editingBreakpointRequest: request })}
+        {...extra}
+      />
+    );
+    const view = render(shell());
+    return { store, devices, zooms, view, shell };
+  }
+
+  it("starts on the base breakpoint, and reports it", () => {
+    const { devices } = deviceShell();
+    expect(devices.at(-1)).toBeNull();
+  });
+
+  it("holds the device a host asks for, and reports it", () => {
+    const { devices, view, shell, store } = deviceShell();
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    expect(devices.at(-1)).toBe("tablet");
+    expect(JSON.parse(store.value ?? "{}").editingBreakpoint).toBe("tablet");
+  });
+
+  it("restores the device the author left, before any request", () => {
+    const { devices } = deviceShell(
+      memoryStore(
+        JSON.stringify({ ...DEFAULT_PREFERENCES, editingBreakpoint: "mobile" })
+      )
+    );
+    expect(devices.at(-1)).toBe("mobile");
+  });
+
+  it("keeps the device when a panel opens or closes", () => {
+    // The defect this guards: the device was read off the canvas's measured
+    // width, so opening a panel narrowed the canvas and moved every edit to a
+    // narrower breakpoint without the author choosing one.
+    const { devices, view, shell } = deviceShell();
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const layers = rail.querySelector<HTMLButtonElement>(
+      '[data-panel="layers"]'
+    );
+    if (layers === null) throw new Error("no Layers item on the rail");
+    fireEvent.click(layers);
+    fireEvent.click(layers);
+    expect(new Set(devices.slice(devices.indexOf("tablet")))).toEqual(
+      new Set(["tablet"])
+    );
+  });
+
+  it("goes back to fitting the canvas when the device changes", () => {
+    const { zooms, view, shell } = deviceShell(
+      memoryStore(JSON.stringify({ ...DEFAULT_PREFERENCES, zoom: 1.5 }))
+    );
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    expect(zooms.at(-1)).toEqual({ kind: "fit" });
+  });
+
+  it("keeps a chosen zoom when the same device is asked for again", () => {
+    // Choosing the device already being edited is not a change of device, and
+    // throwing away the author's zoom for it would be a surprise.
+    const { zooms, view, shell } = deviceShell(
+      memoryStore(
+        JSON.stringify({
+          ...DEFAULT_PREFERENCES,
+          zoom: 1.5,
+          editingBreakpoint: "tablet",
+        })
+      )
+    );
+    view.rerender(shell({ breakpoint: "tablet", count: 1 }));
+    expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1.5 });
+  });
+});
+
+describe("zooming from the keyboard", () => {
+  function zoomShell(stored: Record<string, unknown> = {}) {
+    stubContainerFits(true);
+    const zooms: unknown[] = [];
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, ...stored })
+        )}
+        onZoomChange={zoom => zooms.push(zoom)}
+      />
+    );
+    return zooms;
+  }
+
+  it("shows the page at actual size on mod+0", () => {
+    const zooms = zoomShell();
+    fireEvent.keyDown(document, { key: "0", ctrlKey: true, metaKey: false });
+    fireEvent.keyDown(document, { key: "0", metaKey: true, ctrlKey: false });
+    expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1 });
+  });
+
+  it("fits the canvas on Shift+1, whichever character the layout gives", () => {
+    // On a US layout Shift+1 arrives as "!"; on layouts where the digit needs
+    // Shift, it arrives as "1" with Shift held. Both mean the same press.
+    const us = zoomShell({ zoom: 1.5 });
+    fireEvent.keyDown(document, { key: "!", shiftKey: true });
+    expect(us.at(-1)).toEqual({ kind: "fit" });
+    cleanup();
+    const azerty = zoomShell({ zoom: 1.5 });
+    fireEvent.keyDown(document, { key: "1", shiftKey: true });
+    expect(azerty.at(-1)).toEqual({ kind: "fit" });
+  });
+
+  it("zooms only the shell that holds focus when two are mounted", () => {
+    // Two shells share one shortcut manager. The zoom keys must answer for
+    // the shell the author is in, as F6 does, not for whichever registered
+    // last.
+    stubContainerFits(true);
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        onZoomChange={zoom => first.push(zoom)}
+      />
+    );
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        onZoomChange={zoom => second.push(zoom)}
+      />
+    );
+    const [firstRail] = screen.getAllByRole("navigation", {
+      name: "Editor panels",
+    });
+    firstRail?.focus();
+    fireEvent.keyDown(document.activeElement ?? document, {
+      key: "0",
+      ctrlKey: true,
+    });
+    expect(first.at(-1)).toEqual({ kind: "fixed", scale: 1 });
+    expect(second.at(-1)).toEqual({ kind: "fit" });
+  });
+
+  it("leaves Shift+1 to a text field, where it types a character", () => {
+    // On a layout where the digit needs Shift, Shift+1 is how "1" is typed.
+    // The field is inside the shell, so the focus check passes and only the
+    // typing rule can keep the key; a field outside would pass by absence.
+    stubContainerFits(true);
+    const zooms: unknown[] = [];
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, zoom: 1.5 })
+        )}
+        onZoomChange={zoom => zooms.push(zoom)}
+        inspector={<input aria-label="A field in the inspector" />}
+      />
+    );
+    const field = screen.getByRole("textbox", {
+      name: "A field in the inspector",
+    });
+    field.focus();
+    fireEvent.keyDown(field, { key: "1", shiftKey: true });
+    fireEvent.keyDown(field, { key: "!", shiftKey: true });
+    expect(zooms.at(-1)).toEqual({ kind: "fixed", scale: 1.5 });
+  });
+});
+
+describe("hiding the side panels", () => {
+  function sidesShell(stored: Record<string, unknown> = {}) {
+    stubContainerFits(true);
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, ...stored })
+    );
+    const view = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        availablePanels={["add", "layers"]}
+        renderPanel={panel => <p>{panel} panel</p>}
+        inspector={<p>inspector body</p>}
+      />
+    );
+    return { store, ...view };
+  }
+  const toggle = (name: RegExp) => screen.getByRole("button", { name });
+  const stored = (store: { value: string | null }) =>
+    JSON.parse(store.value ?? "{}") as Record<string, unknown>;
+
+  it("hides and shows the inspector, and remembers it", () => {
+    const { store } = sidesShell();
+    expect(screen.getByText("inspector body")).toBeTruthy();
+    expect(toggle(/^Inspector$/).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(toggle(/^Inspector$/));
+
+    expect(screen.queryByText("inspector body")).toBeNull();
+    expect(
+      screen.queryByRole("complementary", { name: "Inspector" })
+    ).toBeNull();
+    expect(toggle(/^Inspector$/).getAttribute("aria-pressed")).toBe("false");
+    expect(stored(store).inspectorHidden).toBe(true);
+  });
+
+  it("restores a hidden inspector when nothing else differs from the defaults", () => {
+    sidesShell({ inspectorHidden: true });
+    expect(screen.queryByText("inspector body")).toBeNull();
+    expect(toggle(/^Inspector$/).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("hides the left panel without forgetting which one was open", () => {
+    const { store } = sidesShell({ leftPanel: "layers" });
+    expect(screen.getByText("layers panel")).toBeTruthy();
+
+    fireEvent.click(toggle(/^Left panel$/));
+    expect(screen.queryByText("layers panel")).toBeNull();
+    expect(stored(store)).toMatchObject({
+      leftPanel: "layers",
+      leftPanelHidden: true,
+    });
+
+    fireEvent.click(toggle(/^Left panel$/));
+    expect(screen.getByText("layers panel")).toBeTruthy();
+  });
+
+  it("opens Add when the left panel is shown with none chosen", () => {
+    sidesShell({ leftPanel: null, leftPanelHidden: true });
+    fireEvent.click(toggle(/^Left panel$/));
+    expect(screen.getByText("add panel")).toBeTruthy();
+  });
+
+  it("shows the left side again when the rail is used while it is hidden", () => {
+    sidesShell({ leftPanel: "layers", leftPanelHidden: true });
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    const add = rail.querySelector<HTMLButtonElement>('[data-panel="add"]');
+    if (add === null) throw new Error("no Add item on the rail");
+    fireEvent.click(add);
+    expect(screen.getByText("add panel")).toBeTruthy();
+  });
+
+  it("hides both sides on mod+\\, and shows both again", () => {
+    const { store } = sidesShell({ leftPanel: "layers" });
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.queryByText("layers panel")).toBeNull();
+    expect(screen.queryByText("inspector body")).toBeNull();
+    expect(stored(store)).toMatchObject({
+      leftPanelHidden: true,
+      inspectorHidden: true,
+    });
+
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.getByText("layers panel")).toBeTruthy();
+    expect(screen.getByText("inspector body")).toBeTruthy();
+  });
+
+  it("hides both when only one is showing", () => {
+    sidesShell({ leftPanel: "layers", leftPanelHidden: true });
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.queryByText("inspector body")).toBeNull();
+  });
+
+  it("draws no left panel button when the host offers no left panel", () => {
+    // With nothing to show there, the button could only do nothing.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        availablePanels={[]}
+        inspector={<p>inspector body</p>}
+      />
+    );
+    expect(screen.queryByRole("button", { name: /^Left panel$/ })).toBeNull();
+    expect(toggle(/^Inspector$/)).toBeTruthy();
+  });
+
+  it("opens the first panel the host offers when it offers no Add", () => {
+    // Shown with none chosen, the left side has to open something the rail
+    // offers, or the button would stay unpressed and nothing would open.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: null })
+        )}
+        availablePanels={["layers"]}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+    fireEvent.click(toggle(/^Left panel$/));
+    expect(screen.getByText("layers panel")).toBeTruthy();
+    expect(toggle(/^Left panel$/).getAttribute("aria-pressed")).toBe("true");
+
+    // mod+\ brings both sides back to the same panel.
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.queryByText("layers panel")).toBeNull();
+    fireEvent.keyDown(document, { key: "\\", ctrlKey: true });
+    expect(screen.getByText("layers panel")).toBeTruthy();
+  });
+
+  it("keeps mod+\\ working from inside a side it hides, with two editors on the page", () => {
+    // Hiding the side that holds focus would drop focus to the page body,
+    // where neither of two editors claims the key, so the second press
+    // could not bring the sides back.
+    stubContainerFits(true);
+    const shell = (label: string) => (
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "add" })
+        )}
+        availablePanels={["add"]}
+        renderPanel={() => <p>{label} add panel</p>}
+        inspector={<button type="button">{label} inspector control</button>}
+      />
+    );
+    render(shell("first"));
+    render(shell("second"));
+    screen.getByRole("button", { name: "first inspector control" }).focus();
+
+    fireEvent.keyDown(document.activeElement ?? document, {
+      key: "\\",
+      ctrlKey: true,
+    });
+    expect(screen.queryByText("first inspector control")).toBeNull();
+    expect(screen.getByText("second inspector control")).toBeTruthy();
+
+    fireEvent.keyDown(document.activeElement ?? document, {
+      key: "\\",
+      ctrlKey: true,
+    });
+    expect(screen.getByText("first inspector control")).toBeTruthy();
+    expect(screen.getByText("first add panel")).toBeTruthy();
+  });
+
+  it("leaves mod+\\ to a text field inside the editor", () => {
+    // Inside the shell, so the focus check passes and only the typing rule
+    // can keep the key: a backslash typed into a field is text.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        inspector={<input aria-label="A field in the inspector" />}
+      />
+    );
+    const field = screen.getByRole("textbox", {
+      name: "A field in the inspector",
+    });
+    field.focus();
+    fireEvent.keyDown(field, { key: "\\", ctrlKey: true });
+    expect(
+      screen.getByRole("textbox", { name: "A field in the inspector" })
+    ).toBeTruthy();
+  });
+});
+
+describe("the top bar's three columns", () => {
+  it("places the host's start, centre and end content, and its own controls, in their columns", () => {
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="About us"
+        topBar={<span>start content</span>}
+        topBarCenter={<span>centre content</span>}
+        topBarEnd={<span>end content</span>}
+        onZoomChange={vi.fn()}
+      />
+    );
+    const column = (name: string) =>
+      document.querySelector<HTMLElement>(`[data-topbar="${name}"]`);
+    const start = column("start");
+    const centre = column("centre");
+    const end = column("end");
+    expect(start?.textContent).toContain("About us");
+    expect(start?.textContent).toContain("start content");
+    expect(start?.querySelector('[aria-label="Exit editor"]')).not.toBeNull();
+    expect(centre?.textContent).toContain("centre content");
+    expect(centre?.querySelector(".nx-zoom-control")).not.toBeNull();
+    expect(end?.textContent).toContain("end content");
+    expect(end?.querySelector('[aria-label="Inspector"]')).not.toBeNull();
+  });
+
+  it("ends on the host's actions: the panel buttons come first, then a rule", () => {
+    // The accepted layout ends the bar on the action that leads, so the panel
+    // buttons sit before the document's controls rather than after them.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="About us"
+        topBarEnd={<button type="button">Publish</button>}
+        onZoomChange={vi.fn()}
+      />
+    );
+    const end = document.querySelector<HTMLElement>('[data-topbar="end"]');
+    const names = Array.from(end?.querySelectorAll("button") ?? []).map(
+      button => button.getAttribute("aria-label") ?? button.textContent
+    );
+    expect(names).toEqual(["Left panel", "Inspector", "Publish"]);
+    const publish = screen.getByRole("button", { name: "Publish" });
+    expect(publish.previousElementSibling?.getAttribute("aria-hidden")).toBe(
+      "true"
+    );
+  });
+
+  it.each([
+    ["no end content", undefined],
+    ["an empty conditional slot", null],
+    ["a false condition", false],
+  ])("draws no rule for %s", (_name, topBarEnd) => {
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="About us"
+        topBarEnd={topBarEnd}
+        onZoomChange={vi.fn()}
+      />
+    );
+    const end = document.querySelector<HTMLElement>('[data-topbar="end"]');
+    expect(end?.querySelector('[aria-hidden="true"].w-px')).toBeNull();
+  });
+
+  it("truncates a long title rather than pushing the centre column", () => {
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        title="A page title long enough to run into the device buttons"
+      />
+    );
+    const title = screen.getByText(
+      "A page title long enough to run into the device buttons"
+    );
+    expect(title.className).toContain("truncate");
+    expect(title.getAttribute("title")).toBe(
+      "A page title long enough to run into the device buttons"
+    );
+  });
+});
+
+describe("the shell's keys inside the canvas's frame", () => {
+  /** A binding registered from inside the shell, on the shell's own manager. */
+  function Binding({ onPress }: { onPress: () => void }): null {
+    useShortcuts(
+      [
+        {
+          keys: "mod+s",
+          description: "Save",
+          // Not prevented, so a listener installed twice would run it twice.
+          preventDefault: false,
+          run: () => onPress(),
+        },
+      ],
+      { name: "Test binding" }
+    );
+    return null;
+  }
+
+  it("hears a key pressed in the frame's document, through the one manager", () => {
+    // A key pressed with focus inside the frame is dispatched in the frame's
+    // document. The binding sits in a slot, so it is registered on whatever
+    // manager the shell provides: firing proves the SHELL's manager listens in
+    // the frame, rather than a second one built there.
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("no frame document");
+    expect(inner).not.toBe(document);
+    stubContainerFits(true);
+    const onPress = vi.fn();
+    render(
+      <CanvasFrameProvider frame={frame}>
+        <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+          <Binding onPress={onPress} />
+        </BuilderShell>
+      </CanvasFrameProvider>
+    );
+    fireEvent.keyDown(inner, { key: "s", ctrlKey: true, metaKey: false });
+    fireEvent.keyDown(inner, { key: "s", metaKey: true, ctrlKey: false });
+    expect(onPress).toHaveBeenCalledTimes(1);
+    frame.remove();
+  });
+});
+
+describe("the canvas region around a canvas in a frame", () => {
+  it("hands focus on into the frame, and is no tab stop of its own", () => {
+    /*
+     * F6 focuses the canvas region; the page is in the frame, so focus has to
+     * go on into it. A region that stayed a tab stop as well would trap Tab:
+     * Shift+Tab out of the frame would land on it and be sent straight back.
+     */
+    const frame = document.createElement("iframe");
+    stubContainerFits(true);
+    const { getByRole } = render(
+      <CanvasFrameProvider frame={frame}>
+        <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+          <span />
+        </BuilderShell>
+      </CanvasFrameProvider>
+    );
+    const region = getByRole("region", { name: "Canvas" });
+    // The frame inside the region, as `CanvasFrame` draws it there.
+    region.append(frame);
+    expect(region.tabIndex).toBe(-1);
+    act(() => region.focus());
+    expect(document.activeElement).toBe(frame);
+  });
+
+  it("is a tab stop of its own while the painted frame overflows it, so the keyboard can scroll it", () => {
+    /*
+     * At a zoom past the region, the region itself scrolls the painted frame,
+     * and arrow keys inside the frame scroll only the frame's own page. So
+     * while it overflows, the region keeps focus when it gets it, and Tab goes
+     * on into the frame from there.
+     */
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(2000);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+    const frame = document.createElement("iframe");
+    stubContainerFits(true);
+    const { getByRole } = render(
+      <CanvasFrameProvider frame={frame}>
+        <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+          <span />
+        </BuilderShell>
+      </CanvasFrameProvider>
+    );
+    const region = getByRole("region", { name: "Canvas" });
+    region.append(frame);
+    expect(region.tabIndex).toBe(0);
+    act(() => region.focus());
+    expect(document.activeElement).toBe(region);
+    vi.restoreAllMocks();
+  });
+
+  it("stays a tab stop over a canvas in the editor's own document", () => {
+    stubContainerFits(true);
+    const { getByRole } = render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <span />
+      </BuilderShell>
+    );
+    const region = getByRole("region", { name: "Canvas" });
+    expect(region.tabIndex).toBe(0);
+    act(() => region.focus());
+    expect(document.activeElement).toBe(region);
   });
 });

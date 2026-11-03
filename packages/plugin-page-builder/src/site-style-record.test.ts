@@ -45,6 +45,21 @@ describe("checkStoredTokens", () => {
     expect(result.value?.darkMode).toBe("media");
   });
 
+  it("keeps a variable's plain label, which the whitelist has to name", () => {
+    const result = checkStoredTokens({
+      tokens: [{ ...token("color.brand", "#111111"), label: "Brand" }],
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.value?.tokens[0]?.label).toBe("Brand");
+  });
+
+  it("refuses a label that cannot be shown", () => {
+    const result = checkStoredTokens({
+      tokens: [{ ...token("color.brand", "#111111"), label: "a\nb" }],
+    });
+    expect(result.issues.join(" ")).toMatch(/label/);
+  });
+
   it("carries both extension records through, because this shape is a WHITELIST", () => {
     /*
      * The narrowed token is rebuilt field by field, so a field this list omits
@@ -241,6 +256,35 @@ describe("checkStoredFonts", () => {
     const result = checkStoredFonts([{ family: "NoSrc" }]);
     expect(result.issues).toHaveLength(1);
     expect(result.value).toEqual([]);
+  });
+
+  it("keeps where a face came from, so a re-save does not drop it", () => {
+    const source = {
+      kind: "google",
+      id: "inter",
+      licence: "OFL-1.1",
+      category: "sans-serif",
+    };
+    const result = checkStoredFonts([
+      {
+        family: "Inter",
+        src: [{ url: "/api/media/m1/raw", format: "woff2" }],
+        source,
+      },
+    ]);
+    expect(result.issues).toEqual([]);
+    expect(result.value?.[0]?.source).toEqual(source);
+  });
+
+  it("refuses a source that is not a record of words", () => {
+    const result = checkStoredFonts([
+      {
+        family: "Inter",
+        src: [{ url: "/api/media/m1/raw" }],
+        source: { kind: "google", id: 7 },
+      },
+    ]);
+    expect(result.issues).toHaveLength(1);
   });
 });
 

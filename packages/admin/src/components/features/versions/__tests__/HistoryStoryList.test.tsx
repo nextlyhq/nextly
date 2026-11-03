@@ -323,6 +323,48 @@ describe("events between versions", () => {
     expect(list).toHaveTextContent("Published English and Spanish");
     expect(list).toHaveTextContent("3 older versions removed by retention");
   });
+
+  it("shows a takeover row naming who took over from whom", () => {
+    renderList(
+      [version(1, 1), version(2, 5)],
+      [
+        event("taken-over", 3, {
+          actorId: "u2",
+          actorName: "Grace",
+          payload: { fromId: "u1", fromName: "Ana" },
+        }),
+      ]
+    );
+    const list = screen.getByRole("list", { name: "History, newest first" });
+    const row = within(list)
+      .getByText("Took over from Ana")
+      .closest("li") as HTMLElement;
+    // A row of its own, led by who took over, and no version's row.
+    expect(row).toHaveTextContent("Grace");
+    expect(row).not.toHaveTextContent("Version");
+    // Between the two versions, in the order they happened: newest first.
+    const text = list.textContent ?? "";
+    const at = (s: string) => text.indexOf(s);
+    expect(at("Version 2")).toBeGreaterThan(-1);
+    expect(at("Version 2")).toBeLessThan(at("Took over from Ana"));
+    expect(at("Took over from Ana")).toBeLessThan(at("Version 1"));
+  });
+
+  it("says the previous editor is unavailable when the server could not name them", () => {
+    renderList(
+      [version(1, 1)],
+      [
+        event("taken-over", 3, {
+          actorName: "Grace",
+          payload: { fromId: "u-gone", fromName: null },
+        }),
+      ]
+    );
+    const list = screen.getByRole("list", { name: "History, newest first" });
+    expect(list).toHaveTextContent("Took over (previous editor unavailable)");
+    expect(list).not.toHaveTextContent("null");
+    expect(list).not.toHaveTextContent("u-gone");
+  });
 });
 
 describe("filters", () => {

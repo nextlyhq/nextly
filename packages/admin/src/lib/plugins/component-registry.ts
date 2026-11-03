@@ -136,6 +136,15 @@ export interface DocumentViewProps {
    * names none of them, the admin asks the author before the view is drawn.
    */
   field?: FieldConfig;
+  /**
+   * For a view offered on a field type: where the field sits in the document
+   * form, from its root — `layout` for a top-level field, `hero.body` for one
+   * inside a named group. Bind through this rather than `field.name`, which
+   * names the field within its own group only.
+   *
+   * @experimental
+   */
+  fieldPath?: string;
 }
 
 /**
