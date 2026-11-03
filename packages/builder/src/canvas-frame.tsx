@@ -1252,6 +1252,11 @@ function useLayerPlacement(
         if (root !== null && typeof Sizes === "function") {
           sizes = new Sizes(place);
           sizes.observe(root);
+          // The root can MOVE without changing size, when what is above it
+          // in a site's own layout grows — a banner, a header image loading —
+          // and only the page's own size says so.
+          sizes.observe(view.document.documentElement);
+          if (view.document.body !== null) sizes.observe(view.document.body);
         }
         // The root's own attributes say how the site's dark mode applies.
         if (root !== null && Mutations !== undefined) {

@@ -238,10 +238,53 @@ describe("the canvas frame on a page the site serves", () => {
     // The page above the footer grows: the footer moves down, its own size
     // the same, and the page's body is what changes size.
     footer.getBoundingClientRect = () => new DOMRect(0, 500, 1280, 40);
-    const body = watches.find(watch => watch.targets.includes(doc.body));
-    expect(body, "the page's body is watched").toBeDefined();
-    act(() => body?.changed());
+    const page = watches.filter(watch => watch.targets.includes(doc.body));
+    expect(page.length, "the page's body is watched").toBeGreaterThan(0);
+    act(() => {
+      for (const watch of page) watch.changed();
+    });
     expect(Number.parseFloat(cue?.style.top ?? "0")).toBeGreaterThan(0);
+  });
+
+  it("moves the editor's chrome with the canvas when the site's layout above it grows", async () => {
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={siteSource()}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    const doc = frameDocument(frame);
+    const watches: { targets: Element[]; changed: () => void }[] = [];
+    class Sizes {
+      private readonly targets: Element[] = [];
+      constructor(changed: () => void) {
+        watches.push({ targets: this.targets, changed });
+      }
+      observe(target: Element): void {
+        this.targets.push(target);
+      }
+      disconnect(): void {}
+    }
+    Object.defineProperty(doc.defaultView, "ResizeObserver", {
+      value: Sizes,
+      configurable: true,
+    });
+    await hydrate(frame);
+    const root = doc.querySelector<HTMLElement>(".nx-canvas");
+    const content = container.querySelector<HTMLElement>(
+      ".nx-canvas-layer__content"
+    );
+    if (root === null || content === null) throw new Error("no canvas");
+    // A banner above the canvas grows: the canvas moves down, its own size
+    // the same, and only the page's size changes.
+    root.getBoundingClientRect = () => new DOMRect(0, 300, 1280, 400);
+    const page = watches.filter(watch => watch.targets.includes(doc.body));
+    expect(page.length, "the page's body is watched").toBeGreaterThan(0);
+    act(() => {
+      for (const watch of page) watch.changed();
+    });
+    expect(content.style.transform).toContain("300px");
   });
 
   it("takes a cue away with the part the site's layout removes", async () => {
