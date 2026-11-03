@@ -1149,7 +1149,7 @@ export type TokenNamingProblem =
  * grammar decides what those keys may contain and its DEPTH decides how far the
  * reader has to descend to find the token underneath them.
  */
-export function labelProblem(name: unknown): TokenNamingProblem | undefined {
+function labelProblem(name: unknown): TokenNamingProblem | undefined {
   // Persisted settings reach here unvalidated, and `RegExp.test` COERCES: a
   // stored `123` becomes "123" and satisfies the grammar, after which the value
   // travels on as a number and throws where a string was assumed.
@@ -1178,7 +1178,7 @@ export function labelProblem(name: unknown): TokenNamingProblem | undefined {
  * subjects take different rules and a caller holding a bare string cannot be
  * relied on to say which it has.
  */
-export function identityProblem(
+function identityProblem(
   identity: unknown,
   field: "name" | "id"
 ): TokenNamingProblem | undefined {

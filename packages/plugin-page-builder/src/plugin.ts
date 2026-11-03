@@ -649,6 +649,24 @@ function isOrphanedSingle(
 const REGISTRY_PAGE_SIZE = 100;
 
 /**
+ * What the font catalogue adds to the plugin: the two hosts its server may
+ * reach, its routes, and whether the host turned it off. Worked out once, so
+ * the plugin's definition spreads the parts rather than asking at each.
+ */
+function fontCatalogueParts(fonts: ReturnType<typeof resolveFontOptions>): {
+  off: boolean;
+  capabilities: { capabilities?: { net: { outbound: string[] } } };
+  routes: ReturnType<typeof siteFontRoutes>;
+} {
+  if (fonts === false) return { off: true, capabilities: {}, routes: [] };
+  return {
+    off: false,
+    capabilities: { capabilities: { net: { outbound: [...fonts.outbound] } } },
+    routes: siteFontRoutes({ fonts }),
+  };
+}
+
+/**
  * Every collection slug the registry holds, or `undefined` when it could not
  * be read.
  *
@@ -866,8 +884,9 @@ export const pageBuilder = (
   // the defaults tier. The stored tier reaches the published route through
   // `loadSiteStyle`, which reads per request.
   const configStyle = resolveSiteStyle(opts.siteStyle);
-  // The font catalogue's hosts and caps, refused at boot when unusable.
-  const fonts = resolveFontOptions(opts.fonts);
+  // The font catalogue's hosts and caps, refused at boot when unusable, and
+  // what it adds to the plugin.
+  const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
 
   // The usage indexes' reconciler for a write made in a transaction the
   // caller owns, which their hooks skip. Set by `init`, read per request.
@@ -906,9 +925,7 @@ export const pageBuilder = (
     // The catalogue's two hosts, the only ones the server may reach, so an
     // add's downloads go through `ctx.fetch` and are listed where a reviewer
     // reads them.
-    ...(fonts === false
-      ? {}
-      : { capabilities: { net: { outbound: [...fonts.outbound] } } }),
+    ...fonts.capabilities,
     admin: {
       // How the plugin names itself wherever the admin lists it. Without this
       // the dashboard section and the plugins list fall back to `meta.name`,
@@ -1392,7 +1409,7 @@ export const pageBuilder = (
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
         // Design → Fonts' catalogue: read it, and add a family to the site.
-        ...(fonts === false ? [] : siteFontRoutes({ fonts })),
+        ...fonts.routes,
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,
@@ -1428,12 +1445,12 @@ export const pageBuilder = (
         opts.checklist !== undefined ||
         opts.limits !== undefined ||
         opts.siteStyle !== undefined ||
-        fonts === false
+        fonts.off
           ? {
               clientConfig: {
                 // The Fonts tab offers no catalogue when the host turned it
                 // off, rather than one whose routes do not exist.
-                ...(fonts === false ? { fontCatalogue: false } : {}),
+                ...(fonts.off ? { fontCatalogue: false } : {}),
                 ...(opts.remotePatterns === undefined
                   ? {}
                   : { remotePatterns: opts.remotePatterns }),
