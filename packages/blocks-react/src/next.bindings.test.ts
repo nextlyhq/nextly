@@ -252,6 +252,52 @@ describe("a routed page's bindings", () => {
     expect(html).toContain("Public");
   });
 
+  it("a binding on a node the shape repair drops claims no read", async () => {
+    // A stored node with no usable version: the read pipeline drops it before
+    // anything renders, so its entry binding must not spend the page's one
+    // claim, which the list beside it needs.
+    const content = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "dropped",
+            type: "core/heading",
+            version: 1.5,
+            props: { text: "Own", level: "h1" },
+            bindings: { text: { $bind: "title" } },
+          },
+          {
+            id: "loop",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts", limit: 1 },
+            slots: {
+              children: [
+                {
+                  id: "item",
+                  type: "core/heading",
+                  version: 1,
+                  props: { text: "Own", level: "h2" },
+                  bindings: { text: { $bind: "title", source: "item" } },
+                },
+              ],
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    const nextly = instance(content);
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks, maxQueries: 1 },
+      nextly
+    );
+    expect(publicReads(nextly).map(args => args.collection)).toEqual(["posts"]);
+    expect(html).toContain("Public");
+  });
+
   it("a page with no binding reads nothing more and renders as it did", async () => {
     const nextly = instance({
       formatVersion: DOCUMENT_FORMAT_VERSION,

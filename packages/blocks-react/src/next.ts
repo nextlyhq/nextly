@@ -95,7 +95,11 @@ import {
 } from "./next-layouts";
 import { layoutPartSheets, type PagePart } from "./page-parts";
 import { PageRenderer } from "./page-renderer";
-import { pageBindingRun, prepareDocumentForRead } from "./prepare-document";
+import {
+  pageBindingRun,
+  prepareDocumentForRead,
+  repairedDocuments,
+} from "./prepare-document";
 import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
@@ -1786,12 +1790,17 @@ async function readPageBindings(args: {
   };
 }
 
-/** Every document a page draws: its own, and each component it inlines. */
+/**
+ * Every document a page draws, its own and each component it inlines, as the
+ * read pipeline will repair them under this route's caps, so a node the repair
+ * drops claims no read.
+ */
 function documentsDrawn(
+  config: BlocksPageConfig,
   document: BlockDocument,
   ...definitions: readonly DefinitionsById[]
 ): BlockDocument[] {
-  return [document, ...definitions.flatMap(map => [...map.values()])];
+  return repairedDocuments(document, definitions, effectiveLimits(config));
 }
 
 /**
@@ -1917,7 +1926,7 @@ function blocksRouteConfig(
               config,
               entry,
               context,
-              documents: documentsDrawn(document, definitions),
+              documents: documentsDrawn(config, document, definitions),
               entrySource,
               reader: publicReaderFor(config, context.locale, listWindow),
               budget,
@@ -2034,7 +2043,12 @@ function blocksRouteConfig(
         config,
         entry,
         context,
-        documents: documentsDrawn(document, definitions, regionDefinitions),
+        documents: documentsDrawn(
+          config,
+          document,
+          definitions,
+          regionDefinitions
+        ),
         entrySource,
         reader: publicReaderFor(config, context.locale, listWindow),
         budget,

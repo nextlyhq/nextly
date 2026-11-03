@@ -224,6 +224,34 @@ describe("reading and formatting dates without the server's zone or a placeholde
     });
   });
 
+  it("keeps a time-only value's time when its format sets only the hour style", () => {
+    const opens: BindingFieldShape = {
+      name: "opensAt",
+      type: "date",
+      timeOnly: true,
+    };
+    const env = { locale: "en", timeZone: "UTC" };
+    const time = "1970-01-01T21:30:00.000Z";
+    for (const options of [{ hour12: false }, { hourCycle: "h23" }]) {
+      expect(
+        text(env, time, checked({ type: "date", options }, opens), opens)
+      ).toBe("21:30");
+    }
+  });
+
+  it("refuses a calendar date that does not exist, alone or inside a date-time", () => {
+    expect(machineDate("2026-02-30")).toBeUndefined();
+    expect(
+      machineDate("2026-02-30T10:00:00Z", DATE_TIME_FIELD)
+    ).toBeUndefined();
+    expect(machineDate("2026-13-01")).toBeUndefined();
+    // A real leap day is a date.
+    expect(machineDate("2024-02-29")).toEqual({
+      datetime: "2024-02-29",
+      dateOnly: true,
+    });
+  });
+
   it("allows hour12 and hourCycle beside a preset", () => {
     const short = checked(
       { type: "date", options: { timeStyle: "short", hour12: false } },

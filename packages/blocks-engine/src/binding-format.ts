@@ -166,6 +166,21 @@ const PLACEHOLDER_FREE_DEFAULTS: Readonly<
   month: { year: "numeric", month: "long" },
 };
 
+/**
+ * A format's options with the parts its granularity shows by default, when the
+ * format picks no part of its own. An hour style alone picks none, so it is
+ * kept beside the defaults rather than leaving `Intl` to show a full date.
+ */
+function withDefaultParts(
+  options: FormatOptions,
+  granularity: DateGranularity
+): FormatOptions {
+  const defaults = PLACEHOLDER_FREE_DEFAULTS[granularity];
+  if (defaults === undefined) return options;
+  if (displayParts(Object.keys(options)).length > 0) return options;
+  return { ...defaults, ...options };
+}
+
 /** The options every number format may set. */
 const DIGIT_OPTIONS: Readonly<Record<string, OptionRule>> = {
   minimumIntegerDigits: wholeNumber(1, 21),
@@ -397,23 +412,41 @@ function partsTheFieldLacks(field: BindingFieldShape | undefined): {
   return { parts: NO_PARTS, message: "" };
 }
 
+/**
+ * The options that pick which parts of a date are shown, as opposed to how a
+ * time is written: everything but the hour style.
+ */
+function displayParts(keys: readonly string[]): string[] {
+  return keys.filter(key => !HOUR_STYLE.has(key));
+}
+
+/** A preset beside a single component, which `Intl` refuses. */
+function presetConflict(keys: readonly string[]): FormatCheck | undefined {
+  const shown = displayParts(keys);
+  const presets = shown.filter(key => DATE_PRESETS.has(key)).length;
+  if (presets === 0 || presets === shown.length) return undefined;
+  return invalid(
+    "A date format uses either dateStyle and timeStyle, or single parts such as month and day, not both."
+  );
+}
+
+/** An option showing a part the field's value does not have. */
+function fieldPartConflict(
+  keys: readonly string[],
+  field: BindingFieldShape | undefined
+): FormatCheck | undefined {
+  const hidden = partsTheFieldLacks(field);
+  return keys.some(key => hidden.parts.has(key))
+    ? misfit(hidden.message)
+    : undefined;
+}
+
 /** Why a date format's options cannot be used together, or for this field. */
 function dateOptionProblem(
   keys: readonly string[],
   field: BindingFieldShape | undefined
 ): FormatCheck | undefined {
-  const presets = keys.filter(key => DATE_PRESETS.has(key));
-  const components = keys.filter(
-    key => !DATE_PRESETS.has(key) && !HOUR_STYLE.has(key)
-  );
-  if (presets.length > 0 && components.length > 0) {
-    return invalid(
-      "A date format uses either dateStyle and timeStyle, or single parts such as month and day, not both."
-    );
-  }
-  const hidden = partsTheFieldLacks(field);
-  if (keys.some(key => hidden.parts.has(key))) return misfit(hidden.message);
-  return undefined;
+  return presetConflict(keys) ?? fieldPartConflict(keys, field);
 }
 
 function checkDateFormat(
@@ -518,6 +551,30 @@ function isCalendarDate(granularity: DateGranularity): boolean {
 }
 
 /**
+ * Whether the calendar date a string starts with exists. `Date` rolls an
+ * impossible one over, so `2026-02-30` would otherwise read as March 2.
+ */
+function isRealCalendarDate(value: string): boolean {
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+/** The instant a stored value names, read only from ISO 8601 text or a Date. */
+function instantOf(value: unknown): Date | undefined {
+  if (value instanceof Date) return value;
+  if (typeof value !== "string" || !isRealCalendarDate(value)) return undefined;
+  if (DAY_STRING.test(value)) return new Date(`${value}T00:00:00.000Z`);
+  return INSTANT_STRING.test(value) ? new Date(value) : undefined;
+}
+
+/**
  * A bound date as an instant and what it means, or nothing for a value that
  * is not a date.
  *
@@ -533,12 +590,7 @@ function readDate(
 ):
   | { readonly instant: Date; readonly granularity: DateGranularity }
   | undefined {
-  let instant: Date | undefined;
-  if (value instanceof Date) instant = value;
-  else if (typeof value === "string") {
-    if (DAY_STRING.test(value)) instant = new Date(`${value}T00:00:00.000Z`);
-    else if (INSTANT_STRING.test(value)) instant = new Date(value);
-  }
+  const instant = instantOf(value);
   if (instant === undefined || Number.isNaN(instant.getTime())) {
     return undefined;
   }
@@ -688,10 +740,7 @@ export function createBindingFormatter(env: FormatEnv): BindingFormatter {
     // are stored in UTC, so they are read in UTC; an instant is shown in the
     // site's zone.
     const timeZone = date.granularity === "dateTime" ? env.timeZone : "UTC";
-    const options =
-      Object.keys(format.options).length === 0
-        ? (PLACEHOLDER_FREE_DEFAULTS[date.granularity] ?? format.options)
-        : format.options;
+    const options = withDefaultParts(format.options, date.granularity);
     const formatter = buildOnce(
       dates,
       JSON.stringify([locale, timeZone, options]),
