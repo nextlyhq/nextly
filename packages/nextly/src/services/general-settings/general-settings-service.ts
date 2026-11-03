@@ -13,6 +13,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, sql } from "drizzle-orm";
 
 import { loadedDialect } from "../../database/dialect-tables";
+import { flushContentChange } from "../../domains/flush-content-change";
+import { nextlySiteSettingsTags } from "../../runtime/cache/nextly-tags";
 import type {
   GeneralSettingsRecord,
   GeneralSettingsUpdate,
@@ -210,6 +212,15 @@ export class GeneralSettingsService extends BaseService {
         updatedAt: now,
       });
     }
+
+    // Pages that show the site's name, address, logo or time zone are cached
+    // under the settings tag, so every saved change expires it. Best-effort:
+    // the write is committed, so a cache failure is logged, never thrown.
+    await flushContentChange(
+      { tags: nextlySiteSettingsTags() },
+      this.logger,
+      "a site settings write"
+    );
 
     return this.getSettings();
   }

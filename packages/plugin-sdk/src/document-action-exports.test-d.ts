@@ -6,9 +6,12 @@
  * an action always says what it came to, that a dismissed question is its own
  * answer, and the four save states a surface draws.
  */
+import type { JSX } from "react";
 import { expectTypeOf } from "vitest";
 
 import {
+  DocumentPrimaryAction,
+  DocumentSaveIndicator,
   useBeforeDocumentAction,
   useDocumentActions,
   useTrackedWrite,
@@ -48,3 +51,11 @@ expectTypeOf(useTrackedWrite).returns.toEqualTypeOf<
 >();
 
 expectTypeOf<DocumentActions["storedAt"]>().toEqualTypeOf<Date | null>();
+
+// The header's controls for a view without one: components a view places,
+// which may render nothing outside a document editor.
+expectTypeOf(DocumentSaveIndicator).parameter(0).toEqualTypeOf<{
+  className?: string;
+}>();
+expectTypeOf(DocumentSaveIndicator).returns.toEqualTypeOf<JSX.Element | null>();
+expectTypeOf(DocumentPrimaryAction).returns.toEqualTypeOf<JSX.Element | null>();

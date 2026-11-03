@@ -12,6 +12,7 @@
  */
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import type { HostFinder, HostRef } from "./fields/blocks-composition";
+import { chunked } from "./id-batches";
 import type { UsageIndexHealth } from "./usage-index-health";
 import { indexIsWhole } from "./usage-index-health";
 
@@ -48,7 +49,7 @@ export function indexHostFinder(args: {
       // A whole frontier per query rather than a query per component: a host
       // walk can reach many components at once, and asking for each in turn
       // is a round trip per id.
-      for (const ids of chunks(componentIds, IDS_PER_QUERY)) {
+      for (const ids of chunked(componentIds, IDS_PER_QUERY)) {
         read += await readRows(
           nextly,
           args.indexCollection,
@@ -106,14 +107,6 @@ async function readRows(
     if (!answer.meta.hasNext) return read;
   }
   return read;
-}
-
-/** A list in runs of at most `size`. */
-function chunks<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size)
-    out.push(items.slice(i, i + size));
-  return out;
 }
 
 /** One index row as a host, or `null` for a row that names no collection entry. */

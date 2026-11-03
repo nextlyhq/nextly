@@ -32,7 +32,6 @@ function renderList(fields: BuilderField[]) {
         onDeleteField={vi.fn()}
         onDuplicateField={vi.fn()}
         onReorder={vi.fn()}
-        onAddInsideParent={vi.fn()}
         readOnly={false}
       />
     </DndContext>

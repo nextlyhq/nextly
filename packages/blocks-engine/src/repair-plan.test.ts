@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode } from "./document";
-import { DEFAULT_LIMITS } from "./limits";
+import { DEFAULT_LIMITS, documentBytes } from "./limits";
 import { lockBreaksIn } from "./lock-breaks";
 import { lockRepairRule, planRepair, type RepairRule } from "./repair-plan";
 import {
@@ -186,6 +186,7 @@ describe("planRepair", () => {
     expect(plan.steps).toEqual([
       expect.objectContaining({
         kind: "move",
+        cause: "lock",
         nodeId: "extra",
         from: { holderId: "row", slot: "items" },
       }),
@@ -443,6 +444,55 @@ describe("planRepair", () => {
     const second = plan.result.nodes[1]!.slots!.body![0]!;
     expect(first.props.frame).toEqual(second.props.frame);
     expect(first.props.frame).not.toBe(second.props.frame);
+  });
+
+  it("plans nothing when the blocks it would add take the page past its byte limit", () => {
+    const row = placed("acme/fixed-row", "row");
+    delete row.slots;
+    const doc = page(row);
+    // Room for the row as it is, and not for the two blocks it would gain.
+    const limits = { ...DEFAULT_LIMITS, maxBytes: documentBytes(doc) + 16 };
+    const plan = planRepair(doc, { ...sources(), limits });
+    expect(plan.steps).toEqual([]);
+    expect(plan.remaining).not.toEqual([]);
+  });
+
+  it("finds the outermost locked block under a node cap raised past the default", () => {
+    // More nodes ahead of the shelf than the default cap, under a cap raised
+    // to hold them: the shelf's lock must still be read, so the block goes
+    // straight to just after the shelf.
+    const filler = Array.from({ length: 5_100 }, (_, i) => ({
+      ...placed("acme/divider"),
+      id: `f${i}`,
+    }));
+    const shelf = placed("acme/sealed-shelf", "shelf");
+    shelf.slots!.main![0]!.slots!.body!.push({
+      ...placed("acme/divider"),
+      id: "extra",
+    });
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 6_000 };
+    const plan = planRepair(page(...filler, shelf), { ...sources(), limits });
+    expect(plan.steps).toEqual([
+      expect.objectContaining({
+        kind: "move",
+        nodeId: "extra",
+        after: "shelf",
+      }),
+    ]);
+  });
+
+  it("names every block an add brings, the starting blocks inside it included", () => {
+    const shelf = placed("acme/sealed-shelf", "shelf");
+    delete shelf.slots;
+    const plan = repaired(page(shelf));
+    const card = plan.result.nodes[0]!.slots!.main![0]!;
+    expect(plan.steps).toEqual([
+      expect.objectContaining({
+        kind: "add",
+        nodeId: card.id,
+        nodeIds: [card.id, card.slots!.body![0]!.id],
+      }),
+    ]);
   });
 
   it("repairs several breaks in one plan", () => {

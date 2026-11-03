@@ -48,11 +48,16 @@ import { stateHasOwnValues } from "./style-values";
  * an unnamed option.
  */
 const STATE_LABELS: Readonly<Record<StyleState, string>> = {
-  base: "None",
+  base: "Normal",
   hover: "Hover",
-  focus: "Focused",
+  focus: "Focus",
   active: "Pressed",
 };
+
+/** A state's name in this product's words: Normal, Hover, Focus, Pressed. */
+export function stateLabel(state: StyleState): string {
+  return STATE_LABELS[state];
+}
 
 /**
  * What each state MEANS, for the accessible name and the tooltip.

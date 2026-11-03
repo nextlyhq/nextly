@@ -126,6 +126,35 @@ describe("a field transformed when it is read", () => {
   });
 });
 
+describe("a sort of several keys", () => {
+  const denyAll = () => false;
+
+  it("is refused for a denied key in any position, naming every refused key", async () => {
+    registerFieldFunctions("collection", SLUG, [
+      { name: "title", type: "text" },
+      { name: "note", type: "text", access: { read: denyAll } },
+      { name: "card", type: "text", access: { read: denyAll } },
+    ]);
+    const refusal = await refusalOf(
+      assertSortableField("collection", SLUG, ["title", "note", "card"])
+    );
+    expect(refusal).toContain("FIELD_NOT_SORTABLE");
+    expect(refusal).toContain("sort.note");
+    expect(refusal).toContain("sort.card");
+    expect(refusal).not.toContain("sort.title");
+  });
+
+  it("CONTROL: passes when every key may be read", async () => {
+    registerFieldFunctions("collection", SLUG, [
+      { name: "title", type: "text" },
+      { name: "rank", type: "number" },
+    ]);
+    await expect(
+      assertSortableField("collection", SLUG, ["title", "rank"])
+    ).resolves.toBeUndefined();
+  });
+});
+
 interface RuleArgs {
   req: { user?: { id?: unknown } };
   id?: string;

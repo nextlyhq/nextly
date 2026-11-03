@@ -42,8 +42,11 @@ export const paragraph: BlockDefinition<ParagraphProps, PageContext> =
   defineBlock({
     name: "core/text",
     version: 1,
-    description:
-      "A paragraph of plain text. Rich formatting lives in the rich-text block, which carries its own editor.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A paragraph of plain
+    // text. Rich formatting lives in the rich-text block, which carries its own
+    // editor.
+    description: "A paragraph of plain text.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -53,7 +56,9 @@ export const paragraph: BlockDefinition<ParagraphProps, PageContext> =
       category: CONTENT,
       keywords: ["paragraph", "copy", "body", "prose"],
     },
-    props: { text: { role: "content", type: "textarea", inline: true } },
+    props: {
+      text: { label: "Text", role: "content", type: "textarea", inline: true },
+    },
     defaultProps: { text: "" },
     // The opening prose is what a search result should quote. Offered whole and
     // untruncated: how long a description may be is the metadata layer's rule,
