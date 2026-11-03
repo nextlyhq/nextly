@@ -30,12 +30,14 @@ import { tablesLeftInPlace } from "../../domains/schema/ownership/drop-guard";
 import { assertDependenciesInstalled } from "../../domains/schema/ownership/install-plan";
 import {
   createOwnerRegistry,
+  ELEMENT_NOUNS,
   type OwnerRecord,
 } from "../../domains/schema/ownership/owner-registry";
 import type { PluginLifecycleRecord } from "../../domains/schema/ownership/plugin-lifecycle-state";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
 import {
   planUninstall,
+  type UninstallDependent,
   type UninstallInput,
   type UninstallPlan,
 } from "../../domains/schema/ownership/uninstall-plan";
@@ -167,6 +169,37 @@ export interface PluginLifecycleDeps {
   /** Which of the named tables exist in the database now. */
   liveTables: (tables: readonly string[]) => Promise<ReadonlySet<string>>;
   /**
+   * What other owners built on or into the schema a full uninstall of the
+   * plugin would drop: elements on its tables, keys and relationship fields
+   * pointing in, and elements using a column it contributed elsewhere. Reads
+   * only, and throws rather than answering "nothing" about a record it could
+   * not read, so the uninstall refuses.
+   *
+   * @param owned the plugin's live owner rows: its tables, and the columns it
+   *   contributed to other owners' tables
+   */
+  schemaDependents: (
+    plugin: LifecyclePlugin,
+    owned: readonly OwnerRecord[]
+  ) => Promise<UninstallDependent[]>;
+  /**
+   * Forget a fully uninstalled plugin: delete its settings (secrets
+   * included), its migration-ledger rows and its owner records, so a later
+   * install starts from nothing and applies every module again. Its
+   * `plugin_lifecycle` record stays: the boot reads it. Each delete matches
+   * nothing the second time, so a resumed uninstall can run it again.
+   */
+  forgetPlugin: (plugin: LifecyclePlugin) => Promise<void>;
+  /**
+   * The columns, indexes, foreign keys and checks each named table has now,
+   * by kind and name; a table that does not exist is absent. A full
+   * uninstall reads it once its DOWNs have run, so it forgets the plugin
+   * only once everything it added to other owners' tables is gone.
+   */
+  liveElements: (
+    tables: readonly string[]
+  ) => Promise<ReadonlyMap<string, readonly LiveElement[]>>;
+  /**
    * Each named table that exists now, with a token the database keeps for
    * that table through a rename and gives no table that replaces it
    * (`readTableIdentities`); null where it reports none. An uninstall reads
@@ -213,6 +246,12 @@ export interface PluginLifecycleDeps {
   liveColumns?: (
     tables: readonly string[]
   ) => Promise<ReadonlyMap<string, ReadonlySet<string>>>;
+}
+
+/** A column, index, foreign key or check a table has now. */
+export interface LiveElement {
+  kind: Exclude<NonNullable<OwnerRecord["elementKind"]>, "table">;
+  name: string;
 }
 
 /** How an uninstall was asked for: whether it keeps the data, and the consent to lose it. */
@@ -391,6 +430,13 @@ interface UninstallDecision {
   downs: PreparedModuleDown[];
   /** What it deletes, as consented to or agreed to at the terminal. */
   deletions: Deletion[];
+  /**
+   * Its owner rows on tables that exist, leaving out a column no longer in
+   * its table: what the dependents were read over.
+   */
+  owned: OwnerRecord[];
+  /** Its lifecycle record as the uninstall found it. */
+  found: PluginLifecycleRecord | undefined;
 }
 
 /**
@@ -434,11 +480,8 @@ async function decideUninstall(
 ): Promise<UninstallDecision> {
   const plugin = find(deps.plugins, name);
   assertEnabled(plugin);
-  assertResumedTheSameWay(
-    plugin,
-    (await deps.readLifecycle()).get(plugin.name),
-    opts.keepData
-  );
+  const found = (await deps.readLifecycle()).get(plugin.name);
+  assertResumedTheSameWay(plugin, found, opts.keepData);
   const repository = new SchemaOwnersRepository(deps.db, deps.dialect);
   const registry = createOwnerRegistry(repository);
   const recordedRows = await registry.listByOwner(plugin.name);
@@ -450,21 +493,31 @@ async function decideUninstall(
   const live = await deps.liveTables([
     ...new Set(recordedRows.map(row => row.tableName)),
   ]);
-  const owned = recordedRows.filter(row => live.has(row.tableName));
-  // Element rows on this plugin's tables that somebody else owns — they go
-  // with the table on a full uninstall, and the confirmation names them.
-  // Read from the tables the plugin OWNS: an element it added to another
-  // owner's table puts that table in `owned` too, and its other
-  // contributors' elements there are not dropped with anything.
-  const ownTables = owned
-    .filter(row => (row.elementKind ?? "table") === "table")
-    .map(row => row.tableName);
-  const foreignElements = (
-    await repository.read([...new Set(ownTables)])
-  ).filter(
-    row =>
-      (row.elementKind ?? "table") !== "table" && row.ownerId !== plugin.name
+  const liveOwned = recordedRows.filter(row => live.has(row.tableName));
+  const columnTables = [
+    ...new Set(
+      liveOwned
+        .filter(row => row.elementKind === "column")
+        .map(row => row.tableName)
+    ),
+  ];
+  const liveColumns =
+    columnTables.length > 0 && deps.liveColumns !== undefined
+      ? await deps.liveColumns(columnTables)
+      : undefined;
+  // A column's row outlives a `migrate:down --plugin` that removed it, as
+  // its table's does; no DOWN left to run drops it, so nothing is asked
+  // about it.
+  const owned = liveOwned.filter(
+    row => row.elementKind !== "column" || columnStands(row, liveColumns)
   );
+  // What other owners built on or into this schema refuses a full
+  // uninstall: dropping it would delete their data, which this operator's
+  // consent cannot give away. Keeping the data drops nothing, so it is not
+  // read then.
+  const dependents = opts.keepData
+    ? []
+    : await deps.schemaDependents(plugin, owned);
 
   const input: UninstallInput = {
     pluginName: plugin.name,
@@ -475,7 +528,7 @@ async function decideUninstall(
       .filter(p => !p.enabled)
       .map(p => ({ name: p.name, requires: p.requires })),
     owned,
-    foreignElements,
+    dependents,
     modules: plugin.modules,
     unshipped: plugin.unshippedModules,
     keepData: opts.keepData,
@@ -483,7 +536,7 @@ async function decideUninstall(
 
   // Throws on a dependent or an irreversible module.
   const plan = planUninstall(input);
-  assertTablesCanBeUndone(plugin, plan, deps);
+  await assertTablesCanBeUndone(plugin, plan, owned, deps);
 
   // Before the confirmation: a DOWN that would be refused is refused whether
   // or not the operator confirms, and asking them to confirm it first only
@@ -494,27 +547,32 @@ async function decideUninstall(
       : [];
 
   assertDownsDropTables(plugin, plan, downs, deps.dialect);
-  const columnTables = [
-    ...new Set(
-      owned
-        .filter(row => row.elementKind === "column")
-        .map(row => row.tableName)
-    ),
-  ];
-  const liveColumns =
-    columnTables.length > 0 && deps.liveColumns !== undefined
-      ? await deps.liveColumns(columnTables)
-      : undefined;
   const deletions = await consentToDeletions(
     plugin,
-    uninstallDeletions(plugin, plan, owned, downs, liveColumns),
+    uninstallDeletions(plugin, plan, owned, downs),
     plan,
     opts,
     deps,
     agreed
   );
 
-  return { plugin, plan, downs, deletions };
+  return { plugin, plan, downs, deletions, owned, found };
+}
+
+/**
+ * Whether a recorded column is still in its table, as `liveColumns` read it:
+ * the one reading of which recorded columns an uninstall still drops. Unread
+ * (`liveColumns` absent), every recorded column counts as there, which asks
+ * for more, never less.
+ */
+function columnStands(
+  row: OwnerRecord,
+  liveColumns: ReadonlyMap<string, ReadonlySet<string>> | undefined
+): boolean {
+  return (
+    liveColumns === undefined ||
+    liveColumns.get(row.tableName)?.has(row.elementName ?? "") === true
+  );
 }
 
 /**
@@ -560,26 +618,60 @@ function assertResumedTheSameWay(
  * Refused rather than improvised: the honest answer is that this database
  * has no recorded statement that undoes those tables, and inventing DROPs
  * here would be a destructive path nothing generated and nothing reviewed.
+ *
+ * The same holds for a column, index, foreign key or check the plugin added
+ * to another owner's table that is there now (`liveElementsItAdded`): with
+ * no DOWN left to run, nothing removes it, and the check after the DOWNs
+ * would refuse only once the hook had run and the uninstall was recorded
+ * begun. Refused here instead, before either.
  */
-function assertTablesCanBeUndone(
+async function assertTablesCanBeUndone(
   plugin: LifecyclePlugin,
   plan: UninstallPlan,
-  deps: Pick<PluginLifecycleDeps, "logger">
-): void {
-  if (plan.tablesDropped.length === 0 || plan.downModules.length > 0) return;
+  owned: readonly OwnerRecord[],
+  deps: Pick<PluginLifecycleDeps, "logger" | "liveElements">
+): Promise<void> {
+  if (plan.finalState !== "uninstalled" || plan.downModules.length > 0) return;
+  const elements = await liveElementsItAdded(plugin, plan, owned, deps);
+  if (plan.tablesDropped.length === 0 && elements.length === 0) return;
   for (const table of plan.tablesDropped) deps.logger.warn(`  - ${table}`);
+  for (const element of elements) {
+    deps.logger.warn(`  - ${describeAdded(element)}`);
+  }
   throw new NextlyError({
     code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
-    publicMessage:
-      `${plugin.name} owns ${String(plan.tablesDropped.length)} table(s), listed above, but this database has no applied migration module to undo them — ` +
-      `they were created by a development push rather than by a migration. ` +
-      `Nothing was changed. Drop them with a migration, or remove the plugin from config and reset the development database.`,
+    publicMessage: nothingUndoesMessage(plugin, plan.tablesDropped, elements),
     logContext: {
       plugin: plugin.name,
       reason: "no-applied-module",
       tables: plan.tablesDropped,
+      ...(elements.length > 0 ? { elements } : {}),
     },
   });
+}
+
+/** The refusal's words for schema no applied module can undo, as listed above it. */
+function nothingUndoesMessage(
+  plugin: LifecyclePlugin,
+  tables: readonly string[],
+  elements: readonly AddedElement[]
+): string {
+  const next =
+    "Nothing was changed. Drop them with a migration, or remove the plugin from config and reset the development database.";
+  if (elements.length === 0) {
+    return (
+      `${plugin.name} owns ${String(tables.length)} table(s), listed above, but this database has no applied migration module to undo them — ` +
+      `they were created by a development push rather than by a migration. ${next}`
+    );
+  }
+  const owns = [
+    ...(tables.length > 0 ? [`${String(tables.length)} table(s)`] : []),
+    `${String(elements.length)} element(s) on other owners' tables`,
+  ].join(" and ");
+  return (
+    `${plugin.name} owns ${owns}, listed above, but this database has no applied migration module to undo them — ` +
+    `a development push created them, or a DOWN that already ran left them in place. ${next}`
+  );
 }
 
 /**
@@ -594,14 +686,13 @@ function assertTablesCanBeUndone(
  * uninstall keeping its data — deletes nothing and needs no consent, whatever
  * the plugin owns, and neither does one whose DOWNs are all judged to lose no
  * data (dropping an index, say). A recorded column is listed only while it is
- * still in its table (`liveColumns`).
+ * still in its table: `owned` has left out the others (`columnStands`).
  */
 function uninstallDeletions(
   plugin: LifecyclePlugin,
   plan: UninstallPlan,
   owned: readonly OwnerRecord[],
-  downs: readonly PreparedModuleDown[],
-  liveColumns: ReadonlyMap<string, ReadonlySet<string>> | undefined
+  downs: readonly PreparedModuleDown[]
 ): Deletion[] {
   if (plan.downModules.length === 0) return [];
   if (!downs.some(down => down.destructive)) return [];
@@ -613,9 +704,7 @@ function uninstallDeletions(
         row =>
           row.elementKind === "column" &&
           row.ownerId === plugin.name &&
-          !dropped.has(row.tableName) &&
-          (liveColumns === undefined ||
-            liveColumns.get(row.tableName)?.has(row.elementName ?? "") === true)
+          !dropped.has(row.tableName)
       )
       .map(row => ({
         kind: "column" as const,
@@ -654,13 +743,6 @@ async function consentToDeletions(
   const deletions = first
     ? await countDeletions(planned, deps.db, deps.dialect)
     : planned;
-  if (first) {
-    warnList(
-      deps,
-      `Dropping its tables also drops ${String(plan.elementsDropped.length)} element(s) other owners added to them:`,
-      plan.elementsDropped
-    );
-  }
   const verdict = await judgeDataLoss({
     deletions,
     consent: opts.consent ?? NO_CONSENT,
@@ -693,23 +775,22 @@ async function consentToDeletions(
   });
 }
 
-/** A heading and one line per item, or nothing when there are none. */
-function warnList(
-  deps: Pick<PluginLifecycleDeps, "logger">,
-  heading: string,
-  items: readonly string[]
-): void {
-  if (items.length === 0) return;
-  deps.logger.warn(heading);
-  for (const item of items) deps.logger.warn(`  - ${item}`);
-}
-
 /** Runs a decided uninstall: the hook, the DOWNs, the owner state. */
 async function executeUninstall(
-  { plugin, plan, downs }: UninstallDecision,
-  opts: { keepData: boolean },
+  decided: UninstallDecision,
+  opts: UninstallOptions,
   deps: PluginLifecycleDeps
 ): Promise<void> {
+  const { plugin } = decided;
+  if (finishedAlready(decided)) {
+    deps.logger.success(
+      `${plugin.name} is already uninstalled; nothing was changed.`
+    );
+    deps.logger.info(
+      `Remove "${plugin.name}" from your config to finish. Until you do, boot will refuse to start.`
+    );
+    return;
+  }
   const registry = createOwnerRegistry(
     new SchemaOwnersRepository(deps.db, deps.dialect)
   );
@@ -718,39 +799,56 @@ async function executeUninstall(
   // what `assertHookLeftTables` compares them with once it has run. Read,
   // and refused when unreadable, before the first change, so a database that
   // cannot answer changes nothing.
-  const judged = await readTablesAsTheyStand(plan, deps);
-  assertIdentitiesReadable(plugin, plan, judged);
+  const judged = await readTablesAsTheyStand(decided.plan, deps);
+  assertIdentitiesReadable(plugin, decided.plan, judged);
 
-  // Before the first change, the hook included: an uninstall that stops part
-  // way leaves this as the plugin's state, which the boot refuses and a run
-  // of the command again finishes.
-  await deps.recordLifecycle(plugin, {
-    state: "uninstalling",
-    keepData: opts.keepData,
-  });
+  // Recorded begun right before the first change, the hook included: an
+  // uninstall that stops part way leaves this as the plugin's state, which
+  // the boot refuses and a run of the command again finishes. Not before the
+  // hook's boot: the decision made again after it can still refuse, having
+  // changed nothing, and the state must then be the one it was, absent
+  // included, so that keeping the data instead is not refused as an
+  // unfinished uninstall resumed the other way. Once only.
+  let begun = false;
+  const recordBegun = async (): Promise<void> => {
+    if (begun) return;
+    begun = true;
+    await deps.recordLifecycle(plugin, {
+      state: "uninstalling",
+      keepData: opts.keepData,
+    });
+  };
 
-  // The tables keep the identities read before anything ran: the boot runs
-  // every enabled plugin's init(), and one could put another table in place
-  // of this plugin's, which a baseline taken after the boot would accept.
-  // Only SQLite's schema version is read again once the boot is done, right
-  // before the hook: the boot syncs code-first schema and can change it,
-  // which read from before it would be laid at the hook's door. A plugin
-  // without the hook boots nothing, and the first read stands.
+  // The hook's boot syncs the code-first schema, so once it is done the
+  // uninstall is decided again over what it left (`afterTheBoot`), and that
+  // decision is the one the hook and the DOWNs run under. A plugin without
+  // the hook boots nothing, and the first decision and reading stand.
+  //
+  // A plugin recorded uninstalled has had its hook run, and no install since:
+  // its boot would sync the schema that uninstall removed back into place.
+  // So neither runs again; whatever a later `migrate` applied is undone by
+  // the DOWNs alone.
+  let decision = decided;
   let beforeHook = judged;
-  await deps.runLifecycleHook(
-    plugin,
-    "onUninstall",
-    { keepData: opts.keepData },
-    async () => {
-      if (judged?.schemaVersion === undefined) return;
-      const schemaVersion = await deps.schemaVersion();
-      // Unreadable here, the comparison after the hook could only refuse:
-      // refused now, before the hook can change rows or anything outside.
-      if (schemaVersion === null)
-        throw schemaVersionUnreadableAfterBoot(plugin);
-      beforeHook = { ...judged, schemaVersion };
-    }
-  );
+  if (decided.found?.state !== "uninstalled") {
+    await deps.runLifecycleHook(
+      plugin,
+      "onUninstall",
+      { keepData: opts.keepData },
+      async () => {
+        ({ decision, beforeHook } = await afterTheBoot(
+          decided,
+          judged,
+          opts,
+          deps
+        ));
+        await recordBegun();
+      }
+    );
+  }
+  // No hook ran: before the first DOWN.
+  await recordBegun();
+  const { plan, downs, owned } = decision;
   await assertHookLeftTables(plugin, plan, beforeHook, deps);
 
   // `runDown` names a module whose DOWN runs outside a transaction before
@@ -762,8 +860,15 @@ async function executeUninstall(
     );
   }
   await assertTablesDropped(plugin, plan, deps);
+  await assertElementsDropped(plugin, plan, owned, deps);
 
-  await registry.setState(plugin.name, plan.finalState);
+  // A full uninstall leaves nothing of the plugin behind but the record that
+  // it was uninstalled; keeping the data keeps its rows, marked orphaned.
+  if (plan.finalState === "uninstalled") {
+    await deps.forgetPlugin(plugin);
+  } else {
+    await registry.setState(plugin.name, plan.finalState);
+  }
   await deps.recordLifecycle(plugin, { state: plan.finalState });
 
   deps.logger.success(
@@ -773,6 +878,174 @@ async function executeUninstall(
   );
   deps.logger.info(
     `Remove "${plugin.name}" from your config to finish. Until you do, boot will refuse to start.`
+  );
+}
+
+/**
+ * An uninstall run again after one finished, with nothing left to undo: the
+ * plugin is recorded uninstalled, no module of it is applied, and it owns
+ * nothing that exists. It is reported done and changes nothing, the hook
+ * included, rather than recorded begun and finished a second time.
+ */
+function finishedAlready(decided: UninstallDecision): boolean {
+  return (
+    decided.found?.state === "uninstalled" &&
+    decided.plan.downModules.length === 0 &&
+    decided.owned.length === 0
+  );
+}
+
+/**
+ * A full uninstall decided again once the hook's boot is done, and the tables
+ * as the hook finds them.
+ *
+ * The boot syncs the code-first schema. It can create one of the plugin's
+ * tables that was missing, recording it as the plugin's, and it can bring a
+ * relationship or upload field into one of its collections into the
+ * registries: neither was there when the uninstall was decided. So every
+ * refusal is asked again over the owner rows, tables and dependents as the
+ * boot left them, accepting the deletions already agreed to and refusing
+ * anything new, before the hook and any DOWN run.
+ *
+ * The tables keep the identities read before anything ran: the boot runs
+ * every enabled plugin's init(), and one could put another table in place of
+ * this plugin's, which a baseline taken after the boot would accept. Only a
+ * table the boot created is read now, having had none before, and SQLite's
+ * schema version, which the boot's sync moves and which, read from before
+ * it, would be laid at the hook's door.
+ */
+async function afterTheBoot(
+  decided: UninstallDecision,
+  judged: TablesAsTheyStand | undefined,
+  opts: UninstallOptions,
+  deps: PluginLifecycleDeps
+): Promise<{
+  decision: UninstallDecision;
+  beforeHook: TablesAsTheyStand | undefined;
+}> {
+  const decision = await decideAgainAfterTheBoot(decided, opts, deps);
+  if (judged === undefined) return { decision, beforeHook: judged };
+  const created = decision.plan.tablesDropped.filter(
+    table => !judged.identities.has(table)
+  );
+  const identities =
+    created.length === 0
+      ? judged.identities
+      : new Map([
+          ...judged.identities,
+          ...(await deps.tableIdentities(created)),
+        ]);
+  const schemaVersion =
+    judged.schemaVersion === undefined ? undefined : await deps.schemaVersion();
+  // Unreadable here, the comparison after the hook could only refuse:
+  // refused now, before the hook can change rows or anything outside.
+  if (schemaVersion === null)
+    throw schemaVersionUnreadableAfterBoot(decided.plugin);
+  const beforeHook = { identities, schemaVersion };
+  assertIdentitiesReadable(decided.plugin, decision.plan, beforeHook);
+  return { decision, beforeHook };
+}
+
+/**
+ * The full uninstall decided again, or its refusal, which comes before the
+ * uninstall is recorded begun and so leaves the state as it was found. An
+ * uninstall keeping its data drops nothing the boot could add, and its owner
+ * rows are marked whatever they are, so it is not decided again.
+ */
+async function decideAgainAfterTheBoot(
+  decided: UninstallDecision,
+  opts: UninstallOptions,
+  deps: PluginLifecycleDeps
+): Promise<UninstallDecision> {
+  if (decided.plan.finalState !== "uninstalled") return decided;
+  return decideUninstall(decided.plugin.name, opts, deps, decided.deletions);
+}
+
+/**
+ * Refuse to forget a fully uninstalled plugin while a column, index, foreign
+ * key or check it added to another owner's table is still there.
+ *
+ * Its tables are checked by `assertTablesDropped`; what it added elsewhere
+ * goes only with its DOWNs, and a DOWN that leaves one runs without error.
+ * Forgetting the plugin then would delete the owner row that says whose the
+ * element is, and the migration rows a later install reads, which would
+ * replay an `ADD COLUMN` or `CREATE INDEX` over the one still there. Its
+ * records are kept instead, and the uninstall is left to run again.
+ * Matched by kind and name, the name without regard to case, so a database
+ * that folds a name's case is not read as having dropped it.
+ */
+async function assertElementsDropped(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  owned: readonly OwnerRecord[],
+  deps: Pick<PluginLifecycleDeps, "liveElements">
+): Promise<void> {
+  if (plan.finalState !== "uninstalled") return;
+  const left = await liveElementsItAdded(plugin, plan, owned, deps);
+  if (left.length === 0) return;
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+    publicMessage: `${plugin.name}'s DOWN migrations ran but left ${left.map(describeAdded).join(", ")} in place, so it was not recorded as uninstalled and its records were kept. Drop ${left.length === 1 ? "it" : "them"}, then run the uninstall again to record it.`,
+    logContext: {
+      plugin: plugin.name,
+      reason: "elements-left-by-down",
+      elements: left,
+    },
+  });
+}
+
+/** A column, index, foreign key or check the plugin added to another owner's table. */
+interface AddedElement {
+  table: string;
+  kind: LiveElement["kind"];
+  name: string;
+}
+
+/** How an element the plugin added elsewhere reads in a refusal. */
+function describeAdded(element: AddedElement): string {
+  return `${ELEMENT_NOUNS[element.kind]} "${element.name}" on ${element.table}`;
+}
+
+/**
+ * What the plugin added to other owners' tables that is there now: its
+ * element rows on tables a full uninstall does not drop, read against
+ * `liveElements`. Matched by kind and name, the name without regard to case,
+ * so a database that folds a name's case is not read as having dropped it.
+ * The one reading both the check before the hook and the one after the DOWNs
+ * make.
+ */
+async function liveElementsItAdded(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  owned: readonly OwnerRecord[],
+  deps: Pick<PluginLifecycleDeps, "liveElements">
+): Promise<AddedElement[]> {
+  const dropped = new Set(plan.tablesDropped);
+  const added = owned.flatMap((row): AddedElement[] => {
+    const kind = row.elementKind ?? "table";
+    if (
+      kind === "table" ||
+      row.ownerKind !== "plugin" ||
+      row.ownerId !== plugin.name ||
+      dropped.has(row.tableName)
+    ) {
+      return [];
+    }
+    return [{ table: row.tableName, kind, name: row.elementName ?? "" }];
+  });
+  if (added.length === 0) return [];
+  const read = await deps.liveElements([
+    ...new Set(added.map(element => element.table)),
+  ]);
+  const live = new Map(
+    [...read].map(([table, elements]) => [table.toLowerCase(), elements])
+  );
+  return added.filter(element =>
+    (live.get(element.table.toLowerCase()) ?? []).some(
+      there =>
+        there.kind === element.kind &&
+        there.name.toLowerCase() === element.name.toLowerCase()
+    )
   );
 }
 
@@ -873,8 +1146,8 @@ async function assertHookLeftTables(
 
 /**
  * SQLite's schema version could not be read once the hook's boot was done.
- * The plugin is recorded uninstalling by then and its hook has not run, so
- * running the uninstall again picks it up from there.
+ * Neither the hook nor the record that the uninstall began has happened by
+ * then, so running the uninstall again starts it afresh.
  */
 function schemaVersionUnreadableAfterBoot(
   plugin: LifecyclePlugin
