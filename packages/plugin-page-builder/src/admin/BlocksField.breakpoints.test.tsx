@@ -390,10 +390,14 @@ describe("the sheet the canvas is compiled with", () => {
 });
 
 describe("the top bar's title", () => {
-  it("shows the document's title as the form holds it", async () => {
+  it("shows the document's title as the form holds it, as the page switcher", async () => {
     const { screen } = await import("@testing-library/react");
     openEditor();
-    expect(screen.getByTestId("shell-title").textContent).toBe("About us");
+    expect(
+      screen.getByRole("button", { name: "About us: switch page" }).textContent
+    ).toBe("About us");
+    // The shell's own read-only title is not drawn beside it.
+    expect(screen.getByTestId("shell-title").textContent).toBe("");
   });
 });
 
