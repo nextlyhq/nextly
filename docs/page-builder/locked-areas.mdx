@@ -116,6 +116,9 @@ round it is a move of the locked block, and refused. The same holds for a block 
 holds it. The editor asks the same question of a move before it is made. To change or
 move a locked block, send it unlocked in the same save.
 
+A known limit: a script or API write can swap a locked block with the block next to it,
+since that looks the same as the neighbour moving; the editor refuses it.
+
 Deleting is the exception. A locked block can't be deleted in the same save that
 unlocks it, and neither can a block that holds it: unlock it and save first, then
 delete it in a second save. The editor says so: until the unlock is saved, Delete is
