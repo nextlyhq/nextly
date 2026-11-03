@@ -394,3 +394,27 @@ describe("a breakpoint named __proto__", () => {
     ]);
   });
 });
+
+describe("carryDeviceVisibility on the container axis", () => {
+  it("gives a container breakpoint wider than every earlier one the axis's visible start", () => {
+    // The container axis has no base context: nothing held the widths above
+    // the widest container breakpoint, so a wider one added starts visible.
+    const before: BreakpointSet = {
+      viewport: [],
+      container: [{ id: "card", label: "Card", maxWidth: 400 }],
+    };
+    const after: BreakpointSet = {
+      viewport: [],
+      container: [
+        { id: "wide", label: "Wide", maxWidth: 900 },
+        { id: "card", label: "Card", maxWidth: 400 },
+      ],
+    };
+    const next = carryDeviceVisibility(
+      { devices: { card: false } },
+      before,
+      after
+    );
+    expect(shown(next, after)).toEqual({ base: true, wide: true, card: false });
+  });
+});

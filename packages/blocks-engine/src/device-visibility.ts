@@ -217,7 +217,9 @@ export function setDeviceVisibility(
 
 /**
  * The context of `contexts` whose band holds `width` on `axis`: the narrowest
- * one whose upper bound is at least that width, or the axis's widest context.
+ * one whose upper bound is at least that width. `undefined` when none does,
+ * which happens only on the container axis: it has no unbounded base, so a
+ * width above its widest breakpoint was held by no context at all.
  */
 function coveringContext(
   contexts: readonly BreakpointContext[],
@@ -227,7 +229,7 @@ function coveringContext(
   const onAxis = contexts.filter(
     context => (context.axis ?? "viewport") === axis
   );
-  let covering = onAxis[0];
+  let covering: BreakpointContext | undefined;
   for (const context of onAxis) {
     if ((context.maxWidth ?? Number.POSITIVE_INFINITY) >= width) {
       covering = context;
