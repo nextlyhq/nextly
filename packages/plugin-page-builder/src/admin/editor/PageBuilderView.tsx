@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useController } from "react-hook-form";
 
 import { acceptedKinds } from "../../fields/blocks-options";
+import { PageLayoutPicker } from "../page-layout";
 import { PageBuilderCard } from "../PageBuilderCard";
 import { useRestingPageRender } from "../use-resting-page-render";
 
@@ -86,6 +87,7 @@ function ReadOnlyPage({ control, field: declaration, name }: BoundProps) {
         canEdit={false}
         href={undefined}
         onNavigate={() => {}}
+        after={<PageLayoutPicker control={control} disabled />}
       />
     </div>
   );

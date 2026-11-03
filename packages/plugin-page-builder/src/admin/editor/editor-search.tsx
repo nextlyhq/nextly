@@ -11,8 +11,9 @@
  * @module editor-search
  */
 
-import { revealNode } from "@nextlyhq/builder";
+import { keyHint, revealNode } from "@nextlyhq/builder";
 import {
+  COMMAND_PALETTE_KEYS,
   EditorCommandPalette,
   type BuilderCommand,
 } from "@nextlyhq/builder/shell";
@@ -77,20 +78,26 @@ export function SearchButton({
 }: {
   onOpen: () => void;
 }): React.JSX.Element {
+  // The key as this platform names it: ⌘K on a Mac, Ctrl+K elsewhere.
+  const hint = keyHint(COMMAND_PALETTE_KEYS);
   return (
     <Button
       type="button"
       size="sm"
       variant="outline"
-      title="Search and commands (⌘K)"
+      title={
+        hint === null ? "Search and commands" : `Search and commands (${hint})`
+      }
       aria-label="Search and commands"
       aria-keyshortcuts="Meta+K Control+K"
       onClick={onOpen}
     >
       <Search className="size-4" aria-hidden="true" />
-      <kbd className="rounded border border-border bg-muted px-1 font-mono text-[11px] text-muted-foreground">
-        ⌘K
-      </kbd>
+      {hint === null ? null : (
+        <kbd className="rounded border border-border bg-muted px-1 font-mono text-[11px] text-muted-foreground">
+          {hint}
+        </kbd>
+      )}
     </Button>
   );
 }

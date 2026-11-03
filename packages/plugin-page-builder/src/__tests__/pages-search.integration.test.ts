@@ -49,6 +49,9 @@ const ARTICLES = "articles";
  */
 const NOTES = "notes";
 
+/** How a locked article's headline starts: its body is withheld from everyone. */
+const LOCKED = "Locked";
+
 /** Articles beyond the named ones, so a capped answer is observably cut. */
 const FILLER = PAGES_SEARCH_LIMIT_MAX + 2;
 
@@ -70,10 +73,18 @@ const articles = defineCollection({
     blocks({
       name: "body",
       // A field-level read rule on the Page Builder field itself: a caller
-      // without `read-pages` reads the article and its title, not its body.
+      // without `read-pages` reads the article and its title, not its body;
+      // and nobody reads the body of a LOCKED article, decided row by row.
       access: {
-        read: ({ permissions }: { permissions: string[] }) =>
-          permissions.includes(`read-${PAGES}`),
+        read: ({
+          permissions,
+          data,
+        }: {
+          permissions: string[];
+          data?: { headline?: unknown };
+        }) =>
+          permissions.includes(`read-${PAGES}`) &&
+          !String(data?.headline ?? "").startsWith(LOCKED),
       },
     } as never),
   ],
@@ -263,6 +274,16 @@ describe.each(getConfiguredTestDialects())(
         collection: PAGES,
         data: { title: "Qx mango", slug: "qx-mango", status: "published" },
       });
+      // Two locked articles that sort before two open ones ("L" < "O"), so a
+      // limit of two reads only locked rows first.
+      for (const headline of [
+        `${LOCKED} zq 1`,
+        `${LOCKED} zq 2`,
+        "Open zq 3",
+        "Open zq 4",
+      ]) {
+        await direct.create({ collection: ARTICLES, data: { headline } });
+      }
     }, 180_000);
 
     afterAll(async () => {
@@ -316,8 +337,11 @@ describe.each(getConfiguredTestDialects())(
 
         expect(answer.items).toHaveLength(2);
         expect(answer.meta.limit).toBe(2);
-        // Three pages; the named article, the fillers and the two "Qx" ones.
-        expect(answer.meta.total).toBe(3 + 1 + FILLER + 2);
+        // Every match: three pages, the named article, the fillers, the two
+        // "Qx" articles and the four "zq" ones. Exact here, because the two
+        // rows read from each collection were all openable and every match
+        // not read is counted (an upper bound in general, see the contract).
+        expect(answer.meta.total).toBe(3 + 1 + FILLER + 2 + 4);
         expect(answer.meta.hasNext).toBe(true);
       });
 
@@ -388,6 +412,18 @@ describe.each(getConfiguredTestDialects())(
         expect(answer.items.map(item => item.collection)).not.toContain(
           ARTICLES
         );
+      });
+
+      it("reads past rows whose field is withheld row by row, to the openable ones behind them", async () => {
+        const answer = await search({ q: "zq", limit: "2" }, reader);
+
+        expect(answer.items.map(item => item.title)).toEqual([
+          "Open zq 3",
+          "Open zq 4",
+        ]);
+        // Every match was read, so the count is exact: the two open ones.
+        expect(answer.meta.total).toBe(2);
+        expect(answer.meta.hasNext).toBe(false);
       });
 
       it("CONTROL: a caller who may read the field is offered the same article", async () => {

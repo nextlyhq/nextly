@@ -139,7 +139,7 @@ export function parsePagesSearchQuery(url: string | URL): PagesSearchRequest {
     url,
     Object.values(PAGES_SEARCH_PARAMS),
     querySchema,
-    "This parameter is not one the pages search accepts."
+    "pages search"
   );
   const search = query[PAGES_SEARCH_PARAMS.q];
   const exclude = query[PAGES_SEARCH_PARAMS.exclude];
@@ -269,11 +269,22 @@ const NO_HITS: CollectionHits = { items: [], total: 0 };
 const READS_AT_ONCE = 2;
 
 /**
+ * The most pages of `limit` rows one search reads from one collection.
+ *
+ * A row whose Page Builder field the caller may not read is dropped after it
+ * is read, so a collection is read on, page by page, until it yields `limit`
+ * openable rows or its matches run out. Bounded, so a collection that
+ * withholds nearly everything cannot make one keystroke scan its table: at
+ * most this many times `limit` rows.
+ */
+const PAGES_PER_COLLECTION = 3;
+
+/**
  * Answer one search: read each page collection as the caller, then merge.
  *
- * Each collection is read once, for at most `limit` rows in the database's
- * title order, and the merge only ever takes a prefix of each, so a row a
- * collection's limit left out is never one the merge would have chosen.
+ * Each collection is read in the database's title order until it yields
+ * `limit` openable rows, and the merge only ever takes a prefix of each, so a
+ * row a collection's read left out is never one the merge would have chosen.
  */
 export async function readPagesSearch(
   request: PagesSearchRequest,
@@ -390,16 +401,66 @@ async function searchCollection(
 ): Promise<CollectionHits> {
   const where = whereFor(source, request);
   if (where === NO_MATCH) return NO_HITS;
-  const page = await readRows(source, request, reads, where);
-  if (page === undefined) return NO_HITS;
-  const items = page.items.flatMap(row => {
+  const first = await readRows(source, request, reads, where);
+  if (first === undefined) return NO_HITS;
+  return readOn(source, request.limit, reads, first);
+}
+
+/**
+ * The openable rows of one collection, read page by page from the first.
+ *
+ * Pages are read in the same order the first was, so the rows kept are a
+ * prefix of the collection's openable rows in the database's order. Reading
+ * stops at `limit` openable rows, at the end of the matches, or at
+ * {@link PAGES_PER_COLLECTION} pages.
+ *
+ * The total is the openable rows among those read plus every match not read,
+ * whose rows were never judged: an upper bound, exact once the read reached
+ * the end (see `PagesSearchResponse`).
+ */
+async function readOn(
+  source: PageCollection,
+  limit: number,
+  reads: PagesSearchReads,
+  first: FirstRead
+): Promise<CollectionHits> {
+  const items: PageItem[] = [];
+  let scanned = 0;
+  let page = first.page;
+  for (let number = 1; ; number += 1) {
+    items.push(...openableItems(page.items, source));
+    scanned += page.items.length;
+    if (!readsOnPast(page, number, items.length, limit)) break;
+    page = await reads.find({ ...first.args, page: number + 1 });
+  }
+  const unread = Math.max(0, page.meta.total - scanned);
+  return { items: items.slice(0, limit), total: items.length + unread };
+}
+
+/** Whether a collection's read goes on past page `number`. */
+function readsOnPast(
+  page: AsCallerPage,
+  number: number,
+  kept: number,
+  limit: number
+): boolean {
+  return (
+    kept < limit &&
+    page.meta.hasNext &&
+    page.items.length > 0 &&
+    number < PAGES_PER_COLLECTION
+  );
+}
+
+/** The rows of one page that are search results, in the order read. */
+function openableItems(
+  rows: readonly unknown[],
+  source: PageCollection
+): PageItem[] {
+  return rows.flatMap(row => {
     const item = itemOf(row, source);
     return item === undefined ? [] : [item];
   });
-  // A row left out here (its builder field withheld, or no usable id) is not
-  // counted either: the total is the pages this caller can go to, as far as
-  // this read has seen them.
-  return { items, total: page.meta.total - (page.items.length - items.length) };
 }
 
 /**
@@ -453,10 +514,16 @@ function unorderedRead(
   };
 }
 
+/** A collection's first page, with the read that answered it, for the next pages. */
+interface FirstRead {
+  readonly args: PagesFindArgs;
+  readonly page: AsCallerPage;
+}
+
 /**
- * Read one collection's rows as the caller, ordered by title and then id so
- * the rows a limit keeps are a stable prefix of the database's title order;
- * `undefined` when core leaves this caller nothing of it.
+ * Read one collection's first page as the caller, ordered by title and then
+ * id so the rows a limit keeps are a stable prefix of the database's title
+ * order; `undefined` when core leaves this caller nothing of it.
  *
  * Core refusing the collection leaves its pages out, and the rest of the
  * search still answers: the refusal is core's, applied. A caller who may read
@@ -470,19 +537,23 @@ async function readRows(
   request: PagesSearchRequest,
   reads: PagesSearchReads,
   where: WhereFilter | undefined
-): Promise<AsCallerPage | undefined> {
+): Promise<FirstRead | undefined> {
   const unordered = unorderedRead(source, request, where);
   const titleName = source.title?.name;
+  const ordered: PagesFindArgs = {
+    ...unordered,
+    sort: titleName === undefined ? ["id"] : [titleName, "id"],
+  };
   try {
-    return await reads.find({
-      ...unordered,
-      sort: titleName === undefined ? ["id"] : [titleName, "id"],
-    });
+    return { args: ordered, page: await reads.find(ordered) };
   } catch (error) {
     if (NextlyError.isForbidden(error)) return undefined;
     if (titleName === undefined || !refusesField(error, titleName)) throw error;
     if (request.search !== undefined) return undefined;
-    return reads.find({ ...unordered, sort: ["id"] });
+    // The read that answers is the one the next pages repeat, so they keep
+    // its order.
+    const byId: PagesFindArgs = { ...unordered, sort: ["id"] };
+    return { args: byId, page: await reads.find(byId) };
   }
 }
 

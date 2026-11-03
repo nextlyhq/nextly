@@ -63,7 +63,7 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button, Skeleton } from "@nextlyhq/ui";
 import { ArrowRight, LayoutGrid } from "lucide-react";
-import { useId, useMemo, type JSX } from "react";
+import { useId, useMemo, type JSX, type ReactNode } from "react";
 
 import type { ComponentLibraryState } from "./component-library-client";
 import { sectionAddress, showsAnotherLanguage } from "./editor/builder-address";
@@ -166,6 +166,32 @@ export interface PageBuilderCardProps {
    * disabled action, or where an enabled one leads.
    */
   note?: string;
+  /**
+   * What the card holds after the page: the page's Layout picker, for a
+   * collection whose pages are drawn inside a Layout. Drawn in both the empty
+   * and the built card, so the choice is there before the first block is.
+   */
+  after?: ReactNode;
+}
+
+/**
+ * `children`, followed by `after` when there is one. Without it the children
+ * are returned bare, so a card with nothing after it keeps its own layout.
+ */
+function WithAfter({
+  after,
+  children,
+}: {
+  after: ReactNode;
+  children: JSX.Element;
+}): JSX.Element {
+  if (after == null) return children;
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      {children}
+      {after}
+    </div>
+  );
 }
 
 /** Why a page never saved has no way in yet: it has no address. */
@@ -513,6 +539,7 @@ export function PageBuilderCard({
   href,
   onNavigate,
   note,
+  after,
 }: PageBuilderCardProps): JSX.Element {
   const sections = useMemo(
     // The same resolver and inputs the picture draws with, so the list names
@@ -536,12 +563,14 @@ export function PageBuilderCard({
   // build one would be wrong.
   if (documentNodes(document).length === 0) {
     return (
-      <EmptyPage
-        canEdit={canEdit}
-        href={href}
-        onNavigate={onNavigate}
-        said={said}
-      />
+      <WithAfter after={after}>
+        <EmptyPage
+          canEdit={canEdit}
+          href={href}
+          onNavigate={onNavigate}
+          said={said}
+        />
+      </WithAfter>
     );
   }
 
@@ -580,6 +609,7 @@ export function PageBuilderCard({
         hrefFor={hrefFor}
         onNavigate={onNavigate}
       />
+      {after}
     </div>
   );
 }

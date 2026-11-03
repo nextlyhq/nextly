@@ -1,9 +1,10 @@
 /**
- * How the editor's read routes take their query string: the parameter shapes
- * they share, and the one step that parses a query or refuses it.
+ * A plugin route's query, read and parsed at the boundary.
  *
- * Shared rather than restated per route, so the entries route and the pages
- * search cap a limit, read a search and word a refusal by one rule.
+ * One reading for every route that takes a query, so each refuses what it
+ * cannot take the same way: as a validation error that names the parameter and
+ * never echoes its value, since what the caller sent goes nowhere but the read
+ * it was checked for.
  *
  * @module route-query
  */
@@ -42,20 +43,18 @@ export function optionalText(
 }
 
 /**
- * Read the parameters `names` from `url` and parse them with `schema`, or
- * refuse the request.
+ * The parameters `names` of `url`, parsed by `schema`, or a validation error
+ * saying `route` does not accept them.
  *
  * Only the parameters the route reads, and each once: a repeated parameter
- * takes its first value, as `URLSearchParams.get` does everywhere. A refusal is
- * a validation error naming each parameter with `message`, and never echoing
- * its value: what the caller sent goes nowhere but the read it was checked for.
+ * takes its first value, as `URLSearchParams.get` does everywhere.
  */
-export function parseRouteQuery<T>(
+export function parseRouteQuery<S extends z.ZodType>(
   url: string | URL,
   names: readonly string[],
-  schema: z.ZodType<T>,
-  message: string
-): T {
+  schema: S,
+  route: string
+): z.output<S> {
   const params = new URL(url).searchParams;
   const raw: Record<string, string> = {};
   for (const name of names) {
@@ -68,7 +67,7 @@ export function parseRouteQuery<T>(
       errors: parsed.error.issues.map(issue => ({
         path: issue.path.map(String).join(".") || "query",
         code: "INVALID_QUERY",
-        message,
+        message: `This parameter is not one the ${route} accepts.`,
       })),
     });
   }

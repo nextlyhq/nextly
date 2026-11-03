@@ -676,3 +676,69 @@ describe("how many collections are read at once", () => {
     expect(most).toBe(2);
   });
 });
+
+describe("rows whose Page Builder field is withheld row by row", () => {
+  /** One page of a longer read: these rows, the full match count, and whether more follow. */
+  const pageOf = (items: unknown[], total: number, hasNext: boolean) => ({
+    items,
+    meta: {
+      total,
+      page: 1,
+      limit: 2,
+      totalPages: Math.ceil(total / 2),
+      hasNext,
+      hasPrev: false,
+    },
+  });
+  /** A row the caller may open, and one whose builder field core withheld. */
+  const open = (id: string) => ({ id, title: id, content: null });
+  const shut = (id: string) => ({ id, title: id });
+
+  it("reads on past withheld rows, in the same order, until it has the limit", async () => {
+    const { reads, find } = readsOver([record("pages")], async args =>
+      (args.page ?? 1) === 1
+        ? pageOf([shut("a"), shut("b")], 4, true)
+        : pageOf([open("c"), open("d")], 4, false)
+    );
+
+    const answer = await readPagesSearch(request({ limit: 2 }), reads);
+
+    expect(answer.items.map(item => item.id)).toEqual(["c", "d"]);
+    // The next page repeats the first read, order included, one page on.
+    const [first, second] = find.mock.calls.map(
+      call => call[0] as PagesFindArgs
+    );
+    expect(second).toEqual({ ...first, page: 2 });
+    expect(answer.meta.total).toBe(2);
+  });
+
+  it("stops at its bound however much is withheld, and counts what it did not read", async () => {
+    const { reads, find } = readsOver([record("pages")], async () =>
+      pageOf([shut("x"), shut("y")], 1000, true)
+    );
+
+    const answer = await readPagesSearch(request({ limit: 2 }), reads);
+
+    // Three pages of two rows read, none openable: the 994 matches never
+    // read are counted, since none was judged, and nothing is claimed of them.
+    expect(find).toHaveBeenCalledTimes(3);
+    expect(answer.items).toEqual([]);
+    expect(answer.meta.total).toBe(994);
+    expect(answer.meta.hasNext).toBe(true);
+  });
+
+  it("counts the openable rows read plus the matches beyond them, once it has the limit", async () => {
+    const { reads, find } = readsOver([record("pages")], async args =>
+      (args.page ?? 1) === 1
+        ? pageOf([shut("a"), open("b")], 10, true)
+        : pageOf([open("c"), shut("d")], 10, true)
+    );
+
+    const answer = await readPagesSearch(request({ limit: 2 }), reads);
+
+    expect(find).toHaveBeenCalledTimes(2);
+    expect(answer.items.map(item => item.id)).toEqual(["b", "c"]);
+    // Two openable among the four read, and six matches not read.
+    expect(answer.meta.total).toBe(8);
+  });
+});

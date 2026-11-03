@@ -25,6 +25,8 @@ export interface AsCallerFindArgs {
   /** Fields to order by, ascending, each breaking the ties of the one before. */
   readonly sort?: readonly string[];
   readonly limit: number;
+  /** Which page of `limit` rows, from 1; the first when absent. */
+  readonly page?: number;
   /** The language to read in, when the request named one. */
   readonly locale?: string;
 }
@@ -56,6 +58,7 @@ export async function findAsCaller(
     select: args.select,
     ...(args.sort === undefined ? {} : { sort: [...args.sort] }),
     limit: args.limit,
+    ...(args.page === undefined ? {} : { page: args.page }),
     ...(args.locale === undefined ? {} : { locale: args.locale }),
   });
   return { items: result.items, meta: result.meta };

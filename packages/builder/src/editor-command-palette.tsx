@@ -76,7 +76,7 @@ export interface EditorCommandPaletteProps {
    * What the Add panel adds from, so a search offers the same blocks and adds
    * each where the panel would. Without it, search adds nothing.
    */
-  insert?: Omit<InsertOffersInputs, "editor" | "inside" | "enabled">;
+  insert?: Omit<InsertOffersInputs, "editor" | "enabled">;
   /** Bring a block into view on the canvas once a search has selected it. */
   revealBlock?: (id: string) => void;
   /** Results the host searches for itself: the site's other pages. */

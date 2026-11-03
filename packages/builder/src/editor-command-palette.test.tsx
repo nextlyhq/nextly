@@ -194,6 +194,20 @@ describe("the editor's search", () => {
     expect(revealBlock).toHaveBeenCalledWith("welcome");
   });
 
+  it("adds inside the container whose + opened Add, as the panel would", () => {
+    register();
+    const editor = editorSpy(page(), "hero");
+    mount(editor, { insert: { inside: "hero" } });
+    search("text");
+
+    const [row] = rowsUnder("Add");
+    expect(row?.textContent).toContain("Adding inside Hero");
+    fireEvent.click(row as HTMLElement);
+    const op = editor.apply.mock.calls[0]?.[0];
+    // At the end of the Hero's own region, not after it.
+    expect(op.at).toEqual({ parentId: "hero", slot: "children", index: 1 });
+  });
+
   it("lists neither blocks to add nor the page's blocks before anything is typed", () => {
     register();
     mount(editorSpy(page(), null));

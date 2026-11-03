@@ -126,7 +126,7 @@ export function parseEntriesQuery(url: string | URL): EntriesRequest {
     url,
     Object.values(ENTRIES_PARAMS),
     querySchema,
-    "This parameter is not one the entries route accepts."
+    "entries route"
   );
   const ids = query[ENTRIES_PARAMS.ids];
   const search = query[ENTRIES_PARAMS.search];

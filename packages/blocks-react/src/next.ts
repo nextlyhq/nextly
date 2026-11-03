@@ -18,16 +18,16 @@ import {
   deriveSeoFromDocument,
   isFetchableUrl,
   DOCUMENT_FORMAT_VERSION,
-} from "@nextlyhq/blocks-engine";
-import type {
-  BlockDocument,
-  DefinitionsById,
-  BlockSeoContribution,
-  DocumentLimits,
-  RemotePatternInput,
-  SeoImageCandidate,
-  SiteSheetInput,
-  StyleCompileContext,
+  regionDocument,
+  type BlockDocument,
+  type BlockSeoContribution,
+  type DefinitionsById,
+  type DocumentLimits,
+  type LayoutRegion,
+  type RemotePatternInput,
+  type SeoImageCandidate,
+  type SiteSheetInput,
+  type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
 import {
@@ -80,13 +80,12 @@ import {
   cappedLifetime,
   checkedLayoutsProvider,
   DEFAULT_LAYOUTS_COLLECTION,
-  regionDocument,
   regionsFor,
   type BlocksLayoutsProvider,
-  type LayoutRegion,
   type LayoutRowReader,
 } from "./next-layouts";
-import { pageCompileContext, PageRenderer } from "./page-renderer";
+import { layoutPartSheets, type PagePart } from "./page-parts";
+import { PageRenderer } from "./page-renderer";
 import { prepareDocumentForRead } from "./prepare-document";
 import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
@@ -1872,92 +1871,31 @@ function drawWithRegions(args: {
     "page" as const,
     ...(footer === undefined ? [] : [footer]),
   ];
-
-  // No breakpoints means no site sheet to place and no compile for a region,
-  // so every document keeps what it would have had alone.
-  const emitting: SheetProps = siteStyles === undefined ? {} : { siteStyles };
-  const inheriting: SheetProps =
-    siteStyles === undefined
-      ? {}
-      : {
-          siteStyles: false,
-          ...optionalStyleContext(
-            pageCompileContext(shared.styleContext, siteStyles)
-          ),
-        };
+  // One answer for every surface drawing a page inside its Layout: which part
+  // emits the site sheet, and the scope each part compiles under.
+  const sheets = layoutPartSheets({
+    parts: parts.map((part): PagePart => (part === "page" ? part : part.area)),
+    styleContext: shared.styleContext,
+    siteStyles,
+    pageScope:
+      typeof page.styles?.scope === "string" ? page.styles.scope : undefined,
+  });
   return parts.map((part, index) => {
-    const base = index === 0 ? emitting : inheriting;
+    const sheet = sheets[index] ?? {};
     if (part === "page") {
-      // The page keeps the scope its stored sheet was compiled under, so a
-      // stored artifact still matches; one compiled unscoped gets a scope of
-      // its own here, and is recompiled for it.
-      const pageScope =
-        typeof page.styles?.scope === "string"
-          ? page.styles.scope
-          : PART_SCOPE_PAGE;
-      return createElement(PageRenderer, {
-        ...page,
-        ...scopedSheet(base, shared.styleContext, pageScope),
-        key: "page",
-      });
+      return createElement(PageRenderer, { ...page, ...sheet, key: "page" });
     }
     return createElement(
       part.area,
       { key: part.area, "data-nextly-region": part.area },
       createElement(PageRenderer, {
         ...shared,
-        ...scopedSheet(base, shared.styleContext, partScope(part.area)),
+        ...sheet,
         document: regionDocument([part]),
         ...(definitions.size === 0 ? {} : { definitions }),
       })
     );
   });
-}
-
-/**
- * The scope each document drawn on one page compiles under: one per part.
- *
- * Node ids are unique within a document, not across documents, so the page and
- * a region can hold the same id and with it the same generated class; and a
- * page-level rule is anchored at every page root. Unscoped, one document's
- * sheet would restyle the other. A distinct scope per part is the compiler's
- * own mechanism for this (`StyleCompileContext.scope`): every selector it
- * writes is constrained to the root carrying that class, and the renderer puts
- * the class on the root it mounts.
- */
-const PART_SCOPE_PAGE = "nx-pb-part-page";
-
-function partScope(area: LayoutRegion["area"]): string {
-  return `nx-pb-part-${area}`;
-}
-
-/**
- * `sheet` with `scope` set on its compile context, falling back to the
- * route's own context for the document that emits the site sheet. A document
- * with no compile context at all compiles nothing, so there is nothing to
- * scope.
- */
-function scopedSheet(
-  sheet: SheetProps,
-  routeContext: StyleCompileContext | undefined,
-  scope: string
-): SheetProps {
-  const context = sheet.styleContext ?? routeContext;
-  return context === undefined
-    ? sheet
-    : { ...sheet, styleContext: { ...context, scope } };
-}
-
-/** How one document on the page treats the site sheet. */
-type SheetProps = Pick<
-  Parameters<typeof PageRenderer>[0],
-  "siteStyles" | "styleContext"
->;
-
-function optionalStyleContext(
-  context: StyleCompileContext | undefined
-): SheetProps {
-  return context === undefined ? {} : { styleContext: context };
 }
 
 /**

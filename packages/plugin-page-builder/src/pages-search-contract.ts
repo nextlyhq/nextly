@@ -86,8 +86,14 @@ export interface PageItem {
 
 /**
  * What the pages search answers: the canonical list envelope, `{ items, meta }`.
- * `meta.total` counts every matching page the caller may read across the
- * collections searched; `items` holds the first of them by title.
+ * `items` holds the first matching pages by title that the caller may open.
+ *
+ * `meta.total` is an UPPER BOUND on how many such pages there are, exact for
+ * every collection the search read to its end. Whether a page may be opened
+ * is decided row by row (its Page Builder field's read rule), and a search
+ * reads a bounded number of rows per collection, so the total counts the
+ * openable pages among the rows read plus every match it did not read. It is
+ * never smaller than the true count, so `meta.hasNext` false means no more.
  */
 export interface PagesSearchResponse {
   readonly items: readonly PageItem[];

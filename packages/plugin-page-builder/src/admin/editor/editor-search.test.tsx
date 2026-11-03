@@ -38,11 +38,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 vi.mock("@nextlyhq/builder", () => ({
   revealNode: (root: unknown, id: string) => revealNode(root, id),
+  // The platform's own spelling, as the builder would answer off a Mac.
+  keyHint: (spec: string) => (spec === "mod+k" ? "Ctrl+K" : null),
 }));
 
 /** What the palette was last handed, observed rather than rebuilt. */
 let palette: Record<string, unknown> = {};
 vi.mock("@nextlyhq/builder/shell", () => ({
+  COMMAND_PALETTE_KEYS: "mod+k",
   EditorCommandPalette: (props: Record<string, unknown>) => {
     palette = props;
     return null;
@@ -217,11 +220,14 @@ describe("the editor's page search", () => {
 });
 
 describe("the top bar's search button", () => {
-  it("opens the search, and names its shortcut", () => {
+  it("opens the search, and names its shortcut as this platform spells it", () => {
     const onOpen = vi.fn();
     render(<SearchButton onOpen={onOpen} />);
     const button = screen.getByRole("button", { name: "Search and commands" });
     expect(button.getAttribute("aria-keyshortcuts")).toContain("Meta+K");
+    // Off a Mac there is no ⌘ key to press.
+    expect(button.textContent).toBe("Ctrl+K");
+    expect(button.getAttribute("title")).toBe("Search and commands (Ctrl+K)");
     fireEvent.click(button);
     expect(onOpen).toHaveBeenCalledTimes(1);
   });

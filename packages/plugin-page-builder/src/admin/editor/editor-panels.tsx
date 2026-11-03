@@ -23,6 +23,8 @@ import {
   LayersPanel,
   useBuilderChecklist,
   type BuilderShell,
+  type CanvasRegion,
+  type LayersRegionRow,
   type LibraryTierState,
 } from "@nextlyhq/builder/shell";
 import {
@@ -37,8 +39,10 @@ import {
   type ReactNode,
   type Dispatch,
 } from "react";
+import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
+import { usePageLayoutRegions, usePageLayoutSettings } from "../page-layout";
 import {
   usePatternLibrary,
   type LibraryReadState,
@@ -328,11 +332,25 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
  */
-export function useEditorPanels(
+export function useEditorPanels<TFieldValues extends FieldValues>(
   mount: EditorMount,
-  name: string
+  name: string,
+  /**
+   * The entry's form, and the canvas the Layout's regions are scrolled to.
+   * The page's Layout regions are rows in Layers, drawn on the canvas beside
+   * them; its section is handed to the Settings dialog.
+   */
+  page: {
+    control: Control<TFieldValues>;
+    canvasRoot: HTMLElement | null;
+  }
 ): EditorPanels {
   const { editor, clientConfig } = mount;
+  // The Layout section for the Settings dialog's "This page" tab, or null for
+  // a form that is not a page's.
+  const pageLayout = usePageLayoutSettings(page.control);
+  // From the form's unsaved values, so a change of Layout redraws at once.
+  const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
    *
@@ -370,6 +388,9 @@ export function useEditorPanels(
     // Settings is a dialog, not a panel: the entry's fields are drawn in its
     // "This page" tab.
     availablePanels: AVAILABLE_PANELS,
+    pageLayout,
+    canvasRegions: layoutRegions.canvas,
+    layersRegions: layoutRegions.layers,
     ...library,
     ...requests,
   };
@@ -385,6 +406,12 @@ export type EditorPanels = OfferedLibrary &
   PanelRequests & {
     entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
+    /** The page's Layout section for Settings, or null for another form. */
+    pageLayout: ReactNode | null;
+    /** The regions of the page's Layout, drawn locked around the page. */
+    canvasRegions: readonly CanvasRegion[];
+    /** The same regions, as read-only rows in Layers. */
+    layersRegions: readonly LayersRegionRow[];
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
   };
@@ -398,6 +425,7 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  layersRegions,
   drag,
   offered,
   offerablePatterns,
@@ -412,8 +440,10 @@ export function editorPanelRenderer({
   classSummaryContext,
   requestPanel,
   insertInside,
-}: Pick<EditorMount, "editor"> &
-  Pick<
+}: Pick<EditorMount, "editor"> & {
+  /** The regions of the page's Layout, as read-only rows in Layers. */
+  layersRegions?: readonly LayersRegionRow[];
+} & Pick<
     SiteStyleInputs,
     | "canvasSiteStyle"
     | "siteStylePending"
@@ -465,6 +495,7 @@ export function editorPanelRenderer({
           editor={editor}
           moveHints
           definitions={offered.definitions}
+          regions={layersRegions}
         />
       ),
       design: () => (
