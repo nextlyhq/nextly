@@ -39,7 +39,7 @@ function Bind({
 function Page({ children }: { children?: React.ReactNode }) {
   return (
     <ShortcutProvider isApple={false}>
-      <Bind name="entry-form" keys="mod+s" description="Save entry" />
+      <Bind name="entry-form" keys="mod+s" description="Save" />
       <Bind
         name="entry-form-escape"
         keys="Escape"
@@ -91,7 +91,7 @@ describe("HelpDialog", () => {
       </Page>
     );
     expect(list().textContent).toContain("Duplicate the selected block");
-    expect(list().textContent).toContain("Save entry");
+    expect(list().textContent).toContain("Save");
     // The platform's menu key is listed by hand.
     expect(list().textContent).toContain(
       "Open the block's menu from a link or button inside it"
