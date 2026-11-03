@@ -83,10 +83,222 @@ const COLLECTION_COLUMN = "entity";
 const DOCUMENT_COLUMN = "entityKey";
 
 /**
+ * The documents that reference something, grouped by the collection holding
+ * them, and whether that is all of them.
+ *
+ * The richer answer the count is derived from: a surface that lists where
+ * something is used, and one that splits the count by kind of document, read
+ * the same buckets the count adds up, so the three can never disagree.
+ */
+export interface DocumentsUsing {
+  /**
+   * Each collection holding a referencing document, with that document's id.
+   * A `null` id is a row whose document column held nothing: counted, since
+   * it is a reference, but nameable by no one.
+   */
+  readonly collections: readonly {
+    readonly collection: string;
+    readonly documents: readonly (string | null)[];
+  }[];
+  /** Whether `collections` is the whole answer; see {@link UsageCount}. */
+  readonly complete: boolean;
+}
+
+/** One reference to one document, as either read finds it. */
+interface FoundReference {
+  readonly referenceId: string;
+  /** `null` for a row that names no collection: a document nobody can place. */
+  readonly collection: string | null;
+  readonly document: string | null;
+}
+
+/**
+ * The listing for each id, from the references found: THE one statement of
+ * what a usage listing is, whichever read found the references.
+ *
+ * Distinct documents per collection, in the order first found. An id is a
+ * floor when any of its references could not be placed in a collection, when
+ * the read that found them stopped at its cap, or when the index as a whole is
+ * not whole.
+ */
+function listingFrom(
+  referenceIds: readonly string[],
+  found: Iterable<FoundReference>,
+  readCut: boolean,
+  health: UsageIndexHealth
+): Map<string, DocumentsUsing> {
+  const byId = new Map<
+    string,
+    { collections: Map<string, Set<string | null>>; placeable: boolean }
+  >();
+  for (const id of referenceIds) {
+    byId.set(id, { collections: new Map(), placeable: true });
+  }
+  for (const reference of found) {
+    const entry = byId.get(reference.referenceId);
+    if (entry === undefined) continue;
+    if (reference.collection === null) {
+      entry.placeable = false;
+      continue;
+    }
+    const documents =
+      entry.collections.get(reference.collection) ?? new Set<string | null>();
+    documents.add(reference.document);
+    entry.collections.set(reference.collection, documents);
+  }
+  const whole = indexIsWhole(health);
+  const listings = new Map<string, DocumentsUsing>();
+  for (const [id, entry] of byId) {
+    listings.set(id, {
+      collections: [...entry.collections].map(([collection, documents]) => ({
+        collection,
+        documents: [...documents],
+      })),
+      complete: !readCut && entry.placeable && whole,
+    });
+  }
+  return listings;
+}
+
+/**
+ * Which documents reference `referenceId`, by collection, and whether that is
+ * all of them.
+ *
+ * Asked of the database as grouped reads, so a reference used on thousands of
+ * documents costs two reads per collection rather than its rows. The answer is
+ * {@link listingFrom}'s, which the batch read shares.
+ */
+async function listDocumentsUsing<TRow extends UsageSubject>(args: {
+  index: UsageIndex<TRow>;
+  read: GroupedUsageReader;
+  referenceId: string;
+  /** What is known about the index as a whole; see {@link countDocumentsUsing}. */
+  health: UsageIndexHealth;
+}): Promise<DocumentsUsing> {
+  const { referenceId } = args;
+  // An empty id references nothing and is not an id. Answered as COMPLETE
+  // because it genuinely is — nothing can reference what is not a reference —
+  // and answered without a read, because asking would spend a query to learn
+  // what the argument already said.
+  if (referenceId === "") return { collections: [], complete: true };
+
+  const referencing = args.index.whereReferencing(referenceId);
+
+  // Which collections hold a reference at all, then the documents in EACH.
+  // The grouped read takes one column, so the pair is asked as two questions:
+  // grouping by the id across every collection at once is the fold described
+  // above, and grouping by collection alone counts collections, not documents.
+  const collections = await args.read({
+    where: referencing,
+    groupBy: COLLECTION_COLUMN,
+  });
+  const found: FoundReference[] = [];
+  let readCut = collections.truncated;
+  for (const collection of collections.buckets) {
+    if (collection === null) {
+      found.push({ referenceId, collection: null, document: null });
+      continue;
+    }
+    const inCollection = await args.read({
+      where: { ...referencing, [COLLECTION_COLUMN]: { equals: collection } },
+      groupBy: DOCUMENT_COLUMN,
+    });
+    for (const document of inCollection.buckets) {
+      found.push({ referenceId, collection, document });
+    }
+    readCut ||= inCollection.truncated;
+  }
+  const listing = listingFrom([referenceId], found, readCut, args.health);
+  return listing.get(referenceId) ?? { collections: [], complete: true };
+}
+
+/**
+ * Reads a usage index's stored rows a page at a time, as the system: the rows
+ * a predicate matches, without grouping.
+ */
+export interface UsageRowReader {
+  (args: {
+    where: Record<string, { equals: string } | { in: string[] }>;
+    /** Which page of rows, from 1. */
+    page: number;
+  }): Promise<{ items: readonly unknown[]; hasNext: boolean }>;
+}
+
+/**
+ * The most pages of rows one batch read takes. Bounded, so a page of styles
+ * used on very many documents costs a fixed number of reads and says its
+ * counts are floors, rather than reading the whole index.
+ */
+export const USAGE_ROW_PAGES_MAX = 10;
+
+/**
+ * Which documents reference each of `referenceIds`, by collection, in a
+ * bounded number of reads however many ids are asked for.
+ *
+ * One predicate names every id, and the rows it matches are read a page at a
+ * time, up to {@link USAGE_ROW_PAGES_MAX} pages; a row per field, language and
+ * stored form is folded into one document by {@link listingFrom}, the same
+ * statement the single listing uses. Reaching the cap makes every id's answer
+ * a floor, since the rows not read could belong to any of them.
+ */
+export async function listDocumentsUsingEach<TRow extends UsageSubject>(args: {
+  index: UsageIndex<TRow>;
+  rows: UsageRowReader;
+  referenceIds: readonly string[];
+  /** What is known about the index as a whole; see {@link countDocumentsUsing}. */
+  health: UsageIndexHealth;
+}): Promise<Map<string, DocumentsUsing>> {
+  // The empty id is no reference, as for the single listing: complete, and
+  // never asked about.
+  const ids = [...new Set(args.referenceIds)];
+  const asked = ids.filter(id => id !== "");
+  const found: FoundReference[] = [];
+  let readCut = false;
+  for (let page = 1; asked.length > 0; page += 1) {
+    const read = await args.rows({
+      where: args.index.whereReferencingAny(asked),
+      page,
+    });
+    for (const item of read.items) {
+      const reference = foundIn(args.index, item);
+      if (reference !== undefined) found.push(reference);
+    }
+    if (!read.hasNext) break;
+    if (page >= USAGE_ROW_PAGES_MAX) {
+      readCut = true;
+      break;
+    }
+  }
+  const listings = listingFrom(asked, found, readCut, args.health);
+  if (ids.includes("")) listings.set("", { collections: [], complete: true });
+  return listings;
+}
+
+/** One stored row as a found reference, or `undefined` when it is not one. */
+function foundIn<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
+  item: unknown
+): FoundReference | undefined {
+  if (item === null || typeof item !== "object") return undefined;
+  const row = item as Record<string, unknown>;
+  const own = index.readOwn(row);
+  if (own === null) return undefined;
+  return {
+    referenceId: index.referenceOf(own),
+    collection:
+      typeof row[COLLECTION_COLUMN] === "string"
+        ? row[COLLECTION_COLUMN]
+        : null,
+    document:
+      typeof row[DOCUMENT_COLUMN] === "string" ? row[DOCUMENT_COLUMN] : null,
+  };
+}
+
+/**
  * How many documents reference `referenceId`, and whether that is all of them.
  *
- * The index decides which rows count — it owns whether a marker sits beside its
- * references and how to exclude one — and this decides what the buckets mean.
+ * Derived from {@link listDocumentsUsing}: the number is how many documents
+ * that listing holds, so a count and a list of the same thing always agree.
  */
 export async function countDocumentsUsing<TRow extends UsageSubject>(args: {
   index: UsageIndex<TRow>;
@@ -104,48 +316,14 @@ export async function countDocumentsUsing<TRow extends UsageSubject>(args: {
    */
   health: UsageIndexHealth;
 }): Promise<UsageCount> {
-  // An empty id references nothing and is not an id. Answered as COMPLETE
-  // because it genuinely is — nothing can reference what is not a reference —
-  // and answered without a read, because asking would spend a query to learn
-  // what the argument already said.
-  if (args.referenceId === "") return { documents: 0, complete: true };
+  const found = await listDocumentsUsing(args);
+  return { documents: documentCountOf(found), complete: found.complete };
+}
 
-  const referencing = args.index.whereReferencing(args.referenceId);
-
-  // Which collections hold a reference at all, then the documents in EACH.
-  // The grouped read takes one column, so the pair is asked as two questions:
-  // grouping by the id across every collection at once is the fold described
-  // above, and grouping by collection alone counts collections, not documents.
-  const collections = await args.read({
-    where: referencing,
-    groupBy: COLLECTION_COLUMN,
-  });
-
-  let documents = 0;
-  let truncated = collections.truncated;
-  let placeable = true;
-  for (const entity of collections.buckets) {
-    // A row naming no collection is a document this cannot place, and a count
-    // that dropped it would be a floor presenting itself as exact.
-    if (entity === null) {
-      placeable = false;
-      continue;
-    }
-    const inCollection = await args.read({
-      where: { ...referencing, [COLLECTION_COLUMN]: { equals: entity } },
-      groupBy: DOCUMENT_COLUMN,
-    });
-    documents += inCollection.buckets.length;
-    truncated ||= inCollection.truncated;
-  }
-
-  // Four conditions in one expression, and no ordering between them can drop
-  // one: a read reached its cap, a row could not be placed in a collection,
-  // some document in the index was never readable, or some scope was never
-  // walked. The first two are about this component; the other two were
-  // resolved once for the whole screen.
-  return {
-    documents,
-    complete: !truncated && placeable && indexIsWhole(args.health),
-  };
+/** How many documents a listing holds: the one count of a listing. */
+export function documentCountOf(found: DocumentsUsing): number {
+  return found.collections.reduce(
+    (sum, entry) => sum + entry.documents.length,
+    0
+  );
 }
