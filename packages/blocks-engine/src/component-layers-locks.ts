@@ -79,9 +79,11 @@ export function componentLayersLocks(
 }
 
 /**
- * The document with each placement's own values and slot content removed, so
- * composing it draws every component as the component holds it: the baseline
- * a placement's values are measured against.
+ * The document with each placement's own values, its chosen variant and its
+ * slot content removed, so composing it draws every component as the
+ * component holds it: the baseline a placement's values are measured against.
+ * A variant is a placement's choice too, and one that changes a locked block
+ * changes it as a value would.
  */
 export function placementsAsComponentsHoldThem(
   document: BlockDocument,
@@ -96,6 +98,7 @@ export function placementsAsComponentsHoldThem(
       const props = own.props;
       if (typeof props === "object" && props !== null) {
         delete (props as Record<string, unknown>).overrides;
+        delete (props as Record<string, unknown>).variant;
       }
       delete own.slots;
     },
@@ -126,16 +129,69 @@ function placedLocksOnly(
   return copy;
 }
 
+/** A kept form, read once: its nodes without page locks, and what it holds. */
+interface KeptForm {
+  readonly form: unknown;
+  /** The blocks its components lock, by id. */
+  readonly locked: ReadonlySet<string>;
+  /** Every composed node's id it holds. */
+  readonly ids: ReadonlySet<string>;
+  /** The placements it composes, by the instance their nodes name. */
+  readonly placements: ReadonlySet<string>;
+}
+
+/** One kept form, read for {@link keptBy}. */
+function keptFormOf(
+  form: unknown,
+  limits: Pick<DocumentLimits, "maxNodes">
+): KeptForm {
+  const ids = new Set<string>();
+  const placements = new Set<string>();
+  walkNodes(
+    nodesOf(form),
+    node => {
+      ids.add(node.id);
+      const owner = (node as { instanceOf?: unknown }).instanceOf;
+      if (typeof owner === "string") placements.add(owner);
+    },
+    { maxNodes: limits.maxNodes }
+  );
+  return {
+    form: placedLocksOnly(form, limits),
+    locked: new Set(
+      [...componentLayersLocks(nodesOf(form), limits)].flatMap(([id, lock]) =>
+        lock.holderId === id ? [id] : []
+      )
+    ),
+    ids,
+    placements,
+  };
+}
+
 /**
  * Whether one of `kept` already gave the locked block what the composed page
  * gives it: that form holds it locked by its component, and the page leaves
- * it as the form holds it.
+ * it as the form holds it; or, for a block the page no longer draws, that
+ * form composes the same placement and does not draw it either, as when a
+ * variant chosen before already hid it.
  */
 function keptBy(
   change: LayersLockChange,
   composed: unknown,
-  kept: readonly { form: unknown; locked: ReadonlySet<string> }[]
+  kept: readonly KeptForm[],
+  placementOf: (id: string) => string | undefined
 ): boolean {
+  if (change.kind === "removed") {
+    const placement = placementOf(change.id);
+    if (
+      placement !== undefined &&
+      kept.some(
+        form => form.placements.has(placement) && !form.ids.has(change.id)
+      )
+    ) {
+      return true;
+    }
+  }
   return kept.some(
     ({ form, locked }) =>
       locked.has(change.id) &&
@@ -162,13 +218,9 @@ export function placedLockChanges(
 ): LayersLockChange[] {
   const found = layersLockChanges(composed, placedLocksOnly(asHeld, limits));
   if (found.length === 0) return [];
-  const forms = kept.map(form => ({
-    form: placedLocksOnly(form, limits),
-    locked: new Set(
-      [...componentLayersLocks(nodesOf(form), limits)].flatMap(([id, lock]) =>
-        lock.holderId === id ? [id] : []
-      )
-    ),
-  }));
-  return found.filter(change => !keptBy(change, composed, forms));
+  const forms = kept.map(form => keptFormOf(form, limits));
+  const held = componentLayersLocks(nodesOf(asHeld), limits);
+  return found.filter(
+    change => !keptBy(change, composed, forms, id => held.get(id)?.placementId)
+  );
 }

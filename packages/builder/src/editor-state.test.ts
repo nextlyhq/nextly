@@ -1221,6 +1221,72 @@ describe("the locks an edit is held to", () => {
     });
   });
 
+  it("refuses an edit that hides a block its component locks, by a value or by a variant", () => {
+    // Hidden, the block leaves no lock on the page after the edit; it is
+    // judged against the page as its components hold it, where it is drawn.
+    const promo = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        { ...headline("hero"), locked: true, name: "Hero" },
+        headline("free"),
+      ],
+      exposed: [
+        {
+          id: "heroShown",
+          label: "Hero shown",
+          nodeId: "hero",
+          propPath: "visibility",
+          type: "visibility",
+        },
+        {
+          id: "freeShown",
+          label: "Free shown",
+          nodeId: "free",
+          propPath: "visibility",
+          type: "visibility",
+        },
+      ],
+      variants: { quiet: { label: "Quiet", overrides: { heroShown: false } } },
+    } as unknown as BlockDocument;
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          {
+            id: "i1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "promo" },
+          } as BlockNode,
+        ]),
+        definitions: new Map([["promo", promo]]),
+        componentName: () => "Promo",
+      })
+    );
+    const set = (props: Record<string, unknown>) => ({
+      kind: "update" as const,
+      id: "i1",
+      patch: { props: { componentId: "promo", ...props } },
+    });
+    const refused = {
+      code: "layers-locked",
+      label: "Promo",
+      relation: "component",
+      verb: "change",
+    };
+
+    expect(
+      result.current.lockRefusalFor([set({ overrides: { heroShown: false } })])
+    ).toEqual(refused);
+    expect(result.current.lockRefusalFor([set({ variant: "quiet" })])).toEqual(
+      refused
+    );
+    // CONTROL: hiding the free block is the placement's to decide.
+    expect(
+      result.current.lockRefusalFor([set({ overrides: { freeShown: false } })])
+    ).toBeUndefined();
+  });
+
   it("refuses content a placement gives a component's locked slot, judged on the composed page", () => {
     // The component exposes its own row, locked "all", for each placement to
     // fill. One headline is what the row starts with; a second is a block the

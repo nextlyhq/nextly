@@ -461,28 +461,47 @@ function componentLockAdded(
     componentName,
   }: Pick<LockJudgement, "limits" | "componentName"> & { compose: Composer }
 ): LockRefusalFacts | undefined {
-  if (componentLayersLocks(composedAfter.nodes, limits).size === 0) {
-    return undefined;
-  }
+  // Asked of the as-held baseline, not of the page after the edit: an edit
+  // that hides or removes the locked block leaves no lock after it to find,
+  // but the page before it, or as saved, still draws one. A page none of
+  // whose forms draws a component lock composes nothing more.
+  const drawsLock = [composedAfter, ...kept].some(
+    form => componentLayersLocks(form.nodes, limits).size > 0
+  );
+  if (!drawsLock) return undefined;
   const asHeld = compose(
     placementsAsComponentsHoldThem(after, limits)
   ).document;
+  const held = componentLayersLocks(asHeld.nodes, limits);
+  if (held.size === 0) return undefined;
   const [change] = placedLockChanges(composedAfter, asHeld, kept, limits);
   if (change === undefined) return undefined;
-  const placementId = componentLayersLocks(asHeld.nodes, limits).get(
-    change.id
-  )?.placementId;
+  return componentLockFacts(
+    componentNameOf(after, held.get(change.id)?.placementId, componentName)
+  );
+}
+
+/** The name of the component a page's placement draws, or "" when none is known. */
+function componentNameOf(
+  page: BlockDocument,
+  placementId: string | undefined,
+  componentName: LockJudgement["componentName"]
+): string {
   const placement =
-    placementId === undefined ? undefined : findNode(after.nodes, placementId);
+    placementId === undefined ? undefined : findNode(page.nodes, placementId);
   const componentId = (
     placement?.props as { componentId?: unknown } | undefined
   )?.componentId;
+  return typeof componentId === "string"
+    ? (componentName?.(componentId) ?? "")
+    : "";
+}
+
+/** A refusal for a block a component locks, named by the component. */
+function componentLockFacts(name: string): LockRefusalFacts {
   return {
     code: "layers-locked",
-    label:
-      typeof componentId === "string"
-        ? (componentName?.(componentId) ?? "")
-        : "",
+    label: name,
     relation: "component",
     verb: "change",
   };
