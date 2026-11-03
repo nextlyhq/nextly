@@ -1298,24 +1298,41 @@
 }
 
 /*
- * A prop row in a component's own view: the field, then the icon that lets
- * each placement change it, on the same line, and under both the dashed row
- * naming the field once it is exposed. The expose control's own wrapper is
- * `display: contents`, so its icon, name row and reason are laid out by this
- * grid beside the field they belong to.
+ * A prop row in a component's own view: the field, the icon that lets each
+ * placement change it, and under both the dashed row naming the field once
+ * it is exposed. The expose control's own wrapper is `display: contents`, so
+ * its icon, name row and reason are laid out by this grid.
+ *
+ * ONE column, the field's own. The icon is drawn over the field's first row
+ * at the trailing edge of its LABEL column, as Figma and Webflow put a bind
+ * icon beside a property's name, and the label keeps room for it; a column of
+ * its own would take its width from the control's and clip a wide control.
  */
 .nx-inspector__prop {
+  /* 24px: the smallest target WCAG 2.2 AA allows, so the label keeps room. */
+  --nx-expose-toggle-size: 1.5rem;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  column-gap: 0.375rem;
   row-gap: 0.25rem;
   min-width: 0;
 }
 
 .nx-inspector__prop > :first-child {
   grid-column: 1;
+  grid-row: 1;
   min-width: 0;
+}
+
+/* The label, held by a lock or not, leaves the icon its width. */
+.nx-inspector__prop > .nx-inspector__field > label,
+.nx-inspector__prop > .nx-inspector__field > .nx-inspector__field-name,
+.nx-inspector__prop > .nx-inspector__held > .nx-inspector__field > label,
+.nx-inspector__prop
+  > .nx-inspector__held
+  > .nx-inspector__field
+  > .nx-inspector__field-name {
+  padding-right: var(--nx-expose-toggle-size);
 }
 
 .nx-expose {
@@ -1325,22 +1342,49 @@
 /*
  * The expose icon: the component mark, quiet until hovered, in the
  * component's hue and wash while pressed. Held (aria-disabled) stays readable
- * and focusable, only dimmer.
+ * and focusable, only dimmer. Drawn at the end of the field's label column,
+ * vertically centred on a control of the field's usual height.
  */
 .nx-expose__toggle {
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 1;
+  justify-self: start;
+  align-self: start;
+  position: relative;
+  z-index: 1;
   display: inline-grid;
   place-items: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  margin-top: 0.125rem;
+  width: var(--nx-expose-toggle-size);
+  height: var(--nx-expose-toggle-size);
+  /* The label column's end, reaching half into the gap after it. */
+  margin-left: calc(6.5rem + 0.25rem - var(--nx-expose-toggle-size));
+  margin-top: 0.25rem;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-md, 0.375rem);
   background: transparent;
   color: var(--nx-muted-foreground);
   cursor: pointer;
+}
+
+/*
+ * Where the label does not sit in a column of its own (a switch row with its
+ * words beside it, a stacked field, a block's own inspector listing names
+ * alone, or a field stacked in a narrow rail) the icon goes to the row's end,
+ * where nothing is drawn.
+ */
+.nx-inspector__prop:has(> .nx-inspector__field--inline) .nx-expose__toggle,
+.nx-inspector__prop:has(> .nx-inspector__field--stacked) .nx-expose__toggle,
+[data-expose-rows] .nx-expose__toggle {
+  justify-self: end;
+  margin-left: 0;
+}
+
+@container nx-inspector-fields (max-width: 18rem) {
+  .nx-inspector__prop .nx-expose__toggle {
+    justify-self: end;
+    margin-left: 0;
+  }
 }
 
 .nx-expose__toggle:hover {
@@ -1423,19 +1467,29 @@
   margin-bottom: 0.5rem;
 }
 
+/*
+ * Laid out as a field is, a label column then the value, so the icon lands
+ * at the end of the label column here too.
+ */
 .nx-expose__shown {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr);
   align-items: center;
-  gap: 0.25rem 0.75rem;
+  column-gap: 0.5rem;
   min-height: 2rem;
   margin: 0;
   font-size: 0.8125rem;
 }
 
 .nx-expose__shown-label {
-  min-width: 6rem;
+  padding-right: var(--nx-expose-toggle-size);
   font-weight: 500;
+}
+
+/* The Shown words are the row's field, in the cell the icon is drawn over. */
+.nx-expose-shown .nx-expose__shown {
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .nx-expose__shown-value {
