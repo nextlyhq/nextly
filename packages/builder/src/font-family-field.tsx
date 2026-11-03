@@ -321,16 +321,6 @@ export function FontFamilyField({
           />
         </PopoverContent>
       </Popover>
-      {unknown ? (
-        <button
-          type="button"
-          className="nx-vars__link nx-font-pick__clear"
-          aria-label="Clear Font"
-          onClick={() => onCommit(null)}
-        >
-          Clear
-        </button>
-      ) : null}
     </div>
   );
 }

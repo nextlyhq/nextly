@@ -201,7 +201,7 @@ describe("the Components panel's list", () => {
     });
 
     expect(screen.getByText("This site has no components yet.")).toBeTruthy();
-    expect(screen.getByText(/choose Save as component/)).toBeTruthy();
+    expect(screen.getByText(/choose Turn into component/)).toBeTruthy();
     expect(rowNames()).toEqual([]);
   });
 
@@ -214,7 +214,7 @@ describe("the Components panel's list", () => {
     });
 
     expect(screen.getByText("This site has no components yet.")).toBeTruthy();
-    expect(screen.queryByText(/Save as component/)).toBeNull();
+    expect(screen.queryByText(/Turn into component/)).toBeNull();
   });
 
   it("says none can go inside the component being edited, not that the site has none", () => {

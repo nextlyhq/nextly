@@ -169,8 +169,7 @@ describe("BlockToolbar", () => {
           editor={editor}
           components={{
             mayCreate: true,
-            onSaveAsComponent: () => {},
-            onConvertToComponent: () => {},
+            onTurnIntoComponent: () => {},
           }}
         >
           <Canvas

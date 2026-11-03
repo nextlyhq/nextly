@@ -30,6 +30,7 @@ import {
   depthMoveActions,
   TOOLBAR_GAP_PX,
   toolbarActions,
+  turnIntoChoice,
   toolbarPlacement,
   unionRect,
   type ToolbarAction,
@@ -384,8 +385,9 @@ describe("toolbarActions", () => {
 describe("making a component from a selection", () => {
   const anyParent = { parentsOf: () => undefined };
   const offer = { mayCreate: true };
+  const TURN = "turn-into-component";
 
-  it("offers neither verb where the host has no component library", () => {
+  it("is not offered where the host has no component library", () => {
     const ids = toolbarActions(
       documentOf([node("a")]),
       "a",
@@ -393,11 +395,10 @@ describe("making a component from a selection", () => {
       anyParent
     ).map(action => action.id);
 
-    expect(ids).not.toContain("save-as-component");
-    expect(ids).not.toContain("convert-to-component");
+    expect(ids).not.toContain(TURN);
   });
 
-  it("offers both behind the menu, for a run of blocks", () => {
+  it("is ONE item behind the menu, for a run of blocks", () => {
     const document = documentOf([node("a"), node("b"), node("c")]);
     const actions = toolbarActions(
       document,
@@ -409,17 +410,22 @@ describe("making a component from a selection", () => {
       offer
     );
 
-    for (const id of ["save-as-component", "convert-to-component"] as const) {
-      expect(actionOf(actions, id)).toMatchObject({
-        enabled: true,
-        inMenu: true,
-      });
-    }
+    expect(actionOf(actions, TURN)).toMatchObject({
+      label: "Turn into component…",
+      enabled: true,
+      inMenu: true,
+    });
+    // The two items it replaces are gone.
+    const ids: readonly string[] = actions.map(action => action.id);
+    expect(ids).not.toContain("save-as-component");
+    expect(ids).not.toContain("convert-to-component");
+    // Both ways are open.
+    expect(turnIntoChoice(document, ["a", "b"], anyParent)).toEqual({});
     // The structural verbs stay buttons of their own.
     expect(actionOf(actions, "delete").inMenu).toBeUndefined();
   });
 
-  it("dims both with the grant's reason for an author who may not publish components", () => {
+  it("is dimmed with the grant's reason for an author who may not publish components", () => {
     const actions = toolbarActions(
       documentOf([node("a")]),
       "a",
@@ -430,15 +436,13 @@ describe("making a component from a selection", () => {
       { mayCreate: false }
     );
 
-    for (const id of ["save-as-component", "convert-to-component"] as const) {
-      expect(actionOf(actions, id)).toMatchObject({
-        enabled: false,
-        reason: "You do not have permission to create and publish components.",
-      });
-    }
+    expect(actionOf(actions, TURN)).toMatchObject({
+      enabled: false,
+      reason: "You do not have permission to create and publish components.",
+    });
   });
 
-  it("dims both with the planner's reason for a run with a gap", () => {
+  it("is dimmed with the planner's reason for a run with a gap", () => {
     const document = documentOf([node("a"), node("b"), node("c")]);
     const actions = toolbarActions(
       document,
@@ -450,13 +454,14 @@ describe("making a component from a selection", () => {
       offer
     );
 
-    const reason = compositionRefusalReason({ problem: "gap" });
-    expect(actionOf(actions, "save-as-component").reason).toBe(reason);
-    expect(actionOf(actions, "convert-to-component").reason).toBe(reason);
+    expect(actionOf(actions, TURN).reason).toBe(
+      compositionRefusalReason({ problem: "gap" })
+    );
+    expect(actionOf(actions, TURN).enabled).toBe(false);
   });
 
-  it("dims convert alone when a locked block cannot be taken off the page", () => {
-    // Saving copies, so a locked block may be saved; converting removes it.
+  it("stays offered, keeping the originals only, when a locked block cannot be taken off the page", () => {
+    // Saving copies, so a locked block may be saved; replacing removes it.
     const document = documentOf([node("a", "acme/heading", { locked: true })]);
     const actions = toolbarActions(
       document,
@@ -468,36 +473,41 @@ describe("making a component from a selection", () => {
       offer
     );
 
-    expect(actionOf(actions, "save-as-component").enabled).toBe(true);
-    expect(actionOf(actions, "convert-to-component").enabled).toBe(false);
+    expect(actionOf(actions, TURN).enabled).toBe(true);
+    const choice = turnIntoChoice(document, ["a"], anyParent);
+    expect(choice.replaceRefused).toEqual(expect.any(String));
+    expect(choice.keepRefused).toBeUndefined();
   });
 
-  it("dims convert when the editor's lock question refuses its ops", () => {
+  it("keeps the originals only when the editor's lock question refuses the placement", () => {
     const document = documentOf([node("a")]);
     const asked: string[] = [];
+    const ask = (ops: readonly { kind: string }[]) => {
+      asked.push(ops.map(op => op.kind).join(","));
+      return ops.some(op => op.kind === "insert")
+        ? {
+            code: "locked-slot-altered" as const,
+            holderType: "acme/hero",
+            lock: "all" as const,
+            childType: undefined,
+          }
+        : undefined;
+    };
     const actions = toolbarActions(
       document,
       "a",
       ["a"],
       anyParent,
       true,
-      ops => {
-        asked.push(ops.map(op => op.kind).join(","));
-        return ops.some(op => op.kind === "insert")
-          ? {
-              code: "locked-slot-altered",
-              holderType: "acme/hero",
-              lock: "all",
-              childType: undefined,
-            }
-          : undefined;
-      },
+      ask,
       offer
     );
 
     expect(asked).toContain("remove,insert");
-    expect(actionOf(actions, "convert-to-component").enabled).toBe(false);
-    expect(actionOf(actions, "save-as-component").enabled).toBe(true);
+    expect(actionOf(actions, TURN).enabled).toBe(true);
+    expect(
+      turnIntoChoice(document, ["a"], anyParent, ask).replaceRefused
+    ).toEqual(expect.any(String));
   });
 });
 

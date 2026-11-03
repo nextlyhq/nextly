@@ -136,11 +136,22 @@ test.describe("the Page Builder's own screen", () => {
     await recorded;
 
     // Reloaded without saving: the stored page still holds both blocks, and
-    // the screen offers the work the reload would otherwise have lost.
+    // the save chip offers the work the reload would otherwise have lost,
+    // with no banner above the editor saying it a second time.
     await page.reload();
     await expect(block(page, "goes")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText(/You have unsaved changes from/)).toBeVisible();
+    const chip = page.getByTestId("save-state-indicator");
+    await expect(chip).toContainText("Unsaved changes");
+    await expect(
+      page
+        .getByRole("status")
+        .filter({ hasText: /You have unsaved changes from/ })
+    ).toHaveCount(0);
 
+    await chip
+      .getByRole("button", { name: "Unsaved changes: restore options" })
+      .click();
+    await expect(page.getByText(/You have unsaved changes from/)).toBeVisible();
     await page.getByRole("button", { name: "Restore", exact: true }).click();
 
     await expect(block(page, "goes")).toHaveCount(0);

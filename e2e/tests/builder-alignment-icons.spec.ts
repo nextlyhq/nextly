@@ -74,10 +74,17 @@ async function storedStyles(
   pageId: string,
   nodeId: string
 ): Promise<Record<string, unknown>> {
-  const response = await request.get(`${ENTRIES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: { id: string; content?: { nodes?: Record<string, unknown>[] } }[];
+  // By its id, not from a list page the shared database may push it off.
+  const response = await request.get(`${ENTRIES}/${pageId}?status=all`);
+  expect(response.ok(), `reading the page: ${response.status()}`).toBe(true);
+  const body = (await response.json()) as Record<string, unknown>;
+  const item = (body.item ?? body) as {
+    content?: string | { nodes?: Record<string, unknown>[] };
   };
+  const content =
+    typeof item.content === "string"
+      ? (JSON.parse(item.content) as { nodes?: Record<string, unknown>[] })
+      : item.content;
   const walk = (
     nodes: Record<string, unknown>[]
   ): Record<string, unknown> | undefined => {
@@ -94,9 +101,7 @@ async function storedStyles(
     }
     return undefined;
   };
-  const node = walk(
-    body.items.find(item => item.id === pageId)?.content?.nodes ?? []
-  );
+  const node = walk(content?.nodes ?? []);
   const styles = node?.styles as
     | { base?: { base?: Record<string, unknown> } }
     | undefined;
@@ -138,7 +143,7 @@ async function openStyle(
 /** Each icon of a group chosen by a click, each showing as chosen. */
 async function clickEach(page: Page, group: string): Promise<string> {
   const radios = page
-    .getByRole("radiogroup", { name: group })
+    .getByRole("radiogroup", { name: group, exact: true })
     .getByRole("radio");
   const count = await radios.count();
   expect(count, `${group} has icons`).toBeGreaterThan(1);
@@ -156,17 +161,15 @@ test.describe("alignment and direction icons", () => {
     const pageId = await createPage(page.request);
     await openStyle(page, pageId, SECTION, "Layout");
 
-    for (const group of [
-      "Flex direction",
-      "Flex wrap",
-      "Justify content",
-      "Align items",
-    ]) {
+    for (const group of ["Flex direction", "Flex wrap", "Justify", "Align"]) {
       await clickEach(page, group);
     }
 
     // By keyboard: the group is one tab stop, and the arrows move the choice.
-    const justify = page.getByRole("radiogroup", { name: "Justify content" });
+    const justify = page.getByRole("radiogroup", {
+      name: "Justify",
+      exact: true,
+    });
     await justify.getByRole("radio", { name: "Start" }).click();
     const reachable = justify.locator('[role="radio"][tabindex="0"]');
     await expect(reachable).toHaveCount(1);
@@ -209,7 +212,7 @@ test.describe("alignment and direction icons", () => {
     const pageId = await createPage(page.request);
     await openStyle(page, pageId, SECTION, "Layout");
     await expect(
-      page.getByRole("radiogroup", { name: "Justify content" })
+      page.getByRole("radiogroup", { name: "Justify", exact: true })
     ).toBeVisible();
 
     const results = await new AxeBuilder({ page })
