@@ -193,23 +193,20 @@ const HOMEPAGE_API = "/admin/api/singles/homepage";
 /** The homepage form's action that opens the Page Builder. */
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 
-/** A site rule no admin style or block style sets, so only its source decides. */
+/** An element rule in the admin's document, which no block style sets. */
 const SITE_HEADING_RULE = "h2 { text-transform: uppercase; }";
 
-test("the Page Builder's canvas takes the site's element rules, and the rest of the admin does not", async ({
+test("the Page Builder's canvas is a document of its own, which the admin's element rules do not reach", async ({
   page,
 }) => {
-  // The site's rule on every document this page loads, as a site's own
-  // stylesheet is.
-  await page.addInitScript(rule => {
-    document.addEventListener("DOMContentLoaded", () => {
-      const style = document.createElement("style");
-      style.dataset.e2eSiteRule = "";
-      style.textContent = rule;
-      document.head.append(style);
-    });
-  }, SITE_HEADING_RULE);
-
+  /*
+   * The page is drawn in the canvas's own frame, whose document holds the page
+   * and the site's sheet alone: a rule in the admin's document styles the
+   * admin and never the page, the isolation that keeps the admin's theme and
+   * stylesheets off what the author edits. The rule is put in the admin's
+   * document once it has loaded, the way a site's stylesheet loaded into the
+   * admin would be.
+   */
   const heading = "A heading the site styles";
   const stored = await page.request.patch(HOMEPAGE_API, {
     data: {
@@ -231,7 +228,6 @@ test("the Page Builder's canvas takes the site's element rules, and the rest of 
     true
   );
 
-  // In the canvas: drawn as the site draws an `h2`.
   await gotoAdmin(page, "/singles/homepage");
   await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
   const canvasHeading = canvasFrame(page)
@@ -239,13 +235,23 @@ test("the Page Builder's canvas takes the site's element rules, and the rest of 
     .filter({ hasText: heading })
     .first();
   await expect(canvasHeading).toBeVisible({ timeout: 30_000 });
-  await expect(canvasHeading).toHaveCSS("text-transform", "uppercase");
-
-  // Outside it, on the dashboard of the same admin: the rule is in the
-  // document, and a card title, also an `h2`, is drawn as the admin draws it.
-  await gotoAdmin(page, "");
+  await page.evaluate(rule => {
+    const style = document.createElement("style");
+    style.dataset.e2eSiteRule = "";
+    style.textContent = rule;
+    document.head.append(style);
+  }, SITE_HEADING_RULE);
+  // The control: the rule is in the admin's document and applies there.
   await expect(page.locator("style[data-e2e-site-rule]")).toHaveCount(1);
-  const title = cardTitles(page).first();
-  await expect(title).toBeVisible({ timeout: 30_000 });
-  await expect(title).toHaveCSS("text-transform", "none");
+  expect(
+    await page.evaluate(() => {
+      const probe = document.createElement("h2");
+      document.body.append(probe);
+      const transform = getComputedStyle(probe).textTransform;
+      probe.remove();
+      return transform;
+    })
+  ).toBe("uppercase");
+  // The page in the canvas does not take it.
+  await expect(canvasHeading).toHaveCSS("text-transform", "none");
 });

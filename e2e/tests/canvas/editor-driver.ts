@@ -1,13 +1,8 @@
 /**
- * Driving the real page builder, wherever its canvas renders.
+ * Driving the real page builder, whose canvas renders in a same-origin iframe
+ * the editor owns, titled "Page canvas: …":
  *
- * The canvas renders in the admin's own document today. It is meant to move
- * into a same-origin iframe the editor owns, titled "Page canvas: …", and this
- * suite exists to be the before-and-after check for that move. So nothing here
- * assumes which document the blocks are in:
- *
- * - blocks are found through {@link canvasScope}, which is the canvas frame
- *   when there is one and the page otherwise;
+ * - blocks are found through {@link canvasScope}, the canvas frame;
  * - anything evaluated against a block reads the block's OWN document and
  *   window (`ownerDocument`, `defaultView`), never the globals of whichever
  *   realm the evaluation started in;
@@ -15,8 +10,8 @@
  *   framed element in the main page's coordinates, so `page.mouse` lands on it
  *   either way.
  *
- * The editor's chrome — Layers, the live region, the inspector — stays in the
- * admin's document in both arrangements, so it is found on the page.
+ * The editor's chrome — Layers, the live region, the inspector, the toolbar —
+ * is in the admin's document, so it is found on the page.
  *
  * Black box like the rest of `e2e/`: no product code is imported.
  *
@@ -45,16 +40,15 @@ const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 type Scope = Page | FrameLocator;
 
 /**
- * The document the blocks are in.
+ * The document the blocks are in: the canvas frame's.
  *
- * Asked fresh on every call rather than decided once, because the frame is
- * created when the canvas mounts and a scope taken before that would point at
- * the page for the rest of the test.
+ * Always the frame, never decided by whether one exists yet: a scope taken
+ * before the frame has mounted would look for the blocks on the page for the
+ * rest of a wait, and find nothing there.
  */
-export async function canvasScope(page: Page): Promise<Scope> {
-  return (await page.locator(CANVAS_FRAME).count()) > 0
-    ? page.frameLocator(CANVAS_FRAME)
-    : page;
+export function canvasScope(page: Page): Promise<Scope> {
+  // A promise still, the shape every caller awaits.
+  return Promise.resolve(page.frameLocator(CANVAS_FRAME));
 }
 
 /** The canvas's root element, inside whichever document holds it. */

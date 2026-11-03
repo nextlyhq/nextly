@@ -25,6 +25,10 @@ import {
   canvasLayer,
 } from "../support/canvas-frame";
 import { LOCK } from "../support/locks";
+import {
+  storeSiteBreakpoints,
+  type SiteBreakpoints,
+} from "../support/site-breakpoints";
 import { test } from "../support/test";
 
 import { openEditorWith, selection, structure } from "./editor-driver";
@@ -32,7 +36,6 @@ import { openEditorWith, selection, structure } from "./editor-driver";
 // The homepage document and the site's breakpoints are both written here.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
-const SITE_STYLE = "/admin/api/singles/site-style";
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 
 // The editor reads `mod` as Control in the Desktop Chrome device this suite
@@ -110,11 +113,11 @@ const DEVICES = [
   { name: /^Mobile/, width: 640, height: 1024 },
 ] as const;
 
-async function storeBreakpoints(page: Page, value: unknown): Promise<void> {
-  const stored = await page.request.patch(SITE_STYLE, {
-    data: { breakpoints: value },
-  });
-  expect(stored.ok(), `storing breakpoints: ${stored.status()}`).toBe(true);
+async function storeBreakpoints(
+  page: Page,
+  value: SiteBreakpoints
+): Promise<void> {
+  await storeSiteBreakpoints(page.request, value);
 }
 
 /** What a block's rendering says about the viewport it was laid out in. */

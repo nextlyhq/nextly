@@ -132,6 +132,9 @@ async function select(
   id: string,
   at: "centre" | "corner" = "centre"
 ): Promise<void> {
+  // Cleared first: the selected block's toolbar is drawn over the canvas, and
+  // over the block below it, so a click aimed there would land on the toolbar.
+  await page.keyboard.press("Escape");
   await canvasFrame(page)
     .locator(`.nx-canvas [data-nx-node="${id}"]`)
     .first()
@@ -363,7 +366,7 @@ test.describe("the inspector", () => {
     await expect(page.locator("[data-read-only]")).toContainText("Locked");
 
     await page.getByRole("button", { name: "Actions for Heading" }).click();
-    await page.getByRole("menuitem", { name: "Unlock" }).click();
+    await page.getByRole("menuitem", { name: "Unlock", exact: true }).click();
     await expect(page.locator('[data-lock="layers"]')).toHaveCount(0);
     await page.getByRole("tab", { name: "Content" }).click();
     await expect(content.getByLabel("Text")).toBeEnabled();
