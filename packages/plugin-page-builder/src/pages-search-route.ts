@@ -1194,7 +1194,7 @@ interface PagesSearchRouteContext extends PageCollectionsContext {
  * an empty page as well as on `hasMore: false`, so a listing that never says
  * it is done cannot hold the search open.
  */
-async function registryRecords(
+export async function registryRecords(
   ctx: PageCollectionsContext
 ): Promise<unknown[]> {
   const records: unknown[] = [];
