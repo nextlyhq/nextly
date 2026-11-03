@@ -14,6 +14,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   canPrompt,
+  cancelEndsRun,
+  setCancelEndsRun,
   setNonInteractive,
 } from "../../domains/schema/migrate/can-prompt";
 import { createProgram } from "../program";
@@ -29,6 +31,7 @@ vi.mock("@nextlyhq/telemetry", () => ({
 
 afterEach(() => {
   setNonInteractive(false);
+  setCancelEndsRun(false);
 });
 
 const program = createProgram();
@@ -233,5 +236,21 @@ describe("--non-interactive typed on the command line", () => {
 
   it("is what turns it off: without it, the same run at a terminal may ask", async () => {
     expect(await mayAskFrom(["node", "nextly", "prune"])).toBe(true);
+  });
+});
+
+describe("a cancel at a prompt", () => {
+  // The app's dev server never runs the program, so the flag starts off and a
+  // cancel there stops only the change it was asked about.
+  it("ends the run under every command the program runs", async () => {
+    const run = createProgram();
+    let ends: boolean | undefined;
+    // Its own action is replaced, so nothing it does is loaded or run.
+    commandAt(run, ["prune"]).action(() => {
+      ends = cancelEndsRun();
+    });
+    expect(cancelEndsRun()).toBe(false);
+    await run.parseAsync(["node", "nextly", "prune"]);
+    expect(ends).toBe(true);
   });
 });

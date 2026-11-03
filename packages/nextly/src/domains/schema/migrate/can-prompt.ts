@@ -36,3 +36,20 @@ export function canPrompt(): boolean {
     Boolean(process.stdin.isTTY && process.stdout.isTTY)
   );
 }
+
+let cancelEnds = false;
+
+/**
+ * Records that a cancel (Ctrl+C) at a prompt ends the run, with exit 130. The
+ * CLI's program turns it on for every `nextly` command; the app's dev server
+ * (`next dev`) leaves it off, so a cancel there stops only the change it was
+ * asked about and the server keeps running.
+ */
+export function setCancelEndsRun(value: boolean): void {
+  cancelEnds = value;
+}
+
+/** Whether a cancel at a prompt ends the run (`setCancelEndsRun`). */
+export function cancelEndsRun(): boolean {
+  return cancelEnds;
+}

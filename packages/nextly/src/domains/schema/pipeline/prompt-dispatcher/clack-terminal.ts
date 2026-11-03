@@ -24,7 +24,7 @@ import * as clack from "@clack/prompts";
 import { answered } from "../../../../cli/utils/prompt-cancelled";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { consoleLogger } from "../../../../shared/types";
-import { canPrompt } from "../../migrate/can-prompt";
+import { cancelEndsRun, canPrompt } from "../../migrate/can-prompt";
 import {
   deprecationNotices,
   judgeDataLoss,
@@ -82,11 +82,21 @@ function isDrop(event: ClassifierEvent): event is DestructiveDropEvent {
 }
 
 /**
- * Asks at the terminal, defaulting to no. A cancelled prompt (Ctrl+C) is not
- * a no: it ends the run with exit 130 (`answered`).
+ * A prompt's answer. A cancel (Ctrl+C) is not a no: under a `nextly` command
+ * it ends the run with exit 130 (`answered`); inside the app's dev server
+ * (`next dev`), where nothing turns `cancelEndsRun` on, it stops only this
+ * apply and the server keeps running.
  */
+async function answeredHere<T>(answer: T | symbol): Promise<T> {
+  if (clack.isCancel(answer) && !cancelEndsRun()) {
+    throw new PromptCancelledError();
+  }
+  return answered(answer);
+}
+
+/** Asks at the terminal, defaulting to no; a cancel as `answeredHere`. */
 async function askInTerminal(question: string): Promise<boolean> {
-  return answered(
+  return answeredHere(
     await clack.confirm({
       message: question,
       initialValue: false,
@@ -95,13 +105,13 @@ async function askInTerminal(question: string): Promise<boolean> {
 }
 
 /**
- * A prompt's answer, or, for Ctrl+C, the end of the run with exit 130
- * (`answered`) once the prompt block is closed. A cancel is not the
- * "Cancel everything" answer, which stops only the apply.
+ * A prompt's answer, closing the prompt block first on a cancel, which then
+ * goes as `answeredHere`. A cancel is not the "Cancel everything" answer,
+ * which stops only the apply.
  */
-function answeredOrClosed<T>(answer: T | symbol): Promise<T> {
+async function answeredOrClosed<T>(answer: T | symbol): Promise<T> {
   if (clack.isCancel(answer)) clack.outro("Cancelled");
-  return answered(answer);
+  return answeredHere(answer);
 }
 
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {

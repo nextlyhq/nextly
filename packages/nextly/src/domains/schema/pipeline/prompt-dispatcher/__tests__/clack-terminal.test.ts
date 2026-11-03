@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setCancelEndsRun } from "../../../migrate/can-prompt";
 import type {
   ClassifierEvent,
   RenameCandidate,
@@ -7,6 +8,7 @@ import type {
 } from "../../pushschema-pipeline-interfaces";
 import {
   ClackTerminalPromptDispatcher,
+  PromptCancelledError,
   TTYRequiredError,
 } from "../clack-terminal";
 import { ttyRequiredDetail } from "../errors";
@@ -803,7 +805,7 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
   });
 });
 
-describe("ClackTerminalPromptDispatcher - a cancel exits 130", () => {
+describe("ClackTerminalPromptDispatcher - a cancel exits 130 under a nextly command", () => {
   /** What `process.exit` was asked for, thrown so the dispatch goes no further. */
   class Exited extends Error {
     constructor(readonly code: number | string | null | undefined) {
@@ -833,9 +835,12 @@ describe("ClackTerminalPromptDispatcher - a cancel exits 130", () => {
     vi.spyOn(process, "exit").mockImplementation(code => {
       throw new Exited(code);
     });
+    // As the program's hook turns it on for every `nextly` command.
+    setCancelEndsRun(true);
   });
 
   afterEach(() => {
+    setCancelEndsRun(false);
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     for (const [stream, was] of [
@@ -932,6 +937,21 @@ describe("ClackTerminalPromptDispatcher - a cancel exits 130", () => {
     await expect(
       dispatch({ events: [dropEvent("excerpt")] })
     ).resolves.toMatchObject({ proceed: false });
+    expect(process.exit).not.toHaveBeenCalled();
+  });
+
+  // Inside the app's dev server (`next dev`), nothing turns the flag on: a
+  // cancel stops only this apply, and the server keeps running.
+  it("but inside the dev server cancels only this apply, without exiting", async () => {
+    setCancelEndsRun(false);
+    mockSelect.mockResolvedValueOnce(CANCEL);
+    await expect(
+      dispatch({ candidates: [candidate("title", "name")] })
+    ).rejects.toBeInstanceOf(PromptCancelledError);
+    mockConfirm.mockResolvedValueOnce(CANCEL);
+    await expect(
+      dispatch({ events: [dropEvent("excerpt")] })
+    ).rejects.toBeInstanceOf(PromptCancelledError);
     expect(process.exit).not.toHaveBeenCalled();
   });
 });

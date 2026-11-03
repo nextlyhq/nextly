@@ -9,7 +9,7 @@
 import type { Command } from "commander";
 
 /** The codes every command ends with. */
-export const SHARED_EXIT_CODES =
+const SHARED_EXIT_CODES =
   "0 done or nothing to do · 1 failed or refused · 130 interrupted";
 
 /**

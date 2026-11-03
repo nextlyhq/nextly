@@ -12,7 +12,10 @@
 import { Command, Option } from "commander";
 import pc from "picocolors";
 
-import { setNonInteractive } from "../domains/schema/migrate/can-prompt";
+import {
+  setCancelEndsRun,
+  setNonInteractive,
+} from "../domains/schema/migrate/can-prompt";
 import { getCoreVersion } from "../plugins/core-version";
 
 import { registerAddCommand } from "./commands/add.command";
@@ -172,6 +175,8 @@ ${pc.bold("Documentation:")}
     setNonInteractive(
       thisCommand.opts<{ nonInteractive?: boolean }>().nonInteractive === true
     );
+    // A cancel at any prompt a command reaches ends the run with exit 130.
+    setCancelEndsRun(true);
     // The mode line goes to stderr, so a command's `--json` output stays one
     // document, and `--quiet` keeps it to errors only.
     setModeLineWriter(
