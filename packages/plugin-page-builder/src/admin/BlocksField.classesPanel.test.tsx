@@ -118,7 +118,10 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-// A designer: the role that may change the site's design.
+/*
+ * A designer. The variables studio surrounds every Design tab, so it is drawn
+ * here too, and it asks whether the variables may be changed.
+ */
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) => permission === "update-site-style",
 }));
@@ -210,6 +213,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
    * a rejection into per-field messages. Answering none exercises the branch

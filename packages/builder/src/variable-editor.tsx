@@ -30,6 +30,7 @@ import {
   variableLabelIssue,
   type VariableEntry,
 } from "./tokens-studio";
+import { swatchStyle } from "./variable-swatch";
 
 export interface VariableEditorProps {
   entry: VariableEntry;
@@ -730,15 +731,6 @@ function withoutParts(
     .map(part => part.at)
     .sort((a, b) => b - a)
     .reduce(removeToken, tokens);
-}
-
-/** A swatch painted through a custom property, or the empty swatch. */
-export function swatchStyle(
-  colour: string | undefined
-): React.CSSProperties | undefined {
-  return colour === undefined
-    ? undefined
-    : ({ "--nx-swatch": colour } as React.CSSProperties);
 }
 
 /**
