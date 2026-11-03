@@ -204,7 +204,7 @@ export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
     entryId: { label: "Linked entry", role: "content", type: "text" },
     target: {
       label: "Open link in",
-      optionLabels: { _self: "This tab", _blank: "A new tab" },
+      optionLabels: { _self: "This tab", _blank: "New tab" },
       type: "select",
       options: ["_self", "_blank"],
     },

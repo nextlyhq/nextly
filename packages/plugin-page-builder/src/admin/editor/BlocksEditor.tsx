@@ -818,6 +818,9 @@ function editorSettings(
           // dialog on every pass, open or not.
           dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
         }
+        // The SEO plugin's group, where the page has one: its fields are then
+        // among the page's own, and the preview is not all there is.
+        seoFields={page.seo !== undefined}
         breakpoints={{
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,

@@ -72,10 +72,7 @@ import {
   SelectSeparator,
   SelectTrigger,
   SelectValue,
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
 } from "@nextlyhq/ui";
 import { ChevronDown, RotateCcw } from "lucide-react";
 import * as React from "react";
@@ -85,6 +82,7 @@ import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { ChoiceList } from "./choice-list";
+import { ChromeTooltip } from "./chrome-tooltip";
 import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
@@ -1389,8 +1387,11 @@ function StylePropertyFields({
       {above.map(toggle)}
       {property.offered ? null : (
         <p className="nx-inspector__note" data-not-offered={property.property}>
-          This block no longer offers {property.label}. The value is still on
-          the page and can be cleared.
+          {/* Not "no longer": a value written through the API is stored on
+              blocks that never offered the property. Said plainly so the
+              author knows clearing it changes the page. */}
+          This block doesn&apos;t offer {property.label}. The value set here
+          still applies; clearing it removes it.
         </p>
       )}
       {/* The container's flow, which alignment icons are drawn in. */}
@@ -2353,24 +2354,21 @@ function ResetAction({
         : `Reset to ${sourceLabel(revealed)}`;
   return (
     <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            className="nx-style-inspector__breakpoint-action"
-            data-action="reset"
-            {...commitsFor(fieldId)}
-            onClick={onReset}
-            aria-label={named}
-          >
-            {/* An icon at the row's end, where a "Reset to unset" line under
+      <ChromeTooltip content={tip}>
+        <button
+          type="button"
+          className="nx-style-inspector__breakpoint-action"
+          data-action="reset"
+          {...commitsFor(fieldId)}
+          onClick={onReset}
+          aria-label={named}
+        >
+          {/* An icon at the row's end, where a "Reset to unset" line under
                 every set control made each one two rows. The words are its
                 tooltip and, in full, its name. */}
-            <RotateCcw size={14} aria-hidden="true" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>{tip}</TooltipContent>
-      </Tooltip>
+          <RotateCcw size={14} aria-hidden="true" />
+        </button>
+      </ChromeTooltip>
     </TooltipProvider>
   );
 }

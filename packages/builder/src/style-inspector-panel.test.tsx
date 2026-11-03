@@ -1730,6 +1730,20 @@ describe("a value the panel shows and could not remove", () => {
     ).toBeNull();
   });
 
+  it("says a stored value the block does not offer still applies, without claiming it once did", () => {
+    // "No longer offers" read as a capability taken away, for a value written
+    // through the API on a block that never had it, and left the author
+    // guessing whether clearing it would change anything.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { borderRadius: "4px" } },
+    } as NodeStyles;
+    mount({ border: { line: true } }, styles);
+    const notice = document.querySelector('[data-not-offered="borderRadius"]');
+    expect(notice?.textContent).toBe(
+      "This block doesn't offer Border radius. The value set here still applies; clearing it removes it."
+    );
+  });
+
   it("offers the form selector while the property IS still supported", () => {
     // The positive control for the test above. Without it, a panel that had
     // simply stopped rendering form selectors altogether would pass.

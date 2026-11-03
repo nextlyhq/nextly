@@ -599,6 +599,7 @@ export type {
 export type {
   SharedStyleKind,
   SharedStyleReach,
+  SharedStyleRefusal,
   SharedStylesUsage,
   SharedStyleUse,
   SharedStyleUsesPage,
