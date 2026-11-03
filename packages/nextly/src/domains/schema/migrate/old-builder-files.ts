@@ -26,10 +26,20 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { getTableName } from "../../collections/services/collection-utils";
 import { parseEntityHeaders } from "../migrate-create/format-file";
 import { MANAGED_TABLE_PREFIXES } from "../pipeline/managed-tables";
+import {
+  indexNameForColumn,
+  MAX_INDEX_NAME_LENGTH,
+  uniqueIndexNameForColumn,
+} from "../services/index-name";
 
 import { hasExecutableText, splitSqlStatements } from "./split-sql";
 import { isDownMarker, isUpMarker } from "./sql-sections";
-import { tablesChangedIn, tablesDroppedBy } from "./statement-targets";
+import {
+  indexesDroppedBy,
+  registryRowWrittenBy,
+  tablesChangedIn,
+  tablesDroppedBy,
+} from "./statement-targets";
 
 /** A part of the signature a Builder-named file can lack. */
 export type OldBuilderSignaturePart = "snapshot" | "header" | "scope";
@@ -58,10 +68,17 @@ const BULK_DROP_NAME = /^\d+_collections_[0-9a-f]{12}$/;
 /** The user-field table, dropped by name, not by any collection's slug. */
 const USER_EXT_TABLE = "user_ext";
 
-/** The entity a Builder file name gives, and which tables are its own. */
+/** Where a collection is registered: the table its own registry row is in. */
+const COLLECTION_REGISTRY = "dynamic_collections";
+
+/**
+ * The entity a Builder file name gives, which tables are its own, and the
+ * registry table holding its own row, when a file of its may write one.
+ */
 interface NamedEntity {
   slug: string;
   owns: (table: string) => boolean;
+  registry?: string;
 }
 
 function entityOf(verb: string, rest: string): NamedEntity {
@@ -83,8 +100,14 @@ function entityOf(verb: string, rest: string): NamedEntity {
       };
     }
   }
+  // Every other file is a collection's, and a create file may also upsert
+  // the collection's own registry row.
   const own = getTableName(rest);
-  return { slug: rest, owns: table => isOwnTable(own, table) };
+  return {
+    slug: rest,
+    owns: table => isOwnTable(own, table),
+    registry: COLLECTION_REGISTRY,
+  };
 }
 
 /** Whether `name` starts with a table prefix only Nextly's entities use. */
@@ -109,6 +132,43 @@ function isOwnTable(own: string, table: string): boolean {
   return at > 0 && isEntityTableName(table.slice(0, at));
 }
 
+/** The two names an index on one column is given, by their prefix. */
+const COLUMN_INDEX_NAMES = [
+  { prefix: "idx_", name: indexNameForColumn },
+  { prefix: "uq_", name: uniqueIndexNameForColumn },
+] as const;
+
+/**
+ * Whether an index dropped by name alone is on one of the entity's tables:
+ * its name is exactly the one-column index name, plain or unique, of an own
+ * table and some column. Two kinds of name are not traced, so a file
+ * dropping one is partial:
+ *
+ * - one at the length bound, or holding a character outside ASCII, which may
+ *   be a bounded name: its readable part cut short and a hash appended, so
+ *   the table it names may be a prefix of the real one;
+ * - one another entity's table also explains (`idx_dc_posts_archive_title` is
+ *   `dc_posts`' `archive_title` or `dc_posts_archive`'s `title`).
+ */
+function isOwnIndex(entity: NamedEntity, index: string): boolean {
+  if (index.length >= MAX_INDEX_NAME_LENGTH || !/^[\x20-\x7e]*$/.test(index)) {
+    return false;
+  }
+  let owned = false;
+  for (const { prefix, name } of COLUMN_INDEX_NAMES) {
+    if (!index.startsWith(prefix)) continue;
+    const rest = index.slice(prefix.length);
+    for (let at = rest.indexOf("_"); at > 0; at = rest.indexOf("_", at + 1)) {
+      const table = rest.slice(0, at);
+      const column = rest.slice(at + 1);
+      if (column === "" || name(table, column) !== index) continue;
+      if (entity.owns(table)) owned = true;
+      else if (isEntityTableName(table)) return false;
+    }
+  }
+  return owned;
+}
+
 /** (c): whether the content carries any line `migrate:create` writes. */
 function hasCreateHeader(content: string): boolean {
   const headers = parseEntityHeaders(content);
@@ -126,9 +186,24 @@ function hasCreateHeader(content: string): boolean {
 }
 
 /**
- * (d): whether every statement changes only the entity's own tables. A drop
- * file is held to more: every statement must be a DROP TABLE, since that is
- * all the Builder ever wrote into one.
+ * Whether `statement` writes the entity's own registry row: a row of its
+ * registry table keyed on its own slug, read exactly. A slug the scan cannot
+ * read exactly is not the entity's, so such a file is partial.
+ */
+function writesOwnRegistryRow(
+  entity: NamedEntity,
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  if (entity.registry === undefined) return false;
+  const row = registryRowWrittenBy(statement, dialect);
+  return row?.table === entity.registry && row.slug === entity.slug;
+}
+
+/**
+ * (d): whether every statement changes only the entity's own tables, drops
+ * an index traced to one of them by name, or writes its own registry row. A drop file is held to more: every statement
+ * must be a DROP TABLE, since that is all the Builder ever wrote into one.
  */
 function staysInEntity(
   entity: NamedEntity,
@@ -141,6 +216,15 @@ function staysInEntity(
   if (statements.length === 0) return false;
   const read = dropOnly ? tablesDroppedBy : tablesChangedIn;
   return statements.every(statement => {
+    if (!dropOnly && writesOwnRegistryRow(entity, statement, file.dialect)) {
+      return true;
+    }
+    const indexes = dropOnly
+      ? undefined
+      : indexesDroppedBy(statement, file.dialect);
+    if (indexes !== undefined) {
+      return indexes.every(index => isOwnIndex(entity, index));
+    }
     const tables = read(statement, file.dialect);
     return (
       tables !== undefined &&

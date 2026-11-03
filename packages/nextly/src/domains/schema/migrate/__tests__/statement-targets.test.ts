@@ -4,7 +4,13 @@
 // must treat an unreadable statement as leaving them.
 import { describe, expect, it } from "vitest";
 
-import { tablesChangedIn, tablesDroppedBy } from "../statement-targets";
+import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
+import {
+  indexesDroppedBy,
+  registryRowWrittenBy,
+  tablesChangedIn,
+  tablesDroppedBy,
+} from "../statement-targets";
 
 describe.each(["postgresql", "mysql"] as const)(
   "tablesChangedIn on %s",
@@ -116,3 +122,148 @@ describe.each(["postgresql", "mysql"] as const)(
     });
   }
 );
+
+// The registry row a statement writes, keyed on its slug. The positive cells
+// read the upsert the Builder itself generated, so a change to its shape
+// shows up here; each negative cell is one way a statement could reach a
+// row other than the slug it names.
+describe.each(["postgresql", "mysql"] as const)(
+  "registryRowWrittenBy on %s",
+  dialect => {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    const read = (sql: string) => registryRowWrittenBy(sql, dialect);
+    const upsert = buildCollectionMetadataUpsert(
+      { slug: "posts", fields: [{ name: "title", type: "text" }] },
+      dialect
+    );
+
+    it("reads the slug of the Builder's own upsert", () => {
+      expect(read(upsert)).toEqual({
+        table: "dynamic_collections",
+        slug: "posts",
+      });
+    });
+
+    it("reads a plain insert with no upsert", () => {
+      expect(
+        read(
+          `INSERT INTO ${q("r")} (${q("id")}, ${q("slug")}) VALUES ('1', 'posts')`
+        )
+      ).toEqual({ table: "r", slug: "posts" });
+    });
+
+    it("reads an update keyed on one slug", () => {
+      expect(
+        read(
+          `UPDATE ${q("r")} SET ${q("labels")} = '{}' WHERE ${q("slug")} = 'posts'`
+        )
+      ).toEqual({ table: "r", slug: "posts" });
+    });
+
+    it.each([
+      [
+        "a second row",
+        () =>
+          `INSERT INTO ${q("r")} (${q("slug")}) VALUES ('posts'), ('other')`,
+      ],
+      [
+        "a slug that is not a string",
+        () => `INSERT INTO ${q("r")} (${q("slug")}) VALUES (lower('POSTS'))`,
+      ],
+      [
+        "a slug the scan cannot read exactly",
+        () => `INSERT INTO ${q("r")} (${q("slug")}) VALUES (E'po\\sts')`,
+      ],
+      [
+        "no slug column",
+        () => `INSERT INTO ${q("r")} (${q("id")}) VALUES ('posts')`,
+      ],
+      [
+        "an insert from a query",
+        () => `INSERT INTO ${q("r")} (${q("slug")}) SELECT 'posts'`,
+      ],
+      [
+        "an update that renames the row",
+        () =>
+          `UPDATE ${q("r")} SET ${q("slug")} = 'other' WHERE ${q("slug")} = 'posts'`,
+      ],
+      [
+        "an update that rewrites the id",
+        () =>
+          `UPDATE ${q("r")} SET ${q("id")} = 'x' WHERE ${q("slug")} = 'posts'`,
+      ],
+      [
+        "an update keyed on more than the slug",
+        () =>
+          `UPDATE ${q("r")} SET ${q("labels")} = '{}' WHERE ${q("slug")} = 'posts' OR 1 = 1`,
+      ],
+      [
+        "an update with no WHERE",
+        () => `UPDATE ${q("r")} SET ${q("labels")} = '{}'`,
+      ],
+      [
+        "an upsert that renames the row it meets",
+        () =>
+          dialect === "mysql"
+            ? `INSERT INTO ${q("r")} (${q("slug")}) VALUES ('posts') ON DUPLICATE KEY UPDATE ${q("slug")} = 'other'`
+            : `INSERT INTO ${q("r")} (${q("slug")}) VALUES ('posts') ON CONFLICT (${q("slug")}) DO UPDATE SET ${q("slug")} = 'other'`,
+      ],
+      [
+        "an upsert setting a column to something else",
+        () =>
+          dialect === "mysql"
+            ? `INSERT INTO ${q("r")} (${q("slug")}, ${q("labels")}) VALUES ('posts', '{}') ON DUPLICATE KEY UPDATE ${q("labels")} = (SELECT 1)`
+            : `INSERT INTO ${q("r")} (${q("slug")}, ${q("labels")}) VALUES ('posts', '{}') ON CONFLICT (${q("slug")}) DO UPDATE SET ${q("labels")} = (SELECT 1)`,
+      ],
+      [
+        "an upsert followed by a statement left without its ;",
+        () =>
+          `${upsert}\n--> statement-breakpoint\nALTER TABLE ${q("nextly_users")} ADD COLUMN ${q("x")} text`,
+      ],
+      [
+        "an update followed by a statement left without its ;",
+        () =>
+          `UPDATE ${q("r")} SET ${q("labels")} = '{}' ALTER TABLE ${q("t")} ADD ${q("x")} text WHERE ${q("slug")} = 'posts'`,
+      ],
+      [
+        "a deletion",
+        () => `DELETE FROM ${q("r")} WHERE ${q("slug")} = 'posts'`,
+      ],
+    ])("reads nothing from %s", (_, sql) => {
+      expect(read(sql())).toBeUndefined();
+    });
+  }
+);
+
+describe("registryRowWrittenBy on postgresql only", () => {
+  it("reads nothing from an upsert keyed on another column", () => {
+    expect(
+      registryRowWrittenBy(
+        `INSERT INTO "r" ("id", "slug") VALUES ('1', 'posts') ON CONFLICT ("id") DO UPDATE SET "labels" = EXCLUDED."labels"`,
+        "postgresql"
+      )
+    ).toBeUndefined();
+  });
+});
+
+describe("indexesDroppedBy", () => {
+  it.each([
+    [`DROP INDEX "idx_a"`, ["idx_a"]],
+    [
+      `DROP INDEX CONCURRENTLY IF EXISTS "idx_a", idx_b RESTRICT;`,
+      ["idx_a", "idx_b"],
+    ],
+  ])("reads %s", (sql, names) => {
+    expect(indexesDroppedBy(sql, "postgresql")).toEqual(names);
+  });
+
+  it.each([
+    `DROP INDEX "idx_a" CASCADE`,
+    `DROP INDEX "s"."idx_a"`,
+    "DROP INDEX `idx_a` ON `t`",
+    `DROP TABLE "idx_a"`,
+  ])("reads nothing from %s", sql => {
+    expect(indexesDroppedBy(sql, "postgresql")).toBeUndefined();
+  });
+});

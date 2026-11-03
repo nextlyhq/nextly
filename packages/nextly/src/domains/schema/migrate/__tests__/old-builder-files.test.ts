@@ -160,7 +160,7 @@ describe.each<Dialect>(["postgresql", "mysql"])(
         expect(
           old(
             "1730000000000_create_posts.sql",
-            `${createFile("posts", dialect)}${BREAK}ALTER TABLE ${q(table, dialect)} ADD COLUMN ${q("x", dialect)} text;`
+            `${createFile("posts", dialect)};${BREAK}ALTER TABLE ${q(table, dialect)} ADD COLUMN ${q("x", dialect)} text;`
           )
         ).toEqual({ kind: "partial", lacks: ["scope"] });
       }
@@ -175,11 +175,21 @@ describe.each<Dialect>(["postgresql", "mysql"])(
       });
     });
 
+    it("(d) a statement run with its own registry row, for want of a ;, makes it partial", () => {
+      // The runner splits at `;` only, so this ALTER runs as part of the upsert.
+      expect(
+        old(
+          "1730000000000_create_posts.sql",
+          `${createFile("posts", dialect)}${BREAK}ALTER TABLE ${q("nextly_users", dialect)} ADD COLUMN ${q("x", dialect)} text;`
+        )
+      ).toEqual({ kind: "partial", lacks: ["scope"] });
+    });
+
     it("(d) a statement it cannot read makes it partial", () => {
       expect(
         old(
           "1730000000000_create_posts.sql",
-          `${createFile("posts", dialect)}${BREAK}GRANT ALL ON ${q("dc_posts", dialect)} TO someone;`
+          `${createFile("posts", dialect)};${BREAK}GRANT ALL ON ${q("dc_posts", dialect)} TO someone;`
         )
       ).toEqual({
         kind: "partial",
@@ -306,3 +316,69 @@ describe.each<Dialect>(["postgresql", "mysql"])("drop files on %s", dialect => {
     });
   });
 });
+
+// A table-less DROP INDEX (PostgreSQL's and SQLite's form) names no table, so
+// its table is traced from the index name: exactly the one-column index name,
+// plain or unique, of one of the entity's own tables. A name that cannot be
+// traced, or that another entity's table explains as well, makes the file
+// partial.
+describe.each(["postgresql", "sqlite"] as const)(
+  "classifyMigrationFile on a dropped index, %s",
+  dialect => {
+    const update = (...statements: string[]) =>
+      classifyMigrationFile(
+        facts({
+          name: "1730000000006_update_posts.sql",
+          content: [
+            `ALTER TABLE "dc_posts" DROP COLUMN "title";`,
+            ...statements,
+          ].join(BREAK),
+          dialect,
+        })
+      );
+    const ignored = { kind: "old-builder", entity: "posts" };
+    const partial = { kind: "partial", lacks: ["scope"] };
+
+    it.each([
+      [
+        "a plain index on its own table",
+        `DROP INDEX IF EXISTS "idx_dc_posts_title";`,
+      ],
+      [
+        "a unique index on its own table",
+        `DROP INDEX IF EXISTS "uq_dc_posts_title";`,
+      ],
+      [
+        "an index on its translation table",
+        `DROP INDEX "idx_dc_posts_locales_title";`,
+      ],
+    ])("traces %s", (_n, sql) => {
+      expect(update(sql)).toEqual(ignored);
+    });
+
+    it.each([
+      [
+        "another entity's index",
+        `DROP INDEX IF EXISTS "idx_dc_comments_title";`,
+      ],
+      [
+        "a name another entity's table explains as well",
+        `DROP INDEX IF EXISTS "idx_dc_posts_archive_title";`,
+      ],
+      [
+        "an index name of no column",
+        `DROP INDEX IF EXISTS "dc_posts_title_key";`,
+      ],
+      [
+        "a name at the bound, which may be a cut one",
+        `DROP INDEX IF EXISTS "idx_dc_posts_${"a".repeat(63 - "idx_dc_posts_".length)}";`,
+      ],
+      [
+        "a drop that cascades",
+        `DROP INDEX IF EXISTS "idx_dc_posts_title" CASCADE;`,
+      ],
+    ])("does not trace %s", (_n, sql) => {
+      expect(update(sql)).toEqual(partial);
+    });
+  }
+);

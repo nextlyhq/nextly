@@ -167,11 +167,17 @@ export function leadingWords(
 
 /**
  * A string, a quoted name or a PostgreSQL dollar-quoted body among a
- * statement's tokens: one unit, never a keyword. `name` is a quoted name's
- * text, upper-cased; a string or a body has none.
+ * statement's tokens: one unit, never a keyword. `kind` says which. `name`
+ * is a quoted name's text, upper-cased; a string or a body has none.
  */
 export interface QuotedToken {
+  kind: "string" | "body" | "name";
   name: string | undefined;
+  /**
+   * A string's value, only when the scan reads it exactly (`SqlSegment`'s
+   * `text`); undefined for an inexact string, and absent on a name or body.
+   */
+  text?: string;
   /**
    * PostgreSQL's `U&"..."`, whose escapes the scan does not decode: `name` is
    * then the text as written, not the name the server reads.
@@ -220,12 +226,16 @@ function* serverTokens(
         break;
       case "quoted-name":
         yield {
+          kind: "name",
           name: segment.content.toUpperCase(),
           ...(segment.unicodeEscaped ? { escaped: true } : {}),
         };
         break;
+      case "string":
+        yield { kind: "string", name: undefined, text: segment.text };
+        break;
       default:
-        yield { name: undefined };
+        yield { kind: "body", name: undefined };
     }
   }
 }
