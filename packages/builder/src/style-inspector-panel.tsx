@@ -188,7 +188,7 @@ import {
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
-import { tokenForTypedName, variablePlaceholder } from "./style-variables";
+import { tokenForTypedName } from "./style-variables";
 import { VariableChip, VariableChoice } from "./variable-choice";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 
@@ -2932,6 +2932,7 @@ function FoldedField({
       leaf={leaf}
       tokens={tokens}
       bound={false}
+      empty={stored === undefined}
       current={undefined}
       label={actionName}
       onPick={identity => onCommit({ $token: identity })}
@@ -3050,11 +3051,8 @@ function LengthOrNumberField({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const { draft, setDraft } = useDraft(stored);
-  // Says a variable may be chosen where the site has one this field takes.
   const mode = useCanvasTokenMode();
-  const hint = useUnsetHint(
-    variablePlaceholder(leaf, tokens, "1.5, 24px or 150%", mode)
-  );
+  const hint = useUnsetHint("1.5, 24px or 150%");
   const commit = () => {
     if (draft === storedText(stored)) return;
     // A variable's name typed here is that variable, asked before the text is
@@ -4863,6 +4861,7 @@ function NumericField({
         leaf={control.leaf}
         tokens={tokens}
         bound={false}
+        empty={stored === undefined}
         current={undefined}
         label={actionName}
         onPick={identity => onCommit({ $token: identity })}
@@ -5334,11 +5333,11 @@ function TextField({
   const [typing, setTyping] = useTyping(editing);
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
-  // The mode the canvas shows: a typed name and the hint offer what the
-  // field's variables list offers, in that mode.
+  // The mode the canvas shows: a typed name matches what the field's
+  // variables list offers, in that mode.
   const mode = useCanvasTokenMode();
   const hint = useUnsetHint(
-    compact ? "–" : hintFor(control, tokens, fallbackHint, mode)
+    compact ? "–" : (fallbackHint ?? placeholderFor(control))
   );
   const commit = () => {
     // Written or not, the text is no longer mid-edit.
@@ -5613,26 +5612,6 @@ function dimensionHint(
 function numberHint(leaf: Extract<StyleLeaf, { kind: "number" }>): string {
   if (leaf.min === undefined || leaf.max === undefined) return "a number";
   return `${leaf.min} to ${leaf.max}`;
-}
-
-/**
- * The hint a text field shows: the form its leaf takes, and for a length or a
- * number, that a variable may be chosen where the site has one. A colour's
- * list leads with its variables already, and a free value's hint names no
- * form a variable could be the other half of.
- */
-function hintFor(
-  control: StyleControl,
-  tokens: SiteTokenSet | undefined,
-  /** The field's own hint where it replaces the leaf's: "16" beside "px". */
-  own: string | undefined,
-  mode: TokenMode
-): string {
-  const base = own ?? placeholderFor(control);
-  const { leaf } = control;
-  return leaf.kind === "dimension" || leaf.kind === "number"
-    ? variablePlaceholder(leaf, tokens, base, mode)
-    : base;
 }
 
 /** A hint at the form this leaf takes, from the catalog rather than a list here. */

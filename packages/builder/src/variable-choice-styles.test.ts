@@ -49,6 +49,7 @@ describe("a hidden ◇ takes no clicks", () => {
     ".nx-style-inspector__numeric:hover .nx-variable-choice",
     ".nx-style-inspector__numeric:focus-within .nx-variable-choice",
     ".nx-variable-choice[data-bound]",
+    ".nx-variable-choice[data-empty]",
     '.nx-variable-choice[data-state="open"]',
     "[data-side]:hover .nx-variable-choice",
     "[data-side]:focus-within .nx-variable-choice",

@@ -2677,7 +2677,8 @@
 
 /*
  * Shown while the field is pointed at or holds focus, and always while it
- * holds a variable or its list is open. Faded rather than removed, so the ◇
+ * holds a variable, holds nothing at all, or its list is open: on an empty
+ * field the ◇ is what says a variable may be chosen. Faded rather than removed, so the ◇
  * stays in the tab order and shows itself when Tab reaches it.
  */
 .nx-style-inspector__numeric .nx-variable-choice,
@@ -2693,6 +2694,7 @@
 .nx-style-inspector__select:hover .nx-variable-choice,
 .nx-style-inspector__select:focus-within .nx-variable-choice,
 .nx-variable-choice[data-bound],
+.nx-variable-choice[data-empty],
 .nx-variable-choice[data-state="open"] {
   opacity: 1;
   pointer-events: auto;

@@ -18,7 +18,6 @@ import { variablesFor } from "./style-colour";
 import {
   lengthInPx,
   tokenForTypedName,
-  variablePlaceholder,
   variableSample,
 } from "./style-variables";
 
@@ -43,6 +42,10 @@ const OPACITY = shapeOf("opacity") as unknown as StyleLeaf;
 const LINE_HEIGHT = (shapeOf("lineHeight").of as StyleLeaf[])[1] as StyleLeaf;
 const PADDING_START = (shapeOf("padding").sides as Record<string, StyleLeaf>)
   .blockStart as StyleLeaf;
+const GAP = shapeOf("gap") as unknown as StyleLeaf;
+/** The single-radius arm of `borderRadius`. */
+const RADIUS = (shapeOf("borderRadius").of as StyleLeaf[])[0] as StyleLeaf;
+const WIDTH = shapeOf("width") as unknown as StyleLeaf;
 
 /**
  * A type size and its line height under ONE name, as Design adds them, so a
@@ -65,6 +68,7 @@ const TOKENS: SiteTokenSet = {
       kind: "dimension",
       values: { light: "2rem" },
     },
+    { name: "radius.card", kind: "dimension", values: { light: "12px" } },
     { name: "color.ink", kind: "color", values: { light: "#111111" } },
     {
       name: "shadow.soft",
@@ -126,30 +130,44 @@ describe("a typed variable name", () => {
   });
 });
 
-describe("a field's hint", () => {
-  it("says a variable may be chosen where the site has one of its kinds", () => {
-    expect(variablePlaceholder(FONT_SIZE, TOKENS, "16px")).toBe(
-      "16px or a variable"
-    );
+describe("what a field's list offers: its own family", () => {
+  const names = (leaf: StyleLeaf): string[] =>
+    variablesFor(leaf, TOKENS).map(token => token.name);
+
+  it("offers a font size the type sizes alone", () => {
+    expect(names(FONT_SIZE)).toEqual(["font-size.display"]);
   });
 
-  it("stays as it was where the site has none of its kinds", () => {
+  it("offers a line height the line heights alone", () => {
+    expect(names(LINE_HEIGHT)).toEqual(["line-height.display"]);
+  });
+
+  it("offers margin, padding and gap the spacing steps alone", () => {
+    // `space.4` is the engine's own, so a site has it without defining it.
+    const spacing = ["space.4", "space.sm", "spacing.large"];
+    expect(names(PADDING_START)).toEqual(spacing);
+    expect(names(GAP)).toEqual(spacing);
+  });
+
+  it("offers a radius the radii alone", () => {
+    expect(names(RADIUS)).toEqual(["radius.card"]);
+  });
+
+  it("offers any other length every length", () => {
+    expect(names(WIDTH)).toEqual([
+      "content.width",
+      "space.4",
+      "font-size.display",
+      "line-height.display",
+      "space.sm",
+      "spacing.large",
+      "radius.card",
+    ]);
+  });
+
+  it("offers a field nothing where the site has none of its kinds", () => {
     // No number variable anywhere, the engine's defaults included.
-    expect(variablePlaceholder(OPACITY, TOKENS, "0 to 1")).toBe("0 to 1");
-    expect(variablePlaceholder(FONT_SIZE, undefined, "16px")).toBe("16px");
-  });
-});
-
-describe("what a field's list offers", () => {
-  it("offers a type size only where text is sized", () => {
-    const names = (leaf: StyleLeaf) =>
-      variablesFor(leaf, TOKENS).map(token => token.name);
-    expect(names(FONT_SIZE)).toContain("font-size.display");
-    expect(names(FONT_SIZE)).not.toContain("line-height.display");
-    expect(names(LINE_HEIGHT)).toContain("line-height.display");
-    expect(names(LINE_HEIGHT)).not.toContain("font-size.display");
-    expect(names(PADDING_START)).not.toContain("font-size.display");
-    expect(names(PADDING_START)).toContain("space.sm");
+    expect(names(OPACITY)).toEqual([]);
   });
 });
 
@@ -157,7 +175,7 @@ describe("a variable's sample", () => {
   const sample = (name: string) => {
     const found = [
       ...variablesFor(FONT_SIZE, TOKENS),
-      ...variablesFor(PADDING_START, TOKENS),
+      ...variablesFor(WIDTH, TOKENS),
       ...variablesFor(BOX_SHADOW, TOKENS),
     ].find(token => token.name === name);
     if (found === undefined) throw new Error(`not offered: ${name}`);

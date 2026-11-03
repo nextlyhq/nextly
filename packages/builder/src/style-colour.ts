@@ -84,7 +84,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
-import { typeScaleProperty } from "./tokens-studio";
+import { lengthFamilyOf, type LengthFamily } from "./tokens-studio";
 
 /**
  * One site variable a control may offer, in the forms it is needed in.
@@ -207,19 +207,36 @@ export function variablesFor(
   return offeredTokens(tokens, mode).filter(
     token =>
       leaf.tokenKinds.includes(token.kind) &&
-      // A type size is a length, and so is its paired line height, and both
-      // carry the same name: offering either where the other belongs would
-      // list "Display" twice in a font size field, one of them the wrong
-      // value. Each is offered where it is made for, and every other length
-      // everywhere a length is taken.
+      // Each field its own family: a font size the type sizes, a line height
+      // the line heights, margin, padding and gap the spacing steps, a radius
+      // the radii. A type size and its line height share a name, and a
+      // spacing step and a radius often do ("Md"), so a list of every length
+      // named one variable twice; any other length takes every length.
       madeFor(token, leaf)
   );
 }
 
-/** Whether a variable made for one CSS property is offered at this leaf. */
+/** Whether a variable belongs to the family this leaf's field offers. */
 function madeFor(token: SiteVariable, leaf: StyleLeaf): boolean {
-  const property = typeScaleProperty(token);
-  return property === undefined || property === leaf.cssProperty;
+  const family = fieldFamilyOf(leaf.cssProperty);
+  return family === undefined || lengthFamilyOf(token) === family;
+}
+
+/**
+ * The family of length variables a CSS property's field offers, or
+ * `undefined` for a field that offers every variable of its kinds.
+ *
+ * By the property the leaf writes, so every side of a margin or a padding and
+ * every corner of a radius is answered by one rule.
+ */
+function fieldFamilyOf(cssProperty: string): LengthFamily | undefined {
+  if (cssProperty === "font-size" || cssProperty === "line-height") {
+    return cssProperty;
+  }
+  if (/^(margin|padding)(-|$)/.test(cssProperty)) return "spacing";
+  if (/(^|-)gap$/.test(cssProperty)) return "spacing";
+  if (/radius$/.test(cssProperty)) return "radius";
+  return undefined;
 }
 
 /**

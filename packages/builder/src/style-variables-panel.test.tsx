@@ -224,18 +224,51 @@ describe("a field whose property takes a variable", () => {
     );
   });
 
-  it("hints that a variable may be chosen, where one can be", () => {
+  it("keeps the hint short, and shows an empty field's ◇ at rest instead", () => {
+    // "16 or a variable" was cut off in the field; the ◇ on an empty field is
+    // what says a variable can be chosen now.
     mount({ typography: true });
     expect(
       (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
-    ).toBe("16 or a variable");
+    ).toBe("16");
+    expect(
+      screen
+        .getByRole("button", { name: "Variables for Font size" })
+        .hasAttribute("data-empty")
+    ).toBe(true);
   });
 
-  it("keeps the hint as it was where no variable can be chosen", () => {
-    mount({ effects: true });
+  it("does not show the ◇ at rest on a field that holds a value", () => {
+    mount({ typography: true }, { fontSize: "20px" });
     expect(
-      (screen.getByLabelText("Opacity") as HTMLInputElement).placeholder
-    ).toBe("0 to 1");
+      screen
+        .getByRole("button", { name: "Variables for Font size" })
+        .hasAttribute("data-empty")
+    ).toBe(false);
+  });
+
+  it("offers a spacing side the spacing steps, not the radii", () => {
+    mount({ spacing: true });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Variables for Padding block start",
+      })
+    );
+    const spacing = screen
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    expect(spacing).toContain("Sm 8px");
+    expect(spacing.some(text => text?.startsWith("Card"))).toBe(false);
+  });
+
+  it("offers a radius the radii, not the spacing steps", () => {
+    mount({ border: { radius: true } });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Variables for Border radius" })
+    );
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Card 12px"]);
   });
 });
 
@@ -257,7 +290,7 @@ describe("a field holding a variable", () => {
     ).toBe("Display");
     fireEvent.click(
       within(chip).getByRole("button", {
-        name: "Remove Display from Font size",
+        name: "Clear Font size",
       })
     );
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -384,9 +417,7 @@ describe("where focus goes as a field changes shape", () => {
     render(
       <LivePanel values={{ fontSize: { $token: "font-size.display" } }} />
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Remove Display from Font size" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Clear Font size" }));
     const field = await screen.findByLabelText("Font size");
     await waitFor(() => expect(document.activeElement).toBe(field));
   });
@@ -438,7 +469,7 @@ describe("the mode a field's variables are read in", () => {
         values: { light: "12px", dark: "#ff0000" },
       },
       {
-        name: "space.mode",
+        name: "font-size.mode",
         kind: "dimension",
         values: { light: "16px", dark: "24px" },
       },
@@ -486,7 +517,7 @@ describe("the mode a field's variables are read in", () => {
     try {
       mount(
         { typography: true },
-        { fontSize: { $token: "space.mode" } },
+        { fontSize: { $token: "font-size.mode" } },
         NIGHT
       );
       const chip = fieldsOf("fontSize").getByRole("group", {
@@ -569,7 +600,7 @@ describe("a held variable whose name another shares", () => {
     expect(chip.textContent).toBe("Big (font-size.hero) 48px");
     expect(
       within(chip).getByRole("button", {
-        name: "Remove Big (font-size.hero) from Font size",
+        name: "Clear Font size",
       })
     ).toBeDefined();
     fireEvent.click(

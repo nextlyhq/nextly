@@ -57,6 +57,12 @@ export interface VariableChoiceProps {
   readonly tokens: SiteTokenSet | undefined;
   /** Whether the field holds a variable now, which keeps the ◇ in view. */
   readonly bound: boolean;
+  /**
+   * Whether the field holds nothing, which also keeps the ◇ in view: on an
+   * empty field it is what says a variable may be chosen. Left out, it shows
+   * only on hover or focus.
+   */
+  readonly empty?: boolean;
   /** The identity the field holds, marked in the list, if it holds one. */
   readonly current: string | undefined;
   /** The field's name, for the button's and the list's names: "Font size". */
@@ -66,7 +72,10 @@ export interface VariableChoiceProps {
 }
 
 /** What {@link VariablesMenuItem} is given: the same, less `bound`. */
-export type VariablesMenuItemProps = Omit<VariableChoiceProps, "bound">;
+export type VariablesMenuItemProps = Omit<
+  VariableChoiceProps,
+  "bound" | "empty"
+>;
 
 /** What {@link VariableChip} is given. */
 export interface VariableChipProps {
@@ -111,6 +120,7 @@ export function VariableChoice({
   leaf,
   tokens,
   bound,
+  empty = false,
   current,
   label,
   onPick,
@@ -134,6 +144,7 @@ export function VariableChoice({
           // Kept in view while the field holds a variable, so the way to
           // choose another is where the author last found it.
           data-bound={bound ? "" : undefined}
+          data-empty={empty ? "" : undefined}
         >
           <Diamond aria-hidden="true" size={14} />
         </button>
@@ -391,11 +402,11 @@ export function VariableChip({
       <button
         type="button"
         onClick={onClear}
-        // The variable AND the field: several fields can hold one variable,
-        // and a column of buttons all called "Remove Display" cannot be told
-        // apart by a screen-reader user.
-        aria-label={`Remove ${name} from ${label}`}
-        title={`Remove ${name}`}
+        // Named as the colour control's Clear is, by the field: several fields
+        // can hold one variable, and a column of buttons all named for it
+        // could not be told apart by a screen-reader user.
+        aria-label={`Clear ${label}`}
+        title={`Clear ${name}`}
       >
         <X aria-hidden="true" size={14} />
       </button>

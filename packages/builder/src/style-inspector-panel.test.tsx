@@ -1239,12 +1239,12 @@ describe("controls", () => {
     // says the same thing twice.
     expect(
       screen.getByRole("button", {
-        name: "Remove space.4 from Padding block start",
+        name: "Clear Padding block start",
       })
     ).toBeDefined();
     expect(
       screen.getByRole("button", {
-        name: "Remove space.2 from Margin block start",
+        name: "Clear Margin block start",
       })
     ).toBeDefined();
   });
@@ -1355,7 +1355,7 @@ describe("controls", () => {
 
     fireEvent.click(
       padding.getByRole("button", {
-        name: "Remove space.4 from Padding block start",
+        name: "Clear Padding block start",
       })
     );
 

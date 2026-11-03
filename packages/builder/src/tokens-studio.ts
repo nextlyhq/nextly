@@ -578,8 +578,34 @@ export function variableGroupHeadings(): readonly {
 const SIZE_PREFIX = "font-size.";
 const LINE_HEIGHT_PREFIX = "line-height.";
 
-/** Code-name prefixes that put a length in the spacing group. */
-const SPACING_PREFIXES = ["space.", "spacing.", "gap.", "radius."];
+/** Code-name prefixes of a spacing step, and of a radius. */
+const SPACING_PREFIXES = ["space.", "spacing.", "gap."];
+const RADIUS_PREFIX = "radius.";
+
+/** The families a length variable belongs to, each made for its own fields. */
+export type LengthFamily = "font-size" | "line-height" | "spacing" | "radius";
+
+/**
+ * The family a length variable belongs to, read from its code name as the
+ * Design panel groups it, or `undefined` for a length that names none (a
+ * content width) and for anything that is not a length.
+ *
+ * The inspector offers each field its own family, so a padding lists the
+ * spacing steps and a radius the radii; asked here so the Design panel's
+ * groups and the inspector's lists cannot disagree about what a variable is.
+ */
+export function lengthFamilyOf(token: {
+  name: string;
+  kind: TokenKind;
+}): LengthFamily | undefined {
+  const type = typeScaleProperty(token);
+  if (type !== undefined) return type;
+  if (token.kind !== "dimension") return undefined;
+  if (token.name.startsWith(RADIUS_PREFIX)) return "radius";
+  return SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
+    ? "spacing"
+    : undefined;
+}
 
 /**
  * The CSS property a type-scale variable is made for: `font-size` for a type
@@ -613,13 +639,9 @@ export function variableGroupOf(token: {
 }): VariableGroup {
   if (token.kind === "color") return "colours";
   if (token.kind === "shadow") return "spacing";
-  if (typeScaleProperty(token) !== undefined) return "type";
-  if (
-    token.kind === "dimension" &&
-    SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
-  ) {
-    return "spacing";
-  }
+  const family = lengthFamilyOf(token);
+  if (family === "font-size" || family === "line-height") return "type";
+  if (family === "spacing" || family === "radius") return "spacing";
   return "other";
 }
 

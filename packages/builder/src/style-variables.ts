@@ -1,14 +1,14 @@
 /**
  * What a style field offers from the site's variables, beyond what a colour
- * needs: matching a typed name, the field's hint, and the sample a list draws.
+ * needs: matching a typed name, and the sample a list draws.
  *
  * Pure, for the reason `style-colour.ts` is. Which variable a typed word names
  * and how wide a sample is are derivation, and a test of the rendered field
  * cannot tell a right answer from a plausible wrong one.
  *
  * Every answer here reads the ONE projection of the site's variables,
- * {@link variablesFor}, so the list a field offers, the names it accepts as
- * typed and whether its hint mentions variables at all cannot disagree.
+ * {@link variablesFor}, so the list a field offers and the names it accepts
+ * as typed cannot disagree.
  *
  * @module style-variables
  */
@@ -68,24 +68,6 @@ export function tokenForTypedName(
   if (named.size !== 1) return undefined;
   const [identity] = named;
   return identity;
-}
-
-/**
- * A field's hint, saying a variable may be chosen where one can be:
- * "16px or a variable". The hint alone where the site has no variable this
- * field takes, since pointing at a choice that does not exist would send the
- * author looking for it.
- */
-export function variablePlaceholder(
-  leaf: StyleLeaf,
-  tokens: SiteTokenSet | undefined,
-  base: string,
-  mode: TokenMode = "light"
-): string {
-  // In the mode the canvas shows, as the field's list offers them.
-  return variablesFor(leaf, tokens, mode).length > 0
-    ? `${base} or a variable`
-    : base;
 }
 
 /**

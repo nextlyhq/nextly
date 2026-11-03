@@ -64,6 +64,8 @@ const leafOf = (property: string): StyleLeaf => {
 
 const FONT_SIZE = leafOf("fontSize");
 const OPACITY = leafOf("opacity");
+/** A length with no family of its own, so every length is offered there. */
+const WIDTH = leafOf("width");
 
 const TOKENS: SiteTokenSet = {
   tokens: [
@@ -177,6 +179,20 @@ describe("the ◇ beside a field", () => {
       (body.querySelector(".nx-variable-choice__name") as HTMLElement).style
         .fontSize
     ).toBe("16px");
+  });
+
+  it("draws a length as a bar scaled to it, capped", () => {
+    render(
+      <VariableChoice
+        leaf={WIDTH}
+        tokens={TOKENS}
+        bound={false}
+        current={undefined}
+        label="Width"
+        onPick={vi.fn()}
+      />
+    );
+    fireEvent.click(trigger("Width"));
     const bar = screen
       .getByRole("option", { name: "Sm 8px" })
       .querySelector(".nx-variable-choice__bar") as HTMLElement;
@@ -185,6 +201,90 @@ describe("the ◇ beside a field", () => {
       .getByRole("option", { name: "Content width 72rem" })
       .querySelector(".nx-variable-choice__bar") as HTMLElement;
     expect(wide.style.inlineSize).toBe("64px");
+  });
+
+  it("opens on the first row drawn, and the arrows follow the drawn order", () => {
+    // Grouped as Design groups them, so the order drawn is not the order the
+    // site lists them in: the engine's own Content width comes first there
+    // and is drawn last, under Other.
+    render(
+      <VariableChoice
+        leaf={WIDTH}
+        tokens={TOKENS}
+        bound={false}
+        current={undefined}
+        label="Width"
+        onPick={vi.fn()}
+      />
+    );
+    fireEvent.click(trigger("Width"));
+    const drawn = screen.getAllByRole("option");
+    expect(drawn.map(option => option.textContent)).toEqual([
+      "Display 48px",
+      "Body 16px",
+      "Space 4 1rem",
+      "Sm 8px",
+      "Content width 72rem",
+    ]);
+    const selected = (): string | null =>
+      screen
+        .getAllByRole("option")
+        .find(option => option.getAttribute("aria-selected") === "true")
+        ?.textContent ?? null;
+    expect(selected()).toBe("Display 48px");
+    const list = screen.getByRole("listbox", { name: "Variables" });
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    expect(selected()).toBe("Body 16px");
+    fireEvent.keyDown(list, { key: "End" });
+    expect(selected()).toBe("Content width 72rem");
+    fireEvent.keyDown(list, { key: "ArrowUp" });
+    expect(selected()).toBe("Sm 8px");
+  });
+
+  it("opens on the variable the field holds, wherever it is drawn", () => {
+    render(
+      <VariableChoice
+        leaf={WIDTH}
+        tokens={TOKENS}
+        bound
+        current="space.sm"
+        label="Width"
+        onPick={vi.fn()}
+      />
+    );
+    fireEvent.click(trigger("Width"));
+    expect(
+      screen
+        .getByRole("option", { name: "Sm 8px" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+  });
+
+  it("is shown at rest on an empty field, and not on one holding a value", () => {
+    const { rerender } = render(
+      <VariableChoice
+        leaf={FONT_SIZE}
+        tokens={TOKENS}
+        bound={false}
+        empty
+        current={undefined}
+        label="Font size"
+        onPick={vi.fn()}
+      />
+    );
+    expect(trigger().hasAttribute("data-empty")).toBe(true);
+    rerender(
+      <VariableChoice
+        leaf={FONT_SIZE}
+        tokens={TOKENS}
+        bound={false}
+        empty={false}
+        current={undefined}
+        label="Font size"
+        onPick={vi.fn()}
+      />
+    );
+    expect(trigger().hasAttribute("data-empty")).toBe(false);
   });
 
   it("searches once the list is long", () => {
@@ -197,15 +297,15 @@ describe("the ◇ beside a field", () => {
     };
     render(
       <VariableChoice
-        leaf={FONT_SIZE}
+        leaf={WIDTH}
         tokens={many}
         bound={false}
         current={undefined}
-        label="Font size"
+        label="Width"
         onPick={vi.fn()}
       />
     );
-    fireEvent.click(trigger());
+    fireEvent.click(trigger("Width"));
     const search = screen.getByRole("combobox", { name: "Search variables" });
     fireEvent.change(search, { target: { value: "step 3" } });
     expect(
@@ -244,7 +344,7 @@ describe("the ◇ beside a field", () => {
 });
 
 describe("the chip a held variable shows", () => {
-  it("names the variable, with its value, and its remove button names both", () => {
+  it("names the variable, with its value, and clears as a colour's Clear does", () => {
     const onClear = vi.fn();
     render(
       <VariableChip
@@ -259,7 +359,7 @@ describe("the chip a held variable shows", () => {
     expect(chip.textContent).toBe("Display 48px");
     fireEvent.click(
       within(chip).getByRole("button", {
-        name: "Remove Display from Font size",
+        name: "Clear Font size",
       })
     );
     expect(onClear).toHaveBeenCalledTimes(1);

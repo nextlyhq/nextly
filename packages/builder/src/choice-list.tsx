@@ -65,10 +65,19 @@ export function ChoiceList<C extends ListedChoice>({
   const [query, setQuery] = React.useState("");
   const searchable = choices.length > SEARCH_FROM;
   const needle = query.trim().toLowerCase();
-  const shown =
+  const matching =
     needle === ""
       ? choices
       : choices.filter(choice => choice.label.toLowerCase().includes(needle));
+  // In the order the rows are DRAWN: grouped, a list draws group by group,
+  // and the row it opens on and the one an arrow moves to have to be the
+  // ones the author sees there, not the next in the order they were given.
+  const shown =
+    groups === undefined
+      ? matching
+      : groups.flatMap(({ group }) =>
+          matching.filter(choice => choice.group === group)
+        );
   const [active, setActive] = React.useState(() =>
     Math.max(
       0,
