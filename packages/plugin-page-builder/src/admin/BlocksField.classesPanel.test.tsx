@@ -117,6 +117,14 @@ vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) => permission === "update-site-style",
 }));
 
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({ ...storedRead, refetch: refetchStoredStyle }),
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
@@ -171,7 +179,6 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
    * that must still refuse when the transport could not describe why.
    */
   validationIssues: () => [],
-  useSingleDocument: () => storedRead,
   useUpdateSingleDocument: () => ({
     mutateAsync: async (value: Record<string, unknown>) => {
       saved.push(value);
