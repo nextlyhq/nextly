@@ -2442,7 +2442,9 @@ function JumpAction({
       onClick={onJump}
       aria-label={`Edit ${label} at ${where}, where its value was set`}
     >
-      Go to {where}
+      {/* The source, as the caption beside an inherited value says it, and
+          the way there: one line rather than a caption and a "Go to". */}
+      From {where}
     </button>
   );
 }
@@ -3203,12 +3205,13 @@ function ProvenanceDot({
        * copies in the accessibility tree is the same sentence announced twice,
        * which reads as a stutter rather than as emphasis.
        */}
-      {described.kind === "inherited" ? (
+      {described.kind === "inherited" && answer?.jump === undefined ? (
         /*
          * An inherited value's source stays in sight, at the end of the
          * label's row: the value shown greyed in the control is only half an
          * answer without where it came from. In brief, with the whole
-         * sentence on hover for a caption the row cuts short.
+         * sentence on hover for a caption the row cuts short. Not where the
+         * row offers a jump to its source: the jump names it, and goes there.
          */
         <span
           className="nx-style-inspector__provenance-source"

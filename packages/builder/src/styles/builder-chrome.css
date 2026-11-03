@@ -4323,9 +4323,10 @@ fieldset.nx-inspector__fields {
 }
 
 /*
- * Beside its control, a label has a 7.5rem column, which it and its source
+ * Beside its control, a label has a 7rem column, which it and its source
  * cannot share on one line: the source takes a line of its own under the
- * label there, and the stacked layout below puts it back on the label's row.
+ * label there, which the 40px control beside it leaves room for, and the
+ * stacked layout below puts it back on the label's row.
  */
 .nx-style-inspector .nx-inspector__field > label {
   flex-wrap: wrap;

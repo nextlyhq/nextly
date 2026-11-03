@@ -3250,6 +3250,26 @@ describe("the action a control's breakpoint provenance earns", () => {
     expect(action("jump")).not.toBeNull();
   });
 
+  it("names the source on the jump itself, and once", () => {
+    // The jump says where the value comes from and goes there: a caption
+    // beside the label saying "From Tablet" as well said it twice.
+    mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")?.textContent).toBe("From Tablet");
+    expect(action("jump")?.getAttribute("aria-label")).toMatch(
+      /^Edit Colour at Tablet/
+    );
+    expect(
+      document.querySelector(
+        '[data-property="color"] .nx-style-inspector__provenance-source'
+      )
+    ).toBeNull();
+  });
+
   it("keeps the reset beside the jump when a value stored here is shadowed", () => {
     /*
      * Editing base while a live tablet declaration wins: the row's value

@@ -148,7 +148,7 @@ describe("an inherited value's source", () => {
   });
 
   it("takes a line of its own under the label in the wide layout", () => {
-    // Beside its control the label has a 7.5rem column, which the label and
+    // Beside its control the label has a 7rem column, which the label and
     // its source cannot share on one line.
     expect(
       ruleBody(".nx-style-inspector .nx-inspector__field > label")
@@ -158,7 +158,7 @@ describe("an inherited value's source", () => {
     );
     // Stacked, the label has the row to itself, so the source shares it.
     const narrow = atRuleBodies(
-      "@container nx-inspector-fields (max-width: 19rem)"
+      "@container nx-inspector-fields (max-width: 17rem)"
     ).join(" ");
     expect(narrow).toContain(
       ".nx-style-inspector .nx-inspector__field > label > .nx-style-inspector__provenance-source { flex-basis: auto; margin-inline-start: auto; }"
