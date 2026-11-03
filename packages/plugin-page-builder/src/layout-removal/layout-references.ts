@@ -15,6 +15,11 @@
  * (`_isWorkingDraft`); without one the read falls back to the live row, which
  * the first query already judged.
  *
+ * ## By id, never by offset
+ *
+ * Both listings walk by an id cursor ({@link byIdCursor}), so a page deleted
+ * while the scan runs cannot shift a later page out of it.
+ *
  * ## Bounded
  *
  * Every row listed and every draft read spends one of a fixed budget of page
@@ -31,7 +36,7 @@
 import type { Nextly } from "nextly";
 
 import { relationId } from "../default-layout/store";
-import { walkPages } from "../paged-walk";
+import { walkPages, type StorePage } from "../paged-walk";
 
 /** How many page reads one scan may spend. */
 const PAGE_READ_BUDGET = 2000;
@@ -41,6 +46,9 @@ const PAGE_SIZE = 100;
 
 /** The Direct API reads the scan makes. */
 export type ReferenceReads = Pick<Nextly, "find" | "findByID">;
+
+/** A listing's filter, as the Direct API takes it. */
+type PageWhere = NonNullable<Parameters<ReferenceReads["find"]>[0]["where"]>;
 
 /** Where a page names the Layout. */
 export type ReferencePlace = "live" | "unpublished" | "draft";
@@ -122,6 +130,29 @@ async function workingDraftsNaming(
   return naming;
 }
 
+/**
+ * A page reader that walks by id rather than by offset: every read asks for
+ * the first page of the rows after the last id it saw, sorted by id. A page
+ * deleted behind the cursor cannot shift a later row past it, as it would past
+ * an offset.
+ */
+function byIdCursor(
+  read: (where: PageWhere) => Promise<StorePage>,
+  where: PageWhere
+): () => Promise<StorePage> {
+  let after: string | null = null;
+  return async () => {
+    const answered = await read(
+      after === null ? where : { ...where, id: { greater_than: after } }
+    );
+    for (const row of answered.items) {
+      const id = relationId(row);
+      if (id !== null) after = id;
+    }
+    return answered;
+  };
+}
+
 /** Scan the pages collection for every page naming `layoutId`. */
 export async function scanLayoutReferences(args: {
   nextly: ReferenceReads;
@@ -141,18 +172,20 @@ export async function scanLayoutReferences(args: {
   const rowsDone = await walkPages({
     describe: `the pages naming Layout ${layoutId}`,
     maxPages,
-    fetchPage: page =>
-      nextly.find({
-        collection: pages,
-        where: { layout: { equals: layoutId } },
-        status: "all",
-        sort: "id",
-        page,
-        limit: PAGE_SIZE,
-        depth: 0,
-        select: { title: true, status: true },
-        overrideAccess: true,
-      }),
+    fetchPage: byIdCursor(
+      where =>
+        nextly.find({
+          collection: pages,
+          where,
+          status: "all",
+          sort: "id",
+          limit: PAGE_SIZE,
+          depth: 0,
+          select: { title: true, status: true },
+          overrideAccess: true,
+        }),
+      { layout: { equals: layoutId } }
+    ),
     onPage: (items, { hasNext }) => {
       for (const row of items) {
         spent += 1;
@@ -175,17 +208,20 @@ export async function scanLayoutReferences(args: {
   const draftsDone = await walkPages({
     describe: "the published pages",
     maxPages,
-    fetchPage: page =>
-      nextly.find({
-        collection: pages,
-        status: "published",
-        sort: "id",
-        page,
-        limit: PAGE_SIZE,
-        depth: 0,
-        select: { title: true },
-        overrideAccess: true,
-      }),
+    fetchPage: byIdCursor(
+      where =>
+        nextly.find({
+          collection: pages,
+          where,
+          status: "published",
+          sort: "id",
+          limit: PAGE_SIZE,
+          depth: 0,
+          select: { title: true },
+          overrideAccess: true,
+        }),
+      {}
+    ),
     onPage: async (items, { hasNext }) => {
       const toRead: { id: string; title: string }[] = [];
       let unread = 0;

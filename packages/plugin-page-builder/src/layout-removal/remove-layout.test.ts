@@ -160,7 +160,11 @@ function site(): Site {
 }
 
 /** A page of `items`, as the Direct API pages a list. */
-function paged(items: Row[], args: Record<string, unknown>) {
+function paged(rows: Row[], args: Record<string, unknown>) {
+  const items =
+    args.sort === "id"
+      ? [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))
+      : rows;
   const limit = Number(args.limit ?? 10);
   const page = Number(args.page ?? 1);
   return {
@@ -169,12 +173,17 @@ function paged(items: Row[], args: Record<string, unknown>) {
   };
 }
 
-/** The `where` a call filters by: an id, an id list, or a Layout. */
+/** The `where` a call filters by: an id, an id list, an id cursor, or a Layout. */
 function filterBy(items: Row[], where: unknown): Row[] {
-  const w = (where ?? {}) as Record<string, { equals?: unknown; in?: unknown }>;
+  const w = (where ?? {}) as Record<
+    string,
+    { equals?: unknown; in?: unknown; greater_than?: unknown }
+  >;
+  const after = w.id?.greater_than;
   return items.filter(
     item =>
       (w.id?.equals === undefined || item.id === w.id.equals) &&
+      (typeof after !== "string" || String(item.id) > after) &&
       (!Array.isArray(w.id?.in) || w.id.in.includes(item.id)) &&
       (w.layout?.equals === undefined || item.layout === w.layout.equals)
   );
@@ -786,6 +795,50 @@ describe("the scan", () => {
 
     expect(scan).toEqual({
       references: [{ id: "p1", title: "A", place: "draft" }],
+      complete: true,
+    });
+  });
+});
+
+describe("the scan's cursor", () => {
+  it("still reads a later page's working draft when a page it passed is deleted", async () => {
+    const s = site();
+    for (let i = 0; i < 150; i += 1) {
+      s.pages.push({
+        id: `p${String(i).padStart(3, "0")}`,
+        title: `Page ${String(i)}`,
+        status: "published",
+        layout: null,
+      });
+    }
+    // The first page of the published walk is p000 to p099; p100 opens the
+    // second, and only its working draft names the Layout.
+    s.pageDrafts.set("p100", { id: "p100", layout: "landing" });
+    const api = directApi(s);
+    const find = api.find.bind(api);
+    let publishedReads = 0;
+    const deleting = Object.assign(Object.create(api) as object, {
+      find: async (args: Parameters<typeof api.find>[0]) => {
+        const answered = await find(args);
+        if (args.status === "published") {
+          publishedReads += 1;
+          // A page the walk already passed is deleted before the next read.
+          if (publishedReads === 1) {
+            s.pages = s.pages.filter(page => page.id !== "p005");
+          }
+        }
+        return answered;
+      },
+    }) as typeof api;
+
+    const scan = await scanLayoutReferences({
+      nextly: deleting,
+      pages: "pages",
+      layoutId: "landing",
+    });
+
+    expect(scan).toEqual({
+      references: [{ id: "p100", title: "Page 100", place: "draft" }],
       complete: true,
     });
   });
