@@ -39,6 +39,7 @@ import {
 import { gotoAdmin } from "./support/admin";
 import { settleTransitions } from "./support/axe-scan.mjs";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
+import { storedPageNodes } from "./support/stored-page";
 import { fileAccount, test } from "./support/test";
 
 const COMPONENTS = "/admin/api/collections/components/entries";
@@ -150,16 +151,10 @@ async function storedNodes(
   request: APIRequestContext,
   id: string
 ): Promise<{ type: string; props?: { componentId?: string } }[]> {
-  const response = await request.get(`${PAGES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: {
-      id: string;
-      content?: {
-        nodes?: { type: string; props?: { componentId?: string } }[];
-      };
-    }[];
-  };
-  return body.items.find(item => item.id === id)?.content?.nodes ?? [];
+  return (await storedPageNodes(request, PAGES, id)) as {
+    type: string;
+    props?: { componentId?: string };
+  }[];
 }
 
 /** What the page holds, as a type per block and the component it places. */

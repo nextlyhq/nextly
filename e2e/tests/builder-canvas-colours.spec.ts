@@ -191,15 +191,23 @@ async function groundBehind(target: Locator): Promise<string> {
  * Read once the seeded heading is on screen: an empty page root has no box,
  * and a ground read before the document arrived would describe nothing.
  */
-async function published(
-  page: Page
-): Promise<{ ground: [number, number, number] }> {
+async function published(page: Page): Promise<{
+  ground: [number, number, number];
+  colorScheme: string;
+  face: string;
+}> {
   await page.goto("/");
   await expect(
     page.getByRole("heading", { name: HEADING, level: 1 })
   ).toBeVisible({ timeout: 30_000 });
   const root = page.locator(".nx-pb-page").first();
-  return { ground: await toRgb(page, await groundBehind(root)) };
+  return {
+    ground: await toRgb(page, await groundBehind(root)),
+    colorScheme: await root.evaluate(
+      element => getComputedStyle(element).colorScheme
+    ),
+    face: await root.evaluate(element => getComputedStyle(element).fontFamily),
+  };
 }
 
 for (const theme of ["dark", "light"] as const) {
@@ -223,10 +231,12 @@ for (const theme of ["dark", "light"] as const) {
         "the page behind the blocks is the site's ground, as published"
       ).toEqual(site.ground);
 
+      // The site's own scheme, as published: the canvas is drawn inside the
+      // site's page, which states it, and never the admin's.
       expect(
         await canvas.evaluate(element => getComputedStyle(element).colorScheme),
         "native controls and scrollbars on the page follow the site, not the admin"
-      ).toBe("light");
+      ).toBe(site.colorScheme);
 
       // The admin's own text colour, read off the editor's chrome root.
       const adminText = await toRgb(
@@ -260,7 +270,13 @@ for (const theme of ["dark", "light"] as const) {
       expect(face, "the page is not set in the admin's face").not.toContain(
         "Geist"
       );
-      expect(face.split(",")[0]?.trim()).toBe("system-ui");
+      // The site's own body face, as published: the canvas is drawn inside
+      // the site's page, which sets it.
+      expect(
+        await canvasPage(page).evaluate(
+          element => getComputedStyle(element).fontFamily
+        )
+      ).toBe(site.face);
     });
 
     test("the editor's marks on the page are legible and its chrome stays the admin's", async ({
@@ -360,15 +376,9 @@ test.describe("with the system in dark mode", () => {
   }) => {
     /*
      * The playground's site darkens with the system (its strategy is `media`),
-     * so with the system in dark its tokens take their dark values — while the
-     * admin here is pinned to LIGHT. The canvas page follows the site's own
-     * TOKENS: its ground is the site's background token, whose dark value the
-     * site defines, so the page and its colour scheme go dark.
-     *
-     * The published page goes dark here for a second reason the canvas
-     * cannot see: the playground's host body has its own dark colours. Its
-     * ground is therefore compared only as "dark", while the canvas's is
-     * pinned to the token's own dark value.
+     * while the admin here is pinned to LIGHT. The canvas is drawn inside the
+     * site's own page, so it goes dark exactly as the published page does:
+     * the same ground and the same colour scheme, never the admin's.
      */
     test.slow();
     await page.emulateMedia({ colorScheme: "dark" });
@@ -385,12 +395,11 @@ test.describe("with the system in dark mode", () => {
     const canvas = canvasFrame(page).locator(".nx-canvas");
     expect(
       await canvas.evaluate(element => getComputedStyle(element).colorScheme)
-    ).toBe("dark");
+    ).toBe(site.colorScheme);
     const ground = await toRgb(page, await groundBehind(canvasPage(page)));
-    expect(
-      ground,
-      "the canvas ground is the site's background token, at its dark value"
-    ).toEqual([11, 15, 25]);
+    expect(ground, "the canvas ground is the published page's").toEqual(
+      site.ground
+    );
     const pageText = await toRgb(
       page,
       await canvasText(page).evaluate(
@@ -728,6 +737,21 @@ test.describe("a translucent site ground", () => {
       },
     });
     expect(stored.ok(), `storing the ground: ${stored.status()}`).toBe(true);
+    // On the editor's blank page, which paints the site's ground itself. A
+    // page the site serves paints its own, as it does published, so the site's
+    // canvas route is answered as missing and the editor falls back.
+    await page.route("**/page-builder-canvas", async route => {
+      // A thrown handler prints the request, headers and all; answer instead.
+      try {
+        await route.fulfill({
+          status: 404,
+          contentType: "text/html",
+          body: "<!doctype html><html><body><main>Not found</main></body></html>",
+        });
+      } catch {
+        await route.abort().catch(() => undefined);
+      }
+    });
     try {
       await openBuilder(page, "light");
       await expectGroundOnce(page);
