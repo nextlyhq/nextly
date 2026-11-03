@@ -20,6 +20,7 @@ import {
   type UseDocumentLockOptions,
 } from "@admin/hooks/queries/useDocumentLock";
 import { useDocumentLockHolder } from "@admin/hooks/queries/useDocumentLockHolder";
+import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
 
 import {
   documentLockAffordances,
@@ -73,6 +74,9 @@ export function useDocumentLockSurface({
     ...options,
     enabled: enabled && readOnlyForReader,
   });
+  // Who is signed in, so a claim held by this person in another tab is told
+  // as theirs rather than as a colleague's.
+  const me = useCurrentUserId();
 
   // 🔴 The colleague outlives a failed refresh. Every beat re-asks, so a
   // transient rejection arrives as `unavailable` long after a holder was
@@ -100,7 +104,7 @@ export function useDocumentLockSurface({
       ? readOnlyBecause === "removed-from-code"
         ? READ_ONLY_REMOVED_FROM_CODE
         : readerAffordances(holder)
-      : documentLockAffordances(state, lastKnownHolder.current)),
+      : documentLockAffordances(state, lastKnownHolder.current, me)),
     takeOver,
     requestAccess,
   };

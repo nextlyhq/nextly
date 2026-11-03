@@ -191,6 +191,87 @@ describe("useDocumentLock", () => {
     expect(del).not.toHaveBeenCalled();
   });
 
+  it("hands the claim back once, in a request that outlives the page, when the page goes away", async () => {
+    // 🔴 Closing the tab, reloading or following a link out runs no React
+    // cleanup, so without this the claim sits on the server for a whole lease.
+    // `keepalive` is what lets the request finish after the page has gone, and
+    // the unmount that may still follow must not send it a second time.
+    const { result, unmount } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    act(() => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pagehide", { persisted: false })
+      );
+    });
+    unmount();
+
+    expect(del).toHaveBeenCalledTimes(1);
+    expect(del).toHaveBeenCalledWith(
+      "/document-lock",
+      { ...ref, claimToken: "t1" },
+      { keepalive: true }
+    );
+  });
+
+  it("hands nothing back on the way out when a colleague holds it", async () => {
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pagehide", { persisted: false })
+      );
+    });
+
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("claims again when the page comes back from the back-forward cache", async () => {
+    // The claim was handed back as the page was hidden, so a page the browser
+    // restores holds nothing until it asks again.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pagehide", { persisted: true })
+      );
+    });
+    await act(async () => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pageshow", { persisted: true })
+      );
+    });
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
+
+  it("stops listening for the page going away once the editor has gone", async () => {
+    // A listener left behind would release, on some later page exit, a claim
+    // that belongs to whatever editor the person opened next.
+    const { result, unmount } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    unmount();
+    del.mockClear();
+
+    act(() => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pagehide", { persisted: false })
+      );
+    });
+
+    expect(del).not.toHaveBeenCalled();
+  });
+
   it("takes over on request, and holds it afterwards", async () => {
     post.mockResolvedValue(held);
     const { result } = renderHook(() => useDocumentLock(ref));

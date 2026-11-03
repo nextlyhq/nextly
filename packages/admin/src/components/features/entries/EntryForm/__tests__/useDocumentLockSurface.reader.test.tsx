@@ -19,6 +19,10 @@ const { get, post, patch, del } = vi.hoisted(() => ({
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { get, post, patch, delete: del },
 }));
+// Who is signed in: nobody known yet, so no holder reads as this user's own.
+vi.mock("@admin/hooks/useCurrentUserId", () => ({
+  useCurrentUserId: () => null,
+}));
 
 import { DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS } from "nextly/document-lock";
 

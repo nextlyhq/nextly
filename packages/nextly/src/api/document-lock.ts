@@ -42,6 +42,7 @@ import {
   type DocumentRef,
   type DocumentScopeKind,
 } from "../domains/document-lock";
+import { peopleById } from "../domains/versions/author-hydration";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 
@@ -52,6 +53,26 @@ import {
   assertVersionDocumentReadable,
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
+
+/**
+ * What the next editor is told holds the document: a person by their name,
+ * else their email; an API key as one, by its maker's name where they have
+ * one; and, when nothing names the caller, "Someone". Never empty, so no lock
+ * message can read "null is editing this document".
+ *
+ * A key is named as a key rather than as its maker, because a script holding
+ * a document is not its maker sitting at it, and the person asked to let go
+ * should know which of the two they are waiting on. The maker's name is read
+ * through `peopleById`, the one lookup that names a person, and only for a
+ * key: a session already carries it.
+ */
+async function holderLabel(auth: AuthContext): Promise<string> {
+  if (auth.authMethod === "api-key") {
+    const maker = (await peopleById([auth.userId])).get(auth.userId)?.name;
+    return maker ? `${maker}'s API key` : "An API key";
+  }
+  return auth.userName || auth.userEmail || "Someone";
+}
 
 async function getDocumentLockService(): Promise<DocumentLockService> {
   await getCachedNextly();
@@ -307,7 +328,7 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
     ref,
     {
       ownerId: auth.userId,
-      ownerLabel: auth.userName ?? auth.userEmail ?? null,
+      ownerLabel: await holderLabel(auth),
       // What a takeover's history event credits: the key itself for an API
       // key, and the person by name only, never by the email above.
       actor: actorFromAuthContext(auth),
