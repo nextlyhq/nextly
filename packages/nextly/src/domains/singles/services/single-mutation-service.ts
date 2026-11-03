@@ -72,7 +72,6 @@ import { refusalIssues } from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
 import {
   hookChangedWholeNumberIssues,
-  snapshotForHookJudgment,
   validateEntryData,
   type ValidationIssue,
 } from "../../../shared/lib/entry-validation";
@@ -2606,7 +2605,6 @@ export class SingleMutationService extends BaseService {
       // which runs above at step 5 -- before validation -- so the hook that
       // documents itself as the last chance to shape a stored value saw data
       // the rules had not been applied to yet.
-      const hookSnapshot = snapshotForHookJudgment(currentData);
       if (this.hookRegistry.hasHooks("beforeChange", hookCollection)) {
         const beforeChangeResult = await this.hookRegistry.execute(
           "beforeChange",
@@ -2641,7 +2639,6 @@ export class SingleMutationService extends BaseService {
       // decide. The hooks run after the validation gate, so what they leave
       // behind is a write the gate never saw.
       const hookIssues = hookChangedWholeNumberIssues(
-        hookSnapshot,
         currentData,
         fieldConfigs
       );

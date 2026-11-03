@@ -269,65 +269,26 @@ function fieldJudgesFractions(field: ValidatableField): boolean {
 }
 
 /**
- * The pre-hook copy the hook judgment compares against. Deep on purpose: the
- * hook runner recurses into group and repeater rows and its handlers mutate
- * those rows IN PLACE, so a shallow spread shares the nested object and a
- * content comparison would see the hook's own result as unchanged. A payload
- * is JSON-shaped, so `structuredClone` answers; the shallow fallback covers
- * whatever exotic value it refuses, at the cost of nested-in-place visibility
- * on that corner.
- */
-export function snapshotForHookJudgment(
-  data: Record<string, unknown>
-): Record<string, unknown> {
-  try {
-    return structuredClone(data);
-  } catch {
-    return { ...data };
-  }
-}
-
-/**
- * The row objects a container value holds: a repeater's array filtered to
- * its object rows, a group's single object, anything else empty. Mirrors
- * the row walk the hook runner recurses with.
- */
-function containerRows(value: unknown): Record<string, unknown>[] {
-  if (Array.isArray(value)) {
-    return value.filter(
-      (row): row is Record<string, unknown> =>
-        row !== null && typeof row === "object"
-    );
-  }
-  if (value !== null && typeof value === "object") {
-    return [value as Record<string, unknown>];
-  }
-  return [];
-}
-
-/**
- * The whole-number floor, judged over everything a beforeChange hook left
- * changed — top-level values and numbers inside group and repeater rows.
+ * The whole-number floor, judged over the document the write will store,
+ * after the beforeChange hooks have had their turn.
  *
  * The hooks run after the validation gate and may transform or set any
- * value, so what they leave behind is a write this gate never saw: a hook
+ * value, so what they leave behind is a write the gate never saw: a hook
  * that produces a fraction would reach an integer column and let the
  * database decide — the dialect divergence the whole-number rule exists to
- * remove.
+ * remove. The gate, however, guarantees the document it passed was
+ * fraction-free — every fractional caller value was already refused — so
+ * without comparing anything: every fraction present after the hooks is a
+ * hook's own production, wherever it sits. Rows a hook inserted, removed or
+ * reordered change no verdict, because no row is matched against a
+ * predecessor; the walk judges the content as it stands.
  *
- * Top-level scalars are compared by reference against the snapshot taken
- * before the hooks ran — a number, string or boolean a hook leaves is
- * always a replacement. Containers are compared by CONTENTS (`group` and
- * `repeater` rows), because the hook runner recurses into those rows and
- * its handlers mutate them in place: the parent's reference does not move
- * even when a nested number did. Rows past the snapshot's own rows are
- * hook-written whole, and every number in them is judged.
- *
- * Only number fields are judged — every other rule keeps its pre-hook
- * verdict — and hasMany elements are judged as values, indexed in the path.
+ * Only whole-number fields are judged — every other rule keeps its pre-hook
+ * verdict, and fraction-capable fields (decimal, float) keep their
+ * fractions — and hasMany elements are judged as values, indexed in the
+ * path. Virtual fields store nothing, so a hook writing one is not a write.
  */
 export function hookChangedWholeNumberIssues(
-  snapshot: Record<string, unknown> | undefined,
   data: Record<string, unknown>,
   fields: ValidatableField[],
   path = ""
@@ -340,39 +301,39 @@ export function hookChangedWholeNumberIssues(
   );
   for (const key of Object.keys(data)) {
     const field = byName.get(key);
-    if (!field) continue;
+    if (!field || !isJudgedOnWrite(field)) continue;
     const childPath = path ? `${path}.${key}` : key;
 
-    // A container's children are judged by CONTENTS, not by reference: the
-    // hook runner recurses into group and repeater rows and its handlers
-    // mutate those rows in place, so the parent's reference does not move
-    // even when a nested number did.
+    // A group or repeater carries rows of child fields: the hook runner
+    // recurses into those rows and its handlers mutate them IN PLACE, so
+    // the walk descends the same way and judges the content as it stands —
+    // the fraction a handler left in a row is judged where the row sits,
+    // however the rows got there.
     if (
       (field.type === "group" || field.type === "repeater") &&
       Array.isArray(field.fields)
     ) {
-      const before = snapshot?.[key];
-      const after = data[key];
-      if (JSON.stringify(before ?? null) === JSON.stringify(after ?? null)) {
-        continue;
-      }
-      const rowsBefore = containerRows(before);
-      containerRows(after).forEach((row, index) => {
-        const rowPath =
-          field.type === "repeater" ? `${childPath}[${index}]` : childPath;
+      const value = data[key];
+      const rows = Array.isArray(value)
+        ? value
+        : value !== null && typeof value === "object"
+          ? [value]
+          : [];
+      rows.forEach((row, index) => {
+        if (row === null || typeof row !== "object" || Array.isArray(row)) {
+          return;
+        }
         issues.push(
           ...hookChangedWholeNumberIssues(
-            rowsBefore[index],
-            row,
+            row as Record<string, unknown>,
             field.fields as ValidatableField[],
-            rowPath
+            field.type === "repeater" ? `${childPath}[${index}]` : childPath
           )
         );
       });
       continue;
     }
 
-    if (snapshot && data[key] === snapshot[key]) continue;
     // A fraction-capable field (decimal, float) keeps fractions; a
     // whole-number field is the one the floor judges.
     if (fieldJudgesFractions(field)) continue;

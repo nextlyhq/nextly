@@ -129,7 +129,6 @@ import {
 import { detachData } from "../../../shared/lib/detach";
 import {
   hookChangedWholeNumberIssues,
-  snapshotForHookJudgment,
   validateEntryData,
   type EntryWriteContext,
   type ValidationIssue,
@@ -7302,7 +7301,6 @@ export class CollectionMutationService extends BaseService {
       // declarations of that name mean the same moment. What the hooks leave
       // behind is judged after the field-level phase — a hook write is a
       // write the gate never saw.
-      const hookSnapshot = snapshotForHookJudgment(finalData);
       await this.hookService.runBeforeChange({
         collection: params.collectionName,
         operation: "create",
@@ -7328,11 +7326,7 @@ export class CollectionMutationService extends BaseService {
       // The whole-number floor judges what the hooks changed: a fraction a
       // hook produced would reach the integer column and let the database
       // decide, on every verb this gate guards.
-      const hookIssues = hookChangedWholeNumberIssues(
-        hookSnapshot,
-        finalData,
-        fields
-      );
+      const hookIssues = hookChangedWholeNumberIssues(finalData, fields);
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });
       }
@@ -13488,7 +13482,6 @@ export class CollectionMutationService extends BaseService {
       // declarations of that name mean the same moment. What the hooks leave
       // behind is judged after the field-level phase — a hook write is a
       // write the gate never saw.
-      const hookSnapshot = snapshotForHookJudgment(finalData);
       await this.hookService.runBeforeChange({
         collection: params.collectionName,
         operation: "update",
@@ -13515,11 +13508,7 @@ export class CollectionMutationService extends BaseService {
       // The whole-number floor judges what the hooks changed: a fraction a
       // hook produced would reach the integer column and let the database
       // decide, on every verb this gate guards.
-      const hookIssues = hookChangedWholeNumberIssues(
-        hookSnapshot,
-        finalData,
-        fields
-      );
+      const hookIssues = hookChangedWholeNumberIssues(finalData, fields);
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });
       }
@@ -18064,7 +18053,6 @@ export class CollectionMutationService extends BaseService {
       // collection-level handler running while the field-level one is skipped
       // would be the gate half-applied.
       if (options.runHooks) {
-        const hookSnapshot = snapshotForHookJudgment(finalData);
         await this.hookService.runBeforeChange({
           collection: params.collectionName,
           operation: "create",
@@ -18087,11 +18075,7 @@ export class CollectionMutationService extends BaseService {
         // The whole-number floor judges what the hooks changed: a fraction a
         // hook produced would reach the integer column and let the database
         // decide, on every verb this gate guards.
-        const hookIssues = hookChangedWholeNumberIssues(
-          hookSnapshot,
-          finalData,
-          fields
-        );
+        const hookIssues = hookChangedWholeNumberIssues(finalData, fields);
         if (hookIssues.length > 0) {
           throw NextlyError.validation({ errors: hookIssues });
         }
@@ -18819,7 +18803,6 @@ export class CollectionMutationService extends BaseService {
       // validation gate has just passed. Both sit under the same `skipHooks`
       // gate: the flag means this write runs no user hooks at all.
       if (options.runHooks) {
-        const hookSnapshot = snapshotForHookJudgment(finalData);
         await this.hookService.runBeforeChange({
           collection: params.collectionName,
           operation: "update",
@@ -18843,11 +18826,7 @@ export class CollectionMutationService extends BaseService {
         // The whole-number floor judges what the hooks changed: a fraction a
         // hook produced would reach the integer column and let the database
         // decide, on every verb this gate guards.
-        const hookIssues = hookChangedWholeNumberIssues(
-          hookSnapshot,
-          finalData,
-          fields
-        );
+        const hookIssues = hookChangedWholeNumberIssues(finalData, fields);
         if (hookIssues.length > 0) {
           throw NextlyError.validation({ errors: hookIssues });
         }
