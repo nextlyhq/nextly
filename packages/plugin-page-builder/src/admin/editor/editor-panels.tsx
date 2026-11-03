@@ -12,12 +12,15 @@ import {
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
 import {
+  browserStore,
   DEFAULT_PREFERENCES,
   type LeftPanel,
+  type PreferenceStore,
   type SavedPattern,
 } from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
+  CHECKLIST_STORAGE_KEY,
   ClassManagerPanel,
   ComponentsPanel,
   InsertPanel,
@@ -66,6 +69,27 @@ import {
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
+
+/** A key for the document the editor has open, from its identity. */
+function identityKey(
+  identity: ReturnType<typeof useDocumentIdentity>
+): string | undefined {
+  if (identity === null) return undefined;
+  return identity.kind === "collection"
+    ? `collection:${identity.slug}:${identity.documentId ?? "new"}`
+    : `${identity.kind}:${identity.slug}`;
+}
+
+/**
+ * Where the getting-started card's dismissal is kept: under the author's own
+ * key, so dismissing it is one author's choice in a browser two people share.
+ * With no author known, the card's own browser-wide default.
+ */
+function checklistStoreFor(userId: string | null): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : browserStore(`${CHECKLIST_STORAGE_KEY}:${userId}`);
+}
 
 /**
  * Every left panel the editor can fill today: Add, Layers, Pages, the site's
@@ -380,9 +404,19 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
    * config and a malformed one both leave it on, because the default is the
    * behaviour a site that configured nothing asked for.
    */
+  const checklistStore = useMemo(
+    () => checklistStoreFor(mount.userId),
+    [mount.userId]
+  );
+  const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
-    enabled: clientConfig?.checklist !== false,
+    documentKey: identityKey(identity),
+    // Not until the author is known: their own dismissal is the one to read,
+    // and a card drawn before it arrives would flash for an author who
+    // dismissed it.
+    enabled: clientConfig?.checklist !== false && checklistStore !== undefined,
+    ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
   const library = useOfferedLibrary(mount);
@@ -457,7 +491,10 @@ export function editorPanelRenderer({
   requestPanel,
   insertInside,
   pages,
+  documentDirty,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+  /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
+  documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
   layersRegions?: readonly LayersRegionRow[];
   /** "Edit component", which the Components panel offers on each row. */
@@ -554,7 +591,7 @@ export function editorPanelRenderer({
       ),
       // Read when the panel is drawn, as every other entry reads its inputs,
       // so drawing another panel never needs the Pages panel's mount.
-      pages: () => pages.renderPagesPanel(),
+      pages: () => pages.renderPagesPanel({ unsavedWork: documentDirty }),
       design: () => (
         <DesignPanel
           view={view}

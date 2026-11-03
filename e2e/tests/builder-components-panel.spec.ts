@@ -377,9 +377,13 @@ test.describe("the Components panel", () => {
     );
     const banner = page.getByRole("region", { name: "Editing a component" });
     await expect(banner).toContainText(title);
-    await expect(banner).toContainText(/Changes reach/);
+    // Whatever it says of reach is about pages, never documents: a component
+    // placed nowhere says "Not on any page yet", or nothing while the usage
+    // index is still being filled (a floor of none says nothing).
+    await expect(banner).not.toContainText(/document/);
 
-    await banner.getByRole("button", { name: "Back" }).click();
+    // The one Back, named for the page it returns to.
+    await banner.getByRole("button", { name: /^Back to / }).click();
     await expect(page).toHaveURL(
       new RegExp(`/admin/collections/pages/${id}/builder\\?`)
     );

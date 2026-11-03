@@ -23,9 +23,12 @@ import {
 import {
   useDocumentActionsContext,
   useHostedRecoveryPoint,
+  useHostedStored,
 } from "./DocumentActionsContext";
 import { DocumentStatusLive } from "./DocumentStatusLive";
+import { useHostedRecoveryOffer } from "./RecoveryOfferContext";
 import { SaveStateIndicator } from "./SaveStateIndicator";
+import type { DocumentActionBindings } from "./useDocumentActionBindings";
 
 /**
  * Whether the document's work is stored: the header's chip, with the
@@ -39,13 +42,35 @@ export function DocumentSaveIndicator({
   className?: string;
 }): JSX.Element | null {
   const hosted = useDocumentActionsContext();
-  const recovery = useHostedRecoveryPoint();
   if (hosted === null) return null;
+  return <HostedSaveIndicator hosted={hosted} className={className} />;
+}
+
+/**
+ * The chip inside an editor. Apart from the null check above, so the recovery
+ * offer is claimed only by a chip that is actually drawn.
+ */
+function HostedSaveIndicator({
+  hosted,
+  className,
+}: {
+  hosted: DocumentActionBindings;
+  className: string | undefined;
+}): JSX.Element {
+  const recovery = useHostedRecoveryPoint();
+  // The editor reports a stored document saved from the moment it opens, with
+  // when in the tooltip; the entry form's own bar does not pass this.
+  const stored = useHostedStored();
+  // The recovery offer, made in the chip; its control claims it, which takes
+  // down the banner.
+  const offer = useHostedRecoveryOffer();
   return (
     <>
       <SaveStateIndicator
         saveState={hosted.saveState}
         recovery={recovery}
+        stored={stored}
+        offer={offer}
         {...(className === undefined ? {} : { className })}
       />
       <DocumentStatusLive

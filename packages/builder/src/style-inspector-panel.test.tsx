@@ -866,15 +866,16 @@ describe("controls", () => {
     });
   });
 
-  it("lets a keyword selection be cleared, which a select cannot offer as an item", () => {
+  it("lets a keyword selection be reset, which a select cannot offer as an item", () => {
     const styles = {
       base: { [BASE_BREAKPOINT]: { mixBlendMode: "multiply" } },
     } as NodeStyles;
     const editor = mount({ effects: true }, styles);
 
+    // From the row's reset: a select cannot offer "unset" as an item.
     fireEvent.click(
       fieldsOf("mixBlendMode").getByRole("button", {
-        name: "Clear Mix blend mode",
+        name: /^Reset Mix blend mode/,
       })
     );
 
@@ -1075,7 +1076,12 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
-    const group = screen.getByRole("radiogroup", { name: "Justify content" });
+    // "Justify", its CSS name in the label's tooltip: "Justify content" was cut
+    // short in the 7rem label column.
+    const group = screen.getByRole("radiogroup", { name: "Justify" });
+    expect(screen.getByText("Justify").closest("label")?.title).toMatch(
+      /^Justify content/
+    );
     const start = within(group).getByRole("radio", { name: "Start" });
     expect(start.getAttribute("data-icon")).toBe("AlignVerticalJustifyStart");
 
@@ -1093,11 +1099,44 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
-    fireEvent.click(screen.getByText("Justify content"));
+    fireEvent.click(screen.getByText("Justify"));
 
     expect(document.activeElement?.getAttribute("role")).toBe("radio");
     expect(document.activeElement?.getAttribute("aria-label")).toBe("End");
     expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("resets a value set here from one icon at the row's end, even with no cascade", () => {
+    // One way to reset a row, whatever its control: no Clear beside a list
+    // and a Reset line under it besides, and none at all where the panel was
+    // mounted without a cascade to say where values come from.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+    } as NodeStyles;
+    const editor = mount({ layout: true }, styles);
+
+    const field = document.querySelector(
+      '[data-property="display"]'
+    ) as HTMLElement;
+    expect(
+      within(field).queryByRole("button", { name: "Clear Display" })
+    ).toBeNull();
+    const reset = within(field).getByRole("button", { name: /^Reset Display/ });
+    expect(reset.textContent).toBe("");
+    fireEvent.click(reset);
+    // The only value goes, and with it the node's styles.
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
+      "flex"
+    );
+  });
+
+  it("offers no reset for a value that is not set here", () => {
+    mount({ layout: true });
+
+    expect(
+      document.querySelector('[data-property="display"] [data-action="reset"]')
+    ).toBeNull();
   });
 
   it("leaves a trailing decimal point for the catalog, rather than reading it as a number", () => {
@@ -1159,7 +1198,7 @@ describe("controls", () => {
     ).toBeDefined();
   });
 
-  it("names every keyword clear action for its own property", () => {
+  it("names every reset for its own property", () => {
     // Two keyword properties set at once would otherwise offer two buttons
     // both called "Clear", and a screen-reader user cannot tell which
     // declaration each removes.
@@ -1172,8 +1211,9 @@ describe("controls", () => {
     mount({ effects: true }, styles);
 
     expect(
-      screen.getByRole("button", { name: "Clear Mix blend mode" })
+      screen.getByRole("button", { name: /^Reset Mix blend mode/ })
     ).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Reset Filter/ })).toBeDefined();
   });
 
   it("does not read NBSP-only text as an empty field, which would DELETE the value", () => {
@@ -2693,7 +2733,10 @@ describe("the action a control's breakpoint provenance earns", () => {
      * rather than a load-bearing one, and this case does not pretend to cover
      * it.
      */
-    mount({ stored: BASE_BREAKPOINT, entries: [], onJump: () => {} });
+    // Stored at another tier and nowhere in the trace, so the address being
+    // edited holds nothing: a value stored HERE earns a reset however the
+    // cascade reads it.
+    mount({ stored: "tablet", entries: [], onJump: () => {} });
 
     expect(action("reset")).toBeNull();
     expect(action("jump")).toBeNull();
@@ -2740,6 +2783,55 @@ describe("the action a control's breakpoint provenance earns", () => {
      * for this button.
      */
     expect(label).toContain("from base");
+  });
+
+  it("keeps the reset for a value stored at a tier the canvas is not showing", () => {
+    /*
+     * The panel can edit a tier the preview is not at. The cascade then reads
+     * the control as unset, which is true of what is DISPLAYED, while a value
+     * is stored at the address being edited. A list has no Clear of its own,
+     * so this reset is the one way to remove that value.
+     */
+    register({ layout: true });
+    const editor = editorFor(
+      documentOf({ base: { tablet: { display: "flex" } } } as NodeStyles)
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={SITE}
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT] as never}
+        cascade={
+          {
+            entries: [
+              {
+                origin: { kind: "node", id: "a" },
+                property: "display",
+                value: "flex",
+                state: "base",
+                breakpoint: "tablet",
+              },
+            ],
+            nodes: editor.document.nodes,
+          } as never
+        }
+      />
+    );
+
+    const reset = document.querySelector<HTMLElement>(
+      '[data-property="display"] [data-action="reset"]'
+    );
+    expect(reset).not.toBeNull();
+    // Named without saying what shows through: the cascade did not rank this
+    // tier, so "leaving it unset" could be false.
+    expect(reset?.getAttribute("aria-label")).toBe("Reset Display at Tablet");
+    fireEvent.click(reset as HTMLElement);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
+      "flex"
+    );
   });
 
   it("names the action by its PROPERTY, not by the leaf alone", () => {
@@ -2872,6 +2964,25 @@ describe("the action a control's breakpoint provenance earns", () => {
     });
 
     expect(action("jump")).not.toBeNull();
+  });
+
+  it("keeps the reset beside the jump when a value stored here is shadowed", () => {
+    /*
+     * Editing base while a live tablet declaration wins: the row's value
+     * comes from tablet, so it earns the jump, and base still stores a value
+     * the author can only remove from here. A list or an icon group has no
+     * Clear of its own, so without this reset that value is stuck.
+     */
+    const editor = mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt(BASE_BREAKPOINT), entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")).not.toBeNull();
+    expect(action("reset")).not.toBeNull();
+    fireEvent.click(action("reset") as HTMLElement);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("withholds the jump for a tier the canvas cannot be taken to", () => {
@@ -3568,6 +3679,25 @@ describe("the Font control", () => {
     );
     return editor;
   }
+
+  it("removes a family the site does not have through the row's one reset", () => {
+    register({ typography: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { fontFamily: "Comic Sans MS, cursive" } },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        fonts={{ faces: [INTER], fromCode: [] }}
+      />
+    );
+    const field = fieldsOf("fontFamily");
+    expect(field.queryByRole("button", { name: "Clear Font" })).toBeNull();
+    fireEvent.click(field.getByRole("button", { name: /^Reset Font/ }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
 
   it("is a list of the site's fonts, with no box to type a family into", () => {
     mountFonts();

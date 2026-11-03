@@ -86,7 +86,9 @@ describe("the canvas frame", () => {
     const sheet =
       inside.querySelector("style:not([data-nx-page-chrome-tokens])")
         ?.textContent ?? "";
-    expect(sheet).toContain("html, body { margin: 0; padding: 0; }");
+    expect(sheet).toContain(
+      ":where(:root[data-nx-canvas-frame]), :where(:root[data-nx-canvas-frame]) body { margin: 0; padding: 0; }"
+    );
   });
 
   it("keeps one iframe element, and the page in it, across a device change", () => {
@@ -312,6 +314,22 @@ describe("the canvas frame", () => {
     rerender(<CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />);
     expect(root?.getAttribute("lang")).toBe("fr");
     document.documentElement.removeAttribute("lang");
+  });
+
+  it("states the page's direction on the frame's document", () => {
+    const { container, rerender } = render(
+      <CanvasFrame width={1280} title="Home" source={TEST_SOURCE} dir="rtl" />
+    );
+    const frame = frameIn(container);
+    loadPage(frame);
+    const root = frame.contentDocument?.documentElement;
+    expect(root?.getAttribute("dir")).toBe("rtl");
+
+    // With no direction of its own, the editor document's is the nearest.
+    document.documentElement.dir = "ltr";
+    rerender(<CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />);
+    expect(root?.getAttribute("dir")).toBe("ltr");
+    document.documentElement.removeAttribute("dir");
   });
 
   it("hands its frame to the provider above it, for the code around the canvas", () => {

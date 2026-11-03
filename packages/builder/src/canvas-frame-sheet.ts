@@ -29,12 +29,42 @@ import { CANVAS_ROOT_CLASS } from "./shell-state";
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
 /**
+ * The attribute on the root element of the editor's blank page, which a page
+ * the site serves never carries.
+ *
+ * @internal
+ */
+export const BLANK_PAGE_ATTRIBUTE = "data-nx-canvas-frame";
+
+/**
+ * Scopes a rule to the editor's blank page.
+ *
+ * The blank page has no site around the canvas, so some rules here stand in
+ * for one: a base reset, a light ground, the site's ink and body font drawn on
+ * the canvas root. On a page the site serves, its own layout and stylesheets
+ * already decide each of those, exactly as they do for the published page, and
+ * a stand-in would override them.
+ */
+// In \`:where()\`, so scoping a rule adds nothing to its specificity: on the
+// blank page each wins or loses exactly as it did before it was scoped.
+const BLANK = `:where(:root[${BLANK_PAGE_ATTRIBUTE}])`;
+
+/**
+ * Marks the site's own elements around the point the canvas is mounted at,
+ * on a page the site serves: its header, footer and whatever else its layout
+ * draws, inert and quietened.
+ *
+ * @internal
+ */
+export const SITE_CHROME_ATTRIBUTE = "data-nx-site-chrome";
+
+/**
  * Boxes size as border-box: the default most site resets set (Tailwind's
  * preflight, modern-normalize), so a padded block at full width is as wide
  * on the canvas as on most published pages.
  *
- * It stands in until the frame loads the site's own stylesheets, which will
- * then decide. So it sits in a cascade layer of its own, declared before
+ * It stands in, on the blank page only, for the site's own stylesheets, which
+ * decide on a page the site serves. So it sits in a cascade layer of its own, declared before
  * anything else in the frame: the lowest layer, which any site rule loaded
  * later wins over, whether that rule is in a layer of the site's or in none.
  * The rest of this sheet is not layered, and states what the editor needs
@@ -51,29 +81,40 @@ export const CANVAS_FRAME_DEFAULTS =
  * @internal
  */
 export const CANVAS_FRAME_SHEET: string = `
-/* A plain base: the user agent's body margin never shows, so a bare page in the
-   frame lines up with the same page published. */
-html, body { margin: 0; padding: 0; }
+/* A plain base, on the blank page: the user agent's body margin never shows,
+   so a bare page in the frame lines up with the same page published. A page
+   the site serves keeps the site's own base. */
+${BLANK}, ${BLANK} body { margin: 0; padding: 0; }
 
-/* The page is light unless the site says otherwise: the frame's document is
-   its own, so the admin's dark scheme is never inherited, and the ground under
-   the page is the browser's default canvas. */
-html { color-scheme: light; background-color: Canvas; }
+/* The blank page is light unless the site says otherwise: the frame's document
+   is its own, so the admin's dark scheme is never inherited, and the ground
+   under the page is the browser's default canvas. */
+${BLANK} { color-scheme: light; background-color: Canvas; }
 
-/* The page fills the frame's viewport, so the end of a short page still has
-   pixels to drop a block on. Grown as a flex item of the body rather than
+/* The blank page fills the frame's viewport, so the end of a short page still
+   has pixels to drop a block on. Grown as a flex item of the body rather than
    given a minimum height of its own: with a minimum height on the canvas root,
    Chromium's End and Home keys stop moving the caret in text being edited
-   below the first block. */
-body { min-height: 100vh; display: flex; flex-direction: column; }
+   below the first block. On a page the site serves, the site's layout decides
+   how tall the canvas is, as it does for the published page. */
+${BLANK} body { min-height: 100vh; display: flex; flex-direction: column; }
 
-/* The page's own surface, in the SITE's colours and type. The frame is a
-   document of its own, so nothing of the admin's theme is inherited here; what
-   the canvas does not name falls back to the browser's defaults, which is what
-   a published page shows where nothing paints. */
 ${ROOT} {
   position: relative;
   box-sizing: border-box;
+  /* A press on a block is a grab, not a text selection: the browser would
+     otherwise start selecting words before the drag reaches its activation
+     distance. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The page's own surface on the blank page, in the SITE's colours and type.
+   Nothing of the admin's theme is inherited in the frame; what the canvas does
+   not name falls back to the browser's defaults, which is what a published
+   page shows where nothing paints. On a page the site serves, the canvas
+   paints none of these and inherits the site's, as the published page does. */
+${BLANK} ${ROOT} {
   /* Fills the viewport: see the body above. */
   flex: 1 0 auto;
   /* The site's background, text and body font, which the canvas root names
@@ -83,36 +124,40 @@ ${ROOT} {
   background-color: var(--nx-canvas-site-ground, Canvas);
   color: var(--nx-canvas-site-ink, CanvasText);
   font-family: var(--nx-canvas-site-font, system-ui), sans-serif;
-  /* A press on a block is a grab, not a text selection: the browser would
-     otherwise start selecting words before the drag reaches its activation
-     distance. */
-  user-select: none;
-  -webkit-user-select: none;
 }
 
-/* The site's own dark mode, the one thing that darkens the page. The canvas
-   root carries the dark-ground marker only when the site's dark values include
-   a dark ground, and states the nearest theme marker above it as
+/* The site's own dark mode, the one thing that darkens the blank page. The
+   canvas root carries the dark-ground marker only when the site's dark values
+   include a dark ground, and states the nearest theme marker above it as
    data-nx-site-theme; with none stated, the device decides, as it does for
    the token values. The admin's theme reaches nothing in this document. */
-${ROOT}[data-nx-site-dark-ground][data-nx-site-theme="dark"] {
+${BLANK} ${ROOT}[data-nx-site-dark-ground][data-nx-site-theme="dark"] {
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
-  ${ROOT}[data-nx-site-dark-ground]:not([data-nx-site-theme]) {
+  ${BLANK} ${ROOT}[data-nx-site-dark-ground]:not([data-nx-site-theme]) {
     color-scheme: dark;
   }
 }
 
-/* The page is one stacking context, so a blend mode inside it starts from the
-   page's own background, and it repeats the site's ground where that ground is
-   opaque, so a blended block mixes with it as on the published page. The
-   ground at no weight, so a background the page gives its own root wins. */
-${ROOT} > .nx-pb-page {
+/* On the blank page, the page is one stacking context, so a blend mode inside
+   it starts from the page's own background, and it repeats the site's ground
+   where that ground is opaque, so a blended block mixes with it as on the
+   published page. The ground at no weight, so a background the page gives its
+   own root wins. On a page the site serves, a blend mixes with the site's own
+   ground, as it does published. */
+${BLANK} ${ROOT} > .nx-pb-page {
   isolation: isolate;
 }
-:where(${ROOT}[data-nx-site-ground-opaque] > .nx-pb-page) {
+:where(${BLANK} ${ROOT}[data-nx-site-ground-opaque] > .nx-pb-page) {
   background-color: var(--nx-canvas-site-ground, Canvas);
+}
+
+/* The site's own layout around the canvas, on a page the site serves: there
+   to show where the page sits, quietened as a Layout region's content is, and
+   inert, so its links and forms neither work nor navigate the frame. */
+[${SITE_CHROME_ATTRIBUTE}] {
+  opacity: var(--nx-builder-region-opacity, 0.6);
 }
 
 /* Text being edited is text again. */

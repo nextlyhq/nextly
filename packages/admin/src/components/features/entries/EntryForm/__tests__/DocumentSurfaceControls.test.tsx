@@ -10,7 +10,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import type { RecoveryPointState } from "../SaveStateIndicator";
+import {
+  saveIndicatorView,
+  type RecoveryPointState,
+} from "../SaveStateIndicator";
 import type {
   DocumentActionBindings,
   DocumentSaveState,
@@ -23,9 +26,12 @@ let recovery: RecoveryPointState = {
   pendingOfferAt: null,
 };
 
+let stored: { at: Date | null } | null = null;
+
 vi.mock("../DocumentActionsContext", () => ({
   useDocumentActionsContext: () => hosted,
   useHostedRecoveryPoint: () => recovery,
+  useHostedStored: () => stored,
 }));
 
 const { DocumentPrimaryAction, DocumentSaveIndicator } = await import(
@@ -51,6 +57,7 @@ function host(
 afterEach(() => {
   hosted = null;
   recovery = { enabled: false, storedAt: null, pendingOfferAt: null };
+  stored = null;
   run.mockClear();
 });
 
@@ -68,6 +75,49 @@ describe("DocumentSaveIndicator", () => {
 
   it("reads the host's recovery point: edits held only in one are unsaved", () => {
     hosted = host({ saveState: { kind: "saved", at: new Date() } });
+    recovery = {
+      enabled: true,
+      storedAt: new Date(),
+      pendingOfferAt: new Date(),
+    };
+    render(<DocumentSaveIndicator />);
+    expect(screen.queryByText("Saved")).toBeNull();
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+  });
+
+  it("reports a stored document saved from the moment it opens, with when in the tooltip", async () => {
+    // Nothing saved this session: the document's own stored time speaks.
+    hosted = host({ saveState: { kind: "saved", at: null } });
+    stored = { at: new Date(Date.now() - 3 * 60 * 60 * 1000) };
+    render(<DocumentSaveIndicator />);
+    const saved = screen.getByText("Saved");
+    await userEvent.hover(saved);
+    expect(
+      (await screen.findAllByText("Saved 3 hours ago")).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("reports a working draft saved, without the published version's age", async () => {
+    // The row keeps the published time, so no age is better than a wrong one.
+    hosted = host({ saveState: { kind: "saved", at: null } });
+    stored = { at: null };
+    render(<DocumentSaveIndicator />);
+    await userEvent.hover(screen.getByText("Saved"));
+    expect(
+      (await screen.findAllByText("Changes saved as a draft")).length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/ ago$/)).toBeNull();
+  });
+
+  it("says nothing for a document with no stored time yet", () => {
+    hosted = host({ saveState: { kind: "saved", at: null } });
+    const { container } = render(<DocumentSaveIndicator />);
+    expect(container.textContent).toBe("");
+  });
+
+  it("never reports saved over edits held only in a recovery point, stored time or not", () => {
+    hosted = host({ saveState: { kind: "saved", at: null } });
+    stored = { at: new Date(Date.now() - 60 * 60 * 1000) };
     recovery = {
       enabled: true,
       storedAt: new Date(),
@@ -139,5 +189,17 @@ describe("DocumentPrimaryAction", () => {
     expect(button.getAttribute("title")).toBe("Nothing to save yet.");
     await userEvent.click(button);
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveIndicatorView without a stored time", () => {
+  it("keeps an opened document quiet until it is saved, as the entry form's bar shows it", () => {
+    // The entry form passes no stored time, so its bar is unchanged.
+    expect(
+      saveIndicatorView(
+        { kind: "saved", at: null },
+        { enabled: false, storedAt: null, pendingOfferAt: null }
+      )
+    ).toBeNull();
   });
 });

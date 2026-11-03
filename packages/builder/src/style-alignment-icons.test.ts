@@ -100,26 +100,42 @@ describe("alignmentGroupFor", () => {
     );
   });
 
-  it("turns the wrap icons with the cross axis, and flips reversed wrapping along it", () => {
+  it("draws wrapping along the container's own main and cross directions", () => {
+    // The wrap icon's lines run right and wrap downward. Each option carries
+    // the matrix that maps those two directions onto the container's main
+    // direction and the way its lines advance: absent where they already
+    // match, a left-to-right row wrapping down.
     const values = ["nowrap", "wrap", "wrap-reverse"];
-    const along = (at: Flow) =>
+    const matrices = (at: Flow) =>
       alignmentGroupFor("flex-wrap", values, at)?.options.map(option =>
-        [option.value, option.rotated ? "turned" : "", option.flip ?? ""].join(
-          ":"
-        )
+        option.matrix === undefined ? "same" : option.matrix.join(",")
       );
-    // In a row the lines wrap downward, and in reverse upward.
-    expect(along(ROW)).toEqual([
-      "nowrap::",
-      "wrap::",
-      "wrap-reverse::vertical",
+    expect(matrices(ROW)).toEqual(["same", "same", "1,0,0,-1"]);
+    // A left-to-right column runs down and its lines advance rightward.
+    expect(matrices(COLUMN)).toEqual(["0,1,1,0", "0,1,1,0", "0,1,-1,0"]);
+    // Right to left, a row runs left and still wraps down.
+    expect(matrices(flow({ rtl: true }))).toEqual([
+      "-1,0,0,1",
+      "-1,0,0,1",
+      "-1,0,0,-1",
     ]);
-    // In a column they wrap across, so the icons turn and reverse sideways.
-    expect(along(COLUMN)).toEqual([
-      "nowrap:turned:",
-      "wrap:turned:",
-      "wrap-reverse:turned:horizontal",
-    ]);
+  });
+
+  it("ignores a stored reversed direction once the element is not flex", () => {
+    // A block or grid keeps a stored column-reverse it no longer lays out by:
+    // its axes come from the writing mode, so reversing the main one drew a
+    // hybrid of the old layout and the new.
+    const values = ["nowrap", "wrap", "wrap-reverse"];
+    const matrices = (at: Flow) =>
+      alignmentGroupFor("flex-wrap", values, at)?.options.map(option =>
+        option.matrix === undefined ? "same" : option.matrix.join(",")
+      );
+    expect(
+      matrices(flow({ flex: false, direction: "column-reverse" }))
+    ).toEqual(matrices(ROW));
+    expect(matrices(flow({ flex: false, direction: "row-reverse" }))).toEqual(
+      matrices(ROW)
+    );
   });
 
   it("ignores a flex direction the element does not lay out by", () => {
