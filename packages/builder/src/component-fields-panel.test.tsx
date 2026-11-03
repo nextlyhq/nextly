@@ -138,18 +138,30 @@ function exposeRow(prop: string): HTMLElement {
   return row;
 }
 
-/** The icon button beside one prop that lets each placement change it. */
+/** The icon button beside one prop that lets each page change it. */
 function exposeButton(prop: string): HTMLElement {
   return within(exposeRow(prop)).getByRole("button", {
-    name: /^Let each placement/,
+    name: /^Let each page/,
   });
+}
+
+/** What a toggle's tooltip says, read with the focus on it as a keyboard would. */
+function tooltipOf(button: HTMLElement): string {
+  act(() => {
+    button.focus();
+  });
+  const said = screen.getByRole("tooltip").textContent ?? "";
+  act(() => {
+    button.blur();
+  });
+  return said;
 }
 
 describe("a prop row in a component's view", () => {
   it("exposes the prop with the icon beside it, and names the field under it", () => {
     const editor = mount(component(), "c1");
     const toggle = within(exposeRow("title")).getByRole("button", {
-      name: "Let each placement change Title",
+      name: "Let each page change Title",
     });
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(toggle);
@@ -161,7 +173,7 @@ describe("a prop row in a component's view", () => {
     // with the focus in it, since the name is what an author decides next.
     expect(exposeButton("title").getAttribute("aria-pressed")).toBe("true");
     const name = within(exposeRow("title")).getByRole("textbox", {
-      name: "Name of the field for Title",
+      name: "Name pages see for Title",
     });
     expect(name).toHaveProperty("value", "Title");
     expect(document.activeElement).toBe(name);
@@ -210,12 +222,12 @@ describe("a prop row in a component's view", () => {
     expect(second).not.toBe(first);
   });
 
-  it("holds the icon of a prop no placement could set, and says why when pressed", () => {
+  it("holds the icon of a prop no page could set, and says why when pressed", () => {
     const editor = mount(component(), "c1");
     const toggle = exposeButton("count");
     // Held, not disabled, so it can still be reached and its reason heard.
     expect(toggle.getAttribute("aria-disabled")).toBe("true");
-    expect(toggle.getAttribute("title")).toMatch(/can’t set a number value/);
+    expect(tooltipOf(toggle)).toMatch(/can’t set a number value/);
     fireEvent.click(toggle);
     expect(fields(editor())).toEqual([]);
     expect(within(exposeRow("count")).getByRole("alert").textContent).toMatch(
@@ -236,19 +248,76 @@ describe("a prop row in a component's view", () => {
     expect(fields(editor())).toEqual([]);
   });
 
-  it("lets placements hide the block, from the same icon on its Shown row", () => {
+  it("lets each page hide the block, from the same icon on its Shown row", () => {
     const editor = mount(component(), "c1");
     fireEvent.click(
-      screen.getByRole("button", { name: "Let each placement hide Card" })
+      screen.getByRole("button", { name: "Let each page hide Card" })
     );
     expect(fields(editor())).toMatchObject([
       { nodeId: "c1", type: "visibility", label: "Show card" },
     ]);
     expect(
       screen
-        .getByRole("button", { name: "Let each placement hide Card" })
+        .getByRole("button", { name: "Let each page hide Card" })
         .getAttribute("aria-pressed")
     ).toBe("true");
+  });
+});
+
+describe("the icon's words, in plain terms", () => {
+  it("names a property's icon for pages, and says in one line what turning it on does", () => {
+    mount(component(), "c1");
+    const toggle = within(exposeRow("title")).getByRole("button", {
+      name: "Let each page change Title",
+    });
+    expect(tooltipOf(toggle)).toBe(
+      "Turn this on to let every page that uses the component set its own title."
+    );
+    // No native title beside it: two tooltips would draw over each other.
+    expect(toggle.getAttribute("title")).toBeNull();
+  });
+
+  it("says what the pressed icon means, and how to undo it", () => {
+    mount(component(), "c1");
+    fireEvent.click(
+      within(exposeRow("title")).getByRole("button", {
+        name: "Let each page change Title",
+      })
+    );
+    const pressed = within(exposeRow("title")).getByRole("button", {
+      name: "Let each page change Title",
+    });
+    expect(pressed.getAttribute("aria-pressed")).toBe("true");
+    expect(tooltipOf(pressed)).toBe(
+      "Each page can change this. Turn off to use the component’s value everywhere."
+    );
+  });
+
+  it("words the Shown row's icon the same way", () => {
+    mount(component(), "c1");
+    const toggle = screen.getByRole("button", {
+      name: "Let each page hide Card",
+    });
+    expect(tooltipOf(toggle)).toBe(
+      "Turn this on to let every page that uses the component hide this card."
+    );
+    expect(screen.getByText("On every page")).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(screen.getByText("Each page chooses")).toBeTruthy();
+    expect(
+      tooltipOf(screen.getByRole("button", { name: "Let each page hide Card" }))
+    ).toBe("Each page can hide this. Turn off to show it on every page.");
+  });
+
+  it("says nothing of placements or exposing in the view an author reads", () => {
+    mount(component(), "c1");
+    fireEvent.click(
+      within(exposeRow("title")).getByRole("button", {
+        name: "Let each page change Title",
+      })
+    );
+    const panel = document.querySelector<HTMLElement>(".nx-inspector");
+    expect(panel?.textContent ?? "").not.toMatch(/placement|expos/i);
   });
 });
 
@@ -339,7 +408,7 @@ describe("the component's fields, with nothing selected", () => {
     // The icon itself sits in the sentence, named for a screen reader.
     expect(list.textContent).toContain("Select a block, then use");
     expect(list.textContent).toContain(
-      "beside a property to let each placement change it."
+      "beside a property to let each page change it."
     );
     expect(
       within(list).getByRole("img", { name: "the component mark" })

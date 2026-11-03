@@ -76,7 +76,7 @@ const REFUSAL_COPY: Record<PlanProblem, string> = {
 
   // From a component's exposure, for the verbs that create one.
   "invalid-exposure":
-    "One of the properties chosen cannot be exposed. Remove it and try again.",
+    "One of the values chosen can’t be changed per page. Untick it and try again.",
   "ambiguous-exposure":
     "Two blocks here answer to one name. Rename one and try again.",
   "self-reference":

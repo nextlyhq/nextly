@@ -150,12 +150,12 @@ export function ComponentVariantsSection({
       {fields.length === 0 ? (
         <p className="nx-inspector__note">
           Add a field first. A variant is a named set of values for the fields
-          placements can change.
+          each page can change.
         </p>
       ) : options.length === 0 ? (
         <p className="nx-inspector__note">
           No variants yet. A variant is a named set of field values, like
-          “Featured” or “Compact”, that a placement can choose.
+          “Featured” or “Compact”, that each page can choose.
         </p>
       ) : null}
       {/*
@@ -498,7 +498,7 @@ function VariantValueControl({
     default:
       return (
         <p id={id} className="nx-variants__hint">
-          Chosen on each placement
+          Chosen on each page
         </p>
       );
   }

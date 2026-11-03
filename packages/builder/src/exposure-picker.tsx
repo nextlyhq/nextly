@@ -45,11 +45,11 @@ const REFUSAL: Readonly<Record<ExposureEditProblem, string>> = {
   "unknown-exposure": "That value is no longer in this selection.",
   "unknown-node": "That block is no longer in this selection.",
   "unknown-prop": "That block no longer has this value.",
-  "not-exposable": "Placements have no control for this value.",
+  "not-exposable": "Pages have no control for this value.",
   "content-only":
-    "This block is in an area locked to its content, and this isn’t content, so placements couldn’t change it.",
+    "This block is in an area locked to its content, and this isn’t content, so pages couldn’t change it.",
   "invalid-label": "Give the field a name.",
-  "invalid-exposure": "This value can’t be offered to placements.",
+  "invalid-exposure": "This value can’t be changed per page.",
   "exceeds-limits": "This selection is too large to offer more values.",
 };
 
@@ -162,12 +162,12 @@ export function ExposurePicker({
       disabled={disabled}
     >
       <legend className="nx-expose-picker__legend">
-        What each placement can change
+        What each page can change
       </legend>
       <p id={hintId} className="nx-expose-picker__hint">
         {offered.length === 0
-          ? "Nothing in this selection can be changed per placement, so the component looks the same wherever it is placed."
-          : "Everything else stays as designed in every placement. You can change this later in the component’s own view."}
+          ? "Nothing in this selection can change from page to page, so the component looks the same on every page."
+          : "Anything left unticked looks the same on every page. You can change this later in the component’s own view."}
       </p>
       {offered.length === 0 ? null : (
         <ul className="nx-expose-picker__blocks">
@@ -248,7 +248,7 @@ function CandidateRow({
         <Input
           className="nx-expose-picker__label"
           value={entry.label}
-          aria-label={`Name placements see for ${candidate.name} of ${blockName}`}
+          aria-label={`Name pages see for ${candidate.name} of ${blockName}`}
           onChange={event => onRename(entry, event.target.value)}
         />
       )}
