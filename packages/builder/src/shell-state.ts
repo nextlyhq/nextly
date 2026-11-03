@@ -120,12 +120,11 @@ export const PANEL_BOUNDS = {
 } as const;
 
 /**
- * The rail's fixed width in CSS pixels: wide enough for the longest label,
- * "Components", under its icon at the 12px the admin's text never goes below.
- * At the narrowest supported shell, with both panels open at their initial
- * widths, the canvas keeps 576px — above its own floor.
+ * The rail's fixed width in CSS pixels: a 36px icon square with 6px either
+ * side. The rail shows icons alone, each named by its tooltip, so it gives the
+ * canvas back the width a labelled rail took.
  */
-export const RAIL_WIDTH = 84;
+export const RAIL_WIDTH = 48;
 
 /**
  * The narrowest the canvas may become before a drag stops taking from it.

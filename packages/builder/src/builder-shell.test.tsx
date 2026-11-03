@@ -173,6 +173,42 @@ function renderShell(props: Partial<Parameters<typeof BuilderShell>[0]> = {}) {
   return { onExit, ...result };
 }
 
+describe("the rail's panel keys", () => {
+  const railItem = (name: string) =>
+    within(screen.getByRole("navigation", { name: "Editor panels" })).getByRole(
+      "button",
+      { name }
+    );
+
+  it("opens a panel on its key, and closes it on the same key, as clicking does", () => {
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    fireEvent.keyDown(document.body, { key: "l" });
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.keyDown(document.body, { key: "l" });
+    expect(railItem("Layers").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("does nothing while text is being typed, or with a modifier held", () => {
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    const before = railItem("Design").getAttribute("aria-pressed");
+    const field = document.createElement("input");
+    document.body.append(field);
+    field.focus();
+    fireEvent.keyDown(field, { key: "d" });
+    field.remove();
+    fireEvent.keyDown(document.body, { key: "d", ctrlKey: true });
+    fireEvent.keyDown(document.body, { key: "D", shiftKey: true });
+    expect(railItem("Design").getAttribute("aria-pressed")).toBe(before);
+  });
+
+  it("names each panel's key on its item, for its tooltip and assistive technology", () => {
+    renderShell();
+    expect(railItem("Add").getAttribute("aria-keyshortcuts")).toBe("A");
+    expect(railItem("Pages").getAttribute("aria-keyshortcuts")).toBe("P");
+    expect(railItem("Components").getAttribute("aria-keyshortcuts")).toBe("C");
+  });
+});
+
 describe("whose notices the shell reports", () => {
   it("renders and provides the HOST's queue when one is handed in, so a sentence raised above the shell lands in its region", () => {
     // A host builds its editor above the shell, and that editor is where an
@@ -316,7 +352,7 @@ describe("panels the host cannot fill", () => {
     const rail = screen.getByRole("navigation", { name: "Editor panels" });
     const names = within(rail)
       .getAllByRole("button")
-      .map(button => button.textContent);
+      .map(button => button.getAttribute("aria-label"));
     expect(names).toEqual([
       "Add",
       "Layers",
@@ -388,7 +424,7 @@ describe("the rail's groups", () => {
     expect(
       within(bottom)
         .getAllByRole("button")
-        .map(button => button.textContent)
+        .map(button => button.getAttribute("aria-label"))
     ).toEqual(["Settings", "Help"]);
     expect(within(top).queryByRole("button", { name: "Help" })).toBeNull();
   });
