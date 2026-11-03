@@ -391,3 +391,194 @@ describe("where focus goes as a field changes shape", () => {
     await waitFor(() => expect(document.activeElement).toBe(field));
   });
 });
+
+/**
+ * The device's colour-scheme preference, as `matchMedia` answers it. jsdom
+ * has no `matchMedia`, so without this every test reads as light.
+ */
+function deviceIsDark(dark: boolean): void {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches: dark && query.includes("dark"),
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }),
+  });
+}
+
+/** A canvas root under a page root pinned to one mode, as the editor writes it. */
+function canvasPinnedTo(mode: "light" | "dark"): () => void {
+  const page = document.createElement("div");
+  page.setAttribute("data-nx-theme", mode);
+  const canvas = document.createElement("div");
+  canvas.className = "nx-canvas";
+  page.append(canvas);
+  document.body.append(page);
+  return () => page.remove();
+}
+
+describe("the mode a field's variables are read in", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(window, "matchMedia");
+  });
+
+  /** A length whose light value is not a length, so only dark offers it. */
+  const NIGHT: SiteTokenSet = {
+    tokens: [
+      {
+        name: "space.night",
+        kind: "dimension",
+        values: { light: "#ff0000", dark: "12px" },
+      },
+      {
+        name: "space.day",
+        kind: "dimension",
+        values: { light: "12px", dark: "#ff0000" },
+      },
+      {
+        name: "space.mode",
+        kind: "dimension",
+        values: { light: "16px", dark: "24px" },
+      },
+      {
+        name: "color.ink",
+        kind: "color",
+        values: { light: "#111111", dark: "#eeeeee" },
+      },
+    ],
+  };
+
+  it("in dark, a typed name picks what the picker offers there, and nothing else", async () => {
+    deviceIsDark(true);
+    const editor = mount({ spacing: true }, {}, NIGHT);
+    const field = fieldsOf("padding").getByLabelText("Block start");
+    // Let the device's preference arrive, as it does after mount.
+    await waitFor(() =>
+      expect(
+        fieldsOf("padding").getAllByRole("button", { name: /^Variables for/ })
+      ).not.toHaveLength(0)
+    );
+    fireEvent.change(field, { target: { value: "night" } });
+    fireEvent.blur(field);
+    expect(written(editor)).toContain('{"$token":"space.night"}');
+
+    fireEvent.change(field, { target: { value: "day" } });
+    fireEvent.blur(field);
+    expect(written(editor)).not.toContain('{"$token":"space.day"}');
+  });
+
+  it("follows the device when no marker pins the canvas", async () => {
+    deviceIsDark(true);
+    mount({ typography: true }, {}, NIGHT);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Variables for Font size" })
+    );
+    expect(
+      await screen.findByRole("option", { name: "Mode 24px" })
+    ).toBeDefined();
+  });
+
+  it("follows a canvas pinned dark on a light device, in the list and the chip", async () => {
+    deviceIsDark(false);
+    const unpin = canvasPinnedTo("dark");
+    try {
+      mount(
+        { typography: true },
+        { fontSize: { $token: "space.mode" } },
+        NIGHT
+      );
+      const chip = fieldsOf("fontSize").getByRole("group", {
+        name: "Font size",
+      });
+      await waitFor(() => expect(chip.textContent).toBe("Mode 24px"));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Variables for Font size" })
+      );
+      expect(screen.getByRole("option", { name: "Mode 24px" })).toBeDefined();
+    } finally {
+      unpin();
+    }
+  });
+
+  it("follows a canvas pinned light on a dark device", async () => {
+    deviceIsDark(true);
+    const unpin = canvasPinnedTo("light");
+    try {
+      mount({ typography: true }, {}, NIGHT);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Variables for Font size" })
+      );
+      // Given time for the device's dark answer to arrive, the pin still wins.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(screen.getByRole("option", { name: "Mode 16px" })).toBeDefined();
+    } finally {
+      unpin();
+    }
+  });
+
+  it("paints the colour picker's variables in the same pinned mode", async () => {
+    deviceIsDark(false);
+    const unpin = canvasPinnedTo("dark");
+    try {
+      mount({ color: { text: true } }, {}, NIGHT);
+      fireEvent.click(
+        fieldsOf("color").getByRole("button", { name: /^Colour for/ })
+      );
+      const ink = await screen.findByRole("option", { name: "Ink" });
+      await waitFor(() =>
+        expect(
+          (
+            ink.querySelector(".nx-vars__swatch--main") as HTMLElement
+          ).style.getPropertyValue("--nx-swatch")
+        ).toBe("#eeeeee")
+      );
+    } finally {
+      unpin();
+    }
+  });
+});
+
+describe("a held variable whose name another shares", () => {
+  it("is named on the chip as the list names it, with what tells them apart", () => {
+    const twins: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.display",
+          label: "Big",
+          kind: "dimension",
+          values: { light: "48px" },
+        },
+        {
+          name: "font-size.hero",
+          label: "Big",
+          kind: "dimension",
+          values: { light: "48px" },
+        },
+      ],
+    };
+    mount(
+      { typography: true },
+      { fontSize: { $token: "font-size.hero" } },
+      twins
+    );
+    const chip = fieldsOf("fontSize").getByRole("group", {
+      name: "Font size",
+    });
+    expect(chip.textContent).toBe("Big (font-size.hero) 48px");
+    expect(
+      within(chip).getByRole("button", {
+        name: "Remove Big (font-size.hero) from Font size",
+      })
+    ).toBeDefined();
+    fireEvent.click(
+      fieldsOf("fontSize").getByRole("button", {
+        name: "Variables for Font size",
+      })
+    );
+    expect(
+      screen.getByRole("option", { name: "Big (font-size.hero) 48px" })
+    ).toBeDefined();
+  });
+});

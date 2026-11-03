@@ -2683,6 +2683,9 @@
 .nx-style-inspector__numeric .nx-variable-choice,
 .nx-style-inspector__select .nx-variable-choice {
   opacity: 0;
+  /* Hidden is out of hit testing too: invisible, it would still take a click
+     meant for what it sits over. Focus still reaches it, and reveals it. */
+  pointer-events: none;
 }
 
 .nx-style-inspector__numeric:hover .nx-variable-choice,
@@ -2692,6 +2695,7 @@
 .nx-variable-choice[data-bound],
 .nx-variable-choice[data-state="open"] {
   opacity: 1;
+  pointer-events: auto;
 }
 
 /*
@@ -6048,12 +6052,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  */
 [data-side] .nx-variable-choice {
   opacity: 0;
+  pointer-events: none;
 }
 
 [data-side]:hover .nx-variable-choice,
 [data-side]:focus-within .nx-variable-choice,
 [data-side] .nx-variable-choice[data-state="open"] {
   opacity: 1;
+  pointer-events: auto;
 }
 
 /*

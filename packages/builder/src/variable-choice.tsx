@@ -35,9 +35,8 @@ import { Diamond, X } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList } from "./choice-list";
-import { usePrefersDark } from "./prefers-dark";
+import { useCanvasTokenMode } from "./prefers-dark";
 import {
-  activeTokenMode,
   variableFor,
   variableLabel,
   variablesFor,
@@ -71,6 +70,11 @@ export type VariablesMenuItemProps = Omit<VariableChoiceProps, "bound">;
 
 /** What {@link VariableChip} is given. */
 export interface VariableChipProps {
+  /**
+   * The catalog leaf the field edits: the chip names its variable as the
+   * field's list does, qualified where another listed variable shares the name.
+   */
+  readonly leaf: StyleLeaf;
   readonly tokens: SiteTokenSet | undefined;
   /** The identity the field stores. */
   readonly identity: string;
@@ -86,14 +90,14 @@ export interface VariableChipProps {
 
 /**
  * The variables offered at this leaf in the mode the canvas is showing, read
- * as the colour picker reads it: the device's preference decides which value
- * a variable shows, so a dark device lists the dark values the canvas draws.
+ * from the one source the colour picker reads too: the canvas's theme marker,
+ * else the device's preference, so the list shows the values the canvas draws.
  */
 function useOffered(
   leaf: StyleLeaf,
   tokens: SiteTokenSet | undefined
 ): readonly SiteVariable[] {
-  return variablesFor(leaf, tokens, activeTokenMode(usePrefersDark()));
+  return variablesFor(leaf, tokens, useCanvasTokenMode());
 }
 
 /**
@@ -348,15 +352,20 @@ function VariableRow({ entry }: { entry: VariableEntry }): React.JSX.Element {
  * remove it.
  */
 export function VariableChip({
+  leaf,
   tokens,
   identity,
   label,
   onClear,
   labelledBy,
 }: VariableChipProps): React.JSX.Element {
-  const mode = activeTokenMode(usePrefersDark());
+  const mode = useCanvasTokenMode();
   const variable = variableFor(identity, tokens, mode);
-  const name = variable?.label ?? identity;
+  const offered = variablesFor(leaf, tokens, mode);
+  // Named through the list's own rule, so two variables sharing a name read
+  // here as they do there, and the chip says which one the document holds.
+  const name =
+    variable === undefined ? identity : variableLabel(variable, offered);
   return (
     // A group, so it can carry a name: a bare paragraph maps to a role that
     // prohibits one. Focusable by script only, as the field's label targets it.

@@ -107,7 +107,7 @@ import {
 import type { InspectorSectionKey } from "./inspector-sections";
 import { layerLabel } from "./layers";
 import type { BuilderOp } from "./ops";
-import { usePrefersDark } from "./prefers-dark";
+import { useCanvasTokenMode } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
 import type { SideOrientation } from "./side-orientation";
 import { stateLabel } from "./state-switcher";
@@ -621,7 +621,9 @@ function StyleInspectorBody({
   const [chosenForms, setChosenForms] = React.useState<Record<string, number>>(
     {}
   );
-  const prefersDark = usePrefersDark();
+  // The canvas's own mode, its theme marker first and the device after, so
+  // every control here shows the values the canvas is drawing.
+  const prefersDark = useCanvasTokenMode() === "dark";
   /*
    * What the browser is applying, or `undefined` when nobody can say.
    *
@@ -2691,6 +2693,7 @@ function ControlValue({
     return (
       <div className="nx-style-inspector__numeric">
         <VariableChip
+          leaf={variableLeafOf(control.leaf, fold)}
           tokens={tokens}
           identity={identity}
           label={actionName}
@@ -3048,14 +3051,15 @@ function LengthOrNumberField({
 }): React.JSX.Element {
   const { draft, setDraft } = useDraft(stored);
   // Says a variable may be chosen where the site has one this field takes.
+  const mode = useCanvasTokenMode();
   const hint = useUnsetHint(
-    variablePlaceholder(leaf, tokens, "1.5, 24px or 150%")
+    variablePlaceholder(leaf, tokens, "1.5, 24px or 150%", mode)
   );
   const commit = () => {
     if (draft === storedText(stored)) return;
     // A variable's name typed here is that variable, asked before the text is
     // read as a number or a length, as every text field asks it.
-    const named = tokenForTypedName(leaf, tokens, draft);
+    const named = tokenForTypedName(leaf, tokens, draft, mode);
     const value =
       named === undefined ? lineHeightFromText(draft) : { $token: named };
     if (onCommit(value) === "unchanged") {
@@ -5146,6 +5150,7 @@ function commitDraft({
   kind,
   leaf,
   tokens,
+  mode,
   onCommit,
   setDraft,
 }: {
@@ -5156,6 +5161,8 @@ function commitDraft({
   leaf: StyleLeaf;
   /** The site's variables, so a variable's name typed here picks it. */
   tokens: SiteTokenSet | undefined;
+  /** The mode the canvas shows, so typing matches what the list offers. */
+  mode: TokenMode;
   onCommit: (value: StyleValue | null) => CommitOutcome;
   setDraft: (value: string) => void;
 }): void {
@@ -5168,7 +5175,9 @@ function commitDraft({
   // A variable's name typed in, "Display" or "Text", is that variable, asked
   // BEFORE the text is read as a value: read first, the word is refused as
   // "not a length" or stored as a literal no page can use.
-  const named = emptied ? undefined : tokenForTypedName(leaf, tokens, draft);
+  const named = emptied
+    ? undefined
+    : tokenForTypedName(leaf, tokens, draft, mode);
   const outcome = onCommit(
     emptied
       ? null
@@ -5325,8 +5334,11 @@ function TextField({
   const [typing, setTyping] = useTyping(editing);
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
+  // The mode the canvas shows: a typed name and the hint offer what the
+  // field's variables list offers, in that mode.
+  const mode = useCanvasTokenMode();
   const hint = useUnsetHint(
-    compact ? "–" : hintFor(control, tokens, fallbackHint)
+    compact ? "–" : hintFor(control, tokens, fallbackHint, mode)
   );
   const commit = () => {
     // Written or not, the text is no longer mid-edit.
@@ -5337,6 +5349,7 @@ function TextField({
       kind: control.kind,
       leaf: control.leaf,
       tokens,
+      mode,
       onCommit,
       setDraft,
     });
@@ -5612,12 +5625,13 @@ function hintFor(
   control: StyleControl,
   tokens: SiteTokenSet | undefined,
   /** The field's own hint where it replaces the leaf's: "16" beside "px". */
-  own: string | undefined
+  own: string | undefined,
+  mode: TokenMode
 ): string {
   const base = own ?? placeholderFor(control);
   const { leaf } = control;
   return leaf.kind === "dimension" || leaf.kind === "number"
-    ? variablePlaceholder(leaf, tokens, base)
+    ? variablePlaceholder(leaf, tokens, base, mode)
     : base;
 }
 

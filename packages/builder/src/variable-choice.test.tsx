@@ -248,6 +248,7 @@ describe("the chip a held variable shows", () => {
     const onClear = vi.fn();
     render(
       <VariableChip
+        leaf={FONT_SIZE}
         tokens={TOKENS}
         identity="font-size.display"
         label="Font size"
@@ -267,6 +268,7 @@ describe("the chip a held variable shows", () => {
   it("shows the stored identity for a variable the site no longer has", () => {
     render(
       <VariableChip
+        leaf={FONT_SIZE}
         tokens={TOKENS}
         identity="font-size.gone"
         label="Font size"

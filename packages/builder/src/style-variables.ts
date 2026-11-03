@@ -79,9 +79,13 @@ export function tokenForTypedName(
 export function variablePlaceholder(
   leaf: StyleLeaf,
   tokens: SiteTokenSet | undefined,
-  base: string
+  base: string,
+  mode: TokenMode = "light"
 ): string {
-  return variablesFor(leaf, tokens).length > 0 ? `${base} or a variable` : base;
+  // In the mode the canvas shows, as the field's list offers them.
+  return variablesFor(leaf, tokens, mode).length > 0
+    ? `${base} or a variable`
+    : base;
 }
 
 /**
