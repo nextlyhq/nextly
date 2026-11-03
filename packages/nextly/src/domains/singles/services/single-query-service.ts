@@ -161,6 +161,7 @@ import {
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   attachDocumentVersions,
+  languageRevisionsOf,
   storedRevisionsOf,
 } from "../../versions/document-revision";
 import {
@@ -1383,6 +1384,9 @@ export class SingleQueryService extends BaseService {
 
       // Last, so no hook can drop or forge it. The live row's version, a held
       // draft overlaid on the document included.
+      const joinedRevisions = translations
+        ? languageRevisionsOf(translations.companionRows)
+        : undefined;
       await attachDocumentVersions([doc], {
         stored: storedRevisions,
         run: (statement, values) =>
@@ -1401,6 +1405,15 @@ export class SingleQueryService extends BaseService {
             : null,
         localization: this.localization,
         locale: options.locale,
+        // Taken with the document by the joined read, when it was joined.
+        ...(translations && joinedRevisions
+          ? {
+              known: {
+                revisions: joinedRevisions,
+                locales: translations.localeChain,
+              },
+            }
+          : {}),
       });
 
       return {

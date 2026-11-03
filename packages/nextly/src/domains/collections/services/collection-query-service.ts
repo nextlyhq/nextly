@@ -195,6 +195,7 @@ import { resolveComponentTableName } from "../../schema/utils/resolve-table-name
 import {
   attachDocumentVersions,
   DOCUMENT_REVISION_COLUMN,
+  languageRevisionsOf,
   storedRevisionsOf,
 } from "../../versions/document-revision";
 import {
@@ -2636,6 +2637,11 @@ export class CollectionQueryService extends BaseService {
     hooksWaived?: boolean;
     /** Whether the collection keeps translations, whose rows its version names. */
     localized: boolean;
+    /** Translation counters the read already took (`attachDocumentVersions`). */
+    knownLanguages?: {
+      revisions: ReadonlyMap<string, ReadonlyMap<string, number>>;
+      locales: readonly string[];
+    };
   }): Promise<Record<string, unknown>[]> {
     const { rows, collectionName, tableName, fields } = params;
     // Taken before step (1), which removes the counter with every other
@@ -2902,6 +2908,7 @@ export class CollectionQueryService extends BaseService {
           : null,
       localization: this.localization,
       locale: params.locale,
+      known: params.knownLanguages,
     });
 
     return finalData;
@@ -5017,6 +5024,14 @@ export class CollectionQueryService extends BaseService {
           ? localeChain
           : null;
       let entry: Record<string, unknown> | undefined;
+      // The translation counters the joined read takes with the entry, so
+      // its version needs no statement of its own.
+      let knownLanguages:
+        | {
+            revisions: Map<string, Map<string, number>>;
+            locales: readonly string[];
+          }
+        | undefined;
       if (joinedLocaleChain && companion) {
         const table = companion.table;
         // As the translations read it stands for fails: the database's own message, which names
@@ -5034,6 +5049,11 @@ export class CollectionQueryService extends BaseService {
             })
         );
         entry = joined.entry;
+        const joinedRevisions = languageRevisionsOf(joined.companionRows);
+        knownLanguages = joinedRevisions && {
+          revisions: joinedRevisions,
+          locales: joinedLocaleChain,
+        };
         if (entry) {
           fillCompanionFields({
             rows: [entry],
@@ -5474,6 +5494,7 @@ export class CollectionQueryService extends BaseService {
       const [finalData] = await this.finalizeReadRows({
         rows: [expandedEntry],
         hooksWaived,
+        knownLanguages,
         localized: (collection as { localized?: boolean }).localized === true,
         // afterRead handlers on a read by id receive the document itself.
         single: true,

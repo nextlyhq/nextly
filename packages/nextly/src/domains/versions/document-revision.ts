@@ -381,6 +381,15 @@ export async function attachDocumentVersions(
     languagesTable: string | null;
     localization: SanitizedLocalizationConfig | undefined;
     locale: string | undefined;
+    /**
+     * Translation counters the read already took with the documents, and the
+     * languages it took them in (`languageRevisionsOf`). Used in place of a
+     * statement of their own when they cover every language the versions name.
+     */
+    known?: {
+      revisions: ReadonlyMap<string, ReadonlyMap<string, number>>;
+      locales: readonly string[];
+    };
   }
 ): Promise<void> {
   const locales = versionLanguagesFor({
@@ -392,8 +401,13 @@ export async function attachDocumentVersions(
     .map(documentIdOf)
     .filter((id): id is string => id !== undefined && args.stored.has(id));
   if (ids.length === 0) return;
-  const languages =
-    locales && args.languagesTable !== null
+  const covered =
+    locales !== undefined &&
+    args.known !== undefined &&
+    locales.every(locale => args.known!.locales.includes(locale));
+  const languages = covered
+    ? args.known!.revisions
+    : locales && args.languagesTable !== null
       ? await readLanguageRevisions(args.run, {
           dialect: args.dialect,
           table: args.languagesTable,
@@ -408,4 +422,25 @@ export async function attachDocumentVersions(
       locales ? languageCounters(languages?.get(id), locales) : undefined
     );
   }
+}
+
+/**
+ * Translation counters from translation rows a read already holds, by
+ * document, then by language; undefined when any of those rows was read
+ * without its counter, which then has to be read by itself.
+ */
+export function languageRevisionsOf(
+  rows: readonly Record<string, unknown>[]
+): Map<string, Map<string, number>> | undefined {
+  const out = new Map<string, Map<string, number>>();
+  for (const row of rows) {
+    if (!(DOCUMENT_REVISION_COLUMN in row)) return undefined;
+    const parent = row._parent;
+    const locale = row._locale;
+    if (typeof parent !== "string" || typeof locale !== "string") continue;
+    const languages = out.get(parent) ?? new Map<string, number>();
+    languages.set(locale, revisionOf(row[DOCUMENT_REVISION_COLUMN]));
+    out.set(parent, languages);
+  }
+  return out;
 }
