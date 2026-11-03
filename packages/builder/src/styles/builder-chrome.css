@@ -2397,8 +2397,21 @@
  * buttons that happen to be adjacent: they share a border and split the width,
  * so the pair reads as a single choice with one side taken.
  */
+/*
+ * Every segmented choice in the inspector, drawn as its Content and Style tabs
+ * are, so the panel has one segmented control: an edged, muted track at the
+ * control height that draws the only edge, its buttons inside it without
+ * borders of their own (so no seam is drawn twice, whatever their number), and
+ * the chosen one raised on the card surface.
+ */
 .nx-style-inspector__toggle {
   display: flex;
+  height: var(--nx-control-height);
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-muted);
 }
 
 .nx-style-inspector__toggle > button {
@@ -2411,57 +2424,29 @@
    * to be about where the label reads best rather than about what fits.
    */
   min-width: 0;
-  /* The control's height, not its padding, sets its size: 28px like its neighbours. */
-  height: var(--nx-control-height);
   padding: 0 0.5rem;
-  border: 1px solid var(--nx-border);
-  /* Given up here and taken back by the first button, so a seam is one border. */
-  border-inline-start-width: 0;
-  background: var(--nx-background);
-  color: var(--nx-foreground);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-muted-foreground);
   font: inherit;
   cursor: pointer;
 }
 
-/*
- * The group's leading edge belongs to the group, not to each button in it.
- *
- * Every button gives its leading border up and the first one takes it back, so
- * a seam between two buttons is drawn once however many there are. Stated this
- * way round because the alternative — removing the border from the LAST button
- * — is right only while there are exactly two: with three it leaves the first
- * seam two borders wide and the second one, and the segments stop reading as a
- * single control. This way the count cannot enter into it, and the rule needs
- * no selector beyond the two the radii already use.
- */
-.nx-style-inspector__toggle > button:first-child {
-  border-inline-start-width: 1px;
-  border-start-start-radius: var(--radius-md);
-  border-end-start-radius: var(--radius-md);
+.nx-style-inspector__toggle > button:hover:not(:disabled) {
+  color: var(--nx-foreground);
 }
 
-.nx-style-inspector__toggle > button:last-child {
-  border-start-end-radius: var(--radius-md);
-  border-end-end-radius: var(--radius-md);
-}
-
-/*
- * The taken side is filled rather than merely outlined. `aria-pressed` is the
- * state a screen reader reads, so styling from that attribute keeps what is
- * seen and what is announced reading off one value.
- */
+/* Raised and edged as the chosen tab is, which marks an icon as well as words. */
 .nx-style-inspector__toggle > button[aria-pressed="true"],
 .nx-style-inspector__toggle > button[aria-checked="true"] {
-  background: var(--nx-accent);
-  color: var(--nx-accent-foreground);
+  background: var(--nx-card);
+  color: var(--nx-foreground);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 0 0 1px var(--nx-muted-foreground);
 }
 
-/*
- * A choice that may not be changed here, under a lock or in a read-only area,
- * as the admin draws every disabled control: at half strength with a cursor
- * that says the press will not land. The taken side keeps its fill, so what is
- * chosen stays readable, but no longer reads as a live control.
- */
 .nx-style-inspector__toggle > button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -2500,8 +2485,16 @@
   transform: translate(-50%, -50%) rotate(-45deg);
 }
 
+/* The device being edited, marked under its button, over a raised one too. */
 .nx-visible-on > button[data-editing] {
   box-shadow: inset 0 -2px 0 var(--nx-ring);
+}
+
+.nx-visible-on > button[aria-pressed="true"][data-editing] {
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 0 0 1px var(--nx-muted-foreground),
+    inset 0 -2px 0 var(--nx-ring);
 }
 
 /*
@@ -2546,8 +2539,10 @@
   /* Edged as the state switcher is: on the panel's muted surface a track
      with no edge did not show. */
   border: 1px solid var(--nx-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   background: var(--nx-muted);
+  /* The tabs fill the track's height, so the whole tab answers a click. */
+  align-items: stretch;
 }
 
 .nx-inspector__tab {
@@ -2556,7 +2551,7 @@
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: calc(var(--radius) - 2px);
+  border-radius: var(--radius-sm);
   background: transparent;
   box-shadow: none;
   font-size: var(--nx-builder-font-size);
@@ -2571,12 +2566,16 @@
 /*
  * The chosen tab's words in the panel's own text colour, never the accent,
  * which measured 4.09:1 as text on the panel surface, under the 4.5:1 text
- * this size needs; the raised surface marks which tab is chosen.
+ * this size needs. Its raised surface is edged in the muted text colour, which
+ * holds 3:1 against the track in both schemes: the card and the two text
+ * colours alone measured about 1.2:1 and 2.5:1 in dark.
  */
 .nx-inspector__tab[data-state="active"] {
   background: var(--nx-card);
   color: var(--nx-builder-text, var(--nx-foreground));
-  box-shadow: var(--shadow-sm);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 0 0 1px var(--nx-muted-foreground);
 }
 
 .nx-inspector__tab:focus-visible {

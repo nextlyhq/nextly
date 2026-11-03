@@ -569,7 +569,10 @@ describe("the inspector at the editor's density", () => {
       ".nx-inspector__field--exposed > label, .nx-inspector__field--exposed > .nx-inspector__field-name { display: flex; align-items: center; min-height: var(--nx-control-height); }"
     );
     const segment = ruleBody(".nx-style-inspector__toggle > button");
-    expect(segment).toContain("height: var(--nx-control-height)");
+    expect(ruleBody(".nx-style-inspector__toggle")).toContain(
+      "height: var(--nx-control-height)"
+    );
+    // Inside its track, a button fills the track's height.
     expect(segment).toContain("padding: 0 0.5rem");
   });
 
@@ -597,9 +600,18 @@ describe("the inspector's Content and Style tabs", () => {
     expect(tab).toContain("border: 0");
     expect(tab).toContain("background: transparent");
     expect(tab).toContain("color: var(--nx-muted-foreground)");
+    // Its tabs fill the track's height, so the whole tab answers a click,
+    // and take the theme's radius tiers rather than recomputing them.
+    expect(list).toContain("align-items: stretch");
+    expect(list).toContain("border-radius: var(--radius-md)");
+    expect(tab).toContain("border-radius: var(--radius-sm)");
     const active = ruleBody('.nx-inspector__tab[data-state="active"]');
     expect(active).toContain("background: var(--nx-card)");
-    expect(active).toContain("box-shadow: var(--shadow-sm)");
+    // An edge that holds 3:1 against the track in both schemes: the card and
+    // the text colours alone measured about 1.2:1 and 2.5:1 in dark.
+    expect(active).toContain(
+      "box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--nx-muted-foreground)"
+    );
     expect(ruleBody(".nx-inspector__tab:focus-visible")).toContain(
       "outline: 2px solid var(--nx-ring)"
     );
