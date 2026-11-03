@@ -1952,6 +1952,68 @@ describe("a step recorded from outside the document", () => {
     expect(calls).toEqual([]);
   });
 
+  it("gives back the redo branch when a step undone before its change answered is withdrawn", async () => {
+    // An earlier edit undone, a held style change recorded, and that change
+    // undone before its save answers. The save is then refused, so the
+    // change never took effect: the earlier Redo is still the author's.
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let withdraw: () => void = () => {};
+    let answer: (took: boolean) => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep({
+        undo: () =>
+          new Promise<boolean>(resolve => {
+            answer = resolve;
+          }),
+        redo: () => Promise.resolve(true),
+      });
+    });
+    let undoing: Promise<boolean> | boolean = false;
+    act(() => {
+      undoing = result.current.undo();
+    });
+    act(() => withdraw());
+    await act(async () => {
+      answer(false);
+      await undoing;
+    });
+    expect(result.current.canRedo).toBe(true);
+    await act(async () => {
+      await result.current.redo();
+    });
+    expect(ids(result.current.document)).toEqual(["a", "b"]);
+  });
+
+  it("ends the redo branch for good once undoing the step took effect", async () => {
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+    act(() => {
+      result.current.apply(insert("b", 1));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    let withdraw: () => void = () => {};
+    act(() => {
+      withdraw = result.current.recordStep(step(calls, "style"));
+    });
+    await act(async () => {
+      await result.current.undo();
+    });
+    act(() => withdraw());
+    expect(result.current.canRedo).toBe(false);
+  });
+
   it("keeps the redo branch ended once another edit has followed it", async () => {
     const calls: string[] = [];
     const { result } = renderHook(() =>

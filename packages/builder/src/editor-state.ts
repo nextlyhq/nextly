@@ -918,19 +918,31 @@ function useHistoryStacks(): {
     });
   }, []);
   /*
-   * The redo branch the newest recorded step ended, with that step, so that
-   * withdrawing it before anything follows gives the branch back: a change
-   * that never took effect must not cost the author their redo either.
+   * The redo branch the newest recorded step ended, with that step and the
+   * entry below it, so that withdrawing the step before anything follows
+   * gives the branch back: a change that never took effect must not cost the
+   * author their redo either. Kept while the step itself is undone and not yet
+   * answered, since its change may still be refused.
    */
   const endedBranch = useRef<{
     by: HistoryEntry;
+    below: HistoryEntry | undefined;
     branch: HistoryEntry[];
   } | null>(null);
   const push = useCallback(
     (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
       let dropped: HistoryEntry | undefined;
-      // Whatever is pushed next means the branch can no longer come back.
-      endedBranch.current = null;
+      // Whatever is pushed next means the branch can no longer come back,
+      // unless it is that step itself moving between the stacks.
+      const ended = endedBranch.current;
+      const sameStep =
+        into !== "new" &&
+        ended !== null &&
+        ended.by.kind === "step" &&
+        entry.kind === "step" &&
+        entry.origin === ended.by.origin;
+      if (!sameStep) endedBranch.current = null;
+      const below = undoStack.current.at(-1);
       if (into === "redo") {
         redoStack.current.push(entry);
       } else {
@@ -947,7 +959,7 @@ function useHistoryStacks(): {
         // A new edit invalidates the redo branch: those inverses were computed
         // against a document that no longer exists, so replaying one would
         // apply an edit derived from a tree that has since changed.
-        endedBranch.current = { by: entry, branch: redoStack.current };
+        endedBranch.current = { by: entry, below, branch: redoStack.current };
         redoStack.current = [];
       }
       sync();
@@ -981,20 +993,22 @@ function useHistoryStacks(): {
     (origin: HistoryStep, dropped: HistoryEntry | undefined) => {
       const kept = (held: HistoryEntry) =>
         held.kind !== "step" || held.origin !== origin;
-      // Still the newest entry, with nothing undone or made since: the redo
-      // branch its recording ended comes back with its withdrawal.
+      // With the step gone, the history as it was when the step was recorded
+      // (nothing made since, and nothing else undone): the redo branch its
+      // recording ended comes back with its withdrawal.
       const ended = endedBranch.current;
+      endedBranch.current = null;
+      undoStack.current = undoStack.current.filter(kept);
+      const redo = redoStack.current.filter(kept);
       const restore =
         ended !== null &&
         ended.by.kind === "step" &&
         ended.by.origin === origin &&
-        undoStack.current.at(-1) === ended.by &&
-        redoStack.current.length === 0
+        undoStack.current.at(-1) === ended.below &&
+        redo.length === 0
           ? ended.branch
           : [];
-      endedBranch.current = null;
-      undoStack.current = undoStack.current.filter(kept);
-      redoStack.current = [...redoStack.current.filter(kept), ...restore];
+      redoStack.current = [...redo, ...restore];
       if (dropped !== undefined && undoStack.current.length < MAX_HISTORY) {
         undoStack.current.unshift(dropped);
         if (dropped.kind === "ops") forgotten.current -= 1;
@@ -1003,7 +1017,17 @@ function useHistoryStacks(): {
     },
     [sync]
   );
-  return { depths, push, pop, remove, withdraw };
+  /*
+   * A replay of the step took effect: its change and its undo are both real,
+   * so the branch it ended is gone for good.
+   */
+  const settle = useCallback((origin: HistoryStep) => {
+    const ended = endedBranch.current;
+    if (ended?.by.kind === "step" && ended.by.origin === origin) {
+      endedBranch.current = null;
+    }
+  }, []);
+  return { depths, push, pop, remove, withdraw, settle };
 }
 
 /**
@@ -1016,13 +1040,15 @@ function replayStep(
   { step, origin }: { step: HistoryStep; origin: HistoryStep },
   into: "undo" | "redo",
   push: (entry: HistoryEntry, into: "undo" | "redo") => void,
-  remove: (entry: HistoryEntry) => void
+  remove: (entry: HistoryEntry) => void,
+  settle: (origin: HistoryStep) => void
 ): Promise<boolean> {
   const moved: HistoryEntry = { kind: "step", step: reversed(step), origin };
   push(moved, into);
   return step.undo().then(
     took => {
-      if (!took) remove(moved);
+      if (took) settle(origin);
+      else remove(moved);
       return took;
     },
     () => {
@@ -1105,7 +1131,7 @@ export function useEditorState({
     );
   latestDocument.current = document;
 
-  const { depths, push, pop, remove, withdraw } = useHistoryStacks();
+  const { depths, push, pop, remove, withdraw, settle } = useHistoryStacks();
 
   /**
    * Run an op and record its inverse on the given stack.
@@ -1270,11 +1296,11 @@ export function useEditorState({
       if (entry === undefined) return false;
       const into = from === "undo" ? "redo" : "undo";
       if (entry.kind === "step") {
-        return replayStep(entry, into, push, remove);
+        return replayStep(entry, into, push, remove, settle);
       }
       return run(entry.ops, into) !== null;
     },
-    [pop, push, remove, run]
+    [pop, push, remove, run, settle]
   );
   const undo = useCallback(() => replay("undo"), [replay]);
   const redo = useCallback(() => replay("redo"), [replay]);
