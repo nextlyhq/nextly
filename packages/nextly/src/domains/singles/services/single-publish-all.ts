@@ -52,6 +52,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
+import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
@@ -1246,6 +1247,17 @@ export class SinglePublishAllService extends BaseService {
       locale: locale ?? undefined,
       req: access.user ? { user: access.user } : {},
       access,
+      // The Single's write, on its transaction, so a field inside an instance
+      // that reads the library judges it as the Single's own fields are.
+      write: entryWriteContext({
+        kind: "single",
+        slug: plan.slug,
+        connection: {
+          db: tx,
+          executor: tx.getDrizzle(),
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        },
+      }),
     });
   }
 

@@ -3637,6 +3637,17 @@ export class SingleMutationService extends BaseService {
               // the caller and trust the Single's own fields are judged with,
               // a visitor by the same Public role as the Single's gate.
               access: fieldGroupWriteAccessOf(options, this.fieldRuleVisitor),
+              // The Single's write, on its transaction, so a field inside an
+              // instance that reads the library judges it as the Single's own.
+              write: entryWriteContext({
+                kind: "single",
+                slug,
+                connection: {
+                  db: tx,
+                  executor: tx.getDrizzle(),
+                  defaultLocale: this.localization?.defaultLocale ?? null,
+                },
+              }),
             });
             if (
               !holdEdit &&

@@ -89,8 +89,10 @@ Changing a block's `defaultProps` doesn't lock existing pages out. Inside a
 place, or put it back as the block now starts. Only a third value is refused. This
 holds for a single as for a collection's page. A localized blocks field keeps what the
 same language already stores, never another language's value. A page saved for the
-first time, and a language saving its first value, are measured against the starting
-blocks alone.
+first time, a language saving its first value, and a blocks field inside a field group
+are measured against the starting blocks alone. So a stored field-group value whose
+`"contentOnly"` child kept an older value is refused on its next save: put that child
+back as the block now starts, and the save goes through.
 A page placing a component keeps what the component itself holds.
 
 ## Components and locks
