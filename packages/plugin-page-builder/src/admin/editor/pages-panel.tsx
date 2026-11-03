@@ -394,15 +394,19 @@ function PageList({
   }
   const groups = groupsOf(list.items);
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 grid-cols-1 gap-2">
       {groups.map(group => (
-        <section key={group.collection} aria-label={group.label}>
+        <section
+          key={group.collection}
+          aria-label={group.label}
+          className="min-w-0"
+        >
           {groups.length > 1 ? (
             <h3 className="px-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               {group.label}
             </h3>
           ) : null}
-          <ul className="grid gap-0.5">
+          <ul className="grid min-w-0 grid-cols-1 gap-0.5">
             {group.items.map(page => (
               <PageRow
                 key={`${page.collection}:${page.id}`}
@@ -473,8 +477,8 @@ function PageRow({
   const title = page.title.trim() === "" ? "Untitled" : page.title;
   return (
     <li
-      className={`group flex h-8 items-center gap-2 rounded-md px-1.5 text-sm ${
-        editing ? "bg-accent" : "hover:bg-accent/60"
+      className={`group flex h-8 min-w-0 items-center gap-2 rounded-md px-1.5 text-sm ${
+        editing ? "bg-muted" : "hover:bg-muted/60"
       }`}
     >
       <FileText
@@ -529,6 +533,10 @@ function RowMenu({
 }): React.JSX.Element {
   // A draft cannot be copied yet: the copy reads the published page.
   const draft = page.status === "draft";
+  // Rename starts once the menu has CLOSED. Started while it closes, the
+  // menu's focus return pulls focus out of the new field, whose blur then
+  // ends the rename before anything was typed.
+  const renameAfterClose = React.useRef(false);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -540,13 +548,27 @@ function RowMenu({
           <MoreHorizontal aria-hidden="true" className="size-4" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
+      <DropdownMenuContent
+        align="start"
+        onCloseAutoFocus={event => {
+          if (!renameAfterClose.current) return;
+          renameAfterClose.current = false;
+          event.preventDefault();
+          onRename();
+        }}
+      >
         {editing ? null : (
           <DropdownMenuItem onSelect={() => actions.open(page)}>
             Open
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem onSelect={onRename}>Rename</DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => {
+            renameAfterClose.current = true;
+          }}
+        >
+          Rename
+        </DropdownMenuItem>
         <DropdownMenuItem
           disabled={draft}
           title={draft ? "Publish it first to duplicate it." : undefined}
