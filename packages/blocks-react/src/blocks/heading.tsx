@@ -79,8 +79,10 @@ export function renderHeading({
 export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
   name: "core/heading",
   version: 1,
-  description:
-    "A section title. The level is chosen by the author, so the page outline stays stable when blocks move.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A section title. The level
+  // is chosen by the author, so the page outline stays stable when blocks move.
+  description: "A title for a page or section.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.
@@ -91,11 +93,28 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
     keywords: ["title", "headline", "h1", "h2"],
   },
   props: {
-    text: { role: "content", type: "text", inline: true },
-    level: { type: "select", options: [...HEADING_LEVELS] },
-    href: { role: "content", type: "url" },
-    target: { type: "select", options: ["_self", "_blank"] },
-    rel: { type: "text" },
+    text: { label: "Text", role: "content", type: "text", inline: true },
+    level: {
+      label: "Level",
+      optionLabels: {
+        h1: "H1",
+        h2: "H2",
+        h3: "H3",
+        h4: "H4",
+        h5: "H5",
+        h6: "H6",
+      },
+      type: "select",
+      options: [...HEADING_LEVELS],
+    },
+    href: { label: "Link", role: "content", type: "url" },
+    target: {
+      label: "Open link in",
+      optionLabels: { _self: "This tab", _blank: "A new tab" },
+      type: "select",
+      options: ["_self", "_blank"],
+    },
+    rel: { label: "Link relationship", type: "text" },
   },
   defaultProps: { text: "", level: "h2" },
   // A heading is what a page calls itself, so the first one is the best title
@@ -114,5 +133,11 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // A heading with a destination renders an `<a>` inside it, so it is
+  // interactive while linked. Read through `url()`, as the renderer reads it.
+  contentModel: props =>
+    url(props.href) === undefined
+      ? { is: ["flow"] }
+      : { is: ["flow", "interactive"] },
   render: renderHeading,
 });

@@ -79,10 +79,16 @@ import { createCliAdapter } from "../utils/adapter";
 import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
-export const CREATE_ADMIN_COMMAND = "users:create-admin";
+import {
+  ADMIN_PASSWORD_ENV,
+  CREATE_ADMIN_COMMAND,
+} from "./create-admin.command";
 
-/** Where the password is read from when no prompt can ask for it. */
-export const ADMIN_PASSWORD_ENV = "NEXTLY_ADMIN_PASSWORD";
+export {
+  ADMIN_PASSWORD_ENV,
+  CREATE_ADMIN_COMMAND,
+  registerCreateAdminCommand,
+} from "./create-admin.command";
 
 /** The first administrator's details, the password among them. */
 export interface FirstAdminDetails {
@@ -415,28 +421,23 @@ function processIo(context: CommandContext): CreateAdminIo {
   };
 }
 
-/** Register `nextly users:create-admin`. */
-export function registerCreateAdminCommand(
-  program: Command,
+/**
+ * The action of `nextly users:create-admin`, loaded when it runs, building its
+ * context with the factory the program hands in.
+ */
+export function createAdminAction(
   createContext: (options: GlobalOptions) => CommandContext
-): void {
-  program
-    .command(CREATE_ADMIN_COMMAND)
-    .description(
-      `Create the first administrator in this install's database (password from ${ADMIN_PASSWORD_ENV} or a prompt)`
-    )
-    .option("--email <email>", "The administrator's email")
-    .option("--name <name>", "The administrator's name")
-    .action(async (options: CreateAdminOptions, cmd: Command) => {
-      const context = createContext(cmd.optsWithGlobals());
-      try {
-        process.exitCode = await runCreateAdmin(
-          options,
-          context,
-          processIo(context)
-        );
-      } catch (error) {
-        failWithError(context.logger, error);
-      }
-    });
+): (options: CreateAdminOptions, cmd: Command) => Promise<void> {
+  return async (options: CreateAdminOptions, cmd: Command) => {
+    const context = createContext(cmd.optsWithGlobals());
+    try {
+      process.exitCode = await runCreateAdmin(
+        options,
+        context,
+        processIo(context)
+      );
+    } catch (error) {
+      failWithError(context.logger, error);
+    }
+  };
 }

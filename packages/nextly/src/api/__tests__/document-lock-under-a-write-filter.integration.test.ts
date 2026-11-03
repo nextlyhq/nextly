@@ -73,7 +73,7 @@ async function claimedBy(owner: string, id: string): Promise<string> {
     .get<DocumentLockService>("documentLockService")
     .acquire(
       { scopeKind: "collection", slug: NOTES, entryId: id },
-      { ownerId: owner, ownerLabel: owner }
+      { ownerId: owner, ownerLabel: owner, actor: { type: "user", id: owner } }
     );
   if (outcome.status !== "acquired") throw new Error("the claim was not taken");
   return outcome.claimToken;

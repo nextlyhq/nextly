@@ -50,10 +50,23 @@
  * sighted author reads it because it sits under the tree; a screen-reader user
  * hears it on entering the tree, which is the moment the question arises.
  *
+ * ## Rows can be dragged, through the same rule as everything else
+ *
+ * A row dragged by the pointer moves its block, and dragged to the right nests
+ * it; `layers-drag` follows the gesture and `layers-drop` decides where it
+ * lands and whether the placement rule and the locks allow it. Off while a
+ * search filters the list, whose hidden neighbours a drop would land between.
+ *
  * @module layers-panel
  */
 
-import { allBlocks } from "@nextlyhq/blocks-engine";
+import {
+  allBlocks,
+  registryNestingSource,
+  type ComponentLookup,
+  type NestingSource,
+  type RegionArea,
+} from "@nextlyhq/blocks-engine";
 import {
   Input,
   TreeView,
@@ -64,11 +77,26 @@ import { EyeOff, Lock, SlidersHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
 import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
-import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
+import {
+  ancestorIds,
+  filterLayers,
+  layersOf,
+  UNNAMED_COMPONENT,
+  type ComponentTitleOf,
+  type LayerNode,
+} from "./layers";
+import {
+  type LayersDrag,
+  LAYERS_TREE_CLASS,
+  LayersDropOverlay,
+  useLayersDrag,
+} from "./layers-drag";
 
 export interface LayersPanelProps {
   /** The editor whose document this shows and whose selection it drives. */
@@ -88,18 +116,80 @@ export interface LayersPanelProps {
    * direction for a claim that cannot be checked from here.
    */
   moveHints?: boolean;
+  /**
+   * The nesting rules a dragged row is judged by. Defaults to the registry's,
+   * which is what the keyboard moves and the canvas default to.
+   */
+  nesting?: NestingSource;
+  /**
+   * The component definitions the canvas draws instances from, so a dragged
+   * instance is judged by what it draws, as its canvas drop is.
+   */
+  definitions?: ComponentLookup;
+  /**
+   * The regions of the page's Layout, shown as read-only rows: a header above
+   * the page's blocks, a footer below them.
+   *
+   * Outside the tree on purpose. They are not the page's blocks, so they take
+   * no part in its selection, its drag and drop, its locks or its visibility;
+   * each is one button an author reaches by Tab, and activating it shows the
+   * region on the canvas.
+   */
+  regions?: readonly LayersRegionRow[];
+  /**
+   * A component's title by id, so a placement's row reads as what the author
+   * placed, and a search for that title finds it. The library holds the
+   * titles, and the host read it.
+   */
+  componentTitle?: ComponentTitleOf;
+}
+
+/** One region of the page's Layout, as a read-only row in Layers. */
+export interface LayersRegionRow {
+  readonly area: RegionArea;
+  /** The area's name, "Header". */
+  readonly name: string;
+  /** Where it comes from, "from Layout Main". */
+  readonly origin: string;
+  /** Show the region on the canvas. */
+  readonly onActivate: () => void;
+}
+
+/** A region of the page's Layout, as a row that is not one of the page's blocks. */
+function RegionRow({ row }: { row: LayersRegionRow }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="nx-layers-region"
+      data-nx-layers-region={row.area}
+      // Named whole, so it is announced as one sentence: what it is, where it
+      // comes from, and that it cannot be changed here.
+      aria-label={`${row.name}, ${row.origin}, locked`}
+      onClick={row.onActivate}
+    >
+      <Lock size={14} aria-hidden="true" />
+      <span className="nx-layers-region__name">{row.name}</span>
+      <span className="nx-layers-region__origin">{row.origin}</span>
+    </button>
+  );
 }
 
 /** One badge: an icon nobody has to see, and a word every reader gets. */
 function Badge({
   icon,
   text,
+  lock,
 }: {
   icon: React.ReactNode;
   text: string;
+  /** For a lock badge: the block's own lock, or one it is held by. */
+  lock?: "own" | "inherited";
 }): React.JSX.Element {
   return (
-    <span className="nx-layer-row__badge">
+    <span
+      className="nx-layer-row__badge"
+      {...(lock === undefined ? {} : { "data-lock": lock })}
+    >
       {/*
         The icon is decorative and the word is the fact. A title attribute would
         reach a pointer and nothing else, and an icon alone announces as an
@@ -129,10 +219,32 @@ function iconsByType(): ReadonlyMap<string, string | undefined> {
   );
 }
 
+/**
+ * The mark a row draws: a placement's is the component mark whatever its
+ * type's own icon, so it reads as a component beside the blocks around it.
+ */
+function markOf(
+  node: LayerNode,
+  icons: ReadonlyMap<string, string | undefined>
+): string | undefined {
+  return node.component ? "component" : icons.get(node.type);
+}
+
+/**
+ * The word as well as the mark, for a placement its component's title names:
+ * the title alone would read as the block's own name. The fallback is already
+ * that word, so it is not said twice.
+ */
+function ComponentTag({ node }: { node: LayerNode }): React.JSX.Element | null {
+  if (!node.component || node.label === UNNAMED_COMPONENT) return null;
+  return <span className="nx-layer-row__tag">component</span>;
+}
+
 /** A layer as a row: its mark, its name, and what is true about it. */
 function rowOf(
   node: LayerNode,
-  icons: ReadonlyMap<string, string | undefined>
+  icons: ReadonlyMap<string, string | undefined>,
+  draggingId: string | null
 ): TreeNode {
   return {
     id: node.id,
@@ -142,8 +254,14 @@ function rowOf(
     // that is not its name.
     textValue: node.label,
     label: (
-      <span className="nx-layer-row">
-        <BlockIconMark icon={icons.get(node.type)} size={14} />
+      <span
+        className="nx-layer-row"
+        {...(node.component ? { "data-component": "" } : {})}
+        // The block in hand, faded where it sits as the canvas fades its own
+        // drag source; the same attribute, so the two read as one gesture.
+        {...(node.id === draggingId ? { [DRAG_SOURCE_ATTRIBUTE]: "" } : {})}
+      >
+        <BlockIconMark icon={markOf(node, icons)} size={14} />
         {/* `data-nx-layer` names the block a row stands for. Labels repeat —
             every paragraph is "Text" — so it is the one stable way to find a
             given block's row, the Layers counterpart of the canvas's
@@ -151,7 +269,24 @@ function rowOf(
         <span className="nx-layer-row__label" data-nx-layer={node.id}>
           {node.label}
         </span>
-        {node.locked ? <Badge icon={<Lock size={12} />} text="Locked" /> : null}
+        <ComponentTag node={node} />
+        {/* Both locks in the row's own ink, so each reads against the row in
+            every state it can be in. A lock held from a block around it is
+            quieter by weight, a thinner stroke, never by a fainter colour; both
+            say so in words, and the inherited one names the block to unlock. */}
+        {node.locked ? (
+          <Badge
+            icon={<Lock size={12} strokeWidth={2.5} />}
+            text="Locked"
+            lock="own"
+          />
+        ) : node.lockedBy === undefined ? null : (
+          <Badge
+            icon={<Lock size={12} strokeWidth={1.25} />}
+            text={`Locked by ${node.lockedBy}`}
+            lock="inherited"
+          />
+        )}
         {node.breakpointHidden ? (
           <Badge
             icon={<EyeOff size={12} />}
@@ -166,7 +301,14 @@ function rowOf(
         ) : null}
       </span>
     ),
-    children: node.children.map(child => rowOf(child, icons)),
+    // Omitted for a block that holds nothing: the tree draws a twisty and an
+    // open/closed state for any row given a children list, empty or not, and
+    // a twisty that opens onto nothing is a control that does nothing.
+    ...(node.children.length === 0
+      ? {}
+      : {
+          children: node.children.map(child => rowOf(child, icons, draggingId)),
+        }),
   };
 }
 
@@ -194,17 +336,50 @@ const DIRECTION_LABEL: Readonly<Record<MoveDirection, string>> = {
   outdent: "Move out",
 };
 
+/**
+ * The drag's state as the panel draws it: absent with no drag, "refused"
+ * while the place under the pointer refuses the block — which turns the
+ * cursor to no-drop, as the canvas does — and empty otherwise.
+ */
+function draggingState(drag: LayersDrag): string | undefined {
+  if (drag.draggingId === null) return undefined;
+  return drag.drawn?.result.kind === "refused" ? "refused" : "";
+}
+
 export function LayersPanel({
   editor,
   moveHints = false,
+  nesting,
+  definitions,
+  regions,
+  componentTitle,
 }: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
 
+  // Memoised on what was supplied, so the drag is not handed a new rule
+  // source on every render.
+  const rules = React.useMemo(
+    () => nesting ?? registryNestingSource(),
+    [nesting]
+  );
+  const drag = useLayersDrag({
+    editor,
+    nesting: rules,
+    ...(definitions === undefined ? {} : { definitions }),
+    enabled: query.trim() === "",
+    // A collapsed row rested on during a drag opens into the author's own set,
+    // as a twisty click would, so it stays open after the drag ends.
+    onOpen: id =>
+      setOpened(previous =>
+        previous.includes(id) ? previous : [...previous, id]
+      ),
+  });
+
   // Recomputed each render rather than memoised. The tree is only valid against
   // the document it was read from, and every edit replaces that document — a
   // memo would need the document as its key and would therefore never hit.
-  const tree = layersOf(editor.document);
+  const tree = layersOf(editor.document, componentTitle);
   const search = filterLayers(tree, query);
 
   /*
@@ -249,8 +424,8 @@ export function LayersPanel({
 
   const icons = React.useMemo(iconsByType, []);
   const nodes = React.useMemo(
-    () => search.roots.map(root => rowOf(root, icons)),
-    [search.roots, icons]
+    () => search.roots.map(root => rowOf(root, icons, drag.draggingId)),
+    [search.roots, icons, drag.draggingId]
   );
 
   /*
@@ -306,10 +481,16 @@ export function LayersPanel({
         <Input
           value={query}
           onChange={event => setQuery(event.target.value)}
-          placeholder="Search layers"
-          aria-label="Search layers"
+          placeholder={`Search ${EDITOR_WORDS.layers.toLowerCase()}`}
+          aria-label={`Search ${EDITOR_WORDS.layers.toLowerCase()}`}
         />
       </div>
+
+      {regions
+        ?.filter(row => row.area === "header")
+        .map(row => (
+          <RegionRow key={row.area} row={row} />
+        ))}
 
       {tree.length === 0 ? (
         <p className="nx-layers-panel__note">
@@ -318,33 +499,56 @@ export function LayersPanel({
       ) : nodes.length === 0 ? (
         <p className="nx-layers-panel__note">No blocks match “{query}”.</p>
       ) : (
-        <TreeView
-          className="nx-layers-panel__tree"
-          aria-label="Layers"
-          nodes={nodes}
-          selectedId={editor.selectedId}
-          // The panel shows what the canvas shows. Passing only the primary
-          // would leave two surfaces disagreeing about what is selected, on a
-          // screen where a delete acts on all of it.
-          selectedIds={editor.selection.ids}
-          // The tree's three gestures ARE the editor's three gestures: it
-          // reports which one a row's modifiers meant and the store's own rules
-          // decide what that does. A panel translating them itself would be a
-          // second grammar to keep in step.
-          onSelectedChange={editor.select}
-          expandedIds={expandedIds}
-          // The tree reports the whole next set, which during a search includes
-          // branches only the search opened. Those are dropped before storing,
-          // so clearing the query collapses them again instead of baking a
-          // temporary reveal into what the author has open.
-          onExpandedChange={next =>
-            setOpened(next.filter(id => !search.expand.includes(id)))
-          }
-          // The hint is the tree's DESCRIPTION, so it is announced on entering
-          // the tree rather than only readable by someone who can see it below.
-          aria-describedby={hints.length === 0 ? undefined : hintId}
-        />
+        <div
+          className="nx-layers-panel__body"
+          data-nx-dragging={draggingState(drag)}
+          {...drag.handlers}
+        >
+          <TreeView
+            className={LAYERS_TREE_CLASS}
+            aria-label={EDITOR_WORDS.layers}
+            nodes={nodes}
+            selectedId={editor.selectedId}
+            // The panel shows what the canvas shows. Passing only the primary
+            // would leave two surfaces disagreeing about what is selected, on a
+            // screen where a delete acts on all of it.
+            selectedIds={editor.selection.ids}
+            // The tree's three gestures ARE the editor's three gestures: it
+            // reports which one a row's modifiers meant and the store's own rules
+            // decide what that does. A panel translating them itself would be a
+            // second grammar to keep in step.
+            onSelectedChange={editor.select}
+            expandedIds={expandedIds}
+            // The tree reports the whole next set, which during a search includes
+            // branches only the search opened. Those are dropped before storing,
+            // so clearing the query collapses them again instead of baking a
+            // temporary reveal into what the author has open.
+            onExpandedChange={next =>
+              setOpened(next.filter(id => !search.expand.includes(id)))
+            }
+            // The hint is the tree's DESCRIPTION, so it is announced on entering
+            // the tree rather than only readable by someone who can see it below.
+            aria-describedby={hints.length === 0 ? undefined : hintId}
+          />
+          <LayersDropOverlay drawn={drag.drawn} />
+        </div>
       )}
+
+      {regions
+        ?.filter(row => row.area === "footer")
+        .map(row => (
+          <RegionRow key={row.area} row={row} />
+        ))}
+
+      {/*
+        Why a drop under the pointer is refused, spoken. Present from the first
+        render, since a region that appears with its first message is often not
+        announced at all. A `div` rather than the editor's `p` region, which is
+        the keyboard moves' own and sits elsewhere in the editor.
+      */}
+      <div role="status" aria-live="polite" className="nx-sr-only">
+        {drag.announcement}
+      </div>
 
       {/*
         Outside the empty and no-match branches deliberately: the bindings are

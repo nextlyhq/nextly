@@ -9,13 +9,14 @@
  * is, and an address that already names a database is refused, because that
  * database is somebody's.
  *
- * The database is kept after the run, as the SQLite file is, so a failure can
- * be read from it; the next run on the same port drops it first. One per port,
- * so a checkout's runs reuse one name rather than piling up.
+ * The database lives only as long as its run: the run's teardown drops it,
+ * and the next run on the same port drops it first in case a run was cut
+ * short. One per port, so two checkouts' runs never share one.
  *
- * Read by the Playwright config (which database the server is given) and by
- * `scripts/reset-e2e-db.mjs` (which database is dropped and created), so the
- * two can never disagree about which one the run owns.
+ * Read by the Playwright config (which database the server is given), by
+ * `scripts/reset-e2e-db.mjs` (which is created) and by the run's teardown
+ * (which is dropped), so they can never disagree about which one the run
+ * owns.
  */
 
 /** The dialects the suite runs on. SQLite is the default. */
@@ -53,6 +54,10 @@ function e2eDialect(env = process.env) {
 }
 
 /**
+ * @typedef {{ dialect: "sqlite" | "postgresql" | "mysql", serverUrl: URL | null, name: string, url: string }} E2eDatabase
+ */
+
+/**
  * The run's database: the dialect, the server's address (null on SQLite), the
  * database's own name, and the URL the playground is started with.
  *
@@ -61,7 +66,7 @@ function e2eDialect(env = process.env) {
  * other's database.
  *
  * @param {{ port: number, env?: NodeJS.ProcessEnv }} options
- * @returns {{ dialect: "sqlite" | "postgresql" | "mysql", serverUrl: URL | null, name: string, url: string }}
+ * @returns {E2eDatabase}
  */
 export function e2eDatabase({ port, env = process.env }) {
   const dialect = e2eDialect(env);

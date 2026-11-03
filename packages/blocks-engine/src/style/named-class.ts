@@ -16,7 +16,7 @@
 // complaint most often made about combo classes elsewhere. The order is data the author controls,
 // and it is the documented way one class overrides another.
 
-import type { NodeStyles } from "../document";
+import { MAX_NAMED_CLASSES, type NodeStyles } from "../document";
 import { isPlainRecord } from "../plain-record";
 
 /** The prefix every named class carries in the emitted CSS. */
@@ -63,6 +63,17 @@ export interface NamedClass {
   orderIndex: number;
   /** The styles this class applies, in the same envelope a node uses. */
   styles: NodeStyles;
+  /**
+   * The name an author gave the class, shown where the slug would read as code. Display text
+   * only: nothing compiled reads it, and an entry without one is named by its slug.
+   */
+  label?: string;
+  /**
+   * Set while the class is locked: its styles, name and slug may not change and it may not be
+   * removed until someone allowed to lock classes unlocks it. Absent, never `false`, when
+   * unlocked. Nothing compiled reads it.
+   */
+  locked?: true;
 }
 
 /**
@@ -92,6 +103,22 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
     // was dropped as a duplicate, taking the styling of every node referencing it.
     isPlainRecord(candidate.styles)
   );
+}
+
+/**
+ * The part of a class library the compiler reads: its first `MAX_NAMED_CLASSES` entries, as an
+ * array prefix, before any ordering or claim rule. An entry past the cap is never read, so it
+ * neither renders nor takes a slug or an id from an entry that does.
+ *
+ * The one statement of the cap's reading, so a caller asking which classes a page can use asks
+ * exactly what the compiler reads rather than a library the compiler would cut short.
+ */
+export function namedClassesRead(
+  library: readonly NamedClass[]
+): readonly NamedClass[] {
+  return library.length > MAX_NAMED_CLASSES
+    ? library.slice(0, MAX_NAMED_CLASSES)
+    : library;
 }
 
 /**

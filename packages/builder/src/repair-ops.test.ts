@@ -1,5 +1,5 @@
 /**
- * A lock repair as the op store applies it.
+ * A repair, of locks and placements, as the op store applies it.
  *
  * The engine's planner says what the repaired document is; the store only
  * takes ops. These turn the plan's steps into ops, and every case holds them
@@ -16,13 +16,19 @@ import {
   DEFAULT_LIMITS,
   expandSlotDefaults,
   lockBreaksIn,
+  lockRepairRule,
   makeNode,
+  placementBreaksIn,
+  placementRepairRule,
   planRepair,
   registerBlocks,
   registryBlockSource,
   registryNestingSource,
   type BlockDocument,
   type BlockNode,
+  type ContentModel,
+  type RepairPlan,
+  type RepairRule,
 } from "@nextlyhq/blocks-engine";
 
 import { repairOps } from "./repair-ops";
@@ -82,6 +88,27 @@ beforeEach(() => {
           },
         },
       },
+      // A box whose `link` prop makes it render an `<a>`, which refuses the
+      // Button, an interactive block, anywhere beneath it.
+      {
+        ...base,
+        name: "acme/box",
+        slots: { children: {} },
+        contentModel: (props: { link?: string }): ContentModel =>
+          typeof props.link === "string"
+            ? {
+                is: ["flow", "interactive"],
+                accepts: { without: ["interactive"] },
+              }
+            : { is: ["flow"] },
+      },
+      {
+        ...base,
+        name: "acme/button",
+        contentModel: (): ContentModel => ({
+          is: ["flow", "phrasing", "interactive"],
+        }),
+      },
       {
         ...base,
         name: "acme/sealed-shelf",
@@ -118,8 +145,8 @@ function page(...nodes: BlockNode[]): BlockDocument {
 }
 
 /** Plan, translate, apply: the document the ops give, beside the plan's. */
-function applied(document: BlockDocument) {
-  const plan = planRepair(document, sources());
+function applied(document: BlockDocument, rules?: readonly RepairRule[]) {
+  const plan = planRepair(document, sources(), rules);
   const translated = repairOps(document, plan);
   if (!("ops" in translated)) throw new Error("the repair was refused");
   const result = applyOps(document, translated.ops).document;
@@ -212,6 +239,24 @@ describe("repairOps", () => {
       refused: { reason: "locked-block", nodeId: "inner" },
     });
   });
+
+  it("names the locked block AROUND one it must move or change, the one to unlock", () => {
+    // The broken row sits inside a block the author locked in Layers. Every
+    // step of its repair changes something that lock covers, so the op layer
+    // refuses it; the repair names the block to unlock rather than reporting
+    // that its blocks could not be placed.
+    const row = placed("acme/fixed-row", "row");
+    row.slots!.items!.reverse();
+    const document = page({
+      ...placed("acme/card", "frame"),
+      locked: true,
+      slots: { body: [row] },
+    });
+
+    expect(repairOps(document, planRepair(document, sources()))).toEqual({
+      refused: { reason: "locked-block", nodeId: "frame" },
+    });
+  });
   it("puts parts back before it adds, so every step stays within the byte cap", () => {
     // A row missing its divider, and a sealed card whose headline holds a
     // large design value the lock puts back. The page and the repaired page
@@ -235,5 +280,80 @@ describe("repairOps", () => {
     });
 
     expect(translated).not.toHaveProperty("refused");
+  });
+
+  it("applies the placement rule's moves after the lock rule's, giving the plan's result", () => {
+    // The lock rule moves the extra Button out of the fixed row, still inside
+    // the linked box; the placement rule then moves it out of the link, and
+    // the second Button with it, in order.
+    const row = placed("acme/fixed-row", "row");
+    row.slots!.items!.push(placed("acme/button", "first"));
+    const box = {
+      ...placed("acme/box", "box"),
+      props: { link: "/go" },
+      slots: { children: [row, placed("acme/button", "second")] },
+    };
+    const { plan, result } = applied(page(box), [
+      lockRepairRule,
+      placementRepairRule,
+    ]);
+
+    expect(plan.steps.map(step => step.kind === "move" && step.cause)).toEqual([
+      "lock",
+      "placement",
+      "placement",
+    ]);
+    expect(result).toEqual(plan.result);
+    expect(result.nodes.map(node => node.id)).toEqual([
+      "box",
+      "first",
+      "second",
+    ]);
+    expect(placementBreaksIn(result, sources())).toEqual([]);
+  });
+
+  it("places a placement move exactly after the block it names", () => {
+    // Two moves out of one slot that name the same block: the second lands
+    // just after it, before the first, as the plan's result has them.
+    const box = {
+      ...placed("acme/box", "box"),
+      props: { link: "/go" },
+      slots: {
+        children: [placed("acme/button", "a"), placed("acme/button", "b")],
+      },
+    };
+    const document = page(box);
+    const from = { holderId: "box", slot: "children" };
+    const plan: RepairPlan = {
+      steps: [
+        {
+          kind: "move",
+          cause: "placement",
+          nodeId: "a",
+          type: "acme/button",
+          from,
+          after: "box",
+        },
+        {
+          kind: "move",
+          cause: "placement",
+          nodeId: "b",
+          type: "acme/button",
+          from,
+          after: "box",
+        },
+      ],
+      result: page(
+        { ...box, slots: { children: [] } },
+        box.slots.children[1]!,
+        box.slots.children[0]!
+      ),
+      remaining: [],
+      remainingPlacements: [],
+    };
+
+    const translated = repairOps(document, plan);
+    if (!("ops" in translated)) throw new Error("the repair was refused");
+    expect(applyOps(document, translated.ops).document).toEqual(plan.result);
   });
 });

@@ -13,6 +13,7 @@
 import {
   newId,
   resolveSiteTokens,
+  validateFontFace,
   type BreakpointSet,
   type FontFaceDef,
   type NamedClass,
@@ -22,23 +23,42 @@ import {
   authoredBreakpoints,
   FontsPanel,
   TokensPanel,
+  withoutFamily,
   type ClassCreation,
   type ClassRenameOutcome,
+  type FontCatalogue,
   type FontFaceUpload,
   type FontsPanelProps,
+  type SiteFamily,
 } from "@nextlyhq/builder/shell";
-import { useUploadMedia } from "@nextlyhq/plugin-sdk/admin";
-import { WEB_FONT_FORMATS } from "nextly/config";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  usePluginClientConfig,
+  useUploadMedia,
+  WEB_FONT_FORMATS,
+} from "@nextlyhq/plugin-sdk/admin";
+import { useCan } from "@nextlyhq/plugin-sdk/client";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
+import { catalogueFileUrl } from "../../site-fonts/contract";
 import {
   classOverrideOf,
   tokenOverrideOf,
   tokenSaveOutcome,
   type SiteStyleData,
 } from "../../site-style";
-import { useSaveSiteStyle } from "../site-style-client";
+import { useFontCatalogueClient, useSaveSiteStyle } from "../site-style-client";
 import { useShown } from "../use-shown";
+
+import { useDesignHeaderSlot } from "./design-panel";
+import { StyleRevisionContext } from "./site-style-history";
+import { PLUGIN_SOURCE } from "./stored-document";
 
 /**
  * The faces the site loads, or `undefined` while that is not yet known.
@@ -139,6 +159,11 @@ export function TokensStudio({
   pending: boolean;
 }): React.JSX.Element {
   const { save } = useSaveSiteStyle();
+  // The server refuses a change to the site style without this grant; the
+  // panel shows the variables read-only rather than offering edits it would
+  // refuse.
+  const mayChange = useCan("update-site-style");
+  const headerActions = useDesignHeaderSlot();
   /*
    * What the CANVAS resolves, which is what the studio has to show and edit.
    *
@@ -211,6 +236,8 @@ export function TokensStudio({
       supplied={baseline}
       issue={issue}
       absence={pending ? "pending" : "failed"}
+      readOnly={!mayChange}
+      headerActions={headerActions}
       onChange={commit}
       /*
        * The set as it is at the moment an import needs it, rather than the one
@@ -461,7 +488,7 @@ export function useClassSurface(
      * against it would compose a library missing everything stored — and the
      * save would then delete those classes rather than add one.
      */
-    create: useCreateClass(writes, configured),
+    create: useHeldWhileReplaying(useCreateClass(writes, configured)),
     /** Which classes are mid-rename, for the manager's no-op check. */
     pendingSlugs,
     /*
@@ -475,8 +502,37 @@ export function useClassSurface(
      * library missing everything stored would save that partial list, which
      * deletes the classes it could not see rather than renaming one.
      */
-    rename: useRenameClass(writes, configured, beginRename, endRename),
+    rename: useHeldWhileReplaying(
+      useRenameClass(writes, configured, beginRename, endRename)
+    ),
   };
+}
+
+/** What a class change made while a style replay settles is told. */
+const REPLAY_SETTLING = {
+  ok: false as const,
+  reason: "A style change is being undone or redone. Try again in a moment.",
+};
+
+/**
+ * A class write, refused while a style undo or redo settles.
+ *
+ * The inspector and the class manager compose a whole library from the one
+ * they hold, which still has what the replay took away until the read
+ * catches up; a write made then would put it back. So the write waits, said
+ * in words, until the replayed value has been read.
+ */
+function useHeldWhileReplaying<Args extends unknown[], Outcome>(
+  write: (...args: Args) => Promise<Outcome>
+): (...args: Args) => Promise<Outcome | typeof REPLAY_SETTLING> {
+  const { settling } = useContext(StyleRevisionContext);
+  const latest = useRef(settling);
+  latest.current = settling;
+  return useCallback(
+    (...args: Args) =>
+      latest.current ? Promise.resolve(REPLAY_SETTLING) : write(...args),
+    [write]
+  );
 }
 
 /**
@@ -685,7 +741,10 @@ function useFontFaceWriter(
   stored: readonly FontFaceDef[] | undefined,
   storedPending: boolean,
   unreadableFonts: readonly string[]
-): (request: FontFaceUpload) => Promise<string | undefined> {
+): {
+  add: (request: FontFaceUpload) => Promise<string | undefined>;
+  remove: (family: SiteFamily) => Promise<string | undefined>;
+} {
   const { save: saveSiteStyle } = useSaveSiteStyle();
   const { mutateAsync: uploadMedia } = useUploadMedia();
   /*
@@ -718,7 +777,7 @@ function useFontFaceWriter(
    */
   const uploaded = useRef<{ file: File; media: UploadedMedia } | null>(null);
 
-  return useCallback(
+  const add = useCallback(
     async (request: FontFaceUpload): Promise<string | undefined> => {
       /*
        * Refused rather than guessed at. `save` replaces the section outright,
@@ -753,6 +812,33 @@ function useFontFaceWriter(
         return `This site stores a font this version cannot read (${unreadableFonts.join(", ")}), and adding one would replace it. Repair or remove that entry first.`;
       }
 
+      /*
+       * Refused from the file's own first bytes BEFORE the upload: the media
+       * pipeline takes far more than fonts, and a file stored here that no
+       * face points at would stay in the media library. The type check after
+       * the upload stays, for what the pipeline settles on.
+       */
+      const signed = await webFontFormatOf(request.file);
+      if (signed === undefined) {
+        return NOT_A_FONT;
+      }
+      // The face judged as the save will judge it, also BEFORE the upload: a
+      // family the site cannot store would otherwise leave a stored file no
+      // face points at.
+      const problems = validateFontFace(
+        {
+          family: request.family,
+          src: [{ url: "/api/media/pending/raw", format: signed }],
+          weight: request.weight,
+          style: request.style,
+          source: { kind: "upload" },
+        },
+        "fonts"
+      );
+      if (problems.length > 0) {
+        return problems.map(problem => problem.message).join(" ");
+      }
+
       const stored_ = await storeOnce(request.file, uploaded, uploadMedia);
       if (typeof stored_ === "string") return stored_;
       const media = stored_;
@@ -770,7 +856,7 @@ function useFontFaceWriter(
        */
       const format = fontFormatFor(media.mimeType);
       if (format === undefined) {
-        return `A font file has to be .woff2 or .woff — this one was stored as ${media.mimeType}.`;
+        return NOT_A_FONT;
       }
 
       const face: FontFaceDef = {
@@ -784,6 +870,8 @@ function useFontFaceWriter(
         src: [{ url: `/api/media/${media.id}/raw`, format }],
         weight: request.weight,
         style: request.style,
+        // So the Fonts tab can say it was uploaded rather than downloaded.
+        source: { kind: "upload" },
       };
 
       const next = [...appendBase(stored, written.current), face];
@@ -807,6 +895,39 @@ function useFontFaceWriter(
     },
     [saveSiteStyle, stored, storedPending, unreadableFonts, uploadMedia]
   );
+
+  /*
+   * Remove a family's stored faces, through the same section write and so
+   * one step of the editor's undo history. The files stay in the media
+   * library: another page or face may still point at them.
+   */
+  const remove = useCallback(
+    async (family: SiteFamily): Promise<string | undefined> => {
+      if (storedPending) {
+        return "This site's fonts are still loading. Try again in a moment.";
+      }
+      if (unreadableFonts.length > 0) {
+        return `This site stores a font this version cannot read (${unreadableFonts.join(", ")}), and removing one would replace it. Repair or remove that entry first.`;
+      }
+      const next = withoutFamily(
+        appendBase(stored, written.current),
+        family.key
+      );
+      const result = await saveSiteStyle("fonts", next);
+      if (result.saved) {
+        // Forgotten here too, or the next upload would put it back.
+        written.current = withoutFamily(written.current, family.key);
+        return undefined;
+      }
+      const reasons = Object.values(result.issues);
+      return reasons.length > 0
+        ? reasons.join(" ")
+        : `${family.family} could not be removed.`;
+    },
+    [saveSiteStyle, stored, storedPending, unreadableFonts]
+  );
+
+  return { add, remove };
 }
 
 /**
@@ -851,15 +972,52 @@ function faceIdentity(face: FontFaceDef): string {
 }
 
 /**
- * The fonts panel, with the writer that adds a face.
+ * The Google Fonts catalogue as the Fonts tab reads it: through the server,
+ * with previews from the file host the server names. `undefined` when the
+ * host turned the catalogue off.
+ */
+function useFontCatalogue(): FontCatalogue | undefined {
+  const config = usePluginClientConfig(PLUGIN_SOURCE);
+  const client = useFontCatalogueClient();
+  // The file host the last read named, which previews are built under. Rows
+  // exist only once a read has answered, so it is set before it is asked.
+  const previewBase = useRef("");
+  const off = config?.fontCatalogue === false;
+  return useMemo(
+    () =>
+      off
+        ? undefined
+        : {
+            load: async (signal: AbortSignal) => {
+              const read = await client.load(signal);
+              previewBase.current = read.previewBase;
+              return read;
+            },
+            previewUrl: (family, weight, style) =>
+              catalogueFileUrl(previewBase.current, {
+                id: family.id,
+                version: "latest",
+                subset: family.defSubset,
+                weight,
+                style,
+              }),
+            add: client.add,
+          },
+    [off, client]
+  );
+}
+
+/**
+ * The Fonts tab, with the writers that add and remove a face and the
+ * catalogue.
  *
- * Its own component rather than another hook in the editor: the editor already
- * carries more state than one screen can hold, and a panel that needs a writer
- * is the thing that should own it. The upload also concerns nobody else on this
- * surface, so the editor gains one element and no new state.
+ * Its own component rather than more hooks in the editor: a panel that needs
+ * writers is the thing that should own them. Shown read-only to a role
+ * without `update-site-style`, which the server would refuse anyway.
  */
 export function FontsPanelWithUpload({
   faces,
+  codeFaces,
   tokens,
   absence,
   onOpenTokens,
@@ -871,17 +1029,19 @@ export function FontsPanelWithUpload({
   storedPending: boolean;
   unreadableFonts: readonly string[];
 }): React.JSX.Element {
-  const addFontFace = useFontFaceWriter(
-    storedFaces,
-    storedPending,
-    unreadableFonts
-  );
+  const mayChange = useCan("update-site-style");
+  const writer = useFontFaceWriter(storedFaces, storedPending, unreadableFonts);
+  const catalogue = useFontCatalogue();
   return (
     <FontsPanel
       absence={absence}
       acceptFiles={FONT_FILE_ACCEPT}
       faces={faces}
-      onAddFace={addFontFace}
+      codeFaces={codeFaces}
+      readOnly={!mayChange}
+      onAddFace={writer.add}
+      onRemoveFamily={writer.remove}
+      catalogue={catalogue}
       onOpenTokens={onOpenTokens}
       tokens={tokens}
     />
@@ -924,6 +1084,33 @@ async function storeOnce(
       ? reason.message
       : "That file could not be uploaded.";
   }
+}
+
+const NOT_A_FONT =
+  "This file isn\u2019t a .woff2 or .woff font, so it wasn\u2019t added.";
+
+/**
+ * The `format()` keyword of the web font a file begins as, by its signature,
+ * read from the same table the upload gate checks the bytes against; nothing
+ * when it begins as none.
+ */
+async function webFontFormatOf(file: File): Promise<string | undefined> {
+  // `FileReader` rather than `Blob.arrayBuffer()`, which not every DOM the
+  // admin runs in provides.
+  const head = await new Promise<Uint8Array>(resolve => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve(
+        reader.result instanceof ArrayBuffer
+          ? new Uint8Array(reader.result)
+          : new Uint8Array(0)
+      );
+    reader.onerror = () => resolve(new Uint8Array(0));
+    reader.readAsArrayBuffer(file.slice(0, 4));
+  });
+  const text = String.fromCharCode(...head);
+  return WEB_FONT_FORMATS.find(format => format.signature === text)
+    ?.formatKeyword;
 }
 
 /**

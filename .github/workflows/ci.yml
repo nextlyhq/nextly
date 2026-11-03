@@ -3127,6 +3127,44 @@ jobs:
           pnpm exec vitest run --dir scripts --reporter=verbose
           scripts/cli-entry.cli.test.mjs
 
+  # `nextly --version`, `nextly --help`, an unknown command and every command's
+  # `--help` answer within 500 ms: the median of 10 runs of the built bin,
+  # started with node directly on this runner (scripts/check-cli-startup.mjs).
+  # The commands come from the program's own list, so a new command's help is
+  # timed by being defined. Linux only: the budget is stated for this runner.
+  cli-startup:
+    name: CLI start-up timing
+    needs: [changes]
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build nextly
+        run: pnpm turbo build --filter=nextly...
+
+      - name: Answer-only invocations within 500 ms
+        run: node scripts/check-cli-startup.mjs
+
   # Keeps one issue open while a job above that does not block a merge is red
   # on `main` (the browser tests, dev reload, the smokes and the scaffold
   # build), and closes it on the first run in which they all pass. They are not in `CI gate`, so a red

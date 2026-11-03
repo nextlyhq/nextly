@@ -62,6 +62,7 @@ import {
   readerStatusWrite,
   statusWritesHeld,
 } from "@admin/components/features/entries/EntryForm/reader-status-write";
+import type { RecoveryPointState } from "@admin/components/features/entries/EntryForm/SaveStateIndicator";
 import { submitDocument } from "@admin/components/features/entries/EntryForm/submit-document";
 import {
   submitBusy,
@@ -1268,6 +1269,18 @@ export function SingleForm({
    * back their outcome so an action run from outside the header can say what
    * it came to.
    */
+  /*
+   * The recovery point, once, for every place the save state is drawn: the
+   * header's chip, and a document view's own through the host.
+   */
+  const recoveryPoint: RecoveryPointState = {
+    enabled: autosaveScope !== null,
+    storedAt: autosave.lastSavedAt,
+    // A recovery point newer than the stored document, still on offer: its
+    // edits are not stored, whatever the form says.
+    pendingOfferAt: recovery.offer?.savedAt ?? null,
+  };
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode: "edit",
     hasStatus,
@@ -1361,6 +1374,9 @@ export function SingleForm({
                  */
                 // Nor beside a document view, which takes the window alone.
                 open={previewOnScreen}
+                // A document view is a full-height screen: the closed split
+                // hands it the content area's height to fill.
+                fill={documentView !== undefined}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -1374,7 +1390,10 @@ export function SingleForm({
                 >
                   {/* A document view replaces the form body and nothing around
                       it, as in the entry editor. */}
-                  <DocumentActionsHost input={documentActionsInput}>
+                  <DocumentActionsHost
+                    input={documentActionsInput}
+                    recovery={recoveryPoint}
+                  >
                     <SaveWithoutPublishingBridge into={saveWithoutPublishing} />
                     {/* Mod+S runs the Save action, so a Single saves by the
                       same rule the entry editor does. The view owns Escape;
@@ -1420,13 +1439,11 @@ export function SingleForm({
                               bar={
                                 <DocumentBar
                                   panelMode={panel.mode}
-                                  autosaveEnabled={autosaveScope !== null}
-                                  // A recovery point newer than the stored document, still on offer:
-                                  // its edits are not stored, whatever the form says.
+                                  autosaveEnabled={recoveryPoint.enabled}
                                   pendingRecoveryAt={
-                                    recovery.offer?.savedAt ?? null
+                                    recoveryPoint.pendingOfferAt
                                   }
-                                  autosaveLastSavedAt={autosave.lastSavedAt}
+                                  autosaveLastSavedAt={recoveryPoint.storedAt}
                                   mode="edit"
                                   hasStatus={hasStatus}
                                   // The status the pill reports, and whether a

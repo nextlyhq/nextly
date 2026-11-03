@@ -81,6 +81,58 @@ sees a block registered that way: nothing can name its module before the plugin 
 the component map cannot import it. In development, the first registration of each such
 block logs a warning naming it. Declare it instead.
 
+## Prop types and their controls
+
+The inspector's Content tab draws one control per prop, from the prop's `type`:
+
+| `type`     | Control                                                                                            |
+| ---------- | -------------------------------------------------------------------------------------------------- |
+| `text`     | A one-line field.                                                                                  |
+| `textarea` | A multi-line field.                                                                                |
+| `url`      | A field for a link.                                                                                |
+| `number`   | A number field.                                                                                    |
+| `checkbox` | A switch.                                                                                          |
+| `select`   | A list of the strings in the prop's `options`.                                                     |
+| `media`    | A button that opens the media library. The prop stores the chosen file's id.                       |
+| `richText` | The admin's rich-text editor.                                                                      |
+| `array`    | A list of items, each drawn from the prop's `item` schema, with Add, Remove, and Move up and down. |
+| `relation` | A search over one collection's entries. The prop stores the chosen entry's id.                     |
+
+Text fields save when you leave them, so one edit is one step in Undo. A prop of any other
+type is listed with a note that it is not editable here.
+
+Give each prop the words an author reads. `label` names the control, and for a
+`checkbox` it says what "on" does. `optionLabels` names a select's options by
+their stored value. Without them a control shows the prop's name and the raw values.
+
+```ts
+props: {
+  alt: { type: "text", label: "Alt text", role: "content" },
+  loading: {
+    type: "select",
+    label: "Loading",
+    options: ["lazy", "eager"],
+    optionLabels: { lazy: "Load when near the screen", eager: "Load immediately" },
+  },
+  decorative: { type: "checkbox", label: "Decorative (no alt text)" },
+},
+```
+
+A `relation` prop names its collection in `relationTo`:
+
+```ts
+props: {
+  post: { type: "relation", relationTo: "posts", role: "content" },
+},
+```
+
+The control searches that collection by its title field and shows each entry's title.
+It reads with the signed-in author's own access: an entry they can't read is never
+offered, and a stored entry they can't read is shown as one they can't open, not by its
+id. Only collections that a registered block's `relation` prop names can be searched
+this way. The page stores the id, so your block's `render` looks the entry up when it
+draws.
+
 ## Give a block its own inspector
 
 By default a block's inspector is generated from its `props`. To draw your own, name a

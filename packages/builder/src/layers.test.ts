@@ -19,6 +19,7 @@ import {
 
 import {
   ancestorIds,
+  componentTitles,
   filterLayers,
   layerLabel,
   layersOf,
@@ -113,6 +114,81 @@ describe("layerLabel", () => {
     expect(
       layerLabel(node("b", "acme/hero-banner", { name: "Top" }), lookup)
     ).toBe("Top");
+  });
+});
+
+describe("a component placement's name", () => {
+  // A placement is one node of the engine's own type, so the type says only
+  // that it IS a placement. What the author placed is the component, which
+  // only the library can name.
+  const placement = (
+    id: string,
+    componentId: unknown,
+    extra: Partial<BlockNode> = {}
+  ) =>
+    node(id, "nextly/component-instance", { props: { componentId }, ...extra });
+  const titles = componentTitles([
+    { id: "cmp-hero", title: "Hero banner" },
+    { id: "cmp-blank", title: "   " },
+  ]);
+
+  it("is the component's title", () => {
+    expect(layerLabel(placement("a", "cmp-hero"), undefined, titles)).toBe(
+      "Hero banner"
+    );
+  });
+
+  it("is the name the author gave the placement, over the title", () => {
+    expect(
+      layerLabel(
+        placement("a", "cmp-hero", { name: "Top banner" }),
+        undefined,
+        titles
+      )
+    ).toBe("Top banner");
+  });
+
+  it('is "Component" when nothing names the component', () => {
+    // Not the type humanised: "Component instance" names the engine's
+    // mechanism, which is not a word an author used for anything.
+    expect(layerLabel(placement("a", "cmp-gone"), undefined, titles)).toBe(
+      "Component"
+    );
+    expect(layerLabel(placement("b", "cmp-blank"), undefined, titles)).toBe(
+      "Component"
+    );
+    expect(layerLabel(placement("c", "cmp-hero"))).toBe("Component");
+    // A stored id that is not a string reaches no lookup.
+    expect(layerLabel(placement("d", 42), undefined, titles)).toBe("Component");
+  });
+
+  it("reads the same in the tree and the trail", () => {
+    register();
+    const document = documentOf([
+      node("box", "core/box", {
+        slots: { children: [placement("a", "cmp-hero")] },
+      }),
+    ]);
+
+    expect(layersOf(document, titles)[0].children[0].label).toBe("Hero banner");
+    expect(pathTo(document, "a", titles).map(row => row.label)).toEqual([
+      "Box",
+      "Hero banner",
+    ]);
+  });
+
+  it("names the placement holding a lock by its title", () => {
+    register();
+    const document = documentOf([
+      placement("a", "cmp-hero", {
+        locked: true,
+        slots: { children: [node("t", "core/text")] },
+      }),
+    ]);
+
+    expect(layersOf(document, titles)[0].children[0].lockedBy).toBe(
+      "Hero banner"
+    );
   });
 });
 
@@ -307,5 +383,42 @@ describe("filterLayers", () => {
 
   it("returns nothing when nothing matches", () => {
     expect(filterLayers(tree(), "zzz").roots).toEqual([]);
+  });
+});
+
+describe("a lock in the tree", () => {
+  it("marks the rows inside a locked block with the name of the block that holds it", () => {
+    register();
+    const rows = layersOf(
+      documentOf([
+        node("hero", "core/heading", {
+          locked: true,
+          name: "Hero",
+          slots: {
+            children: [
+              node("inner", "core/heading", {
+                locked: true,
+                name: "Inner",
+                slots: { children: [node("deep", "core/heading")] },
+              }),
+            ],
+          },
+        }),
+        node("free", "core/heading"),
+      ])
+    );
+    const [hero, free] = rows;
+    const inner = hero?.children[0];
+    // A row locked itself says so and is held by nothing; the nearest lock
+    // above names a row that is not; a row nothing covers carries neither.
+    expect(hero).toMatchObject({ locked: true });
+    expect(hero?.lockedBy).toBeUndefined();
+    expect(inner).toMatchObject({ locked: true });
+    expect(inner?.lockedBy).toBeUndefined();
+    expect(inner?.children[0]).toMatchObject({
+      locked: false,
+      lockedBy: "Inner",
+    });
+    expect(free?.lockedBy).toBeUndefined();
   });
 });

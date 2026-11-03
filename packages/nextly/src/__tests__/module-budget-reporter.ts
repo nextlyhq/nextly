@@ -103,7 +103,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 72, tailMeanModules: 1_291 };
+export const BUDGET = { heavyFiles: 63, tailMeanModules: 1_291 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
@@ -448,6 +448,10 @@ export default class ModuleBudgetReporter implements Reporter {
           "set JUDGED_PROJECT in src/__tests__/module-budget-reporter.ts to its name"
       );
     }
+    const judgedRoot = testModules.find(m => m.project.name === JUDGED_PROJECT)
+      ?.project.config.root;
+    const leftover = judgedRoot ? leftoverMigrations(judgedRoot) : undefined;
+    if (leftover) return fail(leftover);
     const counted = this.recordedCounts(testModules);
     if (typeof counted === "string") return fail(counted);
     this.report(
@@ -668,6 +672,26 @@ function chainFromTest(
 interface Counted {
   module: TestModule;
   count: number;
+}
+
+/**
+ * Why the run cannot be measured when the package holds a migrations folder,
+ * or undefined when it holds none.
+ *
+ * A development boot loads the migrate command when the app's migrations
+ * folder exists, and under the test runner the app is this package, so a
+ * folder an earlier run left in it (nothing in it is tracked) adds that
+ * command's modules to every file that boots: measured, one file went from
+ * 932 to 1,258. The counts would then judge the folder rather than the code.
+ */
+export function leftoverMigrations(root: string): string | undefined {
+  const dir = join(root, "src", "db", "migrations");
+  if (!existsSync(dir)) return undefined;
+  return (
+    `module budget not measured: ${dir} exists. Remove it (nothing under ` +
+    "src/db is tracked); a run that left it wrote there, and a boot that " +
+    "finds it loads the migrate command, so every count would read high."
+  );
 }
 
 /** Fails the run with `message`, which is why it failed. */

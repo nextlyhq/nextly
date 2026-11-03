@@ -23,6 +23,11 @@
 
 export { BuilderShell } from "./builder-shell";
 export type { BuilderShellProps } from "./builder-shell";
+/**
+ * The shell's preferences kept per signed-in user, for a host that knows who
+ * is signed in: pass it as `store`. @experimental
+ */
+export { userPreferenceStore } from "./shell-state";
 
 /**
  * The compiled cascade behind the page, for chrome that names where a value
@@ -53,7 +58,7 @@ export type { BuilderShellProps } from "./builder-shell";
  * A pure function over a document, so it crosses this entry carrying no state
  * and no React.
  */
-export { selectionIsInspectable } from "./inspector";
+export { lockViewOf, selectionIsInspectable } from "./inspector";
 export { pageStyleTrace } from "./style-trace";
 
 /**
@@ -86,7 +91,33 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  * from a server module while the writer lives behind the boundary — two halves
  * of one contract that could then be versioned apart.
  */
-export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
+export {
+  CANVAS_ROOT_CLASS,
+  Canvas,
+  DropRefusal,
+  nodeIdFromEvent,
+} from "./canvas";
+
+/**
+ * @experimental The frame the canvas is drawn in, and how the code around the
+ * canvas learns about it.
+ *
+ * `CanvasFrame` is both the component and the type `useCanvasFrame` answers
+ * with: what the frame is, its document and window, its painted scale and
+ * viewport, and the point mapping between it and the editor. The provider
+ * goes ABOVE the editor's shell, so the panels, the toolbar and the keys
+ * outside the canvas see the frame the canvas registers into it.
+ *
+ * `CanvasMarks` draws the selection and the drop container over the page.
+ */
+export {
+  CanvasFrame,
+  CANVAS_FRAME_TITLE_PREFIX,
+  canvasFrameTitle,
+} from "./canvas-frame";
+export type { CanvasFrameProps } from "./canvas-frame";
+export { CanvasFrameProvider, useCanvasFrame } from "./canvas-frame-context";
+export { CanvasMarks } from "./canvas-marks";
 
 /**
  * @experimental Hold the editor's shortcuts while something modal is over it.
@@ -103,7 +134,10 @@ export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
  * Alt+Arrow reach the page behind the dialog.
  */
 export { useModalKeyboardHold } from "./modal-keyboard-hold";
-export type { CanvasPreview, CanvasProps } from "./canvas";
+export type { CanvasProps } from "./canvas";
+// The regions of a page's Layout, drawn locked around the page on the canvas.
+export type { CanvasRegion } from "./canvas-regions";
+export { REGION_ATTRIBUTE } from "./canvas-regions";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -134,6 +168,13 @@ export type {
   BlockInspectorResolver,
   InspectorPanelProps,
 } from "./inspector-panel";
+// What a host tells the inspector about the component it edits, beside it.
+export type { ComponentFieldsHost } from "./component-fields";
+// The banner over a component's own view: its name, its reach, and Back.
+export { ComponentBanner } from "./component-banner";
+export type { ComponentBannerProps } from "./component-banner";
+// And about its variants: how many placements chose one, for the delete dialog.
+export type { ComponentVariantsHost, VariantUse } from "./component-variants";
 
 /**
  * The Style half of the same inspector.
@@ -149,6 +190,8 @@ export type { StyleInspectorPanelProps } from "./style-inspector-panel";
 
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps, LibraryTierState } from "./insert-panel";
+export { ComponentsPanel } from "./components-panel";
+export type { ComponentsPanelProps } from "./components-panel";
 // The shape a host hands the panel for the pattern tier. Published beside the
 // panel because supplying `patterns` is impossible without it: a caller loads
 // rows from a plugin's collection and has to know which fields the palette
@@ -204,6 +247,7 @@ export {
   editedBreakpointAtWidth,
   editingBreakpointOf,
   offeredTiers,
+  previewHeight,
   previewWidth,
   selectableTiers,
   widthForBreakpoint,
@@ -230,6 +274,7 @@ export type {
   BlockActions,
   BlockKeyboardActionsOptions,
   BlockKeyboardActionsResult,
+  ComponentVerbsHost,
 } from "./keyboard-actions";
 
 /**
@@ -316,6 +361,23 @@ export { MAX_HISTORY, useEditorState } from "./editor-state";
 export type { EditorState, UseEditorStateArgs } from "./editor-state";
 
 /**
+ * Why `EditorState.lockRefusalFor` refuses an edit: a slot lock a block
+ * declares, or a block an author locked in Layers. The answer is a union, and
+ * `isLayersLockFacts` tells the two apart: a Layers lock names the locked
+ * block (`label`, `relation`, `verb`), a slot lock names its holder
+ * (`holderType`, `lock`). `lockRefusalWording` words either.
+ */
+export {
+  isLayersLockFacts,
+  lockRefusalWording,
+  type LayersLockRefusalFacts,
+  type LockedRelation,
+  type LockedVerb,
+  type LockRefusalFacts,
+  type SlotLockRefusalFacts,
+} from "./lock-refusal";
+
+/**
  * Dragging blocks on the canvas, behind the same client banner: the hook holds
  * a gesture and the indicator draws its answer.
  *
@@ -352,7 +414,22 @@ export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
  * never fetch.
  */
 export { useInlineEditing } from "./use-inline-editing";
+/**
+ * The registry an inspector rich-text field holds its open passage in, so the
+ * host's `useInlineEditing` finishes it before the document is stored.
+ * Made once per editor and lent to both the inspector and the inline editing.
+ *
+ * @experimental
+ */
+export { createOpenPassages } from "./open-passages";
+export type { OpenPassages } from "./open-passages";
 export type { UseInlineEditingResult } from "./use-inline-editing";
+/**
+ * What a host says when a double-click lands on text a component does not
+ * expose: the hook selects the placement and hands the host its id, and the
+ * host reads the placement with `inspectInstance` against its own library.
+ */
+export { inspectInstance, partOfComponentSentence } from "./instance-inspector";
 /**
  * What finishing an inline edit did.
  *
@@ -435,7 +512,7 @@ export type {
  * document and ships from the root entry.
  */
 export { LayersPanel } from "./layers-panel";
-export type { LayersPanelProps } from "./layers-panel";
+export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
 /*
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
@@ -444,6 +521,12 @@ export { TokensPanel } from "./tokens-panel";
 export type { TokensPanelProps } from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
+/*
+ * The editor's words, spelled once, for every surface a host draws beside the
+ * shell's own: a panel it mounts names its places with these.
+ */
+export { EDITOR_WORDS } from "./editor-words";
+export type { EditorWord } from "./editor-words";
 /*
  * The two class surfaces, and the rules both answer from.
  *
@@ -504,20 +587,39 @@ export type {
 } from "./class-library";
 
 /**
- * The fonts panel, and the rules it draws from.
+ * The Design panel's Fonts tab, and the rules it draws from.
  *
- * A reader over the site's faces and its `fontFamily` tokens rather than an
- * editor: creating and renaming those tokens belongs to the tokens studio, and
- * the question this answers — whether a family a token names will actually
- * render — needs both lists at once, which is why neither the studio nor the
- * inspector can ask it.
+ * It lists the site's fonts and font variables, adds a font by uploading a
+ * file or through the host's Google Fonts catalogue, and removes one. Font
+ * variables are listed here and changed in Variables.
+ *
+ * @experimental The catalogue's shapes may change while the feature settles.
  */
 export { FontsPanel } from "./fonts-panel";
-export type { FontsPanelProps, FontFaceUpload } from "./fonts-panel";
-export { fontTokenRows, readStack, rowsNeedingAttention } from "./font-library";
+export type {
+  CatalogueAddRequest,
+  CatalogueFamilyView,
+  FontCatalogue,
+  FontsPanelProps,
+  FontFaceUpload,
+} from "./fonts-panel";
+export {
+  fontTokenRows,
+  readStack,
+  rowsNeedingAttention,
+  withoutFamily,
+} from "./font-library";
 export type {
   FamilyReading,
   FamilySource,
   FontTokenRow,
+  SiteFamily,
   StackReading,
 } from "./font-library";
+
+/**
+ * Which values each placement of a new component may change: the picker the
+ * host's "Save as component" and "Convert to component" forms draw.
+ */
+export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
+export type { ExposurePickerProps } from "./exposure-picker";

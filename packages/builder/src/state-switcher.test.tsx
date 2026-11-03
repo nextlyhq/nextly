@@ -14,7 +14,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
-import type { NodeStyles } from "@nextlyhq/blocks-engine";
+import { BASE_BREAKPOINT, type NodeStyles } from "@nextlyhq/blocks-engine";
 
 import { StateSwitcher } from "./state-switcher";
 import { stateHasOwnValues } from "./style-values";
@@ -341,7 +341,7 @@ describe("which states report that they carry values", () => {
     expect(
       screen.getByRole("radio", { name: /Hover.*has styles/ })
     ).toBeTruthy();
-    expect(screen.queryByRole("radio", { name: /Focused.*has styles/ })).toBe(
+    expect(screen.queryByRole("radio", { name: /Focus.*has styles/ })).toBe(
       null
     );
   });
@@ -366,9 +366,9 @@ describe("choosing a state", () => {
     render(<StateSwitcher state="base" onSelect={vi.fn()} />);
 
     expect(screen.getAllByRole("radio").map(el => el.textContent)).toEqual([
-      "None",
+      "Normal",
       "Hover",
-      "Focused",
+      "Focus",
       "Pressed",
     ]);
   });
@@ -407,6 +407,26 @@ describe("choosing a state", () => {
       .filter(el => el.getAttribute("tabindex") === "0");
 
     expect(stops).toHaveLength(1);
-    expect(stops[0]?.textContent).toBe("Focused");
+    expect(stops[0]?.textContent).toBe("Focus");
+  });
+});
+
+describe("the labels, over the stored state keys", () => {
+  it.each([
+    ["base", "Normal"],
+    ["hover", "Hover"],
+    ["focus", "Focus"],
+    ["active", "Pressed"],
+  ] as const)("shows a document stored with %s under %s", (state, label) => {
+    // The keys are what documents store, and they do not change: only the
+    // words over them do, so a page saved before the rename reads the same.
+    const styles = {
+      [state]: { [BASE_BREAKPOINT]: { opacity: 0.5 } },
+    } as NodeStyles;
+    render(<StateSwitcher state={state} onSelect={vi.fn()} styles={styles} />);
+
+    const selected = screen.getByRole("radio", { checked: true });
+    // Exact, so "Focused" cannot pass for "Focus".
+    expect(selected.textContent).toBe(label);
   });
 });

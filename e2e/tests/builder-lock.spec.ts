@@ -15,6 +15,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { freeDocument, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { canvasFrame } from "./support/canvas-frame";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
 import {
@@ -34,7 +35,7 @@ function heading(id: string, text: string) {
 }
 
 function block(page: Page, id: string) {
-  return page.locator(`.nx-canvas [data-nx-node="${id}"]`).first();
+  return canvasFrame(page).locator(`.nx-canvas [data-nx-node="${id}"]`).first();
 }
 
 /** The homepage, as the document-lock route names it. */
