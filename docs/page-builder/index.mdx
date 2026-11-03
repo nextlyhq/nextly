@@ -322,6 +322,10 @@ A loop always sends a sort, so a list with none comes back in id order. If the r
 a loop's stored sort (a field since removed, or one the public may not read), the loop lists in
 id order instead of going empty.
 
+A provider you wrote yourself, for `PageRenderer` outside a route, now receives `sort` as one
+key or an array of keys, and an empty array for a loop with no sort. Read it as "no sort
+given": `[sort ?? []].flat()` gives the keys either way.
+
 The reader is `createPublicReader` (from `nextly/runtime`, `@experimental`), which you can also
 call yourself over a Nextly instance. It takes a list's query as data and fixes everything that decides who sees what:
 
