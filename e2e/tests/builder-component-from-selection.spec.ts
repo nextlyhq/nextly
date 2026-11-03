@@ -112,9 +112,13 @@ test.describe("making a component from a selection", () => {
 
     await clickBlock(page, "hero-title");
     await page.getByRole("button", { name: "More actions" }).click();
-    await page.getByRole("menuitem", { name: /^Convert to component/ }).click();
+    // One item for both ways; the dialog opens on replacing the blocks.
+    await expect(
+      page.getByRole("menuitem", { name: /^(Save as|Convert to) component/ })
+    ).toHaveCount(0);
+    await page.getByRole("menuitem", { name: /^Turn into component/ }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Convert to component" });
+    const dialog = page.getByRole("dialog", { name: "Turn into component" });
     await expect(dialog).toBeVisible();
     await expect(
       dialog.getByText("Checking what this will change…")
@@ -123,7 +127,7 @@ test.describe("making a component from a selection", () => {
     // The heading's text, offered to every placement, named for the author.
     await dialog.getByRole("checkbox", { name: "Text" }).click();
     await dialog.getByLabel(/Name placements see for Text/).fill("Headline");
-    await dialog.getByRole("button", { name: "Convert" }).click();
+    await dialog.getByRole("button", { name: "Turn into component" }).click();
     await expect(dialog).toBeHidden({ timeout: 30_000 });
 
     // The heading is now drawn through a placement: the same words, and no
@@ -169,7 +173,7 @@ test.describe("making a component from a selection", () => {
     ]);
   });
 
-  test("saves from the context menu and leaves the page as it was", async ({
+  test("saves a copy from the context menu, keeping the originals, and leaves the page as it was", async ({
     page,
   }) => {
     const tag = `${Date.now()}`;
@@ -178,10 +182,14 @@ test.describe("making a component from a selection", () => {
 
     await clickBlock(page, "hero-body");
     await (await block(page, "hero-body")).click({ button: "right" });
-    await page.getByRole("menuitem", { name: /^Save as component/ }).click();
+    await page.getByRole("menuitem", { name: /^Turn into component/ }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Save as component" });
+    const dialog = page.getByRole("dialog", { name: "Turn into component" });
     await expect(dialog).toBeVisible();
+    // Keeping the originals is the save: the page is left as it was.
+    await dialog
+      .getByRole("checkbox", { name: "Keep the original blocks on this page" })
+      .click();
     await expect(
       dialog.getByText("This page is not changed.", { exact: false })
     ).toBeVisible();

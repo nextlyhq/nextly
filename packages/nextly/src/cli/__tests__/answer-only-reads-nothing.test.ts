@@ -20,6 +20,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -50,7 +51,10 @@ let readable: string;
 let runs = 0;
 
 beforeAll(() => {
-  scratch = mkdtempSync(join(tmpdir(), "nextly-answer-"));
+  // The real path, so the folders the assertions name are the ones the probe
+  // records: on macOS the temp directory is a link (`/var` to `/private/var`),
+  // and a process run in it reports where the link leads.
+  scratch = realpathSync(mkdtempSync(join(tmpdir(), "nextly-answer-")));
   empty = join(scratch, "empty");
   mkdirSync(empty);
   broken = join(scratch, "broken");

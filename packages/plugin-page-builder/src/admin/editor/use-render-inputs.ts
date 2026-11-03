@@ -58,6 +58,7 @@ import { readSiteStyleRecord } from "../../site-style-record";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 
+import { useSiteCanvas, type SiteCanvas } from "./site-canvas";
 import {
   useBreakpointWriter,
   useClassSurface,
@@ -781,7 +782,8 @@ function useStyleReadings({
  * Each part reads the ones before it, so they are asked in this order and
  * handed on whole rather than re-derived: the context, the widths sized from
  * it, the state shown, the element and the drag, and the readings off all of
- * them.
+ * them. Where the page is drawn — the site's canvas route or the editor's
+ * blank page — reads only the plugin's config.
  */
 export function useCanvasInputs(
   mount: EditorMount,
@@ -798,7 +800,15 @@ export function useCanvasInputs(
     ...viewport,
     ...styleState,
   });
-  return { ...render, ...viewport, ...styleState, ...wiring, ...readings };
+  const site = useSiteCanvas(mount.clientConfig);
+  return {
+    ...render,
+    ...viewport,
+    ...styleState,
+    ...wiring,
+    ...readings,
+    ...site,
+  };
 }
 
 /**
@@ -810,4 +820,5 @@ export type CanvasInputs = CanvasRender &
   CanvasViewport &
   ShownStyleState &
   CanvasWiring &
-  StyleReadings;
+  StyleReadings &
+  SiteCanvas;

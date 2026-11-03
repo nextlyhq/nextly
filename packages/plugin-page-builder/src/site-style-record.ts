@@ -30,6 +30,7 @@ import {
   emitTokenBlocks,
   isPlainRecord,
   isUsableNamedClass,
+  namedClassesRead,
   newStyleIssueBudget,
   resolveSiteTokens,
   tokenLabelIssue,
@@ -646,8 +647,8 @@ function mergedLibraryIssues(
   // The cap is applied BEFORE resolution, as an array prefix on the whole
   // library, so it is applied that way here too.
   const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
-  const before = renderedIds(policy.defaults?.classes ?? []);
-  const after = renderedIds(merged);
+  const before = referableClassIds(policy.defaults?.classes ?? []);
+  const after = referableClassIds(merged);
 
   const issues: string[] = [];
   // A class the site used to render and no longer does. This write caused it,
@@ -672,13 +673,57 @@ function mergedLibraryIssues(
   return issues;
 }
 
-/** The ids a library actually renders, as the compiler resolves it. */
-function renderedIds(library: readonly NamedClass[]): Set<string> {
-  const read =
-    library.length > MAX_NAMED_CLASSES
-      ? library.slice(0, MAX_NAMED_CLASSES)
-      : library;
-  return new Set(usableNamedClasses(read).map(entry => entry.id));
+/**
+ * The ids a library actually renders, as the compiler resolves it: the part
+ * the compiler reads (its capped prefix), then the ordering and claim rules.
+ * These are also the classes a page may add a reference to.
+ */
+export function referableClassIds(
+  library: readonly NamedClass[]
+): ReadonlySet<string> {
+  return new Set(
+    usableNamedClasses(namedClassesRead(library)).map(entry => entry.id)
+  );
+}
+
+/**
+ * A class entry with its shared-style marks checked: the name an author gave
+ * it and its lock. Each mark that cannot be used adds an issue, which refuses
+ * a write, and is left out of the entry a read keeps.
+ */
+function withUsableMarks(
+  entry: NamedClass,
+  index: number,
+  issues: string[]
+): NamedClass {
+  // Read as unknown: the type states what a usable entry holds, while a
+  // stored one may hold anything under these keys.
+  const record: { readonly label?: unknown; readonly locked?: unknown } = entry;
+  // The name is display text, judged by the engine's one rule for a label, so
+  // a shared style's name and a variable's are held to the same line.
+  const labelIssue = tokenLabelIssue(record.label);
+  // Present or absent, never `false`: one spelling for "unlocked", so a lock
+  // comparison cannot read `false` and absent as a change.
+  const lockUsable = record.locked === undefined || record.locked === true;
+  if (labelIssue !== undefined) {
+    issues.push(
+      `classes[${index}] has a name that cannot be used. ${labelIssue}`
+    );
+  }
+  if (!lockUsable) {
+    issues.push(
+      `classes[${index}] has a lock that cannot be read: it is true while the class is locked, and absent otherwise.`
+    );
+  }
+  if (labelIssue === undefined && lockUsable) return entry;
+  // A read keeps the class and drops only the mark it cannot use; the write
+  // was refused by the issues above.
+  const { label, locked, ...rest } = entry;
+  return {
+    ...rest,
+    ...(labelIssue === undefined && label !== undefined ? { label } : {}),
+    ...(lockUsable && locked !== undefined ? { locked } : {}),
+  };
 }
 
 /**
@@ -741,7 +786,7 @@ export function checkStoredClasses(
     if (!budget.truncated) {
       issues.push(...classValueIssues(entry, index, policy, budget));
     }
-    classes.push(entry);
+    classes.push(withUsableMarks(entry, index, issues));
   });
   issues.push(...mergedLibraryIssues(classes, policy));
   return { value: classes, issues };
