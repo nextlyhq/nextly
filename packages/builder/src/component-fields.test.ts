@@ -186,7 +186,8 @@ describe("exposing a prop", () => {
       type: "select",
     });
     expect(exposeOffer({ type: "number" })).toEqual({
-      reason: expect.stringMatching(/number value/),
+      reason:
+        "Pages can’t set a number value, so this stays the same everywhere it is used.",
     });
   });
 
@@ -322,7 +323,9 @@ describe("removing a field", () => {
         { kind: "field" },
         { count: 3, complete: false }
       ).placements
-    ).toMatch(/placed directly in at least 3 documents\.$/);
+    ).toMatch(
+      /^When you publish this component, every use of it that set this field loses its value\. .*placed directly in at least 3 documents\.$/
+    );
     expect(
       removalSentences(planned, { kind: "field" }, { count: 1, complete: true })
         .placements
@@ -515,13 +518,11 @@ describe("where a field comes from, in plain words", () => {
     expect(fieldSource(doc, field({ nodeId: "gone" }))).toBe("A missing block");
   });
 
-  it("says what a placement does with an exposed slot", () => {
+  it("says what each page does with an exposed slot", () => {
     const slotted = component({
       nodes,
       slots: { body: { label: "Body", nodeId: "b", slot: "inside" } },
     });
-    expect(slotSource(slotted, "body")).toBe(
-      "Button, filled on each placement"
-    );
+    expect(slotSource(slotted, "body")).toBe("Button, filled by each use");
   });
 });

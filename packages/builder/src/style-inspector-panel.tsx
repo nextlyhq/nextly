@@ -44,7 +44,6 @@ import {
   type SiteTokenSet,
   type TokenMode,
   type StyleLeaf,
-  type StyleShape,
   type StyleOrigin,
   type StyleState,
   type StyleSubject,
@@ -71,6 +70,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
   Tooltip,
@@ -96,6 +96,7 @@ import {
   type FontChoices,
 } from "./font-family-field";
 import { IconChoiceField } from "./icon-choice-field";
+import { InheritedValue, useUnsetHint } from "./inherited-value";
 import {
   designIsWritable,
   designReadOnlyReason,
@@ -103,9 +104,12 @@ import {
   lockViewOf,
 } from "./inspector";
 import type { InspectorSectionKey } from "./inspector-sections";
+import { layerLabel } from "./layers";
 import type { BuilderOp } from "./ops";
 import { usePrefersDark } from "./prefers-dark";
+import { radioGroupStep } from "./roving-radios";
 import type { SideOrientation } from "./side-orientation";
+import { stateLabel } from "./state-switcher";
 import {
   alignmentGroupFor,
   drawsIcons,
@@ -127,10 +131,11 @@ import {
   contrastRatioText,
   type ColourToken,
 } from "./style-colour";
-import type {
-  StyleControl,
-  StyleControlKind,
-  StyleControlVariants,
+import {
+  formNamesOf,
+  type StyleControl,
+  type StyleControlKind,
+  type StyleControlVariants,
 } from "./style-controls";
 import {
   fontWeightOptions,
@@ -150,23 +155,27 @@ import {
 } from "./style-inspector";
 import {
   CSS_NUMBER,
+  measurementOf,
   measurementOfText,
   steppedValue,
   toggleOptionsFor,
   toggleShows,
   unitChoicesFor,
+  withDefaultUnit,
   withUnit,
 } from "./style-numeric";
 import {
   breakpointBadge,
   breakpointSource,
+  inheritedProvenance,
   propertiesWriting,
-  styleProvenance,
   type BreakpointBadge,
   type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
 import {
+  isLogicalSide,
+  physicalCornerName,
   physicalSideName,
   sideBoxFor,
   sideOf,
@@ -691,6 +700,10 @@ function StyleInspectorBody({
     state: inspected.state,
     breakpoint: inspected.breakpoint,
     labelOf: id => breakpointLabel(breakpoints, id),
+    nameOf: id => {
+      const node = findNode(editor.document.nodes, id);
+      return node === undefined ? undefined : layerLabel(node);
+    },
   };
   const provenanceOf = provenanceReader({
     cascade,
@@ -1177,6 +1190,7 @@ function SectionFields({
         <StylePropertyFields
           key={`${surroundings.nodeId}:${property.property}`}
           property={property}
+          namesSection={property.property === sectionKey}
           {...surroundings}
         />
       ))}
@@ -1230,6 +1244,13 @@ function spacingRings(
  * hint there is no room for.
  */
 const CompactSides = React.createContext(false);
+
+/**
+ * Whether this field's form toggle is drawn just above it. A single control
+ * there keeps its label for assistive technology and drops the visible copy:
+ * the toggle's row already says the name.
+ */
+const NamedAbove = React.createContext(false);
 
 /**
  * The spacing section as the design draws it: one box, margin the outer ring
@@ -1399,7 +1420,8 @@ function MoreProperties({
  * `margin` is four logical sides and `position` is a scheme, four offsets and a
  * stacking order, so a property is a GROUP of controls rather than a field. The
  * heading is drawn only when there is more than one, because a lone control
- * already carries the property's name.
+ * already carries the property's name, and not when the section is titled
+ * with it.
  */
 function StylePropertyFields({
   property,
@@ -1414,10 +1436,30 @@ function StylePropertyFields({
   provenanceOf,
   editing,
   onChooseForm,
+  namesSection,
 }: {
   property: InspectedStyleProperty;
+  /**
+   * Whether the property shares its section's name, as `border` does in the
+   * Border section: its heading would say the section's title again.
+   */
+  namesSection: boolean;
 } & StyleFieldSurroundings): React.JSX.Element {
   const many = property.controls.length > 1;
+  const fold = property.offered
+    ? foldedControlFor(property.property)
+    : undefined;
+  const choices = (property.offered ? property.variants : [])
+    // A folded property's root form follows from its value; see
+    // `style-folded.ts`. Its other choices, if any, stay.
+    .filter(
+      variant =>
+        variant.count > 1 && (fold === undefined || variant.path.length > 0)
+    );
+  // A toggle at the root is drawn on a row named for the property, so the
+  // property needs no heading over it as well.
+  const headed =
+    many && !namesSection && !choices.some(choice => choice.path.length === 0);
   /*
    * Whether this property is drawn as a box, and in what order — one decision,
    * settled outside the component. Each side still keeps its own control, so it
@@ -1425,15 +1467,26 @@ function StylePropertyFields({
    * only.
    */
   const box = sideBoxFor(property.controls, orientation);
-  const fold = property.offered
-    ? foldedControlFor(property.property)
-    : undefined;
+  const { above, before, toggled } = placeChoices(choices, box.boxed);
+  const toggle = (variant: StyleControlVariants) => (
+    <FormChoice
+      key={variant.path.join(".")}
+      property={property}
+      variant={variant}
+      nodeId={nodeId}
+      state={state}
+      breakpoint={breakpoint}
+      editor={editor}
+      policy={policy}
+      onChooseForm={onChooseForm}
+    />
+  );
   return (
     <div
       className="nx-style-inspector__property"
       data-property={property.property}
     >
-      {many ? (
+      {headed ? (
         <p
           className="nx-style-inspector__property-label"
           title={property.summary}
@@ -1457,26 +1510,7 @@ function StylePropertyFields({
         the value itself is the honest way to remove it, and it is already
         there.
       */}
-      {(property.offered ? property.variants : [])
-        // A folded property's root form follows from its value; see
-        // `style-folded.ts`. Its other choices, if any, stay.
-        .filter(
-          variant =>
-            variant.count > 1 && (fold === undefined || variant.path.length > 0)
-        )
-        .map(variant => (
-          <FormChoice
-            key={variant.path.join(".")}
-            property={property}
-            variant={variant}
-            nodeId={nodeId}
-            state={state}
-            breakpoint={breakpoint}
-            editor={editor}
-            policy={policy}
-            onChooseForm={onChooseForm}
-          />
-        ))}
+      {above.map(toggle)}
       {property.offered ? null : (
         <p className="nx-inspector__note" data-not-offered={property.property}>
           This block no longer offers {property.label}. The value is still on
@@ -1504,7 +1538,7 @@ function StylePropertyFields({
         >
           <SideBoxFrame box={box}>
             {box.controls.map(control => (
-              <StyleControlField
+              <React.Fragment
                 // The ADDRESS, not just the position: a host switching state or
                 // breakpoint leaves this field mounted, and where the old and new
                 // addresses hold the same value — both unset, most often — the
@@ -1516,32 +1550,90 @@ function StylePropertyFields({
                   property.property,
                   ...control.path,
                 ].join(".")}
-                control={control}
-                side={sideOf(box, control)}
-                label={
-                  many
-                    ? fieldLabel(control.path[control.path.length - 1] ?? "")
-                    : property.label
-                }
-                summary={many ? undefined : property.summary}
-                propertyLabel={property.label}
-                clearOnly={!property.offered || control.withheld}
-                nodeId={nodeId}
-                state={state}
-                breakpoint={breakpoint}
-                editor={editor}
-                policy={policy}
-                tokens={tokens}
-                prefersDark={prefersDark}
-                provenanceOf={provenanceOf}
-                editing={editing}
-              />
+              >
+                {before(control.path).map(toggle)}
+                <NamedAbove.Provider
+                  value={toggled.includes(control.path.join("."))}
+                >
+                  <StyleControlField
+                    control={control}
+                    side={sideOf(box, control)}
+                    label={
+                      many
+                        ? positionLabel(control, orientation)
+                        : property.label
+                    }
+                    summary={many ? undefined : property.summary}
+                    propertyLabel={property.label}
+                    clearOnly={!property.offered || control.withheld}
+                    nodeId={nodeId}
+                    state={state}
+                    breakpoint={breakpoint}
+                    editor={editor}
+                    policy={policy}
+                    tokens={tokens}
+                    prefersDark={prefersDark}
+                    provenanceOf={provenanceOf}
+                    editing={editing}
+                  />
+                </NamedAbove.Provider>
+              </React.Fragment>
             ))}
           </SideBoxFrame>
         </FoldedUnion.Provider>
       </AlignmentFlow.Provider>
     </div>
   );
+}
+
+/**
+ * Where each form toggle is drawn. A nested form's toggle sits just above its
+ * own control where the controls are a list; a box places its sides itself,
+ * so its toggles stay above it. Only a control with its toggle just above
+ * drops its own visible name (`toggled`, by path).
+ */
+function placeChoices(
+  choices: readonly StyleControlVariants[],
+  boxed: boolean
+): {
+  above: readonly StyleControlVariants[];
+  before: (path: readonly string[]) => readonly StyleControlVariants[];
+  toggled: readonly string[];
+} {
+  const inline = boxed ? [] : choices.filter(c => c.path.length > 0);
+  const above = choices.filter(choice => !inline.includes(choice));
+  const toggled = [
+    ...above.filter(choice => choice.path.length === 0),
+    ...inline,
+  ].map(choice => choice.path.join("."));
+  return {
+    above,
+    before: path =>
+      inline.filter(choice => choice.path.join(".") === path.join(".")),
+    toggled,
+  };
+}
+
+/**
+ * A control's name within its property: a side or a corner in plain words
+ * ("Top", "Bottom left"), as the element's measured axes place it, rather
+ * than CSS's logical words ("Block start", "End start"); any other position
+ * by its key. Logical until the canvas has said which way the element runs:
+ * on a right-to-left or vertical page a guessed "Left" would be wrong, and
+ * the logical word is true either way.
+ */
+function positionLabel(
+  control: StyleControl,
+  orientation: SideOrientation | undefined
+): string {
+  const key = control.path[control.path.length - 1] ?? "";
+  if (orientation === undefined) return fieldLabel(key);
+  const plain =
+    (isLogicalSide(key) ? physicalSideName(key, orientation) : undefined) ??
+    physicalCornerName(key, orientation);
+  return plain === undefined
+    ? fieldLabel(key)
+    : plain.charAt(0).toUpperCase() + plain.slice(1);
 }
 
 /** How an author says which form they mean to write a value in. */
@@ -1557,29 +1649,10 @@ function formKey(property: string, path: readonly string[]): string {
 }
 
 /**
- * What each form is called, from the arm's own shape kind.
- *
- * The catalog gives arms no names, so their shape kind is the most specific
- * thing it says about them — and "Form 1 / Form 2" tells an author nothing
- * about which is which. Partial for the same reason the placeholders are: this
- * is a label, so a kind this build has not learned about gets the kind itself
- * rather than a compile error.
- */
-const FORM_LABEL: Partial<Record<StyleShape["kind"], string>> = {
-  dimension: "Length",
-  number: "Number",
-  keyword: "Keyword",
-  color: "Colour",
-  cssValue: "Custom",
-  url: "URL",
-  logicalSides: "Per side",
-  logicalCorners: "Per corner",
-  object: "Fields",
-  union: "Mixed",
-};
-
-/**
- * The choice of form at one union position.
+ * The choice of form at one union position: a toggle of its forms, named in
+ * plain words ("All | Corners", "Number | Auto"), on a row named for the
+ * property, where a menu labelled "Border radius form" put an internal word in
+ * front of authors.
  *
  * Choosing a form while a value is stored CLEARS it. The two forms hold
  * different things — one radius is not four corners — so there is nothing to
@@ -1606,10 +1679,10 @@ function FormChoice({
   policy: StylePolicy | undefined;
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
-  const id = React.useId();
-  const choose = (raw: string) => {
-    const arm = Number(raw);
-    if (!Number.isInteger(arm)) return;
+  const labelId = React.useId();
+  const radios = React.useRef<(HTMLButtonElement | null)[]>([]);
+  const choose = (arm: number) => {
+    if (arm === variant.active) return;
     onChooseForm(property.property, variant.path, arm);
     const current = findNode(editor.document.nodes, nodeId);
     if (current === undefined) return;
@@ -1632,33 +1705,55 @@ function FormChoice({
     const cleared = batchStyleClearOps([current], address, policy);
     if (cleared.ops.length > 0) editor.applyAll(cleared.ops);
   };
+  // As a radio group's arrow keys do: move and choose together, wrapping.
+  const step = (event: React.KeyboardEvent) => {
+    const delta = radioGroupStep(event.key);
+    if (delta === null) return;
+    event.preventDefault();
+    const next = (variant.active + delta + variant.count) % variant.count;
+    choose(next);
+    radios.current[next]?.focus();
+  };
 
   return (
     <div className="nx-inspector__field" data-form-choice={property.property}>
-      <Label htmlFor={id}>
-        {/*
-          The PROPERTY's name at the root, because a property whose shape is a
-          union at the top draws one control and therefore no heading — so
-          `fontWeight`, `lineHeight` and `fontStyle` would all offer a selector
-          called "Form". Below the root the heading is rendered, so the position
-          is enough to tell them apart.
-        */}
+      {/*
+        The PROPERTY's name at the root, and the position's below it, where the
+        heading names the property: a toggle called "Form" would tell a
+        screen-reader user nothing about which property it changes. Plain text
+        rather than a label, which would forward a click to a radio.
+      */}
+      <p className="nx-inspector__field-name" id={labelId}>
         {variant.path.length === 0
-          ? `${property.label} form`
-          : `${fieldLabel(variant.path[variant.path.length - 1] ?? "")} form`}
-      </Label>
-      <Select value={String(variant.active)} onValueChange={choose}>
-        <SelectTrigger id={id}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {variant.kinds.map((kind, index) => (
-            <SelectItem key={`${index}:${kind}`} value={String(index)}>
-              {FORM_LABEL[kind] ?? kind}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+          ? property.label
+          : fieldLabel(variant.path[variant.path.length - 1] ?? "")}
+      </p>
+      <div
+        className="nx-style-inspector__toggle"
+        role="radiogroup"
+        aria-labelledby={labelId}
+      >
+        {formNamesOf(variant).map((name, index) => {
+          const checked = index === variant.active;
+          return (
+            <button
+              key={`${index}:${name}`}
+              ref={button => {
+                radios.current[index] = button;
+              }}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              // The group's one tab stop is the chosen form.
+              tabIndex={checked ? 0 : -1}
+              onClick={() => choose(index)}
+              onKeyDown={step}
+            >
+              {name}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1723,11 +1818,13 @@ function StyleFieldLabel({
   editing: EditedAddress;
   descendant: string | undefined;
 }): React.JSX.Element {
+  const namedAbove = React.useContext(NamedAbove);
   return (
     <Label
       id={id}
       htmlFor={readOnly || focusOnly ? undefined : htmlFor}
       title={title}
+      data-named-above={namedAbove ? "" : undefined}
       {...(focusOnly && !readOnly
         ? {
             onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
@@ -1745,6 +1842,20 @@ function StyleFieldLabel({
       />
     </Label>
   );
+}
+
+/**
+ * What reaches a control from another tier, shown in it while nothing is set
+ * here. Read from the same answer as the dot, so the two never disagree.
+ */
+function inheritedShown(
+  stored: StyleValue | undefined,
+  answer: ProvenanceAnswer | undefined
+): string | undefined {
+  if (stored !== undefined || answer?.provenance.kind !== "inherited") {
+    return undefined;
+  }
+  return answer.provenance.entry.value;
 }
 
 function StyleControlField({
@@ -1852,6 +1963,7 @@ function StyleControlField({
    * The dot and the action are two readings of one answer, not two answers.
    */
   const answer = provenanceOf(control.leaf);
+  const inherited = inheritedShown(stored, answer);
 
   const readOnly = showsNoField(control, stored, clearOnly);
   const labelId = `${id}-label`;
@@ -1893,20 +2005,22 @@ function StyleControlField({
         editing={editing}
         descendant={control.leaf.descendant}
       />
-      <ControlOrFont
-        id={id}
-        labelledBy={labelId}
-        control={control}
-        stored={stored}
-        actionName={actionName}
-        clearOnly={clearOnly}
-        tokens={tokens}
-        prefersDark={prefersDark}
-        pairedColour={pairedColour}
-        obscuredBy={obscuredBy}
-        describedBy={describedBy}
-        onCommit={commit}
-      />
+      <InheritedValue.Provider value={inherited}>
+        <ControlOrFont
+          id={id}
+          labelledBy={labelId}
+          control={control}
+          stored={stored}
+          actionName={actionName}
+          clearOnly={clearOnly}
+          tokens={tokens}
+          prefersDark={prefersDark}
+          pairedColour={pairedColour}
+          obscuredBy={obscuredBy}
+          describedBy={describedBy}
+          onCommit={commit}
+        />
+      </InheritedValue.Provider>
       <BreakpointAction
         answer={answer}
         label={actionName}
@@ -2040,7 +2154,7 @@ function provenanceReader({
      * of one trace would first disagree at exactly the boundaries the trace
      * exists to settle.
      */
-    const provenance = styleProvenance(query);
+    const provenance = inheritedProvenance(query);
     const badge = breakpointBadge(query, provenance, breakpoints);
     /*
      * Offered only for a tier a canvas can actually be taken to. A declaration
@@ -2141,7 +2255,7 @@ function BreakpointAction({
   if (badge.kind === "authored") {
     return (
       <ResetAction
-        revealed={badge.revealed ?? "unset"}
+        revealed={revealedBy(badge)}
         label={label}
         editing={editing}
         fieldId={fieldId}
@@ -2310,6 +2424,17 @@ export function supersedes(
   );
 }
 
+/**
+ * What a reset reveals, from an authored badge: another tier, nothing, or a
+ * value passed down from an enclosing block or the page, which no tier names.
+ */
+function revealedBy(
+  badge: Extract<BreakpointBadge, { kind: "authored" }>
+): BreakpointSource | "unset" | "unknown" {
+  if (badge.revealed !== undefined) return badge.revealed;
+  return badge.passedDown === true ? "unknown" : "unset";
+}
+
 function ResetAction({
   revealed,
   label,
@@ -2391,7 +2516,9 @@ function JumpAction({
       onClick={onJump}
       aria-label={`Edit ${label} at ${where}, where its value was set`}
     >
-      Go to {where}
+      {/* The source, as the caption beside an inherited value says it, and
+          the way there: one line rather than a caption and a "Go to". */}
+      From {where}
     </button>
   );
 }
@@ -2716,6 +2843,7 @@ function SelectField({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const current = typeof stored === "string" ? stored : "";
+  const hint = useUnsetHint("Not set");
   // The validator accepts a keyword case-insensitively, with surrounding CSS
   // whitespace and escapes, and accepts the CSS-wide keywords everywhere — so
   // a stored `Bold` or `inherit` is live and compiles while matching no item
@@ -2733,7 +2861,7 @@ function SelectField({
           aria-describedby={describedBy}
           aria-invalid={describedBy === undefined ? undefined : true}
         >
-          <SelectValue placeholder="Not set" />
+          <SelectValue placeholder={hint} />
         </SelectTrigger>
         <SelectContent>
           {extra === null ? null : (
@@ -2804,6 +2932,20 @@ function FoldedField({
   );
 }
 
+/**
+ * An inherited value by the name its option carries — `700` as "Bold 700" —
+ * found by the key it would be stored under, so the list and the hint name a
+ * weight the same way. As written when no option holds it.
+ */
+function optionNamed(
+  options: readonly FoldedOption[],
+  written: string
+): string {
+  const number = trimCssWhitespace(written) === "" ? NaN : Number(written);
+  const key = storedKey(Number.isFinite(number) ? number : written);
+  return options.find(option => option.key === key)?.label ?? written;
+}
+
 /** A select over named options, each committing its own stored value. */
 function OptionSelect({
   id,
@@ -2819,6 +2961,9 @@ function OptionSelect({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const current = storedKey(stored) ?? "";
+  const inherited = React.useContext(InheritedValue);
+  const hint =
+    inherited === undefined ? "Not set" : optionNamed(options, inherited);
   return (
     <div className="nx-style-inspector__select">
       <Select
@@ -2833,7 +2978,7 @@ function OptionSelect({
           aria-describedby={describedBy}
           aria-invalid={describedBy === undefined ? undefined : true}
         >
-          <SelectValue placeholder="Not set" />
+          <SelectValue placeholder={hint} />
         </SelectTrigger>
         <SelectContent>
           {options.map(option => (
@@ -2864,6 +3009,7 @@ function LengthOrNumberField({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const { draft, setDraft } = useDraft(stored);
+  const hint = useUnsetHint("1.5, 24px or 150%");
   const commit = () => {
     if (draft === storedText(stored)) return;
     if (onCommit(lineHeightFromText(draft)) === "unchanged") {
@@ -2874,7 +3020,7 @@ function LengthOrNumberField({
     <Input
       id={id}
       value={draft}
-      placeholder="1.5, 24px or 150%"
+      placeholder={hint}
       aria-describedby={describedBy}
       aria-invalid={describedBy === undefined ? undefined : true}
       onChange={event => setDraft(event.target.value)}
@@ -3133,6 +3279,23 @@ function ProvenanceDot({
        * copies in the accessibility tree is the same sentence announced twice,
        * which reads as a stutter rather than as emphasis.
        */}
+      {described.kind === "inherited" && answer?.jump === undefined ? (
+        /*
+         * An inherited value's source stays in sight, under the label: the
+         * value shown greyed in the control is only half an answer without
+         * where it came from. In brief, with the whole sentence on hover for
+         * a caption the row cuts short, and in text on focus below. Not where
+         * the row offers a jump to its source: the jump names it, and goes
+         * there.
+         */
+        <span
+          className="nx-style-inspector__provenance-source"
+          title={described.text}
+          aria-hidden="true"
+        >
+          {described.source}
+        </span>
+      ) : null}
       <span className="nx-style-inspector__provenance-text" aria-hidden="true">
         {described.text}
       </span>
@@ -3151,16 +3314,76 @@ export function describeProvenance(
   provenance: StyleProvenance | undefined,
   editing: EditedAddress,
   controlDescendant?: string
-): { kind: "authored" | "inherited"; text: string } | null {
+):
+  | { kind: "authored"; text: string }
+  | { kind: "inherited"; text: string; source: string }
+  | null {
   if (provenance === undefined) return null;
   if (provenance.kind === "authored") {
     return { kind: "authored", text: "Set here" };
   }
   if (provenance.kind !== "inherited") return null;
+  const { from, entry } = provenance;
   return {
     kind: "inherited",
-    text: `Inherited from ${originName(provenance.from, provenance.entry, editing, controlDescendant)}`,
+    text: `Inherited from ${originName(from, entry, editing, controlDescendant)}`,
+    source: `From ${originBrief(from, entry, editing, controlDescendant)}`,
   };
+}
+
+/**
+ * The same place in brief, for the caption drawn beside an inherited value:
+ * the tier, then each axis that differs, named as the panel names them.
+ *
+ * Built from the same reading as {@link originName}: the control a rule came
+ * through and the axes that differ are asked of the same helpers, so the
+ * caption and the sentence cannot name two different places. Shorter where
+ * the sentence spends words on what the author already knows, the block they
+ * selected, and on qualifiers a caption of one row has no room for.
+ */
+function originBrief(
+  origin: StyleOrigin,
+  entry: StyleTraceEntry,
+  editing: EditedAddress,
+  controlDescendant: string | undefined
+): string {
+  const control = sourceControl(entry, controlDescendant);
+  const ownBlock = origin.kind === "node" && origin.id === editing.nodeId;
+  const parts = [ownBlock ? control : briefSubject(origin, editing)];
+  // Defaults are no breakpoint's to edit, so naming one after them would send
+  // an author to a tier where the value is not.
+  const defaults = origin.kind === "element" || origin.kind === "blockType";
+  if (!defaults && entry.breakpoint !== editing.breakpoint) {
+    parts.push(editing.labelOf(entry.breakpoint));
+  }
+  if (entry.state !== editing.state) parts.push(stateLabel(entry.state));
+  const named = parts.filter(part => part !== undefined);
+  return named.length === 0 ? "this block" : named.join(" · ");
+}
+
+/** {@link originSubject}'s tiers, in the words a one-row caption can hold. */
+function briefSubject(origin: StyleOrigin, editing: EditedAddress): string {
+  switch (origin.kind) {
+    case "class":
+      return `.${origin.slug}`;
+    case "blockType":
+      return origin.type === editing.blockType
+        ? "block defaults"
+        : "enclosing block defaults";
+    case "page":
+      return "the page";
+    // The tag as the HTML tag control shows it, which is where an author
+    // meets it.
+    case "element":
+      return `${origin.tag.toUpperCase()} defaults`;
+    case "node":
+      return enclosingName(editing, origin.id);
+  }
+}
+
+/** An enclosing block as the Layers panel names it, or in general words. */
+function enclosingName(editing: EditedAddress, nodeId: string): string {
+  return editing.nameOf?.(nodeId) ?? "an enclosing block";
 }
 
 /**
@@ -3204,13 +3427,14 @@ function originSubject(
     case "element":
       return `the ${origin.tag} typography baseline`;
     case "node":
-      if (origin.id !== editing.nodeId) return "an enclosing block";
+      if (origin.id !== editing.nodeId)
+        return enclosingName(editing, origin.id);
       return control ?? "this block";
   }
 }
 
 /**
- * The control a declaration came from, when it was not this one.
+ * The label of the control a declaration came from, when it was not this one.
  *
  * `undefined` when the declaration belongs to this control's own address.
  *
@@ -3239,7 +3463,7 @@ function sourceControl(
   if (mine === theirs) return undefined;
   const writers = propertiesWriting(entry.property, entry.descendant);
   if (writers.length !== 1) return undefined;
-  return `the ${fieldLabel(writers[0] ?? "")} control`;
+  return fieldLabel(writers[0] ?? "");
 }
 
 /**
@@ -3302,6 +3526,11 @@ export interface EditedAddress {
   readonly breakpoint: BreakpointId;
   /** A breakpoint's author-facing name, for saying which one a value came from. */
   readonly labelOf: (breakpoint: BreakpointId) => string;
+  /**
+   * A block's name as the Layers panel shows it, for saying which enclosing
+   * block a value came from. Absent, it is "an enclosing block".
+   */
+  readonly nameOf?: (nodeId: string) => string | undefined;
 }
 
 /**
@@ -3329,7 +3558,8 @@ function originName(
   editing: EditedAddress,
   controlDescendant: string | undefined
 ): string {
-  const control = sourceControl(entry, controlDescendant);
+  const label = sourceControl(entry, controlDescendant);
+  const control = label === undefined ? undefined : `the ${label} control`;
   const ownControl = origin.kind === "node" && origin.id === editing.nodeId;
   const parts = [originSubject(origin, editing, control)];
   if (!ownControl && control !== undefined) parts.push(`via ${control}`);
@@ -3788,6 +4018,13 @@ function ColourPicker({
   const superseded = React.useRef(false);
   const [open, setOpen] = React.useState(false);
   const [custom, setCustom] = React.useState(customFirst);
+  // A colour inherited from another tier is painted while none is set here,
+  // and marked so the swatch reads as inherited rather than chosen. Through
+  // the same projection as a stored colour, so a site variable or
+  // `currentcolor`, which resolve against the canvas, leave it unpainted
+  // rather than painted with the panel's own colour.
+  const inherited = React.useContext(InheritedValue);
+  const painted = shown ?? colourHexOf(inherited, undefined);
   return (
     <Popover
       open={open}
@@ -3804,7 +4041,10 @@ function ColourPicker({
     >
       <PopoverTrigger asChild>
         <ColourTrigger
-          shown={shown}
+          shown={painted}
+          data-inherited={
+            shown === undefined && inherited !== undefined ? "" : undefined
+          }
           reference={reference}
           referenceLabel={referenceLabel}
           actionName={actionName}
@@ -3856,7 +4096,9 @@ function ColourPicker({
         <CustomColour
           open={custom}
           onToggle={() => setCustom(was => !was)}
-          shown={shown}
+          // What the swatch paints, an inherited colour included, so a small
+          // adjustment starts from what the author sees.
+          shown={painted}
           unrepresented={unrepresented}
           onColour={onColour}
         />
@@ -4457,7 +4699,15 @@ function NumericField({
   // has no menu to gain a unit from.
   // Not in the spacing box, whose sides take the unit as typed.
   const compact = React.useContext(CompactSides);
-  const showUnits = !compact && units.length > 0 && measurement !== undefined;
+  const unitMenu = useFieldUnit({
+    leaf: control.leaf,
+    stored,
+    draft,
+    setDraft,
+    onCommit,
+  });
+  const { unit, keywords } = unitMenu;
+  const showUnits = !compact && unitMenu.acts;
   // A stored unit the candidate list does not carry — `ch`, or an uppercase
   // `PX` the validator folds — is live and compiles while matching no item, and
   // a controlled select over it renders an EMPTY trigger above a value that is
@@ -4480,9 +4730,16 @@ function NumericField({
         setDraft={setDraft}
         describedBy={describedBy}
         invalid={describedBy !== undefined}
-        onCommit={onCommit}
+        // A bare number takes the unit the field shows: "24" is 24px.
+        onCommit={value => onCommit(withDefaultUnit(control.leaf, value, unit))}
+        // The unit shown in the suffix is left out of the field.
+        {...suffixedText(control, unit, unitMenu.isKeyword, showUnits)}
         onStep={(draft, delta) => {
-          const next = steppedValue(control.leaf, draft, delta);
+          const next = steppedValue(
+            control.leaf,
+            withDefaultUnit(control.leaf, draft, unit) ?? draft,
+            delta
+          );
           // `undefined` means this value cannot be stepped or the result would
           // be refused, so the key does nothing rather than writing a value the
           // document then rejects.
@@ -4499,13 +4756,8 @@ function NumericField({
           // picked, so a unit added and then undone leaves the trigger still
           // displaying it while the draft has none. The draft is the only unit
           // state, and passing `undefined` would give it a second one.
-          value={measurement.unit}
-          onValueChange={unit => {
-            // Composed from the draft, which is what the author is looking at.
-            const next = withUnit(control.leaf, draft, unit);
-            if (next === undefined) return;
-            if (onCommit(next) !== "refused") setDraft(next);
-          }}
+          value={unitMenu.value}
+          onValueChange={unitMenu.choose}
         >
           <SelectTrigger
             className="nx-style-inspector__unit"
@@ -4525,9 +4777,15 @@ function NumericField({
             {extraUnit === null ? null : (
               <SelectItem value={extraUnit}>{extraUnit}</SelectItem>
             )}
-            {units.map(unit => (
-              <SelectItem key={unit} value={unit}>
-                {unit}
+            {units.map(choice => (
+              <SelectItem key={choice} value={choice}>
+                {choice}
+              </SelectItem>
+            ))}
+            {keywords.length === 0 ? null : <SelectSeparator />}
+            {keywords.map(keyword => (
+              <SelectItem key={keyword} value={keyword}>
+                {keyword}
               </SelectItem>
             ))}
           </SelectContent>
@@ -4535,6 +4793,173 @@ function NumericField({
       ) : null}
     </div>
   );
+}
+
+/**
+ * A field's hint while it shows its unit: what an unset value IS where the
+ * property's initial value is a word ("Auto" for a width, a height or an
+ * inset, "None" for a max size), so the hint never reads like a real default;
+ * otherwise the leaf's own hint as a number alone ("16", a border's "1").
+ * Margin allows `auto` but starts at 0, so it keeps a number.
+ */
+function bareNumberHint(control: StyleControl): string {
+  const { leaf } = control;
+  const keywords = leaf.kind === "dimension" ? (leaf.keywords ?? []) : [];
+  const css = leaf.cssProperty;
+  if (keywords.includes("none") && /^max-/.test(css)) return "None";
+  if (keywords.includes("auto") && !/^(margin|padding)/.test(css)) {
+    return "Auto";
+  }
+  return /^-?[\d.]+/.exec(placeholderFor(control))?.[0] ?? "";
+}
+
+/**
+ * Whether a choice in the unit menu can act: on a measurement, a keyword, or
+ * any bare number the commit will give the unit (".5", "1e3" included, by the
+ * same grammar). On an empty field only when what shows there is a
+ * measurement or nothing: an inherited "auto" or "clamp(…)" beside "px"
+ * would read as one value it is not.
+ */
+function unitActs(
+  draft: string,
+  measurement: ReturnType<typeof measurementOfText>,
+  inherited: string | undefined,
+  isKeyword: boolean
+): boolean {
+  const text = trimCssWhitespace(draft);
+  if (text === "") {
+    return (
+      inherited === undefined || measurementOfText(inherited) !== undefined
+    );
+  }
+  return measurement !== undefined || isKeyword || CSS_NUMBER.test(text);
+}
+
+/** The first unit that says one, in order of precedence, else px. */
+function shownUnit(candidates: readonly (string | undefined)[]): string {
+  return candidates.find(candidate => candidate !== undefined) ?? "px";
+}
+
+/**
+ * How the field reads beside its unit suffix: the unit left out of the value
+ * and the hint ("2" beside "rem"), a keyword shown once, in the suffix, and a
+ * hint that says what an unset value is. Nothing when no suffix is shown.
+ */
+function suffixedText(
+  control: StyleControl,
+  unit: string,
+  isKeyword: boolean,
+  shown: boolean
+): { display?: (text: string) => string; fallbackHint?: string } {
+  if (!shown) return {};
+  const fallbackHint = bareNumberHint(control);
+  return {
+    display: isKeyword
+      ? () => ""
+      : text => {
+          // A length in another unit (an inherited "2px" beside a pending
+          // "rem") is not shown beside this one, which would read as one
+          // value it is not; the plain hint takes its place.
+          const other = unitOf(measurementOfText(text));
+          return other !== undefined && other !== unit
+            ? fallbackHint
+            : withoutUnit(text, unit);
+        },
+    fallbackHint,
+  };
+}
+
+/** A measurement's unit, or `undefined` for none or a bare number. */
+function unitOf(
+  measurement: ReturnType<typeof measurementOfText>
+): string | undefined {
+  return measurement === undefined || measurement.unit === ""
+    ? undefined
+    : measurement.unit;
+}
+
+/** A length's text without the unit shown beside it: "2rem" beside "rem" reads "2". */
+function withoutUnit(text: string, unit: string): string {
+  const trimmed = trimCssWhitespace(text);
+  const number = trimmed.slice(0, trimmed.length - unit.length);
+  return trimmed.toLowerCase().endsWith(unit.toLowerCase()) &&
+    CSS_NUMBER.test(number)
+    ? number
+    : text;
+}
+
+/**
+ * The unit a length field shows and a bare number takes: the one the draft
+ * already carries, else the one the author last chose, else the leaf's first
+ * (px). Its keywords, `auto` and the rest, are offered after the units.
+ *
+ * `acts` says whether a choice in the menu can do anything: an empty field,
+ * whose bare number will take the unit shown, one measurement, or one of the
+ * keywords. Over anything else — `calc()`, scientific notation — every choice
+ * would be a no-op, and a control that silently does nothing is worse than
+ * none.
+ */
+function useFieldUnit({
+  leaf,
+  stored,
+  draft,
+  setDraft,
+  onCommit,
+}: {
+  leaf: StyleLeaf;
+  stored: StyleValue | undefined;
+  draft: string;
+  setDraft: (value: string) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): {
+  unit: string;
+  keywords: readonly string[];
+  isKeyword: boolean;
+  acts: boolean;
+  value: string;
+  choose: (choice: string) => void;
+} {
+  const [chosen, setChosen] = React.useState<string | undefined>(undefined);
+  const measurement = measurementOfText(draft);
+  const units = unitChoicesFor(leaf);
+  const keywords = leaf.kind === "dimension" ? (leaf.keywords ?? []) : [];
+  const inherited = React.useContext(InheritedValue);
+  // The unit the draft says, else the one just chosen, else the stored
+  // value's, else the inherited value's, so a new number keeps the unit the
+  // author sees; px only when nothing says another.
+  const unit = shownUnit([
+    unitOf(measurement),
+    chosen,
+    unitOf(measurementOf(stored)),
+    unitOf(inherited === undefined ? undefined : measurementOfText(inherited)),
+    units[0],
+  ]);
+  const isKeyword = keywords.includes(draft);
+  const write = (value: string) => {
+    if (onCommit(value) !== "refused") setDraft(value);
+  };
+  return {
+    unit,
+    keywords,
+    isKeyword,
+    acts:
+      units.length > 0 && unitActs(draft, measurement, inherited, isKeyword),
+    // A unit chosen over a stored keyword shows at once, though nothing is
+    // written until a number is typed.
+    value: isKeyword && chosen === undefined ? draft : unit,
+    choose: choice => {
+      // A keyword is a whole value, written as chosen.
+      if (keywords.includes(choice)) {
+        setChosen(undefined);
+        return write(choice);
+      }
+      setChosen(choice);
+      // Composed from the draft, which is what the author is looking at;
+      // with no number on screen yet, the unit waits for one.
+      const next = withUnit(leaf, draft, choice);
+      if (next !== undefined) write(next);
+    },
+  };
 }
 
 /**
@@ -4554,6 +4979,8 @@ function TextField({
   invalid,
   onCommit,
   onStep,
+  display,
+  fallbackHint,
 }: {
   id: string;
   control: StyleControl;
@@ -4591,9 +5018,20 @@ function TextField({
    * than read from the store, so a step lands on what the author is looking at.
    */
   onStep?: (draft: string, delta: number) => string | null;
+  /**
+   * How the draft and the hint read in the field, where a unit shown beside
+   * it is left out of both ("2" beside "rem"). The draft itself, which is
+   * what commits and steps, is unchanged.
+   */
+  display?: (text: string) => string;
+  /** The hint while nothing applies, in place of the leaf's own. */
+  fallbackHint?: string;
 }): React.JSX.Element {
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
+  const hint = useUnsetHint(
+    compact ? "–" : (fallbackHint ?? placeholderFor(control))
+  );
   const commit = () => {
     if (draft === storedText(stored)) return;
     // CSS whitespace here too, not JavaScript's. `String.prototype.trim` also
@@ -4616,8 +5054,8 @@ function TextField({
   return (
     <Input
       id={id}
-      value={draft}
-      placeholder={compact ? "–" : placeholderFor(control)}
+      value={display === undefined ? draft : display(draft)}
+      placeholder={display === undefined ? hint : display(hint)}
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
@@ -4827,8 +5265,10 @@ const FIXED_PLACEHOLDER: Partial<Record<StyleLeaf["kind"], string>> = {
   // literal here would also be a hardcoded colour, which this repository bans
   // outright — the rule reads source, not intent, and it is right to: a hex in
   // a placeholder is one copy away from a hex in a style.
-  // Short enough to read inside the field rather than cut off mid-word.
-  color: "Name, hex or rgb()",
+  // Short enough to read inside the field beside its swatch at the default
+  // panel width, where "Name, hex or rgb()" was cut off mid-word. rgb() and
+  // the other forms stay valid to type.
+  color: "Name or hex",
   url: "https://…",
 };
 
@@ -4842,6 +5282,8 @@ const FIXED_PLACEHOLDER: Partial<Record<StyleLeaf["kind"], string>> = {
 function dimensionHint(
   leaf: Extract<StyleLeaf, { kind: "dimension" }>
 ): string {
+  // A line's width as a line is usually drawn: "16px" read as a heavy frame.
+  if (/^(border|outline)(-.+)?-width$/.test(leaf.cssProperty)) return "1px";
   return leaf.allowPercentage === true ? "16px or 50%" : "16px";
 }
 

@@ -13,7 +13,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { freeDocument, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { canvasFrame } from "./support/canvas-frame";
 import { EVERY_DIALECT } from "./support/every-dialect";
@@ -158,6 +158,74 @@ test.describe("two editors on one page", { tag: EVERY_DIALECT }, () => {
       await page.getByRole("button", { name: "Take it back" }).click();
       await expect(block(page, "first")).toBeVisible({ timeout: 30_000 });
       await expect(block(page, "second")).toHaveCount(0);
+    } finally {
+      await other.context.close();
+    }
+  });
+
+  test("the builder shows the saved page before it unlocks after a takeover", async ({
+    page,
+    browser,
+    baseURL,
+  }) => {
+    // The builder's editor reads its page once, as it mounts. Unlocked over
+    // the page read while the first person held it, it would go on showing,
+    // and then save, the page from before what they saved.
+    //
+    // The test before this one ends with its second editor holding the page,
+    // and closing their page does not release it.
+    await freeDocument(page.request, "homepage");
+    await openBuilder(page);
+    await expect(block(page, "first")).toBeVisible({ timeout: 30_000 });
+    await claimedBy(page.request, await homepage(page));
+
+    const other = await secondEditor(browser, page, baseURL);
+    try {
+      await arriveAtBuilder(other.page);
+      await expect(
+        other.page.getByText(/is editing this document/)
+      ).toBeVisible({ timeout: 30_000 });
+
+      // The first person saves a page with a section the second never read.
+      const stored = await page.request.patch(HOMEPAGE_API, {
+        data: {
+          layout: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [heading("first", "First"), heading("saved", "Saved")],
+          },
+        },
+      });
+      expect(stored.ok()).toBe(true);
+
+      // The second person's read of the page after the takeover is held, so
+      // the builder is seen still read-only while it is on its way.
+      const read = new RegExp(`${HOMEPAGE_API}(?:\\?|$)`);
+      let release: () => void = () => {};
+      const released = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      await other.page.route(read, async route => {
+        if (route.request().method() !== "GET") return route.continue();
+        await released;
+        await route.continue();
+      });
+      const asked = other.page.waitForRequest(
+        request => request.method() === "GET" && read.test(request.url()),
+        { timeout: 45_000 }
+      );
+
+      await other.page.getByRole("button", { name: "Take over" }).click();
+      await asked;
+      await expect(
+        other.page.getByRole("banner", { name: "Editor actions" })
+      ).toHaveCount(0);
+
+      release();
+      await expect(block(other.page, "saved")).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(block(other.page, "second")).toHaveCount(0);
     } finally {
       await other.context.close();
     }

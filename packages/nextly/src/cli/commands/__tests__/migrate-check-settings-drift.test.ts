@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig, text } from "../../../config";
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
@@ -122,9 +123,13 @@ const project = (description: string) =>
   });
 
 const create = (config: unknown) =>
-  run(config, context =>
-    runMigrateCreate("create", { cwd: dir, nonInteractive: true }, context)
-  );
+  run(config, context => {
+    // As `--non-interactive` does: no rename is asked about.
+    setNonInteractive(true);
+    return runMigrateCreate("create", { cwd: dir }, context).finally(() =>
+      setNonInteractive(false)
+    );
+  });
 const check = (config: unknown) =>
   run(config, context => runMigrateCheck({ cwd: dir }, context));
 

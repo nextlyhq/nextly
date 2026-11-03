@@ -179,7 +179,7 @@ test.describe("the canvas in the site's own layout", () => {
         '<a href="/elsewhere">Site link</a><form action="/search"><input name="q" aria-label="Site search"></form>';
       document.body.prepend(header);
     });
-    // `:visible`, so a hidden copy of the page that Cache Components keeps mounted is never matched.
+    // Held to the visible header: an id alone would also match one in a hidden copy of a page.
     const header = canvasFrame(page).locator("#site-header:visible");
     await expect(header).toHaveAttribute("inert", "");
     await expect(header).toHaveAttribute("data-nx-site-chrome", "");

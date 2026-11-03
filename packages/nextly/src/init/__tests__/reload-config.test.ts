@@ -23,6 +23,7 @@ import {
   type ManifestEntry,
 } from "../../domains/field-groups/migration/manifest";
 import { MIGRATION_MARKER_VERSION } from "../../domains/field-groups/migration/state";
+import { TTYRequiredError } from "../../domains/schema/pipeline/prompt-dispatcher/errors";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { judgeAddress } from "../../shared/address-rule";
 import { ADDRESS_CASES } from "../../shared/__tests__/helpers/address-cases";
@@ -2255,7 +2256,9 @@ describe("reloadNextlyConfig", () => {
       renamesApplied: 0,
       error: {
         code: "CONFIRMATION_REQUIRED_NO_TTY",
-        message: "TTY required for schema confirmation",
+        // The message the terminal dispatcher's refusal carries.
+        message: new TTYRequiredError("Rename dc_posts.body to summary?")
+          .message,
       },
     });
 
@@ -2271,6 +2274,12 @@ describe("reloadNextlyConfig", () => {
     expect(consoleSpy).toHaveBeenCalled();
     const warningArg = consoleSpy.mock.calls[0]?.[0] as string;
     expect(warningArg).toContain("confirmation");
+    // The refusal's detail alone: its lead and its advice, written for a
+    // command run, are replaced by the dev server's own.
+    expect(warningArg).toContain("  Rename dc_posts.body to summary?\n");
+    expect(warningArg).not.toContain("nobody can be asked");
+    expect(warningArg).not.toContain("TTY required");
+    expect(warningArg).not.toContain("migration files via");
 
     consoleSpy.mockRestore();
   });

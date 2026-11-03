@@ -63,7 +63,8 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import type { AlignmentGroup } from "./style-alignment-icons";
+import { InheritedValue } from "./inherited-value";
+import type { AlignmentGroup, AlignmentOption } from "./style-alignment-icons";
 
 /** The icons the mapping names, by their lucide export name. */
 const ICONS: Readonly<Record<string, LucideIcon>> = {
@@ -110,6 +111,20 @@ const STEPS: Readonly<Record<string, number>> = {
 
 type CommitOutcome = "applied" | "refused" | "unchanged";
 
+/**
+ * An option's name, and its mark when it is the value inherited from another
+ * tier: drawn as a dashed ring and said in its name, since a screen reader
+ * otherwise hears every option unchecked and cannot tell which applies.
+ */
+function inheritedMark(
+  option: AlignmentOption,
+  inherited: string | undefined
+): { "aria-label": string; "data-inherited"?: "" } {
+  return option.value === inherited
+    ? { "aria-label": `${option.label}, inherited`, "data-inherited": "" }
+    : { "aria-label": option.label };
+}
+
 export function IconChoiceField({
   id,
   labelledBy,
@@ -129,6 +144,11 @@ export function IconChoiceField({
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   const current = typeof stored === "string" ? stored : undefined;
+  // The value reaching this block from another tier. Its icon is marked, not
+  // checked, while nothing is set here: the group shows what the canvas draws
+  // without claiming this block chose it.
+  const inherited = React.useContext(InheritedValue);
+  const shownInherited = stored === undefined ? inherited : undefined;
   const { options } = group;
   const chosen = options.findIndex(option => option.value === current);
   const buttons = React.useRef<(HTMLButtonElement | null)[]>([]);
@@ -197,7 +217,7 @@ export function IconChoiceField({
                       {...(stop ? { id } : {})}
                       role="radio"
                       aria-checked={checked}
-                      aria-label={option.label}
+                      {...inheritedMark(option, shownInherited)}
                       aria-invalid={invalid}
                       tabIndex={stop ? 0 : -1}
                       data-icon={option.icon}
@@ -270,11 +290,26 @@ function OtherValues({
 }): React.JSX.Element {
   const value =
     current !== undefined && values.includes(current) ? current : "";
+  // An inherited value with no icon of its own lives here: More is ringed
+  // as an inherited icon is, and says which value applies.
+  const inherited = React.useContext(InheritedValue);
+  const shows =
+    current === undefined &&
+    inherited !== undefined &&
+    values.includes(inherited)
+      ? inherited
+      : undefined;
   return (
     <Select value={value} onValueChange={next => onCommit(next)}>
       <SelectTrigger
         className="nx-icon-choice__more"
-        aria-label={`More ${actionName} values`}
+        data-inherited={shows === undefined ? undefined : ""}
+        title={shows}
+        aria-label={
+          shows === undefined
+            ? `More ${actionName} values`
+            : `More ${actionName} values, showing ${shows}`
+        }
         aria-describedby={describedBy}
         aria-invalid={describedBy === undefined ? undefined : true}
       >

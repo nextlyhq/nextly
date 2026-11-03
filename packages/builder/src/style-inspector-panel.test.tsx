@@ -644,7 +644,7 @@ describe("controls", () => {
     expect(
       (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
         .value
-    ).toBe("12px");
+    ).toBe("12");
     // The same side of a DIFFERENT property is empty, which is what says the
     // read is addressed rather than by leaf name.
     expect(
@@ -801,7 +801,7 @@ describe("controls", () => {
     expect(
       (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
         .value
-    ).toBe("4px");
+    ).toBe("4");
   });
 
   it("offers every form the catalog declares, so an unset union is authorable", () => {
@@ -809,12 +809,20 @@ describe("controls", () => {
     // engine answers with the catalog's first arm when nothing is stored.
     mount({ border: { radius: true } });
 
-    const trigger = screen.getByLabelText("Border radius form");
-    fireEvent.click(trigger);
-    // Named from the arms' own shape kinds rather than numbered.
-    expect(screen.getByRole("option", { name: "Per corner" })).toBeDefined();
+    // A toggle on the property's own row, its forms named in plain words.
+    const forms = screen.getByRole("radiogroup", { name: "Border radius" });
+    expect(
+      within(forms)
+        .getAllByRole("radio")
+        .map(radio => radio.textContent)
+    ).toEqual(["All", "Corners"]);
+    expect(
+      within(forms)
+        .getByRole("radio", { name: "All" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
 
-    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+    fireEvent.click(within(forms).getByRole("radio", { name: "Corners" }));
 
     expect(
       fieldsOf("borderRadius").getByLabelText("Start start")
@@ -830,8 +838,7 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ border: { radius: true } }, styles);
 
-    fireEvent.click(screen.getByLabelText("Border radius form"));
-    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Corners" }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
@@ -853,8 +860,9 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ position: true }, styles);
 
-    fireEvent.click(screen.getByLabelText("Z index form"));
-    fireEvent.click(screen.getByRole("option", { name: "Keyword" }));
+    // A form of one keyword is named by it: "Auto", not "Keyword".
+    const forms = screen.getByRole("radiogroup", { name: "Z index" });
+    fireEvent.click(within(forms).getByRole("radio", { name: "Auto" }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
@@ -972,14 +980,54 @@ describe("controls", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
-  it("names a ROOT form selector for its own property", () => {
+  it("names a ROOT form toggle for its own property, without the word form", () => {
     // A property whose shape is a union at the top draws one control and so no
-    // heading, so a selector called "Form" would tell a screen-reader user
-    // nothing about which property it changes. Typography's unions draw no
-    // form selector at all: their one control takes either form.
+    // heading, so a toggle called "Form" would tell a screen-reader user
+    // nothing about which property it changes. "Border radius form" was an
+    // internal word in front of authors. Typography's unions draw no form
+    // choice at all: their one control takes either form.
     mount({ border: { radius: true } });
 
-    expect(screen.getByLabelText("Border radius form")).toBeDefined();
+    expect(
+      screen.getByRole("radiogroup", { name: "Border radius" })
+    ).toBeDefined();
+    expect(screen.queryByText(/ form$/)).toBeNull();
+  });
+
+  it("moves between forms with the arrow keys, the chosen one the tab stop", () => {
+    mount({ border: { radius: true } });
+    const all = screen.getByRole("radio", { name: "All" });
+    expect(all.tabIndex).toBe(0);
+    expect(screen.getByRole("radio", { name: "Corners" }).tabIndex).toBe(-1);
+
+    fireEvent.keyDown(all, { key: "ArrowRight" });
+
+    expect(
+      fieldsOf("borderRadius").getByLabelText("Start start")
+    ).toBeDefined();
+  });
+
+  it("draws a nested form's toggle just above its own control", () => {
+    // Position's z-index is the last of its controls: a toggle drawn above
+    // them all left the number field at the bottom with no visible name.
+    mount({ position: true });
+    const toggleRow = screen
+      .getByRole("radiogroup", { name: "Z index" })
+      .closest("[data-form-choice]");
+    const next = toggleRow?.nextElementSibling;
+    const label = next?.querySelector("label");
+    expect(label?.textContent).toContain("Z index");
+    expect(label?.hasAttribute("data-named-above")).toBe(true);
+  });
+
+  it("says the property's name once, on the toggle's row", () => {
+    // The one control under the toggle keeps its label for assistive
+    // technology and drops the visible copy, which said "Border radius" twice.
+    mount({ border: { radius: true } });
+    const below = document.querySelector(
+      '[data-property="borderRadius"] .nx-inspector__field:not([data-form-choice]) label'
+    );
+    expect(below?.hasAttribute("data-named-above")).toBe(true);
   });
 
   it("offers font weight as ONE list of named weights, with no form to choose first", () => {
@@ -1056,15 +1104,14 @@ describe("controls", () => {
   it("hints at a value in words short enough to read inside the field", () => {
     // A hint cut off mid-word ("16px or 50%, or xx-sm…") tells the author
     // less than a short one. Keywords stay valid to type; the hint shows the
-    // form a value takes, not every value it may take.
+    // form a value takes, not every value it may take. A length shows its
+    // unit beside the field, so its hint is the number alone.
     mount({ typography: true, color: true });
 
     expect(
       (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
-    ).toBe("16px or 50%");
-    expect(
-      fieldsOf("color").getByPlaceholderText("Name, hex or rgb()")
-    ).toBeDefined();
+    ).toBe("16");
+    expect(fieldsOf("color").getByPlaceholderText("Name or hex")).toBeDefined();
   });
 
   it("sets alignment with icons that follow the container's direction", () => {
@@ -1656,7 +1703,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(field).toHaveProperty("value", "0px");
+    expect(field).toHaveProperty("value", "0");
   });
 
   it("offers a unit menu only where the value is one measurement", () => {
@@ -1749,7 +1796,7 @@ describe("what the arrow keys do and do not claim", () => {
     });
     // One op, not a commit of the draft followed by a step of the result.
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(field).toHaveProperty("value", "21px");
+    expect(field).toHaveProperty("value", "21");
   });
 
   it("leaves an arrow to the IME while a composition is in progress", () => {
@@ -1845,6 +1892,303 @@ describe("what the arrow keys do and do not claim", () => {
   });
 });
 
+describe("a length field's unit", () => {
+  /** Width inherited from a class `.card`, nothing stored on the box. */
+  function mountCardedWidth(value: string): void {
+    register({ dimensions: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              {
+                origin: { kind: "class", id: "cls-1", slug: "card" },
+                property: "width",
+                value,
+                state: "base",
+                breakpoint: BASE_BREAKPOINT,
+              },
+            ],
+          } as never
+        }
+      />
+    );
+  }
+
+  it("commits a bare number in the unit beside it, px unless another is chosen", () => {
+    // "24" was refused as "not a length".
+    const editor = mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: "24" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"24px"'
+    );
+  });
+
+  it("shows the unit menu while the field is empty, on px", () => {
+    mount({ dimensions: true });
+    const unit = fieldsOf("width").getByLabelText("Unit for Width");
+    expect(unit.textContent).toBe("px");
+  });
+
+  it("takes a unit chosen before a number is typed", () => {
+    const editor = mount({ dimensions: true });
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    // Nothing to write yet: the field is empty.
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: "2" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"2rem"'
+    );
+  });
+
+  it("shows a stored length's number in the field and its unit in the suffix", () => {
+    // "240px" in the field beside "px" said the unit twice.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "2rem" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
+    expect(width.value).toBe("2");
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "rem"
+    );
+    // A new number keeps the stored unit, not px.
+    fireEvent.change(width, { target: { value: "3" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"3rem"'
+    );
+  });
+
+  it("steps the number with the arrow keys in the unit shown", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "10px" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    fireEvent.keyDown(fieldsOf("width").getByLabelText("Width"), {
+      key: "ArrowUp",
+    });
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"11px"'
+    );
+  });
+
+  it("hints at what an unset size is, Auto or None, not a number that reads like a default", () => {
+    // "16" beside Width read as a real default; unset, a width is auto and a
+    // max width none.
+    mount({ dimensions: true });
+    const hint = (label: string, property: string) =>
+      (fieldsOf(property).getByLabelText(label) as HTMLInputElement)
+        .placeholder;
+    expect(hint("Width", "width")).toBe("Auto");
+    expect(hint("Height", "height")).toBe("Auto");
+    expect(hint("Max width", "maxWidth")).toBe("None");
+  });
+
+  it("hints at a number alone for a length whose unset value is not a word", () => {
+    // Margin allows `auto` but starts at 0, so its hint stays a number.
+    mount({ spacing: true });
+    const top = fieldsOf("padding").getByLabelText(
+      "Block start"
+    ) as HTMLInputElement;
+    expect(top.placeholder).not.toBe("Auto");
+  });
+
+  it("shows a stored keyword once, in the suffix, not again in the field", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "auto" } },
+    } as NodeStyles;
+    mount({ dimensions: true }, styles);
+    const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
+    expect(width.value).toBe("");
+    expect(width.placeholder).toBe("");
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "auto"
+    );
+  });
+
+  it("keeps the suffix for every bare number the commit will take", () => {
+    // ".5" is committed with the unit shown, so the unit stays shown.
+    mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: ".5" } });
+    expect(fieldsOf("width").queryByLabelText("Unit for Width")).not.toBeNull();
+  });
+
+  it("draws no unit beside an inherited value that is not a measurement", () => {
+    // An inherited "auto" or "clamp(…)" beside "px" read "auto px".
+    mountCardedWidth("clamp(1rem, 2vw, 3rem)");
+    expect(fieldsOf("width").queryByLabelText("Unit for Width")).toBeNull();
+  });
+
+  it("shows a unit chosen over a stored keyword, writing nothing until a number", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "auto" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "rem"
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("never shows an inherited length beside a different pending unit", () => {
+    // "2px" beside "rem" read as one value it is not.
+    mountCardedWidth("2px");
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    expect(width.placeholder).not.toContain("px");
+  });
+
+  it("offers the property's keywords after its units", () => {
+    const editor = mount({ dimensions: true });
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "auto" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"auto"'
+    );
+  });
+});
+
+describe("a side or a corner, in plain words", () => {
+  const LTR = { writingMode: "horizontal-tb", direction: "ltr" };
+  /** The visible names of one property's controls, on an element whose axes are known or not. */
+  function sideLabels(
+    property: string,
+    supports: Record<string, boolean | Record<string, boolean>>,
+    orientation: { writingMode: string; direction: string } | undefined,
+    styles?: NodeStyles
+  ): (string | null)[] {
+    register(supports);
+    render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf(styles))}
+        {...(orientation === undefined ? {} : { sideOrientation: orientation })}
+      />
+    );
+    return Array.from(
+      document.querySelectorAll(
+        `[data-property="${property}"] .nx-style-inspector__field-label-text`
+      )
+    ).map(label => label.textContent);
+  }
+
+  it("names a border's sides Top, Bottom, Left and Right", () => {
+    // "Top" and "Right" are CSS's logical words, not an
+    // author's. Named for a left-to-right horizontal element unless the
+    // canvas says otherwise.
+    const labels = sideLabels("border", { border: true }, LTR);
+    expect(labels.slice(0, 4)).toEqual(["Top", "Bottom", "Left", "Right"]);
+  });
+
+  it("names them from the element's direction, Right first on a right-to-left page", () => {
+    const labels = sideLabels(
+      "border",
+      { border: true },
+      {
+        writingMode: "horizontal-tb",
+        direction: "rtl",
+      }
+    );
+    expect(labels.slice(0, 4)).toEqual(["Top", "Bottom", "Right", "Left"]);
+  });
+
+  it("keeps the logical words until the canvas has said which way the element runs", () => {
+    // A guessed "Left" is wrong on a right-to-left or vertical page; the
+    // logical word is true on every page.
+    const labels = sideLabels("border", { border: true }, undefined);
+    expect(labels.slice(0, 4)).toEqual([
+      "Block start",
+      "Block end",
+      "Inline start",
+      "Inline end",
+    ]);
+  });
+
+  it("hints at a border's width as a border is drawn, not as a length in general", () => {
+    // "16px" read as a heavy frame where a border is usually a hairline.
+    mount({ border: true });
+    const top = document.querySelector<HTMLInputElement>(
+      '[data-property="border"] input'
+    );
+    expect(top?.placeholder).toBe("1");
+  });
+
+  it("names a radius's corners Top left and the rest", () => {
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: {
+          borderRadius: {
+            startStart: "1px",
+            startEnd: "2px",
+            endStart: "3px",
+            endEnd: "4px",
+          },
+        },
+      },
+    } as NodeStyles;
+    const labels = sideLabels(
+      "borderRadius",
+      { border: { radius: true } },
+      LTR,
+      styles
+    );
+    expect(labels).toEqual([
+      "Top left",
+      "Top right",
+      "Bottom left",
+      "Bottom right",
+    ]);
+  });
+});
+
+describe("a property named like its section", () => {
+  it("draws no heading of its own, which would repeat the section's", () => {
+    // "Border" over the border's sides, inside the section titled Border,
+    // said the same word twice in a row.
+    mount({ border: true });
+    const heading = document.querySelector(
+      '[data-property="border"] .nx-style-inspector__property-label'
+    );
+    expect(document.querySelector('[data-property="border"]')).not.toBeNull();
+    expect(heading).toBeNull();
+  });
+
+  it("keeps the heading of a property its section does not name", () => {
+    mount({ spacing: true });
+    // Padding's four sides, in the section titled Spacing.
+    const heading = document.querySelector(
+      '[data-property="padding"] .nx-style-inspector__property-label'
+    );
+    expect(heading?.textContent).toBe("Padding");
+  });
+});
+
 describe("where a control's value came from", () => {
   /** The dot for one property's single control. */
   const dotIn = (property: string) =>
@@ -1895,6 +2239,164 @@ describe("where a control's value came from", () => {
     );
     return editor;
   }
+
+  /** A box carrying `.card` and nothing stored, so every value it shows is inherited. */
+  function mountCarded(
+    entries: readonly unknown[],
+    supports: Record<string, boolean | Record<string, boolean>>
+  ): void {
+    register(supports);
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={{ nodes: editor.document.nodes, entries } as never}
+      />
+    );
+  }
+  const fromCard = (over: Record<string, unknown>) =>
+    entry({ origin: { kind: "class", id: "cls-1", slug: "card" }, ...over });
+  const sourceIn = (property: string) =>
+    document.querySelector(
+      `[data-property="${property}"] .nx-style-inspector__provenance-source`
+    )?.textContent;
+
+  it("shows an inherited value in its field, and where it came from beside the label", () => {
+    // The value an author sees on the canvas, where a generic hint said
+    // nothing about it. Shown as the placeholder, so it reads as not set here
+    // and nothing is written by looking at it.
+    mountCarded([fromCard({ value: "#123456" })], { color: true });
+    const input = document.querySelector<HTMLInputElement>(
+      '[data-property="color"] input'
+    );
+    expect(input?.getAttribute("placeholder")).toBe("#123456");
+    expect(input?.value).toBe("");
+    expect(sourceIn("color")).toBe("From .card");
+  });
+
+  it("leaves the swatch unpainted for an inherited colour it cannot resolve here", () => {
+    // A site variable or currentcolor resolves against the canvas, not this
+    // panel: painted raw, it showed the admin's colour or none.
+    mountCarded([fromCard({ value: "var(--site-color-primary)" })], {
+      color: true,
+    });
+    const swatch = document.querySelector<HTMLElement>(
+      '[data-property="color"] .nx-style-inspector__swatch'
+    );
+    expect(swatch?.style.getPropertyValue("--nx-swatch")).toBe("");
+    expect(swatch?.hasAttribute("data-empty")).toBe(true);
+  });
+
+  it("opens the picker on the inherited colour it paints", () => {
+    // From the fallback, a small adjustment committed an unrelated colour.
+    mountCarded([fromCard({ value: "#336699" })], { color: true });
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
+    // The raw picker sits under Custom colour, after the site's variables.
+    fireEvent.click(screen.getByRole("button", { name: "Custom colour" }));
+    const picker = document.querySelector<HTMLElement>(
+      ".nx-style-inspector__picker"
+    );
+    const hex =
+      picker === null ? undefined : within(picker).getAllByRole("textbox")[0];
+    expect(
+      (hex as HTMLInputElement | undefined)?.value.toLowerCase()
+    ).toContain("336699");
+  });
+
+  it("paints an inherited colour in its swatch, marked as inherited", () => {
+    mountCarded([fromCard({ value: "#123456" })], { color: true });
+    const swatch = document.querySelector<HTMLElement>(
+      '[data-property="color"] .nx-style-inspector__swatch'
+    );
+    expect(swatch?.style.getPropertyValue("--nx-swatch")).toBe("#123456");
+    expect(swatch?.hasAttribute("data-inherited")).toBe(true);
+    expect(swatch?.hasAttribute("data-empty")).toBe(false);
+  });
+
+  it("shows an inherited keyword in its list in place of Not set", () => {
+    mountCarded([fromCard({ property: "display", value: "flex" })], {
+      layout: true,
+    });
+    // By the label's start: the label also holds the source caption.
+    const trigger = screen.getByLabelText(/^Display/);
+    expect(trigger.textContent).toBe("flex");
+    expect(trigger.textContent).not.toContain("Not set");
+    expect(sourceIn("display")).toBe("From .card");
+  });
+
+  it("shows an inherited weight by its name, not Not set", () => {
+    // The audit's case: a bold heading read its weight as "Not set".
+    mountCarded([fromCard({ property: "font-weight", value: "700" })], {
+      typography: true,
+    });
+    expect(screen.getByLabelText(/^Font weight/).textContent).toBe("Bold 700");
+    expect(sourceIn("fontWeight")).toBe("From .card");
+  });
+
+  it("names the enclosing block an inherited colour comes from, as Layers does", () => {
+    // CSS inheritance: the box inside a "Hero" with a colour of its own takes
+    // the Hero's colour, and says so by the name the Layers panel shows.
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "acme/box",
+          version: 1,
+          name: "Hero",
+          props: {},
+          styles: { base: { [BASE_BREAKPOINT]: { color: "#123456" } } },
+          slots: {
+            children: [{ id: "a", type: "acme/box", version: 1, props: {} }],
+          },
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              entry({
+                origin: { kind: "node", id: "outer" },
+                value: "#123456",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(sourceIn("color")).toBe("From Hero");
+    expect(dotIn("color")?.getAttribute("aria-label")).toBe(
+      "Inherited from Hero"
+    );
+    expect(
+      document
+        .querySelector('[data-property="color"] input')
+        ?.getAttribute("placeholder")
+    ).toBe("#123456");
+  });
+
+  it("draws no source beside a value set here", () => {
+    mountWithTrace([entry()]);
+    expect(sourceIn("color")).toBeUndefined();
+  });
 
   it("marks a value the author set on THIS block as set here", () => {
     mountWithTrace([entry()]);
@@ -2085,17 +2587,39 @@ describe("where a control's value came from", () => {
       />
     );
 
-    const text = document.querySelector(
-      '[data-property="color"] .nx-style-inspector__provenance-text'
+    // An inherited value's source is shown without focus, in brief, with the
+    // dot's whole sentence on the caption for a pointer.
+    const source = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-source'
     );
 
     // The POPULATION first. Both sides of the comparison below read through
     // `?.`, so a query that found nothing would compare `undefined` with
     // `undefined` and pass while nothing was rendered at all.
     expect(dotIn("color")).not.toBeNull();
-    expect(text).not.toBeNull();
+    expect(source).not.toBeNull();
+    expect(source?.getAttribute("title")).toBe(
+      dotIn("color")?.getAttribute("aria-label")
+    );
+    expect(source?.textContent).toBe("From .card");
+    expect(source?.getAttribute("aria-hidden")).toBe("true");
+    // And the whole sentence in text for a keyboard user, as for "Set here":
+    // the caption is brief and may be cut short.
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
     expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
-    expect(text?.textContent).not.toBe("");
+    expect(text?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("puts 'Set here' in TEXT too, revealed when the field has focus", () => {
+    mountWithTrace([entry()]);
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
+    expect(dotIn("color")).not.toBeNull();
+    expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
+    expect(text?.textContent).toBe("Set here");
     expect(text?.getAttribute("aria-hidden")).toBe("true");
   });
 
@@ -2319,7 +2843,7 @@ describe("where a control's value came from", () => {
      */
     mountWithTrace(undefined);
     expect(dotIn("color")).toBeNull();
-    expect(fieldsOf("color").getByLabelText("Color")).toBeTruthy();
+    expect(fieldsOf("color").getByLabelText("Colour")).toBeTruthy();
   });
 
   it("draws nothing when the trace cannot say WHICH control wrote it", () => {
@@ -2618,7 +3142,7 @@ describe("naming the place a value came from", () => {
         editing as never,
         "a:hover"
       )?.text
-    ).toBe("Inherited from the Link color control");
+    ).toBe("Inherited from the Link colour control");
   });
 
   it("still says 'this block' when the control's OWN rule won", () => {
@@ -2652,6 +3176,92 @@ describe("naming the place a value came from", () => {
       )
     ).toBeNull();
     expect(describeProvenance(undefined, editing as never)).toBeNull();
+  });
+
+  describe("in brief, as the caption shown beside an inherited value", () => {
+    const sourceFor = (
+      origin: unknown,
+      entry = at(),
+      descendant?: string
+    ): string | undefined => {
+      const described = describeProvenance(
+        { kind: "inherited", entry, from: origin } as never,
+        editing as never,
+        descendant
+      );
+      return described?.kind === "inherited" ? described.source : undefined;
+    };
+
+    it("names only what differs when the value is this block's own", () => {
+      // "From this block at Medium" spends the row on the one part the author
+      // already knows: they selected this block.
+      expect(
+        sourceFor({ kind: "node", id: "a" }, at({ breakpoint: "md" }))
+      ).toBe("From Medium");
+      expect(sourceFor({ kind: "node", id: "a" }, at({ state: "hover" }))).toBe(
+        "From Hover"
+      );
+      expect(
+        sourceFor(
+          { kind: "node", id: "a" },
+          at({ breakpoint: "md", state: "hover" })
+        )
+      ).toBe("From Medium · Hover");
+    });
+
+    it("names the tier it came from, with what differs after it", () => {
+      expect(sourceFor({ kind: "class", id: "cls-1", slug: "card" })).toBe(
+        "From .card"
+      );
+      expect(
+        sourceFor(
+          { kind: "class", id: "cls-1", slug: "card" },
+          at({ breakpoint: "md" })
+        )
+      ).toBe("From .card · Medium");
+      expect(sourceFor({ kind: "page" })).toBe("From the page");
+      expect(sourceFor({ kind: "node", id: "outer" })).toBe(
+        "From an enclosing block"
+      );
+    });
+
+    it("calls a block's defaults and the typography baseline defaults", () => {
+      expect(sourceFor({ kind: "blockType", type: "acme/box" })).toBe(
+        "From block defaults"
+      );
+      expect(sourceFor({ kind: "blockType", type: "acme/section" })).toBe(
+        "From enclosing block defaults"
+      );
+      // A heading's weight from the h2 baseline: the element an author sees
+      // in the HTML tag control, not the tier's internal name.
+      expect(sourceFor({ kind: "element", tag: "h2" })).toBe(
+        "From H2 defaults"
+      );
+    });
+
+    it("names no breakpoint after defaults, which no breakpoint edits", () => {
+      // "From H2 defaults · Desktop" sends an author to a tier where the value
+      // is not, since defaults are no tier's to edit.
+      expect(
+        sourceFor({ kind: "element", tag: "h2" }, at({ breakpoint: "md" }))
+      ).toBe("From H2 defaults");
+      expect(
+        sourceFor(
+          { kind: "blockType", type: "acme/box" },
+          at({ breakpoint: "md" })
+        )
+      ).toBe("From block defaults");
+    });
+
+    it("names the control a descendant rule came from by its label alone", () => {
+      expect(
+        sourceFor(
+          { kind: "node", id: "a" },
+          at({ property: "color", descendant: " a" }),
+          "a:hover"
+        )
+      ).toBe("From Link colour");
+    });
   });
 });
 
@@ -2774,15 +3384,14 @@ describe("the action a control's breakpoint provenance earns", () => {
      * Block start" and a screen-reader user could not tell which style each
      * removes — the same reason the panel computes an action name for `Clear`.
      */
-    expect(label).toContain("Color");
+    expect(label).toContain("Colour");
     /*
      * The tier a reset falls back to is NAMED, not left to be guessed. The
-     * unconditional tier has no authored definition to take a label from, so it
-     * is called by its id here — the same name every other sentence in this
-     * panel gives it, which is the point: one naming, not a second one invented
-     * for this button.
+     * unconditional tier is called what the device switcher calls it — the
+     * same name every other sentence in this panel gives it, which is the
+     * point: one naming, not a second one invented for this button.
      */
-    expect(label).toContain("from base");
+    expect(label).toContain("from Desktop");
   });
 
   it("keeps the reset for a value stored at a tier the canvas is not showing", () => {
@@ -2964,6 +3573,26 @@ describe("the action a control's breakpoint provenance earns", () => {
     });
 
     expect(action("jump")).not.toBeNull();
+  });
+
+  it("names the source on the jump itself, and once", () => {
+    // The jump says where the value comes from and goes there: a caption
+    // beside the label saying "From Tablet" as well said it twice.
+    mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")?.textContent).toBe("From Tablet");
+    expect(action("jump")?.getAttribute("aria-label")).toMatch(
+      /^Edit Colour at Tablet/
+    );
+    expect(
+      document.querySelector(
+        '[data-property="color"] .nx-style-inspector__provenance-source'
+      )
+    ).toBeNull();
   });
 
   it("keeps the reset beside the jump when a value stored here is shadowed", () => {
@@ -3288,7 +3917,10 @@ describe("a segmented keyword control behaves as a toggle", () => {
      */
     const editor = mountWith("italic");
 
-    fireEvent.click(fieldsOf("fontStyle").getByText("Font style"));
+    // The field's own label: the form toggle's row says the name as well.
+    fireEvent.click(
+      fieldsOf("fontStyle").getByText("Font style", { selector: "label *" })
+    );
 
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
@@ -3361,7 +3993,7 @@ describe("a per-side property is drawn as a box", () => {
   });
 
   it("names each side in plain words for the element's axes", () => {
-    // "Margin top" rather than "Block start": the box is drawn because the
+    // "Margin top" rather than "Top": the box is drawn because the
     // element's axes are known, and in them the sides have physical names.
     const { box } = mountSpacingBox(LTR);
     const within_ = within(box as HTMLElement);
