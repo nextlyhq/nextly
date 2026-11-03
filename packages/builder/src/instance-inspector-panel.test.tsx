@@ -241,10 +241,33 @@ describe("what a selected instance is shown as", () => {
   it("says when the component exposes nothing, rather than showing an empty list", () => {
     mount(instance(), header({ exposed: [] }));
 
+    // With no Edit component on offer, the sentence points at nothing.
     expect(
       screen.getByText(/has no fields to change on this page/).textContent
-    ).toContain("Edit component");
+    ).not.toContain("Edit component");
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("points at Edit component only where it is offered", () => {
+    const definition = header({ exposed: [] });
+    render(
+      <InspectorPanel
+        editor={editorFor(pageOf(instance()))}
+        componentLibrary={{
+          definitions: new Map([["header", definition]]),
+          components: LIBRARY,
+        }}
+        verbs={{
+          actions: [
+            { id: "edit-component", label: "Edit component", enabled: true },
+          ],
+          run: vi.fn(),
+        }}
+      />
+    );
+    expect(
+      screen.getByText(/has no fields to change on this page/).textContent
+    ).toContain("Use Edit component");
   });
 });
 
@@ -1323,6 +1346,20 @@ describe("a refused link once the value changes underneath it", () => {
 });
 
 describe("the variant a placement uses", () => {
+  it("says a field the variant clears is cleared by the variant, not on this page", () => {
+    // The page holds no value to reset; the variant removed it.
+    const definition = header({
+      variants: {
+        v1: { label: "Dark", overrides: { title: { $unset: true } } },
+      },
+    } as Partial<ComponentDocument>);
+    mount(instance({ variant: "v1" }), definition, [
+      { id: "header", title: "Header", document: definition },
+    ]);
+    expect(screen.getByText("Cleared by variant")).toBeDefined();
+    expect(screen.queryByText("Cleared on this page")).toBeNull();
+  });
+
   it("is named under the title", () => {
     const definition = header({
       variants: { v1: { label: "Dark", overrides: { tone: "dark" } } },

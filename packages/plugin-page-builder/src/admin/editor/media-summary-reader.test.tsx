@@ -43,12 +43,28 @@ describe("the inspector's media read", () => {
       url: "/uploads/team.jpg",
       thumbnailUrl: null,
       filename: "team.jpg",
+      mimeType: "image/jpeg",
       altText: "",
     });
     const { result } = renderHook(() => useMediaSummaryReader());
     await expect(result.current("m2")).resolves.toEqual({
       name: "team.jpg",
       thumbnail: "/uploads/team.jpg",
+    });
+  });
+
+  it("pictures a file only when it is an image, still naming any file", async () => {
+    // A PDF's own address drawn as an <img> is a broken picture.
+    readMedia.mockResolvedValue({
+      id: "m3",
+      url: "/uploads/brochure.pdf",
+      thumbnailUrl: null,
+      filename: "brochure.pdf",
+      mimeType: "application/pdf",
+    });
+    const { result } = renderHook(() => useMediaSummaryReader());
+    await expect(result.current("m3")).resolves.toEqual({
+      name: "brochure.pdf",
     });
   });
 

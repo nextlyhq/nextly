@@ -237,7 +237,10 @@ describe("the dialogs' words", () => {
 
     mount("duplicate");
     const duplicate = await screen.findByRole("dialog");
-    expect(duplicate.textContent).toMatch(/this page uses it/);
+    // Only the selected one switches: another of the same on this page keeps
+    // the original, so "this page uses it" overstated it.
+    expect(duplicate.textContent).toMatch(/the one you selected uses it/);
+    expect(duplicate.textContent).toMatch(/other uses on this page included/);
     expect(duplicate.textContent).not.toMatch(/placement/i);
   });
 });

@@ -383,7 +383,7 @@ function DuplicateForm({
   return (
     <ActionDialog
       title="Duplicate component"
-      description={`A copy of ${source?.title ?? "this component"} is made, and this page uses it, keeping its own values. Everywhere else keeps the original.`}
+      description={`A copy of ${source?.title ?? "this component"} is made, and the one you selected uses it, keeping its own values. Everywhere else keeps the original, other uses on this page included.`}
       busy={busy}
       onClose={onClose}
       returnFocusTo={returnFocusTo}

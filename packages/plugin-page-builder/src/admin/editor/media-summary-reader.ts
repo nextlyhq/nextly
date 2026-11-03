@@ -27,20 +27,28 @@ interface MediaItem {
   readonly filename?: string;
   readonly originalFilename?: string | null;
   readonly altText?: string | null;
+  readonly mimeType?: string | null;
 }
 
 /**
  * The name as the author uploaded it, else as stored; the thumbnail, else the
- * file itself; and the alt text only when there is some.
+ * file itself when it is an image (a PDF's address drawn as a picture is a
+ * broken one); and the alt text only when there is some.
  */
 function summaryOf(item: MediaItem | null): MediaSummary | null {
   if (item === null) return null;
   const name = item.originalFilename || item.filename;
+  const thumbnail = item.thumbnailUrl || (isImage(item) ? item.url : "");
   return {
     ...(name ? { name } : {}),
-    thumbnail: item.thumbnailUrl || item.url,
+    ...(thumbnail ? { thumbnail } : {}),
     ...(item.altText ? { alt: item.altText } : {}),
   };
+}
+
+/** Whether the item is a picture, by the type its upload settled on. */
+function isImage(item: MediaItem): boolean {
+  return item.mimeType?.startsWith("image/") === true;
 }
 
 /** The inspector's media read, stable for the editor's life. */

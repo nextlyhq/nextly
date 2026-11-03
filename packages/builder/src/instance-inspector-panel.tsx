@@ -113,9 +113,19 @@ const SOURCE_ICON: Readonly<
   cleared: CircleSlash,
 };
 
-/** The words a row's badge shows: its source, or "Cleared". */
+/**
+ * A cleared value, said by whoever cleared it: a variant's clearing is not
+ * this page's, and there is no page value to reset.
+ */
+const CLEARED_LABEL: Readonly<Record<ExposedRow["source"], string>> = {
+  definition: "Empty in the component",
+  variant: "Cleared by variant",
+  instance: "Cleared on this page",
+};
+
+/** The words a row's badge shows: its source, or who cleared it. */
 function sourceBadgeLabel(row: Pick<ExposedRow, "source" | "cleared">): string {
-  return row.cleared ? "Cleared on this page" : SOURCE_LABEL[row.source];
+  return (row.cleared ? CLEARED_LABEL : SOURCE_LABEL)[row.source];
 }
 
 /**
@@ -276,10 +286,7 @@ export function InstanceInspectorPanel({
          * that something is missing: the content lives on the definition, and
          * the definition has a screen.
          */
-        <p className="nx-inspector__note">
-          This component has no fields to change on this page. Use Edit
-          component to change its content.
-        </p>
+        <NoFieldsNote verbs={verbs} />
       ) : (
         <section aria-labelledby={headingId}>
           <h3 id={headingId} className="nx-inspector__heading">
@@ -818,15 +825,41 @@ function OrphanedOverrides({
  * an author looking at a placement's fields is the one most likely to want the
  * component's own design next.
  */
+/**
+ * What a component with no fields says. It points at Edit component only
+ * where that button is offered: an author who may not edit components is not
+ * sent to an action they lack.
+ */
+function NoFieldsNote({
+  verbs,
+}: {
+  verbs: CardVerbs | undefined;
+}): React.JSX.Element {
+  return (
+    <p className="nx-inspector__note">
+      This component has no fields to change on this page.
+      {editComponentOffered(verbs)
+        ? " Use Edit component to change its content."
+        : null}
+    </p>
+  );
+}
+
+/** Whether the host offers Edit component, enabled, for this placement. */
+function editComponentOffered(verbs: CardVerbs | undefined): boolean {
+  return (
+    verbs?.actions.some(
+      action => action.id === "edit-component" && action.enabled
+    ) === true
+  );
+}
+
 function EditComponentButton({
   verbs,
 }: {
   verbs: CardVerbs | undefined;
 }): React.JSX.Element | null {
-  const offered = verbs?.actions.some(
-    action => action.id === "edit-component" && action.enabled
-  );
-  if (verbs === undefined || offered !== true) return null;
+  if (verbs === undefined || !editComponentOffered(verbs)) return null;
   return (
     <Button
       type="button"
