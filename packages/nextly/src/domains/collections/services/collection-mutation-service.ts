@@ -2519,11 +2519,15 @@ export class CollectionMutationService extends BaseService {
       | undefined
   ): Record<string, unknown> {
     const status = localized?.companionData._status;
-    return Object.assign(
-      { ...finalData },
-      localized?.localizedFieldValues,
-      typeof status === "string" ? { status } : {},
-      ...lifted
+    // A copy of its own: the field-group save prepares its instances in place
+    // (defaults, hashing), and a validator must see each as it was sent.
+    return structuredClone(
+      Object.assign(
+        { ...finalData },
+        localized?.localizedFieldValues,
+        typeof status === "string" ? { status } : {},
+        ...lifted
+      )
     );
   }
 

@@ -3654,7 +3654,11 @@ export class SingleMutationService extends BaseService {
                   },
                 }),
                 // As written: the field groups were lifted out of it before.
-                payload: { ...currentData, ...attemptComponentFields },
+                // A copy of its own, as the save prepares instances in place.
+                payload: structuredClone({
+                  ...currentData,
+                  ...attemptComponentFields,
+                }),
               },
             });
             if (
