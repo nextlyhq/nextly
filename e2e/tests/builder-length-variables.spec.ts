@@ -13,6 +13,7 @@ import {
   clickBlock,
   openEditorWith,
   pressSave,
+  selection,
 } from "./canvas/editor-driver";
 import { expectNoAxeViolations } from "./support/axe";
 import { LOCK } from "./support/locks";
@@ -138,10 +139,21 @@ test("a type size picked for a heading is stored as a reference, and follows the
     await display.click();
     await expect(list).toHaveCount(0);
 
-    // The field shows the variable by name, and the canvas draws it.
-    await expect(
-      inspector.getByRole("group", { name: /^Font size/ })
-    ).toContainText("Display");
+    // The field shows the variable by name on one line, never its code
+    // path, and the canvas draws it.
+    const chip = inspector.getByRole("group", { name: /^Font size/ });
+    await expect(chip).toContainText("Display");
+    await expect(chip).not.toContainText("font-size.display");
+    const lines = await chip
+      .locator(".nx-variable-chip__text")
+      .evaluate(element => {
+        const style = getComputedStyle(element);
+        return (
+          element.getBoundingClientRect().height /
+          Number.parseFloat(style.lineHeight)
+        );
+      });
+    expect(lines).toBeLessThan(1.5);
     await expect.poll(() => headingSize(page)).toBe("48px");
 
     // What the page stores is the reference, not the size it resolves to.
@@ -174,6 +186,75 @@ test("a type size picked for a heading is stored as a reference, and follows the
     await written;
     await page.keyboard.press("Escape");
     await expect.poll(() => headingSize(page)).toBe("40px");
+  } finally {
+    const restored = await page.request.patch(SITE_STYLE, {
+      data: { tokens: before },
+    });
+    expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
+      true
+    );
+  }
+});
+
+test("Escape closes an open picker and leaves the selection, and the next one goes up", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const before = await storedTokens(page);
+  try {
+    const seeded = await page.request.patch(SITE_STYLE, {
+      data: { tokens: { tokens: TYPE_SCALE } },
+    });
+    expect(seeded.ok(), `seeding the type scale: ${seeded.status()}`).toBe(
+      true
+    );
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openEditorWith(
+      page,
+      [
+        {
+          id: "escape-section",
+          type: "core/section",
+          version: 1,
+          props: { as: "section", contained: true },
+          slots: { children: NODES },
+        },
+      ],
+      HEADING
+    );
+    const inspector = page.getByTestId("inspector");
+    const pickers = [
+      {
+        open: inspector.getByRole("button", {
+          name: "Variables for Font size",
+        }),
+        list: page.getByRole("listbox", { name: "Variables" }),
+      },
+      {
+        open: inspector.getByRole("button", { name: /^Colour for Color/ }),
+        list: page.getByRole("listbox", { name: "Colour variables" }),
+      },
+    ];
+    for (const picker of pickers) {
+      await clickBlock(page, HEADING);
+      await expect.poll(() => selection(page)).toEqual([HEADING]);
+      await inspector.getByRole("tab", { name: "Style" }).click();
+      if (!(await picker.open.isVisible())) {
+        await inspector.getByRole("button", { name: /^Typography/ }).click();
+      }
+      await picker.open.focus();
+      await page.keyboard.press("Enter");
+      await expect(picker.list).toBeVisible();
+
+      // One press closes the list, and only the list.
+      await page.keyboard.press("Escape");
+      await expect(picker.list).toHaveCount(0);
+      expect(await selection(page)).toEqual([HEADING]);
+
+      // With it closed, Escape is the editor's again: up to the section.
+      await page.keyboard.press("Escape");
+      await expect.poll(() => selection(page)).toEqual(["escape-section"]);
+    }
   } finally {
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before },
