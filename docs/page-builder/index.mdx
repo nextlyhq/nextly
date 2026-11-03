@@ -171,10 +171,14 @@ the editor. The route renders no content of its own and reads nothing, and it te
 engines not to index it.
 
 The path must be on the same site as the admin, since the editor draws into the page it
-loads. Without `canvasPath`, or when the route is not found or does not load, the canvas
-draws the page on a blank page of its own, and a note above it says so. The page then has
-its block styles and the site's shared styles, but not your app's own CSS files, such as a
+loads. Without `canvasPath`, the canvas draws the page on a blank page of its own. It does
+the same when the route is set but not found or does not load, and then a note above the
+canvas says so, with a link to this section. On the blank page the page has its block
+styles and the site's shared styles, but not your app's own CSS files, such as a
 `globals.css` that styles `h2` or `body`.
+
+Pointing at your layout around the page shows that it is part of your site's layout, which
+is edited in your site's code rather than in the editor.
 
 ## Breakpoints
 

@@ -25,6 +25,9 @@ const HOMEPAGE_API = "/admin/api/singles/homepage";
 const BUILDER_URL = /\/admin\/singles\/homepage\/builder\?field=layout$/;
 /** The playground's canvas route, its `canvasPath`. */
 const CANVAS_ROUTE = "/page-builder-canvas";
+/** What the note says when the route is set but cannot be shown. */
+const FALLBACK_NOTE =
+  "Shown without your site’s header, footer and styles. The site’s canvas page didn’t load. Details";
 
 const TEXTS = {
   heading: "A heading on the site",
@@ -180,6 +183,23 @@ test.describe("the canvas in the site's own layout", () => {
     await expect(header).toHaveAttribute("inert", "");
     await expect(header).toHaveAttribute("data-nx-site-chrome", "");
 
+    // Pointing at it says why it can't be used: a cue over it in the editor,
+    // with a not-allowed cursor and a tag naming it as the site's layout.
+    const headerBox = await header.boundingBox();
+    if (headerBox === null) throw new Error("the site's header is not drawn");
+    await page.mouse.move(headerBox.x + 8, headerBox.y + headerBox.height / 2);
+    // The cue the pointer is over: the header's.
+    const cue = page.locator(".nx-site-chrome-cue:hover");
+    await expect(cue).toHaveCount(1);
+    await expect(cue.locator(".nx-site-chrome-cue__tag")).toHaveText(
+      "Part of your site’s layout"
+    );
+    await expect(cue.locator(".nx-site-chrome-cue__tag")).toHaveCSS(
+      "opacity",
+      "1"
+    );
+    await expect(cue).toHaveCSS("cursor", "not-allowed");
+
     // Neither its link nor its field can be reached: a press on the link
     // leaves the frame where it is, and the field takes no focus.
     const link = canvasFrame(page).getByText("Site link");
@@ -210,9 +230,11 @@ test.describe("the canvas in the site's own layout", () => {
       })
     );
     await openBuilder(page);
-    await expect(siteLayoutNote(page)).toHaveText(
-      "Shown without your site’s layout and styles: the canvas route was not found."
+    await expect(siteLayoutNote(page)).toHaveAttribute(
+      "data-canvas-state",
+      "site-layout-not-served"
     );
+    await expect(siteLayoutNote(page)).toHaveText(FALLBACK_NOTE);
     expect(await framePage(page)).toBe("about:srcdoc");
   });
 
@@ -232,9 +254,11 @@ test.describe("the canvas in the site's own layout", () => {
       });
     });
     await openBuilder(page);
-    await expect(siteLayoutNote(page)).toHaveText(
-      "Shown without your site’s layout and styles: the canvas route is on another site."
+    await expect(siteLayoutNote(page)).toHaveAttribute(
+      "data-canvas-state",
+      "site-layout-other-origin"
     );
+    await expect(siteLayoutNote(page)).toHaveText(FALLBACK_NOTE);
     expect(await framePage(page)).toBe("about:srcdoc");
   });
 });

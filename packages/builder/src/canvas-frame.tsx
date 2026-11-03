@@ -71,6 +71,7 @@ import {
   CANVAS_ROOT_CLASS,
   EMPTY_ELEMENTS_ATTRIBUTE,
 } from "./shell-state";
+import { SiteChromeCues } from "./site-chrome-cues";
 
 /**
  * Where the frame's page comes from, and where in it the canvas is mounted.
@@ -293,7 +294,7 @@ function FramedCanvas({
   const [frame, setFrame] = React.useState<HTMLIFrameElement | null>(null);
   const { shown, refuse } = useShownSource(source, onSourceFallback);
   const { page, mountPoint } = useFramePage(frame, shown, refuse);
-  useSiteChrome(page, mountPoint);
+  const siteChrome = useSiteChrome(page, mountPoint);
 
   const region = useRegionSize(stage);
   const size: FrameSize = { width, height };
@@ -328,6 +329,12 @@ function FramedCanvas({
           className="nx-canvas-layer"
           {...{ [CANVAS_LAYER_ATTRIBUTE]: "" }}
         >
+          <SiteChromeCues
+            frame={frame}
+            page={page}
+            elements={siteChrome}
+            scale={scale}
+          />
           <div ref={layerContent} className="nx-canvas-layer__content">
             {overlay}
           </div>
@@ -573,18 +580,20 @@ const UNDRAWN_ELEMENTS: ReadonlySet<string> = new Set([
 /**
  * Mark one element of the site's layout as its chrome, inert unless the site
  * made it so itself, remembering which it marked so they can be given back.
+ * Answers whether the element is chrome at all: one that draws nothing is not.
  */
 function markBeside(
   element: Element,
   seen: Set<Element>,
   marked: Set<Element>
-): void {
+): boolean {
   seen.add(element);
-  if (UNDRAWN_ELEMENTS.has(element.localName)) return;
+  if (UNDRAWN_ELEMENTS.has(element.localName)) return false;
   element.setAttribute(SITE_CHROME_ATTRIBUTE, "");
-  if (element.hasAttribute("inert")) return;
+  if (element.hasAttribute("inert")) return true;
   element.setAttribute("inert", "");
   marked.add(element);
+  return true;
 }
 
 /** The mount point's ancestors below the body, and the body itself. */
@@ -603,6 +612,9 @@ function ancestorsUpToBody(
   return ancestors;
 }
 
+/** No site chrome: the blank page, or a site page not yet ready. */
+const NO_CHROME: readonly Element[] = [];
+
 /**
  * Make the site's own layout around the mount point inert and quiet, on a
  * page the site serves: every element beside the mount point and beside each
@@ -610,12 +622,14 @@ function ancestorsUpToBody(
  * since the canvas is inside them.
  *
  * Marked again when an ancestor gains a child, for a site whose layout draws
- * part of itself once its own scripts have run.
+ * part of itself once its own scripts have run. Answers with the elements it
+ * marked, for the cues drawn over them.
  */
 function useSiteChrome(
   page: Document | null,
   mountPoint: HTMLElement | null
-): void {
+): readonly Element[] {
+  const [chrome, setChrome] = React.useState<readonly Element[]>(NO_CHROME);
   useIsomorphicLayoutEffect(() => {
     if (page === null || mountPoint === null || mountPoint === page.body)
       return;
@@ -624,13 +638,17 @@ function useSiteChrome(
     // made inert itself stays so when the canvas leaves.
     const seen = new Set<Element>();
     const marked = new Set<Element>();
+    const drawn: Element[] = [];
     const mark = (): void => {
+      const before = drawn.length;
       for (const parent of ancestors) {
         for (const beside of Array.from(parent.children)) {
           const onThePath = beside === mountPoint || ancestors.includes(beside);
-          if (!onThePath && !seen.has(beside)) markBeside(beside, seen, marked);
+          if (onThePath || seen.has(beside)) continue;
+          if (markBeside(beside, seen, marked)) drawn.push(beside);
         }
       }
+      if (drawn.length !== before) setChrome([...drawn]);
     };
     mark();
     const Mutations = page.defaultView?.MutationObserver;
@@ -643,8 +661,10 @@ function useSiteChrome(
       for (const element of seen)
         element.removeAttribute(SITE_CHROME_ATTRIBUTE);
       for (const element of marked) element.removeAttribute("inert");
+      setChrome(NO_CHROME);
     };
   }, [page, mountPoint]);
+  return chrome;
 }
 
 /**

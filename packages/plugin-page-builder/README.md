@@ -179,7 +179,7 @@ and hand-written `@media` rules answer for the device, as they do when published
 canvas inside your site's own layout, with your app's global stylesheet, fonts, header and
 footer, mount a route whose page is `PageBuilderCanvas` from
 `@nextlyhq/plugin-page-builder/canvas` and name its path as the `canvasPath` option. Without it,
-the canvas draws on a blank page and says so, and your app's own CSS does not reach it.
+the canvas draws on a blank page, and your app's own CSS does not reach it.
 
 ## Extending — add your own block
 

@@ -168,6 +168,40 @@ describe("the canvas frame on a page the site serves", () => {
     expect(alreadyInert?.hasAttribute("inert")).toBe(true);
   });
 
+  it("draws a cue over each part of the site's layout, in the editor's document", async () => {
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={siteSource()}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    await hydrate(frame);
+    const cues = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(".nx-site-chrome-cue")
+      );
+    // The text beside the mount point, the header, the aside the site made
+    // inert itself and the footer; the script draws nothing and gets none.
+    expect(cues()).toHaveLength(4);
+    for (const cue of cues()) {
+      expect(cue.title).toBe(
+        "Part of your site’s layout. It comes from your site’s code and can’t be edited here."
+      );
+      expect(cue.textContent).toBe("Part of your site’s layout");
+      // In the editor's document, over the frame, never in the page.
+      expect(cue.ownerDocument).toBe(document);
+    }
+    // A part the layout draws later gets one too.
+    await act(async () => {
+      frameDocument(frame)
+        .getElementById("site-main")
+        ?.append(frameDocument(frame).createElement("nav"));
+      await Promise.resolve();
+    });
+    expect(cues()).toHaveLength(5);
+  });
+
   it("falls back to the blank page, and says why, when the page loaded is not the route", () => {
     const onSourceFallback =
       vi.fn<(reason: CanvasFrameFallback | null) => void>();

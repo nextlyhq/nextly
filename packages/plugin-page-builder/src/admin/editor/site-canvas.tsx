@@ -6,15 +6,18 @@
  *
  * The route is the site's (`PageBuilderCanvas`, mounted at the plugin's
  * `canvasPath`), so the editor learns its path from the plugin's client
- * config. Without one, or when the route cannot be shown, the canvas draws on
- * the editor's blank page and a note above it says which, because a page
- * drawn without the site's stylesheets can differ from the published one.
+ * config. Without one, the canvas draws on the editor's blank page and says
+ * nothing: that is every site that has not opted in, and a note there would
+ * never go away. When a site has set the route and it cannot be shown, a note
+ * above the canvas says so, because the page is then drawn without the site's
+ * stylesheets and can differ from the published one.
  *
  * @module admin/editor/site-canvas
  */
-import type {
-  CanvasFrameFallback,
-  CanvasFrameSource,
+import {
+  CANVAS_ROUTE_DOCS_HREF,
+  type CanvasFrameFallback,
+  type CanvasFrameSource,
 } from "@nextlyhq/builder/shell";
 import { useDocumentLocale } from "@nextlyhq/plugin-sdk/admin";
 import { useMemo, useState, type JSX } from "react";
@@ -65,15 +68,15 @@ export function readCanvasPath(
   return typeof path === "string" && path !== "" ? path : undefined;
 }
 
-/** Why the canvas is drawn without the site's layout, if it is. */
-export type SiteCanvasFallback = CanvasFrameFallback | "no-route";
-
 /** @internal */
 export interface SiteCanvas {
   /** The site's canvas route, or `undefined` for the editor's blank page. */
   readonly canvasSource: CanvasFrameSource | undefined;
-  /** Why the canvas shows the blank page, or `null` when it shows the site's. */
-  readonly canvasFallback: SiteCanvasFallback | null;
+  /**
+   * Why the canvas shows the blank page in place of the site's canvas route,
+   * or `null` when it shows the route, or the site has none.
+   */
+  readonly canvasFallback: CanvasFrameFallback | null;
   /** What the frame calls when it falls back from the route, or recovers. */
   readonly onCanvasFallback: (reason: CanvasFrameFallback | null) => void;
   /** The direction of the language being edited, for the frame's root. */
@@ -95,35 +98,30 @@ export function useSiteCanvas(
   const locale = useDocumentLocale();
   return {
     canvasSource,
-    canvasFallback: canvasSource === undefined ? "no-route" : refused,
+    canvasFallback: canvasSource === undefined ? null : refused,
     onCanvasFallback: setRefused,
     canvasDir: locale === null ? undefined : locale.rtl ? "rtl" : "ltr",
   };
 }
 
 /**
- * What the note above the canvas says, by why the site's layout is missing.
- * Each says what the author is looking at first, then why.
+ * What the note above the canvas says when the site's canvas route cannot be
+ * shown, whatever the reason: the author can act on none of them, so it says
+ * what they are looking at, and the Details link takes whoever runs the site
+ * to the docs. The reason itself stays on the note as a state, for a test or
+ * whoever debugs it.
  */
-const FALLBACK_NOTES: Readonly<Record<SiteCanvasFallback, string>> = {
-  "no-route":
-    "Shown without your site’s layout and styles: the site has no canvas route set up.",
-  "other-origin":
-    "Shown without your site’s layout and styles: the canvas route is on another site.",
-  "not-served":
-    "Shown without your site’s layout and styles: the canvas route was not found.",
-  "not-ready":
-    "Shown without your site’s layout and styles: the canvas route did not finish loading.",
-};
+const FALLBACK_NOTE =
+  "Shown without your site’s header, footer and styles. The site’s canvas page didn’t load.";
 
 /**
  * The note above a canvas drawn without the site's layout, or nothing while
- * the site's own page is shown.
+ * the site's own page is shown or the site has no canvas route.
  */
 export function SiteLayoutNote({
   fallback,
 }: {
-  fallback: SiteCanvasFallback | null;
+  fallback: CanvasFrameFallback | null;
 }): JSX.Element | null {
   if (fallback === null) return null;
   return (
@@ -132,7 +130,17 @@ export function SiteLayoutNote({
       role="status"
       data-canvas-state={`site-layout-${fallback}`}
     >
-      {FALLBACK_NOTES[fallback]}
+      {FALLBACK_NOTE}{" "}
+      <a
+        href={CANVAS_ROUTE_DOCS_HREF}
+        target="_blank"
+        rel="noreferrer"
+        className="underline underline-offset-2"
+        // The visible word first, so a voice user can say what they see.
+        aria-label="Details about the site’s canvas page (opens in a new tab)"
+      >
+        Details
+      </a>
     </p>
   );
 }

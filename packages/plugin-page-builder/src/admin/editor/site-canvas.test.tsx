@@ -97,10 +97,11 @@ describe("the canvas route's path from the client config", () => {
 });
 
 describe("the editor's site canvas", () => {
-  it("draws on the blank page and says so where the site has no canvas route", () => {
+  it("draws on the blank page, and says nothing, where the site has no canvas route", () => {
+    // Every site that has not opted in: a note there would never go away.
     const { result } = renderHook(() => useSiteCanvas({}));
     expect(result.current.canvasSource).toBeUndefined();
-    expect(result.current.canvasFallback).toBe("no-route");
+    expect(result.current.canvasFallback).toBeNull();
   });
 
   it("loads the route, and says why when the frame falls back from it", () => {
@@ -135,15 +136,23 @@ describe("the note above a canvas without the site's layout", () => {
     expect(container.childNodes).toHaveLength(0);
   });
 
-  it.each([
-    ["no-route", "the site has no canvas route set up"],
-    ["other-origin", "the canvas route is on another site"],
-    ["not-served", "the canvas route was not found"],
-    ["not-ready", "the canvas route did not finish loading"],
-  ] as const)("says what is shown, and why, for %s", (fallback, why) => {
-    render(<SiteLayoutNote fallback={fallback} />);
-    expect(screen.getByRole("status").textContent).toBe(
-      `Shown without your site’s layout and styles: ${why}.`
-    );
-  });
+  it.each(["other-origin", "not-served", "not-ready"] as const)(
+    "says what is shown, in the author's words, with the docs one press away, for %s",
+    fallback => {
+      render(<SiteLayoutNote fallback={fallback} />);
+      const note = screen.getByRole("status");
+      expect(note.textContent).toBe(
+        "Shown without your site’s header, footer and styles. The site’s canvas page didn’t load. Details"
+      );
+      // The reason stays on the note, for a test or whoever debugs it.
+      expect(note.getAttribute("data-canvas-state")).toBe(
+        `site-layout-${fallback}`
+      );
+      const details = screen.getByRole("link", { name: /^Details/ });
+      expect(details.getAttribute("href")).toBe(
+        "https://nextlyhq.com/docs/page-builder#draw-the-canvas-in-your-sites-layout"
+      );
+      expect(details.getAttribute("target")).toBe("_blank");
+    }
+  );
 });
