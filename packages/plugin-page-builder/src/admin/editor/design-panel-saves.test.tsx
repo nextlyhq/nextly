@@ -494,4 +494,50 @@ describe("the Design panel's writes", () => {
     // Stored where the read already holds it, so nothing is drawn over it.
     expect(previewing()).toBe("0");
   });
+  it("refuses Save when the held edit it writes is refused, and says why", async () => {
+    single.refuse = "That colour cannot be stored.";
+    render(<Editor steps={[]} />);
+    enter(openBrand(), "#000012");
+    let refusal: unknown;
+    await act(async () => {
+      try {
+        await beforeAction.run?.();
+      } catch (error) {
+        refusal = error;
+      }
+    });
+    // Throwing is how a before-action refuses Save and Publish, with its
+    // message: the page is not stored with a style that was not.
+    expect(refusal).toBeInstanceOf(Error);
+    expect((refusal as Error).message).toBe(
+      "The page was not saved because a design change was refused: That colour cannot be stored."
+    );
+    expect(writes).toHaveLength(1);
+    expect(screen.getByRole("alert", { hidden: true }).textContent).toBe(
+      "That colour cannot be stored."
+    );
+  });
+
+  it("refuses Save for a write released earlier that is refused while Save waits", async () => {
+    single.refuse = "That colour cannot be stored.";
+    let open: () => void = () => {};
+    single.gate = new Promise(resolve => {
+      open = resolve;
+    });
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    enter(field, "#000013");
+    act(() => {
+      fireEvent.keyDown(field, { key: "Escape" });
+    });
+    await settle();
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = Promise.resolve(beforeAction.run?.());
+    });
+    open();
+    await act(async () => {
+      await expect(saving).rejects.toThrow(/design change was refused/);
+    });
+  });
 });

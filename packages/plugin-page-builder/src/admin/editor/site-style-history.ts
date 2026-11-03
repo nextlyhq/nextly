@@ -224,6 +224,11 @@ export function useSiteStyleHistory(): {
   return { history, replay, connect, preview: shown };
 }
 
+/** Why Save or Publish did not run, when a design change it waited for was refused. */
+function designRefusal(reasons: readonly string[]): string {
+  return `The page was not saved because a design change was refused: ${reasons.join(" ")}`;
+}
+
 /** A held value drawn over the read, and the read its write answered at. */
 interface Shown {
   value: unknown;
@@ -307,7 +312,13 @@ function useHeldPreview(): {
  * and when the editor goes away.
  */
 function useReleaseWhenDone(history: SiteStyleHistory): void {
-  useBeforeDocumentAction(() => releaseHeldSiteStyle(history));
+  // A refused write refuses the action too: storing the page then could
+  // keep a reference to a style that was never stored. Thrown, as a
+  // before-action refuses Save and Publish, with words the author reads.
+  useBeforeDocumentAction(async () => {
+    const refused = await releaseHeldSiteStyle(history);
+    if (refused.length > 0) throw new Error(designRefusal(refused));
+  });
   useEffect(() => {
     const release = (): void => {
       void releaseHeldSiteStyle(history);

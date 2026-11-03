@@ -306,6 +306,12 @@ export interface SectionChain {
    * is written, so every later write and replay waits behind it.
    */
   waiting?: HeldWrite;
+  /**
+   * The answers of this editor's writes to the section still on their way:
+   * what a barrier waits for, and reads to learn whether any was refused,
+   * which the tail cannot say since it settles to the value either way.
+   */
+  writing?: Set<Promise<SiteStyleSaveResult>>;
 }
 
 /** A save held for the author's pause. */
@@ -342,17 +348,20 @@ function heldWrites(history: SiteStyleHistory | null): HeldWrite[] {
  */
 export async function releaseHeldSiteStyle(
   history: SiteStyleHistory | null
-): Promise<void> {
-  if (history === null) return;
+): Promise<readonly string[]> {
+  if (history === null) return [];
   for (const write of heldWrites(history)) write.release();
   // Every write still on its way, not only the ones released here: one
   // released earlier, when an editor closed, is no longer held but has not
-  // answered either, and a page saved meanwhile must wait for it too. A
-  // chain's tail settles once every write made to it so far has answered.
-  await Promise.all(
-    [...history.settled.values()]
-      .filter(chain => chain.pending > 0)
-      .map(chain => chain.tail)
+  // answered either, and a page saved meanwhile must wait for it too.
+  const answers = await Promise.all(
+    [...history.settled.values()].flatMap(chain => [...(chain.writing ?? [])])
+  );
+  // Why any was refused, so a caller that must not go on without them, as
+  // Save does, can say so. A write withdrawn before it was sent carries no
+  // reason and was no refusal.
+  return answers.flatMap(answer =>
+    answer.saved ? [] : Object.values(answer.issues)
   );
 }
 
@@ -373,7 +382,9 @@ export function useHeldSiteStyle(): {
   return useMemo(
     () => ({
       extend: () => extendHeldSiteStyle(history),
-      release: () => releaseHeldSiteStyle(history),
+      release: async () => {
+        await releaseHeldSiteStyle(history);
+      },
     }),
     [history]
   );
@@ -539,6 +550,11 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         const result = await write(section, next);
         return { result, holds: result.saved ? next : held, wrote: true };
       });
+      // Counted while it is on its way, for a barrier to wait on and read.
+      const answer = done.then(({ result }) => result);
+      const writing = (chain.writing ??= new Set());
+      writing.add(answer);
+      void answer.then(() => writing.delete(answer));
       chain.tail = done.then(({ holds }) => {
         chain.pending -= 1;
         if (chain.pending === 0) {
