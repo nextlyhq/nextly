@@ -352,6 +352,22 @@ function servicesFor(
 /** The block verbs the inspector's card offers, as the verbs provider shares them. */
 type CardVerbs = ComponentProps<typeof InspectorPanel>["verbs"];
 
+/**
+ * The onboarding checklist, rendered only while it has somewhere to go:
+ * passing an element the shell would position and then hide leaves an empty
+ * positioner over the canvas.
+ */
+function editorChecklist({
+  checklist,
+}: EditorView): React.JSX.Element | undefined {
+  return checklist.visible ? (
+    <OnboardingChecklist
+      steps={checklist.steps}
+      onDismiss={checklist.dismiss}
+    />
+  ) : undefined;
+}
+
 /** The inspector, given the same readings the canvas draws with. */
 function editorInspector(
   view: EditorView,
@@ -861,7 +877,6 @@ function EditorBody<TFieldValues extends FieldValues>({
     mayCreatePattern,
     makeComponent,
     componentVerbs,
-    checklist,
     availablePanels,
     openPanelRequest,
     setShowEmptyElements,
@@ -938,17 +953,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             componentTitle={componentLibrary.titleOf}
           />
         }
-        // Rendered only while it has somewhere to go: passing an element the
-        // shell would position and then hide leaves an empty positioner over
-        // the canvas.
-        checklist={
-          checklist.visible ? (
-            <OnboardingChecklist
-              steps={checklist.steps}
-              onDismiss={checklist.dismiss}
-            />
-          ) : undefined
-        }
+        checklist={editorChecklist(view)}
         renderPanel={editorPanelRenderer(view)}
       >
         {/*
