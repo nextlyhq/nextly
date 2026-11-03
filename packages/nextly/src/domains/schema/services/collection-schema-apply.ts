@@ -151,10 +151,11 @@ class AnsweringDispatcher implements PromptDispatcher {
     private readonly renameResolutions: BrowserRenameResolution[],
     private readonly eventResolutions: Resolution[],
     private readonly legacyResolutions: LegacyResolutionsBundle | undefined,
-    private readonly ownTable: string | undefined
+    private readonly ownTable: string | undefined,
+    private readonly slug: string
   ) {}
 
-  dispatch(
+  async dispatch(
     args: Parameters<PromptDispatcher["dispatch"]>[0]
   ): ReturnType<PromptDispatcher["dispatch"]> {
     const key = (r: {
@@ -194,12 +195,86 @@ class AnsweringDispatcher implements PromptDispatcher {
               toColumn: c.toColumn,
               choice: "drop_and_add" as const,
             }));
-    return new BrowserPromptDispatcher(
-      [...this.renameResolutions, ...rest],
+    const resolutions = [...this.renameResolutions, ...rest];
+    const result = await new BrowserPromptDispatcher(
+      resolutions,
       this.eventResolutions,
       this.legacyResolutions
     ).dispatch(args);
+    if (!result.proceed && this.ownTable !== undefined) {
+      refuseLeftoverColumns(
+        this.slug,
+        this.ownTable,
+        args,
+        result,
+        resolutions
+      );
+    }
+    return result;
   }
+}
+
+/**
+ * Refuse a save that would drop a column of its own table that no field describes and the save
+ * never removed, such as one an install from before removed fields dropped their columns kept,
+ * with its data. The push offers it as a drop, or as the old side of a rename, and nothing the
+ * save decides answers it, so the push would stop as cancelled; this says which column and how
+ * to go on instead, before anything is dropped. Another table's drift is left to the push's own
+ * refusal.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each such column (`COLUMN_NOT_DESCRIBED`)
+ */
+function refuseLeftoverColumns(
+  slug: string,
+  ownTable: string,
+  args: Parameters<PromptDispatcher["dispatch"]>[0],
+  result: Awaited<ReturnType<PromptDispatcher["dispatch"]>>,
+  resolutions: readonly BrowserRenameResolution[]
+): void {
+  // Acknowledged as the browser dispatcher acknowledges a drop: exactly one confirm_drop.
+  const confirmations = new Map<string, number>();
+  for (const r of result.resolutions) {
+    if (r.kind === "confirm_drop") {
+      confirmations.set(r.eventId, (confirmations.get(r.eventId) ?? 0) + 1);
+    }
+  }
+  const answered = new Set(
+    resolutions.map(r => `${r.tableName}::${r.fromColumn}::${r.toColumn}`)
+  );
+  const renamedFrom = new Set(
+    result.confirmedRenames.map(c => `${c.tableName}::${c.fromColumn}`)
+  );
+  const leftover = new Set<string>();
+  for (const event of args.events) {
+    if (
+      event.kind === "destructive_drop" &&
+      event.tableName === ownTable &&
+      confirmations.get(event.id) !== 1
+    ) {
+      leftover.add(event.columnName);
+    }
+  }
+  for (const c of args.candidates) {
+    if (
+      c.tableName === ownTable &&
+      !answered.has(`${c.tableName}::${c.fromColumn}::${c.toColumn}`) &&
+      !renamedFrom.has(`${c.tableName}::${c.fromColumn}`)
+    ) {
+      leftover.add(c.fromColumn);
+    }
+  }
+  if (leftover.size === 0) return;
+  throw NextlyError.validation({
+    errors: [...leftover].map(column => ({
+      path: `columns.${column}`,
+      code: "COLUMN_NOT_DESCRIBED",
+      message:
+        `The collection "${slug}" holds a column "${column}" that no field describes, and ` +
+        `saving would remove it with its data. Drop the column by hand, or add a field that ` +
+        `describes it, then save again.`,
+    })),
+    logContext: { slug, tableName: ownTable, columns: [...leftover] },
+  });
 }
 
 /** One collection's schema change, as either of its callers states it. */
@@ -305,7 +380,8 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
       change.renameResolutions,
       change.eventResolutions,
       change.legacyResolutions,
-      change.dropAndAddUnansweredRenames === true ? tableName : undefined
+      change.dropAndAddUnansweredRenames === true ? tableName : undefined,
+      change.slug
     ),
     tableName,
     new Set(

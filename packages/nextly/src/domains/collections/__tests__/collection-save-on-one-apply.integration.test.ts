@@ -410,6 +410,9 @@ describeEachDialect("a collection's Builder save", dialect => {
     );
 
     expect(saved.success).toBe(false);
+    expect(saved.message).toMatch(
+      /holds a column "stray" that no field describes/
+    );
     expect(await itemColumns()).toContain("stray");
     expect(await recordedFields()).toEqual(recordedBefore);
   }, 120_000);
