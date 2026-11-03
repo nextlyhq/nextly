@@ -258,10 +258,19 @@ export async function scanLayoutReferences(args: {
 }
 
 /**
- * How many ids one readable-pages lookup asks about: under the 500 rows a
- * collection read answers, and well under SQLite's 999 bound parameters.
+ * How many ids one `in` lookup asks about: under the 500 rows a collection
+ * read answers, and well under SQLite's 999 bound parameters.
  */
-const READABLE_CHUNK = 200;
+const ID_CHUNK = 200;
+
+/** `ids` in chunks of {@link ID_CHUNK}, each small enough for one lookup. */
+export function idChunks(ids: readonly string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let at = 0; at < ids.length; at += ID_CHUNK) {
+    chunks.push(ids.slice(at, at + ID_CHUNK));
+  }
+  return chunks;
+}
 
 /**
  * Which of `ids` the remover may read, as one query, each with the title that
@@ -317,9 +326,10 @@ export async function readableTitles(args: {
   const ids = args.references.map(reference => reference.id);
   if (ids.length === 0) return { readable: [], unreadable: 0 };
   const titles = new Map<string, string | null>();
-  for (let at = 0; at < ids.length; at += READABLE_CHUNK) {
-    const chunk = await readableIn(args, ids.slice(at, at + READABLE_CHUNK));
-    for (const [id, title] of chunk) titles.set(id, title);
+  for (const chunk of idChunks(ids)) {
+    for (const [id, title] of await readableIn(args, chunk)) {
+      titles.set(id, title);
+    }
   }
   const readable: { id: string; title: string }[] = [];
   for (const reference of args.references) {

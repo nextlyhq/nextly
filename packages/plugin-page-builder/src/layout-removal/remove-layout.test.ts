@@ -1041,6 +1041,47 @@ describe("the sweep", () => {
     });
   });
 
+  it("drops the tombstones of Layouts published again in chunks, past the database's bound parameters", async () => {
+    const s = site();
+    const d = deps(s);
+    for (let i = 0; i < 450; i += 1) {
+      const id = `t${String(i)}`;
+      s.layouts.set(id, { id, title: id, status: "published" });
+      d.store.rows.set(id, {
+        layoutId: id,
+        action: "unpublish",
+        step: "removed",
+        token: `token-${id}`,
+        startedBy: null,
+        pagesLeft: null,
+        copy: null,
+        copyVersion: null,
+        settledAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+    const find = d.nextly.find.bind(d.nextly);
+    const bounded = {
+      ...d,
+      nextly: Object.assign(Object.create(d.nextly) as object, {
+        find: async (args: Parameters<typeof find>[0]) => {
+          const ids = (args.where as { id?: { in?: unknown[] } } | undefined)
+            ?.id?.in;
+          // A database refuses a statement with more bound parameters than it
+          // takes, as SQLite does past its limit.
+          if (Array.isArray(ids) && ids.length > 250) {
+            throw new Error("too many SQL variables");
+          }
+          return find(args);
+        },
+      }) as typeof d.nextly,
+    };
+
+    await settleLayoutRemovals(bounded);
+
+    expect(d.store.rows.size).toBe(0);
+  });
+
   it("leaves a row inside its lease to the request that holds it", async () => {
     const s = site();
     const d = deps(s);

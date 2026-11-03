@@ -49,7 +49,11 @@ import {
   type DefaultLayoutDirectApi,
 } from "../default-layout/store";
 
-import { scanLayoutReferences, type PageReference } from "./layout-references";
+import {
+  idChunks,
+  scanLayoutReferences,
+  type PageReference,
+} from "./layout-references";
 import { clearPageReference, IN_FLIGHT_CLEARED } from "./page-reference-guard";
 import { restoreFromCopy, type RestoreDeps } from "./restore";
 import { REMOVAL_LEASE_MS, type LayoutRemoval } from "./store";
@@ -252,23 +256,40 @@ export async function settleLayoutRemovals(deps: SweepDeps): Promise<void> {
  * Drop each unpublish tombstone whose Layout is published again. A publish
  * normally drops it from the Layout's own after-write hook, but core's
  * all-languages publish runs no collection hooks, and would otherwise leave a
- * published Layout that make-default refuses as being removed. Never throws.
+ * published Layout that make-default refuses as being removed.
+ *
+ * Asked in chunks ({@link idChunks}), each released on its own, so however many
+ * tombstones build up, no lookup passes the database's bound parameters and
+ * one chunk that fails leaves the rest released. Never throws.
  */
 async function releasePublishedTombstones(deps: SweepDeps): Promise<void> {
+  let tombstones: LayoutRemoval[];
   try {
-    const tombstones = await deps.store.tombstones();
-    const published = await publishedLayoutIds(
-      deps.nextly,
-      deps.slugs,
-      tombstones.map(removal => removal.layoutId)
-    );
-    for (const id of published) await deps.store.releaseTombstone(id);
+    tombstones = await deps.store.tombstones();
   } catch (error) {
-    deps.warn(
-      "[page-builder] the unpublish records of Layouts published again could not be checked; the next sweep will try again",
-      { error: error instanceof Error ? error.message : String(error) }
-    );
+    warnTombstones(deps, error);
+    return;
   }
+  for (const chunk of idChunks(tombstones.map(removal => removal.layoutId))) {
+    try {
+      const published = await publishedLayoutIds(
+        deps.nextly,
+        deps.slugs,
+        chunk
+      );
+      for (const id of published) await deps.store.releaseTombstone(id);
+    } catch (error) {
+      warnTombstones(deps, error);
+    }
+  }
+}
+
+/** Log a tombstone check that failed; the next sweep tries again. */
+function warnTombstones(deps: SweepDeps, error: unknown): void {
+  deps.warn(
+    "[page-builder] the unpublish records of Layouts published again could not be checked; the next sweep will try again",
+    { error: error instanceof Error ? error.message : String(error) }
+  );
 }
 
 /** The rows stopped requests left, each finished or cleared. */
