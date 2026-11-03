@@ -20,7 +20,6 @@ import {
   announcer,
   block,
   boxOf,
-  canvasScope,
   clickBlock,
   layerRow,
   openLayers,
@@ -28,6 +27,7 @@ import {
   selection,
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { canvasLayer } from "./support/canvas-frame";
 import { test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
@@ -130,9 +130,9 @@ async function selectBlock(page: Page, id: string): Promise<void> {
   await expect.poll(() => selection(page)).toEqual([id]);
 }
 
-/** A toolbar button, by its verb, in the canvas's own document. */
+/** A toolbar button, by its verb, in the chrome drawn over the canvas. */
 async function toolbarButton(page: Page, name: string) {
-  return (await canvasScope(page))
+  return canvasLayer(page)
     .getByRole("toolbar", { name: "Block actions" })
     .getByRole("button", { name, exact: true });
 }
@@ -203,7 +203,9 @@ test.describe("a block locked in Layers", () => {
 
     // A click still selects the locked block, so it can be unlocked.
     await selectBlock(page, HERO);
-    const scope = await canvasScope(page);
+    // The note, the toolbar and the refusal are chrome, drawn over the canvas
+    // in the admin's document rather than in the page.
+    const scope = canvasLayer(page);
     await expect(scope.locator("[data-lock-note]")).toHaveText("Locked");
     await expect(
       page.getByRole("button", { name: "Actions for Hero" })

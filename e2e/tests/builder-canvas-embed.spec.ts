@@ -14,6 +14,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 import { canvasRoot, openEditorWith } from "./canvas/editor-driver";
+import { CANVAS_FRAME } from "./support/canvas-frame";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -60,17 +61,17 @@ function zoomTrigger(page: Page): Locator {
 
 /** The width the canvas lays the page out at, which the zoom does not change. */
 async function layoutWidth(page: Page): Promise<number> {
-  return (await canvasRoot(page)).evaluate(
-    element => (element as HTMLElement).offsetWidth
-  );
+  return page
+    .locator(CANVAS_FRAME)
+    .evaluate(element => (element as HTMLElement).offsetWidth);
 }
 
-/** The scale the canvas is drawn at, as the browser computed it. */
-async function drawnZoom(page: Page): Promise<string> {
-  return (await canvasRoot(page)).evaluate(
-    element =>
-      element.ownerDocument.defaultView?.getComputedStyle(element).zoom ?? ""
-  );
+/** The scale the canvas is drawn at: its painted width over its layout width. */
+async function drawnZoom(page: Page): Promise<number> {
+  return page.locator(CANVAS_FRAME).evaluate(element => {
+    const frame = element as HTMLElement;
+    return frame.getBoundingClientRect().width / frame.offsetWidth;
+  });
 }
 
 test.describe("the canvas with an embed on the page", () => {
@@ -132,7 +133,7 @@ test.describe("the canvas with an embed on the page", () => {
     await trigger.click();
     await page.getByRole("menuitemradio", { name: "50%", exact: true }).click();
     await expect(trigger).toHaveText("50%");
-    await expect.poll(() => drawnZoom(page)).toBe("0.5");
+    await expect.poll(() => drawnZoom(page)).toBe(0.5);
 
     expect(errors).toEqual([]);
   });

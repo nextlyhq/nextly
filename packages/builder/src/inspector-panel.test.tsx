@@ -397,6 +397,22 @@ describe("InspectorPanel block card", () => {
     expect(card.querySelector(".nx-block-icon")).not.toBeNull();
   });
 
+  it("sets the icon in a tile, and the description on one line beside the name, whole in its title", () => {
+    // The design's card: a tile, then the name over a one-line description.
+    // Cut to one line on screen, so the whole sentence is kept in the
+    // element (read in full by a screen reader) and offered on hover.
+    mount({ name: "Hero title" });
+
+    const card = document.querySelector("[data-block-card]") as HTMLElement;
+    const tile = card.querySelector(".nx-block-card__icon");
+    expect(tile?.querySelector(".nx-block-icon")).toBeTruthy();
+    const text = card.querySelector(".nx-block-card__text");
+    expect(text?.querySelector("h2")).toBeTruthy();
+    const description = text?.querySelector(".nx-block-card__description");
+    expect(description?.textContent).toBe("A heading.");
+    expect(description?.getAttribute("title")).toBe("A heading.");
+  });
+
   it("leaves the editor around the card's menu in the accessibility tree", () => {
     // A modal menu marks everything outside it aria-hidden while those
     // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
