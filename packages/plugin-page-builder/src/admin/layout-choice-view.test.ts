@@ -70,7 +70,7 @@ const page = (layout: unknown = null, noHeaderFooter = false) => ({
 describe("the page's Layout picker", () => {
   it("offers the default by name, published Layouts, unpublished ones marked, then none", () => {
     expect(layoutPickerView(page(), ready()).options).toEqual([
-      { value: SITE_DEFAULT_VALUE, label: "Site default (Main)" },
+      { value: SITE_DEFAULT_VALUE, label: "Site default", note: "Main" },
       { value: layoutValue("main"), label: "Main" },
       { value: layoutValue("landing"), label: "Landing" },
       {
@@ -84,7 +84,9 @@ describe("the page's Layout picker", () => {
   it("names the default in effect for a page naming nothing", () => {
     const view = layoutPickerView(page(), ready());
     expect(view.value).toBe(SITE_DEFAULT_VALUE);
-    expect(view.why).toBe("Site default: Main");
+    expect(view.why).toBe(
+      "Follows the site default, Main, because this page doesn't choose its own Layout."
+    );
     expect(view.effective?.id).toBe("main");
   });
 
@@ -112,12 +114,25 @@ describe("the page's Layout picker", () => {
     expect(view.options.find(o => o.value === view.value)?.label).toBe(
       "A Layout you can't view, or one that was deleted"
     );
-    expect(view.options[0]?.label).toBe("Site default (Main)");
+    expect(view.options[0]).toMatchObject({
+      label: "Site default",
+      note: "Main",
+    });
     expect(view.why).toBe(
       "You can't see this Layout. It may have been deleted, or you may not have access to it. Choose another Layout to change it."
     );
     // Nothing of it is drawn.
     expect(view.effective).toBeNull();
+  });
+
+  it("says the default shows for an unpublished Layout, even when the default is one the author cannot read", () => {
+    const view = layoutPickerView(
+      page({ id: "unfinished" }),
+      ready({ defaultLayout: null, defaultUnreadable: true })
+    );
+    expect(view.why).toBe(
+      "Unfinished (not published, so the site default shows)"
+    );
   });
 
   it("says a default is set without naming one the author cannot read", () => {
@@ -129,7 +144,7 @@ describe("the page's Layout picker", () => {
       "Site default (a Layout you can't view, or one that was deleted)"
     );
     expect(view.why).toBe(
-      "Site default: a Layout you can't view, or one that was deleted"
+      "Follows the site default: a Layout you can't view, or one that was deleted."
     );
     expect(view.effective).toBeNull();
   });

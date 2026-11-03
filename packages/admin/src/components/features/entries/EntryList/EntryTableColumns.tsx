@@ -111,6 +111,37 @@ const SORTABLE_FIELD_TYPES: readonly string[] = [
  */
 const DEFAULT_COLUMN_COUNT = 4;
 
+/** Field types never shown as a column: they hold nested or related data. */
+const NON_COLUMN_TYPES: readonly string[] = [
+  "group",
+  "relationship",
+  "repeater",
+  "component",
+];
+
+/**
+ * Whether the list picks a field as a default column by itself: a named data
+ * field the form shows. A field the form hides (`admin.hidden`) is set by some
+ * other control, so it is left out here; it stays on offer as a column, and a
+ * collection's own `defaultColumns` may still name it.
+ */
+export function isDefaultColumnField(field: {
+  name?: unknown;
+  type?: unknown;
+  admin?: unknown;
+}): field is { name: string; type: string } {
+  if (typeof field.name !== "string" || field.name.length === 0) return false;
+  if (typeof field.type !== "string" || NON_COLUMN_TYPES.includes(field.type)) {
+    return false;
+  }
+  const admin = field.admin;
+  return !(
+    typeof admin === "object" &&
+    admin !== null &&
+    (admin as { hidden?: unknown }).hidden === true
+  );
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -143,11 +174,10 @@ function isDataField(field: FieldConfig): field is NamedDataFieldConfig {
  */
 function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
   const dataFields: NamedDataFieldConfig[] = [];
-  const excludedTypes = ["group", "relationship", "repeater", "component"];
 
   for (const field of fields) {
     // Only include direct data fields that are not complex/layout types
-    if (isDataField(field) && !excludedTypes.includes(field.type)) {
+    if (isDataField(field) && !NON_COLUMN_TYPES.includes(field.type)) {
       dataFields.push(field);
     }
   }
@@ -163,8 +193,9 @@ function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
  * @returns Array of field names to display as columns
  */
 function getDefaultColumns(fields: FieldConfig[]): string[] {
-  // Filter to data fields only (exclude layout fields)
-  const dataFields = getAllDataFields(fields)
+  // Data fields the form shows, never a hidden one or a layout field.
+  const dataFields = fields
+    .filter(isDefaultColumnField)
     .slice(0, DEFAULT_COLUMN_COUNT)
     .map(f => f.name);
 
