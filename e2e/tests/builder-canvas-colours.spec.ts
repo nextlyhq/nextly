@@ -26,6 +26,12 @@ import { contrastRatio, gotoAdmin, toRgb, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { CANVAS_FRAME, canvasFrame, canvasLayer } from "./support/canvas-frame";
 
+/**
+ * How far outside a block its selection ring is drawn, in screen pixels at any
+ * zoom: the ring and its halo.
+ */
+const RING_OUTSIDE = 4;
+
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 // The canvas reads the site's tokens, which the Site Style single holds.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
@@ -446,19 +452,29 @@ test.describe("selecting a block", () => {
       before
     );
 
-    // The halo is measured onto the selected block: its box is the block's,
-    // and the band is drawn just inside that edge, as the ring is.
+    // The halo is measured onto the selected block: its box is the block's
+    // grown by the ring's distance on every edge, and the band is drawn just
+    // inside that, as the ring is.
     const halo = rings(page);
     await expect(halo).toHaveCount(1);
     const block = await card.boundingBox();
     const band = await halo.boundingBox();
     expect(block && band, "both boxes are measurable").toBeTruthy();
     if (block && band) {
-      for (const key of ["x", "y", "width", "height"] as const) {
+      const gaps = {
+        left: block.x - band.x,
+        top: block.y - band.y,
+        right: band.x + band.width - (block.x + block.width),
+        bottom: band.y + band.height - (block.y + block.height),
+      };
+      for (const [edge, gap] of Object.entries(gaps)) {
         expect(
-          Math.abs(band[key] - block[key]),
-          `the halo's ${key} matches the block's`
-        ).toBeLessThan(1);
+          gap,
+          `the halo's ${edge} stands outside the block`
+        ).toBeGreaterThan(RING_OUTSIDE - 1);
+        expect(gap, `the halo's ${edge} is beside it`).toBeLessThan(
+          RING_OUTSIDE + 1
+        );
       }
     }
   });
@@ -579,7 +595,8 @@ test.describe("the selection halo", () => {
       )
     ).toBe("12px");
     // Drawn over the frame at the frame's painted scale: the corner is the
-    // block's 12px as the author sees it on screen.
+    // block's 12px as the author sees it on screen, grown by the distance the
+    // ring stands outside it, so the two curves stay concentric.
     const scale = await card.evaluate(element => {
       const el = element as HTMLElement;
       const frame = el.ownerDocument.defaultView?.frameElement as
@@ -599,9 +616,9 @@ test.describe("the selection halo", () => {
                 element => getComputedStyle(element).borderTopLeftRadius
               )
             ) -
-              12 * scale
+              (12 * scale + RING_OUTSIDE)
           ),
-        { message: "the ring's corner is the block's" }
+        { message: "the ring's corner follows the block's" }
       )
       .toBeLessThan(0.5);
   });
@@ -641,25 +658,25 @@ test.describe("the selection halo", () => {
     test.slow();
     const card = await selectCardWith(
       page,
-      ".nx-pb-page p[data-nx-node='card'] { position: relative; z-index: 5; background: #2563eb; }"
+      ".nx-pb-page { background: #111827; } .nx-pb-page p[data-nx-node='card'] { position: relative; z-index: 5; background: #2563eb; }"
     );
     await expect(rings(page)).toHaveCount(1);
     const box = await card.boundingBox();
     expect(box, "the card is measurable").not.toBeNull();
     if (box === null) return;
-    // A short column across the top edge: ring, then band, then the card.
-    // Near the left end rather than the middle, where the spacing overlay's
-    // value chip sits over the edge.
+    // A short column across the ring, which stands just outside the card's
+    // top edge: ring, then band, then the card. Near the left end rather than
+    // the middle, where the spacing overlay's value chip sits over the edge.
     const column = await pixelsIn(page, {
       x: Math.round(box.x + box.width / 4),
-      y: Math.floor(box.y),
+      y: Math.floor(box.y) - 6,
       width: 1,
-      height: 6,
+      height: 8,
     });
     /*
-     * Near white rather than pure: the spacing overlay's padding band, which
-     * the editor draws over the selected block, tints everything under it. The
-     * card itself is a saturated blue, so a light pixel can only be the band.
+     * Near white rather than pure: the spacing overlay's band tints what is
+     * under it. The page's ground is near black and the card a saturated blue,
+     * so a light pixel there can only be the halo band.
      */
     expect(
       column.some(([r, g, b]) => Math.min(r, g, b) > 180),

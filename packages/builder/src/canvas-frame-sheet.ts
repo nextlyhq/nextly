@@ -23,7 +23,7 @@
  * @module canvas-frame-sheet
  */
 
-import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
+import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
@@ -169,6 +169,10 @@ ${ROOT} [contenteditable="true"] * {
 
 /* A block that draws nothing still has height enough to be selected. */
 ${ROOT} [data-nx-selected]:empty { min-height: 2px; }
+
+/* A text block emptied of its words keeps a line, so it can still be clicked:
+   see EMPTY_TEXT_SELECTOR. */
+${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
 
 /* An empty container has an area to aim at, unless the author asked to see the
    page as a visitor will. Drawn in the page's own text colour, faint, so it
