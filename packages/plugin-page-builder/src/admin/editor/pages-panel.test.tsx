@@ -189,7 +189,24 @@ describe("the list", () => {
     ]);
     expect(
       screen.getAllByRole("heading", { level: 3 }).map(h => h.textContent)
-    ).toEqual(["Pages", "Landing pages"]);
+    ).toEqual(["Pages", "Landing pages · uses the Page Builder"]);
+  });
+
+  it("asks for each collection's pages together, as it groups them", async () => {
+    await mount([item("a", "Home")]);
+    expect(param(reads[0], "order")).toBe("collection");
+  });
+
+  it("says why a collection other than the first is listed, and not of the first", async () => {
+    // The first collection of an unfiltered list is the plugin's own Pages;
+    // another collection is here only because it has a Page Builder field.
+    await mount([
+      item("a", "Home"),
+      item("b", "Blog post", { collection: "posts", collectionLabel: "Posts" }),
+    ]);
+    const [pages, posts] = screen.getAllByRole("heading", { level: 3 });
+    expect(pages?.textContent).not.toContain("uses the Page Builder");
+    expect(posts?.textContent).toContain("uses the Page Builder");
   });
 
   it("heads each collection only when there is more than one", async () => {
@@ -199,7 +216,7 @@ describe("the list", () => {
     ]);
     expect(
       screen.getAllByRole("heading", { level: 3 }).map(h => h.textContent)
-    ).toEqual(["Pages", "Posts"]);
+    ).toEqual(["Pages", "Posts · uses the Page Builder"]);
     cleanup();
 
     await mount([item("a", "Home"), item("c", "About")]);

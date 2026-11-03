@@ -18,6 +18,8 @@ import {
   unfitContentField,
 } from "nextly/config";
 
+import { canonicalJson } from "@admin/lib/canonical-json";
+
 import { filterFieldNames } from "./content-filter";
 
 /** A content setting that works over a Collection setting of the widget. */
@@ -89,24 +91,11 @@ function noneFor(setting: DependentSetting): unknown {
 export function sameSettingValue(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (!isRecord(a) || !isRecord(b)) return false;
-  return canonical(a) === canonical(b);
+  return canonicalJson(a) === canonicalJson(b);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-/** JSON with every object's keys in order, so key order never decides. */
-function canonical(value: unknown): string {
-  return JSON.stringify(value, (_key, inner: unknown) =>
-    isRecord(inner) && !Array.isArray(inner)
-      ? Object.fromEntries(
-          Object.keys(inner)
-            .sort()
-            .map(key => [key, inner[key]])
-        )
-      : inner
-  );
 }
 
 type SourceField = PublishedContentSource["fields"][number];

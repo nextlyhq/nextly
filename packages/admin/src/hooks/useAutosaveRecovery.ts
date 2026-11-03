@@ -14,7 +14,95 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
-import { versionApi, type VersionScope } from "@admin/services/versionApi";
+import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
+import { canonicalJson } from "@admin/lib/canonical-json";
+import {
+  versionApi,
+  type AutosaveDetail,
+  type VersionScope,
+} from "@admin/services/versionApi";
+
+/**
+ * Where "Not now" is remembered: this browser tab's session storage, keyed by
+ * the document, holding the identity of the recovery point put off.
+ *
+ * Session storage is copied into a tab duplicated from this one or opened from
+ * it, so the point stays put off there too; a tab opened on its own, or a new
+ * window, starts without it.
+ */
+function putOffKey(documentKey: string): string {
+  return `nextly:recovery-not-now:${documentKey}`;
+}
+
+/**
+ * Whether a recovery point holds exactly what the document stores, in the
+ * language it was recorded in. Strict, and offered whenever in doubt: hiding a
+ * point loses work, while offering one needlessly costs a dismissal. A point
+ * in another language than the form shows is never judged equal, and neither
+ * is one lacking a field the server withheld (a password, a field this author
+ * may not read): passing over a missing key would also pass over a property
+ * an edit deleted.
+ */
+function holdsStored(
+  point: AutosaveDetail,
+  stored: unknown,
+  locale: string | null
+): boolean {
+  if ((point.locale ?? null) !== locale) return false;
+  return canonicalJson(point.snapshot) === canonicalJson(stored);
+}
+
+/**
+ * A string's 53-bit hash (cyrb53), to name a recovery point's content in a
+ * short key rather than storing the whole document.
+ */
+function hash53(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/**
+ * Which recovery point this is: when it was stored, in which language, and what
+ * it holds. The time alone is not enough, since SQLite stores it to the second
+ * and a point rewritten within that second, with newer work or in another
+ * language, keeps the same time.
+ */
+function pointIdentity(point: AutosaveDetail): string {
+  return [
+    point.updatedAt,
+    point.locale ?? "",
+    hash53(canonicalJson(point.snapshot)),
+  ].join("|");
+}
+
+/** Whether this tab already put off the recovery point named `at`. */
+function wasPutOff(documentKey: string, at: string): boolean {
+  try {
+    return window.sessionStorage.getItem(putOffKey(documentKey)) === at;
+  } catch {
+    // Storage refused (a private window, blocked site data): offer again.
+    return false;
+  }
+}
+
+/** Remember that this tab put off the recovery point named `at`. */
+function rememberPutOff(documentKey: string, at: string): void {
+  try {
+    window.sessionStorage.setItem(putOffKey(documentKey), at);
+  } catch {
+    // Storage refused: "Not now" lasts for this editor, as it did before.
+  }
+}
 
 export interface UseAutosaveRecoveryOptions {
   /** The document to read a recovery point for, or `null` when there is none. */
@@ -27,6 +115,11 @@ export interface UseAutosaveRecoveryOptions {
    * entry and Single editors must not be able to answer it differently.
    */
   form: UseFormReturn<Record<string, unknown>>;
+  /**
+   * The language the form shows, or `null` where the document has none. A
+   * recovery point recorded in another language is never judged equal to it.
+   */
+  locale?: string | null;
   /**
    * How many saves this editor has made. A save deletes the author's recovery
    * point on the server, so after one, an offer still on screen is for work the
@@ -60,12 +153,15 @@ export interface UseAutosaveRecoveryResult {
    */
   isResolved: boolean;
   /**
-   * Stop offering for the rest of this editing session.
+   * "Not now": stop offering this recovery point for the rest of this browser
+   * tab's session, reloads included.
    *
-   * Local to the component, deliberately: it does NOT delete the stored
-   * recovery point. Dismissing means "not now", and a reader who dismisses and
-   * then reloads should still be offered the work rather than discovering it is
-   * gone because they closed a banner.
+   * It does NOT delete the stored recovery point, deliberately: a newer one,
+   * from edits made after, is offered again, and so is this one in a tab or
+   * window opened on its own (a tab duplicated from this one, or opened from
+   * it, shares its session storage and keeps it put off), so an author never
+   * discovers work gone because they closed an offer. What it ends is the same
+   * offer returning on every load of the editor.
    */
   dismiss: () => void;
   /**
@@ -83,8 +179,12 @@ export interface UseAutosaveRecoveryResult {
 export function useAutosaveRecovery({
   scope,
   form,
+  locale = null,
   savedCount = 0,
 }: UseAutosaveRecoveryOptions): UseAutosaveRecoveryResult {
+  // Recovery points are each author's own, so a "Not now" is too: another
+  // account signed in to this tab is offered its own point.
+  const author = useCurrentUserId();
   // Keyed by the document, so switching entries asks again rather than
   // reusing the previous document's answer.
   const queryKey = [
@@ -120,7 +220,14 @@ export function useAutosaveRecovery({
     staleTime: Infinity,
   });
 
-  const dismiss = useCallback(() => setDismissed(true), []);
+  const dismiss = useCallback(() => {
+    setDismissed(true);
+    if (data)
+      rememberPutOff(`${author ?? ""}|${documentKey}`, pointIdentity(data));
+  }, [data, documentKey, author]);
+
+  // The document as stored, which the form was loaded with.
+  const stored = form.formState.defaultValues;
 
   // A document with no address is answered without asking: there is nothing to
   // read, and that is a final answer rather than a pending one.
@@ -144,8 +251,15 @@ export function useAutosaveRecovery({
     if (dismissed || !data) return null;
     const savedAt = new Date(data.updatedAt);
     if (Number.isNaN(savedAt.getTime())) return null;
+    // Put off in this tab already: see `dismiss`.
+    if (wasPutOff(`${author ?? ""}|${documentKey}`, pointIdentity(data)))
+      return null;
+    // A recovery point holding what the document already stores is no unsaved
+    // work: an author who undid back to the saved document left one behind,
+    // and offering it back on every load restores nothing.
+    if (holdsStored(data, stored, locale)) return null;
     return { savedAt, snapshot: data.snapshot };
-  }, [dismissed, data]);
+  }, [dismissed, data, documentKey, stored, locale, author]);
 
   const restore = useCallback(() => {
     if (!offer) return;
@@ -157,8 +271,9 @@ export function useAutosaveRecovery({
     form.reset(offer.snapshot as Record<string, unknown>, {
       keepDefaultValues: true,
     });
-    dismiss();
-  }, [offer, form, dismiss]);
+    // Taken, not put off: the form holds the work now, so nothing is offered.
+    setDismissed(true);
+  }, [offer, form]);
 
   return { offer, isResolved, dismiss, restore };
 }

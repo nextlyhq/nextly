@@ -242,6 +242,9 @@ function usePagesList(query: string): PagesList {
         path: pagesSearchPath({
           q: query.trim(),
           limit: PAGES_SEARCH_LIMIT_MAX,
+          // Each collection's pages together, the plugin's own Pages first,
+          // as the panel groups them.
+          order: "collection",
           ...(before === undefined ? {} : { before }),
         }),
         signal: controller.signal,
@@ -435,6 +438,14 @@ function PageList({
           {groups.length > 1 ? (
             <h3 className="px-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               {group.label}
+              {/* Why a collection other than Pages is listed at all: an
+                  author who knows Posts as blog entries finds them here. */}
+              {group.collection === list.firstCollection ? null : (
+                <span className="font-normal normal-case tracking-normal">
+                  {" "}
+                  · uses the Page Builder
+                </span>
+              )}
             </h3>
           ) : null}
           <ul className="grid min-w-0 grid-cols-1 gap-0.5">

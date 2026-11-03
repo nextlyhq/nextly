@@ -145,6 +145,48 @@ function StayingPicker({
 }
 
 describe("the media control", () => {
+  it("shows a stored file by its thumbnail, its name and its alt text", async () => {
+    // Without a read of the stored id, every image read "A file from the
+    // media library." and two pictures could not be told apart.
+    register();
+    const editor = editorFor({ mediaId: "m-42" });
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{
+          MediaPicker: FakePicker,
+          readMedia: async id =>
+            id === "m-42"
+              ? { name: "hero.png", thumbnail: "/t/m-42.png", alt: "A hero" }
+              : null,
+        }}
+      />
+    );
+    expect(await screen.findByText("hero.png")).toBeDefined();
+    expect(screen.getByText("Alt text: A hero")).toBeDefined();
+    const thumbnail = document.querySelector(".nx-inspector__media-thumb");
+    expect(thumbnail?.getAttribute("src")).toBe("/t/m-42.png");
+    expect(screen.queryByText(/A file from the media library/)).toBeNull();
+  });
+
+  it("still says a file is chosen when it cannot be read", async () => {
+    register();
+    const editor = editorFor({ mediaId: "m-gone" });
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{
+          MediaPicker: FakePicker,
+          readMedia: async () => null,
+        }}
+      />
+    );
+    expect(
+      await screen.findByText("A file from the media library.")
+    ).toBeDefined();
+    expect(document.querySelector(".nx-inspector__media-thumb")).toBeNull();
+  });
+
   it("closes the picker once a choice is made", () => {
     register();
     const editor = editorFor({});
