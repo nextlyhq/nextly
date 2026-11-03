@@ -151,6 +151,7 @@ import {
   type StyleSection,
   type StyleInspection,
 } from "./style-inspector";
+import { keywordLabel } from "./style-keyword-labels";
 import {
   CSS_NUMBER,
   measurementOf,
@@ -2862,12 +2863,15 @@ function SelectField({
           <SelectValue placeholder={hint} />
         </SelectTrigger>
         <SelectContent>
+          {/* In words, the CSS spelling in the tooltip; see style-keyword-labels. */}
           {extra === null ? null : (
-            <SelectItem value={extra}>{extra}</SelectItem>
+            <SelectItem value={extra} title={extra}>
+              {keywordLabel(control.leaf.cssProperty, extra)}
+            </SelectItem>
           )}
           {control.leaf.values.map(option => (
-            <SelectItem key={option} value={option}>
-              {option}
+            <SelectItem key={option} value={option} title={option}>
+              {keywordLabel(control.leaf.cssProperty, option)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -4545,6 +4549,7 @@ function ValueField({
         id={id}
         labelledBy={labelledBy}
         options={toggle}
+        cssProperty={control.leaf.cssProperty}
         stored={stored}
         describedBy={describedBy}
         onCommit={onCommit}
@@ -4589,6 +4594,7 @@ function ToggleField({
   id,
   labelledBy,
   options,
+  cssProperty,
   stored,
   describedBy,
   onCommit,
@@ -4596,6 +4602,8 @@ function ToggleField({
   id: string;
   labelledBy: string;
   options: readonly string[];
+  /** The property the options are keywords of, for their words. */
+  cssProperty: string;
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
@@ -4633,8 +4641,9 @@ function ToggleField({
             // which is the only way a group of options can reach unset without
             // spending a button on "neither".
             onClick={() => onCommit(pressed ? null : option)}
+            title={option}
           >
-            {option}
+            {keywordLabel(cssProperty, option)}
           </button>
         );
       })}
@@ -4792,8 +4801,8 @@ function NumericField({
             ))}
             {keywords.length === 0 ? null : <SelectSeparator />}
             {keywords.map(keyword => (
-              <SelectItem key={keyword} value={keyword}>
-                {keyword}
+              <SelectItem key={keyword} value={keyword} title={keyword}>
+                {keywordLabel(control.leaf.cssProperty, keyword)}
               </SelectItem>
             ))}
           </SelectContent>

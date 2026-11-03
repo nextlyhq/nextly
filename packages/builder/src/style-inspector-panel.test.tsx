@@ -40,6 +40,7 @@ import {
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
+import { keywordLabel } from "./style-keyword-labels";
 import type { StylePolicy } from "./style-values";
 
 afterEach(() => {
@@ -662,7 +663,7 @@ describe("controls", () => {
 
     // `multiply` is the catalog's, not a list written here — a value absent
     // from `mix-blend-mode` would fail to appear.
-    expect(screen.getByRole("option", { name: "multiply" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Multiply" })).toBeDefined();
   });
 
   it("writes on Enter, and stops the entry form from submitting", () => {
@@ -905,7 +906,8 @@ describe("controls", () => {
     } as NodeStyles;
     mount({ effects: true }, styles);
 
-    expect(fieldsOf("mixBlendMode").getByText("inherit")).toBeDefined();
+    // In words, like every keyword; its CSS spelling is the tooltip.
+    expect(fieldsOf("mixBlendMode").getByText("Inherit")).toBeDefined();
   });
 
   it("reports an edit the op store refused, which the validator cannot anticipate", () => {
@@ -1618,7 +1620,7 @@ describe("a free-form value the panel must let an author repair", () => {
 
     expect(fieldsOf("fontStyle").queryByRole("textbox")).toBeNull();
     expect(
-      fieldsOf("fontStyle").getByRole("button", { name: "italic" })
+      fieldsOf("fontStyle").getByRole("button", { name: "Italic" })
     ).toBeDefined();
   });
 });
@@ -2036,8 +2038,9 @@ describe("a length field's unit", () => {
     const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
     expect(width.value).toBe("");
     expect(width.placeholder).toBe("");
+    // In words, as every keyword is offered.
     expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
-      "auto"
+      keywordLabel("width", "auto")
     );
   });
 
@@ -2189,7 +2192,7 @@ describe("a length field's unit", () => {
   it("offers the property's keywords after its units", () => {
     const editor = mount({ dimensions: true });
     fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
-    fireEvent.click(screen.getByRole("option", { name: "auto" }));
+    fireEvent.click(screen.getByRole("option", { name: "Auto" }));
     expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
       '"width":"auto"'
     );
@@ -3828,8 +3831,12 @@ describe("the action a control's breakpoint provenance earns", () => {
  */
 describe("a segmented keyword control behaves as a toggle", () => {
   /** The buttons of the `fontStyle` toggle, by their option name. */
-  const optionButton = (name: string) =>
-    fieldsOf("fontStyle").getByRole("button", { name });
+  // Found by its words, which name a keyword's button (its CSS spelling is the
+  // tooltip): the cases below speak in keywords, which is what is stored.
+  const optionButton = (keyword: string) =>
+    fieldsOf("fontStyle").getByRole("button", {
+      name: keywordLabel("font-style", keyword),
+    });
 
   /**
    * Every option button, found through the group BY ITS ACCESSIBLE NAME.
@@ -3899,8 +3906,9 @@ describe("a segmented keyword control behaves as a toggle", () => {
       mountWith(stored);
 
       for (const button of allOptions()) {
+        // The button's keyword is its tooltip; its words are its text.
         expect(button.getAttribute("aria-pressed")).toBe(
-          String(button.textContent?.trim() === stored)
+          String(button.getAttribute("title") === stored)
         );
       }
     }
@@ -4274,8 +4282,16 @@ describe("the Baseline gate on the panel", () => {
 
     fireEvent.click(screen.getByLabelText("Display"));
 
-    expect(screen.getByRole("option", { name: "flex" })).toBeDefined();
-    expect(screen.queryByRole("option", { name: "contents" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Flex" })).toBeDefined();
+    expect(screen.queryByRole("option", { name: "Contents only" })).toBeNull();
+  });
+
+  it("names a keyword in words, with its CSS spelling in the tooltip", () => {
+    // "inline-flex" read as code; the words are what an author picks from.
+    mount({ layout: true });
+    fireEvent.click(screen.getByLabelText("Display"));
+    const option = screen.getByRole("option", { name: "Inline flex" });
+    expect(option.getAttribute("title")).toBe("inline-flex");
   });
 
   it("shows a stored withheld value clear-only, and says why", () => {
