@@ -434,7 +434,7 @@ function startingWeights(family: CatalogueFamilyView): Set<number> {
 /**
  * The styles the site already has of a family, as `weight|style|script`: the
  * same cut in another script is another file, and still addable. A face that
- * names no script is taken as the family's own.
+ * names no script matches none, as the server's comparison of ranges does.
  */
 function presentStyles(
   family: CatalogueFamilyView,
@@ -446,7 +446,9 @@ function presentStyles(
     // The weight as stored, so a static 400 is never taken for the variable
     // file's whole range; the planner compares faces the same way.
     const weight = (face.weight ?? "400").trim().replace(/\s+/g, " ");
-    const subset = face.source?.subset ?? family.defSubset;
+    // A face that names no script (an upload, the site's code) covers no
+    // catalogue script: the server adds the catalogue's file beside it.
+    const subset = face.source?.subset ?? "";
     present.add(`${weight}|${style}|${subset}`);
   }
   return present;

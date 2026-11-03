@@ -460,7 +460,12 @@ async function fontsFolder(
     });
     return made.id;
   } catch {
-    return undefined;
+    // Made meanwhile by another surface, perhaps: look once more before
+    // storing the files at the library's root.
+    const again = await api.media.folders
+      .list({ overrideAccess: true })
+      .catch(() => []);
+    return again.find(folder => folder.name === FONTS_FOLDER)?.id;
   }
 }
 
@@ -510,7 +515,9 @@ async function storeAll(
   inTurn: <T>(work: () => Promise<T>) => Promise<T>
 ): Promise<FontFaceDef[]> {
   const asUser = user === null ? {} : { user: { id: user.id } };
-  const folder = await fontsFolder(api, user);
+  // In turn with the other adds: two that both look before either makes the
+  // folder would each make one.
+  const folder = await inTurn(() => fontsFolder(api, user));
   const created: string[] = [];
   try {
     const added: FontFaceDef[] = [];

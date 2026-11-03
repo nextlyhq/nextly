@@ -64,7 +64,9 @@ const AddFontBody = z.strictObject({
     .array(z.enum(["normal", "italic"]))
     .min(1)
     .max(2),
-  subsets: z.array(z.string().max(32).regex(SUBSET_NAME)).min(1).max(4),
+  // Every script a family offers may be asked for; the file cap, applied to
+  // what would be downloaded, is what bounds an add.
+  subsets: z.array(z.string().max(32).regex(SUBSET_NAME)).min(1).max(32),
 });
 
 /** A refusal naming the field and what is wrong with it. */
@@ -188,7 +190,7 @@ export function planFontAdd(
     throw invalid("id", NOT_IN_CATALOGUE);
   }
   checkOffered(request, meta);
-  // The request schema bounds this (9 weights, 2 styles, 4 scripts); the cap
+  // The request schema bounds this (9 weights, 2 styles, 32 scripts); the cap
   // applies to the files left once faces the site has are skipped.
   const wanted = combinations(request);
   const files: PlannedFile[] = [];

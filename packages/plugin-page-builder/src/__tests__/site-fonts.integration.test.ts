@@ -597,6 +597,77 @@ describe.each(getConfiguredTestDialects())(
       expect(families.filter(name => name === "Merriweather")).toHaveLength(2);
     });
 
+    it("makes one Fonts folder when the first two adds start together", async () => {
+      const t = await boot();
+      catalogue.json("/v1/fonts/merriweather", {
+        ...LORA,
+        id: "merriweather",
+        family: "Merriweather",
+      });
+      for (const weight of [400, 700]) {
+        catalogue.font(
+          `/fontsource/fonts/merriweather@5.2.1/latin-${String(weight)}-normal.woff2`
+        );
+      }
+      const fonts = resolveFontOptions({
+        catalogue: { api: catalogue.origin, files: catalogue.origin },
+      });
+      if (fonts === false) throw new Error("the catalogue is on");
+      // Each look for the folder waits until a second one is looking too, or
+      // half a second passes: two adds that look before either makes it would
+      // then both make one.
+      const real = t.nextly as unknown as SiteFontsDirectApi;
+      const waiting: Array<() => void> = [];
+      const together: SiteFontsDirectApi = {
+        ...real,
+        findSingle: args => real.findSingle(args),
+        updateSingle: args => real.updateSingle(args),
+        media: {
+          ...real.media,
+          upload: args => real.media.upload(args),
+          delete: args => real.media.delete(args),
+          folders: {
+            ...real.media.folders,
+            create: args => real.media.folders.create(args),
+            list: async args => {
+              await new Promise<void>(resolve => {
+                waiting.push(resolve);
+                if (waiting.length === 2) for (const go of waiting) go();
+                else setTimeout(resolve, 500).unref();
+              });
+              return real.media.folders.list(args);
+            },
+          },
+        },
+      };
+      const [, addRoute] = siteFontRoutes({
+        fonts,
+        nextly: async () => together,
+      });
+      // A folder records who made it, so the adds run as a real person.
+      const maker = await t.nextly.users.create({
+        email: "folder-maker@example.com",
+        password: "Password123!",
+        data: { name: "Folder Maker", isActive: true },
+      });
+      const request = (id: string) =>
+        addRoute?.handler(
+          new Request(`${ORIGIN}/x`, {
+            method: "POST",
+            body: JSON.stringify({ ...LORA_400_700, id }),
+          }),
+          {
+            self: { collections: {}, singles: {} },
+            user: { id: maker.item.id },
+            caller: { can: async () => true },
+            fetch: (input, init) => fetch(input, init),
+          }
+        );
+      await Promise.all([request("lora"), request("merriweather")]);
+      const folders = await real.media.folders.list({ overrideAccess: true });
+      expect(folders.filter(folder => folder.name === "Fonts")).toHaveLength(1);
+    });
+
     it("refuses an answer that is not a woff2 file, by its type or by its bytes", async () => {
       const t = await boot();
       const cookie = await designer(t);

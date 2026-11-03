@@ -400,6 +400,7 @@ describe("adding a family", () => {
           src: [{ url: "/api/media/m/raw" }],
           weight: "400",
           style: "normal",
+          source: { kind: "google", id: "lora", subset: "latin" },
         },
       ],
     });
@@ -415,6 +416,30 @@ describe("adding a family", () => {
     fireEvent.click(within(editor).getByRole("checkbox", { name: "Bold 700" }));
     expect(
       within(editor).getByRole("button", { name: "Already on this site" })
+    ).toBeTruthy();
+  });
+
+  it("does not take an uploaded cut, which names no script, for a catalogue file", async () => {
+    view(catalogue(), {
+      onSite: [
+        {
+          family: "Lora",
+          src: [{ url: "/api/media/upload/raw" }],
+          weight: "400",
+          style: "normal",
+          source: { kind: "upload" },
+        },
+      ],
+    });
+    const editor = await openAdd(/^Lora/);
+    // The server adds the catalogue's Latin 400 beside the upload, so the
+    // editor offers it rather than holding it.
+    const regular = within(editor).getByRole("checkbox", {
+      name: "Regular 400",
+    });
+    expect((regular as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      within(editor).getByRole("button", { name: "Add 2 more styles" })
     ).toBeTruthy();
   });
 

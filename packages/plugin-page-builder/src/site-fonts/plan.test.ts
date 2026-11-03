@@ -86,6 +86,21 @@ describe("readAddFontBody", () => {
     ).toThrow();
   });
 
+  it("takes every script a family offers, leaving the download to the file cap", () => {
+    const scripts = [
+      "cyrillic",
+      "cyrillic-ext",
+      "greek",
+      "greek-ext",
+      "latin",
+      "latin-ext",
+      "vietnamese",
+    ];
+    expect(readAddFontBody({ ...body, subsets: scripts }).subsets).toEqual(
+      scripts
+    );
+  });
+
   it("refuses a weight that is not one of the nine", () => {
     expect(() => readAddFontBody({ ...body, weights: [450] })).toThrow();
     expect(() => readAddFontBody({ ...body, weights: [] })).toThrow();

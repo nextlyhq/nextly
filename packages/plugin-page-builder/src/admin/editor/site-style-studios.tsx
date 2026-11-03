@@ -33,9 +33,9 @@ import {
 import {
   usePluginClientConfig,
   useUploadMedia,
+  WEB_FONT_FORMATS,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
-import { WEB_FONT_FORMATS } from "nextly/config";
 import {
   useCallback,
   useContext,
