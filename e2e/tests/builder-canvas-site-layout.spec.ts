@@ -133,6 +133,9 @@ test.describe("the canvas in the site's own layout", () => {
   }) => {
     await seed(page);
     await page.goto("/");
+    for (const text of Object.values(TEXTS)) {
+      await expect(page.getByText(text, { exact: true })).toBeVisible();
+    }
     const published = await readType(page, "body");
 
     await openBuilder(page);
@@ -143,6 +146,12 @@ test.describe("the canvas in the site's own layout", () => {
     ).toHaveCount(1);
     await expect(siteLayoutNote(page)).toHaveCount(0);
 
+    // Every block drawn before any is read: they arrive one by one.
+    for (const text of Object.values(TEXTS)) {
+      await expect(
+        canvasFrame(page).locator(".nx-canvas").getByText(text, { exact: true })
+      ).toBeVisible();
+    }
     const frame = page.frame({ url: url => url.pathname === CANVAS_ROUTE });
     if (frame === null) throw new Error("no canvas route frame");
     const canvas = await readType(frame, ".nx-canvas");
