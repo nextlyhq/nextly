@@ -538,12 +538,14 @@ describe("a link and a visibility exposure", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
-  it("sets the visibility box apart from its words", () => {
-    // The box sat against "Shown on this page": the row's spacing rule needed
-    // a class the row did not carry.
+  it("is a switch named by its row, with no words beside it", () => {
+    // A checkbox beside "Shown on this page" wrapped onto two lines; the
+    // switch's state says it, and the row's label names it.
     mount(instance(), linked());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
-    expect(box.parentElement?.className).toBe("nx-inspector__check");
+    expect(
+      screen.getByRole("switch", { name: "Newsletter form" })
+    ).toBeDefined();
+    expect(screen.queryByText("Shown on this page")).toBeNull();
   });
 
   it("shows an inherited visibility row as shown, and hides it by writing false", () => {
@@ -551,7 +553,7 @@ describe("a link and a visibility exposure", () => {
     // definition gates the node itself; the resolver reads `false` as hidden
     // and `true` as shown, and nothing else.
     const editor = mount(instance(), linked());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    const box = screen.getByRole("switch", { name: "Newsletter form" });
 
     expect(box.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(box);
@@ -597,7 +599,7 @@ describe("a link and a visibility exposure", () => {
         ],
       });
     const editor = mount(instance(), gated());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    const box = screen.getByRole("switch", { name: "Newsletter form" });
 
     expect(box.getAttribute("aria-checked")).toBe("false");
     // And not as the author's own doing: there is nothing of theirs to reset.
@@ -613,7 +615,7 @@ describe("a link and a visibility exposure", () => {
 
   it("shows a hidden row unchecked — cleared included, which the page reads as hidden — and shows it again by writing true", () => {
     const hidden = mount(instance({ overrides: { shown: false } }), linked());
-    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    const box = screen.getByRole("switch", { name: "Newsletter form" });
     expect(box.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(box);
     expect(appliedProps(hidden)).toEqual({
@@ -625,7 +627,7 @@ describe("a link and a visibility exposure", () => {
     mount(instance({ overrides: { shown: { $unset: true } } }), linked());
     expect(
       screen
-        .getByRole("checkbox", { name: "Newsletter form" })
+        .getByRole("switch", { name: "Newsletter form" })
         .getAttribute("aria-checked")
     ).toBe("false");
     expect(screen.getByText("Cleared on this page")).toBeDefined();

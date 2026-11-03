@@ -40,7 +40,6 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   Button,
-  Checkbox,
   Input,
   Label,
   Select,
@@ -48,6 +47,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
 } from "@nextlyhq/ui";
 import {
   CircleSlash,
@@ -757,14 +757,13 @@ function ExposedVisibilityField({
 }): React.JSX.Element {
   const shown = row.value !== false && !row.cleared;
   return (
-    <div className="nx-inspector__check">
-      <Checkbox
-        id={id}
-        checked={shown}
-        onCheckedChange={checked => onSet(row.id, checked === true)}
-      />
-      <span className="nx-inspector__note">Shown on this page</span>
-    </div>
+    // A switch named by its row, whose state says whether it is shown: a
+    // checkbox beside "Shown on this page" wrapped onto two lines.
+    <Switch
+      id={id}
+      checked={shown}
+      onCheckedChange={checked => onSet(row.id, checked === true)}
+    />
   );
 }
 

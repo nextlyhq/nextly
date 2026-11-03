@@ -53,11 +53,3 @@ describe("the placement's header", () => {
     );
   });
 });
-
-describe("a placement's visibility row", () => {
-  it("keeps the box apart from its words", () => {
-    const row = ruleBody(".nx-inspector__check");
-    expect(row).toContain("display: flex");
-    expect(row).toContain("gap: 0.5rem");
-  });
-});

@@ -309,7 +309,7 @@ test.describe("a placement's exposed fields", () => {
     await link.press("Enter");
     await expect(refusal).toHaveCount(0);
 
-    await page.getByRole("checkbox", { name: "Button shown" }).click();
+    await page.getByRole("switch", { name: "Button shown" }).click();
 
     await save(page, pageId);
     const stored = await storedPlacements(page, pageId);
@@ -332,7 +332,7 @@ test.describe("a placement's exposed fields", () => {
       page.getByRole("textbox", { name: "Button link" })
     ).toHaveValue("/pricing");
     await expect(
-      page.getByRole("checkbox", { name: "Button shown" })
+      page.getByRole("switch", { name: "Button shown" })
     ).not.toBeChecked();
     await expect(row(page, "Heading level")).toContainText("H3");
   });
@@ -387,7 +387,7 @@ test.describe("a placement's exposed fields", () => {
       page.getByRole("textbox", { name: "Button link" })
     ).toBeDisabled();
     await expect(
-      page.getByRole("checkbox", { name: "Button shown" })
+      page.getByRole("switch", { name: "Button shown" })
     ).toBeDisabled();
 
     const text = await headline(page, "p1");
