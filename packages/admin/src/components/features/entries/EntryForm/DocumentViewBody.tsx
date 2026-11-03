@@ -42,7 +42,10 @@ import {
   type ViewFieldResolution,
 } from "@admin/lib/plugins/document-view-registry";
 
-import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
+import {
+  liveRecoveryOffer,
+  LiveDocumentRecoveryOffer,
+} from "./AutosaveRecoveryBanner";
 import {
   useConditionValues,
   viewFieldRefusal,
@@ -53,6 +56,11 @@ import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { DocumentViewFieldRefused } from "./DocumentViewFieldRefused";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { MissingDocumentViewComponent } from "./MissingDocumentViewComponent";
+import {
+  RecoveryOfferProvider,
+  useRecoveryOfferHost,
+  type HostedRecoveryOffer,
+} from "./RecoveryOfferContext";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 /** The view the route names, as the page hands it to the editor. */
@@ -168,6 +176,20 @@ function useRestoreRemount(recovery: UseAutosaveRecoveryResult): {
   return { recovery: offered, generation, withdrawn };
 }
 
+/** The offer the save chip may make, as the banner would make it. */
+function useChipRecoveryOffer(
+  recovery: UseAutosaveRecoveryResult,
+  viewingVersion: ViewedVersion | null
+): HostedRecoveryOffer | null {
+  const offer = liveRecoveryOffer(recovery, viewingVersion);
+  const { restore, dismiss } = recovery;
+  return useMemo(
+    () =>
+      offer === null ? null : { savedAt: offer.savedAt, restore, dismiss },
+    [offer, restore, dismiss]
+  );
+}
+
 /**
  * Which field the view edits, from the address, and whether it may.
  *
@@ -272,6 +294,11 @@ export function DocumentViewBody({
    */
   const exit = view.onExit;
   const offered = useRestoreRemount(recovery);
+  // Handed to the save chip the view draws, which makes the offer there; the
+  // banner below is for a view that draws no chip.
+  const recoveryOffer = useRecoveryOfferHost(
+    useChipRecoveryOffer(offered.recovery, viewingVersion)
+  );
 
   const { editing, refusal } = useViewField(view.fieldType, fields, form);
 
@@ -308,11 +335,13 @@ export function DocumentViewBody({
             onTakeOver={lock.takeOver}
             onRequestAccess={lock.requestAccess}
           />
-          <LiveDocumentRecoveryOffer
-            recovery={offered.recovery}
-            viewingVersion={viewingVersion}
-            className="mx-6 mt-3"
-          />
+          {recoveryOffer.claimed ? null : (
+            <LiveDocumentRecoveryOffer
+              recovery={offered.recovery}
+              viewingVersion={viewingVersion}
+              className="mx-6 mt-3"
+            />
+          )}
           <FormErrorSummary
             errors={errors}
             submitCount={submitCount}
@@ -322,14 +351,16 @@ export function DocumentViewBody({
         {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
         <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
-          <ViewArea
-            editing={editing}
-            refusal={refusal}
-            withdrawn={offered.withdrawn}
-            generation={offered.generation}
-            component={view.component}
-            viewProps={viewProps}
-          />
+          <RecoveryOfferProvider value={recoveryOffer.value}>
+            <ViewArea
+              editing={editing}
+              refusal={refusal}
+              withdrawn={offered.withdrawn}
+              generation={offered.generation}
+              component={view.component}
+              viewProps={viewProps}
+            />
+          </RecoveryOfferProvider>
         </div>
       </div>
     </FormProvider>

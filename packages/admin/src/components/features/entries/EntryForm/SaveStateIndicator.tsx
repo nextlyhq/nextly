@@ -15,17 +15,21 @@
  */
 import {
   Button,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useId } from "react";
+import { useId, useState } from "react";
 
 import { AlertCircle, Check, Cloud, Loader2 } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import type { HostedRecoveryOffer } from "./RecoveryOfferContext";
 import { formatTimeAgo } from "./time-ago";
 import type { DocumentSaveState } from "./useDocumentActionBindings";
 
@@ -210,9 +214,66 @@ function SettledSaveState({
   );
 }
 
+/**
+ * The recovery offer, made in the chip: "Restore…" beside "Unsaved changes",
+ * whose popover says when the work is from and asks. One save state, so no
+ * banner above the editor says the same thing in a second place.
+ */
+function RecoveryOfferControl({
+  offer,
+}: {
+  offer: HostedRecoveryOffer;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const answer = (choice: () => void) => () => {
+    setOpen(false);
+    choice();
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 whitespace-nowrap"
+        >
+          Restore…
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 text-sm">
+        <p className="text-foreground">
+          You have unsaved changes from{" "}
+          <span className="font-medium">{formatTimeAgo(offer.savedAt)}</span>.
+        </p>
+        <div className="mt-3 flex justify-end gap-2">
+          {/* "Not now", not "Discard": the recovery point is kept, and
+              offered again the next time the document opens. */}
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={answer(offer.dismiss)}
+          >
+            Not now
+          </Button>
+          <Button type="button" size="sm" onClick={answer(offer.restore)}>
+            Restore
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export interface SaveStateIndicatorProps {
   saveState: DocumentSaveState;
   recovery: RecoveryPointState;
+  /**
+   * A recovery point on offer, made here rather than in a banner, by a
+   * surface that shows the save state in its own bar.
+   */
+  offer?: HostedRecoveryOffer | null;
   /** When the opened document was last stored; see `saveIndicatorView`. */
   storedAt?: Date | null;
   className?: string;
@@ -222,6 +283,7 @@ export function SaveStateIndicator({
   saveState,
   recovery,
   storedAt = null,
+  offer = null,
   className,
 }: SaveStateIndicatorProps): JSX.Element {
   const view = saveIndicatorView(saveState, recovery, storedAt);
@@ -244,6 +306,11 @@ export function SaveStateIndicator({
       ) : (
         <SettledSaveState view={view} />
       )}
+      {/* Only beside unsaved work: the offer's edits are what keep it
+          unsaved, and a save or a failure says something else first. */}
+      {offer !== null && view?.tone === "unsaved" ? (
+        <RecoveryOfferControl offer={offer} />
+      ) : null}
     </div>
   );
 }
