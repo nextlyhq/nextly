@@ -1276,12 +1276,7 @@
   color: var(--nx-muted-foreground);
 }
 
-/*
- * An exposed row stacks its control over its provenance, in the field's second
- * column: the control is what the author edits and the badge and reset beneath
- * it describe that value, so the two belong in one cell rather than in a third
- * column the label grid does not have.
- */
+/* The control, and a held row's reason under it, in the row's second column. */
 .nx-inspector__exposed {
   display: flex;
   flex-direction: column;
@@ -1290,21 +1285,38 @@
 }
 
 /*
- * An exposed row's label sits beside its CONTROL, not beside the whole cell:
- * the cell stacks the control over its provenance and, for a held row, the
- * reason, so a label centred on the cell drifts below the field it names.
- * Top-aligned, and as tall as the control, so every row reads the same way.
+ * A placement's row on the Style tab's grid: its name (with where its value
+ * comes from under it), its control, then a slot for the reset, so it is one
+ * row like a Style row. Top-aligned, so a held row's reason under the control
+ * does not move the name off the control it names.
  */
 .nx-inspector__field.nx-inspector__field--exposed {
+  grid-template-columns: minmax(0, 7rem) minmax(min-content, 1fr) 1.5rem;
   align-items: start;
 }
 
-/* As tall as the control beside it, so a label centres on its row. */
-.nx-inspector__field--exposed > label,
-.nx-inspector__field--exposed > .nx-inspector__field-name {
+/* As tall as the control beside it, so a one-line name centres on its row. */
+.nx-inspector__field--exposed > .nx-inspector__exposed-name {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
   min-height: var(--nx-control-height);
+}
+
+.nx-inspector__field--exposed > .nx-inspector__exposed {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.nx-inspector__field--exposed > .nx-inspector__exposed-reset-slot {
+  display: inline-grid;
+  place-items: center;
+  grid-column: 3;
+  grid-row: 1;
+  block-size: var(--nx-control-height);
 }
 
 /*
@@ -1324,14 +1336,6 @@
 /* On the first line of a reason that wraps, not centred across all of it. */
 .nx-inspector__held-reason > .nx-inspector__source-icon {
   margin-block-start: 0.1875rem;
-}
-
-.nx-inspector__provenance {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-height: 1.5rem;
 }
 
 /*
@@ -2051,9 +2055,17 @@
     grid-column: 1;
   }
 
-  /* Stacked, the label sits above its control and needs no control height. */
-  .nx-inspector__field--exposed > label,
-  .nx-inspector__field--exposed > .nx-inspector__field-name {
+  /*
+   * Stacked, a placement's row too: the name above its control, the reset
+   * after it. Weighed as the placements above, and after them, so it wins.
+   */
+  .nx-inspector__field.nx-inspector__field--exposed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .nx-inspector__field.nx-inspector__field--exposed > * {
+    grid-column: 1;
+    grid-row: auto;
     min-height: 0;
   }
 }

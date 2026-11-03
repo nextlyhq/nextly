@@ -61,3 +61,23 @@ describe("a placement's visibility row", () => {
     expect(row).toContain("gap: 0.5rem");
   });
 });
+
+describe("a placement's row on the inspector grid", () => {
+  it("draws label, control and reset on one row, as a Style row does", () => {
+    expect(
+      ruleBody(".nx-inspector__field.nx-inspector__field--exposed")
+    ).toContain(
+      "grid-template-columns: minmax(0, 7rem) minmax(min-content, 1fr) 1.5rem"
+    );
+    const name = ruleBody(
+      ".nx-inspector__field--exposed > .nx-inspector__exposed-name"
+    );
+    expect(name).toContain("grid-column: 1");
+    expect(name).toContain("min-height: var(--nx-control-height)");
+    expect(
+      ruleBody(
+        ".nx-inspector__field--exposed > .nx-inspector__exposed-reset-slot"
+      )
+    ).toContain("grid-column: 3");
+  });
+});

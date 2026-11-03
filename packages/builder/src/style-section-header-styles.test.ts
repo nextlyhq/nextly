@@ -564,10 +564,8 @@ describe("the inspector at the editor's density", () => {
     );
     expect(input).toContain("padding-block: 0");
     expect(input).toContain("line-height: var(--nx-builder-line-height)");
-    // Exact text: the selector also appears inside a narrow-rail query.
-    expect(FLAT).toContain(
-      ".nx-inspector__field--exposed > label, .nx-inspector__field--exposed > .nx-inspector__field-name { display: flex; align-items: center; min-height: var(--nx-control-height); }"
-    );
+    // A placement row's name cell takes the control height: pinned in
+    // instance-inspector-styles.test.ts with the row's grid.
     const segment = ruleBody(".nx-style-inspector__toggle > button");
     expect(segment).toContain("height: var(--nx-control-height)");
     expect(segment).toContain("padding: 0 0.5rem");
