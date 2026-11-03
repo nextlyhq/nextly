@@ -263,7 +263,7 @@ function useHeldPreview(): {
         // Dropped too once stored where the read already holds it, which
         // happens when the read came back before the write's answer did.
         if (
-          state === "refused" ||
+          state === "dropped" ||
           (state === "stored" &&
             sameSection(storedSection(read.current, section), value))
         ) {
@@ -302,8 +302,9 @@ function useHeldPreview(): {
 /**
  * Writes what a Design edit left waiting for the author's pause whenever the
  * pause cannot be waited for: before the page is saved or published (and the
- * action waits for it, so the page and its styles are stored together), when
- * the browser tab is hidden or closed, and when the editor goes away.
+ * action waits for it, and for any write still on its way, so the page and
+ * its styles are stored together), when the browser tab is hidden or closed,
+ * and when the editor goes away.
  */
 function useReleaseWhenDone(history: SiteStyleHistory): void {
   useBeforeDocumentAction(() => releaseHeldSiteStyle(history));
@@ -311,8 +312,17 @@ function useReleaseWhenDone(history: SiteStyleHistory): void {
     const release = (): void => {
       void releaseHeldSiteStyle(history);
     };
+    // Hidden is the last moment a page is sure to see: it comes before
+    // `pagehide`, and is all a mobile browser closing a tab may send. Nothing
+    // here can wait for the write, so it is sent to outlive the page (the
+    // Single's update asks `keepalive` while the page is hidden).
+    const hidden = (): void => {
+      if (document.visibilityState === "hidden") release();
+    };
+    document.addEventListener("visibilitychange", hidden);
     window.addEventListener("pagehide", release);
     return () => {
+      document.removeEventListener("visibilitychange", hidden);
       window.removeEventListener("pagehide", release);
       release();
     };

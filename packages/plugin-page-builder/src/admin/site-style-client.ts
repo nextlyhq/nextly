@@ -253,15 +253,16 @@ export interface SiteStyleHistory {
   readonly record: (step: SiteStyleStep) => () => void;
   readonly settled: Map<SiteStyleSection, SectionChain>;
   /**
-   * Draws a section's held value before it is stored, and hears how its write
+   * Draws a section's value before it is stored, and hears how its write
    * went: `"held"` shows it, `"stored"` keeps it until the read moves on, and
-   * `"refused"` withdraws it. An answer for a value no longer shown is
-   * ignored. Absent, a held value is drawn once it is stored.
+   * `"dropped"` withdraws it, the write being refused or not needed. An
+   * answer for a value no longer shown is ignored. Absent, a value is drawn
+   * once it is stored.
    */
   readonly preview?: (
     section: SiteStyleSection,
     value: unknown,
-    state: "held" | "stored" | "refused"
+    state: "held" | "stored" | "dropped"
   ) => void;
 }
 
@@ -330,9 +331,17 @@ function heldWrites(history: SiteStyleHistory | null): HeldWrite[] {
 export async function releaseHeldSiteStyle(
   history: SiteStyleHistory | null
 ): Promise<void> {
-  const held = heldWrites(history);
-  for (const write of held) write.release();
-  await Promise.all(held.map(write => write.answered));
+  if (history === null) return;
+  for (const write of heldWrites(history)) write.release();
+  // Every write still on its way, not only the ones released here: one
+  // released earlier, when an editor closed, is no longer held but has not
+  // answered either, and a page saved meanwhile must wait for it too. A
+  // chain's tail settles once every write made to it so far has answered.
+  await Promise.all(
+    [...history.settled.values()]
+      .filter(chain => chain.pending > 0)
+      .map(chain => chain.tail)
+  );
 }
 
 /** The author is still at work, so every held save waits again. */
@@ -361,6 +370,11 @@ export function useHeldSiteStyle(): {
 /** Whether two section values are the same, as stored JSON. */
 /** What a queued write answers with when it should write nothing after all. */
 const SKIP: unique symbol = Symbol("skip");
+/**
+ * What a held write answers with when its edits came back to the value the
+ * section held before them: there is nothing to write, and no step to keep.
+ */
+const UNCHANGED: unique symbol = Symbol("unchanged");
 
 export function sameSection(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -418,6 +432,11 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   // four fields of one record, which is exactly the case a shared scope is for.
   const mutation = useUpdateSingleDocument(SITE_STYLE_SLUG, undefined, {
     scopeId: SITE_STYLE_SLUG,
+    // A write sent while the page is hidden may be the last it makes, as
+    // what was held is written then: sent so the browser finishes it after
+    // the page is gone. Asked at each send, on the one write path.
+    keepalive: () =>
+      typeof document !== "undefined" && document.visibilityState === "hidden",
   });
   // The stored document, read at the moment of a save rather than closed over.
   const { data, refetch } = useStoredSiteStyle();
@@ -490,10 +509,22 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         const next = await value(held);
         // A write whose step was withdrawn while it waited stores nothing.
         if (next === SKIP) {
-          return { result: { saved: false, issues: {} }, holds: held };
+          return {
+            result: { saved: false, issues: {} },
+            holds: held,
+            wrote: false,
+          };
+        }
+        // Nothing to write: the section already holds what was asked for.
+        if (next === UNCHANGED) {
+          return {
+            result: { saved: true, issues: {} },
+            holds: held,
+            wrote: false,
+          };
         }
         const result = await write(section, next);
-        return { result, holds: result.saved ? next : held };
+        return { result, holds: result.saved ? next : held, wrote: true };
       });
       chain.tail = done.then(({ holds }) => {
         chain.pending -= 1;
@@ -567,10 +598,8 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         return write(section, value);
       }
       const held = options?.hold === true ? holdFor(chain, value) : undefined;
-      const { before, done } = inTurn(
-        chain,
-        section,
-        () => held?.next() ?? value
+      const { before, done } = inTurn(chain, section, prior =>
+        held === undefined ? value : held.next(prior)
       );
       if (held !== undefined) {
         held.settle(done.then(({ result }) => result));
@@ -582,11 +611,26 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       let withdrawn = false;
       const replay =
         (target: () => unknown) => async (): Promise<SiteStyleReplay> => {
+          let sent: unknown = SKIP;
           const { result, holds } = await inTurn(
             chainOf(settled, section),
             section,
-            () => (withdrawn ? SKIP : target())
+            () => {
+              if (withdrawn) return SKIP;
+              sent = target();
+              // Drawn at once, over whatever an earlier write left drawn: the
+              // read may already hold this value, and then never moves on.
+              history.preview?.(section, sent, "held");
+              return sent;
+            }
           ).done;
+          if (sent !== SKIP) {
+            history.preview?.(
+              section,
+              sent,
+              result.saved ? "stored" : "dropped"
+            );
+          }
           return { stored: result.saved, section, value: holds };
         };
       const withdraw = history.record({
@@ -599,15 +643,19 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         // The value the burst came to, read when the step is replayed.
         redo: replay(() => (held === undefined ? value : held.write.value)),
       });
-      const { result } = await done;
+      const { result, wrote } = await done;
+      // Refused, or not written because the edits came back to where they
+      // started: either way nothing changed, so the step is withdrawn (which
+      // also gives back the redo it cut off) and nothing new is drawn.
+      const changed = result.saved && wrote;
       if (held !== undefined) {
         history.preview?.(
           section,
           held.write.value,
-          result.saved ? "stored" : "refused"
+          changed ? "stored" : "dropped"
         );
       }
-      if (!result.saved) {
+      if (!changed) {
         withdrawn = true;
         withdraw();
       }
@@ -642,14 +690,15 @@ function joinWaiting(
 /**
  * A save made to wait on `chain` for the author's pause. `next` settles to
  * the value to write once it is to be written, after the pause or at once on
- * `release`; `settle` hands it the answer its write will have, once queued.
+ * `release`, given what the section held before; `settle` hands it the
+ * answer its write will have, once queued.
  */
 function holdFor(
   chain: SectionChain,
   value: unknown
 ): {
   write: HeldWrite;
-  next: () => Promise<unknown>;
+  next: (prior: unknown) => Promise<unknown>;
   settle: (answer: Promise<SiteStyleSaveResult>) => void;
 } {
   let start: () => void = () => {};
@@ -680,9 +729,11 @@ function holdFor(
   write.extend();
   return {
     write,
-    next: async () => {
+    // What to write once due: the latest value, or nothing when the edits
+    // came back to what the section held before them.
+    next: async prior => {
       await due;
-      return write.value;
+      return sameSection(prior, write.value) ? UNCHANGED : write.value;
     },
     settle: answer,
   };

@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The page builder's Design panel now takes a type size's line height without a unit, such as 1.2, starts a new type size at 1.25, says in words why a line height it refuses is refused, and writes the site style once the author pauses or closes a variable's editor, as one undo step, instead of once per field.
+The page builder's Design panel now takes a type size's line height without a unit, such as 1.2, starts a new type size at 1.25, says in words why a line height it refuses is refused, and writes the site style once the author pauses or closes a variable's editor, as one undo step, instead of once per field; what is still waiting is written when the page is saved or hidden, sent so it outlives the page.

@@ -34,7 +34,7 @@ vi.mock("@nextlyhq/plugin-sdk/client", () => ({
 
 const refetch = vi.fn(() => Promise.resolve({ isError: false }));
 /** The stored document, one object as a query holds it between reads. */
-const stored = vi.hoisted(() => ({ data: { tokens: null } }));
+const stored = vi.hoisted(() => ({ data: { tokens: null } as unknown }));
 vi.mock("../site-style-read", () => ({
   useStoredSiteStyle: () => ({
     data: stored.data,
@@ -46,8 +46,16 @@ vi.mock("../site-style-read", () => ({
 
 /** What the Single was asked to store, in order. */
 const writes: Record<string, unknown>[] = [];
-/** Whether the Single refuses the next writes, and what it says. */
-const single = vi.hoisted(() => ({ refuse: undefined as string | undefined }));
+/**
+ * Whether the Single refuses the next writes, and what it says; whether each
+ * write was sent to outlive the page; and a gate a write waits on, for a test
+ * that needs one still in flight.
+ */
+const single = vi.hoisted(() => ({
+  refuse: undefined as string | undefined,
+  keepalive: [] as boolean[],
+  gate: undefined as Promise<void> | undefined,
+}));
 /** What runs before the page's Save and Publish, as the form registers it. */
 const beforeAction = vi.hoisted(() => ({
   run: undefined as undefined | (() => unknown),
@@ -57,9 +65,15 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => undefined,
-  useUpdateSingleDocument: () => ({
+  useUpdateSingleDocument: (
+    _slug: string,
+    _locale: string | undefined,
+    options?: { keepalive?: () => boolean }
+  ) => ({
     mutateAsync: async (data: Record<string, unknown>) => {
       writes.push(data);
+      single.keepalive.push(options?.keepalive?.() === true);
+      await single.gate;
       if (single.refuse !== undefined) throw new Error("Validation failed.");
       return { id: "1" };
     },
@@ -174,6 +188,8 @@ beforeEach(() => {
   stored.data = { tokens: null };
   writes.length = 0;
   single.refuse = undefined;
+  single.keepalive = [];
+  single.gate = undefined;
   beforeAction.run = undefined;
   vi.useFakeTimers();
 });
@@ -347,5 +363,93 @@ describe("the Design panel's writes", () => {
       "That colour cannot be stored."
     );
     expect(steps).toEqual([]);
+  });
+  it("writes at once when the page is hidden, sent so it outlives the page", async () => {
+    let visibility: DocumentVisibilityState = "visible";
+    const spied = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockImplementation(() => visibility);
+    try {
+      render(<Editor steps={[]} />);
+      enter(openBrand(), "#00000b");
+      expect(writes).toEqual([]);
+      visibility = "hidden";
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await settle();
+      expect(writes).toHaveLength(1);
+      expect(lastBrand()).toBe("#00000b");
+      expect(single.keepalive).toEqual([true]);
+    } finally {
+      spied.mockRestore();
+    }
+  });
+
+  it("makes Save wait for a write released earlier that has not answered", async () => {
+    let open: () => void = () => {};
+    single.gate = new Promise(resolve => {
+      open = resolve;
+    });
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    enter(field, "#00000c");
+    act(() => {
+      fireEvent.keyDown(field, { key: "Escape" });
+    });
+    await settle();
+    // Released when the editor closed, and still on its way.
+    expect(writes).toHaveLength(1);
+    let saved = false;
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = Promise.resolve(beforeAction.run?.()).then(() => {
+        saved = true;
+      });
+    });
+    await settle();
+    expect(saved).toBe(false);
+    open();
+    await act(async () => {
+      await saving;
+    });
+    expect(saved).toBe(true);
+  });
+
+  it("writes nothing and keeps no step for an edit changed back within the pause", async () => {
+    const brand = {
+      name: "color.brand",
+      kind: "color",
+      values: { light: "#1d2b6b" },
+    };
+    stored.data = { tokens: { tokens: [brand] } };
+    const steps: EditorStep[] = [];
+    render(<Editor steps={steps} />);
+    const field = openBrand();
+    enter(field, "#00000d");
+    expect(steps).toHaveLength(1);
+    enter(field, "#1d2b6b");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toEqual([]);
+    // Withdrawn, which gives the redo it cut off back to the author.
+    expect(steps).toEqual([]);
+  });
+
+  it("draws the original value again when a held edit is undone", async () => {
+    const steps: EditorStep[] = [];
+    render(<Editor steps={steps} />);
+    enter(openBrand(), "#00000e");
+    expect(canvas()).toBe("#00000e");
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    await settle();
+    // Written, then taken back; the read has not moved on, and the canvas
+    // shows what the section holds again.
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual({ tokens: null });
+    expect(canvas()).toBe("none");
   });
 });
