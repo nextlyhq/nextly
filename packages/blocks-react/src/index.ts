@@ -301,6 +301,8 @@ export type {
   // cannot write these down cannot annotate the call it is required to make.
   ComponentUnresolvedReason,
   DefinitionsById,
+  // A resolved node maps each exposed prop to the placement exposure feeding it.
+  PropExposure,
   ResolvedBlockNode,
   ResolvedDocument,
   UnresolvedInstance,
