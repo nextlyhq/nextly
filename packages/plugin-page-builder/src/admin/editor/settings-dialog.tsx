@@ -21,6 +21,7 @@
  */
 import {
   BreakpointManager,
+  EDITOR_WORDS,
   type BuilderShellProps,
 } from "@nextlyhq/builder/shell";
 import { usePluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
@@ -151,7 +152,7 @@ export function SettingsDialog({
           }}
         >
           <DialogHeader className="px-6 pt-6">
-            <DialogTitle>Settings</DialogTitle>
+            <DialogTitle>{EDITOR_WORDS.settings}</DialogTitle>
             <DialogDescription className="sr-only">
               {"This page's settings, and the site's."}
             </DialogDescription>

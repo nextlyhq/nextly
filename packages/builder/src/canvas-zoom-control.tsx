@@ -155,7 +155,13 @@ export function CanvasZoomControl({
       >
         <Minus className="size-3.5" aria-hidden="true" />
       </button>
-      <DropdownMenu>
+      {/*
+        Not modal. A modal menu marks the whole editor around it aria-hidden
+        while its controls stay focusable (axe: aria-hidden-focus). This is a
+        choice beside the canvas, not a dialog: Escape, a click outside and
+        Tab still close it, and focus returns to the trigger.
+      */}
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger
           className="nx-zoom-control"
           /*

@@ -486,6 +486,12 @@ export type { TokensPanelProps } from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
 /*
+ * The editor's words, spelled once, for every surface a host draws beside the
+ * shell's own: a panel it mounts names its places with these.
+ */
+export { EDITOR_WORDS } from "./editor-words";
+export type { EditorWord } from "./editor-words";
+/*
  * The two class surfaces, and the rules both answer from.
  *
  * Split because the actions are: applying a class happens while styling one

@@ -59,6 +59,7 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import { EDITOR_WORDS } from "./editor-words";
 import { emptySlotOf } from "./empty-slot";
 import { positionOf, type OpPosition } from "./ops";
 
@@ -1168,8 +1169,9 @@ const CATEGORY_HEADINGS: Readonly<Record<string, string>> = {
   content: "Text",
   media: "Media",
   interactive: "Interactive",
-  [COMPONENT_CATEGORY]: "Your components",
-  [UNCATEGORISED]: "More blocks",
+  // The two groups the panel makes are named with the editor's words.
+  [COMPONENT_CATEGORY]: `Your ${EDITOR_WORDS.components.toLowerCase()}`,
+  [UNCATEGORISED]: `More ${EDITOR_WORDS.blocks.toLowerCase()}`,
 };
 
 /**

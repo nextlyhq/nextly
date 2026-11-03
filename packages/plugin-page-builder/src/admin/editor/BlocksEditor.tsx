@@ -886,7 +886,15 @@ function EditorBody<TFieldValues extends FieldValues>({
         // The trail sits in the bottom bar, which the shell owns. Passed as a
         // slot rather than rendered beside the canvas so it cannot overlap the
         // page an author is editing.
-        breadcrumb={<SelectionBreadcrumb editor={editor} />}
+        // The hint names Enter, Escape and the palette's key because this
+        // editor binds all three: inline editing and the block keyboard
+        // actions below, and the palette it mounts.
+        breadcrumb={
+          <SelectionBreadcrumb
+            editor={editor}
+            hints={{ editText: true, goUp: true, commandPalette: true }}
+          />
+        }
         // Rendered only while it has somewhere to go: passing an element the
         // shell would position and then hide leaves an empty positioner over
         // the canvas.
