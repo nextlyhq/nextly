@@ -15977,6 +15977,9 @@ export class CollectionMutationService extends BaseService {
       // Store the pending edit rather than the live row, through the same
       // method the other two paths use.
       let workingDraftDocument: Record<string, unknown> | undefined;
+      // The draft this save accumulated onto, if any: what the after-hooks
+      // compare against, as on the single-entry update.
+      let priorWorkingDraftDocument: Record<string, unknown> | undefined;
       if (storeAsWorkingDraft) {
         const draftWrite = await this.storeWorkingDraftInTx(tx, {
           collection,
@@ -16036,6 +16039,7 @@ export class CollectionMutationService extends BaseService {
           );
         }
         workingDraftDocument = draftWrite.workingDraftDocument;
+        priorWorkingDraftDocument = draftWrite.priorWorkingDraftDocument;
       }
 
       // Handle many-to-many relationships on the caller's transaction so the
@@ -16274,14 +16278,30 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
+      // What this update wrote, as the single-entry update reports it: a held
+      // edit leaves the live row unchanged, so the hooks, the field hooks and
+      // the response get the pending draft, marked before the hooks run. A
+      // draft keeps `status` at the live parent's value, so without the marker
+      // a hook could not tell a draft save from a publish.
+      const written = (workingDraftDocument ?? updated) as Record<
+        string,
+        unknown
+      >;
+      if (workingDraftDocument) {
+        written._isWorkingDraft = true;
+      }
+
       // Execute afterUpdate hooks (unless skipped)
       if (options.runHooks) {
         // Execute afterUpdate hooks (code-registered)
         const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
           operation: "update" as const,
-          data: updated,
-          originalData: existingEntry,
+          data: written,
+          // A repeat draft save compares against the prior draft, not the
+          // unchanged live row, so an earlier save's edits are not reported
+          // as changing again.
+          originalData: priorWorkingDraftDocument ?? existingEntry,
           user: params.user,
           context: sharedContext,
           // Bind an after-hook that reads via context.executor to the caller's
@@ -16302,7 +16322,7 @@ export class CollectionMutationService extends BaseService {
           this.hookService.buildPrebuiltHookContext({
             collection: params.collectionName,
             operation: "update",
-            data: updated,
+            data: written,
             queryDatabase: this.queryDatabaseFn,
             user: params.user,
             sharedContext,
@@ -16340,7 +16360,7 @@ export class CollectionMutationService extends BaseService {
           kind: "collection",
           slug: params.collectionName,
           phase: "afterChange",
-          data: updated as Record<string, unknown>,
+          data: written,
           operation: "update",
           user: params.user,
           only: touched,
@@ -16350,10 +16370,7 @@ export class CollectionMutationService extends BaseService {
       // A held edit answers with the pending document, not the live row, so
       // that is the document redacted: it carries the edited values, field
       // groups included, which the live row does not.
-      const response = (workingDraftDocument ?? updated) as Record<
-        string,
-        unknown
-      >;
+      const response = written;
       await this.redactResponseFields(
         response,
         fields,

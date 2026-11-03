@@ -219,11 +219,11 @@ describe("transactional writes carry field groups (integration)", () => {
         { overrideAccess: true }
       )
     );
-    // The pending document, not the live row (this path does not mark it
-    // `_isWorkingDraft` the way the ordinary update does; the content says
-    // which it is). The draft carries the component, where before it carried
-    // `{}` for it.
+    // The pending document, not the live row, marked `_isWorkingDraft` as the
+    // ordinary update marks it. The draft carries the component, where before
+    // it carried `{}` for it.
     expect(held.title).toBe("Draft title");
+    expect(held._isWorkingDraft).toBe(true);
     expect(seo(held)).toBe("draft");
 
     // Live content is untouched: the row and the component table both.
