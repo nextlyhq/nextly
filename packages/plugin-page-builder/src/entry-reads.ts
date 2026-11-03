@@ -22,8 +22,8 @@ export interface AsCallerFindArgs {
   readonly collection: string;
   readonly where?: WhereFilter;
   readonly select: Record<string, boolean>;
-  /** A field to order by, ascending. */
-  readonly sort?: string;
+  /** Fields to order by, ascending, each breaking the ties of the one before. */
+  readonly sort?: readonly string[];
   readonly limit: number;
   /** The language to read in, when the request named one. */
   readonly locale?: string;
@@ -54,7 +54,7 @@ export async function findAsCaller(
     status: "all",
     ...(args.where === undefined ? {} : { where: args.where }),
     select: args.select,
-    ...(args.sort === undefined ? {} : { sort: args.sort }),
+    ...(args.sort === undefined ? {} : { sort: [...args.sort] }),
     limit: args.limit,
     ...(args.locale === undefined ? {} : { locale: args.locale }),
   });

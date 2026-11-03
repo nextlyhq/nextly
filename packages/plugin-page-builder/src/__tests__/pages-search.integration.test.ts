@@ -67,7 +67,15 @@ const articles = defineCollection({
           permissions.includes(`read-${NOTES}`),
       },
     } as never),
-    blocks({ name: "body" }),
+    blocks({
+      name: "body",
+      // A field-level read rule on the Page Builder field itself: a caller
+      // without `read-pages` reads the article and its title, not its body.
+      access: {
+        read: ({ permissions }: { permissions: string[] }) =>
+          permissions.includes(`read-${PAGES}`),
+      },
+    } as never),
   ],
 });
 
@@ -158,6 +166,8 @@ describe.each(getConfiguredTestDialects())(
     let outsider = "";
     /** Reads pages and articles, and not the article title field. */
     let titleBlind = "";
+    /** Reads articles and their titles, and not their Page Builder field. */
+    let bodyBlind = "";
     let alphaPageId = "";
     let alphaArticleId = "";
 
@@ -214,6 +224,7 @@ describe.each(getConfiguredTestDialects())(
       ]);
       outsider = await keyHolding([`read-${PAGES}`, `read-${NOTES}`]);
       titleBlind = await keyHolding([`read-${PAGES}`, `read-${ARTICLES}`]);
+      bodyBlind = await keyHolding([`read-${ARTICLES}`, `read-${NOTES}`]);
 
       const idOf = (created: { item: { id: string | number } }) =>
         String(created.item.id);
@@ -242,6 +253,15 @@ describe.each(getConfiguredTestDialects())(
       await direct.create({
         collection: NOTES,
         data: { title: "Alpha note" },
+      });
+      // Titles whose order depends on case: by code point, SQLite's order,
+      // "Qx Zulu" < "Qx mango" < "qx apple"; ignoring case, "qx apple" first.
+      for (const headline of ["Qx Zulu", "qx apple"]) {
+        await direct.create({ collection: ARTICLES, data: { headline } });
+      }
+      await direct.create({
+        collection: PAGES,
+        data: { title: "Qx mango", slug: "qx-mango", status: "published" },
       });
     }, 180_000);
 
@@ -296,8 +316,8 @@ describe.each(getConfiguredTestDialects())(
 
         expect(answer.items).toHaveLength(2);
         expect(answer.meta.limit).toBe(2);
-        // Two pages, the named article and the fillers.
-        expect(answer.meta.total).toBe(2 + 1 + FILLER);
+        // Three pages; the named article, the fillers and the two "Qx" ones.
+        expect(answer.meta.total).toBe(3 + 1 + FILLER + 2);
         expect(answer.meta.hasNext).toBe(true);
       });
 
@@ -339,6 +359,40 @@ describe.each(getConfiguredTestDialects())(
 
       it("is refused before any of it when not signed in at all", async () => {
         expect((await ask({ q: "alpha" })).status).toBe(401);
+      });
+    });
+
+    describe("the order across collections", () => {
+      it("never ranks a row the database's limit cut above one it kept", async () => {
+        // Articles answer "Qx Zulu" for a limit of one and cut "qx apple".
+        // Any order that would put "qx apple" first must not then answer
+        // "Qx mango", which it would rank after the article it never read.
+        const first = await search({ q: "qx", limit: "1" }, reader);
+        expect(first.items.map(item => item.title)).toEqual(["Qx Zulu"]);
+      });
+
+      it("answers the same order however many rows are asked for", async () => {
+        const all = await search({ q: "qx", limit: "3" }, reader);
+        expect(all.items.map(item => item.title)).toEqual([
+          "Qx Zulu",
+          "Qx mango",
+          "qx apple",
+        ]);
+      });
+    });
+
+    describe("a caller who may read a page but not its Page Builder field", () => {
+      it("is not offered the page, since the editor would open on a field it may not read", async () => {
+        const answer = await search({ q: "alpha" }, bodyBlind);
+
+        expect(answer.items.map(item => item.collection)).not.toContain(
+          ARTICLES
+        );
+      });
+
+      it("CONTROL: a caller who may read the field is offered the same article", async () => {
+        const answer = await search({ q: "alpha" }, reader);
+        expect(answer.items.map(item => item.id)).toContain(alphaArticleId);
       });
     });
 

@@ -163,7 +163,7 @@ function usePageSearch(): {
           ? { status: "Couldn't search pages. Try again." }
           : {}),
       },
-      commands: state.kind === "found" ? state.items.map(pageCommand) : [],
+      commands: state.kind === "found" ? pageCommands(state.items) : [],
     },
     search,
   };
@@ -197,8 +197,25 @@ async function readPages(
   }
 }
 
-/** A page as a search row: its title, whether it is a draft, and opening it. */
-function pageCommand(item: PageItem): BuilderCommand {
+/**
+ * The found pages as search rows.
+ *
+ * Each names its collection when the title alone would not tell it apart:
+ * the results come from more than one collection, or a title repeats.
+ */
+function pageCommands(items: readonly PageItem[]): BuilderCommand[] {
+  const collections = new Set(items.map(item => item.collection));
+  const titles = new Map<string, number>();
+  for (const item of items) {
+    titles.set(item.title, (titles.get(item.title) ?? 0) + 1);
+  }
+  return items.map(item =>
+    pageCommand(item, collections.size > 1 || (titles.get(item.title) ?? 0) > 1)
+  );
+}
+
+/** A page as a search row: its title, what tells it apart, and opening it. */
+function pageCommand(item: PageItem, nameCollection: boolean): BuilderCommand {
   const address = builderAddress(
     { kind: "collection", slug: item.collection, documentId: item.id },
     item.field
@@ -209,10 +226,22 @@ function pageCommand(item: PageItem): BuilderCommand {
     group: PAGES_GROUP,
     icon: <FileText className="size-4" />,
     // Says only what tells two pages apart at a glance.
-    ...(item.status === "draft" ? { detail: "Draft" } : {}),
+    ...detailOf(item, nameCollection),
     verb: "Open",
     run: () => {
       if ("href" in address) navigateTo(address.href);
     },
   };
+}
+
+/** "Draft", the collection's name, both, or nothing. */
+function detailOf(
+  item: PageItem,
+  nameCollection: boolean
+): { detail?: string } {
+  const parts = [
+    ...(nameCollection ? [item.collectionLabel] : []),
+    ...(item.status === "draft" ? ["Draft"] : []),
+  ];
+  return parts.length === 0 ? {} : { detail: parts.join(" · ") };
 }

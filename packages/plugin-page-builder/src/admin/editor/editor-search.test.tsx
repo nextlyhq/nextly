@@ -133,6 +133,27 @@ describe("the editor's page search", () => {
     expect(results().commands[0]?.detail).toBe("Draft");
   });
 
+  it("names the collection when two found pages share a title", async () => {
+    const twin = (collection: string, collectionLabel: string) => ({
+      id: `${collection}-home`,
+      collection,
+      collectionLabel,
+      field: "layout",
+      title: "Home",
+    });
+    answer = async () => ({
+      items: [twin("pages", "Pages"), twin("landing", "Landing pages")],
+      meta: { total: 2 } as PagesSearchResponse["meta"],
+    });
+    mount();
+    search("home");
+    await settle();
+    expect(results().commands.map(row => row.detail)).toEqual([
+      "Pages",
+      "Landing pages",
+    ]);
+  });
+
   it("opens a found page in the editor", async () => {
     mount();
     search("head");

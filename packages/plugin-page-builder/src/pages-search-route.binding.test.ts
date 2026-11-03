@@ -75,7 +75,8 @@ describe("the pages search reads AS THE CALLER", () => {
   beforeEach(() => {
     nextly.find.mockReset();
     nextly.find.mockResolvedValue({
-      items: [{ id: "p1", title: "About", status: "published" }],
+      // `content` comes back (empty), as for a caller who may read the field.
+      items: [{ id: "p1", title: "About", status: "published", content: null }],
       meta: {
         total: 1,
         page: 1,
@@ -101,8 +102,8 @@ describe("the pages search reads AS THE CALLER", () => {
       overrideAccess: false,
       status: "all",
       where: { title: { contains: "abo" } },
-      select: { id: true, title: true, status: true },
-      sort: "title",
+      select: { id: true, title: true, status: true, content: true },
+      sort: ["title", "id"],
       limit: 5,
     });
     expect(args.user).toBe(identity.user);

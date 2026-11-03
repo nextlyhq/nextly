@@ -148,8 +148,20 @@ function record(
   };
 }
 
-/** A page of rows, as one list read answers. */
-function rows(items: unknown[], total = items.length) {
+/**
+ * A page of rows, as one list read answers. Each row carries the Page Builder
+ * field (`content`, empty) unless it states it, as a row does whose field the
+ * caller may read; {@link withheldRows} models one whose field core withheld.
+ */
+function rows(items: Record<string, unknown>[], total = items.length) {
+  return withheldRows(
+    items.map(row => ({ content: null, ...row })),
+    total
+  );
+}
+
+/** A page of rows exactly as given, the builder field absent where not stated. */
+function withheldRows(items: unknown[], total = items.length) {
   return {
     items,
     meta: {
@@ -226,13 +238,87 @@ describe("which collections are searched", () => {
           ],
         }),
       ],
-      async () => rows([{ id: "l1", title: "Launch" }])
+      async () => rows([{ id: "l1", title: "Launch", body: null }])
     );
 
     const answer = await readPagesSearch(request(), reads);
 
     expect(readCollections(find)).toEqual(["landing"]);
     expect(answer.items[0]?.field).toBe("body");
+  });
+
+  it("opens a blocks field inside a named group by its form path, as the editor does", async () => {
+    const { reads, find } = readsOver(
+      [
+        record("landing", {
+          fields: [
+            { name: "title", type: "text" },
+            {
+              name: "hero",
+              type: "group",
+              fields: [{ name: "body", type: "blocks" }],
+            },
+          ],
+        }),
+      ],
+      async () => rows([{ id: "l1", title: "Launch", hero: { body: null } }])
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(answer.items.map(item => item.field)).toEqual(["hero.body"]);
+    // The group is selected, since the field is stored under its key.
+    expect((find.mock.calls[0]?.[0] as PagesFindArgs).select).toMatchObject({
+      hero: true,
+    });
+  });
+
+  it("never reads a collection whose only blocks field is inside a repeater, which the editor does not open", async () => {
+    const { reads, find } = readsOver(
+      [
+        record("landing", {
+          fields: [
+            { name: "title", type: "text" },
+            {
+              name: "sections",
+              type: "repeater",
+              fields: [{ name: "body", type: "blocks" }],
+            },
+          ],
+        }),
+      ],
+      async () => rows([{ id: "l1", title: "Launch" }])
+    );
+
+    await readPagesSearch(request(), reads);
+
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it("names the first field that holds pages, passing over one that holds only components or patterns", async () => {
+    const { reads, find } = readsOver(
+      [
+        record("landing", {
+          fields: [
+            { name: "title", type: "text" },
+            { name: "parts", type: "blocks", blocks: { kinds: ["component"] } },
+            { name: "body", type: "blocks" },
+          ],
+        }),
+        record("library", {
+          fields: [
+            { name: "title", type: "text" },
+            { name: "pattern", type: "blocks", blocks: { kinds: ["pattern"] } },
+          ],
+        }),
+      ],
+      async () => rows([{ id: "l1", title: "Launch", body: null }])
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(readCollections(find)).toEqual(["landing"]);
+    expect(answer.items.map(item => item.field)).toEqual(["body"]);
   });
 
   it("answers an empty list, reading nothing, where no collection has the field", async () => {
@@ -270,8 +356,8 @@ describe("what each read asks for", () => {
     expect(find.mock.calls[0]?.[0]).toEqual({
       collection: "pages",
       where: { headline: { contains: "abo" } },
-      select: { id: true, headline: true },
-      sort: "headline",
+      select: { id: true, headline: true, content: true },
+      sort: ["headline", "id"],
       limit: 3,
     });
   });
@@ -288,8 +374,13 @@ describe("what each read asks for", () => {
       find.mock.calls
         .map(call => call[0] as PagesFindArgs)
         .find(args => args.collection === slug)?.select;
-    expect(select("pages")).toEqual({ id: true, title: true, status: true });
-    expect(select("landing")).toEqual({ id: true, title: true });
+    expect(select("pages")).toEqual({
+      id: true,
+      title: true,
+      status: true,
+      content: true,
+    });
+    expect(select("landing")).toEqual({ id: true, title: true, content: true });
   });
 
   it("drops the excluded page in the database, in its own collection only", async () => {
@@ -325,7 +416,7 @@ describe("the merged answer", () => {
         args.collection === "pages"
           ? rows(
               [
-                { id: "p1", title: "beta", status: "draft" },
+                { id: "p1", title: "Beta", status: "draft" },
                 { id: "p2", title: "Delta", status: "published" },
               ],
               4
@@ -341,8 +432,6 @@ describe("the merged answer", () => {
 
     const answer = await readPagesSearch(request({ limit: 3 }), reads);
 
-    // Case does not decide the order: "beta" sorts between "Alpha" and
-    // "Charlie", which a plain code-point sort would put last.
     expect(answer.items).toEqual([
       {
         id: "1",
@@ -356,7 +445,7 @@ describe("the merged answer", () => {
         collection: "pages",
         collectionLabel: "Page",
         field: "content",
-        title: "beta",
+        title: "Beta",
         status: "draft",
       },
       {
@@ -388,10 +477,64 @@ describe("the merged answer", () => {
 
     const answer = await readPagesSearch(request(), reads);
 
+    // In the order the database answered: one collection is never re-sorted.
     expect(answer.items.map(item => [item.id, item.title])).toEqual([
-      ["p3", "Kept"],
       ["p1", PAGES_UNTITLED],
       ["p2", PAGES_UNTITLED],
+      ["p3", "Kept"],
+    ]);
+  });
+
+  it("never ranks a row the database cut above one it kept", async () => {
+    // SQLite orders by code point, so "Zeta" precedes "alpha" and a limit of
+    // one keeps "Zeta" and cuts "alpha". A merge in any other order would
+    // rank "apple" first while "alpha", which that order puts before it, was
+    // never read.
+    const { reads } = readsOver(
+      [record("pages"), record("landing")],
+      async args =>
+        args.collection === "pages"
+          ? rows([{ id: "p1", title: "Zeta" }], 2)
+          : rows([{ id: "l1", title: "apple" }], 1)
+    );
+
+    const answer = await readPagesSearch(request({ limit: 1 }), reads);
+
+    expect(answer.items.map(item => item.title)).toEqual(["Zeta"]);
+  });
+
+  it("takes each collection's rows in the database's own order, whatever its collation", async () => {
+    // A case-insensitive collation (MySQL's default) answers "apple" before
+    // "Banana". The merge keeps that order within the collection rather than
+    // re-sorting it, so what the limit cut stays behind what it kept.
+    const { reads } = readsOver(
+      [record("pages"), record("landing")],
+      async args =>
+        args.collection === "pages"
+          ? rows([
+              { id: "p1", title: "apple" },
+              { id: "p2", title: "Banana" },
+            ])
+          : rows([{ id: "l1", title: "Avocado" }])
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(answer.items.map(item => item.title)).toEqual([
+      "Avocado",
+      "apple",
+      "Banana",
+    ]);
+  });
+
+  it("asks each collection for its rows by title, then id, so a limit cuts a stable prefix", async () => {
+    const { reads, find } = readsOver([record("pages")], async () => rows([]));
+
+    await readPagesSearch(request(), reads);
+
+    expect((find.mock.calls[0]?.[0] as PagesFindArgs).sort).toEqual([
+      "title",
+      "id",
     ]);
   });
 
@@ -450,9 +593,9 @@ describe("what core refuses", () => {
     expect(find).toHaveBeenCalledTimes(1);
   });
 
-  it("lists pages unordered, untitled, when the caller may not order by their title", async () => {
+  it("lists pages by id, untitled, when the caller may not order by their title", async () => {
     const { reads, find } = readsOver([record("pages")], async args => {
-      if (args.sort !== undefined) {
+      if (args.sort?.includes("title")) {
         throw NextlyError.validation({
           errors: [
             { path: "sort.title", code: "FIELD_NOT_SORTABLE", message: "x" },
@@ -465,7 +608,7 @@ describe("what core refuses", () => {
     const answer = await readPagesSearch(request(), reads);
 
     expect(find).toHaveBeenCalledTimes(2);
-    expect(find.mock.calls[1]?.[0]).not.toHaveProperty("sort");
+    expect((find.mock.calls[1]?.[0] as PagesFindArgs).sort).toEqual(["id"]);
     expect(answer.items.map(item => [item.id, item.title])).toEqual([
       ["p1", PAGES_UNTITLED],
     ]);
@@ -485,5 +628,51 @@ describe("what core refuses", () => {
     await expect(
       readPagesSearch(request({ search: "a" }), reads)
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+});
+
+describe("the Page Builder field the caller may not read", () => {
+  it("leaves out a page whose builder field core withheld, and does not count it", async () => {
+    const { reads } = readsOver([record("pages")], async () =>
+      withheldRows(
+        [
+          { id: "p1", title: "Readable", content: null },
+          // Core's field-level read left `content` out of this row.
+          { id: "p2", title: "Withheld" },
+        ],
+        2
+      )
+    );
+
+    const answer = await readPagesSearch(request(), reads);
+
+    expect(answer.items.map(item => item.id)).toEqual(["p1"]);
+    expect(answer.meta.total).toBe(1);
+  });
+});
+
+describe("how many collections are read at once", () => {
+  it("reads at most two at a time, however many page collections there are", async () => {
+    let open = 0;
+    let most = 0;
+    const { reads, find } = readsOver(
+      ["a", "b", "c", "d", "e"].map(slug => record(slug)),
+      async () => {
+        open += 1;
+        most = Math.max(most, open);
+        // Held open across a turn of the event loop, so reads that were
+        // started together are all open at once.
+        await new Promise(resolve => setTimeout(resolve, 5));
+        open -= 1;
+        return rows([]);
+      }
+    );
+
+    await readPagesSearch(request(), reads);
+
+    // Every collection is still read: the bound orders the reads, it does
+    // not drop any.
+    expect(find).toHaveBeenCalledTimes(5);
+    expect(most).toBe(2);
   });
 });

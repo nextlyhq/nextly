@@ -42,7 +42,6 @@ import {
 import { respondList, type PaginationMeta, type WhereFilter } from "nextly";
 import { z } from "nextly/zod";
 
-import { blocksFieldsOf } from "./class-usage-blocks-fields";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
@@ -57,7 +56,9 @@ import {
   type AsCallerFindArgs,
   type AsCallerPage,
 } from "./entry-reads";
+import { acceptsKind } from "./fields/blocks-options";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
+import { editorBlocksFields } from "./nested-blocks-fields";
 import {
   PAGES_SEARCH_EXCLUDE_SEPARATOR,
   PAGES_SEARCH_LIMIT_DEFAULT,
@@ -153,7 +154,10 @@ export function parsePagesSearchQuery(url: string | URL): PagesSearchRequest {
 interface PageCollection {
   readonly slug: string;
   readonly label: string;
-  /** The Page Builder field the editor opens for: the first one declared. */
+  /**
+   * The Page Builder field the editor opens for, by its form path: the first
+   * one the editor reaches that accepts page documents.
+   */
   readonly field: string;
   /** The field that names its entries, or `undefined` for none. */
   readonly title?: TitleField;
@@ -196,16 +200,18 @@ function pageCollectionOf(
   const record = value as Record<string, unknown>;
   const slug = slugOf(record);
   if (slug === undefined || stores.has(slug)) return undefined;
-  const [first] = blocksFieldsOf({
-    fields: record.fields,
-    localized: record.localized,
-  });
-  if (first === undefined) return undefined;
+  // The editor's own reading of which blocks fields it opens (top level or
+  // inside groups, by form path), and the field's own kinds: a field that
+  // holds only components or patterns does not make its rows pages.
+  const field = editorBlocksFields(record).find(declared =>
+    acceptsKind(declared.declaration, "page")
+  );
+  if (field === undefined) return undefined;
   const title = titleFieldIn(record);
   return {
     slug,
     label: labelOf(record, slug),
-    field: first.name,
+    field: field.path,
     ...(title === undefined ? {} : { title }),
     // Core's projection of a registry record, which reads the lifecycle
     // switch only when it is a real boolean.
@@ -255,45 +261,119 @@ interface CollectionHits {
 const NO_HITS: CollectionHits = { items: [], total: 0 };
 
 /**
+ * How many collections one search reads at a time. A site may declare many
+ * page collections, and a search runs on every keystroke, so their reads take
+ * turns rather than all opening at once; two keeps the common one- or
+ * two-collection site a single round.
+ */
+const READS_AT_ONCE = 2;
+
+/**
  * Answer one search: read each page collection as the caller, then merge.
  *
- * Each collection is read once, for at most `limit` rows already sorted by
- * title, so the merged first `limit` by title are among them. The reads run
- * together: how many there are is the site's configuration, and each is
- * bounded by the limit.
+ * Each collection is read once, for at most `limit` rows in the database's
+ * title order, and the merge only ever takes a prefix of each, so a row a
+ * collection's limit left out is never one the merge would have chosen.
  */
 export async function readPagesSearch(
   request: PagesSearchRequest,
   reads: PagesSearchReads
 ): Promise<PagesSearchResponse> {
   const sources = pageCollections(await reads.collections(), reads.stores());
-  const hits = await Promise.all(
-    sources.map(source => searchCollection(source, request, reads))
+  const hits = await inTurns(sources, READS_AT_ONCE, source =>
+    searchCollection(source, request, reads)
   );
-  const items = hits
-    .flatMap(hit => hit.items)
-    .sort(byTitle)
-    .slice(0, request.limit);
+  const items = mergeByTitle(
+    hits.map(hit => hit.items),
+    request.limit
+  );
   const total = hits.reduce((sum, hit) => sum + hit.total, 0);
   return { items, meta: mergedMeta(total, items.length, request.limit) };
 }
 
+/** `work` over `items`, at most `size` at a time, answers in `items` order. */
+async function inTurns<T, R>(
+  items: readonly T[],
+  size: number,
+  work: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let at = 0; at < items.length; at += size) {
+    results.push(...(await Promise.all(items.slice(at, at + size).map(work))));
+  }
+  return results;
+}
+
 /**
- * Titles in reading order, ignoring case and accents, with numbers compared
- * as numbers ("Page 2" before "Page 10"); ties by collection, then id, so the
+ * The first `limit` items of several lists, each already in its database's
+ * title order, merged by taking the lowest head each time.
+ *
+ * Each list is consumed as a prefix and never re-sorted. A database orders
+ * titles by its own collation, which differs by dialect (byte order on
+ * SQLite, a locale's rules on PostgreSQL and MySQL) and which no comparator
+ * here could reproduce for all three; re-sorting the rows by another order
+ * could rank a row the database cut first. Heads are compared by code point,
+ * which is SQLite's order exactly, so there the answer is the true first
+ * `limit` by title across every collection.
+ */
+function mergeByTitle(
+  lists: readonly (readonly PageItem[])[],
+  limit: number
+): PageItem[] {
+  const cursors = lists.map(() => 0);
+  const merged: PageItem[] = [];
+  while (merged.length < limit) {
+    const next = lowestHead(lists, cursors);
+    if (next === undefined) break;
+    merged.push(next.item);
+    cursors[next.list] = (cursors[next.list] ?? 0) + 1;
+  }
+  return merged;
+}
+
+/** The lowest unconsumed head across `lists`, and which list it heads. */
+function lowestHead(
+  lists: readonly (readonly PageItem[])[],
+  cursors: readonly number[]
+): { item: PageItem; list: number } | undefined {
+  let lowest: { item: PageItem; list: number } | undefined;
+  lists.forEach((list, index) => {
+    const head = list[cursors[index] ?? 0];
+    if (head === undefined) return;
+    if (lowest === undefined || byTitle(head, lowest.item) < 0) {
+      lowest = { item: head, list: index };
+    }
+  });
+  return lowest;
+}
+
+/**
+ * Two items by title in code-point order, then collection, then id, so the
  * order never depends on which read answered first.
  */
-const titleOrder = new Intl.Collator(undefined, {
-  sensitivity: "base",
-  numeric: true,
-});
-
 function byTitle(a: PageItem, b: PageItem): number {
   return (
-    titleOrder.compare(a.title, b.title) ||
-    a.collection.localeCompare(b.collection) ||
-    a.id.localeCompare(b.id)
+    byCodePoint(a.title, b.title) ||
+    byCodePoint(a.collection, b.collection) ||
+    byCodePoint(a.id, b.id)
   );
+}
+
+/**
+ * Two strings by Unicode code point, the order SQLite's default collation
+ * gives UTF-8 text. Not `<`, which compares UTF-16 code units and puts a
+ * character above U+FFFF before one in U+E000 to U+FFFF.
+ */
+function byCodePoint(a: string, b: string): number {
+  const left = [...a];
+  const right = [...b];
+  const shared = Math.min(left.length, right.length);
+  for (let at = 0; at < shared; at += 1) {
+    const step =
+      (left[at]?.codePointAt(0) ?? 0) - (right[at]?.codePointAt(0) ?? 0);
+    if (step !== 0) return step;
+  }
+  return left.length - right.length;
 }
 
 /**
@@ -312,13 +392,14 @@ async function searchCollection(
   if (where === NO_MATCH) return NO_HITS;
   const page = await readRows(source, request, reads, where);
   if (page === undefined) return NO_HITS;
-  return {
-    items: page.items.flatMap(row => {
-      const item = itemOf(row, source);
-      return item === undefined ? [] : [item];
-    }),
-    total: page.meta.total,
-  };
+  const items = page.items.flatMap(row => {
+    const item = itemOf(row, source);
+    return item === undefined ? [] : [item];
+  });
+  // A row left out here (its builder field withheld, or no usable id) is not
+  // counted either: the total is the pages this caller can go to, as far as
+  // this read has seen them.
+  return { items, total: page.meta.total - (page.items.length - items.length) };
 }
 
 /**
@@ -363,21 +444,26 @@ function unorderedRead(
       id: true,
       ...(titleName === undefined ? {} : { [titleName]: true }),
       ...(source.lifecycle ? { [STATUS_COLUMN]: true } : {}),
+      // The Page Builder field itself (its top-level key, for a field inside
+      // a group), so core's field-level read decides whether this caller may
+      // open what the item links to: a field it withholds comes back absent.
+      [topKeyOf(source.field)]: true,
     },
     limit: request.limit,
   };
 }
 
 /**
- * Read one collection's rows as the caller, ordered by title so the rows a
- * limit keeps are the first by title; `undefined` when core leaves this caller
- * nothing of it.
+ * Read one collection's rows as the caller, ordered by title and then id so
+ * the rows a limit keeps are a stable prefix of the database's title order;
+ * `undefined` when core leaves this caller nothing of it.
  *
  * Core refusing the collection leaves its pages out, and the rest of the
  * search still answers: the refusal is core's, applied. A caller who may read
  * the pages but not their title field is refused a filter or an order on it:
  * a search on the title then matches nothing for them, and a plain listing is
- * read again unordered, each page labelled untitled as its row carries none.
+ * read again ordered by id alone, each page labelled untitled as its row
+ * carries none.
  */
 async function readRows(
   source: PageCollection,
@@ -388,14 +474,15 @@ async function readRows(
   const unordered = unorderedRead(source, request, where);
   const titleName = source.title?.name;
   try {
-    return await reads.find(
-      titleName === undefined ? unordered : { ...unordered, sort: titleName }
-    );
+    return await reads.find({
+      ...unordered,
+      sort: titleName === undefined ? ["id"] : [titleName, "id"],
+    });
   } catch (error) {
     if (NextlyError.isForbidden(error)) return undefined;
     if (titleName === undefined || !refusesField(error, titleName)) throw error;
     if (request.search !== undefined) return undefined;
-    return reads.find(unordered);
+    return reads.find({ ...unordered, sort: ["id"] });
   }
 }
 
@@ -442,6 +529,10 @@ function namesFieldRefusal(entry: unknown, field: string): boolean {
  * a lifecycle collection, and only as one of the two values it holds.
  */
 function itemOf(row: unknown, source: PageCollection): PageItem | undefined {
+  // A page whose Page Builder field this caller may not read is not one it
+  // can open, so it is not listed. Core's field-level read decided that, by
+  // leaving the field out of the row.
+  if (!holdsField(row, source.field)) return undefined;
   const entry = entryOf(row, source.title?.name);
   if (entry === undefined) return undefined;
   const status = source.lifecycle ? statusOf(row) : undefined;
@@ -453,6 +544,28 @@ function itemOf(row: unknown, source: PageCollection): PageItem | undefined {
     title: entry.title,
     ...(status === undefined ? {} : { status }),
   };
+}
+
+/** The top-level key a form path is stored under: `hero` for `hero.body`. */
+function topKeyOf(path: string): string {
+  return path.split(".")[0] ?? path;
+}
+
+/**
+ * Whether a row carries the field at `path`, or core withheld it.
+ *
+ * A withheld field is ABSENT from the row, not empty: a readable field with
+ * no value still comes back, as `null`. Along a group path, a group with no
+ * value has nothing beneath it to withhold, so it reads as carried.
+ */
+function holdsField(row: unknown, path: string): boolean {
+  let at: unknown = row;
+  for (const step of path.split(".")) {
+    if (typeof at !== "object" || at === null) return true;
+    if (!Object.hasOwn(at, step)) return false;
+    at = (at as Record<string, unknown>)[step];
+  }
+  return true;
 }
 
 /** A row's stored status, when it is one the lifecycle holds. */
