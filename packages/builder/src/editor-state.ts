@@ -56,7 +56,7 @@ import { compositionRefusal, type CompositionRefusal } from "./inserter";
 import {
   layersLockRefusalFor,
   lockRefusalWording,
-  savedLockRemovedBy,
+  savedLockBrokenBy,
   type LockEditRefusal,
   type LockRefusalFacts,
 } from "./lock-refusal";
@@ -690,7 +690,7 @@ function lockAnswerFor(
  * Tell the host which Layers lock refused an edit, and answer whether one did.
  *
  * With `after` and `stored`, the edit applied and only the saved page's lock
- * on a block it deletes is asked (`savedLockRemovedBy`); without them, the
+ * on a block it deletes is asked (`savedLockBrokenBy`); without them, the
  * edit was refused by the op layer and the lock it broke is found again.
  */
 function reportLayersLock(
@@ -703,7 +703,7 @@ function reportLayersLock(
   const found =
     after === undefined || stored === undefined
       ? layersLockRefusalFor(before, ops)
-      : savedLockRemovedBy(before, after, stored, ops);
+      : savedLockBrokenBy(before, after, stored, ops);
   if (found === undefined) return false;
   onLockRefused?.({
     reason: "locked",

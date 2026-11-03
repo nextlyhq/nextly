@@ -144,36 +144,53 @@ function factsOfBreak(
 }
 
 /**
- * A block the edit deletes that the SAVED page still holds locked, or
- * undefined: a save refuses to drop a block locked in what is stored, even
- * one unlocked since, so the unlock has to be saved before the delete.
+ * What the save would refuse of this edit's Layers locks, judged against the
+ * SAVED page with the engine's own comparison (`layersLockChanges`), the one
+ * the server uses, or undefined. Only what this edit adds is asked, not what an
+ * earlier edit already did.
  *
- * Only a delete is asked: a block unlocked since the save may be changed or
- * moved in the same save that carries its unlock. Judged by the engine's own
- * comparison with the stored page (`layersLockChanges`), and only for a block
- * this edit removes, not one an earlier edit already took out.
+ * - A block the edit deletes that the saved page still holds locked, even one
+ *   unlocked since: the unlock has to be saved before the delete.
+ * - A locked block a move of other blocks would read as moved: moving one
+ *   sibling across it is the sibling's move, but moving several past it at
+ *   once reads, at the save, as the locked block moving instead.
+ *
+ * A block unlocked since the save may otherwise be changed or moved in the
+ * same save that carries its unlock.
  */
-export function savedLockRemovedBy(
+export function savedLockBrokenBy(
   before: BlockDocument,
   after: BlockDocument,
   stored: BlockDocument,
   ops: readonly BuilderOp[]
 ): LayersLockRefusalFacts | undefined {
-  const removal = ops.find(op => op.kind === "remove");
-  if (removal === undefined || removal.kind !== "remove") return undefined;
+  const asked = ops.find(op => op.kind === "remove" || op.kind === "move");
+  if (asked === undefined) return undefined;
   const already = new Set(
-    layersLockChanges(before, stored)
-      .filter(change => change.kind === "removed")
-      .map(change => change.id)
+    layersLockChanges(before, stored).map(
+      change => `${change.kind}:${change.id}`
+    )
   );
   const added = layersLockChanges(after, stored).find(
-    change => change.kind === "removed" && !already.has(change.id)
+    change =>
+      (change.kind === "removed" || change.kind === "moved") &&
+      !already.has(`${change.kind}:${change.id}`)
   );
   if (added === undefined) return undefined;
+  if (added.kind === "moved") {
+    return {
+      code: "layers-locked",
+      label: added.label,
+      relation: "self",
+      verb: "move",
+    };
+  }
+  const removal = ops.find(op => op.kind === "remove");
   return {
     code: "layers-locked-when-saved",
     label: added.label,
-    relation: added.id === removal.id ? "self" : "inside",
+    relation:
+      removal?.kind === "remove" && added.id === removal.id ? "self" : "inside",
     verb: "delete",
   };
 }
@@ -205,7 +222,7 @@ export function layersLockRefusalFor(
   }
   return stored === undefined
     ? undefined
-    : savedLockRemovedBy(document, working, stored, ops);
+    : savedLockBrokenBy(document, working, stored, ops);
 }
 
 /**
