@@ -83,10 +83,92 @@ const COLLECTION_COLUMN = "entity";
 const DOCUMENT_COLUMN = "entityKey";
 
 /**
- * How many documents reference `referenceId`, and whether that is all of them.
+ * The documents that reference something, grouped by the collection holding
+ * them, and whether that is all of them.
+ *
+ * The richer answer the count is derived from: a surface that lists where
+ * something is used, and one that splits the count by kind of document, read
+ * the same buckets the count adds up, so the three can never disagree.
+ */
+interface DocumentsUsing {
+  /**
+   * Each collection holding a referencing document, with that document's id.
+   * A `null` id is a row whose document column held nothing: counted, since
+   * it is a reference, but nameable by no one.
+   */
+  readonly collections: readonly {
+    readonly collection: string;
+    readonly documents: readonly (string | null)[];
+  }[];
+  /** Whether `collections` is the whole answer; see {@link UsageCount}. */
+  readonly complete: boolean;
+}
+
+/**
+ * Which documents reference `referenceId`, by collection, and whether that is
+ * all of them.
  *
  * The index decides which rows count — it owns whether a marker sits beside its
  * references and how to exclude one — and this decides what the buckets mean.
+ */
+async function listDocumentsUsing<TRow extends UsageSubject>(args: {
+  index: UsageIndex<TRow>;
+  read: GroupedUsageReader;
+  referenceId: string;
+  /** What is known about the index as a whole; see {@link countDocumentsUsing}. */
+  health: UsageIndexHealth;
+}): Promise<DocumentsUsing> {
+  // An empty id references nothing and is not an id. Answered as COMPLETE
+  // because it genuinely is — nothing can reference what is not a reference —
+  // and answered without a read, because asking would spend a query to learn
+  // what the argument already said.
+  if (args.referenceId === "") return { collections: [], complete: true };
+
+  const referencing = args.index.whereReferencing(args.referenceId);
+
+  // Which collections hold a reference at all, then the documents in EACH.
+  // The grouped read takes one column, so the pair is asked as two questions:
+  // grouping by the id across every collection at once is the fold described
+  // above, and grouping by collection alone counts collections, not documents.
+  const found = await args.read({
+    where: referencing,
+    groupBy: COLLECTION_COLUMN,
+  });
+
+  const collections: DocumentsUsing["collections"][number][] = [];
+  let truncated = found.truncated;
+  let placeable = true;
+  for (const entity of found.buckets) {
+    // A row naming no collection is a document this cannot place, and a count
+    // that dropped it would be a floor presenting itself as exact.
+    if (entity === null) {
+      placeable = false;
+      continue;
+    }
+    const inCollection = await args.read({
+      where: { ...referencing, [COLLECTION_COLUMN]: { equals: entity } },
+      groupBy: DOCUMENT_COLUMN,
+    });
+    collections.push({ collection: entity, documents: inCollection.buckets });
+    truncated ||= inCollection.truncated;
+  }
+
+  // Four conditions in one expression, and no ordering between them can drop
+  // one: a read reached its cap, a row could not be placed in a collection,
+  // some document in the index was never readable, or some scope was never
+  // walked. The first two are about this reference; the other two were
+  // resolved once for the whole screen.
+  return {
+    collections,
+    complete: !truncated && placeable && indexIsWhole(args.health),
+  };
+}
+
+/**
+ * How many documents reference `referenceId`, and whether that is all of them.
+ *
+ * Derived from {@link listDocumentsUsing}: the number is how many documents
+ * that listing holds, so a count and a list of the same thing always agree.
  */
 export async function countDocumentsUsing<TRow extends UsageSubject>(args: {
   index: UsageIndex<TRow>;
@@ -104,48 +186,12 @@ export async function countDocumentsUsing<TRow extends UsageSubject>(args: {
    */
   health: UsageIndexHealth;
 }): Promise<UsageCount> {
-  // An empty id references nothing and is not an id. Answered as COMPLETE
-  // because it genuinely is — nothing can reference what is not a reference —
-  // and answered without a read, because asking would spend a query to learn
-  // what the argument already said.
-  if (args.referenceId === "") return { documents: 0, complete: true };
-
-  const referencing = args.index.whereReferencing(args.referenceId);
-
-  // Which collections hold a reference at all, then the documents in EACH.
-  // The grouped read takes one column, so the pair is asked as two questions:
-  // grouping by the id across every collection at once is the fold described
-  // above, and grouping by collection alone counts collections, not documents.
-  const collections = await args.read({
-    where: referencing,
-    groupBy: COLLECTION_COLUMN,
-  });
-
-  let documents = 0;
-  let truncated = collections.truncated;
-  let placeable = true;
-  for (const entity of collections.buckets) {
-    // A row naming no collection is a document this cannot place, and a count
-    // that dropped it would be a floor presenting itself as exact.
-    if (entity === null) {
-      placeable = false;
-      continue;
-    }
-    const inCollection = await args.read({
-      where: { ...referencing, [COLLECTION_COLUMN]: { equals: entity } },
-      groupBy: DOCUMENT_COLUMN,
-    });
-    documents += inCollection.buckets.length;
-    truncated ||= inCollection.truncated;
-  }
-
-  // Four conditions in one expression, and no ordering between them can drop
-  // one: a read reached its cap, a row could not be placed in a collection,
-  // some document in the index was never readable, or some scope was never
-  // walked. The first two are about this component; the other two were
-  // resolved once for the whole screen.
+  const found = await listDocumentsUsing(args);
   return {
-    documents,
-    complete: !truncated && placeable && indexIsWhole(args.health),
+    documents: found.collections.reduce(
+      (sum, entry) => sum + entry.documents.length,
+      0
+    ),
+    complete: found.complete,
   };
 }
