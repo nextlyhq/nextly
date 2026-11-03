@@ -201,25 +201,60 @@ describe("useAutosaveRecovery", () => {
     );
   });
 
-  it("passes over a password the server stripped, and only an empty one", async () => {
-    // Every stored recovery point lacks its password fields, which the form
-    // seeds with "": otherwise equal, it holds nothing to offer.
+  it("passes over the fields a point lacks, and not one it holds differently", async () => {
+    // The server leaves out password fields and the fields this author may not
+    // read, which the form seeds with defaults of its own ("", false, 0, []).
     getSpy.mockResolvedValue({
       snapshot: { ...STORED },
       updatedAt: "2026-08-17T10:00:00.000Z",
       locale: null,
     });
-    const stripped = renderRecovery(SCOPE, { ...STORED, secret: "" });
+    const lacking = renderRecovery(SCOPE, {
+      ...STORED,
+      secret: "",
+      featured: false,
+      tags: [],
+    });
     await waitFor(() =>
-      expect(stripped.result.current.recovery.isResolved).toBe(true)
+      expect(lacking.result.current.recovery.isResolved).toBe(true)
     );
-    expect(stripped.result.current.recovery.offer).toBeNull();
-    stripped.unmount();
+    expect(lacking.result.current.recovery.offer).toBeNull();
+    lacking.unmount();
 
-    // A stored value the point lacks is not passed over.
-    const differs = renderRecovery(SCOPE, { ...STORED, note: "kept" });
+    // A field the point holds with another value is unsaved work.
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED, featured: true },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    const differs = renderRecovery(SCOPE, { ...STORED, featured: false });
     await waitFor(() =>
       expect(differs.result.current.recovery.offer).not.toBeNull()
+    );
+  });
+
+  it("offers a point in another language stored in the same second with the same values, after one was put off", async () => {
+    const at = "2026-08-17T10:00:00.000Z";
+    getSpy.mockResolvedValue({
+      snapshot: { title: "same" },
+      updatedAt: at,
+      locale: "en",
+    });
+    const first = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(first.result.current.recovery.offer).not.toBeNull()
+    );
+    act(() => first.result.current.recovery.dismiss());
+    first.unmount();
+
+    getSpy.mockResolvedValue({
+      snapshot: { title: "same" },
+      updatedAt: at,
+      locale: "fr",
+    });
+    const other = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(other.result.current.recovery.offer).not.toBeNull()
     );
   });
 

@@ -53,20 +53,24 @@ function hash53(text: string): string {
 }
 
 /**
- * Which recovery point this is: when it was stored and what it holds. The time
- * alone is not enough, since SQLite stores it to the second and a point
- * rewritten within that second with newer work keeps the same time.
+ * Which recovery point this is: when it was stored, in which language, and what
+ * it holds. The time alone is not enough, since SQLite stores it to the second
+ * and a point rewritten within that second, with newer work or in another
+ * language, keeps the same time.
  */
 function pointIdentity(point: AutosaveDetail): string {
-  return `${point.updatedAt}|${hash53(canonicalJson(point.snapshot))}`;
+  return [
+    point.updatedAt,
+    point.locale ?? "",
+    hash53(canonicalJson(point.snapshot)),
+  ].join("|");
 }
 
 /**
- * Whether a recovery point holds what the document stores: equal everywhere,
- * except that a key the snapshot lacks is passed over where the document holds
- * an empty string. The server strips password fields from every recovery point
- * it stores, and the form seeds each with "", so a point holding nothing else
- * new would otherwise never match.
+ * Whether a recovery point holds what the document stores: every value it holds
+ * equals the document's. A key it lacks holds no unsaved work and is passed
+ * over: the server leaves out the password fields and the fields this author
+ * may not read, which the form still seeds with defaults of its own.
  */
 function holdsStored(snapshot: unknown, stored: unknown): boolean {
   if (Array.isArray(snapshot) || Array.isArray(stored)) {
@@ -78,11 +82,8 @@ function holdsStored(snapshot: unknown, stored: unknown): boolean {
     );
   }
   if (isPlainRecord(snapshot) && isPlainRecord(stored)) {
-    const keys = new Set([...Object.keys(snapshot), ...Object.keys(stored)]);
-    return [...keys].every(key =>
-      Object.hasOwn(snapshot, key)
-        ? holdsStored(snapshot[key], stored[key])
-        : stored[key] === "" || stored[key] === undefined
+    return Object.keys(snapshot).every(key =>
+      holdsStored(snapshot[key], stored[key])
     );
   }
   return canonicalJson(snapshot) === canonicalJson(stored);
