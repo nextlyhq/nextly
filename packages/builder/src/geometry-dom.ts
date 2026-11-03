@@ -177,6 +177,17 @@ export function rootInFrameViewport(root: HTMLElement): Point {
 }
 
 /**
+ * Where an element of a frame's page is, in that frame's VIEWPORT: its client
+ * rectangle inside the frame, which moves with the frame's scroll, as the
+ * canvas root's corner does above. Chrome drawn over the frame scales it by
+ * the frame's painted scale.
+ */
+export function boxInFrameViewport(element: Element): Rect {
+  const box = element.getBoundingClientRect();
+  return { x: box.left, y: box.top, width: box.width, height: box.height };
+}
+
+/**
  * Where editor chrome is drawn, and how it maps the canvas's coordinates.
  *
  * Chrome is drawn in one of two places. Over a canvas sharing the editor's

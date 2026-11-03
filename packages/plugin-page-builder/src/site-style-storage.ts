@@ -22,6 +22,7 @@ import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
 
+import type { StoredSiteStyle } from "./library-contract";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import {
   checkStoredBreakpoints,
@@ -360,7 +361,54 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
  * document's slug is the plugin's to know.
  */
 export interface SiteStyleReader {
-  findSingle(args: { slug: string }): Promise<unknown>;
+  findSingle(args: {
+    slug: string;
+    overrideAccess?: boolean;
+  }): Promise<unknown>;
+}
+
+/**
+ * The stored document's four sections exactly as stored, each `null` where
+ * nothing is stored, and nothing else the row carries (its id, timestamps or
+ * any field a host added).
+ */
+function storedSiteStyleOf(doc: unknown): StoredSiteStyle {
+  const record =
+    typeof doc === "object" && doc !== null
+      ? (doc as Record<string, unknown>)
+      : {};
+  return {
+    tokens: record.tokens ?? null,
+    fonts: record.fonts ?? null,
+    classes: record.classes ?? null,
+    breakpoints: record.breakpoints ?? null,
+  };
+}
+
+/**
+ * The stored site style: the one server-side read of the document, which the
+ * published render layers over the defaults ({@link loadSiteStyle}) and the
+ * editor's route answers as it is.
+ *
+ * Read with whatever access posture the reader has, unless `overrideAccess` is
+ * set. Only the editor's route sets it, after deciding who may ask: every
+ * published page compiles these sections into the CSS a visitor is served.
+ * The published render does not, so a host handing it a reader that enforces
+ * access keeps that enforcement.
+ */
+export async function readStoredSiteStyle(args: {
+  nextly: SiteStyleReader;
+  /** The Single's RESOLVED slug, where a host renamed it. */
+  slug?: string;
+  /** Read past the Single's own read permission. */
+  overrideAccess?: true;
+}): Promise<StoredSiteStyle> {
+  return storedSiteStyleOf(
+    await args.nextly.findSingle({
+      slug: args.slug ?? SITE_STYLE_SLUG,
+      ...(args.overrideAccess === true ? { overrideAccess: true } : {}),
+    })
+  );
 }
 
 /**
@@ -382,8 +430,15 @@ export async function loadSiteStyle(args: {
   /** The Single's RESOLVED slug, where a host renamed it. */
   slug?: string;
 }): Promise<SiteStyleData> {
-  const doc = await args.nextly.findSingle({
-    slug: args.slug ?? SITE_STYLE_SLUG,
-  });
-  return resolveSiteStyle(args.defaults, readSiteStyleRecord(doc));
+  return resolveSiteStyle(
+    args.defaults,
+    readSiteStyleRecord(
+      // The slug alone, never an access override: this is published, and
+      // its read keeps the posture of the reader it was handed.
+      await readStoredSiteStyle({
+        nextly: args.nextly,
+        ...(args.slug === undefined ? {} : { slug: args.slug }),
+      })
+    )
+  );
 }

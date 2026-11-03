@@ -69,6 +69,7 @@ describe("the component's facts", () => {
         live: { properties: ["title"], slots: [] },
         retired: { properties: [], slots: [] },
         reach: null,
+        pages: null,
       },
       new Error("Forbidden")
     );
@@ -89,10 +90,13 @@ describe("the component's facts", () => {
       live: { properties: ["title"], slots: [] },
       retired: null,
       reach: null,
+      pages: { count: 3, complete: true },
     });
     const { result } = renderHook(() => useComponentFacts("hero"));
+    // The page count still travels: the banner says it whatever the ids.
     expect(result.current).toEqual({
       reserved: { unavailable: FACTS_UNRECORDED },
+      pages: { count: 3, complete: true },
     });
   });
 
@@ -101,11 +105,13 @@ describe("the component's facts", () => {
       live: { properties: ["title"], slots: [] },
       retired: { properties: ["subtitle"], slots: ["aside"] },
       reach: { count: 2, complete: false },
+      pages: { count: 5, complete: false },
     });
     const { result } = renderHook(() => useComponentFacts("hero"));
     expect(result.current).toEqual({
       reserved: { properties: ["title", "subtitle"], slots: ["aside"] },
       reach: { count: 2, complete: false },
+      pages: { count: 5, complete: false },
     });
   });
 
