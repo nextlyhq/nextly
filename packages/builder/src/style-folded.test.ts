@@ -69,4 +69,12 @@ describe("lineHeightFromText", () => {
     expect(lineHeightFromText("1.")).toBe("1.");
     expect(lineHeightFromText("   ")).toBeNull();
   });
+
+  it("trims CSS whitespace only, so a non-breaking space is not dropped", () => {
+    // A non-breaking space is not whitespace to CSS: a value carrying one goes
+    // on as typed, for the catalogue to refuse, and one alone is not nothing.
+    expect(lineHeightFromText("\u00a01.5")).toBe("\u00a01.5");
+    expect(lineHeightFromText("\u00a0")).toBe("\u00a0");
+    expect(lineHeightFromText("\t1.5\n")).toBe(1.5);
+  });
 });

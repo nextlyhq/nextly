@@ -16,7 +16,7 @@
  * @module style-folded
  */
 
-import type { StyleValue } from "@nextlyhq/blocks-engine";
+import { trimCssWhitespace, type StyleValue } from "@nextlyhq/blocks-engine";
 
 /** How a folded property is edited. */
 export type FoldedControl = "font-weight" | "number-or-length";
@@ -101,7 +101,9 @@ export function storedKey(stored: StyleValue | undefined): string | undefined {
  * `normal`), for the catalogue to accept or refuse. `null` for nothing typed.
  */
 export function lineHeightFromText(text: string): StyleValue | null {
-  const trimmed = text.trim();
+  // CSS whitespace only: `String.prototype.trim` also strips a non-breaking
+  // space, which CSS reads as part of the value, and would clear on one alone.
+  const trimmed = trimCssWhitespace(text);
   if (trimmed === "") return null;
   // A digit after any point, as CSS requires: "1." goes on as typed, for the
   // catalogue to refuse, rather than being stored as the 1 it is not.
