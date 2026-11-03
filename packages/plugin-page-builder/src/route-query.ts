@@ -9,7 +9,38 @@
  * @module route-query
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
-import type { z } from "nextly/zod";
+import { z } from "nextly/zod";
+
+/**
+ * A limit as a URL carries it: a positive whole number, CAPPED at `max` rather
+ * than refused above it, since the list a caller can have serves it better
+ * than an error. Anything that is not a positive whole number is refused,
+ * because it is not a limit at all.
+ */
+export function cappedLimit(max: number): z.ZodType<number, string> {
+  return z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .pipe(z.number().int().min(1))
+    .transform(value => Math.min(value, max));
+}
+
+/**
+ * Optional text, trimmed, at most `max` characters; an empty value is none.
+ * Refused rather than cut above the bound, because a cut value answers a
+ * different question than the one asked.
+ */
+export function optionalText(
+  max: number
+): z.ZodType<string | undefined, string | undefined> {
+  return z
+    .string()
+    .trim()
+    .max(max)
+    .optional()
+    .transform(value => (value === "" ? undefined : value));
+}
 
 /**
  * The parameters `names` of `url`, parsed by `schema`, or a validation error

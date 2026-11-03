@@ -444,9 +444,15 @@ describe("one read", () => {
       ...r,
       find: async (args: EntriesFindArgs) => {
         if (args.where !== undefined) {
-          throw new NextlyError({
-            code: "FIELD_NOT_FILTERABLE",
-            publicMessage: "Not filterable.",
+          // As core refuses it: a validation error naming the code.
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "where.title",
+                code: "FIELD_NOT_FILTERABLE",
+                message: "Not filterable.",
+              },
+            ],
           });
         }
         return r.find(args);

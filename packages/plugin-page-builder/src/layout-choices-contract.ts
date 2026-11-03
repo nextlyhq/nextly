@@ -96,8 +96,9 @@ export interface LayoutChoice {
    * for one never published: everything about it is unpublished.
    *
    * Asked only of the two Layouts a page can be drawn inside, its selected
-   * one and the site's default, and only for an author who may update
-   * Layouts: false for every other row.
+   * one and the site's default, and true only for a caller who may see that
+   * Layout's working draft (update or publish it), as the service decides:
+   * false for every other row.
    */
   readonly draftChangesNotLive: boolean;
   /**
@@ -132,7 +133,10 @@ export interface LayoutChoicesResponse {
      * collection the site actually has, renamed or not.
      */
     readonly layoutsCollection: string;
-    /** Whether the caller may update Layouts, which offers "Edit Layout". */
+    /**
+     * Whether the caller may update Layouts, which offers "Edit Layout". Only
+     * that: who is told of a draft is the service's decision, per row.
+     */
     readonly canUpdateLayouts: boolean;
     /**
      * Whether more Layouts match than the list holds: the picker then offers
@@ -140,9 +144,17 @@ export interface LayoutChoicesResponse {
      */
     readonly more: boolean;
     /**
+     * The ids of the rows the list itself returned: for a search, the ones
+     * whose title the database matched to the query. Rows added whatever the
+     * query (the page's selected Layout and the default) are not here, so a
+     * search shows exactly what matched.
+     */
+    readonly matched: readonly string[];
+    /**
      * Facts about the region components of the selected Layout and the
-     * default, by id, for an author who may update components: a region has
-     * draft changes when any component it draws does, nested ones included.
+     * default, by id, telling of a draft only to a caller who may see the
+     * component's working draft (update or publish it). A region has draft
+     * changes when any component it draws does, nested ones included.
      */
     readonly regionComponents: Readonly<Record<string, RegionComponentFacts>>;
     /**

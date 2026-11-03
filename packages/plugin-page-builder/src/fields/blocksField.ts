@@ -38,7 +38,7 @@ import {
 } from "./blocks-composition";
 import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
-import { blocksOptionsOf } from "./blocks-options";
+import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import {
   judgesLayersLocks,
@@ -335,7 +335,8 @@ export function blocksFieldType(
        */
       zodSchema: field => {
         const kinds = policyOf(field).kinds;
-        const accepted = kinds ?? ["page"];
+        // The default from its one statement, which the validator reads too.
+        const accepted = kinds ?? DEFAULT_ACCEPTED_KINDS;
         const kindSchema = `z.enum([${accepted
           .map(kind => `"${String(kind).replace(/["\\]/g, "\\$&")}"`)
           .join(", ")}])`;

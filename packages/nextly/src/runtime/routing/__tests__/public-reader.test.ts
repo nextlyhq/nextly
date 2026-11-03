@@ -215,6 +215,63 @@ describe("toPublicFind", () => {
     expect(toPublicFind({ collection: "posts" }).depth).toBe(0);
   });
 
+  it.each(["-", "title,-", ["title", " - "], ["title,-"]])(
+    "refuses a sort key that is only a sign: %j",
+    sort => {
+      expect(
+        refusal(() =>
+          toPublicFind({ collection: "posts", sort } as PublicReadQuery)
+        )
+      ).toContain("public-read-sort-invalid");
+    }
+  );
+
+  it.each(
+    (["gt", "gte", "lt", "lte", "contains"] as const).flatMap(op =>
+      [true, false].map(value => [op, value] as const)
+    )
+  )("refuses %s %s, and keeps a boolean for equals", (op, value) => {
+    expect(
+      refusal(() =>
+        toPublicFind({
+          collection: "posts",
+          filters: [{ field: "rank", op, value }],
+        })
+      )
+    ).toContain("public-read-value-invalid");
+    expect(
+      toPublicFind({
+        collection: "posts",
+        filters: [{ field: "featured", op: "equals", value: true }],
+      }).where
+    ).toEqual({ and: [{ featured: { equals: true } }] });
+  });
+
+  it("takes for contains what core's find takes: text, or a number matched as text", () => {
+    for (const value of ["hel", 12]) {
+      expect(
+        toPublicFind({
+          collection: "posts",
+          filters: [{ field: "title", op: "contains", value }],
+        }).where
+      ).toEqual({ and: [{ title: { contains: value } }] });
+    }
+    expect(
+      refusal(() =>
+        toPublicFind({
+          collection: "posts",
+          filters: [{ field: "title", op: "contains", value: ["a"] }],
+        })
+      )
+    ).toContain("public-read-value-invalid");
+  });
+
+  it("splits each sort element on commas, as core does", () => {
+    expect(
+      toPublicFind({ collection: "posts", sort: ["title, -date", "rank"] }).sort
+    ).toEqual(["title", "-date", "rank"]);
+  });
+
   it("refuses __proto__ as a field name", () => {
     expect(
       refusal(() =>

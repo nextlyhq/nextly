@@ -11,11 +11,11 @@ Choosing a panel's item again closes it and gives the canvas the room back.
 
 The top bar runs across the editor in three parts.
 
-| Part   | What it holds                                                                                                                                        |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Left   | The way back to the entry, the page's title, whether it's a draft or published, and **Undo** and **Redo**.                                           |
-| Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                         |
-| Right  | The buttons that hide or show the left panel and the inspector, whether your work is saved, **Preview** where the admin offers one, and **Publish**. |
+| Part   | What it holds                                                                                                                                                    |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Left   | The way back to the entry, the page's title, whether it's a draft or published, and **Undo** and **Redo**.                                                       |
+| Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                                     |
+| Right  | The buttons that hide or show the left panel and the inspector, **Search**, whether your work is saved, **Preview** where the admin offers one, and **Publish**. |
 
 **Publish** is the entry's own leading action: **Publish**, **Publish changes** or
 **Save**, as on the entry's page. Its arrow holds **Save draft**, **Schedule publish…**
@@ -40,6 +40,23 @@ puts the rest in a menu beside them, under **More devices**. While you style one
 the menu's button shows its name and width. The buttons never change places.
 
 When the bar is narrow, the device buttons drop their label first and keep their icons.
+
+## Search
+
+**Search** in the top bar, or <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a
+Mac), finds four kinds of thing as you type, each under its own heading:
+
+- **Add**: blocks and your components to add. Each says where it will go, as the Add panel
+  does ("Adding after Heading"), and choosing one adds it there.
+- **On this page**: the page's blocks, by the names Layers shows, with what each is and
+  what it sits in. Choosing one selects it and scrolls it into view.
+- **Pages**: the site's other pages you may open, by title, with **Draft** beside a page
+  not yet published. Choosing one opens it in the editor.
+- **Commands**: what you can do to the selected block, Undo and Redo, and closing the
+  editor.
+
+The bottom line says what <kbd>Enter</kbd> does to the highlighted result. Saved sections
+are added from the Add panel's **Sections** tab.
 
 ## The rail
 
@@ -136,7 +153,7 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Escape</kbd>                                                             | Select the block holding this one, or clear the selection at the top of the page                                                  |
 | <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                     | Move the selected block up or down                                                                                                |
 | <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                     | Move the selected block into the container above it, or out of its container                                                      |
-| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                  | Open the command palette                                                                                                          |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                  | Open search: blocks to add, this page's blocks, other pages and commands                                                          |
 | <kbd>F6</kbd>                                                                 | Move to the next area of the editor: top bar, rail, panel, canvas, inspector                                                      |
 | <kbd>Ctrl</kbd>+<kbd>\\</kbd>                                                 | Hide both side panels, or show them again                                                                                         |
 | <kbd>Ctrl</kbd>+<kbd>0</kbd>                                                  | Show the page at actual size                                                                                                      |

@@ -412,7 +412,9 @@ function surfaceFor(
   instance: InstanceInspection | null,
   inspection: BlockInspection | null,
   verbs: CardVerbs | undefined,
-  fields: ComponentFieldsBinding | undefined
+  fields: ComponentFieldsBinding | undefined,
+  /** The canvas's root, where the instance panel marks a placement's parts. */
+  canvasRoot?: HTMLElement | null
 ):
   | { readonly tabless: React.JSX.Element }
   | { readonly block: BlockInspection } {
@@ -447,6 +449,7 @@ function surfaceFor(
           inspection={instance}
           editor={editor}
           verbs={verbs}
+          canvasRoot={canvasRoot}
         />
       ),
     };
@@ -584,7 +587,14 @@ function SelectionInspector({
   // The component's own view, when the document is a component.
   const fields = React.useContext(ComponentFieldsContext);
 
-  const surface = surfaceFor(editor, instance, inspection, verbs, fields);
+  const surface = surfaceFor(
+    editor,
+    instance,
+    inspection,
+    verbs,
+    fields,
+    canvasRoot
+  );
   if ("tabless" in surface) return surface.tabless;
   const block = surface.block;
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
