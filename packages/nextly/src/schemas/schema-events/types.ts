@@ -24,7 +24,14 @@ export type SchemaEventType =
   // `uninstall` began or finished. Recorded for every plugin, schema or none,
   // so a plugin that owns no table has a state the boot and the next install
   // read. Never pruned: the newest one IS the state.
-  | "plugin_lifecycle";
+  | "plugin_lifecycle"
+  // A ledger row names a file an earlier Schema Builder wrote, recorded with
+  // the file's checksum while the file could still be read, so the row is
+  // judged from this mark once the file is gone. Its own type, never a
+  // `file_apply` row or status: every build, this one and every earlier one,
+  // reads a migration's applied state from `file_apply` rows alone, so a mark
+  // can never make one read as applied or unapplied. Never pruned.
+  | "old_builder_file";
 
 /** Lifecycle state of an event row. */
 export type SchemaEventStatus =
