@@ -30,6 +30,21 @@
  * another whatever order they save in. The mutations share one scope, so two
  * saves serialize rather than race.
  *
+ * ## A save can wait for the author's pause
+ *
+ * Every save is a write and, in the editor, a step of undo; the server also
+ * limits how many writes an address may make a minute. So a save asked to
+ * HOLD is not written at once: saves of the same section made before the
+ * author pauses for {@link SITE_STYLE_PAUSE_MS} are written once, with the
+ * latest value, as one step. What is held is written at once when the author
+ * is done ({@link releaseHeldSiteStyle}): an editor closing, the tab or panel
+ * changing, the editor going away, or the page being saved. That is here, in
+ * the one write every studio makes, rather than in each field.
+ *
+ * A held value is drawn at once all the same: it is shown over the stored
+ * read ({@link SiteStylePreviewContext}) until the write answers and the read
+ * has moved on, or until the write is refused.
+ *
  * @module @nextlyhq/plugin-page-builder/admin/site-style-client
  */
 import {
@@ -123,6 +138,7 @@ export interface SiteStyleRead {
  */
 export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
   const { data, isPending, error } = useStoredSiteStyle();
+  const preview = useContext(SiteStylePreviewContext);
 
   // Narrowed and merged in one memo over one source. A stored row predates its
   // validators, so the read keeps what it can type and drops what it cannot,
@@ -132,9 +148,22 @@ export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
   // twice: two calls to `readSiteStyleRecord` over one document are two
   // derivations of the same answer, and they agree until one of them moves.
   const stored = useMemo(() => readSiteStyleRecord(data), [data]);
+  // What is drawn: the stored tier with any held section over it, narrowed
+  // by the same reader. `stored` stays what the document holds, since a
+  // writer builds on that and a held value is not stored yet.
+  const drawn = useMemo(
+    () =>
+      preview.size === 0
+        ? stored
+        : readSiteStyleRecord({
+            ...(typeof data === "object" && data !== null ? data : {}),
+            ...Object.fromEntries(preview),
+          }),
+    [data, preview, stored]
+  );
   const siteStyle = useMemo(
-    () => resolveSiteStyle(defaults, stored),
-    [defaults, stored]
+    () => resolveSiteStyle(defaults, drawn),
+    [defaults, drawn]
   );
   // From the document rather than from `stored`, which is the value AFTER the
   // drop and therefore cannot report one.
@@ -223,7 +252,26 @@ export interface SiteStyleHistory {
   /** Records a step; answers a function that withdraws it. */
   readonly record: (step: SiteStyleStep) => () => void;
   readonly settled: Map<SiteStyleSection, SectionChain>;
+  /**
+   * Draws a section's held value before it is stored, and hears how its write
+   * went: `"held"` shows it, `"stored"` keeps it until the read moves on, and
+   * `"refused"` withdraws it. An answer for a value no longer shown is
+   * ignored. Absent, a held value is drawn once it is stored.
+   */
+  readonly preview?: (
+    section: SiteStyleSection,
+    value: unknown,
+    state: "held" | "stored" | "refused"
+  ) => void;
 }
+
+/**
+ * The held values drawn over the stored read, by section. Empty outside an
+ * editor, and whenever nothing is held.
+ */
+export const SiteStylePreviewContext: Context<
+  ReadonlyMap<SiteStyleSection, unknown>
+> = createContext<ReadonlyMap<SiteStyleSection, unknown>>(new Map());
 
 /**
  * One section's writes in this editor, in turn.
@@ -239,6 +287,75 @@ export interface SectionChain {
   pending: number;
   held: unknown;
   heldAt: unknown;
+  /**
+   * The save waiting for the author's pause, while there is one. On the
+   * chain because it is the chain's next write: it holds `pending` until it
+   * is written, so every later write and replay waits behind it.
+   */
+  waiting?: HeldWrite;
+}
+
+/** A save held for the author's pause. */
+export interface HeldWrite {
+  /** What the write will store: the latest value saved while it waited. */
+  value: unknown;
+  /** Waits again from now, the author being still at work. */
+  readonly extend: () => void;
+  /** Writes now rather than after the pause. */
+  readonly release: () => void;
+  /** Settles once the write has answered. */
+  readonly answered: Promise<SiteStyleSaveResult>;
+}
+
+/**
+ * How long a held save waits for the author to stop before it is written:
+ * long enough to span a field's commit and the next field's first keys, short
+ * enough that a change is stored about as soon as the author looks away.
+ */
+export const SITE_STYLE_PAUSE_MS = 700;
+
+/** The saves an editor's sections are holding, the first for each. */
+function heldWrites(history: SiteStyleHistory | null): HeldWrite[] {
+  if (history === null) return [];
+  return [...history.settled.values()].flatMap(chain =>
+    chain.waiting === undefined ? [] : [chain.waiting]
+  );
+}
+
+/**
+ * Writes every held save now, and settles once each has answered. For when
+ * the author is done: what they typed must not wait on a pause that may never
+ * come, or be lost with the editor.
+ */
+export async function releaseHeldSiteStyle(
+  history: SiteStyleHistory | null
+): Promise<void> {
+  const held = heldWrites(history);
+  for (const write of held) write.release();
+  await Promise.all(held.map(write => write.answered));
+}
+
+/** The author is still at work, so every held save waits again. */
+export function extendHeldSiteStyle(history: SiteStyleHistory | null): void {
+  for (const write of heldWrites(history)) write.extend();
+}
+
+/**
+ * The editor's held saves, for a surface that knows when the author is still
+ * at work or done. Outside an editor nothing is held, and both do nothing.
+ */
+export function useHeldSiteStyle(): {
+  readonly extend: () => void;
+  readonly release: () => Promise<void>;
+} {
+  const history = useContext(SiteStyleHistoryContext);
+  return useMemo(
+    () => ({
+      extend: () => extendHeldSiteStyle(history),
+      release: () => releaseHeldSiteStyle(history),
+    }),
+    [history]
+  );
 }
 
 /** Whether two section values are the same, as stored JSON. */
@@ -265,12 +382,23 @@ export function storedSection(
   return (document as Record<string, unknown>)[section] ?? null;
 }
 
+/** How a save is made. */
+export interface SiteStyleSaveOptions {
+  /**
+   * Wait for the author's pause, joining any save of the section already
+   * waiting; see the module note. A save without it writes at once, along
+   * with whatever of its section is waiting.
+   */
+  readonly hold?: boolean;
+}
+
 /** Saving one section, and what the last attempt said. */
 export interface SiteStyleWrite {
   /** Save ONE section. Every other section is left exactly as it was. */
   readonly save: (
     section: SiteStyleSection,
-    value: unknown
+    value: unknown,
+    options?: SiteStyleSaveOptions
   ) => Promise<SiteStyleSaveResult>;
   /** Whether a save is in flight. */
   readonly saving: boolean;
@@ -418,17 +546,36 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   const save = useCallback(
     async (
       section: SiteStyleSection,
-      value: unknown
+      value: unknown,
+      options?: SiteStyleSaveOptions
     ): Promise<SiteStyleSaveResult> => {
       if (history === null) return write(section, value);
       const { settled } = history;
       const chain = chainOf(settled, section);
+      if (chain.waiting !== undefined) {
+        return joinWaiting(
+          history,
+          section,
+          chain.waiting,
+          value,
+          options?.hold === true
+        );
+      }
       // A save that leaves the section as it stands is no step to take back,
       // and must not end the redo branch.
       if (chain.pending === 0 && sameSection(chain.held, value)) {
         return write(section, value);
       }
-      const { before, done } = inTurn(chain, section, () => value);
+      const held = options?.hold === true ? holdFor(chain, value) : undefined;
+      const { before, done } = inTurn(
+        chain,
+        section,
+        () => held?.next() ?? value
+      );
+      if (held !== undefined) {
+        held.settle(done.then(({ result }) => result));
+        history.preview?.(section, value, "held");
+      }
       // Set once the save is refused: an undo or redo of it queued in the
       // meantime then writes nothing, or a change would be stored with no
       // step left to take it back.
@@ -443,10 +590,23 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           return { stored: result.saved, section, value: holds };
         };
       const withdraw = history.record({
-        undo: replay(() => before),
-        redo: replay(() => value),
+        // A change still waiting is written before it is taken back, so the
+        // step's two halves are the two values the section really held.
+        undo: () => {
+          chainOf(settled, section).waiting?.release();
+          return replay(() => before)();
+        },
+        // The value the burst came to, read when the step is replayed.
+        redo: replay(() => (held === undefined ? value : held.write.value)),
       });
       const { result } = await done;
+      if (held !== undefined) {
+        history.preview?.(
+          section,
+          held.write.value,
+          result.saved ? "stored" : "refused"
+        );
+      }
       if (!result.saved) {
         withdrawn = true;
         withdraw();
@@ -457,6 +617,75 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   );
 
   return { save, saving: mutation.isPending };
+}
+
+/**
+ * A save made while one of its section waits, joined to it: the value it
+ * stores is this one, and its step is the one already recorded. Held, it
+ * waits again; otherwise everything waiting is written now.
+ */
+function joinWaiting(
+  history: SiteStyleHistory,
+  section: SiteStyleSection,
+  waiting: HeldWrite,
+  value: unknown,
+  hold: boolean
+): Promise<SiteStyleSaveResult> {
+  waiting.value = value;
+  // Drawn as the value the waiting write will now answer about.
+  history.preview?.(section, value, "held");
+  if (hold) waiting.extend();
+  else waiting.release();
+  return waiting.answered;
+}
+
+/**
+ * A save made to wait on `chain` for the author's pause. `next` settles to
+ * the value to write once it is to be written, after the pause or at once on
+ * `release`; `settle` hands it the answer its write will have, once queued.
+ */
+function holdFor(
+  chain: SectionChain,
+  value: unknown
+): {
+  write: HeldWrite;
+  next: () => Promise<unknown>;
+  settle: (answer: Promise<SiteStyleSaveResult>) => void;
+} {
+  let start: () => void = () => {};
+  const due = new Promise<void>(resolve => {
+    start = resolve;
+  });
+  let answer: (result: Promise<SiteStyleSaveResult>) => void = () => {};
+  const answered = new Promise<SiteStyleSaveResult>(resolve => {
+    answer = resolve;
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const write: HeldWrite = {
+    value,
+    extend: () => {
+      clearTimeout(timer);
+      timer = setTimeout(write.release, SITE_STYLE_PAUSE_MS);
+    },
+    release: () => {
+      clearTimeout(timer);
+      // No longer joined by later saves: from here it is a write in flight,
+      // and the next save starts a write, and a step, of its own.
+      if (chain.waiting === write) delete chain.waiting;
+      start();
+    },
+    answered,
+  };
+  chain.waiting = write;
+  write.extend();
+  return {
+    write,
+    next: async () => {
+      await due;
+      return write.value;
+    },
+    settle: answer,
+  };
 }
 
 /**

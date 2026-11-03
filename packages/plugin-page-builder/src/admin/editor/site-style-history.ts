@@ -17,6 +17,7 @@
  *
  * @module admin/editor/site-style-history
  */
+import { useBeforeDocumentAction } from "@nextlyhq/plugin-sdk/admin";
 import { toast } from "@nextlyhq/ui";
 import {
   createContext,
@@ -33,6 +34,7 @@ import {
 } from "react";
 
 import {
+  releaseHeldSiteStyle,
   sameSection,
   storedSection,
   type SectionChain,
@@ -176,8 +178,11 @@ export function useSiteStyleHistory(): {
   history: SiteStyleHistory;
   replay: StyleReplay;
   connect: (record: RecordStep | null) => void;
+  /** The held values drawn over the stored read, for `SiteStylePreviewContext`. */
+  preview: ReadonlyMap<SiteStyleSection, unknown>;
 } {
   const [revision, setRevision] = useState(0);
+  const { shown, preview } = useHeldPreview();
   const { inFlight, waitForRead, settling } = useReadBack(setRevision);
   const settled = useRef(new Map<SiteStyleSection, SectionChain>()).current;
   const recorder = useRef<RecordStep | null>(null);
@@ -206,15 +211,112 @@ export function useSiteStyleHistory(): {
       };
     return {
       settled,
+      preview,
       record: step =>
         recorder.current?.({
           undo: replay(step.undo, "undone"),
           redo: replay(step.redo, "redone"),
         }) ?? (() => {}),
     };
-  }, [settled, inFlight, waitForRead]);
+  }, [settled, inFlight, waitForRead, preview]);
   const replay = useMemo(() => ({ revision, settling }), [revision, settling]);
-  return { history, replay, connect };
+  useReleaseWhenDone(history);
+  return { history, replay, connect, preview: shown };
+}
+
+/** A held value drawn over the read, and the read its write answered at. */
+interface Shown {
+  value: unknown;
+  /** The read when the write was stored; `UNANSWERED` while it is held. */
+  storedAt: unknown;
+}
+
+/** What `storedAt` reads before a write has answered. */
+const UNANSWERED: unique symbol = Symbol("unanswered");
+
+/**
+ * The held values drawn over the stored read, so the canvas shows an edit at
+ * once while its write waits for the author's pause.
+ *
+ * A stored value stays drawn until the read moves on from the one it was
+ * stored at: the write asks for the read again, and dropping the value before
+ * that answer would draw the old one for a moment in between. A refused value
+ * is dropped at once, so the canvas goes back to what is stored.
+ */
+function useHeldPreview(): {
+  shown: ReadonlyMap<SiteStyleSection, unknown>;
+  preview: NonNullable<SiteStyleHistory["preview"]>;
+} {
+  const { data } = useStoredSiteStyle();
+  const read = useRef<unknown>(data);
+  read.current = data;
+  const [held, setHeld] = useState<ReadonlyMap<SiteStyleSection, Shown>>(
+    () => new Map()
+  );
+  const preview = useCallback<NonNullable<SiteStyleHistory["preview"]>>(
+    (section, value, state) => {
+      setHeld(current => {
+        const was = current.get(section);
+        // An answer about a value no longer drawn is about an older burst.
+        if (state !== "held" && was?.value !== value) return current;
+        const next = new Map(current);
+        // Dropped too once stored where the read already holds it, which
+        // happens when the read came back before the write's answer did.
+        if (
+          state === "refused" ||
+          (state === "stored" &&
+            sameSection(storedSection(read.current, section), value))
+        ) {
+          next.delete(section);
+        } else
+          next.set(section, {
+            value,
+            storedAt: state === "stored" ? read.current : UNANSWERED,
+          });
+        return next;
+      });
+    },
+    []
+  );
+  useEffect(() => {
+    setHeld(current => {
+      const moved = [...current].filter(
+        ([section, shown]) =>
+          shown.storedAt !== UNANSWERED &&
+          (shown.storedAt !== data ||
+            sameSection(storedSection(data, section), shown.value))
+      );
+      if (moved.length === 0) return current;
+      const next = new Map(current);
+      for (const [section] of moved) next.delete(section);
+      return next;
+    });
+  }, [data]);
+  const shown = useMemo(
+    () => new Map([...held].map(([section, { value }]) => [section, value])),
+    [held]
+  );
+  return { shown, preview };
+}
+
+/**
+ * Writes what a Design edit left waiting for the author's pause whenever the
+ * pause cannot be waited for: before the page is saved or published (and the
+ * action waits for it, so the page and its styles are stored together), when
+ * the browser tab is hidden or closed, and when the editor goes away.
+ */
+function useReleaseWhenDone(history: SiteStyleHistory): void {
+  useBeforeDocumentAction(() => releaseHeldSiteStyle(history));
+  useEffect(() => {
+    const release = (): void => {
+      void releaseHeldSiteStyle(history);
+    };
+    window.addEventListener("pagehide", release);
+    return () => {
+      window.removeEventListener("pagehide", release);
+      release();
+    };
+  }, [history]);
 }
 
 /** How the editor below connects its history to the one provided above it. */

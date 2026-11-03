@@ -57,7 +57,11 @@ import {
   tokenSaveOutcome,
   type SiteStyleData,
 } from "../../site-style";
-import { useFontCatalogueClient, useSaveSiteStyle } from "../site-style-client";
+import {
+  useFontCatalogueClient,
+  useHeldSiteStyle,
+  useSaveSiteStyle,
+} from "../site-style-client";
 import { useShown } from "../use-shown";
 
 import { useDesignHeaderSlot } from "./design-panel";
@@ -150,6 +154,11 @@ export function offerableTokens(
  * the author a page no visitor would see, with no other surface on which to
  * notice the difference.
  *
+ * Shown at once and stored once the author pauses: each edit is held for the
+ * pause, so a run of edits is one write and one step of undo, and it is
+ * written at once when a variable's editor closes, the Variables tab or this
+ * panel goes away, or the page is saved.
+ *
  * It is the Design panel's FRAME rather than its Variables tab, because the
  * panel's header belongs to every tab: the preview switch and the
  * import-and-export menu are drawn into it from here, and an import made from
@@ -172,6 +181,12 @@ export function TokensStudio({
   children: React.ReactNode;
 }): React.JSX.Element {
   const { save } = useSaveSiteStyle();
+  const held = useHeldSiteStyle();
+  // Whatever an edit left waiting is written when the panel goes away, an
+  // import made from another tab included.
+  const release = useRef(held.release);
+  release.current = held.release;
+  useEffect(() => () => void release.current(), []);
   // The server refuses a change to the site style without this grant; the
   // panel shows the variables read-only rather than offering edits it would
   // refuse.
@@ -228,7 +243,8 @@ export function TokensStudio({
        * canvas compiles, so saving it whole would copy every config token into
        * the database on the first edit and mask the site's code from then on.
        */
-      tokenOverrideOf(baseline, next)
+      tokenOverrideOf(baseline, next),
+      { hold: true }
     ).then(result => {
       const outcome = tokenSaveOutcome(
         result.saved,
@@ -262,6 +278,8 @@ export function TokensStudio({
     absence: pending ? "pending" : "failed",
     readOnly: !mayChange,
     onChange: commit,
+    onActivity: held.extend,
+    onSettle: () => void held.release(),
     currentTokens,
     header,
   };
