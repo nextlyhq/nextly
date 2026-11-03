@@ -5,6 +5,11 @@
  * component placement, and during a drag the container a drop would land in or
  * the one refusing it.
  *
+ * A selected component placement is ONE frame around every part its component
+ * draws, tagged with its name, because the parts are one thing the author
+ * placed; its exposed parts keep their dash inside it, as the parts an author
+ * can edit.
+ *
  * The canvas decides WHICH elements are marked and says so with attributes on
  * them (`useCanvasMarkers` in `canvas.tsx`): every rendering of a selected
  * node, the outermost element of a component placement, the drop container.
@@ -20,6 +25,7 @@ import { INSTANCE_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import {
+  outsetCornerRadii,
   scaleCornerRadii,
   SQUARE_CORNERS,
   type CornerRadii,
@@ -47,6 +53,7 @@ import {
   visiblePartOf,
   type OverlaySpace,
 } from "./geometry-dom";
+import { UNNAMED_COMPONENT } from "./layers";
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
@@ -59,6 +66,8 @@ interface Mark {
   readonly locked: boolean;
   /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
+  /** The placement a component frame is drawn around, by its address. */
+  readonly placement?: string;
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -66,15 +75,41 @@ interface Mark {
 
 const NO_MARKS: readonly Mark[] = [];
 
+/** @experimental */
+export interface CanvasMarksProps {
+  /**
+   * A block's name by its address, for the tag on a component placement's
+   * frame: the name its author gave it, or its component's. A placement it
+   * does not name is tagged as a component.
+   */
+  readonly nameOf?: (address: string) => string | undefined;
+}
+
+/**
+ * How far outside a block its selection ring is drawn: the ring and the halo
+ * band inside it, each 2px. Outside, so the ring never covers the block's own
+ * content, the first glyph of a heading set flush with its box.
+ */
+const RING_OUTSIDE = 4;
+
+/**
+ * The height of a placement's tag, drawn above its frame. A frame closer than
+ * this to the top of the page has its tag drawn inside instead, where it is
+ * still on the page.
+ */
+const PLACEMENT_TAG_HEIGHT = 18;
+
 /** Everything that decides how a mark is drawn, as one comparable value. */
 function markKey(mark: Mark): string {
-  const { kind, secondary, component, locked, clipped, radius, rect } = mark;
+  const { kind, secondary, component, locked, clipped, placement } = mark;
+  const { radius, rect } = mark;
   return JSON.stringify([
     kind,
     secondary,
     component,
     locked,
     clipped,
+    placement,
     radius,
     rect.x,
     rect.y,
@@ -102,6 +137,13 @@ function borderRadiusOf(radii: CornerRadii): string {
   );
 }
 
+/** A marked element's box and corners, in the chrome's coordinates. */
+interface Outline {
+  readonly rect: Rect;
+  readonly radii: CornerRadii;
+  readonly clipped: boolean;
+}
+
 /**
  * A marked element's box and corners, in the chrome's coordinates.
  *
@@ -122,7 +164,7 @@ function outlineOf(
   marked: Element,
   root: HTMLElement,
   space: OverlaySpace
-): { rect: Rect; radius: string; clipped: boolean } | null {
+): Outline | null {
   const own = canvasContentRect(marked, root);
   const style = marked.ownerDocument.defaultView?.getComputedStyle(marked);
   const scale = renderedScale(marked, root);
@@ -140,16 +182,83 @@ function outlineOf(
     if (visible === "hidden") return null;
     return {
       rect: space.place(visible),
-      radius: borderRadiusOf(SQUARE_CORNERS),
+      radii: SQUARE_CORNERS,
       clipped: true,
     };
   }
-  const drawn = scaleCornerRadii(inRoot, { x: space.scale, y: space.scale });
   return {
     rect: space.place(own),
-    radius: borderRadiusOf(drawn),
+    radii: scaleCornerRadii(inRoot, { x: space.scale, y: space.scale }),
     clipped: false,
   };
+}
+
+/** The intersection of two rectangles, or `null` where they do not meet. */
+function intersection(a: Rect, b: Rect): Rect | null {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  if (right <= x || bottom <= y) return null;
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+/**
+ * Where a selection ring is drawn for an outline: outside the block by
+ * {@link RING_OUTSIDE}, with its rounded corners grown to stay concentric,
+ * but held inside the page where the block is flush with its edge, so the ring
+ * never runs off the page there.
+ *
+ * A clipped outline is drawn where it is: the page shows nothing past the
+ * clip, so a ring outside it would ring what the reader cannot see.
+ */
+function ringOf(outline: Outline, page: Rect): { rect: Rect; radius: string } {
+  if (outline.clipped) {
+    return { rect: outline.rect, radius: borderRadiusOf(outline.radii) };
+  }
+  const { x, y, width, height } = outline.rect;
+  const grown = {
+    x: x - RING_OUTSIDE,
+    y: y - RING_OUTSIDE,
+    width: width + 2 * RING_OUTSIDE,
+    height: height + 2 * RING_OUTSIDE,
+  };
+  // A block wholly off the page keeps its own box rather than none.
+  return {
+    rect: intersection(grown, page) ?? outline.rect,
+    radius: borderRadiusOf(outsetCornerRadii(outline.radii, RING_OUTSIDE)),
+  };
+}
+
+/** The smallest rectangle holding every one given. */
+function unionOf(rects: readonly Rect[]): Rect {
+  const left = Math.min(...rects.map(rect => rect.x));
+  const top = Math.min(...rects.map(rect => rect.y));
+  const right = Math.max(...rects.map(rect => rect.x + rect.width));
+  const bottom = Math.max(...rects.map(rect => rect.y + rect.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/**
+ * The outline around every part of one placement: their union, square unless
+ * there is one part, whose corners it keeps, and cut by a clip where any part
+ * is.
+ */
+function placementOutline(parts: readonly Outline[]): Outline {
+  const [only] = parts;
+  if (parts.length === 1 && only !== undefined) return only;
+  return {
+    rect: unionOf(parts.map(part => part.rect)),
+    radii: SQUARE_CORNERS,
+    clipped: parts.some(part => part.clipped),
+  };
+}
+
+/** A selected placement's parts, gathered to draw one frame around them. */
+interface SelectedPlacement {
+  readonly parts: Outline[];
+  readonly secondary: boolean;
+  readonly locked: boolean;
 }
 
 /** The marked elements of a canvas root, as the boxes to draw over them. */
@@ -157,7 +266,10 @@ function marksOf(element: HTMLElement): readonly Mark[] {
   const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
   if (space === null) return NO_MARKS;
   const { root } = space;
+  const page = space.place(canvasContentRect(root, root));
   const found: Mark[] = [];
+  // In the order their first part is met, which is document order.
+  const placements = new Map<string, SelectedPlacement>();
   root
     .querySelectorAll(
       `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
@@ -169,29 +281,70 @@ function marksOf(element: HTMLElement): readonly Mark[] {
       // Wholly cut away by a clipping ancestor: the page shows none of it.
       if (outline === null) return;
       const plain = { secondary: false, component: false, locked: false };
+      const drawn = {
+        rect: outline.rect,
+        radius: borderRadiusOf(outline.radii),
+        clipped: outline.clipped,
+      };
       const selected = marked.getAttribute(SELECTED_ATTRIBUTE);
-      if (selected !== null) {
+      // A part of a placement, by the placement's address: the canvas marks
+      // only the outermost elements, so each of these is one whole part.
+      const placement = marked.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
+      const secondary = selected !== "primary";
+      const locked = marked.hasAttribute(LOCKED_ATTRIBUTE);
+      if (selected !== null && placement !== "") {
+        const gathered = placements.get(placement);
+        if (gathered === undefined) {
+          placements.set(placement, { parts: [outline], secondary, locked });
+        } else gathered.parts.push(outline);
+      } else if (selected !== null) {
         found.push({
-          ...outline,
+          ...ringOf(outline, page),
+          clipped: outline.clipped,
           kind: "selected",
-          secondary: selected !== "primary",
-          component: marked.hasAttribute(INSTANCE_ATTRIBUTE),
-          locked: marked.hasAttribute(LOCKED_ATTRIBUTE),
+          secondary,
+          component: false,
+          locked,
         });
       }
-      // An exposed part that is itself selected keeps its ring alone: one
-      // element draws one outline, and the ring says more there.
-      if (marked.hasAttribute(EXPOSED_ATTRIBUTE) && selected === null) {
-        found.push({ ...outline, ...plain, kind: "exposed" });
+      // An exposed part keeps its dash inside its placement's frame. A block
+      // that is itself ringed keeps its ring alone: one element draws one
+      // outline, and the ring says more there.
+      if (
+        marked.hasAttribute(EXPOSED_ATTRIBUTE) &&
+        (selected === null || placement !== "")
+      ) {
+        found.push({ ...drawn, ...plain, kind: "exposed" });
       }
       if (marked.hasAttribute(DROP_PARENT_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-parent" });
+        found.push({ ...drawn, ...plain, kind: "drop-parent" });
       }
       if (marked.hasAttribute(DROP_REFUSED_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-refused" });
+        found.push({ ...drawn, ...plain, kind: "drop-refused" });
       }
     });
+  placements.forEach(({ parts, secondary, locked }, placement) => {
+    const outline = placementOutline(parts);
+    found.push({
+      ...ringOf(outline, page),
+      clipped: outline.clipped,
+      kind: "selected",
+      secondary,
+      component: true,
+      locked,
+      placement,
+    });
+  });
   return found;
+}
+
+/** The tag on a placement's frame: a component's mark and its name. */
+function placementTag(
+  placement: string,
+  nameOf: CanvasMarksProps["nameOf"]
+): string {
+  const name = nameOf?.(placement)?.trim();
+  return `◇ ${name === undefined || name === "" ? UNNAMED_COMPONENT : name}`;
 }
 
 /**
@@ -204,7 +357,9 @@ function marksOf(element: HTMLElement): readonly Mark[] {
  *
  * @experimental
  */
-export function CanvasMarks(): React.JSX.Element {
+export function CanvasMarks({
+  nameOf,
+}: CanvasMarksProps = {}): React.JSX.Element {
   const layer = React.useRef<HTMLDivElement | null>(null);
   const [marks, setMarks] = React.useState<readonly Mark[]>(NO_MARKS);
   const canvasFrame = useCanvasFrame();
@@ -245,6 +400,19 @@ export function CanvasMarks(): React.JSX.Element {
           data-component={mark.component ? "" : undefined}
           data-locked={mark.locked ? "" : undefined}
           data-clipped={mark.clipped ? "" : undefined}
+          // The tag a placement's frame carries, drawn by the stylesheet from
+          // this attribute: the layer is hidden from assistive technology,
+          // and the inspector names the placement in words.
+          data-label={
+            mark.placement === undefined
+              ? undefined
+              : placementTag(mark.placement, nameOf)
+          }
+          data-tag-inside={
+            mark.placement !== undefined && mark.rect.y < PLACEMENT_TAG_HEIGHT
+              ? ""
+              : undefined
+          }
           style={{
             left: mark.rect.x,
             top: mark.rect.y,

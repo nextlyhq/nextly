@@ -19,6 +19,7 @@ import {
 
 import {
   ancestorIds,
+  blockNameOf,
   componentTitles,
   filterLayers,
   layerLabel,
@@ -175,6 +176,20 @@ describe("a component placement's name", () => {
       "Box",
       "Hero banner",
     ]);
+  });
+
+  it("reads the same on the canvas's tag, found by address anywhere in the page", () => {
+    register();
+    const document = documentOf([
+      node("box", "core/box", {
+        slots: { children: [placement("a", "cmp-hero")] },
+      }),
+    ]);
+
+    expect(blockNameOf(document, "a", titles)).toBe("Hero banner");
+    expect(blockNameOf(document, "box", titles)).toBe("Box");
+    // An address the page no longer holds names nothing.
+    expect(blockNameOf(document, "gone", titles)).toBeUndefined();
   });
 
   it("names the placement holding a lock by its title", () => {

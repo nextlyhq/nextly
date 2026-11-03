@@ -271,20 +271,25 @@ test.describe("a placement's exposed fields", () => {
       "data-nx-exposed",
       ""
     );
-    // The heading is also the placement's selected root: it keeps the solid
-    // selection ring rather than trading it for the dashed one. The marks are
-    // drawn over the canvas frame, so the ring is a mark there and no dashed
-    // mark is drawn over the heading.
+    // The placement is ONE frame around its parts, tagged with its name, and
+    // the heading, a selected part as well as an exposed one, keeps its dash
+    // inside it. The marks are drawn over the canvas frame.
     await expect(await headline(page, "p1")).toHaveAttribute(
       "data-nx-selected",
       /.*/
     );
-    await expect(
-      page.locator('.nx-canvas-mark[data-mark="selected"]')
-    ).not.toHaveCount(0);
+    const frame = page.locator('.nx-canvas-mark[data-mark="selected"]');
+    await expect(frame).toHaveCount(1);
+    await expect(frame).toHaveAttribute("data-component", "");
+    await expect(frame).toHaveAttribute("data-label", `◇ ${COMPONENT_TITLE}`);
+    // One dash for each exposed part, the selected heading's included.
+    const exposedParts = await (await canvasRoot(page))
+      .locator("[data-nx-exposed]")
+      .count();
+    expect(exposedParts).toBeGreaterThan(0);
     await expect(
       page.locator('.nx-canvas-mark[data-mark="exposed"]')
-    ).toHaveCount(0);
+    ).toHaveCount(exposedParts);
     await expect(
       (await canvasRoot(page))
         .locator('[data-nx-instance="p1"]')

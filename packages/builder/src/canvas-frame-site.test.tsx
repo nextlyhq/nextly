@@ -306,6 +306,83 @@ describe("the canvas frame on a page the site serves", () => {
     expect(cues()).toHaveLength(3);
   });
 
+  it("gives a part the site's layout removes back the state it had", async () => {
+    const { container } = render(
+      <CanvasFrame width={1280} title="Home" source={siteSource()}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    arrive(frame, SITE_PAGE);
+    await hydrate(frame);
+    const doc = frameDocument(frame);
+    const header = doc.getElementById("site-header");
+    const alreadyInert = doc.getElementById("already-inert");
+    expect(header?.hasAttribute("inert")).toBe(true);
+
+    // The site's own client code takes both out, to reuse them elsewhere.
+    await act(async () => {
+      header?.remove();
+      alreadyInert?.remove();
+      await Promise.resolve();
+    });
+    expect(header?.hasAttribute("inert")).toBe(false);
+    expect(header?.hasAttribute(SITE_CHROME_ATTRIBUTE)).toBe(false);
+    expect(alreadyInert?.hasAttribute(SITE_CHROME_ATTRIBUTE)).toBe(false);
+    // What the site made inert itself stays so.
+    expect(alreadyInert?.hasAttribute("inert")).toBe(true);
+  });
+
+  it("keeps the language and direction the site's own page states, unless the editor names them", async () => {
+    document.documentElement.lang = "en";
+    document.documentElement.dir = "ltr";
+    const source = siteSource();
+    const { container, rerender } = render(
+      <CanvasFrame width={1280} title="Home" source={source}>
+        <Page />
+      </CanvasFrame>
+    );
+    const frame = frameIn(container);
+    act(() => {
+      const doc = frameDocument(frame);
+      doc.replaceChildren(doc.createElement("html"));
+      // A German, right-to-left site, administered in English.
+      doc.documentElement.setAttribute("lang", "de");
+      doc.documentElement.setAttribute("dir", "rtl");
+      doc.documentElement.innerHTML = `<head></head><body>${SITE_PAGE}</body>`;
+      frame.dispatchEvent(new Event("load"));
+    });
+    await hydrate(frame);
+    const root = frameDocument(frame).documentElement;
+    expect(root.getAttribute("lang")).toBe("de");
+    expect(root.getAttribute("dir")).toBe("rtl");
+
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={source}
+        lang="fr"
+        dir="ltr"
+      >
+        <Page />
+      </CanvasFrame>
+    );
+    expect(root.getAttribute("lang")).toBe("fr");
+    expect(root.getAttribute("dir")).toBe("ltr");
+
+    // Named no longer: the site's own values come back.
+    rerender(
+      <CanvasFrame width={1280} title="Home" source={source}>
+        <Page />
+      </CanvasFrame>
+    );
+    expect(root.getAttribute("lang")).toBe("de");
+    expect(root.getAttribute("dir")).toBe("rtl");
+    document.documentElement.removeAttribute("lang");
+    document.documentElement.removeAttribute("dir");
+  });
+
   it("falls back to the blank page, and says why, when the page loaded is not the route", () => {
     const onSourceFallback =
       vi.fn<(reason: CanvasFrameFallback | null) => void>();

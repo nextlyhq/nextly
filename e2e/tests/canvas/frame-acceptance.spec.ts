@@ -589,18 +589,29 @@ async function box(locator: Locator): Promise<Box> {
   return found;
 }
 
-/** Within a page pixel on every edge. */
-function expectAligned(mark: Box, block: Box, what: string): void {
-  expect(Math.abs(mark.x - block.x), `${what}: left`).toBeLessThanOrEqual(1);
-  expect(Math.abs(mark.y - block.y), `${what}: top`).toBeLessThanOrEqual(1);
-  expect(
-    Math.abs(mark.x + mark.width - (block.x + block.width)),
-    `${what}: right`
-  ).toBeLessThanOrEqual(1);
-  expect(
-    Math.abs(mark.y + mark.height - (block.y + block.height)),
-    `${what}: bottom`
-  ).toBeLessThanOrEqual(1);
+/**
+ * How far outside a block its selection ring is drawn, in screen pixels at any
+ * zoom: the ring and its halo. Where the block meets the page's edge, the ring
+ * is held to the page and the distance there is nothing.
+ */
+const RING_OUTSIDE = 4;
+
+/** How far each edge of the ring sits outside the block's. */
+function ringGaps(mark: Box, block: Box): Record<string, number> {
+  return {
+    left: block.x - mark.x,
+    top: block.y - mark.y,
+    right: mark.x + mark.width - (block.x + block.width),
+    bottom: mark.y + mark.height - (block.y + block.height),
+  };
+}
+
+/** Around the block on every edge, by the ring's distance at most. */
+function expectRinged(mark: Box, block: Box, what: string): void {
+  for (const [edge, gap] of Object.entries(ringGaps(mark, block))) {
+    expect(gap, `${what}: ${edge}`).toBeGreaterThanOrEqual(-1);
+    expect(gap, `${what}: ${edge}`).toBeLessThanOrEqual(RING_OUTSIDE + 1);
+  }
 }
 
 test.describe("the frame in the canvas region", () => {
@@ -724,11 +735,11 @@ test.describe("chrome drawn over the frame stays on the block", () => {
       await expect(ring).toHaveCount(1);
       await expect
         .poll(async () => {
-          const [mark, block] = [await box(ring), await box(target)];
-          return Math.abs(mark.y - block.y) + Math.abs(mark.x - block.x);
+          const gaps = ringGaps(await box(ring), await box(target));
+          return Math.max(...Object.values(gaps).map(gap => Math.abs(gap)));
         })
-        .toBeLessThanOrEqual(1);
-      expectAligned(await box(ring), await box(target), what);
+        .toBeLessThanOrEqual(RING_OUTSIDE + 1);
+      expectRinged(await box(ring), await box(target), what);
       // The bar keeps its own size at any zoom, and sits by the block.
       const bar = await box(toolbar);
       expect(bar.height, `${what}: toolbar height`).toBeGreaterThan(24);

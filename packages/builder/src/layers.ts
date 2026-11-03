@@ -36,6 +36,7 @@
  */
 
 import {
+  findNode,
   isComponentInstance,
   type BlockDocument,
   type BlockNode,
@@ -173,6 +174,23 @@ export function layerLabel(
   // Forwarded as given, so an absent lookup keeps `blockLabel`'s own default
   // rather than a second statement of it here.
   return blockLabel(node.type, lookup);
+}
+
+/**
+ * The name of the block at an address anywhere in the document, as its Layers
+ * row reads (see {@link layerLabel}), or `undefined` where the document holds
+ * no such block. The canvas tags a selected placement with it, so the page and
+ * the tree call one block by one name.
+ */
+export function blockNameOf(
+  document: BlockDocument,
+  id: string,
+  componentTitle?: ComponentTitleOf
+): string | undefined {
+  const node = findNode(document.nodes, id);
+  return node === undefined
+    ? undefined
+    : layerLabel(node, undefined, componentTitle);
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   prepareDocumentForRead,
   registeredBlocks,
 } from "@nextlyhq/blocks-react";
+import { blockNameOf } from "@nextlyhq/builder";
 import {
   BlockContextMenu,
   BlockKeyboardActions,
@@ -599,7 +600,17 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             showEmptyElements={showEmptyElements}
             overlay={
               <>
-                <CanvasMarks />
+                <CanvasMarks
+                  // A selected placement's frame is tagged with the name its
+                  // Layers row reads.
+                  nameOf={address =>
+                    blockNameOf(
+                      editor.document,
+                      address,
+                      componentLibrary.titleOf
+                    )
+                  }
+                />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
                 {/*

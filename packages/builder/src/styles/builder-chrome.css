@@ -155,6 +155,7 @@
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-light);
   --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
   --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
 }
@@ -190,6 +191,8 @@
   --nx-builder-select-on-dark: #60a5fa; /* design-lint-ok: blue 400; no runtime variable */
   --nx-builder-component-on-light: #7a00df; /* design-lint-ok: component purple; no admin token */
   --nx-builder-component-on-dark: #c99bff; /* design-lint-ok: component purple; no admin token */
+  --nx-builder-component-text-on-light: #ffffff; /* design-lint-ok: text on the deep purple */
+  --nx-builder-component-text-on-dark: #15171c; /* design-lint-ok: text on the light purple */
   --nx-builder-halo: #ffffff; /* design-lint-ok: mode-invariant halo on site content */
 }
 
@@ -209,6 +212,7 @@
   --nx-builder-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
 }
 
@@ -2227,11 +2231,13 @@
    */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-light);
 }
 
 .nx-canvas-layer[data-nx-page-scheme="dark"] {
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
 }
 
 .nx-canvas-layer__content {
@@ -2305,12 +2311,14 @@
  * the site's CSS can never restyle or hide them and they keep their width at
  * any zoom.
  *
- * The selection is drawn just INSIDE the block's edge, so a block flush with
- * the page's edge keeps its ring and two adjacent blocks' rings do not merge
- * into one thick line. TWO tones, because the ring is drawn on the site's
- * content and no single colour reads on all of it: the select blue disappears
- * on a blue section and a white mark on a white one, so an inset white band
- * directly inside the blue is the halo, which the outline covers half of.
+ * The selection's box is laid OUTSIDE the block (`RING_OUTSIDE` in
+ * `canvas-marks.tsx`) and the ring drawn just inside that box, so the ring
+ * never covers the block's own content, and a block flush with the page's
+ * edge, whose box is held to the page, keeps its ring. TWO tones, because the
+ * ring is drawn on the site's content and no single colour reads on all of
+ * it: the select blue disappears on a blue section and a white mark on a white
+ * one, so an inset white band directly inside the blue is the halo, which the
+ * outline covers half of.
  *
  * The rest of a multi-block selection is thinner: weight says which block the
  * inspector describes without implying two kinds of selected. A component
@@ -2344,6 +2352,36 @@
 
 .nx-canvas-mark[data-mark="selected"][data-component] {
   outline-color: var(--nx-builder-component);
+}
+
+/*
+ * A selected placement's frame is tagged with a component's mark and its name,
+ * on the frame's top right corner outside it, in the component colour: the
+ * block toolbar takes the top left. Drawn from the mark's `data-label`.
+ */
+.nx-canvas-mark[data-mark="selected"][data-label]::before {
+  content: attr(data-label);
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 4px 4px 0 0;
+  background: var(--nx-builder-component);
+  color: var(--nx-builder-component-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* At the top of the page, inside the frame, where it stays on the page. */
+.nx-canvas-mark[data-mark="selected"][data-label][data-tag-inside]::before {
+  top: 0;
+  bottom: auto;
+  border-radius: 0 0 4px 4px;
 }
 
 /*

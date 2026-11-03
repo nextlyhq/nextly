@@ -210,10 +210,12 @@ describe("chrome drawn over a frame lines up with the page", () => {
     // In the editor's document, never the page's, where the site's CSS could
     // reach it.
     expect(ring.ownerDocument).toBe(document);
-    expect(ring.style.left).toBe("50px");
-    expect(ring.style.top).toBe("100px");
-    expect(ring.style.width).toBe("200px");
-    expect(ring.style.height).toBe("50px");
+    // The block's box at the frame's scale, 50,100 200x50, grown by the 4px
+    // the ring stands outside it, which are the editor's pixels at any zoom.
+    expect(ring.style.left).toBe("46px");
+    expect(ring.style.top).toBe("96px");
+    expect(ring.style.width).toBe("208px");
+    expect(ring.style.height).toBe("58px");
     expect(ring.hasAttribute("data-secondary")).toBe(false);
   });
 
