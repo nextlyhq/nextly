@@ -8,6 +8,7 @@ import {
   checkStoredFonts,
   checkStoredTokens,
   readSiteStyleRecord,
+  referableClassIds,
   unreadableStoredFonts,
 } from "./site-style-record";
 
@@ -369,6 +370,35 @@ describe("checkStoredClasses", () => {
   it("refuses a class with no numeric orderIndex", () => {
     const result = checkStoredClasses([{ ...usable, orderIndex: "first" }]);
     expect(result.issues).toHaveLength(1);
+  });
+
+  it("keeps a shared style's name and lock through the check", () => {
+    const named = { ...usable, label: "Card", locked: true };
+    const result = checkStoredClasses([named]);
+    expect(result.issues).toEqual([]);
+    expect(result.value).toEqual([named]);
+  });
+
+  it("refuses a name that is not one line of bounded text", () => {
+    for (const label of [42, "", "Two\nlines", "x".repeat(200)]) {
+      const result = checkStoredClasses([{ ...usable, label }]);
+      expect(result.issues.join(" ")).toContain("classes[0] has a name");
+    }
+  });
+
+  it("refuses a lock that is anything but true", () => {
+    for (const locked of [false, "yes", 1, null]) {
+      const result = checkStoredClasses([{ ...usable, locked }]);
+      expect(result.issues.join(" ")).toContain("classes[0] has a lock");
+    }
+  });
+
+  it("reads a class past an unusable name or lock, without them", () => {
+    // A read keeps the class the compiler can still apply, and drops only the
+    // key it cannot use: a refused write never stored one, so this is a row
+    // written around the gate.
+    const result = checkStoredClasses([{ ...usable, label: 7, locked: "yes" }]);
+    expect(result.value).toEqual([usable]);
   });
 
   // A named class is emitted VERBATIM into the sheet of every public page, so
@@ -899,5 +929,32 @@ describe("judging the write against the tier it will be merged with", () => {
     );
 
     expect(result.issues).toEqual([]);
+  });
+});
+
+describe("referableClassIds", () => {
+  const entry = (n: number, slug = `c${n}`) => ({
+    id: `id-${n}`,
+    slug,
+    orderIndex: n,
+    styles: {},
+  });
+  const library = Array.from({ length: MAX_NAMED_CLASSES }, (_, n) => entry(n));
+
+  it("leaves out a class past the compiler's cap, as the compiler does", () => {
+    const ids = referableClassIds([...library, entry(MAX_NAMED_CLASSES)]);
+    expect(ids.has(`id-${MAX_NAMED_CLASSES - 1}`)).toBe(true);
+    expect(ids.has(`id-${MAX_NAMED_CLASSES}`)).toBe(false);
+  });
+
+  it("keeps an in-cap class whose slug an entry past the cap also claims", () => {
+    // Capped BEFORE the claim rules run: the entry past the cap is never
+    // read, so it cannot take the slug from the class the compiler applies.
+    const ids = referableClassIds([
+      ...library,
+      { ...entry(MAX_NAMED_CLASSES, "c0"), orderIndex: -1 },
+    ]);
+    expect(ids.has("id-0")).toBe(true);
+    expect(ids.has(`id-${MAX_NAMED_CLASSES}`)).toBe(false);
   });
 });

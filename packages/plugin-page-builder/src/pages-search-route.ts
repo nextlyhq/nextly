@@ -32,14 +32,32 @@
  * Draft/Published lifecycle. Only those columns are selected, the search and
  * the limit are applied in the database, and each collection is read once.
  *
+ * ## Paging, and where each page stands
+ *
+ * A cursor carries each collection's position in its own read, so the next
+ * page resumes every read where the merge stopped taking from it (see
+ * `PagesSearchResponse`). Each returned page of a Draft/Published collection
+ * also says where it stands in publishing (`PageState`), from core's own
+ * workflow filters read as the caller: two reads per collection, over the ids
+ * on the page.
+ *
+ * The same reading of which collections hold pages serves the Pages panel's
+ * writes (`pages-write-route`), so a collection is a page collection for both
+ * or for neither.
+ *
  * @module pages-search-route
  */
+import type { DocumentKind } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   resolvedCollectionView,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 import { respondList, type PaginationMeta, type WhereFilter } from "nextly";
+import {
+  IN_RELEASE_KEY,
+  PENDING_CHANGE_KEY,
+} from "nextly/reserved-filter-keys";
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
@@ -56,10 +74,11 @@ import {
   type AsCallerFindArgs,
   type AsCallerPage,
 } from "./entry-reads";
-import { acceptsKind } from "./fields/blocks-options";
+import { acceptedKinds, acceptsKind } from "./fields/blocks-options";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
 import { editorBlocksFields } from "./nested-blocks-fields";
 import {
+  PAGES_SEARCH_CURSOR_MAX,
   PAGES_SEARCH_EXCLUDE_SEPARATOR,
   PAGES_SEARCH_LIMIT_DEFAULT,
   PAGES_SEARCH_LIMIT_MAX,
@@ -68,6 +87,7 @@ import {
   PAGES_SEARCH_ROUTE_PATH,
   type PageItem,
   type PageReference,
+  type PageState,
   type PageStatus,
   type PagesSearchResponse,
 } from "./pages-search-contract";
@@ -94,6 +114,52 @@ export interface PagesSearchRequest {
   readonly limit: number;
   /** The page left out, ordinarily the one being edited. */
   readonly exclude?: PageReference;
+  /** Where an earlier page of the same search stopped; the first page when absent. */
+  readonly before?: PagesCursor;
+}
+
+/**
+ * Where a search stopped: how many pages it has answered, and for each
+ * collection how many rows of its read, in that read's own order, are behind
+ * it. A collection it names no position for starts at its first row.
+ */
+export interface PagesCursor {
+  /** The page this cursor opens, from 2. */
+  readonly page: number;
+  readonly at: Readonly<Record<string, number>>;
+}
+
+/** The most collections one cursor names, and the furthest row and page it may. */
+const CURSOR_COLLECTIONS_MAX = 200;
+const CURSOR_ROW_MAX = 1_000_000_000;
+const CURSOR_PAGE_MAX = 1_000_000;
+
+/** A cursor's decoded shape; anything else is not a cursor this route wrote. */
+const cursorShape = z.strictObject({
+  page: z.number().int().min(2).max(CURSOR_PAGE_MAX),
+  at: z
+    .record(
+      z.string().min(1).max(200),
+      z.number().int().min(0).max(CURSOR_ROW_MAX)
+    )
+    .refine(at => Object.keys(at).length <= CURSOR_COLLECTIONS_MAX),
+});
+
+/**
+ * A cursor as the route writes it: its JSON, base64url-encoded, so it travels
+ * in a query string as one opaque value the client hands back unread.
+ */
+function encodePagesCursor(cursor: PagesCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+/** A cursor's JSON, or `undefined` for a value that is not base64url JSON. */
+function decodeCursor(value: string): unknown {
+  try {
+    return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -127,6 +193,14 @@ const querySchema = z.object({
       })
     )
     .optional(),
+  // Decoded and checked here, so a cursor the route did not write is refused
+  // at the boundary like any other parameter, its value never echoed.
+  [PAGES_SEARCH_PARAMS.before]: z
+    .string()
+    .max(PAGES_SEARCH_CURSOR_MAX)
+    .transform(decodeCursor)
+    .pipe(cursorShape)
+    .optional(),
 });
 
 /**
@@ -143,17 +217,24 @@ export function parsePagesSearchQuery(url: string | URL): PagesSearchRequest {
   );
   const search = query[PAGES_SEARCH_PARAMS.q];
   const exclude = query[PAGES_SEARCH_PARAMS.exclude];
+  const before = query[PAGES_SEARCH_PARAMS.before];
   return {
     ...(search === undefined ? {} : { search }),
     limit: query[PAGES_SEARCH_PARAMS.limit] ?? PAGES_SEARCH_LIMIT_DEFAULT,
     ...(exclude === undefined ? {} : { exclude }),
+    ...(before === undefined ? {} : { before }),
   };
 }
 
-/** One collection the search reads, with what each of its items needs. */
-interface PageCollection {
+/**
+ * One collection that holds pages, with what each of its items needs and what
+ * a new page of it is made with.
+ */
+export interface PageCollection {
   readonly slug: string;
   readonly label: string;
+  /** The plural name the registry holds, when it holds one. */
+  readonly pluralLabel?: string;
   /**
    * The Page Builder field the editor opens for, by its form path: the first
    * one the editor reaches that accepts page documents.
@@ -163,6 +244,27 @@ interface PageCollection {
   readonly title?: TitleField;
   /** Whether it has the Draft/Published lifecycle, and so a status column. */
   readonly lifecycle: boolean;
+  /**
+   * The document kinds that field declares, or `undefined` where it declares
+   * none: what the field's own empty document is made from.
+   */
+  readonly kinds?: readonly DocumentKind[];
+  /**
+   * The top-level text field named `slug`, where the collection has one, and
+   * whether its values must be unique.
+   */
+  readonly slugField?: { readonly name: string; readonly unique: boolean };
+  /**
+   * Required top-level fields a new page would leave empty: not the title, the
+   * slug, the Page Builder field or the status, and with no default. Where any
+   * exist, a page cannot be made from a title alone.
+   */
+  readonly needsMore?: readonly string[];
+  /**
+   * Whether another top-level field must be unique. A copy carries its value
+   * over, which core then refuses, so such pages cannot be copied as they are.
+   */
+  readonly uncopyable?: true;
 }
 
 /**
@@ -209,16 +311,116 @@ function pageCollectionOf(
     acceptsKind(declared.declaration, "page")
   );
   if (field === undefined) return undefined;
-  const title = titleFieldIn(record);
   return {
     slug,
     label: labelOf(record, slug),
+    ...pluralLabelOf(record),
     field: field.path,
-    ...(title === undefined ? {} : { title }),
     // Core's projection of a registry record, which reads the lifecycle
     // switch only when it is a real boolean.
     lifecycle: resolvedCollectionView(record).status === true,
+    ...declaredFacts(record, field.declaration),
+    ...writeLimits(record, field.path, titleFieldIn(record)?.name),
   };
+}
+
+/**
+ * What a page collection's record declares that only some collections do:
+ * the field naming its pages, the kinds its Page Builder field accepts, and a
+ * slug field. Each is left out where the record declares none.
+ */
+function declaredFacts(
+  record: Record<string, unknown>,
+  declaration: object
+): Pick<PageCollection, "title" | "kinds" | "slugField"> {
+  const title = titleFieldIn(record);
+  const kinds = acceptedKinds(declaration);
+  const slugField = slugFieldOf(record);
+  return {
+    ...(title === undefined ? {} : { title }),
+    ...(kinds === undefined ? {} : { kinds }),
+    ...(slugField === undefined ? {} : { slugField }),
+  };
+}
+
+/** A top-level field as a registry record declares it, as far as writes care. */
+interface DeclaredField {
+  name?: unknown;
+  required?: unknown;
+  unique?: unknown;
+  defaultValue?: unknown;
+}
+
+/**
+ * What a page write cannot supply on its own: the other required fields with
+ * no default, and whether another field must be unique. Top-level fields only,
+ * the ones a create body names; the fields a write does fill are left out.
+ */
+function writeLimits(
+  record: Record<string, unknown>,
+  pageField: string,
+  titleName: string | undefined
+): Pick<PageCollection, "needsMore" | "uncopyable"> {
+  const filled = new Set([
+    pageField.split(".")[0] ?? pageField,
+    SLUG_FIELD,
+    "status",
+    ...(titleName === undefined ? [] : [titleName]),
+  ]);
+  const fields = (Array.isArray(record.fields) ? record.fields : []).filter(
+    (value): value is DeclaredField & { name: string } =>
+      typeof value === "object" &&
+      value !== null &&
+      typeof (value as DeclaredField).name === "string" &&
+      !filled.has((value as { name: string }).name)
+  );
+  const needsMore = fields
+    .filter(
+      field => field.required === true && field.defaultValue === undefined
+    )
+    .map(field => field.name);
+  return {
+    ...(needsMore.length === 0 ? {} : { needsMore }),
+    ...(fields.some(field => field.unique === true)
+      ? { uncopyable: true }
+      : {}),
+  };
+}
+
+/** The field name a page's address is conventionally stored under. */
+const SLUG_FIELD = "slug";
+
+/**
+ * A record's top-level `slug` text field, and whether it is unique, or
+ * `undefined` where it has none. Read from the same record the rest of the
+ * collection is, so a write derives a slug only where one is stored.
+ */
+function slugFieldOf(
+  record: Record<string, unknown>
+): PageCollection["slugField"] {
+  const fields = Array.isArray(record.fields) ? record.fields : [];
+  for (const value of fields) {
+    if (typeof value !== "object" || value === null) continue;
+    const field = value as { name?: unknown; type?: unknown; unique?: unknown };
+    if (field.name === SLUG_FIELD && field.type === "text") {
+      return { name: SLUG_FIELD, unique: field.unique === true };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The page collection `slug` names among the registry's records, or
+ * `undefined` when it names none: no such collection, a collection without an
+ * addressable Page Builder field, one of `stores`, or one whose schema is not
+ * live.
+ */
+function pageCollectionIn(
+  records: readonly unknown[],
+  stores: ReadonlySet<string>,
+  slug: string
+): PageCollection | undefined {
+  return pageCollections(records, stores).find(source => source.slug === slug);
 }
 
 /**
@@ -257,6 +459,18 @@ function labelOf(record: Record<string, unknown>, slug: string): string {
     : slug;
 }
 
+/** The plural name a registry record holds (`labels.plural`), if any. */
+function pluralLabelOf(record: Record<string, unknown>): {
+  pluralLabel?: string;
+} {
+  const labels = record.labels;
+  if (typeof labels !== "object" || labels === null) return {};
+  const plural = (labels as { plural?: unknown }).plural;
+  return typeof plural === "string" && plural !== ""
+    ? { pluralLabel: plural }
+    : {};
+}
+
 /** One as-caller list read, as the search asks the Direct API for it. */
 export type PagesFindArgs = AsCallerFindArgs;
 
@@ -275,13 +489,34 @@ export interface PagesSearchReads {
   warn(message: string, context: Record<string, unknown>): void;
 }
 
-/** What one collection contributes: its first rows by title, and its match count. */
+/** One openable row of a collection's read, and where in that read it sits. */
+interface Hit {
+  readonly item: PageItem;
+  /** Its index in the collection's read order, counting every row read. */
+  readonly at: number;
+}
+
+/**
+ * What one collection contributes, from where the cursor left it: its next
+ * openable rows by title, how far its read reached, and its match count.
+ */
 interface CollectionHits {
-  readonly items: readonly PageItem[];
+  readonly hits: readonly Hit[];
+  /** The row index the read reached: every row before it has been judged. */
+  readonly reached: number;
+  /** Whether rows past `reached` match and were not read. */
+  readonly more: boolean;
+  /**
+   * An upper bound on its matches: the rows behind the cursor, the openable
+   * rows read, and every match not read.
+   */
   readonly total: number;
 }
 
-const NO_HITS: CollectionHits = { items: [], total: 0 };
+/** A collection that contributes nothing, its position kept where it was. */
+function noHits(start: number): CollectionHits {
+  return { hits: [], reached: start, more: false, total: 0 };
+}
 
 /**
  * How many collections one search reads at a time. A site may declare many
@@ -303,7 +538,8 @@ const READS_AT_ONCE = 2;
 const PAGES_PER_COLLECTION = 3;
 
 /**
- * Answer one search: read each page collection as the caller, then merge.
+ * Answer one search: read each page collection as the caller from where the
+ * cursor left it, merge, and say where each returned page stands.
  *
  * Each collection is read in the database's title order until it yields
  * `limit` openable rows, and the merge only ever takes a prefix of each, so a
@@ -317,12 +553,9 @@ export async function readPagesSearch(
   const hits = await inTurns(sources, READS_AT_ONCE, source =>
     searchCollection(source, request, reads)
   );
-  const items = mergeByTitle(
-    hits.map(hit => hit.items),
-    request.limit
-  );
-  const total = hits.reduce((sum, hit) => sum + hit.total, 0);
-  return { items, meta: mergedMeta(total, items.length, request.limit) };
+  const merged = mergeByTitle(hits, request.limit);
+  const items = await withStates(merged.items, sources, reads);
+  return { items, meta: mergedMeta(request, sources, hits, merged.taken) };
 }
 
 /** `work` over `items`, at most `size` at a time, answers in `items` order. */
@@ -338,6 +571,12 @@ async function inTurns<T, R>(
   return results;
 }
 
+/** The merge's answer: the items, and how many it took from each collection. */
+interface Merged {
+  readonly items: PageItem[];
+  readonly taken: number[];
+}
+
 /**
  * The first `limit` items of several lists, each already in its database's
  * title order, merged by taking the lowest head each time.
@@ -349,30 +588,47 @@ async function inTurns<T, R>(
  * could rank a row the database cut first. Heads are compared by code point,
  * which is SQLite's order exactly, so there the answer is the true first
  * `limit` by title across every collection.
+ *
+ * The merge stops early when a list runs out while its collection has rows
+ * it did not read (its read reached its bound): one of those could come next,
+ * so taking another collection's head instead could put a row before one that
+ * sorts ahead of it. The next page reads that collection on from where it
+ * stopped, so what is left out here is answered there.
  */
-function mergeByTitle(
-  lists: readonly (readonly PageItem[])[],
-  limit: number
-): PageItem[] {
-  const cursors = lists.map(() => 0);
-  const merged: PageItem[] = [];
-  while (merged.length < limit) {
-    const next = lowestHead(lists, cursors);
+function mergeByTitle(lists: readonly CollectionHits[], limit: number): Merged {
+  const taken = lists.map(() => 0);
+  const items: PageItem[] = [];
+  while (items.length < limit) {
+    if (
+      lists.some((list, index) => list.more && exhausted(list, taken, index))
+    ) {
+      break;
+    }
+    const next = lowestHead(lists, taken);
     if (next === undefined) break;
-    merged.push(next.item);
-    cursors[next.list] = (cursors[next.list] ?? 0) + 1;
+    items.push(next.item);
+    taken[next.list] = (taken[next.list] ?? 0) + 1;
   }
-  return merged;
+  return { items, taken };
 }
 
-/** The lowest unconsumed head across `lists`, and which list it heads. */
+/** Whether the merge has taken every row list `index` read. */
+function exhausted(
+  list: CollectionHits,
+  taken: readonly number[],
+  index: number
+): boolean {
+  return (taken[index] ?? 0) >= list.hits.length;
+}
+
+/** The lowest untaken head across `lists`, and which list it heads. */
 function lowestHead(
-  lists: readonly (readonly PageItem[])[],
-  cursors: readonly number[]
+  lists: readonly CollectionHits[],
+  taken: readonly number[]
 ): { item: PageItem; list: number } | undefined {
   let lowest: { item: PageItem; list: number } | undefined;
   lists.forEach((list, index) => {
-    const head = list[cursors[index] ?? 0];
+    const head = list.hits[taken[index] ?? 0]?.item;
     if (head === undefined) return;
     if (lowest === undefined || byTitle(head, lowest.item) < 0) {
       lowest = { item: head, list: index };
@@ -411,6 +667,16 @@ function byCodePoint(a: string, b: string): number {
 }
 
 /**
+ * Where a cursor left `slug`'s read: the rows behind it, or 0 for a collection
+ * it does not name. An own property only, so a slug such as `constructor` is
+ * never answered from the object's prototype.
+ */
+function positionIn(cursor: PagesCursor | undefined, slug: string): number {
+  if (cursor === undefined || !Object.hasOwn(cursor.at, slug)) return 0;
+  return cursor.at[slug] ?? 0;
+}
+
+/**
  * One collection's part of the search.
  *
  * A search that cannot match its title field (none, or one of a kind `contains`
@@ -422,19 +688,20 @@ async function searchCollection(
   request: PagesSearchRequest,
   reads: PagesSearchReads
 ): Promise<CollectionHits> {
+  const start = positionIn(request.before, source.slug);
   // One collection that cannot be read — a table out of step with its
   // schema, a hook that throws — must not hide every healthy one, so its
   // failure leaves just it out, and is told to the operator rather than the
   // caller, whose answer names nothing it could not see.
   try {
-    return await readCollection(source, request, reads);
+    return await readCollection(source, request, reads, start);
   } catch (error) {
     reads.warn("[page-builder] A collection was left out of a pages search.", {
       collection: source.slug,
       code: NextlyError.is(error) ? error.code : undefined,
       error: error instanceof Error ? error.message : String(error),
     });
-    return NO_HITS;
+    return noHits(start);
   }
 }
 
@@ -442,44 +709,52 @@ async function searchCollection(
 async function readCollection(
   source: PageCollection,
   request: PagesSearchRequest,
-  reads: PagesSearchReads
+  reads: PagesSearchReads,
+  start: number
 ): Promise<CollectionHits> {
   const where = whereFor(source, request);
-  if (where === NO_MATCH) return NO_HITS;
-  const first = await readRows(source, request, reads, where);
-  if (first === undefined) return NO_HITS;
-  return readOn(source, request.limit, reads, first);
+  if (where === NO_MATCH) return noHits(start);
+  const first = await readRows(source, request, reads, where, start);
+  if (first === undefined) return noHits(start);
+  return readOn(source, request.limit, reads, first, start);
 }
 
 /**
- * The openable rows of one collection, read page by page from the first.
+ * The openable rows of one collection, read page by page from `start`.
  *
- * Pages are read in the same order the first was, so the rows kept are a
- * prefix of the collection's openable rows in the database's order. Reading
- * stops at `limit` openable rows, at the end of the matches, or at
- * {@link PAGES_PER_COLLECTION} pages.
+ * Each further read repeats the first, order included, from the row after the
+ * last one read, so the rows kept are a prefix of the collection's openable
+ * rows from `start` in the database's order. Reading stops at `limit` openable
+ * rows, at the end of the matches, or at {@link PAGES_PER_COLLECTION} reads.
  *
- * The total is the openable rows among those read plus every match not read,
- * whose rows were never judged: an upper bound, exact once the read reached
- * the end (see `PagesSearchResponse`).
+ * The total is the rows behind `start`, the openable rows read, and every match
+ * not read, whose rows were never judged: an upper bound, exact once the read
+ * reached the end (see `PagesSearchResponse`).
  */
 async function readOn(
   source: PageCollection,
   limit: number,
   reads: PagesSearchReads,
-  first: FirstRead
+  first: FirstRead,
+  start: number
 ): Promise<CollectionHits> {
-  const items: PageItem[] = [];
+  const hits: Hit[] = [];
   let scanned = 0;
   let page = first.page;
   for (let number = 1; ; number += 1) {
-    items.push(...openableItems(page.items, source));
+    hits.push(...openableHits(page.items, source, start + scanned));
     scanned += page.items.length;
-    if (!readsOnPast(page, number, items.length, limit)) break;
-    page = await reads.find({ ...first.args, page: number + 1 });
+    if (!readsOnPast(page, number, hits.length, limit)) break;
+    page = await reads.find({ ...first.args, offset: start + scanned });
   }
-  const unread = Math.max(0, page.meta.total - scanned);
-  return { items: items.slice(0, limit), total: items.length + unread };
+  const reached = start + scanned;
+  const unread = Math.max(0, page.meta.total - reached);
+  return {
+    hits,
+    reached,
+    more: unread > 0,
+    total: start + hits.length + unread,
+  };
 }
 
 /** Whether a collection's read goes on past page `number`. */
@@ -497,14 +772,18 @@ function readsOnPast(
   );
 }
 
-/** The rows of one page that are search results, in the order read. */
-function openableItems(
+/**
+ * The rows of one read that are search results, in the order read, each with
+ * its index in the collection's read (`from` is the first row's).
+ */
+function openableHits(
   rows: readonly unknown[],
-  source: PageCollection
-): PageItem[] {
-  return rows.flatMap(row => {
+  source: PageCollection,
+  from: number
+): Hit[] {
+  return rows.flatMap((row, index) => {
     const item = itemOf(row, source);
-    return item === undefined ? [] : [item];
+    return item === undefined ? [] : [{ item, at: from + index }];
   });
 }
 
@@ -533,14 +812,15 @@ function whereFor(
 }
 
 /**
- * The read for one collection, unordered. The columns each item needs and no
- * others; `id` is named so a collection with no title field still selects
- * something, since an empty selection selects every field.
+ * The read for one collection, unordered, from row `start` of it. The columns
+ * each item needs and no others; `id` is named so a collection with no title
+ * field still selects something, since an empty selection selects every field.
  */
 function unorderedRead(
   source: PageCollection,
   request: PagesSearchRequest,
-  where: WhereFilter | undefined
+  where: WhereFilter | undefined,
+  start: number
 ): PagesFindArgs {
   const titleName = source.title?.name;
   return {
@@ -556,6 +836,9 @@ function unorderedRead(
       [topKeyOf(source.field)]: true,
     },
     limit: request.limit,
+    // Where the cursor left this collection; the first read of a search
+    // starts at the first row and names none.
+    ...(start === 0 ? {} : { offset: start }),
   };
 }
 
@@ -566,7 +849,7 @@ interface FirstRead {
 }
 
 /**
- * Read one collection's first page as the caller, ordered by title and then
+ * Read one collection's first page from `start` as the caller, ordered by title and then
  * id so the rows a limit keeps are a stable prefix of the database's title
  * order; `undefined` when core leaves this caller nothing of it.
  *
@@ -581,9 +864,10 @@ async function readRows(
   source: PageCollection,
   request: PagesSearchRequest,
   reads: PagesSearchReads,
-  where: WhereFilter | undefined
+  where: WhereFilter | undefined,
+  start: number
 ): Promise<FirstRead | undefined> {
-  const unordered = unorderedRead(source, request, where);
+  const unordered = unorderedRead(source, request, where, start);
   const titleName = source.title?.name;
   const ordered: PagesFindArgs = {
     ...unordered,
@@ -637,18 +921,27 @@ function namesFieldRefusal(entry: unknown, field: string): boolean {
   );
 }
 
-/**
- * One row as a search result, or nothing when it carries no usable id.
- *
- * The id and title by the rule the entries route names an entry by, so an
- * untitled page carries the same neutral label. The status travels only from
- * a lifecycle collection, and only as one of the two values it holds.
- */
+/** One row as a search result, or nothing when it is not one the caller can open. */
 function itemOf(row: unknown, source: PageCollection): PageItem | undefined {
   // A page whose Page Builder field this caller may not read is not one it
   // can open, so it is not listed. Core's field-level read decided that, by
   // leaving the field out of the row.
   if (!holdsField(row, source.field)) return undefined;
+  return pageItemOf(row, source);
+}
+
+/**
+ * One row as a page item, or nothing when it carries no usable id. Shared with
+ * the writes, which answer the page they wrote in the shape the search lists.
+ *
+ * The id and title by the rule the entries route names an entry by, so an
+ * untitled page carries the same neutral label. The status travels only from
+ * a lifecycle collection, and only as one of the two values it holds.
+ */
+export function pageItemOf(
+  row: unknown,
+  source: PageCollection
+): PageItem | undefined {
   const entry = entryOf(row, source.title?.name);
   if (entry === undefined) return undefined;
   const status = source.lifecycle ? statusOf(row) : undefined;
@@ -656,6 +949,9 @@ function itemOf(row: unknown, source: PageCollection): PageItem | undefined {
     id: entry.id,
     collection: source.slug,
     collectionLabel: source.label,
+    ...(source.pluralLabel === undefined
+      ? {}
+      : { collectionPluralLabel: source.pluralLabel }),
     field: source.field,
     title: entry.title,
     ...(status === undefined ? {} : { status }),
@@ -693,33 +989,177 @@ function statusOf(row: unknown): PageStatus | undefined {
 }
 
 /**
- * The merged answer's pagination, in the canonical list meta.
+ * Where a page stands in publishing, from the facts the admin's status pill
+ * is drawn from (`pillStateFromForm(status, false, hasWorkingDraft)`): its
+ * stored status and whether a working draft waits on it; and, beside them,
+ * whether a scheduled release will publish it, which the author must know
+ * first. `undefined` for a plainly published page and for a page without the
+ * lifecycle.
+ */
+export function pageStateOf(
+  status: PageStatus | undefined,
+  hasWorkingDraft: boolean,
+  scheduled: boolean
+): PageState | undefined {
+  if (status === undefined) return undefined;
+  if (scheduled) return "scheduled";
+  if (status === "published") return hasWorkingDraft ? "changed" : undefined;
+  return "draft";
+}
+
+/**
+ * `items` with where each stands in publishing, read once per Draft/Published
+ * collection on the page.
+ */
+async function withStates(
+  items: readonly PageItem[],
+  sources: readonly PageCollection[],
+  reads: PagesSearchReads
+): Promise<PageItem[]> {
+  const asked = sources.filter(
+    source =>
+      source.lifecycle && items.some(item => item.collection === source.slug)
+  );
+  const facts = new Map(
+    await inTurns(asked, READS_AT_ONCE, async source => {
+      const ids = items
+        .filter(item => item.collection === source.slug)
+        .map(item => item.id);
+      // One after the other, so a page's reads take the turn its collection
+      // was given rather than opening two at once.
+      const changed = await idsMatching(source, ids, PENDING_CHANGE_KEY, reads);
+      const scheduled = await idsMatching(source, ids, IN_RELEASE_KEY, reads);
+      return [source.slug, { changed, scheduled }] as const;
+    })
+  );
+  return items.map(item => {
+    const known = facts.get(item.collection);
+    const pending = known?.changed.has(item.id) === true;
+    const state = pageStateOf(
+      item.status,
+      pending,
+      known?.scheduled.has(item.id) === true
+    );
+    return {
+      ...item,
+      ...(state === undefined ? {} : { state }),
+      // Said apart from the state: a scheduled page shows "Scheduled" even
+      // when it also holds changes, and what a copy would read depends on it.
+      ...(pending ? { pendingChange: true as const } : {}),
+    };
+  });
+}
+
+/**
+ * Which of `ids` core's workflow filter `key` keeps, read AS THE CALLER.
  *
- * One page: the search has no paging of its own, so `page` is 1 and `hasNext`
- * says only that more pages matched than were returned.
+ * Core's own reading, not one here: `_pendingChange` keeps an entry whose
+ * working draft holds changes not yet published, by the versions domain's one
+ * statement of what a working draft is (the fact behind the admin's
+ * `hasWorkingDraft`), and `_inRelease` keeps one a scheduled release will
+ * publish after now. Only ids are selected, and the ids already bound the read.
+ *
+ * Nothing is kept when the read fails: the state is a label, never worth the
+ * list. Core refuses `_inRelease` to a caller who may not read releases, and
+ * that refusal is an answer, not a fault: such a caller is told nothing about
+ * a release. Any other failure is told to the operator.
+ */
+async function idsMatching(
+  source: PageCollection,
+  ids: readonly string[],
+  key: typeof PENDING_CHANGE_KEY | typeof IN_RELEASE_KEY,
+  reads: PagesSearchReads
+): Promise<ReadonlySet<string>> {
+  try {
+    const page = await reads.find({
+      collection: source.slug,
+      where: workflowWhere(key, ids),
+      select: { id: true },
+      limit: ids.length,
+    });
+    return new Set(
+      page.items.flatMap(row => {
+        const entry = entryOf(row, undefined);
+        return entry === undefined ? [] : [entry.id];
+      })
+    );
+  } catch (error) {
+    const refused =
+      key === IN_RELEASE_KEY &&
+      (NextlyError.isValidation(error) || NextlyError.isForbidden(error));
+    if (!refused) {
+      reads.warn("[page-builder] A pages search left out where pages stand.", {
+        collection: source.slug,
+        filter: key,
+        code: NextlyError.is(error) ? error.code : undefined,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return new Set();
+  }
+}
+
+/**
+ * The ids, with one of core's reserved workflow keys at the filter's top
+ * level, where core reads them.
+ *
+ * Asserted rather than typed: the keys take `true` itself, a form the
+ * `WhereFilter` type, spelled for field conditions, does not describe. The
+ * spelling is core's (`nextly/reserved-filter-keys`), so it is not restated.
+ */
+function workflowWhere(key: string, ids: readonly string[]): WhereFilter {
+  const where: Record<string, unknown> = { id: { in: [...ids] }, [key]: true };
+  return where as WhereFilter;
+}
+
+/**
+ * The merged answer's pagination, in the canonical list meta, with the cursor
+ * for the next page in `nextBefore`.
+ *
+ * Each collection's next position is the row after the last one the merge
+ * took from it; where the merge took every row its read kept, the rows read
+ * past them were all withheld, so it is where the read reached. `hasNext` says
+ * a collection holds a row the merge left, or matches its read did not reach.
  */
 function mergedMeta(
-  total: number,
-  returned: number,
-  limit: number
+  request: PagesSearchRequest,
+  sources: readonly PageCollection[],
+  hits: readonly CollectionHits[],
+  taken: readonly number[]
 ): PaginationMeta {
+  const at: Record<string, number> = {};
+  let hasNext = false;
+  sources.forEach((source, index) => {
+    const read = hits[index];
+    if (read === undefined) return;
+    const next = read.hits[taken[index] ?? 0];
+    const position = next === undefined ? read.reached : next.at;
+    if (position > 0) at[source.slug] = position;
+    hasNext ||= next !== undefined || read.more;
+  });
+  const total = hits.reduce((sum, read) => sum + read.total, 0);
+  const page = request.before?.page ?? 1;
   return {
     total,
-    page: 1,
-    limit,
-    totalPages: Math.ceil(total / limit),
-    hasNext: total > returned,
-    hasPrev: false,
+    page,
+    limit: request.limit,
+    totalPages: Math.ceil(total / request.limit),
+    hasNext,
+    hasPrev: page > 1,
+    ...(hasNext
+      ? { nextBefore: encodePagesCursor({ page: page + 1, at }) }
+      : {}),
   };
 }
 
 /** How many registry records one page of the listing asks for. */
 const REGISTRY_PAGE_SIZE = 100;
 
-/** The route context this reads: who is asking, its own slugs, and the registry. */
-interface PagesSearchRouteContext {
-  readonly caller: PluginRouteContext["caller"];
-  readonly logger: Pick<PluginRouteContext["logger"], "warn">;
+/**
+ * What decides which collections hold pages: the registry, and the plugin's
+ * own resolved slugs, whose collections are composition stores.
+ */
+export interface PageCollectionsContext {
   readonly self: {
     readonly collections: Readonly<Record<string, string | undefined>>;
   };
@@ -738,6 +1178,12 @@ interface PagesSearchRouteContext {
   };
 }
 
+/** The route context this reads: who is asking, its own slugs, and the registry. */
+interface PagesSearchRouteContext extends PageCollectionsContext {
+  readonly caller: PluginRouteContext["caller"];
+  readonly logger: Pick<PluginRouteContext["logger"], "warn">;
+}
+
 /**
  * Every collection record the registry holds, paged until it says there are
  * no more.
@@ -749,7 +1195,7 @@ interface PagesSearchRouteContext {
  * it is done cannot hold the search open.
  */
 async function registryRecords(
-  ctx: PagesSearchRouteContext
+  ctx: PageCollectionsContext
 ): Promise<unknown[]> {
   const records: unknown[] = [];
   for (let page = 1; ; page += 1) {
@@ -770,6 +1216,41 @@ async function registryRecords(
 }
 
 /**
+ * The composition stores' slugs: RESOLVED, since a host may rename the
+ * plugin's collections, plus a component store the host pointed the plugin at.
+ */
+function compositionStores(
+  ctx: PageCollectionsContext,
+  store: ComponentStore
+): ReadonlySet<string> {
+  return new Set(
+    [
+      ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+      ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
+      store.collection,
+    ].filter((slug): slug is string => slug !== undefined)
+  );
+}
+
+/**
+ * The page collection `slug` names, by the reading the search lists pages by
+ * (the live registry, the composition stores left out), or `undefined` when it
+ * names none. The Pages panel's writes ask this, so a collection the search
+ * would never list is one they never write.
+ */
+export async function findPageCollection(
+  ctx: PageCollectionsContext,
+  store: ComponentStore,
+  slug: string
+): Promise<PageCollection | undefined> {
+  return pageCollectionIn(
+    await registryRecords(ctx),
+    compositionStores(ctx, store),
+    slug
+  );
+}
+
+/**
  * The reads the route binds: the registry listing, the composition stores'
  * resolved slugs, and the shared as-caller read.
  */
@@ -779,16 +1260,7 @@ function directPagesSearchReads(
 ): PagesSearchReads {
   return {
     collections: () => registryRecords(ctx),
-    // RESOLVED slugs, since a host may rename the plugin's collections, plus a
-    // component store the host pointed the plugin at.
-    stores: () =>
-      new Set(
-        [
-          ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
-          ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
-          store.collection,
-        ].filter((slug): slug is string => slug !== undefined)
-      ),
+    stores: () => compositionStores(ctx, store),
     find: args => findAsCaller(ctx, args),
     warn: (message, context) => ctx.logger.warn(message, context),
   };

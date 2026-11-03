@@ -37,10 +37,12 @@ import {
   registerClassUsageMaintenance,
   type CommittedWriteReconciler,
 } from "./class-usage-hook";
+import { classUsageIndex } from "./class-usage-reconcile";
 import {
   classUsageDocumentRowReader,
   ownIndexReader,
   usageCountReader,
+  usageRowReader,
 } from "./class-usage-runtime";
 import {
   CLASS_USAGE_INDEX_SLUG,
@@ -98,7 +100,10 @@ import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { registerLayoutReadinessNotice } from "./layout-readiness-hook";
 import { layoutFenceFloor } from "./layout-removal/page-reference-guard";
 import { removeLayoutRoute } from "./layout-removal/remove-route";
-import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  type SharedStyleUsageKind,
+} from "./library-contract";
 import {
   componentLibraryRoute,
   DEFAULT_COMPONENT_STORE,
@@ -108,6 +113,7 @@ import {
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pagesSearchRoute } from "./pages-search-route";
+import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { retiredStore } from "./retired-store";
@@ -117,6 +123,10 @@ import {
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
 import {
+  LOCK_SHARED_STYLES_DECLARATION,
+  sharedStyleRoutes,
+} from "./shared-styles-routes";
+import {
   resolveFontOptions,
   type PageBuilderFontOptions,
 } from "./site-fonts/options";
@@ -124,7 +134,12 @@ import { siteFontRoutes } from "./site-fonts/routes";
 import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
-import { siteStyleSingle } from "./site-style-storage";
+import { referableClassIds } from "./site-style-record";
+import {
+  loadSiteStyle,
+  SITE_STYLE_SLUG,
+  siteStyleSingle,
+} from "./site-style-storage";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
@@ -132,6 +147,7 @@ import {
   type BackfillHost,
 } from "./usage-backfill-wiring";
 import { usageBookkeeping } from "./usage-bookkeeping";
+import { listDocumentsUsingEach } from "./usage-count";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
@@ -1022,6 +1038,23 @@ export const pageBuilder = (
         // a document composed against this store would be judged by
         // definitions it is not drawn with.
         composesDocuments: opts.componentReadiness !== false,
+        // The classes a page may add a reference to: the ones the compiler
+        // applies, from the code's defaults and the stored record of the
+        // Single as renamed, read per write so a style removed a moment ago
+        // is gone for the next save.
+        siteClassIds: async () => {
+          // Imported at call time, for the reason the readers above give.
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = await getCachedNextly();
+          const style = await loadSiteStyle({
+            nextly: { findSingle: args => nextly.findSingle(args) },
+            defaults: configStyle,
+            slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+          });
+          // Capped and resolved as the compiler reads the library, so a page
+          // may reference exactly the classes it applies.
+          return referableClassIds(style.classes ?? []);
+        },
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
           indexCollection: componentIndex,
@@ -1404,6 +1437,10 @@ export const pageBuilder = (
         // with a Page Builder field, the composition stores left out), by
         // title, read as the author asking.
         pagesSearchRoute(componentStoreOf(opts)),
+        // The Pages panel's writes: create, duplicate, rename and delete a
+        // page, each as the author asking, in exactly the collections the
+        // search lists.
+        ...pagesWriteRoutes(componentStoreOf(opts)),
         // The one write that chooses the site's default Layout. A route rather
         // than an edit to the settings Single, because choosing a default has
         // preconditions (the Layout is published, the caller may publish
@@ -1431,6 +1468,53 @@ export const pageBuilder = (
         siteBreakpointsRoute(),
         // Design → Fonts' catalogue: read it, and add a family to the site.
         ...fonts.routes,
+        // The Design panel's shared styles: lock and unlock one, how widely
+        // each is used and where, and removing the unused. Usage is read from
+        // the class usage index the installed host maintains.
+        ...sharedStyleRoutes({
+          configClassIds: new Set(
+            (configStyle.classes ?? []).map(entry => entry.id)
+          ),
+          usage: ctx => {
+            const index =
+              ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
+              CLASS_USAGE_INDEX_SLUG;
+            const kinds = new Map<string, SharedStyleUsageKind>([
+              [
+                componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                "components",
+              ],
+              [
+                ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+                "patterns",
+              ],
+              [ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG, "layouts"],
+            ]);
+            return {
+              health: () =>
+                usageHealthService(requireInstalled).read(
+                  classUsageIndex,
+                  index
+                ),
+              // One bounded read for a whole page of styles.
+              documentsUsingEach: async (classIds, health) =>
+                listDocumentsUsingEach({
+                  index: classUsageIndex,
+                  rows: usageRowReader(
+                    await requireInstalled().nextly(),
+                    index
+                  ),
+                  referenceIds: classIds,
+                  health,
+                }),
+              // Every other collection with a page builder field holds pages,
+              // as the editor's page search reads them.
+              kindOf: collection => kinds.get(collection) ?? "pages",
+            };
+          },
+        }),
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,
@@ -1446,6 +1530,10 @@ export const pageBuilder = (
           description:
             "Change the site's breakpoints, and choose its default Layout.",
         },
+        // Locking a shared style is its own grant, distinct from changing
+        // Design (`update-site-style`), so a lock protects a style from every
+        // Design manager who does not hold it. Asked by the lock route alone.
+        LOCK_SHARED_STYLES_DECLARATION,
       ],
 
       // No `publish` permission. One was declared here and nothing ever read

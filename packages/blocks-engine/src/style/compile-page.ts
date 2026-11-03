@@ -53,6 +53,7 @@ import type { NamedClass } from "./named-class";
 import {
   isUsableNamedClass,
   namedClassName,
+  namedClassesRead,
   orderedNamedClasses,
   orderedNamedClassPositions,
   usableNamedClassPositions,
@@ -71,6 +72,7 @@ import type { CssRule } from "./serialize";
 import type { StyleOrigin, StyleTraceEntry } from "./style-trace";
 import type { StyleIssueBudget } from "./validate-style-value";
 import { newStyleIssueBudget } from "./validate-style-value";
+import { visibilityCascade } from "./visibility-cascade";
 import {
   allowanceSpent,
   newWarningAllowance,
@@ -1491,6 +1493,10 @@ function visibilityRules(
       message: `Breakpoint "${describeValue(id)}" is not defined for this site, so this visibility setting was not applied.`,
     });
   }
+  // Where the node shows, from the one statement of the cascade the editor
+  // reads too, so the bands below hide exactly where the editor says it is
+  // hidden.
+  const shown = visibilityCascade(devices, contexts);
   // Per axis: a container breakpoint neither inherits from nor cancels a
   // viewport one, because the two ask about different boxes.
   for (const axis of ["viewport", "container"] as const) {
@@ -1536,12 +1542,13 @@ function visibilityRules(
         });
         continue;
       }
-      if (declared === false && !hidden) {
+      const visible = shown[contexts.indexOf(context)] ?? true;
+      if (!visible && !hidden) {
         hidden = true;
         hidingFrom = context;
         continue;
       }
-      if (declared === true && hidden) {
+      if (visible && hidden) {
         hidden = false;
         flush(context.maxWidth);
       }
@@ -2008,10 +2015,7 @@ export function compilePageCss(
   const wholeLibrary: readonly NamedClass[] = Array.isArray(storedLibrary)
     ? (storedLibrary as readonly NamedClass[])
     : [];
-  const library =
-    wholeLibrary.length > MAX_NAMED_CLASSES
-      ? wholeLibrary.slice(0, MAX_NAMED_CLASSES)
-      : wholeLibrary;
+  const library = namedClassesRead(wholeLibrary);
   if (library.length < wholeLibrary.length) {
     pushBoundedWarning(warningAllowance, warnings, {
       path: "/classes",
