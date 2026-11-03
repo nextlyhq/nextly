@@ -55,6 +55,7 @@ import {
   SITE_FONTS_CATALOGUE_ROUTE_PATH,
   SITE_FONTS_ROUTE_PATH,
   type AddSiteFontRequest,
+  type FontCatalogueList,
   type FontCatalogueRead,
 } from "../site-fonts/contract";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
@@ -464,13 +465,18 @@ export function useFontCatalogueClient(): {
 } {
   const { refetch } = useSingleDocument(SITE_STYLE_SLUG);
   const load = useCallback(async (signal: AbortSignal) => {
-    const read = await readPluginRoute<FontCatalogueRead>({
+    const list = await readPluginRoute<FontCatalogueList>({
       plugin: PAGE_BUILDER_PLUGIN_NAME,
       path: SITE_FONTS_CATALOGUE_ROUTE_PATH,
       signal,
     });
-    if (read === undefined) throw new Error("The catalogue answered nothing.");
-    return read;
+    if (list === undefined) throw new Error("The catalogue answered nothing.");
+    // The list envelope, read back into what the Fonts tab draws from.
+    return {
+      families: list.items,
+      previewBase: list.meta.previewBase,
+      fetchedAt: list.meta.fetchedAt,
+    };
   }, []);
   const add = useCallback(
     async (request: AddSiteFontRequest): Promise<string | undefined> => {

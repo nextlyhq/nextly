@@ -125,6 +125,7 @@ import {
   fontWeightOptions,
   foldedControlFor,
   lineHeightFromText,
+  lineHeightLeafFor,
   storedKey,
   type FoldedControl,
   type FoldedOption,
@@ -2832,11 +2833,20 @@ function LengthOrNumberField({
       onChange={event => setDraft(event.target.value)}
       onBlur={commit}
       onKeyDown={event => {
-        if (event.key !== "Enter") return;
-        // Enter finishes the field, and must not submit an entry form around
-        // the editor.
+        if (commitOnEnter(event, commit)) return;
+        // An arrow steps the value as its kind steps, a number or a length,
+        // through the same rule as every numeric field.
+        const delta = arrowStep(event);
+        const leaf = delta === null ? undefined : lineHeightLeafFor(draft);
+        if (delta === null || leaf === undefined) return;
+        const next = steppedValue(
+          leaf,
+          lineHeightFromText(draft) ?? undefined,
+          delta
+        );
+        if (next === undefined) return;
         event.preventDefault();
-        commit();
+        if (onCommit(next) !== "refused") setDraft(String(next));
       }}
     />
   );

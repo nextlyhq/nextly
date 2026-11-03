@@ -668,6 +668,65 @@ describe.each(getConfiguredTestDialects())(
       expect(folders.filter(folder => folder.name === "Fonts")).toHaveLength(1);
     });
 
+    it("refuses a request body past what an add can be, without waiting for the rest", async () => {
+      const t = await boot();
+      const fonts = resolveFontOptions({
+        catalogue: { api: catalogue.origin, files: catalogue.origin },
+      });
+      if (fonts === false) throw new Error("the catalogue is on");
+      const [, addRoute] = siteFontRoutes({
+        fonts,
+        nextly: async () => t.nextly as unknown as SiteFontsDirectApi,
+      });
+      // Far more than any add's body, and never finished: only a read that
+      // stops at its limit answers.
+      const endless = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(" ".repeat(64 * 1024)));
+        },
+      });
+      const request = new Request(`${ORIGIN}/x`, {
+        method: "POST",
+        body: endless,
+        duplex: "half",
+      } as RequestInit);
+      // Copied first, as a boundary in front of a route may: the copy's half
+      // of the body is never read, so waiting on a cancel would wait forever.
+      void request.clone();
+      const answer = addRoute?.handler(request, {
+        self: { collections: {}, singles: {} },
+        user: null,
+        caller: { can: async () => true },
+        fetch: (input, init) => fetch(input, init),
+      });
+      const refusal: unknown = await Promise.race([
+        answer?.then(
+          () => "answered",
+          (error: unknown) => error
+        ),
+        new Promise(resolve => setTimeout(() => resolve("waited"), 2000)),
+      ]);
+      expect(NextlyError.isValidation(refusal)).toBe(true);
+      expect(catalogue.asked).toEqual([]);
+    });
+
+    it("answers an empty catalogue as a list with no pages", async () => {
+      const t = await boot();
+      const cookie = await designer(t);
+      catalogue.json("/v1/fonts?type=google", []);
+      const read = await call(
+        "GET",
+        plugin("site", "fonts", "catalogue"),
+        cookie
+      );
+      expect(read.status).toBe(200);
+      expect(read.body).toMatchObject({
+        items: [],
+        meta: { total: 0, totalPages: 0, hasNext: false, hasPrev: false },
+      });
+      expect((read.body.meta as { limit: number }).limit).toBeGreaterThan(0);
+    });
+
     it("refuses an answer that is not a woff2 file, by its type or by its bytes", async () => {
       const t = await boot();
       const cookie = await designer(t);
@@ -783,9 +842,17 @@ describe.each(getConfiguredTestDialects())(
         call("GET", plugin("site", "fonts", "catalogue"), cookie);
       const first = await read();
       expect(first.status).toBe(200);
+      // The canonical list envelope: the families as items, and where
+      // previews load and when the catalogue was read in its meta.
       expect(first.body).toMatchObject({
-        families: [{ id: "lora", family: "Lora", category: "serif" }],
-        previewBase: catalogue.origin,
+        items: [{ id: "lora", family: "Lora", category: "serif" }],
+        meta: {
+          total: 1,
+          page: 1,
+          totalPages: 1,
+          hasNext: false,
+          previewBase: catalogue.origin,
+        },
       });
       expect((await read()).status).toBe(200);
       expect(
@@ -813,9 +880,9 @@ describe.each(getConfiguredTestDialects())(
           (await (
             await readRoute?.handler(new Request(ORIGIN), ctx)
           )?.json()) as {
-            families: unknown[];
+            items: unknown[];
           }
-        ).families;
+        ).items;
       expect(await families()).toHaveLength(1);
       catalogue.on("/v1/fonts?type=google", (_req, res) =>
         res.writeHead(503).end()

@@ -566,6 +566,26 @@ describe("adding a font file through the panel", () => {
     expect(screen.getByRole("alert").textContent).toContain("woff");
   });
 
+  it("REFUSES a face the site could not store, before anything is uploaded", async () => {
+    /*
+     * A family carrying a stylesheet's structural characters is refused by
+     * the save. Judged first, so no file is stored that no face points at.
+     */
+    storedRead = { data: { fonts: [] }, isPending: false, error: null };
+    openEditor();
+    await pickFile("Brand-Regular.woff2");
+    fireEvent.change(screen.getByRole("textbox", { name: "Family" }), {
+      target: { value: "Brand}" },
+    });
+    await submitAdd();
+
+    expect(uploads).toHaveLength(0);
+    expect(saved).toHaveLength(0);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "is not a usable font family name"
+    );
+  });
+
   it("does not upload the same file twice when the save is refused", async () => {
     /*
      * The two writes cannot be one — the bytes need an id before a face can

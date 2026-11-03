@@ -16,7 +16,14 @@
  * @module style-folded
  */
 
-import { trimCssWhitespace, type StyleValue } from "@nextlyhq/blocks-engine";
+import {
+  STYLE_CATALOG,
+  trimCssWhitespace,
+  type StyleLeaf,
+  type StyleValue,
+} from "@nextlyhq/blocks-engine";
+
+import { CSS_NUMBER } from "./style-numeric";
 
 /** How a folded property is edited. */
 export type FoldedControl = "font-weight" | "number-or-length";
@@ -55,14 +62,14 @@ const WEIGHTS: readonly FoldedOption[] = [
   ["Extra bold", 800],
   ["Black", 900],
 ].map(([name, weight]) => ({
-  key: String(weight),
+  key: `n:${weight}`,
   label: `${name} ${weight}`,
   value: weight as number,
 }));
 
 const RELATIVE_WEIGHTS: readonly FoldedOption[] = [
-  { key: "lighter", label: "Lighter", value: "lighter" },
-  { key: "bolder", label: "Bolder", value: "bolder" },
+  { key: "s:lighter", label: "Lighter", value: "lighter" },
+  { key: "s:bolder", label: "Bolder", value: "bolder" },
 ];
 
 /** What a stored keyword weight is called when it is shown. */
@@ -83,15 +90,23 @@ export function fontWeightOptions(
   if (key === undefined || offered.some(option => option.key === key)) {
     return offered;
   }
-  // The key is the stored scalar as text; a keyword gets its word.
-  const label = KEYWORD_WEIGHT_NAMES[key] ?? key;
+  // The stored scalar as written; a keyword gets its word.
+  const written = key.slice(2);
+  const label = KEYWORD_WEIGHT_NAMES[written] ?? written;
   return [{ key, label, value: stored as StyleValue }, ...offered];
 }
 
-/** The select key a stored scalar is listed under, or `undefined` for none. */
+/**
+ * The select key a stored scalar is listed under, or `undefined` for none.
+ *
+ * Typed: `n:700` for the number and `s:700` for the text "700", which is not
+ * the same value. Sharing one key, a weight stored as text would show as the
+ * number it spells, and choosing that number could not repair it, since the
+ * list would think it already chosen.
+ */
 export function storedKey(stored: StyleValue | undefined): string | undefined {
-  if (typeof stored === "string" && stored !== "") return stored;
-  if (typeof stored === "number") return String(stored);
+  if (typeof stored === "string" && stored !== "") return `s:${stored}`;
+  if (typeof stored === "number") return `n:${stored}`;
   return undefined;
 }
 
@@ -105,7 +120,23 @@ export function lineHeightFromText(text: string): StyleValue | null {
   // space, which CSS reads as part of the value, and would clear on one alone.
   const trimmed = trimCssWhitespace(text);
   if (trimmed === "") return null;
-  // A digit after any point, as CSS requires: "1." goes on as typed, for the
-  // catalogue to refuse, rather than being stored as the 1 it is not.
-  return /^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : trimmed;
+  // CSS's own number grammar, the one every numeric field reads: "1e2" is a
+  // number, and "1." goes on as typed for the catalogue to refuse.
+  if (!CSS_NUMBER.test(trimmed)) return trimmed;
+  const number = Number(trimmed);
+  return Number.isFinite(number) ? number : trimmed;
+}
+
+/**
+ * The catalogue's leaf a typed line height belongs to, its number form or its
+ * length form, so an arrow key steps it as that kind of value steps.
+ */
+export function lineHeightLeafFor(text: string): StyleLeaf | undefined {
+  const entry = STYLE_CATALOG.find(
+    candidate => candidate.property === "lineHeight"
+  );
+  if (entry === undefined || entry.shape.kind !== "union") return undefined;
+  const wanted =
+    typeof lineHeightFromText(text) === "number" ? "number" : "dimension";
+  return entry.shape.of.find((arm): arm is StyleLeaf => arm.kind === wanted);
 }

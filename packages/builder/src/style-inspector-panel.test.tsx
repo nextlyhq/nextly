@@ -1020,6 +1020,27 @@ describe("controls", () => {
     );
   });
 
+  it("steps a line height with the arrow keys, as a number or as a length", () => {
+    // The same affordance as every other numeric field: the step follows the
+    // kind of value in the field.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { lineHeight: 1.5 } },
+    } as NodeStyles;
+    const editor = mount({ typography: true }, styles);
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"lineHeight":2.5'
+    );
+
+    fireEvent.change(field, { target: { value: "24px" } });
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(JSON.stringify(editor.applyAll.mock.calls.at(-1)?.[0])).toContain(
+      '"lineHeight":"25px"'
+    );
+  });
+
   it("stores a line height typed with a unit as that length", () => {
     const editor = mount({ typography: true });
 
