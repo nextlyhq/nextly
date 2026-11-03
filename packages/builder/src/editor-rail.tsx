@@ -15,6 +15,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
   useShortcuts,
+  type ActiveShortcut,
 } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import {
@@ -64,6 +65,32 @@ export function panelLabel(panel: LeftPanel): string {
 const ITEM_CLASS =
   "focus-visible:ring-ring inline-flex size-9 items-center justify-center rounded-md focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
 
+/**
+ * A tooltip's open state that also closes when the pointer moves into a frame.
+ *
+ * The canvas is an iframe beside the rail. A pointer leaving an item for it
+ * passes into another document, so this one sees no further move and Radix,
+ * waiting to learn whether the pointer is heading for the tooltip, kept it
+ * open over the canvas. The frame's own element does receive `pointerover` as
+ * the pointer enters it, so that closes the tooltip; moving onto the tooltip
+ * itself still keeps it, as WCAG 1.4.13 asks.
+ */
+function useTooltipClosedByFrames(): {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+} {
+  const [open, setOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (!open) return;
+    const intoFrame = (event: PointerEvent) => {
+      if (event.target instanceof HTMLIFrameElement) setOpen(false);
+    };
+    document.addEventListener("pointerover", intoFrame, true);
+    return () => document.removeEventListener("pointerover", intoFrame, true);
+  }, [open]);
+  return { open, onOpenChange: setOpen };
+}
+
 function RailItem({
   label,
   shortcut,
@@ -80,8 +107,9 @@ function RailItem({
   onClick: (button: HTMLElement) => void;
 } & Record<`data-${string}`, string>) {
   const key = shortcut?.toUpperCase();
+  const tooltip = useTooltipClosedByFrames();
   return (
-    <Tooltip>
+    <Tooltip {...tooltip}>
       <TooltipTrigger asChild>
         <button
           type="button"
@@ -114,6 +142,34 @@ function RailItem({
   );
 }
 
+/** The shortcut layer the panel keys register in, which Help reads by name. */
+export const PANEL_KEYS_LAYER = "Editor panels";
+
+/**
+ * The panel keys an editor offers, as Help lists them: one per panel it can
+ * fill that has a key, in rail order. The one list the keys are registered
+ * from, so a row in Help is a key that works.
+ */
+export function panelKeyShortcuts(
+  isAvailable: (panel: LeftPanel) => boolean
+): (ActiveShortcut & { panel: LeftPanel })[] {
+  return [...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom]
+    .filter(isAvailable)
+    .flatMap(panel => {
+      const { label, key } = PANEL_CHROME[panel];
+      return key === undefined
+        ? []
+        : [
+            {
+              panel,
+              keys: key,
+              description: `Open or close ${label}`,
+              layer: PANEL_KEYS_LAYER,
+            },
+          ];
+    });
+}
+
 /**
  * The panels' single keys: each opens its panel, or closes it when it is the
  * one open, as clicking its item does. Never while text is being typed and
@@ -124,7 +180,7 @@ function RailItem({
  * editor nobody is looking at.
  */
 function usePanelKeys(
-  panels: readonly LeftPanel[],
+  shortcuts: readonly (ActiveShortcut & { panel: LeftPanel })[],
   onSelect: (panel: LeftPanel) => void,
   claims: (() => boolean) | undefined
 ): void {
@@ -133,21 +189,14 @@ function usePanelKeys(
   const latest = React.useRef(claims);
   latest.current = claims;
   useShortcuts(
-    panels.flatMap(panel => {
-      const { label, key } = PANEL_CHROME[panel];
-      return key === undefined
-        ? []
-        : [
-            {
-              keys: key,
-              description: `Open or close ${label}`,
-              whenTyping: false,
-              when: () => latest.current?.() ?? true,
-              run: () => onSelect(panel),
-            },
-          ];
-    }),
-    { name: "Editor panels" }
+    shortcuts.map(({ panel, keys, description }) => ({
+      keys,
+      description,
+      whenTyping: false,
+      when: () => latest.current?.() ?? true,
+      run: () => onSelect(panel),
+    })),
+    { name: PANEL_KEYS_LAYER }
   );
 }
 
@@ -195,9 +244,7 @@ export function EditorRail({
   keysOn = true,
 }: EditorRailProps): React.JSX.Element {
   usePanelKeys(
-    keysOn
-      ? [...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom].filter(isAvailable)
-      : [],
+    keysOn ? panelKeyShortcuts(isAvailable) : [],
     onSelect,
     claimsKeys
   );

@@ -269,8 +269,11 @@ export interface ShellPreferences {
    * ON by default, and a preference because a key with no modifier can be
    * set off by speech input or a stray press: WCAG 2.1.4 asks that such a
    * shortcut can be turned off. Help holds the switch, beside the keys.
+   *
+   * Optional in this published type, so a host that builds preferences
+   * written before the switch still compiles; absent reads as on.
    */
-  panelKeys: boolean;
+  panelKeys?: boolean;
 }
 
 /**

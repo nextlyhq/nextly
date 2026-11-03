@@ -18,6 +18,7 @@ import {
   Label,
   Switch,
   useActiveShortcuts,
+  type ActiveShortcut,
 } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -79,6 +80,30 @@ function ShortcutList({ rows }: { rows: readonly ShortcutRow[] }) {
 export interface PanelKeysSetting {
   on: boolean;
   onChange: (on: boolean) => void;
+  /**
+   * The keys this editor's rail registers while they are on. Help lists these
+   * rather than the panel keys the shared manager holds, which include a
+   * second editor's on the same page.
+   */
+  shortcuts: readonly ActiveShortcut[];
+  /** The layer they register in, whose bindings Help leaves to `shortcuts`. */
+  layer: string;
+}
+
+/**
+ * The bindings Help lists: the manager's, with the panel keys taken from this
+ * editor alone, and only while they are on. Last, so a binding above them that
+ * takes the same key still wins its row, as it wins the key.
+ */
+function listedShortcuts(
+  active: readonly ActiveShortcut[],
+  panelKeys: PanelKeysSetting | undefined
+): readonly ActiveShortcut[] {
+  if (panelKeys === undefined) return active;
+  return [
+    ...active.filter(shortcut => shortcut.layer !== panelKeys.layer),
+    ...(panelKeys.on ? panelKeys.shortcuts : []),
+  ];
 }
 
 /**
@@ -161,7 +186,10 @@ export function HelpDialog({
               dialog is open — always in a browser, after hydration. */}
           <ShortcutList
             rows={[
-              ...helpShortcuts(active, detectApplePlatform()),
+              ...helpShortcuts(
+                listedShortcuts(active, panelKeys),
+                detectApplePlatform()
+              ),
               ...PLATFORM_KEYS,
             ]}
           />

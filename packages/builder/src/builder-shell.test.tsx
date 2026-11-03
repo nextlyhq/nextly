@@ -299,11 +299,64 @@ describe("the rail's panel keys", () => {
     expect(readPreferences(store).panelKeys).toBe(false);
   });
 
-  it("names each panel's key on its item, for its tooltip and assistive technology", () => {
+  it("names each panel's key on its item, for assistive technology", () => {
     renderShell();
     expect(railItem("Add").getAttribute("aria-keyshortcuts")).toBe("A");
     expect(railItem("Pages").getAttribute("aria-keyshortcuts")).toBe("P");
     expect(railItem("Components").getAttribute("aria-keyshortcuts")).toBe("C");
+  });
+
+  it("names an item and its key in the tooltip its focus shows", async () => {
+    // The rail draws icons only: the tooltip is how a sighted author learns
+    // both what an item is and its key.
+    renderShell();
+    act(() => railItem("Layers").focus());
+
+    // The whole text, since "Layers" alone already holds an "L".
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent?.replace(/\s+/g, "")).toBe("LayersL");
+  });
+
+  it("closes an item's tooltip when the pointer moves into the canvas frame", async () => {
+    // A frame is another document: once the pointer is in it, this one sees
+    // no move that could tell the tooltip it was left, and it stayed open over
+    // the canvas.
+    renderShell();
+    act(() => railItem("Layers").focus());
+    await screen.findByRole("tooltip");
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+
+    fireEvent.pointerOver(frame);
+
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    frame.remove();
+  });
+
+  it("lists in Help only its own editor's panel keys, with two on the page", async () => {
+    // The shortcut manager is shared, and lists every editor's bindings: Help
+    // in an editor whose keys are off listed the other editor's as if they
+    // were its own.
+    stubContainerFits(true);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore(
+          JSON.stringify({ ...DEFAULT_PREFERENCES, panelKeys: false })
+        )}
+      />
+    );
+    render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />);
+    const [first] = screen.getAllByRole("navigation", {
+      name: "Editor panels",
+    });
+    fireEvent.click(
+      within(first as HTMLElement).getByRole("button", { name: "Help" })
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("Hide or show the side panels");
+    expect(dialog.textContent).not.toContain("Open or close Layers");
   });
 });
 

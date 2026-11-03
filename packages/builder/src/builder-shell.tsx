@@ -25,7 +25,13 @@ import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl, useZoomShortcuts } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
 import { isHTMLElement } from "./dom-kind";
-import { EditorRail, panelLabel, type EditorRailProps } from "./editor-rail";
+import {
+  EditorRail,
+  PANEL_KEYS_LAYER,
+  panelKeyShortcuts,
+  panelLabel,
+  type EditorRailProps,
+} from "./editor-rail";
 import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
 import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
@@ -1642,8 +1648,12 @@ function ShellRegions({
           // while the author has not turned them off in Help.
           claimsKeys={() => active && claimsKeys()}
           panelKeys={{
-            on: preferences.panelKeys,
+            // On unless turned off, as a preference written before there
+            // was a switch reads.
+            on: preferences.panelKeys !== false,
             onChange: on => update(current => ({ ...current, panelKeys: on })),
+            shortcuts: panelKeyShortcuts(isAvailable),
+            layer: PANEL_KEYS_LAYER,
           }}
         />
 
