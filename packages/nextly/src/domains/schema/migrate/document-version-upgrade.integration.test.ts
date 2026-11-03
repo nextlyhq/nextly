@@ -15,14 +15,20 @@
  *
  * @module domains/schema/migrate/document-version-upgrade.integration.test
  */
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FreshDatabase } from "../../../__tests__/helpers/fresh-database";
 import {
   migrateFresh,
   noMigrationsDir,
 } from "../../../__tests__/helpers/migrate-core";
-import { defineCollection, defineSingle, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -47,10 +53,19 @@ const PER_DOCUMENT_COLUMNS = [
 const { dir: NO_MIGRATIONS, remove } = noMigrationsDir("nextly-docver-");
 afterAll(remove);
 
+// The Schema Builder runs the migration that creates a collection's tables
+// only in development; elsewhere it records a pending one.
+let previousNodeEnv: string | undefined;
+beforeEach(() => {
+  previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "development";
+});
+
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  process.env.NODE_ENV = previousNodeEnv;
 });
 
 /** Every content table this site holds, by kind. */
@@ -61,7 +76,7 @@ const TABLES = {
   codeSingleLanguages: "single_cf_site_locales",
   // A code-first collection whose table is not named after its slug: found
   // through the registry, never rebuilt from the slug.
-  renamed: "custom_articles",
+  renamed: "dc_custom_articles",
   builderCollection: "dc_ui_pages",
   builderCollectionLanguages: "dc_ui_pages_locales",
   builderSingle: "single_ui_banner",
@@ -72,15 +87,30 @@ const ALL_TABLES = Object.values(TABLES);
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // A field group's tables are no document of their own: the document
+    // holding it is versioned, never the group, so its tables get none of the
+    // columns and its reads must not ask for them.
+    fieldGroups: [
+      defineFieldGroup({ slug: "fg_plain", fields: [text({ name: "label" })] }),
+      defineFieldGroup({
+        slug: "fg_lang",
+        localized: true,
+        fields: [text({ name: "caption" })],
+      }),
+    ],
     collections: [
       defineCollection({
         slug: "cf_posts",
         localized: true,
-        fields: [text({ name: "title", localized: true })],
+        fields: [
+          text({ name: "title", localized: true }),
+          fieldGroup({ name: "plainBox", component: "fg_plain" }),
+          fieldGroup({ name: "langBox", component: "fg_lang" }),
+        ],
       }),
       defineCollection({
         slug: "cf_articles",
-        dbName: TABLES.renamed,
+        dbName: "custom_articles",
         fields: [text({ name: "title" })],
       }),
     ],
@@ -152,7 +182,14 @@ async function seed(t: TestNextly): Promise<void> {
   } as never);
 
   for (const [slug, data] of [
-    ["cf_posts", { title: "Hello" }],
+    [
+      "cf_posts",
+      {
+        title: "Hello",
+        plainBox: { label: "Box" },
+        langBox: { caption: "Caption" },
+      },
+    ],
     ["ui_pages", { heading: "Hi" }],
     ["cf_articles", { title: "Article" }],
   ] as const) {
@@ -223,7 +260,7 @@ async function strip(
 async function contentOf(t: TestNextly): Promise<string> {
   const out: Record<string, unknown[]> = {};
   for (const table of ALL_TABLES) {
-    const rows = await t.adapter.select<Record<string, unknown>>(table, {});
+    const rows = await rowsOf(t, table);
     out[table] = rows
       .map(row =>
         Object.fromEntries(
@@ -242,11 +279,35 @@ async function contentOf(t: TestNextly): Promise<string> {
   return JSON.stringify(out);
 }
 
+/**
+ * Every row as stored, by a statement naming no column: the runtime model of
+ * a table declares the per-document columns whether or not the table has
+ * them yet, and a translation table's declares none of them.
+ */
 async function rowsOf(
   t: TestNextly,
   table: string
 ): Promise<Record<string, unknown>[]> {
-  return t.adapter.select<Record<string, unknown>>(table, {});
+  return t.adapter.executeQuery<Record<string, unknown>>(
+    `SELECT * FROM ${quote(t, table)}`
+  );
+}
+
+/** Each registered entity's migration state and stored schema hash. */
+async function registryState(
+  t: TestNextly
+): Promise<{ table: string; status: unknown; hash: unknown }[]> {
+  const out: { table: string; status: unknown; hash: unknown }[] = [];
+  for (const registry of ["dynamic_collections", "dynamic_singles"]) {
+    for (const row of await rowsOf(t, registry)) {
+      out.push({
+        table: String(row.table_name),
+        status: row.migration_status,
+        hash: row.schema_hash,
+      });
+    }
+  }
+  return out.sort((a, b) => a.table.localeCompare(b.table));
 }
 
 /** An older site: every content table without the columns, rows dated. */
@@ -404,6 +465,38 @@ describe.each(getConfiguredTestDialects())(
       // nothing, or the site's next file is refused as drift.
       expect(diffSnapshots(without, withThem)).toEqual([]);
       expect(diffSnapshots(withThem, without)).toEqual([]);
+    }, 240_000);
+    it("leaves no collection or Single awaiting a migration", async () => {
+      // The columns reach existing tables through this step, not through the
+      // schema version every entity's stored hash is built with: had that
+      // moved, every entity on every site would read as changed and wait for
+      // a migration no file carries.
+      const t = await boot(dialect);
+      await olderSite(t);
+      const before = await registryState(t);
+
+      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+
+      const after = await registryState(t);
+      expect(after).toEqual(before);
+      expect(after.filter(row => row.status === "pending")).toEqual([]);
+    }, 240_000);
+
+    it("reads field groups, translated and not, after the upgrade", async () => {
+      const t = await boot(dialect);
+      await olderSite(t);
+      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+
+      const [post] = await rowsOf(t, TABLES.codeCollection);
+      const read = (await t.nextly.findByID({
+        collection: "cf_posts" as never,
+        id: String(post.id),
+        locale: "en",
+        overrideAccess: true,
+      } as never)) as Record<string, unknown>;
+      expect(read.plainBox).toMatchObject({ label: "Box" });
+      expect(read.langBox).toMatchObject({ caption: "Caption" });
+      expect(read._rev).toBe("1.en:1");
     }, 240_000);
   }
 );

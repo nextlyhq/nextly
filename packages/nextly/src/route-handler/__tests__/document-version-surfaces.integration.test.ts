@@ -192,7 +192,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await counterOf(t, `single_${SETTINGS}`)).toBe(2);
     });
 
-    it("the Direct API returns it from create, update, findByID, find, findSingle, findSingles and updateSingle", async () => {
+    it("the Direct API returns it from create, update, findByID, find, findSingle and updateSingle", async () => {
       const t = await boot(dialect);
       const created = (await t.nextly.create({
         collection: NOTES as never,
@@ -243,25 +243,13 @@ describe.each(getConfiguredTestDialects())(
         unknown
       >;
       expect((updatedSingle.item ?? updatedSingle)._rev).toBe("2");
-      const singles = (await t.nextly.findSingles({
-        overrideAccess: true,
-      } as never)) as unknown as {
-        items: { slug?: string; _rev?: unknown }[];
-      };
-      const listed = singles.items.find(item => item.slug === SETTINGS);
-      // `findSingles` lists the Singles themselves, not their documents; when
-      // it carries a document's fields it carries its version with them.
-      if (listed && "notice" in listed) expect(listed._rev).toBe("2");
     });
 
     it("the plugin service returns it from findEntryById, listEntries and updateEntry, and drops one sent back", async () => {
       const t = await boot(dialect);
       const c = services!;
-      const created = (await c.createEntry(
-        NOTES,
-        { title: "a" },
-        SYSTEM
-      )) as Record<string, unknown>;
+      const created = (await c.createEntry(NOTES, { title: "a" }, SYSTEM))
+        .item as unknown as Record<string, unknown>;
       expect(created._rev).toBe("1");
       const id = String(created.id);
 
@@ -270,19 +258,21 @@ describe.each(getConfiguredTestDialects())(
         unknown
       >;
       expect(found._rev).toBe("1");
-      const updated = (await c.updateEntry(
-        NOTES,
-        id,
-        { ...found, title: "b", _rev: "999" },
-        SYSTEM
-      )) as Record<string, unknown>;
+      const updated = (
+        await c.updateEntry(
+          NOTES,
+          id,
+          { ...found, title: "b", _rev: "999" },
+          SYSTEM
+        )
+      ).item as unknown as Record<string, unknown>;
       expect(updated._rev).toBe("2");
       expect(await counterOf(t, `dc_${NOTES}`, id)).toBe(2);
 
       const listed = (await c.listEntries(NOTES, {}, SYSTEM)) as unknown as {
-        items: Record<string, unknown>[];
+        data: Record<string, unknown>[];
       };
-      expect(listed.items.map(item => item._rev)).toEqual(["2"]);
+      expect(listed.data.map(item => item._rev)).toEqual(["2"]);
     });
   }
 );

@@ -160,6 +160,11 @@ import {
 } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
+  attachDocumentVersions,
+  storedRevisionsOf,
+  versionLanguagesFor,
+} from "../../versions/document-revision";
+import {
   draftDocumentFacts,
   resolveDraftOverlay,
 } from "../../versions/draft-overlay";
@@ -1287,6 +1292,10 @@ export class SingleQueryService extends BaseService {
       // of one of its field values, derived while the row is expanded, so
       // redacting afterwards would leave a withheld value standing in the label
       // it was copied into.
+      // The stored counter, taken before anything below strips it with the
+      // other server-only columns or overlays a held draft on the document.
+      const storedRevisions = storedRevisionsOf([doc]);
+
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta,
@@ -1372,6 +1381,21 @@ export class SingleQueryService extends BaseService {
         stripPasswordFieldValues(doc, singleMeta.fields, passwordReach);
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
+
+      // Last, so no hook can drop or forge it. The live row's version, a held
+      // draft overlaid on the document included.
+      await attachDocumentVersions([doc], {
+        stored: storedRevisions,
+        run: (statement, values) =>
+          this.adapter.executeQuery<Record<string, unknown>>(statement, values),
+        dialect: this.adapter.dialect,
+        table: singleMeta.tableName,
+        locales: versionLanguagesFor({
+          localized: singleMeta.localized === true,
+          localization: this.localization,
+          locale: options.locale,
+        }),
+      });
 
       return {
         success: true,

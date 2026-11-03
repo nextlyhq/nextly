@@ -377,6 +377,19 @@ async function applyPendingMigrations(label: string): Promise<number> {
       !fs.existsSync(migrationsDir) &&
       pluginMigrations.pluginMigrationSets.length === 0
     ) {
+      // No migrate run here, yet every content table still needs the
+      // per-document columns `migrateCore` would have added.
+      const { container } = await import("../di/container");
+      const adapter = container.get<DrizzleAdapter | undefined>("adapter");
+      const { addDocumentColumns } = await import(
+        "../domains/schema/migrate/document-columns"
+      );
+      if (adapter) {
+        await addDocumentColumns({
+          db: adapter.getDrizzle(),
+          dialect: adapter.dialect,
+        });
+      }
       return 0;
     }
 

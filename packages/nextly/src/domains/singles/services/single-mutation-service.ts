@@ -169,6 +169,14 @@ import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
+  bumpDocumentRevision,
+  DOCUMENT_VERSION_KEY,
+  documentVersionOn,
+  revisionBumpColumns,
+  savesMainRow,
+  withoutDocumentVersionKeys,
+} from "../../versions/document-revision";
+import {
   draftComponentValues,
   mergeComponentPatches,
 } from "../../versions/draft-components";
@@ -1666,6 +1674,9 @@ export class SingleMutationService extends BaseService {
     // Refused first when the Single is removed from code, before any hook or
     // read of its document, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("single", slug);
+    // The version a client sends back with what it read is the server's to
+    // decide, so it is dropped before any hook or gate reads the body.
+    data = withoutDocumentVersionKeys(data);
     // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale. Resolved
     // once, here, so the twenty-odd places below that derive from
     // `options.locale` — `writeLocale`, the snapshot locale, the event payloads
@@ -1741,6 +1752,8 @@ export class SingleMutationService extends BaseService {
     // the event is recorded and carried on every post-event return so a
     // committed-but-hook-failed write still flushes its revalidation.
     let revalidationIntent: RevalidationIntent | undefined;
+    // The version this save produced, read inside its own transaction.
+    let writtenVersion: string | undefined;
     // Set when the in-transaction transition check refuses the write against the
     // row-locked status. Declared out here (not in `try`) so the catch can read
     // it: the adapter wraps the thrown sentinel in a DatabaseError as the
@@ -3207,11 +3220,24 @@ export class SingleMutationService extends BaseService {
             // stored below instead. The stored row still travels onward so
             // everything after this reports the document as it stands, which
             // for a held edit is the published content the public still sees.
+            const savedBy = actorForWrite(options.actor ?? null, options.user);
             const rows = holdEdit
               ? [existingDoc]
               : await tx.update<SingleDocument>(
                   singleMeta.tableName,
-                  mainPayload,
+                  {
+                    ...mainPayload,
+                    // The document's counter moves unless this save changed
+                    // translated fields alone, which move only that
+                    // language's row.
+                    ...(savesMainRow({
+                      updatePayload: mainPayload,
+                      componentFieldData: attemptComponentFields,
+                      manyToManyData: {},
+                    })
+                      ? revisionBumpColumns(savedBy)
+                      : {}),
+                  },
                   this.whereEq("id", existingDoc.id),
                   { returning: "*" }
                 );
@@ -3749,6 +3775,7 @@ export class SingleMutationService extends BaseService {
                 locale: writeLocale,
                 values: companionData,
                 status: companionStatus,
+                savedBy,
               });
               const row = rows[0] as Record<string, unknown>;
               for (const f of companion.localizedFields) {
@@ -3783,7 +3810,11 @@ export class SingleMutationService extends BaseService {
             ) {
               await tx.update(
                 companion.companionTableName,
-                { [COMPANION_STATUS_COLUMN]: companionStatus },
+                {
+                  [COMPANION_STATUS_COLUMN]: companionStatus,
+                  // Each translation row moved is a save of that language.
+                  ...revisionBumpColumns(savedBy),
+                },
                 {
                   and: [
                     {
@@ -3825,6 +3856,15 @@ export class SingleMutationService extends BaseService {
             // status-less save of different fields would otherwise rebuild from
             // live content and silently revert the first pending edit.
             if (holdEdit) {
+              // A held edit leaves the live row's content alone, but it is a
+              // change another editor must not overwrite unseen: the counter
+              // and the changer move, and `updated_at` stays the live one's.
+              await bumpDocumentRevision(
+                tx,
+                singleMeta.tableName,
+                { id: existingDoc.id },
+                savedBy
+              );
               const draftRepo = new VersionsRepository(tx);
               const draftRef = {
                 scopeKind: "single" as const,
@@ -4774,6 +4814,18 @@ export class SingleMutationService extends BaseService {
               );
             }
 
+            // The version this save produced, read in its own transaction.
+            if (rows.length > 0) {
+              writtenVersion = await documentVersionOn(tx, {
+                dialect: this.adapter.dialect,
+                table: singleMeta.tableName,
+                id: existingDoc.id,
+                localized: singleMeta.localized === true,
+                localization: this.localization,
+                locale: options.locale,
+              });
+            }
+
             return rows;
           })
         );
@@ -4971,6 +5023,11 @@ export class SingleMutationService extends BaseService {
         overrideAccess: options.overrideAccess && !options.routeAuthorized,
         visitor: this.fieldRuleVisitor,
       });
+
+      if (writtenVersion !== undefined) {
+        (updatedDoc as Record<string, unknown>)[DOCUMENT_VERSION_KEY] =
+          writtenVersion;
+      }
 
       return {
         success: true,

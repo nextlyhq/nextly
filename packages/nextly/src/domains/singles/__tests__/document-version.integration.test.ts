@@ -89,13 +89,21 @@ async function mainRow(
   return rows[0];
 }
 
+/**
+ * A translation row, read by a statement that names its columns: the
+ * translation table's runtime model does not declare the per-document
+ * columns, so the adapter's own select would not return them.
+ */
 async function languageRow(
   t: TestNextly,
   locale: string
 ): Promise<Record<string, unknown>> {
-  const row = await t.adapter.selectOne<Record<string, unknown>>(
-    `single_${PREFS}_locales`,
-    { where: { and: [{ column: "_locale", op: "=", value: locale }] } }
+  const q = (name: string) =>
+    t.adapter.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  const p = t.adapter.dialect === "postgresql" ? "$1" : "?";
+  const [row] = await t.adapter.executeQuery<Record<string, unknown>>(
+    `SELECT * FROM ${q(`single_${PREFS}_locales`)} WHERE ${q("_locale")} = ${p}`,
+    [locale]
   );
   if (!row) throw new Error(`no ${locale} row`);
   return row;
@@ -245,6 +253,21 @@ describe.each(getConfiguredTestDialects())(
       const after = await readRev(t, PREFS, "*");
       expect(after).not.toBe(before);
       expect(revOf(published)).toBe(after);
+    });
+
+    it("a save that sends back `_rev` doesn't fail", async () => {
+      const t = await boot(dialect);
+      const read = (await t.nextly.findSingle({
+        slug: PLAIN,
+        overrideAccess: true,
+      } as never)) as Record<string, unknown>;
+      const saved = await singlesOf(t).update(
+        PLAIN,
+        { ...read, notice: "after" },
+        { overrideAccess: true }
+      );
+      expect(saved).toMatchObject({ success: true });
+      expect(revOf(saved)).toBe("2");
     });
 
     it("stores the counter's own value whatever version an update carries", async () => {

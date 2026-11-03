@@ -301,6 +301,12 @@ function buildCompanionColumnRecord(
   // worklist's SQL filter is unaffected either way: it names the column in raw SQL and is guarded
   // by `hasUpdatedAt`.
 
+  // The version counter and last changer are not declared here either, for the same kind of
+  // reason: this builder serves a field group's translation table too, which is no document and
+  // never gets them, and a bare `select()` naming them would fail there. A collection's or
+  // Single's translation row has them, and they are read and written by statements that name
+  // them (`domains/versions/document-revision`).
+
   // Localized field columns — always nullable (localized-required is app-layer, M2).
   for (const col of columns) {
     const desc: ColumnDescriptor = {
@@ -601,8 +607,17 @@ function buildSystemDrizzleColumn(
   const literal =
     sys.defaultValue?.kind === "literal" ? sys.defaultValue.value : undefined;
   const clockDefault = sys.defaultValue?.kind === "now";
+  const numeric =
+    sys.defaultValue?.kind === "number" ? sys.defaultValue.value : undefined;
 
   if (dialect === "postgresql") {
+    if (sys.kind === "integer") {
+      const col = pgInteger(sys.name);
+      return finishColumn(
+        numeric === undefined ? col : col.default(numeric),
+        sys
+      );
+    }
     if (sys.kind === "timestamp") {
       const col = pgTimestamp(sys.name);
       return finishColumn(clockDefault ? col.defaultNow() : col, sys);
@@ -622,6 +637,13 @@ function buildSystemDrizzleColumn(
   }
 
   if (dialect === "mysql") {
+    if (sys.kind === "integer") {
+      const col = mysqlInt(sys.name);
+      return finishColumn(
+        numeric === undefined ? col : col.default(numeric),
+        sys
+      );
+    }
     if (sys.kind === "timestamp") {
       const col = mysqlTimestamp(sys.name);
       return finishColumn(clockDefault ? col.defaultNow() : col, sys);
@@ -640,6 +662,13 @@ function buildSystemDrizzleColumn(
     );
   }
 
+  if (sys.kind === "integer") {
+    const col = sqliteInteger(sys.name);
+    return finishColumn(
+      numeric === undefined ? col : col.default(numeric),
+      sys
+    );
+  }
   // SQLite stores a timestamp as an epoch integer and has no distinct varchar.
   if (sys.kind === "timestamp") {
     const col = sqliteInteger(sys.name, { mode: "timestamp" });

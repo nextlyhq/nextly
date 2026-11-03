@@ -12,8 +12,9 @@ import {
   DOCUMENT_VERSION_KEY,
   DOCUMENT_REVISION_COLUMN,
   encodeDocumentVersion,
-  stripDocumentVersionKeys,
+  withoutDocumentVersionKeys,
 } from "../document-revision";
+import { documentSystemKeys } from "../snapshot-system-keys";
 
 describe("encodeDocumentVersion", () => {
   it("is the main counter alone for a document with no languages", () => {
@@ -42,8 +43,8 @@ describe("encodeDocumentVersion", () => {
   });
 });
 
-describe("stripDocumentVersionKeys", () => {
-  it("drops the published key and every column the server alone writes", () => {
+describe("withoutDocumentVersionKeys", () => {
+  it("drops the published key and every column the server alone writes, leaving the caller's object as it was", () => {
     const body: Record<string, unknown> = {
       title: "kept",
       [DOCUMENT_VERSION_KEY]: "999",
@@ -52,8 +53,16 @@ describe("stripDocumentVersionKeys", () => {
       _changed_by_id: "someone-else",
       _changed_by_principal_kind: "x",
     };
-    stripDocumentVersionKeys(body);
-    expect(body).toEqual({ title: "kept" });
+    expect(withoutDocumentVersionKeys(body)).toEqual({ title: "kept" });
+    expect(body[DOCUMENT_VERSION_KEY]).toBe("999");
+  });
+
+  it("is never content a version comparison counts", () => {
+    // A restored snapshot holding a stored version must not write it back,
+    // and two versions must not differ by it alone.
+    for (const entity of ["collection", "single"] as const) {
+      expect(documentSystemKeys(entity).has(DOCUMENT_VERSION_KEY)).toBe(true);
+    }
   });
 
   it("names the published key `_rev`", () => {

@@ -192,6 +192,11 @@ import {
 } from "../../schema/services/field-column-descriptor";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
+  attachDocumentVersions,
+  storedRevisionsOf,
+  versionLanguagesFor,
+} from "../../versions/document-revision";
+import {
   draftDocumentFacts,
   resolveDraftOverlay,
   type DraftDocumentConfig,
@@ -2628,8 +2633,13 @@ export class CollectionQueryService extends BaseService {
      * sees the grant, so the waiver does not travel.
      */
     hooksWaived?: boolean;
+    /** Whether the collection keeps translations, whose rows its version names. */
+    localized: boolean;
   }): Promise<Record<string, unknown>[]> {
     const { rows, collectionName, tableName, fields } = params;
+    // Taken before step (1), which removes the counter with every other
+    // server-only column.
+    const storedRevisions = storedRevisionsOf(rows);
     // The field groups held inline in this collection's containers, whose
     // passwords sit in those containers' values: resolved once for the read.
     // A read of every translation returns each translated field keyed by
@@ -2873,6 +2883,21 @@ export class CollectionQueryService extends BaseService {
     // hook, field-level read access and transform — so nothing downstream can
     // re-expose the creator's user id.
     for (const row of finalData) stripServerOnlyColumns(row, tableName);
+
+    // The version, after everything a hook or a selection can do to a row,
+    // so neither can drop or forge it.
+    await attachDocumentVersions(finalData, {
+      stored: storedRevisions,
+      run: (statement, values) =>
+        this.adapter.executeQuery<Record<string, unknown>>(statement, values),
+      dialect: this.dialect,
+      table: tableName,
+      locales: versionLanguagesFor({
+        localized: params.localized,
+        localization: this.localization,
+        locale: params.locale,
+      }),
+    });
 
     return finalData;
   }
@@ -3829,6 +3854,7 @@ export class CollectionQueryService extends BaseService {
       const finalData = await this.finalizeReadRows({
         rows: expandedEntries,
         hooksWaived,
+        localized: (collection as { localized?: boolean }).localized === true,
         collectionName: params.collectionName,
         // The collection record this read was planned from, so a `dbName`
         // collection's contributed columns are found under its real table.
@@ -5437,6 +5463,7 @@ export class CollectionQueryService extends BaseService {
       const [finalData] = await this.finalizeReadRows({
         rows: [expandedEntry],
         hooksWaived,
+        localized: (collection as { localized?: boolean }).localized === true,
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,

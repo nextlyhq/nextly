@@ -61,6 +61,7 @@ import {
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
+import { addDocumentColumns } from "../../domains/schema/migrate/document-columns";
 import {
   assertNotPartiallyApplied,
   applyFailedError,
@@ -1619,6 +1620,15 @@ async function runMigrationStreams(
   return { pluginModulesApplied, applied };
 }
 
+/** The per-document columns every content table needs (`addDocumentColumns`). */
+async function addDocumentColumnsFor(deps: MigrateCoreDeps): Promise<void> {
+  await addDocumentColumns({
+    db: deps.db,
+    dialect: deps.dialect,
+    logger: { info: m => deps.logger.info(m) },
+  });
+}
+
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
@@ -1755,6 +1765,10 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
+      // Before the app's files as well as after them: a file written after
+      // these columns existed may rebuild a SQLite table, copying them from
+      // the live one, and a file written before them creates tables without.
+      await addDocumentColumnsFor(deps);
       await recordAppTableOwners(deps);
       ({ pluginModulesApplied, applied } = await runMigrationStreams(
         deps,
@@ -1768,6 +1782,7 @@ export async function migrateCore(
       // longer holds it. Each stream's reconcile ignores elements it does not
       // own, which is what these rows say.
       await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
+      await addDocumentColumnsFor(deps);
 
       // What the caller must hold true before the registry records the files' metadata.
       await deps.beforeMetadata?.();

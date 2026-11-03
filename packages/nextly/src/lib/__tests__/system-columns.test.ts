@@ -62,6 +62,7 @@ describe("immutability projections", () => {
         "_changed_by_kind",
         "_changed_by_id",
         "_changed_by_principal_kind",
+        "_rev",
       ])
     );
   });
@@ -86,6 +87,7 @@ describe("immutability projections", () => {
         "_changed_by_kind",
         "_changed_by_id",
         "_changed_by_principal_kind",
+        "_rev",
       ])
     );
   });
@@ -107,6 +109,7 @@ describe("immutability projections", () => {
         "_changed_by_kind",
         "_changed_by_id",
         "_changed_by_principal_kind",
+        "_rev",
       ])
     );
   });

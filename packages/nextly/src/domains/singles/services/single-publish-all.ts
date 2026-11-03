@@ -69,6 +69,7 @@ import {
   languagesToAsk,
   unaskedLanguages,
 } from "../../i18n/languages-going-live";
+import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   type LocalizationSource,
   localizationNow,
@@ -86,6 +87,12 @@ import {
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
+import {
+  bumpDocumentRevision,
+  DOCUMENT_VERSION_KEY,
+  documentVersionOn,
+  revisionBumpColumns,
+} from "../../versions/document-revision";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
@@ -155,6 +162,12 @@ import {
 export interface PublishAllSingleResult {
   id: string;
   status?: "published";
+  /**
+   * Every language's version once the publish has committed.
+   *
+   * @experimental Nothing is judged against the version yet.
+   */
+  _rev?: string;
 }
 
 /**
@@ -193,6 +206,8 @@ interface PublishOutcome {
   committed: boolean;
   /** A durable outbox event was appended, so the fast drain is owed. */
   eventRecorded: boolean;
+  /** Every language's version after the publish, read in its transaction. */
+  version?: string;
 }
 
 /**
@@ -352,7 +367,13 @@ export class SinglePublishAllService extends BaseService {
         success: true,
         statusCode: 200,
         message: "All languages published.",
-        data: { id: plan.existingDoc.id, status: "published" },
+        data: {
+          id: plan.existingDoc.id,
+          status: "published",
+          ...(outcome.version !== undefined
+            ? { [DOCUMENT_VERSION_KEY]: outcome.version }
+            : {}),
+        },
         eventRecorded: outcome.eventRecorded,
         committed: outcome.committed,
         // A Single is consumed sitewide, so its one tag is the whole cascade.
@@ -927,6 +948,14 @@ export class SinglePublishAllService extends BaseService {
       documentVanished: false,
       committed,
       eventRecorded,
+      version: await documentVersionOn(tx, {
+        dialect: this.adapter.dialect,
+        table: singleMeta.tableName,
+        id: existingDoc.id,
+        localized: singleMeta.localized === true,
+        localization: this.localization,
+        locale: EVERY_LOCALE,
+      }),
     };
   }
 
@@ -996,8 +1025,18 @@ export class SinglePublishAllService extends BaseService {
           status: "published",
           updated_at: publishNow,
           ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
+          ...revisionBumpColumns(plan.actor),
         },
         this.whereEq("id", existingDoc.id)
+      );
+    } else {
+      // A publish of every language is a save of the document even where the
+      // main row keeps no status of its own; its content is left as it is.
+      await bumpDocumentRevision(
+        tx,
+        singleMeta.tableName,
+        { id: existingDoc.id },
+        plan.actor
       );
     }
 
@@ -1013,7 +1052,7 @@ export class SinglePublishAllService extends BaseService {
       // and parameter binding are the adapter's problem and not this module's.
       await tx.update(
         companion.companionTableName,
-        { _status: "published" },
+        { _status: "published", ...revisionBumpColumns(plan.actor) },
         this.whereEq("_parent", existingDoc.id)
       );
     }
@@ -1196,7 +1235,11 @@ export class SinglePublishAllService extends BaseService {
       if (Object.keys(main).length > 0) {
         await tx.update(
           singleMeta.tableName,
-          { ...main, updated_at: publishNow },
+          {
+            ...main,
+            updated_at: publishNow,
+            ...revisionBumpColumns(plan.actor),
+          },
           this.whereEq("id", existingDoc.id)
         );
       }
@@ -1212,6 +1255,7 @@ export class SinglePublishAllService extends BaseService {
           entryId: existingDoc.id,
           locale: draft.locale,
           values: companionValues,
+          savedBy: plan.actor,
         });
       }
       await this.promoteComponents(

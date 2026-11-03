@@ -16,6 +16,7 @@ import type {
   SupportedDialect,
 } from "@nextlyhq/adapter-drizzle/types";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
@@ -27,6 +28,10 @@ import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoti
 import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
+import {
+  changerColumns,
+  DOCUMENT_REVISION_COLUMN,
+} from "../../versions/document-revision";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import {
   COMPANION_STRUCTURAL_COLUMNS,
@@ -310,7 +315,17 @@ export async function upsertCompanionRow(
   locale: string,
   companionData: Record<string, unknown>,
   status?: string,
-  options: { now?: Date; updatedAt?: CompanionStampMode } = {}
+  options: {
+    now?: Date;
+    updatedAt?: CompanionStampMode;
+    /**
+     * Who made this save, when it is a save of the document: the row's version counter is then
+     * incremented (a row this creates starts at its default, 1) and its last changer recorded,
+     * in this same statement. Absent for a write that is not a save of the language, such as an
+     * archive replay.
+     */
+    savedBy?: RequestActor;
+  } = {}
 ): Promise<void> {
   const withStatus =
     status !== undefined
@@ -377,7 +392,11 @@ export async function upsertCompanionRow(
               options.now
             ),
           };
-  const cols = Object.keys(withStamp);
+  const withChanger =
+    options.savedBy === undefined
+      ? withStamp
+      : { ...withStamp, ...changerColumns(options.savedBy) };
+  const cols = Object.keys(withChanger);
 
   const isMysql = adapter.dialect === "mysql";
   const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
@@ -389,17 +408,28 @@ export async function upsertCompanionRow(
   const valuePlaceholders = allCols
     .map(c => {
       params.push(
-        c === "_parent" ? parentId : c === "_locale" ? locale : withStamp[c]
+        c === "_parent" ? parentId : c === "_locale" ? locale : withChanger[c]
       );
       return ph();
     })
     .join(", ");
 
+  // An existing row's counter moves by one in the conflict branch, from the row's own value under
+  // the lock the upsert holds; an inserted row takes the column default.
+  const increment =
+    options.savedBy === undefined
+      ? []
+      : [
+          isMysql
+            ? `${q(DOCUMENT_REVISION_COLUMN)} = ${q(DOCUMENT_REVISION_COLUMN)} + 1`
+            : `${q(DOCUMENT_REVISION_COLUMN)} = ${q(companionTableName)}.${q(DOCUMENT_REVISION_COLUMN)} + 1`,
+        ];
   const conflict = isMysql
-    ? `ON DUPLICATE KEY UPDATE ${cols.map(c => `${q(c)} = VALUES(${q(c)})`).join(", ")}`
-    : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${cols
-        .map(c => `${q(c)} = excluded.${q(c)}`)
-        .join(", ")}`;
+    ? `ON DUPLICATE KEY UPDATE ${[...cols.map(c => `${q(c)} = VALUES(${q(c)})`), ...increment].join(", ")}`
+    : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${[
+        ...cols.map(c => `${q(c)} = excluded.${q(c)}`),
+        ...increment,
+      ].join(", ")}`;
 
   await adapter.executeQuery(
     `INSERT INTO ${q(companionTableName)} (${allCols.map(q).join(", ")}) ` +

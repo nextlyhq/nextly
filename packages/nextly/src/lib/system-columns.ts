@@ -87,17 +87,18 @@ const RESERVATION_SPELLINGS: Readonly<
  * drift — a runtime schema built as text against a table created as a timestamp is exactly the
  * disagreement this module exists to prevent.
  */
-export type SystemColumnKind = "text" | "varchar" | "timestamp";
+export type SystemColumnKind = "text" | "varchar" | "timestamp" | "integer";
 
 /**
  * What a column defaults to, if anything.
  *
  * `now` is a database-side clock, spelled differently by every dialect. `literal` is a value, which
- * the DDL quotes and the Drizzle builder does not.
+ * the DDL quotes and the Drizzle builder does not. `number` is an integer, written unquoted by both.
  */
 export type SystemColumnDefault =
   | { kind: "now" }
-  | { kind: "literal"; value: string };
+  | { kind: "literal"; value: string }
+  | { kind: "number"; value: number };
 
 /** The physical column, for one dialect. */
 export interface SystemColumnShape {
@@ -121,15 +122,19 @@ export function systemColumnDialectType(
   dialect: SystemColumnDialect
 ): string {
   if (dialect === "postgresql") {
-    return shape.kind === "timestamp" ? "timestamp" : shape.kind;
+    // `udt_name` reports a plain integer as `int4`.
+    return shape.kind === "integer" ? "int4" : shape.kind;
   }
   if (dialect === "mysql") {
     if (shape.kind === "timestamp") return "timestamp";
     if (shape.kind === "varchar") return `varchar(${shape.length ?? 255})`;
+    if (shape.kind === "integer") return "int";
     return "text";
   }
   // SQLite stores a timestamp as an epoch integer and has no distinct varchar.
-  return shape.kind === "timestamp" ? "integer" : "text";
+  return shape.kind === "timestamp" || shape.kind === "integer"
+    ? "integer"
+    : "text";
 }
 
 /**
@@ -145,6 +150,7 @@ export function systemColumnDefaultSql(
   const value = shape.default;
   if (!value) return undefined;
   if (value.kind === "literal") return `'${value.value}'`;
+  if (value.kind === "number") return String(value.value);
   return currentTimestampSql(dialect);
 }
 
@@ -189,6 +195,16 @@ export interface SystemColumnDeclaration {
   strippedFromResponses: boolean;
   reservedIn: readonly ReservationSurface[];
   shape: Readonly<Record<SystemColumnDialect, SystemColumnShape>>;
+  /**
+   * Set on the columns an existing table receives from a step of `nextly migrate` rather than
+   * from a migration file.
+   *
+   * Every content table on every site needs them, whatever the app's own migrations say, so no
+   * migration file carries them and no snapshot comparison reports them: a file's snapshots that
+   * predate them, beside a live table that has them, are the same schema. A new table still gets
+   * them from the same declaration as every other system column.
+   */
+  addedByMigrateStep?: true;
 }
 
 const BOTH_ENTITIES: readonly SystemColumnEntity[] = ["collection", "single"];
@@ -408,6 +424,97 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
       sqlite: { kind: "timestamp", nullable: true },
     },
   },
+  {
+    // The document's version: a counter every save increments, inside the save's own transaction,
+    // and no read changes. A counter rather than a time, because two saves within one second must
+    // differ and `updated_at` is whole seconds on SQLite.
+    //
+    // NOT NULL with a default of 1, so a row inserted by code that does not name it — and every
+    // row existing when the column is added, without an UPDATE rewriting it — reads version 1.
+    //
+    // Published as the opaque `_rev`, never under its own name, so neither timestamp flag applies.
+    name: "_revision",
+    camelName: "_revision",
+    appliesTo: BOTH_ENTITIES,
+    presence: "always",
+    writableByClient: false,
+    publishedUnderCamelName: false,
+    strippedFromResponses: true,
+    // Every validator already refuses a field name with a leading underscore.
+    reservedIn: [],
+    shape: {
+      postgresql: {
+        kind: "integer",
+        nullable: false,
+        default: { kind: "number", value: 1 },
+      },
+      mysql: {
+        kind: "integer",
+        nullable: false,
+        default: { kind: "number", value: 1 },
+      },
+      sqlite: {
+        kind: "integer",
+        nullable: false,
+        default: { kind: "number", value: 1 },
+      },
+    },
+    addedByMigrateStep: true,
+  },
+  // Who or what made the save that last incremented `_revision`, named the way content events
+  // name an actor: a kind, an id, and for a plugin-defined person the person's kind.
+  //
+  // Ids only. A name is looked up when one is needed, so a person erased later leaves nothing
+  // here to scrub. Nullable with no default: a row predating the columns has no known changer,
+  // and a default would name one. Never returned, since only the server decides who may see it.
+  {
+    name: "_changed_by_kind",
+    camelName: "_changed_by_kind",
+    appliesTo: BOTH_ENTITIES,
+    presence: "always",
+    writableByClient: false,
+    publishedUnderCamelName: false,
+    strippedFromResponses: true,
+    reservedIn: [],
+    shape: {
+      postgresql: { kind: "varchar", length: 16, nullable: true },
+      mysql: { kind: "varchar", length: 16, nullable: true },
+      sqlite: { kind: "text", nullable: true },
+    },
+    addedByMigrateStep: true,
+  },
+  {
+    name: "_changed_by_id",
+    camelName: "_changed_by_id",
+    appliesTo: BOTH_ENTITIES,
+    presence: "always",
+    writableByClient: false,
+    publishedUnderCamelName: false,
+    strippedFromResponses: true,
+    reservedIn: [],
+    shape: {
+      postgresql: { kind: "text", nullable: true },
+      mysql: { kind: "varchar", length: 255, nullable: true },
+      sqlite: { kind: "text", nullable: true },
+    },
+    addedByMigrateStep: true,
+  },
+  {
+    name: "_changed_by_principal_kind",
+    camelName: "_changed_by_principal_kind",
+    appliesTo: BOTH_ENTITIES,
+    presence: "always",
+    writableByClient: false,
+    publishedUnderCamelName: false,
+    strippedFromResponses: true,
+    reservedIn: [],
+    shape: {
+      postgresql: { kind: "varchar", length: 64, nullable: true },
+      mysql: { kind: "varchar", length: 64, nullable: true },
+      sqlite: { kind: "text", nullable: true },
+    },
+    addedByMigrateStep: true,
+  },
 ];
 
 // ============================================================
@@ -559,3 +666,23 @@ export function immutableSystemColumnNames(
 export function immutableSystemColumnNamesAnyEntity(): string[] {
   return systemColumnNames(column => !column.writableByClient);
 }
+
+/**
+ * The key a document's version is published under: an opaque string built from the `_revision`
+ * counters, never a column of its own (see `domains/versions/document-revision`).
+ *
+ * Declared here, beside the columns it is built from, so every list of keys a client may never
+ * write can name it without reaching into the versions domain.
+ *
+ * @experimental Nothing is judged against the version yet.
+ */
+export const DOCUMENT_VERSION_KEY = "_rev";
+
+/**
+ * The columns a step of `nextly migrate` adds to existing tables, which no snapshot comparison
+ * reports (see `addedByMigrateStep`).
+ */
+export const MIGRATE_STEP_COLUMN_NAMES: readonly string[] =
+  SYSTEM_COLUMNS.filter(column => column.addedByMigrateStep === true).map(
+    column => column.name
+  );

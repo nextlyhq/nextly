@@ -119,11 +119,29 @@ async function rowOf(
 const mainCounter = async (t: TestNextly, slug: string, id: string) =>
   Number((await rowOf(t, `dc_${slug}`, { id }))._revision);
 
-const languageCounter = async (t: TestNextly, id: string, locale: string) =>
-  Number(
-    (await rowOf(t, `dc_${DOCS}_locales`, { _parent: id, _locale: locale }))
-      ._revision
+/**
+ * A translation row, read by a statement that names its columns: the
+ * translation table's runtime model does not declare the per-document
+ * columns, so the adapter's own select would not return them.
+ */
+async function languageRow(
+  t: TestNextly,
+  id: string,
+  locale: string
+): Promise<Record<string, unknown>> {
+  const q = (name: string) =>
+    t.adapter.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  const p = (n: number) => (t.adapter.dialect === "postgresql" ? `$${n}` : "?");
+  const [row] = await t.adapter.executeQuery<Record<string, unknown>>(
+    `SELECT * FROM ${q(`dc_${DOCS}_locales`)} WHERE ${q("_parent")} = ${p(1)} AND ${q("_locale")} = ${p(2)}`,
+    [id, locale]
   );
+  if (!row) throw new Error(`no ${locale} row for ${id}`);
+  return row;
+}
+
+const languageCounter = async (t: TestNextly, id: string, locale: string) =>
+  Number((await languageRow(t, id, locale))._revision);
 
 async function readRev(
   t: TestNextly,
@@ -445,6 +463,26 @@ describe.each(getConfiguredTestDialects())(
       expect(row._changed_by_id).not.toBe("forged");
     });
 
+    it("a save that sends back `_rev` doesn't fail", async () => {
+      // A client that saves the document it read sends its version with it.
+      // Before the version existed, any key the server did not know reached
+      // the database as a column and the save failed outright.
+      const t = await boot(dialect);
+      const id = idOf(await createNote(t, { title: "a", code: "a" }));
+      const read = (await t.nextly.findByID({
+        collection: NOTES as never,
+        id,
+        overrideAccess: true,
+      } as never)) as Record<string, unknown>;
+      expect(read._rev).toBe("1");
+
+      const saved = await updateNote(t, id, { ...read, title: "b" });
+      expect(saved).toMatchObject({ success: true });
+      expect(revOf(saved)).toBe("2");
+      const created = await createNote(t, { title: "c", code: "c", _rev: "1" });
+      expect(created).toMatchObject({ success: true });
+    });
+
     it("bulk updates by ids and by query give each entry a new version", async () => {
       const t = await boot(dialect);
       const a = idOf(await createNote(t, { title: "a", code: "a" }));
@@ -518,10 +556,7 @@ describe.each(getConfiguredTestDialects())(
         },
         { title: "hola" }
       );
-      const spanish = await rowOf(t, `dc_${DOCS}_locales`, {
-        _parent: id,
-        _locale: "es",
-      });
+      const spanish = await languageRow(t, id, "es");
       expect([
         spanish._changed_by_kind,
         spanish._changed_by_id,
