@@ -276,6 +276,11 @@ export interface SiteStyleHistory {
     value: unknown,
     state: "held" | "stored" | "dropped"
   ) => void;
+  /**
+   * Hears each write joining a section's chain (`1`, held ones included) and
+   * each one answering (`-1`), so the editor knows while any is unfinished.
+   */
+  readonly writing?: (delta: 1 | -1) => void;
 }
 
 /**
@@ -402,6 +407,13 @@ const SKIP: unique symbol = Symbol("skip");
  * section held before them: there is nothing to write, and no step to keep.
  */
 const UNCHANGED: unique symbol = Symbol("unchanged");
+/**
+ * What a replay answers with when the change it would take back was refused:
+ * the section already shows what came before it, so there is nothing to
+ * write and the replay is done, which a write skipped for any other reason
+ * is not.
+ */
+const ALREADY_UNDONE: unique symbol = Symbol("already undone");
 
 export function sameSection(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -533,6 +545,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     ) => {
       const before = chain.tail;
       chain.pending += 1;
+      history?.writing?.(1);
       // This write, as a standing refusal names the one it came from.
       const turn = {};
       const done = before.then(async held => {
@@ -541,6 +554,13 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         if (next === SKIP) {
           return {
             result: { saved: false, issues: {} },
+            holds: held,
+            wrote: false,
+          };
+        }
+        if (next === ALREADY_UNDONE) {
+          return {
+            result: { saved: true, issues: {} },
             holds: held,
             wrote: false,
           };
@@ -568,6 +588,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       void answer.then(() => writing.delete(answer));
       chain.tail = done.then(({ holds }) => {
         chain.pending -= 1;
+        history?.writing?.(-1);
         if (chain.pending === 0) {
           chain.held = holds;
           chain.heldAt = stored.current;
@@ -576,7 +597,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       });
       return { before, done, turn };
     },
-    [write]
+    [write, history]
   );
 
   /**
@@ -661,10 +682,12 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             async () => {
               if (withdrawn) {
                 // Undoing a change that was refused takes it back: its
-                // refusal no longer stands in the way of Save.
+                // refusal no longer stands in the way of Save, and the undo
+                // is done, since what came before it already shows.
                 const current = chainOf(settled, section);
-                if (current.refused?.by === turn) delete current.refused;
-                return SKIP;
+                if (current.refused?.by !== turn) return SKIP;
+                delete current.refused;
+                return ALREADY_UNDONE;
               }
               // The section's value, not a promise of it: an undo's target is
               // what the section held, which may still be settling.

@@ -28,6 +28,16 @@ import {
   vi,
 } from "vitest";
 
+/** What the editor's history says out loud when a replay fails. */
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock("@nextlyhq/ui", async importOriginal => {
+  const actual = await importOriginal<typeof import("@nextlyhq/ui")>();
+  return { ...actual, toast: { ...actual.toast, error: toastError } };
+});
+
+/** What the editor last reported about unsaved work, by key. */
+const unsavedWork = vi.hoisted(() => new Map<string, boolean>());
+
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: () => true,
 }));
@@ -85,6 +95,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
       : [{ path: "tokens", code: "CUSTOM", message: single.refuse }],
   useBeforeDocumentAction: (handler: () => unknown) => {
     beforeAction.run = handler;
+  },
+  // The report the entry form's unsaved-changes guard reads, the one that
+  // asks the browser's "Leave site?" on closing or reloading the tab.
+  useReportUnsavedWork: (key: string, unsaved: boolean) => {
+    unsavedWork.set(key, unsaved);
   },
 }));
 
@@ -198,6 +213,8 @@ beforeEach(() => {
   single.refuse = undefined;
   single.keepalive = [];
   single.gate = undefined;
+  toastError.mockClear();
+  unsavedWork.clear();
   beforeAction.run = undefined;
   vi.useFakeTimers();
 });
@@ -596,5 +613,52 @@ describe("the Design panel's writes", () => {
     await settle();
     expect(writes).toHaveLength(1);
     expect(await save()).toBeUndefined();
+  });
+  it("undoes a held edit whose write is refused quietly, back to the original", async () => {
+    stored.data = {
+      tokens: {
+        tokens: [
+          { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+        ],
+      },
+    };
+    single.refuse = "That colour cannot be stored.";
+    const steps: EditorStep[] = [];
+    render(<Editor steps={steps} />);
+    enter(openBrand(), "#000018");
+    let undone: boolean | undefined;
+    await act(async () => {
+      undone = await steps[0]?.undo();
+    });
+    await settle();
+    // The change was refused, so nothing stands to be undone: the undo is
+    // done, with no message saying it could not be.
+    expect(undone).toBe(true);
+    expect(toastError).not.toHaveBeenCalled();
+    expect(canvas()).toBe("#1d2b6b");
+  });
+
+  it("tells the form there is unsaved work while a style write is held or on its way", async () => {
+    let open: () => void = () => {};
+    single.gate = new Promise(resolve => {
+      open = resolve;
+    });
+    render(<Editor steps={[]} />);
+    const pending = () => [...unsavedWork.values()].some(Boolean);
+    expect(pending()).toBe(false);
+    const field = openBrand();
+    enter(field, "#000019");
+    // Held for the pause.
+    expect(pending()).toBe(true);
+    act(() => {
+      fireEvent.keyDown(field, { key: "Escape" });
+    });
+    await settle();
+    // Released and on its way.
+    expect(writes).toHaveLength(1);
+    expect(pending()).toBe(true);
+    open();
+    await settle();
+    expect(pending()).toBe(false);
   });
 });

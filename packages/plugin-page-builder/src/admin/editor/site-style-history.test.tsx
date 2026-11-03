@@ -43,6 +43,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: async () => undefined,
   // Outside a document editor, where there is no Save to run before.
   useBeforeDocumentAction: () => {},
+  useReportUnsavedWork: () => {},
 }));
 
 const { useSiteStyleHistory } = await import("./site-style-history");

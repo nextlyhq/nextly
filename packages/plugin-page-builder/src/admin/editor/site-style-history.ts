@@ -17,7 +17,10 @@
  *
  * @module admin/editor/site-style-history
  */
-import { useBeforeDocumentAction } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useBeforeDocumentAction,
+  useReportUnsavedWork,
+} from "@nextlyhq/plugin-sdk/admin";
 import { toast } from "@nextlyhq/ui";
 import {
   createContext,
@@ -183,6 +186,7 @@ export function useSiteStyleHistory(): {
 } {
   const [revision, setRevision] = useState(0);
   const { shown, preview } = useHeldPreview();
+  const writing = useUnfinishedWrites();
   const { inFlight, waitForRead, settling } = useReadBack(setRevision);
   const settled = useRef(new Map<SiteStyleSection, SectionChain>()).current;
   const recorder = useRef<RecordStep | null>(null);
@@ -212,13 +216,14 @@ export function useSiteStyleHistory(): {
     return {
       settled,
       preview,
+      writing,
       record: step =>
         recorder.current?.({
           undo: replay(step.undo, "undone"),
           redo: replay(step.redo, "redone"),
         }) ?? (() => {}),
     };
-  }, [settled, inFlight, waitForRead, preview]);
+  }, [settled, inFlight, waitForRead, preview, writing]);
   const replay = useMemo(() => ({ revision, settling }), [revision, settling]);
   useReleaseWhenDone(history);
   return { history, replay, connect, preview: shown };
@@ -227,6 +232,22 @@ export function useSiteStyleHistory(): {
 /** Why Save or Publish did not run, when a design change it waited for was refused. */
 function designRefusal(reasons: readonly string[]): string {
   return `The page was not saved because a design change was refused: ${reasons.join(" ")}`;
+}
+
+/**
+ * Counts the site style writes not yet answered, held ones included, and
+ * reports them to the entry form as unsaved work while there are any. The
+ * form's own unsaved-changes guard then asks the browser's "Leave site?" on
+ * closing or reloading the tab, through its one `beforeunload` listener: a
+ * write still waiting behind another when the page goes is lost, and this
+ * makes that a question rather than a silence.
+ */
+function useUnfinishedWrites(): NonNullable<SiteStyleHistory["writing"]> {
+  const [unfinished, setUnfinished] = useState(0);
+  useReportUnsavedWork("site-style-writes", unfinished > 0);
+  return useCallback((delta: 1 | -1) => {
+    setUnfinished(current => current + delta);
+  }, []);
 }
 
 /** A held value drawn over the read, and the read its write answered at. */
