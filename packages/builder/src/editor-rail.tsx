@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { isIFrame } from "./dom-kind";
 import { EDITOR_WORDS } from "./editor-words";
 import { RAIL_GROUPS, RAIL_WIDTH, type LeftPanel } from "./shell-state";
 
@@ -83,7 +84,7 @@ function useTooltipClosedByFrames(): {
   React.useEffect(() => {
     if (!open) return;
     const intoFrame = (event: PointerEvent) => {
-      if (event.target instanceof HTMLIFrameElement) setOpen(false);
+      if (isIFrame(event.target)) setOpen(false);
     };
     document.addEventListener("pointerover", intoFrame, true);
     return () => document.removeEventListener("pointerover", intoFrame, true);
