@@ -87,7 +87,7 @@ async function select(page: Page, id: string): Promise<void> {
 async function expose(page: Page, prop: string, name: string): Promise<void> {
   const row = exposeRow(page, prop);
   // The component mark beside the property, a button that stays pressed.
-  const toggle = row.getByRole("button", { name: /^Let each placement/ });
+  const toggle = row.getByRole("button", { name: /^Let each page/ });
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   const field = row.getByRole("textbox");
@@ -115,7 +115,7 @@ test.describe("a component's exposed fields", () => {
     await expose(page, "text", "Headline");
     await expose(page, "level", "Heading level");
     await page
-      .getByRole("button", { name: "Let each placement hide Heading" })
+      .getByRole("button", { name: "Let each page hide Heading" })
       .click();
 
     await select(page, "cf-body");
@@ -196,7 +196,7 @@ test.describe("a component's exposed fields", () => {
     });
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText(
-      "every placement that set this field loses its value"
+      "every use of it that set this field loses its value"
     );
     await expect(dialog).toContainText(
       "Night: loses its value, and with nothing left it shows the defaults"

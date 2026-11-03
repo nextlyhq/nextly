@@ -56,7 +56,8 @@ export interface GenerateWidgetOptions {
   view?: string;
   collection?: boolean;
   target?: TargetChoice;
-  force?: boolean;
+  /** Write over files that already exist (`--overwrite`). */
+  overwrite?: boolean;
   dryRun?: boolean;
   /** The site config the root CLI's `--config` names, relative to `cwd`. */
   configPath?: string;
@@ -277,7 +278,7 @@ const RIVAL_EXTENSIONS = [".ts", ".d.ts", ".js", ".jsx", ".mts", ".mjs"];
 /**
  * Why the component cannot be written where it would be shadowed: a module of
  * the same name beside it, or a folder its import would resolve to. Even
- * `--force` writes nothing then, since the card would still not be imported.
+ * `--overwrite` writes nothing then, since the card would still not be imported.
  */
 async function shadowRefusal(
   component: string | undefined
@@ -318,7 +319,7 @@ async function componentLeftovers(
 }
 
 /**
- * Why `--force` may not switch a widget between a view of its own and a core
+ * Why `--overwrite` may not switch a widget between a view of its own and a core
  * view: it writes over the declaration and the test but leaves a component
  * (and a plugin's export of it) that no longer fits, or the other way round
  * rewrites the widget around a component the files there were not made for.
@@ -327,9 +328,9 @@ async function componentLeftovers(
 async function viewSwitchRefusal(
   plan: WidgetPlan,
   paths: ReturnType<typeof planPaths>,
-  force: boolean | undefined
+  overwrite: boolean | undefined
 ): Promise<string | undefined> {
-  if (!force || !(await exists(paths.declaration))) return undefined;
+  if (!overwrite || !(await exists(paths.declaration))) return undefined;
   const component =
     paths.component ?? planPaths({ ...plan, view: "component" }).component;
   const hadComponent = component !== undefined && (await exists(component));
@@ -345,25 +346,25 @@ async function viewSwitchRefusal(
 /** Why nothing may be written over the files already there, or nothing when it may. */
 async function overwriteRefusal(
   files: readonly GeneratedFile[],
-  force: boolean | undefined
+  overwrite: boolean | undefined
 ): Promise<string | undefined> {
-  if (force) return undefined;
+  if (overwrite) return undefined;
   const taken: string[] = [];
   for (const file of files) if (await exists(file.path)) taken.push(file.path);
   if (taken.length === 0) return undefined;
-  return `nothing written: ${taken.join(", ")} already exist${taken.length === 1 ? "s" : ""} (--force overwrites)`;
+  return `nothing written: ${taken.join(", ")} already exist${taken.length === 1 ? "s" : ""} (--overwrite overwrites)`;
 }
 
 /** Writes the files, then the registration edits. */
 async function writeAll(
   files: readonly GeneratedFile[],
   edits: readonly FileEdit[],
-  force: boolean | undefined
+  overwrite: boolean | undefined
 ): Promise<void> {
   for (const file of files) {
     await mkdir(dirname(file.path), { recursive: true });
     // `wx` refuses a file that appeared since the check above.
-    await writeFile(file.path, file.content, { flag: force ? "w" : "wx" });
+    await writeFile(file.path, file.content, { flag: overwrite ? "w" : "wx" });
   }
   for (const edit of edits) await writeFile(edit.path, edit.after);
 }
@@ -404,8 +405,8 @@ export async function runGenerateWidget(
   const files = filesOf(plan, paths);
   const refusal =
     (await shadowRefusal(paths.component)) ??
-    (await viewSwitchRefusal(plan, paths, options.force)) ??
-    (await overwriteRefusal(files, options.force));
+    (await viewSwitchRefusal(plan, paths, options.overwrite)) ??
+    (await overwriteRefusal(files, options.overwrite));
   if (refusal !== undefined) return { ok: false, reason: refusal };
 
   const { root } = plan.target;
@@ -423,7 +424,7 @@ export async function runGenerateWidget(
     added: dependencies.added,
     dryRun: options.dryRun === true,
   });
-  if (!options.dryRun) await writeAll(files, edits, options.force);
+  if (!options.dryRun) await writeAll(files, edits, options.overwrite);
   return {
     ok: true,
     written: !options.dryRun,

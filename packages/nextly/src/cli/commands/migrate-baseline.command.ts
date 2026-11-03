@@ -19,7 +19,6 @@ export function registerMigrateBaselineCommand(program: Command): void {
       "--name <name>",
       `Migration name (default: "${DEFAULT_BASELINE_NAME}")`
     )
-    .option("-c, --config <path>", "Path to nextly.config.ts")
     .option(
       "--force-unlock",
       "Clear a stale migrate lock before taking it (use after a crashed run)"

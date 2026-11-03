@@ -44,7 +44,7 @@ import { cn } from "@nextlyhq/ui/utils";
 import { ChevronDown, Laptop, Monitor, Smartphone, Tablet } from "lucide-react";
 import * as React from "react";
 
-import { authoredBreakpoints } from "./breakpoints";
+import { authoredBreakpoints, BASE_DEVICE_LABEL } from "./breakpoints";
 import { baseWidth, offeredTiers, previewWidth } from "./canvas-width";
 import { radioGroupStep } from "./roving-radios";
 
@@ -104,7 +104,7 @@ export function deviceOptions(
   return [
     {
       id: BASE_BREAKPOINT,
-      label: "Desktop",
+      label: BASE_DEVICE_LABEL,
       preview: previewWidth(breakpoints, BASE_BREAKPOINT),
       range: from === undefined ? "every width" : `from ${from} pixels`,
     },

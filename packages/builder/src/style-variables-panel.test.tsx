@@ -228,7 +228,7 @@ describe("a field whose property takes a variable", () => {
     mount({ typography: true });
     expect(
       (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
-    ).toBe("16px or 50% or a variable");
+    ).toBe("16 or a variable");
   });
 
   it("keeps the hint as it was where no variable can be chosen", () => {

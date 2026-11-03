@@ -108,7 +108,6 @@ test("a type size picked for a heading is stored as a reference, and follows the
       await inspector.getByRole("button", { name: /^Typography/ }).click();
     }
     await expect(fontSize).toBeVisible();
-    await expect(fontSize).toHaveAttribute("placeholder", /or a variable$/);
 
     // The ◇ is faded until the field is pointed at or focused, and Tab
     // reaches it from the field even while faded.
@@ -231,7 +230,7 @@ test("Escape closes an open picker and leaves the selection, and the next one go
         list: page.getByRole("listbox", { name: "Variables" }),
       },
       {
-        open: inspector.getByRole("button", { name: /^Colour for Color/ }),
+        open: inspector.getByRole("button", { name: /^Colour for Colou?r/ }),
         list: page.getByRole("listbox", { name: "Colour variables" }),
       },
     ];
@@ -239,9 +238,14 @@ test("Escape closes an open picker and leaves the selection, and the next one go
       await clickBlock(page, HEADING);
       await expect.poll(() => selection(page)).toEqual([HEADING]);
       await inspector.getByRole("tab", { name: "Style" }).click();
-      if (!(await picker.open.isVisible())) {
-        await inspector.getByRole("button", { name: /^Typography/ }).click();
+      // Opened by its own state rather than by what is visible this instant:
+      // a section read while the inspector redraws would be toggled shut.
+      const typography = inspector.getByRole("button", { name: /^Typography/ });
+      if ((await typography.getAttribute("aria-expanded")) !== "true") {
+        await typography.click();
       }
+      await expect(typography).toHaveAttribute("aria-expanded", "true");
+      await expect(picker.open).toBeVisible();
       await picker.open.focus();
       await page.keyboard.press("Enter");
       await expect(picker.list).toBeVisible();

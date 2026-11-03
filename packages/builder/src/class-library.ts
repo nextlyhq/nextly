@@ -341,6 +341,30 @@ export function classDeclarations(
 }
 
 /**
+ * Every declaration a class writes, in every state and at every breakpoint it
+ * stores values for, compiled as the summary above compiles its base.
+ *
+ * What a search by property or value reads: a class that sets a padding only
+ * on hover, or only on phones, still sets a padding.
+ */
+export function everyClassDeclaration(
+  styles: NodeStyles,
+  context?: StyleCompileContext
+): Declaration[] {
+  return storedContexts(styles).flatMap(
+    pair =>
+      compileStyleValues(
+        pair.values,
+        SUMMARY_PATH,
+        undefined,
+        undefined,
+        undefined,
+        { mayFetchUrl: context?.mayFetchUrl }
+      ).declarations
+  );
+}
+
+/**
  * Every class the site renders, in the order that decides precedence.
  *
  * Ordered by the library's own precedence rather than by name, because that
@@ -379,32 +403,6 @@ export function filterClassRows(
   }
   if (filter === "on-this-page") return rows.filter(row => row.onThisPage);
   return [...rows];
-}
-
-/**
- * The rows whose name contains what the author typed.
- *
- * Beside {@link filterClassRows} rather than inside it, because they answer
- * different questions: a filter narrows by what the INDEX or the open document
- * says, and this narrows by the name. Folding them together would make one
- * function whose result depends on two unrelated inputs, and the chips would
- * then have to know about the query to explain an empty list.
- *
- * Matched on the SLUG alone. A class has no other name — the id is storage and
- * an author never sees it — so matching an id would return rows for a string
- * they cannot see in the list.
- *
- * Case-insensitive because a slug is lowercase by construction and an author
- * typing capitals means the same class rather than none. Substring rather than
- * prefix: the useful search on `hero-banner-wide` is `banner`.
- */
-export function searchClassRows(
-  rows: readonly ClassRow[],
-  query: string
-): ClassRow[] {
-  const needle = query.trim().toLowerCase();
-  if (needle === "") return [...rows];
-  return rows.filter(row => row.slug.toLowerCase().includes(needle));
 }
 
 /**
@@ -555,7 +553,7 @@ export type ClassNameOutcome =
  * Counts the STORED entries, which is what capacity is about. The drawn list
  * is a different question and answering one with the other is the bug.
  */
-export function classLibraryHasRoom(library: readonly NamedClass[]): boolean {
+function classLibraryHasRoom(library: readonly NamedClass[]): boolean {
   return library.length < MAX_NAMED_CLASSES;
 }
 
