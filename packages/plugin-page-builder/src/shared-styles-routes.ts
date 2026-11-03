@@ -39,6 +39,7 @@ import { entryOf, findAsCaller } from "./entry-reads";
 import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import {
   SHARED_STYLE_ID_PARAM,
+  SHARED_STYLE_IN_USE_CODE,
   SHARED_STYLE_LOCK_ROUTE_PATH,
   SHARED_STYLE_PAGE_PARAM,
   SHARED_STYLE_REMOVE_ROUTE_PATH,
@@ -510,7 +511,7 @@ async function refuseStoredUses(
     ids.length
   );
   throw NextlyError.validation({
-    errors: [{ path: "", code: "IN_USE", message }],
+    errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
     logContext: {
       classIds: ids,
       uses: uses.map(use => `${use.kind}:${use.slug}:${use.id}`),

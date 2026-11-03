@@ -179,11 +179,12 @@ describe("locking and removing", () => {
       });
     };
     const { result } = renderHook(() => useSharedStylesClient());
-    let refusal: string | undefined;
+    let refusal: unknown;
     await act(async () => {
       refusal = await result.current.remove(["c-card"]);
     });
-    expect(refusal).toBe(words);
+    // In its words, and marked as the route's in-use refusal.
+    expect(refusal).toEqual({ reason: words, inUse: true });
   });
 
   it("answers a refusal in the route's own words, and reads nothing again", async () => {
@@ -193,14 +194,17 @@ describe("locking and removing", () => {
       );
     };
     const { result } = renderHook(() => useSharedStylesClient());
-    let refusal: string | undefined;
+    let refusal: unknown;
     await act(async () => {
       refusal = await result.current.remove(["c-card"]);
     });
 
-    expect(refusal).toBe(
-      "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet."
-    );
+    // Any other refusal says nothing of use.
+    expect(refusal).toEqual({
+      reason:
+        "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet.",
+      inUse: false,
+    });
     expect(refetches).toBe(0);
   });
 });
