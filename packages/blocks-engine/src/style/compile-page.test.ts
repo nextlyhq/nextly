@@ -2130,6 +2130,67 @@ describe("the space a container puts between its children", () => {
     ]);
   });
 
+  it("follows a display that switches to flex only on hover", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: { base: { display: "block" } },
+          hover: { base: { display: "flex" } },
+        }),
+      ]),
+      { ...CTX, childGaps: GAPS }
+    );
+    const container = `.${nodeClassName("n1")}`;
+    const lines = out.split("\n");
+    const base = lines.indexOf(
+      `.${PAGE_ROOT_CLASS} :where(${container} > * + *) { margin-block-start: var(--site-space-stack) }`
+    );
+    const hovered = lines.indexOf(
+      `.${PAGE_ROOT_CLASS} :where(${container}:where(:hover) > * + *) { margin-block-start: 0 }`
+    );
+    expect(base).toBeGreaterThanOrEqual(0);
+    // After the base rule, so while hovered the flex layout's `gap` alone
+    // spaces the children.
+    expect(hovered).toBeGreaterThan(base);
+  });
+
+  it("puts the flow gap back where a flex container turns to block on hover", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: { base: { display: "flex" } },
+          hover: { base: { display: "block" } },
+        }),
+      ]),
+      { ...CTX, childGaps: GAPS }
+    );
+    const container = `.${nodeClassName("n1")}`;
+    expect(out).toContain(
+      `.${PAGE_ROOT_CLASS} :where(${container} > * + *) { margin-block-start: 0 }`
+    );
+    expect(out).toContain(
+      `.${PAGE_ROOT_CLASS} :where(${container}:where(:hover) > * + *) { margin-block-start: var(--site-space-stack) }`
+    );
+  });
+
+  it("follows a named class's display on focus too", () => {
+    const out = css(doc([node("n1", undefined, { classes: ["c1"] })]), {
+      ...CTX,
+      childGaps: GAPS,
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "row",
+          orderIndex: 0,
+          styles: { focus: { base: { display: "grid" } } },
+        },
+      ],
+    } as unknown as StyleCompileContext);
+    expect(out).toMatch(
+      /:where\(\.nx-bt-core--box\.nx-c-row:where\(:focus[^)]*\) > \* \+ \*\) \{ margin-block-start: 0 \}/
+    );
+  });
+
   it("writes no layout rule for a node whose type has no child gap", () => {
     const out = css(
       doc([node("n1", { base: { base: { display: "flex" } } })]),

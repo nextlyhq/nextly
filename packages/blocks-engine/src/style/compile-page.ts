@@ -1776,11 +1776,13 @@ function spacesWithGap(display: string): boolean {
 /**
  * The flow-margin rules a container needs where its own styles set `display`.
  *
- * One rule per breakpoint that states a display, in breakpoint order, so the
- * desktop-first cascade the display itself follows decides which applies: a
- * flex or grid display takes the flow margin off the children, any other
- * display puts the gap back. Only the base state is read, because a layout
- * switched on hover is not one a gap can follow.
+ * One rule per state and breakpoint that states a display, state outside and
+ * breakpoint inside — the order `envelopeRules` writes the display itself in —
+ * so the cascade that decides which display applies decides which margin
+ * applies too: a flex or grid display takes the flow margin off the children,
+ * any other display puts the gap back. A state's rule carries the same state
+ * selector the display rule does, so a container that turns flex on hover
+ * drops the margin only while hovered.
  *
  * The display is compiled through the catalog rather than read raw, so a value
  * the stylesheet refuses changes nothing here either. Its warnings are already
@@ -1792,28 +1794,37 @@ function layoutModeRules(
   flow: readonly Declaration[],
   contexts: readonly BreakpointContext[],
   anchor: string,
-  tokenPrefix: string
+  tokenPrefix: string,
+  stateSelectors: Readonly<Record<StyleState, string>>
 ): CssRule[] {
   if (!isPlainRecord(styles)) return [];
-  const byBreakpoint = styles.base;
-  if (!isPlainRecord(byBreakpoint)) return [];
   const rules: CssRule[] = [];
-  for (const context of contexts) {
-    const values = byBreakpoint[context.id];
-    if (!isPlainRecord(values) || !Object.hasOwn(values, "display")) continue;
-    const display = compileStyleValues(
-      { display: values.display },
-      "/display",
-      tokenPrefix
-    ).declarations.find(declaration => declaration.property === "display");
-    if (display === undefined) continue;
-    rules.push({
-      ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
-      selector: `${anchor} :where(${container} ${FLOW_CHILDREN})`,
-      declarations: [...(spacesWithGap(display.value) ? NO_FLOW_GAP : flow)],
-    });
+  for (const state of STYLE_STATES) {
+    const byBreakpoint = styles[state];
+    if (!isPlainRecord(byBreakpoint)) continue;
+    for (const context of contexts) {
+      const display = displayAt(byBreakpoint[context.id], tokenPrefix);
+      if (display === undefined) continue;
+      rules.push({
+        ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
+        selector: `${anchor} :where(${container}${stateSelectors[state]} ${FLOW_CHILDREN})`,
+        declarations: [...(spacesWithGap(display) ? NO_FLOW_GAP : flow)],
+      });
+    }
   }
   return rules;
+}
+
+/** The compiled `display` one breakpoint's values state, if any. */
+function displayAt(values: unknown, tokenPrefix: string): string | undefined {
+  if (!isPlainRecord(values) || !Object.hasOwn(values, "display")) {
+    return undefined;
+  }
+  return compileStyleValues(
+    { display: values.display },
+    "/display",
+    tokenPrefix
+  ).declarations.find(declaration => declaration.property === "display")?.value;
 }
 
 export function compilePageCss(
@@ -1847,6 +1858,11 @@ export function compilePageCss(
   // own hover, a class's, a block type's, the page's — so a tier that missed it
   // would show half the appearance the author is editing.
   const previewStates = ctx.previewStates === true;
+  // The state selectors this compile writes, for the rules written outside
+  // `envelopeRules` that still have to follow a state the way it does.
+  const stateSelectorsOfCompile = previewStates
+    ? PREVIEW_STATE_SELECTORS
+    : STATE_SELECTORS;
   // What was WRITTEN, which is not always what was asked for: a scope this
   // compiler refuses is dropped and the sheet compiled global, and a caller that
   // recorded the request would store an artifact claiming an isolation its own
@@ -2136,7 +2152,8 @@ export function compilePageCss(
         flow.declarations,
         contexts,
         defaultsAnchor,
-        tokenPrefix
+        tokenPrefix,
+        stateSelectorsOfCompile
       )
     );
   }
@@ -2314,7 +2331,8 @@ export function compilePageCss(
           flow,
           contexts,
           defaultsAnchor,
-          tokenPrefix
+          tokenPrefix,
+          stateSelectorsOfCompile
         )
       );
     }
@@ -2375,7 +2393,8 @@ export function compilePageCss(
         flowGaps.get(node.type) ?? [],
         flowGaps.has(node.type) ? contexts : [],
         defaultsAnchor,
-        tokenPrefix
+        tokenPrefix,
+        stateSelectorsOfCompile
       ),
     ];
     // Held out of the sheet when the node can be pruned at read time. Serialized on its own, so
