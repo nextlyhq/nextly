@@ -511,3 +511,32 @@ describe("the Content tab's Advanced", () => {
     ).toContain("rotate: 90deg");
   });
 });
+
+describe("a section opening and closing", () => {
+  it("eases its height and opacity out over 150ms", () => {
+    // The shared accordion's 300ms in-out curve read as slow in a panel opened
+    // and closed all day, and its height alone made the fields pop in.
+    expect(
+      ruleBody(
+        '.nx-inspector [data-slot="accordion-content"][data-state="open"]'
+      )
+    ).toContain("animation: nx-section-open 150ms ease-out");
+    expect(
+      ruleBody(
+        '.nx-inspector [data-slot="accordion-content"][data-state="closed"]'
+      )
+    ).toContain("animation: nx-section-close 150ms ease-out");
+    expect(FLAT).toContain(
+      "@keyframes nx-section-open { from { height: 0; opacity: 0; } to { height: var(--radix-accordion-content-height); opacity: 1; } }"
+    );
+    expect(FLAT).toContain(
+      "@keyframes nx-section-close { from { height: var(--radix-accordion-content-height); opacity: 1; } to { height: 0; opacity: 0; } }"
+    );
+  });
+
+  it("does not move at all for an author who asks for less motion", () => {
+    expect(FLAT).toContain(
+      '@media (prefers-reduced-motion: reduce) { .nx-inspector [data-slot="accordion-content"] { animation: none; } }'
+    );
+  });
+});
