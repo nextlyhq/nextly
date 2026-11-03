@@ -310,6 +310,10 @@ export type {
   ExposedPropertyType,
   ResolveComponentOptions,
   WorkAllowance,
+  // Named by the engine's insert of a locked subtree, which types above reach:
+  // where a block lands, and the block that lands there.
+  OpPosition,
+  Placed,
   StyleCompileContext,
   StyleOrigin,
   StyleState,

@@ -80,6 +80,7 @@ const choices: LayoutChoicesResponse = {
     layoutsCollection: "layouts",
     canUpdateLayouts: true,
     more: false,
+    matched: [],
     defaultUnreadable: false,
     regionComponents: {},
     regionDefinitions: {},
@@ -246,7 +247,12 @@ describe("the page's Layout picker", () => {
     };
     const searched = {
       items: [layout(0), layout(230)],
-      meta: { ...choices.meta, defaultLayout: "l0", more: false },
+      meta: {
+        ...choices.meta,
+        defaultLayout: "l0",
+        more: false,
+        matched: ["l230"],
+      },
     };
     identity.mockImplementation(() => ({ kind: "collection", slug: "pages" }));
     read.mockImplementation(({ path }) => {
@@ -285,10 +291,13 @@ describe("the page's Layout picker", () => {
   });
 
   /** A capped list whose search answers as `searched` says. */
-  async function searchCapped(searched: {
-    data?: unknown;
-    error?: unknown;
-  }): Promise<{ retry: ReturnType<typeof vi.fn> }> {
+  async function searchCapped(
+    searched: {
+      data?: unknown;
+      error?: unknown;
+    },
+    query = "Layout 230"
+  ): Promise<{ retry: ReturnType<typeof vi.fn> }> {
     const layout = (i: number) => ({
       id: `l${i}`,
       title: `Layout ${i}`,
@@ -333,7 +342,7 @@ describe("the page's Layout picker", () => {
     await act(async () => {
       fireEvent.change(
         screen.getByRole("combobox", { name: "Search Layouts" }),
-        { target: { value: "Layout 230" } }
+        { target: { value: query } }
       );
     });
     // Past the pause before a search is asked.
@@ -348,6 +357,77 @@ describe("the page's Layout picker", () => {
     expect(screen.getByText("Searching…")).toBeTruthy();
     // The first answer's Layouts are not matches for what was typed.
     expect(screen.queryByRole("option", { name: "Layout 5" })).toBeNull();
+  });
+
+  it("says no Layouts match a search that matches none, keeping the current choice", async () => {
+    // The answer still carries the page's default, which the route adds
+    // whatever the query; it does not match, so it is not a result.
+    await searchCapped(
+      {
+        data: {
+          items: [
+            {
+              id: "l0",
+              title: "Layout 0",
+              published: true,
+              draftChangesNotLive: false,
+              regions: [],
+            },
+          ],
+          meta: {
+            ...choices.meta,
+            defaultLayout: "l0",
+            more: false,
+            matched: [],
+          },
+        },
+      },
+      "zzz"
+    );
+    expect(screen.getByText("No Layouts match.")).toBeTruthy();
+    expect(screen.queryAllByRole("option")).toEqual([]);
+    // The trigger still says what is chosen.
+    expect(
+      screen.getByRole("combobox", { name: "Layout" }).textContent
+    ).toContain("Site default (Layout 0)");
+  });
+
+  it("keeps the rows the server matched, however their titles compare here", async () => {
+    // A database collation matches "cafe" to "Café"; a client comparison
+    // would not. The server's word is the one kept. The default is added to
+    // the answer whatever the query, and is not a match.
+    await searchCapped(
+      {
+        data: {
+          items: [
+            {
+              id: "l0",
+              title: "Layout 0",
+              published: true,
+              draftChangesNotLive: false,
+              regions: [],
+            },
+            {
+              id: "cafe",
+              title: "Café",
+              published: true,
+              draftChangesNotLive: false,
+              regions: [],
+            },
+          ],
+          meta: {
+            ...choices.meta,
+            defaultLayout: "l0",
+            more: false,
+            matched: ["cafe"],
+          },
+        },
+      },
+      "cafe"
+    );
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Café"]);
   });
 
   it("says a search failed and offers to try again, with no stale options", async () => {

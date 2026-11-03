@@ -40,6 +40,8 @@ const SLUGS = {
   settings: PAGE_BUILDER_SETTINGS_SLUG,
 } as const;
 const ORIGIN = "http://localhost";
+/** The grant to publish Layouts, as it is stored. */
+const PUBLISH_LAYOUTS = "publish-layouts";
 
 const idOf = (created: unknown) =>
   String((created as { item: { id: string | number } }).item.id);
@@ -261,6 +263,42 @@ describe.each(getConfiguredTestDialects())(
       const byId = new Map(answer.body.items.map(item => [item.id, item]));
       expect(byId.get(landing)?.draftChangesNotLive).toBe(true);
       expect(byId.get(main)?.draftChangesNotLive).toBe(false);
+    });
+
+    it("tells an author who may publish a Layout, though not update it, of its pending draft", async () => {
+      // The service shows a working draft to whoever may put it live, so the
+      // picker tells a publisher of it as it tells an editor.
+      const t = await boot();
+      const { landing } = await site(t);
+      await person(t, "owner");
+      const publisher = await person(t, "publisher");
+      await grant(t, publisher, [
+        "read-layouts",
+        PUBLISH_LAYOUTS,
+        "read-components",
+      ]);
+
+      const answer = await choices(await sessionOf(t, publisher), landing);
+
+      expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+      // "Edit Layout" stays with the update grant alone.
+      expect(answer.body.meta.canUpdateLayouts).toBe(false);
+      const byId = new Map(answer.body.items.map(item => [item.id, item]));
+      expect(byId.get(landing)?.draftChangesNotLive).toBe(true);
+    });
+
+    it("tells an author who may neither update nor publish a Layout nothing of its draft", async () => {
+      const t = await boot();
+      const { landing } = await site(t);
+      await person(t, "owner");
+      const reader = await person(t, "reader");
+      await grant(t, reader, ["read-layouts", "read-components"]);
+
+      const answer = await choices(await sessionOf(t, reader), landing);
+
+      expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+      const byId = new Map(answer.body.items.map(item => [item.id, item]));
+      expect(byId.get(landing)?.draftChangesNotLive).toBe(false);
     });
 
     it("refuses an author who may not read Layouts", async () => {

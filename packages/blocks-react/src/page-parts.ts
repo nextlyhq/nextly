@@ -72,17 +72,21 @@ export function layoutPartSheets(args: {
 }): PartSheet[] {
   const { parts, styleContext, siteStyles, pageScope } = args;
   const emitting: PartSheet = siteStyles === undefined ? {} : { siteStyles };
+  // The compile context the site's styles imply, which the renderer would
+  // build for a route that states none of its own. Every part compiles under
+  // it, the emitting one included, so that one is scoped too.
+  const implied =
+    siteStyles === undefined || siteStyles === false
+      ? styleContext
+      : pageCompileContext(styleContext, siteStyles);
   const inheriting: PartSheet =
     siteStyles === undefined || siteStyles === false
       ? emitting
-      : {
-          siteStyles: false,
-          ...optionalStyleContext(pageCompileContext(styleContext, siteStyles)),
-        };
+      : { siteStyles: false, ...optionalStyleContext(implied) };
   return parts.map((part, index) =>
     scoped(
       index === 0 ? emitting : inheriting,
-      styleContext,
+      implied,
       partScope(part, pageScope)
     )
   );
@@ -90,15 +94,16 @@ export function layoutPartSheets(args: {
 
 /**
  * `sheet` with `scope` set on its compile context, falling back to the
- * route's own context for the part that emits the site sheet. A part with no
- * compile context at all compiles nothing, so there is nothing to scope.
+ * context the route's inputs imply for the part that emits the site sheet. A
+ * part with no compile context at all compiles nothing, so there is nothing
+ * to scope.
  */
 function scoped(
   sheet: PartSheet,
-  routeContext: StyleCompileContext | undefined,
+  impliedContext: StyleCompileContext | undefined,
   scope: string
 ): PartSheet {
-  const context = sheet.styleContext ?? routeContext;
+  const context = sheet.styleContext ?? impliedContext;
   return context === undefined
     ? sheet
     : { ...sheet, styleContext: { ...context, scope } };
