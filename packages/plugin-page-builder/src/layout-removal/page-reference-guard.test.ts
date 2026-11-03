@@ -48,6 +48,7 @@ function guard(stored: LayoutRemoval | null, page: PageRead = null) {
   );
   const store = { removalOf } as unknown as LayoutRemovalStore;
   const updates: Record<string, unknown>[] = [];
+  const logged: { message: string; detail: unknown }[] = [];
   const nextly = {
     findByID: vi.fn(async () => page),
     update: vi.fn(async (args: Record<string, unknown>) => {
@@ -65,14 +66,16 @@ function guard(stored: LayoutRemoval | null, page: PageRead = null) {
     },
     pages: "pages",
     store: () => store,
-    warn: () => {},
+    warn: (message, detail) => {
+      logged.push({ message, detail });
+    },
   });
   const run = (type: string, context: Record<string, unknown>) => {
     const handler = handlers.get(type);
     if (handler === undefined) throw new Error(`no ${type} handler`);
     return handler({ req: { nextly }, ...context });
   };
-  return { run, removalOf, nextly, updates };
+  return { run, removalOf, nextly, updates, logged };
 }
 
 async function refusal(work: unknown): Promise<unknown> {
@@ -249,6 +252,23 @@ describe("a page write that landed while its Layout was removed", () => {
         data: { layout: null },
         overrideAccess: true,
       }),
+    ]);
+  });
+
+  it("logs which page was cleared, from which Layout, and why", async () => {
+    const page = { id: "p1", layout: FENCED, status: "draft" };
+    const { run, logged } = guard(row({ step: "final" }), page);
+    await run("afterUpdate", { data: page, originalData: page });
+    expect(logged).toEqual([
+      {
+        message: expect.stringContaining("cleared to the site default"),
+        detail: {
+          pageId: "p1",
+          layoutId: FENCED,
+          phase: "afterUpdate",
+          reason: "layout-being-removed",
+        },
+      },
     ]);
   });
 

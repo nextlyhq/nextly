@@ -46,7 +46,7 @@ import {
 } from "../default-layout/store";
 
 import { scanLayoutReferences, type PageReference } from "./layout-references";
-import { clearPageReference } from "./page-reference-guard";
+import { clearPageReference, IN_FLIGHT_CLEARED } from "./page-reference-guard";
 import { restoreFromCopy, type RestoreDeps } from "./restore";
 import { REMOVAL_LEASE_MS, type LayoutRemoval } from "./store";
 
@@ -102,8 +102,13 @@ async function clearPagesLeftOnIt(
         )
       ) {
         deps.warn(
-          "[page-builder] a page saved while its Layout was being removed named that Layout; its Layout was cleared",
-          { pageId: reference.id, layoutId: removal.layoutId }
+          "[page-builder] a page write in flight was cleared to the site default because its Layout is being removed",
+          {
+            pageId: reference.id,
+            layoutId: removal.layoutId,
+            phase: "after-removal",
+            reason: IN_FLIGHT_CLEARED,
+          }
         );
       }
     }

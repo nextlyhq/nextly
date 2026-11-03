@@ -44,19 +44,14 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
-import { recordAdvisoryNotice } from "nextly";
 
 import { relationId } from "../default-layout/store";
 
 import type { LayoutRemoval, LayoutRemovalStore } from "./store";
-import {
-  PAGE_LAYOUT_CLEARED,
-  pageLayoutRefusal,
-  type FencedLayoutState,
-} from "./words";
+import { pageLayoutRefusal, type FencedLayoutState } from "./words";
 
-/** The notice code a page save hears when its Layout choice was cleared. */
-const LAYOUT_CLEARED_CODE = "LAYOUT_REMOVED";
+/** Why a page's Layout was cleared, as the server log records it. */
+export const IN_FLIGHT_CLEARED = "layout-being-removed";
 
 /** The plugin context this needs, named structurally. */
 export interface PageReferenceGuardContext {
@@ -238,16 +233,9 @@ async function clearIfRemoved(
   if (removal === null || !pastItsFinalCheck(removal)) return;
   if (!(await clearPageReference(nextly, args.pages, pageId, named))) return;
   args.warn(
-    "[page-builder] a page saved while its Layout was being removed named that Layout; its Layout was cleared",
-    { pageId, layoutId: named }
+    "[page-builder] a page write in flight was cleared to the site default because its Layout is being removed",
+    { pageId, layoutId: named, phase, reason: IN_FLIGHT_CLEARED }
   );
-  recordAdvisoryNotice({
-    phase,
-    collection: args.pages,
-    code: LAYOUT_CLEARED_CODE,
-    message: PAGE_LAYOUT_CLEARED,
-    entryId: pageId,
-  });
 }
 
 /** The after-write look, by the rule in the module docblock. Never throws. */

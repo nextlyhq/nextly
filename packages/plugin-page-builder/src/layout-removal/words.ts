@@ -80,13 +80,6 @@ export function pickerRemovalNote(state: FencedLayoutState): string {
   }
 }
 
-/**
- * What a page save that landed while its Layout was being removed is told,
- * once its Layout choice was cleared.
- */
-export const PAGE_LAYOUT_CLEARED =
-  "The Layout this page named was removed while the page was being saved, so the page now uses the site's default Layout.";
-
 /** Who stops a removal: the pages using the Layout, as the caller may see them. */
 export interface PagesInTheWay {
   /** The pages the caller may read, by title. */
