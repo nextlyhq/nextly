@@ -155,11 +155,19 @@ async function saveDraft(page: Page): Promise<void> {
 
 /** The Style tab's section labels, in order, without the "has values" words. */
 async function sectionLabels(page: Page): Promise<string[]> {
+  // The dot sits inside the label, beside the name, and carries its own
+  // words for a screen reader; the name is the label without it.
   return page
     .locator(
       ".nx-style-inspector [data-section] .nx-style-inspector__section-label"
     )
-    .allTextContents();
+    .evaluateAll(labels =>
+      labels.map(label => {
+        const name = label.cloneNode(true) as HTMLElement;
+        name.querySelector(".nx-style-inspector__section-dot")?.remove();
+        return name.textContent ?? "";
+      })
+    );
 }
 
 /** The properties a section draws at once, by catalog key. */

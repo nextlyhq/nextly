@@ -799,6 +799,31 @@
   min-block-size: var(--nx-control-height-sm);
 }
 
+/*
+ * The block's mark on a tile, the design's 30px square. The theme's accent
+ * surface and its own foreground, the pair it means to be read together, so
+ * a brand that sets a strong accent keeps the mark visible in either scheme.
+ */
+.nx-block-card__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: 1.875rem;
+  block-size: 1.875rem;
+  border-radius: var(--radius-md);
+  background: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+}
+
+/* The name over its one-line description, taking the room between the
+   tile and the menu. */
+.nx-block-card__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
 .nx-block-card__title {
   flex: 1;
   min-inline-size: 0;
@@ -845,6 +870,13 @@
   font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--nx-muted-foreground);
+}
+
+/* One line: the whole sentence is in the element and its title. */
+.nx-block-card__description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nx-block-card__status {
@@ -1736,10 +1768,12 @@
  * is never colour alone.
  */
 .nx-style-inspector__section-label {
-  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
   text-align: start;
   font-size: 0.8125rem;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .nx-style-inspector__section-dot {
@@ -1747,11 +1781,38 @@
   align-items: center;
 }
 
+/*
+ * A section's heading at the design's height (9px above and below, where the
+ * shared accordion pads 16px), unlined on hover, which would read as a link,
+ * and with the chevron pointing right while closed and down while open, as
+ * every other disclosure in the editor does. The shared component turns its
+ * chevron with a utility in a cascade layer; these rules sit outside the
+ * layers, so they win without raising specificity.
+ */
+.nx-style-inspector__section-trigger {
+  padding-block: 0.5625rem;
+}
+
+.nx-style-inspector__section-trigger:hover {
+  text-decoration: none;
+}
+
+.nx-style-inspector__section-trigger > svg {
+  rotate: -90deg;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-style-inspector__section-trigger[data-state="open"] > svg {
+  rotate: 0deg;
+}
+
 .nx-style-inspector__dot {
   inline-size: 0.375rem;
   block-size: 0.375rem;
   border-radius: 999px;
-  background: var(--nx-primary);
+  /* The colour a field's own dot gives a value set here, which is what this
+     says of the section; `--nx-primary` was the label's own black or white. */
+  background: var(--nx-chart-2);
 }
 
 /* A section's "+ More": quiet, so the controls above it lead. */
@@ -3639,6 +3700,20 @@ fieldset.nx-inspector__fields {
    * `<label>`, and a press on any of a label's content still activates the
    * label, so the field is focused either way.
    */
+  /*
+   * Shown when its field is pointed at or focused. The section heading's dot
+   * says which sections hold values at a glance, and a dot beside every field
+   * as well was the noise the design leaves out. Faded rather than hidden, so
+   * the dot keeps its place (nothing shifts when it appears) and its spoken
+   * label, which `visibility` or `display` would take away.
+   */
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-inspector__field:hover .nx-style-inspector__provenance,
+.nx-inspector__field:focus-within .nx-style-inspector__provenance {
+  opacity: 1;
 }
 
 .nx-style-inspector__provenance[data-provenance="authored"] {
@@ -4630,6 +4705,113 @@ fieldset.nx-inspector__fields {
  * element's axes are used through a rule rather than applied inline, so this
  * one wins on order alone.
  */
+/*
+ * The spacing section's box model, as the design draws it: margin the outer
+ * ring (dashed), padding the inner (solid, on the raised surface), the element
+ * an empty cell in the middle, each ring captioned at its corner.
+ *
+ * The rings are the side boxes above with a ring named, so they keep the
+ * edited element's axes and place each side by which side it is. The margin
+ * ring's middle column is wide enough to hold the padding ring, and its own
+ * centre marker gives way to it.
+ */
+.nx-style-inspector__side-box[data-ring] {
+  position: relative;
+  gap: 0.25rem;
+  padding: 1.25rem 0.375rem 0.375rem;
+  border-radius: var(--radius-md);
+}
+
+.nx-style-inspector__side-box[data-ring="margin"] {
+  grid-template-columns: minmax(3rem, 1fr) minmax(0, 2.6fr) minmax(3rem, 1fr);
+  border: 1px dashed var(--nx-builder-border);
+}
+
+.nx-style-inspector__side-box[data-ring="margin"]::before {
+  display: none;
+}
+
+.nx-style-inspector__side-box[data-ring="padding"] {
+  /* Equal columns, so its top and bottom sides, in the middle one, have the
+     room its left and right have. */
+  grid-template-columns: repeat(3, minmax(2.75rem, 1fr));
+  border: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface-raised);
+}
+
+.nx-spacing-box__centre {
+  grid-area: 2 / 2;
+  min-inline-size: 0;
+}
+
+.nx-spacing-box__caption {
+  position: absolute;
+  inset-block-start: 0.25rem;
+  inset-inline-start: 0.5rem;
+  font-size: var(--text-xs);
+  line-height: 1;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * A side as a value, not a form: the number centred in a small field, no
+ * label drawn (each side is named for assistive technology), and its reset or
+ * jump action shown only while the side is being edited, over what is below
+ * it, so eight sides fit a panel's width.
+ */
+.nx-spacing-box .nx-inspector__field {
+  position: relative;
+  /* One width for every side, wherever its column is wide. */
+  justify-self: center;
+  inline-size: 100%;
+  max-inline-size: 3.5rem;
+}
+
+.nx-spacing-box .nx-inspector__field input {
+  block-size: 1.75rem;
+  padding-inline: 0.25rem;
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.nx-spacing-box .nx-style-inspector__breakpoint-action {
+  display: none;
+}
+
+/*
+ * A side's reset or jump action, and a refusal of what was typed, drawn over
+ * the box below the side rather than inside its 3.5rem: inside, a sentence
+ * turned into a tall column and pushed the rings apart. Bounded to a width the
+ * inspector holds, wrapping within it, and opened toward the inspector's
+ * middle from a side at its inline end, so neither runs off the panel.
+ */
+.nx-spacing-box
+  .nx-inspector__field:focus-within
+  .nx-style-inspector__breakpoint-action,
+.nx-spacing-box .nx-inspector__error {
+  display: flex;
+  position: absolute;
+  z-index: 2;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  inline-size: max-content;
+  max-inline-size: 12rem;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem 0.5rem;
+  white-space: normal;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-popover);
+  color: var(--nx-popover-foreground);
+  box-shadow: var(--shadow-md);
+}
+
+.nx-spacing-box [data-side="inlineEnd"] .nx-style-inspector__breakpoint-action,
+.nx-spacing-box [data-side="inlineEnd"] .nx-inspector__error {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+}
+
 @container nx-inspector-fields (max-width: 18rem) {
   .nx-style-inspector__side-box {
     display: flex;
@@ -4640,6 +4822,28 @@ fieldset.nx-inspector__fields {
 
   .nx-style-inspector__side-box::before {
     display: none;
+  }
+
+  .nx-spacing-box__caption {
+    position: static;
+  }
+
+  /* Rows again, each with its label: the side takes the row's width, and
+     its action and any refusal sit in the row's flow below it. */
+  .nx-spacing-box .nx-inspector__field {
+    max-inline-size: none;
+  }
+
+  .nx-spacing-box .nx-style-inspector__breakpoint-action,
+  .nx-spacing-box .nx-inspector__error {
+    display: flex;
+    position: static;
+    inline-size: auto;
+    max-inline-size: none;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    padding: 0;
   }
 
   .nx-style-inspector__side-box .nx-style-inspector__field-label-text {
