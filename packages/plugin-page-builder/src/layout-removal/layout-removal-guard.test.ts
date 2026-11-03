@@ -32,6 +32,9 @@ const LIVE = {
 
 const TOKEN = "11111111-1111-4111-8111-111111111111";
 
+/** The live row's version, as a removal's copy records it. */
+const LIVE_VERSION = await versionOf(LIVE, null);
+
 function row(overrides: Partial<LayoutRemoval> = {}): LayoutRemoval {
   return {
     layoutId: LIVE.id,
@@ -41,7 +44,7 @@ function row(overrides: Partial<LayoutRemoval> = {}): LayoutRemoval {
     startedBy: null,
     pagesLeft: null,
     copy: { live: LIVE, draft: null },
-    copyVersion: versionOf(LIVE, null),
+    copyVersion: LIVE_VERSION,
     settledAt: null,
     updatedAt: new Date(),
     ...overrides,

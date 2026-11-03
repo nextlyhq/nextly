@@ -28,9 +28,12 @@
  */
 import {
   navigateTo,
+  useDocumentActions,
   useDocumentIdentity,
   useDocumentStatus,
+  usePluginRoute,
   writePluginRoute,
+  type DocumentActions,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
@@ -46,7 +49,10 @@ import {
 } from "@nextlyhq/ui";
 import { useRef, useState, type JSX } from "react";
 
-import { LAYOUTS_DECLARED_SLUG } from "../layout-choices-contract";
+import {
+  PAGE_COLLECTION_ROUTE_PATH,
+  type PageCollectionResponse,
+} from "../layout-choices-contract";
 import type {
   RemovalCheck,
   RemoveResult,
@@ -60,8 +66,11 @@ export interface RemoveLayoutActionProps {
   readonly entryId: string | null;
   /** Whether the Layout is published now, so an unpublish is offered. */
   readonly published: boolean;
-  /** The document's writes are withheld (a past version on screen, say). */
-  readonly disabled?: boolean;
+  /**
+   * Why the document's writes are held (a past version on screen, a
+   * colleague's claim), which holds this action too; absent when it may run.
+   */
+  readonly heldBecause?: string | undefined;
 }
 
 /** Where the dialog is. */
@@ -99,8 +108,29 @@ function reasonOf(error: unknown, fallback: string): string {
 }
 
 /**
+ * Why the editor holds this document's writes, or `undefined` when Remove
+ * Layout may run. Read from the editor's own Delete and Unpublish: a past
+ * version on screen, a colleague's claim or a read-only form gives both a
+ * reason, and where every write is refused the editor offers neither. One of
+ * the two able to run is enough, since the dialog offers whichever applies.
+ */
+function heldReason(
+  actions: Pick<DocumentActions, "actions"> | null
+): string | undefined {
+  const removals = (actions?.actions ?? []).filter(
+    action => action.id === "delete" || action.id === "unpublish"
+  );
+  if (removals.length === 0) return "This document's changes are on hold.";
+  if (removals.some(action => action.disabledReason === undefined)) {
+    return undefined;
+  }
+  return removals[0]?.disabledReason;
+}
+
+/**
  * The entry-form toolbar slot: Remove Layout on a saved Layout's own form,
- * nothing on any other. What the slot is handed (`context`, a controller
+ * nothing on any other. The Layouts collection is matched by the slug the site
+ * resolved, renamed or not. What the slot is handed (`context`, a controller
  * field) is not needed; the form says which document it is.
  */
 export function RemoveLayoutToolbarSlot(_props: {
@@ -108,9 +138,18 @@ export function RemoveLayoutToolbarSlot(_props: {
 }): JSX.Element | null {
   const identity = useDocumentIdentity();
   const status = useDocumentStatus();
+  const actions = useDocumentActions();
+  const collection = identity?.kind === "collection";
+  const resolved = usePluginRoute<PageCollectionResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: PAGE_COLLECTION_ROUTE_PATH,
+    enabled: collection,
+  });
+  const layouts = resolved.data?.layoutsCollection;
   if (
-    identity?.kind !== "collection" ||
-    identity.slug !== LAYOUTS_DECLARED_SLUG ||
+    !collection ||
+    layouts === undefined ||
+    identity.slug !== layouts ||
     identity.documentId === undefined
   ) {
     return null;
@@ -120,6 +159,7 @@ export function RemoveLayoutToolbarSlot(_props: {
       collectionSlug={identity.slug}
       entryId={identity.documentId}
       published={status?.status === "published"}
+      heldBecause={heldReason(actions)}
     />
   );
 }
@@ -129,7 +169,7 @@ export function RemoveLayoutAction({
   collectionSlug,
   entryId,
   published,
-  disabled = false,
+  heldBecause,
 }: RemoveLayoutActionProps): JSX.Element | null {
   const [state, setState] = useState<DialogState>({ kind: "closed" });
   // Each opening of the dialog, numbered: an answer that arrives for an
@@ -198,7 +238,8 @@ export function RemoveLayoutAction({
       <Button
         type="button"
         variant="outline"
-        disabled={disabled}
+        disabled={heldBecause !== undefined}
+        {...(heldBecause === undefined ? {} : { title: heldBecause })}
         onClick={open}
       >
         Remove Layout…

@@ -20,6 +20,14 @@ const navigated: string[] = [];
 
 let identity: { kind: string; slug: string; documentId?: string } | null = null;
 let documentStatus: { status: string; hasWorkingDraft: boolean } | null = null;
+/** The editor's own actions, as `useDocumentActions` answers them. */
+let editorActions: {
+  actions: { id: string; disabledReason?: string }[];
+} | null = {
+  actions: [{ id: "unpublish" }, { id: "delete" }],
+};
+/** The collections as the site resolved them. */
+let resolved = { pagesCollection: "pages", layoutsCollection: "layouts" };
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: (args: { body: { dryRun: boolean } }) => {
@@ -31,6 +39,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
   useDocumentIdentity: () => identity,
   useDocumentStatus: () => documentStatus,
+  useDocumentActions: () => editorActions,
+  usePluginRoute: ({ enabled }: { enabled?: boolean }) => ({
+    data: enabled === false ? undefined : resolved,
+    error: null,
+    pending: false,
+    refetch: () => {},
+  }),
 }));
 
 const { RemoveLayoutAction, RemoveLayoutToolbarSlot } = await import(
@@ -207,6 +222,71 @@ describe("a dry run that answers after the dialog closed", () => {
 });
 
 describe("in the document bar", () => {
+  beforeEach(() => {
+    resolved = { pagesCollection: "pages", layoutsCollection: "layouts" };
+    editorActions = { actions: [{ id: "unpublish" }, { id: "delete" }] };
+  });
+
+  it("offers Remove Layout on a renamed Layouts collection's form", () => {
+    resolved = { pagesCollection: "pages", layoutsCollection: "site-layouts" };
+    identity = {
+      kind: "collection",
+      slug: "site-layouts",
+      documentId: "landing",
+    };
+    documentStatus = { status: "published", hasWorkingDraft: false };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    expect(screen.getByRole("button", { name: "Remove Layout…" })).toBeTruthy();
+  });
+
+  it("holds the button while the editor holds the document's writes, saying why", () => {
+    editorActions = {
+      actions: [
+        { id: "unpublish", disabledReason: "A past version is on screen." },
+        { id: "delete", disabledReason: "A past version is on screen." },
+      ],
+    };
+    identity = { kind: "collection", slug: "layouts", documentId: "landing" };
+    documentStatus = { status: "published", hasWorkingDraft: false };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    const button = screen.getByRole("button", { name: "Remove Layout…" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe("A past version is on screen.");
+  });
+
+  it("holds it when the editor offers neither a delete nor an unpublish", () => {
+    editorActions = { actions: [{ id: "save" }] };
+    identity = { kind: "collection", slug: "layouts", documentId: "landing" };
+    documentStatus = { status: "published", hasWorkingDraft: false };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Remove Layout…",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+  });
+
+  it("leaves it free when one of the two can run", () => {
+    editorActions = {
+      actions: [
+        { id: "unpublish" },
+        { id: "delete", disabledReason: "You can't delete layouts." },
+      ],
+    };
+    identity = { kind: "collection", slug: "layouts", documentId: "landing" };
+    documentStatus = { status: "published", hasWorkingDraft: false };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Remove Layout…",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false);
+  });
+
   it("offers Remove Layout on a Layout's edit screen", () => {
     identity = { kind: "collection", slug: "layouts", documentId: "landing" };
     documentStatus = { status: "published", hasWorkingDraft: false };

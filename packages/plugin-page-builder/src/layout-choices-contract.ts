@@ -15,13 +15,6 @@ import type { FencedLayoutState } from "./layout-removal/words";
 export const LAYOUT_CHOICES_ROUTE_PATH = "/layouts/choices";
 
 /**
- * The slug the plugin declares its Layouts under, before any rename by the
- * host. Kept here, a module the admin bundle may import, so the browser and
- * the collection's own declaration (`collections/layouts`) name one value.
- */
-export const LAYOUTS_DECLARED_SLUG = "layouts";
-
-/**
  * The query parameter naming the Layout the page has selected, by id.
  *
  * The list is bounded, so a site with more Layouts than one answer holds can
@@ -85,6 +78,11 @@ export const PAGE_COLLECTION_ROUTE_PATH = "/layouts/page-collection";
 export interface PageCollectionResponse {
   /** The pages collection's RESOLVED slug. */
   readonly pagesCollection: string;
+  /**
+   * The Layouts collection's RESOLVED slug, so a surface drawn on every entry
+   * form (Remove Layout) can tell a Layout's form, renamed or not.
+   */
+  readonly layoutsCollection: string;
 }
 
 /**

@@ -575,11 +575,14 @@ export function layoutChoicesRoute(
   };
 }
 
-/** Which collection holds the plugin's pages, as this site resolved it. */
+/** Which collections hold the plugin's pages and Layouts, as this site resolved them. */
 export function readPageCollection(
   ctx: Pick<PluginRouteContext, "self">
 ): PageCollectionResponse {
-  return { pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG };
+  return {
+    pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+    layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+  };
 }
 
 /**

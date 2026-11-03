@@ -240,20 +240,25 @@ describe("a Layout behind Remove Layout's fence", () => {
     removal: "unpublished",
   };
 
-  it("is offered no longer, and says why", () => {
+  it("is offered no longer, by its name and a short reason, with the whole reason as its description", () => {
     const view = layoutPickerView(
       page(),
       ready({}, [main, removing, takenDown])
     );
     expect(view.options).toContainEqual({
       value: layoutValue("landing"),
-      label: "Landing (being removed: choose another Layout)",
+      label: "Landing",
+      note: "Being removed",
+      description:
+        "This Layout is being removed, so pages can't choose it. Choose another Layout.",
       disabled: true,
     });
     expect(view.options).toContainEqual({
       value: layoutValue("unfinished"),
-      label:
-        "Unfinished (unpublished with Remove Layout: it can be chosen once published again)",
+      label: "Unfinished",
+      note: "Unpublished. Publish it again to choose it.",
+      description:
+        "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout.",
       disabled: true,
     });
   });

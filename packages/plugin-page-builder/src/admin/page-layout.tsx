@@ -351,8 +351,9 @@ function Picker<T extends FieldValues>({
                 key={option.value}
                 value={option.value}
                 disabled={option.disabled === true}
+                {...optionDescription(option)}
               >
-                {option.label}
+                <OptionText option={option} />
               </SelectItem>
             ))}
           </SelectContent>
@@ -362,6 +363,30 @@ function Picker<T extends FieldValues>({
       <RefusedLine id={errorId} refused={refused} />
     </div>
   );
+}
+
+/**
+ * An option's words: its label, and a short reason muted after it when it
+ * has one (a Layout behind Remove Layout's fence).
+ */
+function OptionText({ option }: { option: PickerOption }): JSX.Element {
+  if (option.note === undefined) return <>{option.label}</>;
+  return (
+    <>
+      {option.label}
+      <span className="text-muted-foreground"> · {option.note}</span>
+    </>
+  );
+}
+
+/** An option's whole reason, as its tooltip and accessible description. */
+function optionDescription(option: PickerOption): {
+  title?: string;
+  "aria-description"?: string;
+} {
+  return option.description === undefined
+    ? {}
+    : { title: option.description, "aria-description": option.description };
 }
 
 /** The picker's description: why the Layout applies, and a refusal if any. */
@@ -560,13 +585,14 @@ function SearchingPicker({
                   key={option.value}
                   value={option.value}
                   disabled={option.disabled === true}
+                  {...optionDescription(option)}
                   onSelect={() => {
                     onChoose(option.value);
                     setOpen(false);
                   }}
                 >
                   <span className="min-w-0 flex-1 truncate">
-                    {option.label}
+                    <OptionText option={option} />
                   </span>
                   {option.value === view.value ? (
                     <Check aria-hidden="true" className="h-4 w-4" />

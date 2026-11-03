@@ -66,13 +66,11 @@ import {
   textarea,
 } from "nextly/config";
 
-import { LAYOUTS_DECLARED_SLUG } from "../layout-choices-contract";
-
 import { layoutAreaOptions } from "./areas";
 import { COMPONENTS_SLUG } from "./components";
 
 /** The slug layouts are stored under. */
-export const LAYOUTS_SLUG: typeof LAYOUTS_DECLARED_SLUG = LAYOUTS_DECLARED_SLUG;
+export const LAYOUTS_SLUG = "layouts";
 
 /**
  * Refuse a Layout that fills one area twice.

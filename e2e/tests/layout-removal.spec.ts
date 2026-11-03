@@ -159,7 +159,7 @@ test("is the only way: the Layout's own delete is refused, naming it", async ({
 
   expect(refused.status()).toBe(409);
   expect(await refused.text()).toContain(
-    "Use Remove Layout to take a Layout down safely."
+    "Use Remove Layout… on the Layout's screen to take it down safely."
   );
 });
 

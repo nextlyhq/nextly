@@ -3,6 +3,8 @@
  *
  * ## The steps, in order
  *
+ * 0. **Read the Layout as the remover**, their access enforced: one they may
+ *    not read answers as missing, before anything is read past their access.
  * 1. **Dry run.** Read the default and scan the pages; answer what stands in
  *    the way, writing nothing.
  * 2. **Mark.** Insert the fence row. From now on the Layout cannot become the
@@ -115,7 +117,15 @@ function conflict(message: string, reason: string, layoutId: string): Error {
   });
 }
 
-/** Refuse a Layout that does not exist, or an unpublish of one not published. */
+/**
+ * Refuse a Layout the remover may not read, or that does not exist, and an
+ * unpublish of one not published.
+ *
+ * The one read made as the remover, with their access enforced, so a row rule
+ * that hides this Layout from them is judged before anything is read past it:
+ * a hidden Layout answers as missing, and nothing about its default status or
+ * its pages is looked up for them. The write itself is judged by its own gate.
+ */
 async function requireRemovable(
   deps: RemoveLayoutDeps,
   request: RemoveRequest
@@ -127,7 +137,7 @@ async function requireRemovable(
     limit: 1,
     depth: 0,
     select: { status: true },
-    overrideAccess: true,
+    ...deps.person.as,
   });
   const row = found.items[0] as { status?: unknown } | undefined;
   if (row === undefined) throw NextlyError.notFound();

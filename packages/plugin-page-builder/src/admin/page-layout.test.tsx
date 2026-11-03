@@ -664,3 +664,37 @@ describe("a save refused for its Layout", () => {
     expect(control.getAttribute("aria-describedby")).toContain(alert.id);
   });
 });
+
+describe("a Layout behind Remove Layout's fence in the list", () => {
+  it("shows its name and a muted short reason, with the whole reason as its tooltip and description", async () => {
+    answering({
+      ...choices,
+      items: [
+        ...choices.items,
+        {
+          id: "retired",
+          title: "Campaign",
+          published: false,
+          draftChangesNotLive: false,
+          regions: [],
+          removal: "unpublished",
+        },
+      ],
+    });
+    renderPicker();
+    const trigger = screen.getByRole("combobox", { name: "Layout" });
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "Enter" });
+    });
+
+    const option = screen.getByRole("option", { name: /Campaign/ });
+    expect(option.textContent).toBe(
+      "Campaign · Unpublished. Publish it again to choose it."
+    );
+    const reason =
+      "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout.";
+    expect(option.getAttribute("title")).toBe(reason);
+    expect(option.getAttribute("aria-description")).toBe(reason);
+    expect(option.getAttribute("aria-disabled")).toBe("true");
+  });
+});

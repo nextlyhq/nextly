@@ -71,6 +71,51 @@ function authored(row: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+/**
+ * The working draft's own address, when its edit changed it; `null` when the
+ * draft keeps the live row's, which the restored Layout already has (under the
+ * next free address if its own was taken).
+ */
+function draftSlug(copy: LayoutCopy): string | null {
+  const slug = copy.draft?.slug;
+  return typeof slug === "string" && slug !== "" && slug !== copy.live.slug
+    ? slug
+    : null;
+}
+
+/**
+ * Save the copy's working draft onto the restored Layout, without a status, so
+ * it is the working draft again rather than its published form. Its own
+ * address goes with it; one another Layout took meanwhile is left off, with a
+ * log line, rather than failing the restore.
+ */
+async function restoreDraft(
+  deps: RestoreDeps,
+  restored: string,
+  copy: LayoutCopy
+): Promise<void> {
+  const draft = copy.draft;
+  if (draft === null) return;
+  const slug = draftSlug(copy);
+  const save = (data: Record<string, unknown>) =>
+    deps.nextly.update({
+      collection: deps.slugs.layouts,
+      id: restored,
+      data,
+      overrideAccess: true,
+    });
+  try {
+    await save({ ...authored(draft), ...(slug === null ? {} : { slug }) });
+  } catch (error) {
+    if (slug === null || !NextlyError.isCode(error, "DUPLICATE")) throw error;
+    deps.warn(
+      "[page-builder] a restored Layout's working draft kept its published address, since another Layout holds the one the draft chose",
+      { restoredLayout: restored, slug }
+    );
+    await save(authored(draft));
+  }
+}
+
 /** The address a restored Layout is created under: its own, else the next free. */
 function slugFor(base: string, attempt: number): string {
   return attempt === 0 ? base : `${base}-${String(attempt + 1)}`;
@@ -128,16 +173,7 @@ export async function restoreFromCopy(
   if (!claimed) return null;
 
   const restored = await createFromCopy(deps, copy);
-  if (copy.draft !== null) {
-    // Saved without a status, so it is the restored Layout's working draft
-    // again rather than its published form.
-    await deps.nextly.update({
-      collection: deps.slugs.layouts,
-      id: restored,
-      data: authored(copy.draft),
-      overrideAccess: true,
-    });
-  }
+  if (copy.draft !== null) await restoreDraft(deps, restored, copy);
   // Re-read just before writing: a newer choice of default made meanwhile is
   // kept, and the restored Layout is then simply one more Layout.
   const latest = await readLayoutSettings(deps.nextly, deps.slugs);

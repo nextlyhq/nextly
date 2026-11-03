@@ -10,6 +10,8 @@ import {
   LAYOUT_EDIT_DURING_REMOVAL,
   pageLayoutRefusal,
   pagesUseItRefusal,
+  pickerRemovalNote,
+  REMOVE_LAYOUT_REFUSAL,
 } from "./words";
 
 describe("the refusal when pages use the Layout", () => {
@@ -75,5 +77,23 @@ describe("what a write meeting the fence is told", () => {
     expect(pageLayoutRefusal("deleted")).toBe(
       "This Layout was deleted, so pages can't choose it. Choose another Layout."
     );
+  });
+});
+
+describe("a Layout's own delete or unpublish", () => {
+  it("names the action and where it is, in words the API can carry too", () => {
+    expect(REMOVE_LAYOUT_REFUSAL).toBe(
+      "Use Remove Layout… on the Layout's screen to take it down safely."
+    );
+  });
+});
+
+describe("the picker's note on a Layout behind the fence", () => {
+  it("is short, beside the Layout's own name", () => {
+    expect(pickerRemovalNote("removing")).toBe("Being removed");
+    expect(pickerRemovalNote("unpublished")).toBe(
+      "Unpublished. Publish it again to choose it."
+    );
+    expect(pickerRemovalNote("deleted")).toBe("Deleted");
   });
 });

@@ -112,6 +112,8 @@ interface Site {
   pageDrafts: Map<string, Row>;
   /** Pages the remover may not read. */
   hidden: Set<string>;
+  /** Layouts the remover may not read. */
+  hiddenLayouts?: Set<string>;
   defaultLayout: string | null;
   /** Called when the default is read, before it answers. */
   onDefaultRead?: () => void;
@@ -189,6 +191,9 @@ function directApi(s: Site): DefaultLayoutDirectApi {
     find: async (args: Record<string, unknown>) => {
       if (args.collection === "layouts") {
         let items = filterBy([...s.layouts.values()], args.where);
+        if (args.overrideAccess === false) {
+          items = items.filter(row => s.hiddenLayouts?.has(row.id) !== true);
+        }
         if (args.status === "published") {
           items = items.filter(row => row.status === "published");
         }
@@ -349,6 +354,28 @@ describe("Remove Layout, with nothing in the way", () => {
     const error = await refusal(remove(d, "unpublish"));
 
     expect((error as Error).message).toBe(NOT_PUBLISHED);
+    expect(d.store.rows.size).toBe(0);
+  });
+});
+
+describe("a Layout the remover may not read", () => {
+  it("answers not found, before any read past their access", async () => {
+    const s = site();
+    s.hiddenLayouts = new Set(["landing"]);
+    s.defaultLayout = "landing";
+    let defaultRead = false;
+    s.onDefaultRead = () => {
+      defaultRead = true;
+    };
+    const d = deps(s);
+
+    const dry = await refusal(remove(d, "delete", true));
+    const real = await refusal(remove(d));
+
+    expect(NextlyError.isCode(dry, "NOT_FOUND")).toBe(true);
+    expect(NextlyError.isCode(real, "NOT_FOUND")).toBe(true);
+    // Nothing about the Layout was looked up for them: not the default.
+    expect(defaultRead).toBe(false);
     expect(d.store.rows.size).toBe(0);
   });
 });
@@ -603,6 +630,28 @@ describe("a promotion landing between the last look at the default and the write
     expect(d.store.rows.get("landing")).toMatchObject({
       step: "removed",
       copy: null,
+    });
+  });
+
+  it("restores the working draft's own address too", async () => {
+    const s = site();
+    s.layoutDrafts.set("landing", {
+      id: "landing",
+      title: "Landing",
+      slug: "landing-renamed",
+      areas: [],
+      updatedAt: "2026-11-01T10:30:00.000Z",
+    });
+    s.onLayoutWrite = () => {
+      s.defaultLayout = "landing";
+    };
+    const d = deps(s);
+
+    await refusal(remove(d));
+
+    expect(s.layouts.get("restored-1")?.slug).toBe("landing");
+    expect(s.layoutDrafts.get("restored-1")).toMatchObject({
+      slug: "landing-renamed",
     });
   });
 

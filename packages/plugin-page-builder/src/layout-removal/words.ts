@@ -21,7 +21,7 @@ export const PAGES_USE_IT =
 
 /** What a plain delete or unpublish of a Layout is told: the way to do it. */
 export const REMOVE_LAYOUT_REFUSAL =
-  "Use Remove Layout to take a Layout down safely.";
+  "Use Remove Layout… on the Layout's screen to take it down safely.";
 
 /** A second removal of a Layout already being removed. */
 export const ALREADY_BEING_REMOVED = "This Layout is already being removed.";
@@ -61,6 +61,22 @@ export function pageLayoutRefusal(state: FencedLayoutState): string {
       return "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout.";
     case "deleted":
       return "This Layout was deleted, so pages can't choose it. Choose another Layout.";
+  }
+}
+
+/**
+ * The short reason the Layout picker shows beside a Layout behind the fence,
+ * muted after its name; the whole sentence (`pageLayoutRefusal`) is the
+ * option's tooltip and description.
+ */
+export function pickerRemovalNote(state: FencedLayoutState): string {
+  switch (state) {
+    case "removing":
+      return "Being removed";
+    case "unpublished":
+      return "Unpublished. Publish it again to choose it.";
+    case "deleted":
+      return "Deleted";
   }
 }
 

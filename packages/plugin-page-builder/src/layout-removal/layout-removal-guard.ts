@@ -272,7 +272,7 @@ async function stillAsCopied(
   const nextly = directApiOf(hook);
   if (nextly === null) return false;
   const draft = await workingDraftOf(nextly, layouts, removal.layoutId);
-  return versionOf(live, draft) === removal.copyVersion;
+  return (await versionOf(live, draft)) === removal.copyVersion;
 }
 
 /** Let the write through only by the rule in the module docblock. */
