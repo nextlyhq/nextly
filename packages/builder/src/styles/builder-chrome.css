@@ -1489,6 +1489,15 @@
   background: transparent;
 }
 
+/*
+ * The expose icon's tooltip: one sentence, wrapped to a readable measure
+ * rather than drawn as one line across the canvas.
+ */
+.nx-expose__tip {
+  max-width: 16rem;
+  line-height: 1.4;
+}
+
 /* The dashed "Field" row under an exposed property, naming the field. */
 .nx-expose__field {
   grid-column: 1 / -1;
