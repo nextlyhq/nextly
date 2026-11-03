@@ -567,6 +567,34 @@ export interface SiteBreakpointsRequest {
   readonly breakpoints: BreakpointSet | null;
 }
 
+/**
+ * Where the editor reads the stored site style: the one read the canvas, the
+ * inspector and Design's studios draw from.
+ *
+ * A route rather than the `site-style` Single's own read, because drawing a
+ * block needs the style and the Single's read needs Design's
+ * `read-site-style`. An author who may edit a page but not the site's design
+ * would otherwise open an editor whose canvas cannot draw. The route answers
+ * to a caller holding `read-site-style` or able to update something the
+ * builder edits; writes still go through the Single and its own permission.
+ */
+export const SITE_STYLE_ROUTE_PATH = "/site/style";
+
+/**
+ * The stored site style as the route answers it: the Single's four sections
+ * exactly as stored, each `null` where nothing is stored, and nothing else.
+ *
+ * Raw rather than narrowed, so the editor narrows a stored record with the
+ * same reader the published render does and can still say which stored font
+ * rows it had to drop.
+ */
+export interface StoredSiteStyle {
+  readonly tokens: unknown;
+  readonly fonts: unknown;
+  readonly classes: unknown;
+  readonly breakpoints: unknown;
+}
+
 /** Where Settings' Site tab reads what it shows and what this caller may change. */
 export const SITE_SETTINGS_ROUTE_PATH = "/site/settings";
 
@@ -679,6 +707,14 @@ export interface ComponentFactsResponse {
    * answer, or the caller may not read the component.
    */
   readonly reach: { readonly count: number; readonly complete: boolean } | null;
+  /**
+   * How many distinct pages and Singles a change to the component reaches:
+   * placed on them directly, through another component, or through a Layout
+   * wrapping them (the site's default included). What the banner over the
+   * component's own view says; `complete` false makes it a floor. `null` when
+   * it could not be counted, or the caller may not read the component.
+   */
+  readonly pages: { readonly count: number; readonly complete: boolean } | null;
 }
 
 /**

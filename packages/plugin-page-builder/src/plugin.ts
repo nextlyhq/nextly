@@ -66,8 +66,13 @@ import { componentActionRoutes } from "./component-actions-route";
 import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
+import {
+  componentPageReach,
+  sitePageReachSources,
+} from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
+import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
   defaultLayoutJob,
   type EnsureDefaultDeps,
@@ -130,6 +135,7 @@ import { siteBreakpointsRoute, siteSettingsRoute } from "./site-settings";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { referableClassIds } from "./site-style-record";
+import { siteStyleRoute } from "./site-style-route";
 import {
   loadSiteStyle,
   SITE_STYLE_SLUG,
@@ -705,46 +711,6 @@ function rowsHoldBlocks(
     if (survey.addressable.length > 0 || survey.unaddressable) return true;
   }
   return false;
-}
-
-/** The slugs the app's configuration still declares as Singles. */
-function declaredSingleSlugs(ctx: {
-  config?: { singles?: unknown };
-}): ReadonlySet<string> | undefined {
-  const singles = ctx.config?.singles;
-  // No list at all is not an empty list. A config shape this cannot read must
-  // not be treated as declaring nothing, which would make every registry row an
-  // orphan and hide real content from the completeness answer.
-  if (!Array.isArray(singles)) return undefined;
-  const slugs = new Set<string>();
-  for (const single of singles) {
-    const slug = (single as { slug?: unknown } | null)?.slug;
-    if (typeof slug === "string" && slug.length > 0) slugs.add(slug);
-  }
-  return slugs;
-}
-
-/**
- * Whether a registry row is a removed code-first Single rather than a live one.
- *
- * Only a `code` row can be one: a Builder-made Single exists nowhere else, so
- * its registry row IS the declaration and configuration says nothing about it.
- *
- * Anything this cannot read is NOT an orphan. A row with no readable slug, or a
- * configuration this could not enumerate, keeps the Single counted — the
- * direction that withholds completeness rather than the one that grants it over
- * content nobody looked at.
- */
-function isOrphanedSingle(
-  row: unknown,
-  declared: ReadonlySet<string> | undefined
-): boolean {
-  if (declared === undefined) return false;
-  const record = row as { source?: unknown; slug?: unknown } | null;
-  if (record?.source !== "code") return false;
-  const slug = record.slug;
-  if (typeof slug !== "string" || slug.length === 0) return false;
-  return !declared.has(slug);
 }
 
 /** How many registry rows one page of the collection listing asks for. */
@@ -1433,6 +1399,51 @@ export const pageBuilder = (
               ),
             });
           },
+          // How many pages a change reaches, for the banner over the view:
+          // through other components by the same index, and through the
+          // Layouts wrapping pages, read live, the site's default included.
+          countPages: ctx => async id => {
+            const index =
+              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+              COMPONENT_USAGE_INDEX_SLUG;
+            const host = requireInstalled();
+            const rows = usageRowReader(await host.nextly(), index);
+            const health = await usageHealthService(requireInstalled).read(
+              componentUsageIndex,
+              index
+            );
+            // Imported at call time, as the Layout choices route does, so the
+            // entry stays free of the runtime graph.
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            return componentPageReach(
+              id,
+              sitePageReachSources({
+                nextly: await getCachedNextly(),
+                slugs: {
+                  layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                  settings:
+                    ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+                    PAGE_BUILDER_SETTINGS_SLUG,
+                },
+                pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+                componentsCollection:
+                  componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                notPages: new Set([
+                  ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+                  ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                ]),
+                documentsUsingEach: componentIds =>
+                  listDocumentsUsingEach({
+                    index: componentUsageIndex,
+                    rows,
+                    referenceIds: componentIds,
+                    health,
+                  }),
+              })
+            );
+          },
           // The ids a published removal retired, from the store the write
           // hooks record them in. Where those hooks are not registered (the
           // host renders components from a source of its own), nothing is
@@ -1533,6 +1544,9 @@ export const pageBuilder = (
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
         siteBreakpointsRoute(),
+        // The editor's read of the stored site style, for anyone who may
+        // edit something the builder opens: the canvas cannot draw without it.
+        siteStyleRoute(componentStoreOf(opts)),
         // Design → Fonts' catalogue: read it, and add a family to the site.
         ...fonts.routes,
         // The Design panel's shared styles: lock and unlock one, how widely

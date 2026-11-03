@@ -377,6 +377,62 @@ describe("an entity that registered a rule under a system resource's name", () =
   });
 });
 
+describe("the type-level question: may the caller act on any entry at all", () => {
+  /** Posts, every action guarded by `rule`. */
+  function postsGuardedBy(rule: Rule): void {
+    registered.rbac = serviceFor("service", rule);
+  }
+
+  /** Plain `can` and the type-level `can` for one caller and action. */
+  async function bothAnswers(
+    caller: Caller,
+    action: string
+  ): Promise<{ plain: boolean; anyEntry: boolean }> {
+    const user = { id: caller.user.id, roles: caller.user.roles };
+    return {
+      plain: await callerMayPerform(caller.scope, action, POSTS, user),
+      anyEntry: await callerMayPerform(caller.scope, action, POSTS, user, {
+        anyEntry: true,
+      }),
+    };
+  }
+
+  it("answers yes for a write a row filter limits, where plain `can` answers no", async () => {
+    postsGuardedBy(RULES["returns-filter"]);
+    // A write under a filter names no entry, so plain `can` refuses it; the
+    // type-level question counts the filter as the right held.
+    for (const caller of [CALLERS["user-with"], CALLERS["key-with"]]) {
+      expect(await bothAnswers(caller!, "update")).toEqual({
+        plain: false,
+        anyEntry: true,
+      });
+    }
+  });
+
+  it("still asks for the permission under a filter", async () => {
+    postsGuardedBy(RULES["returns-filter"]);
+    for (const caller of [CALLERS["user-without"], CALLERS["key-without"]]) {
+      expect(await bothAnswers(caller!, "update")).toEqual({
+        plain: false,
+        anyEntry: false,
+      });
+    }
+  });
+
+  it("is refused where the rule refuses, and allowed where it allows", async () => {
+    postsGuardedBy(RULES["returns-false"]);
+    expect(await bothAnswers(CALLERS["user-with"]!, "update")).toEqual({
+      plain: false,
+      anyEntry: false,
+    });
+    postsGuardedBy(RULES["returns-true"]);
+    expect(await bothAnswers(CALLERS["user-with"]!, "update")).toEqual({
+      plain: true,
+      anyEntry: true,
+    });
+  });
+});
+
 describe("the schema list for a session whose roles cannot be read", () => {
   it("still shows the collections the grants it read allow", async () => {
     registered.rbac = new RBACAccessControlService();

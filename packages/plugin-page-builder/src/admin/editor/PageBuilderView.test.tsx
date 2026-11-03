@@ -162,6 +162,19 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("../site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
@@ -213,13 +226,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // Nothing stored, read successfully: the site's style is ready, so the
   // read-only page is drawn rather than held back for a sheet still coming.
-  useSingleDocument: () => ({
-    data: undefined,
-    isPending: false,
-    error: null,
-  }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,

@@ -29,10 +29,11 @@ import {
   type SiteTokenSet,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
-import { Input, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
-import { ChevronDown, Search } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
+import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
+import { ChoiceList } from "./choice-list";
 import { familyStack, siteFamilies } from "./font-library";
 
 export interface FontFamilyFieldProps {
@@ -134,9 +135,6 @@ const SYSTEM: ReadonlyArray<{ label: string; value: string }> = [
   ),
   ...GENERIC_FONT_FAMILIES.filter(value => !(value in GENERIC_LABELS)),
 ].map(value => ({ label: GENERIC_LABELS[value] ?? value, value }));
-
-/** How many entries the list holds before it offers a search. */
-const SEARCH_FROM = 8;
 
 /** A stack that draws, or nothing for one that only resolves on the page. */
 function drawable(stack: string): string | undefined {
@@ -306,27 +304,13 @@ export function FontFamilyField({
           />
         </PopoverContent>
       </Popover>
-      {unknown ? (
-        <button
-          type="button"
-          className="nx-vars__link nx-font-pick__clear"
-          aria-label="Clear Font"
-          onClick={() => onCommit(null)}
-        >
-          Clear
-        </button>
-      ) : null}
     </div>
   );
 }
 
 /**
- * The open list: an optional search, the three groups, and the link to
+ * The open list: the three groups, searchable once long, and the link to
  * Design's fonts.
- *
- * Focus sits on the search when there is one and on the list when there is
- * not; either way the active entry is named by `aria-activedescendant`, so a
- * screen reader announces it as the arrow keys move.
  */
 function FontList({
   choices,
@@ -339,144 +323,21 @@ function FontList({
   onPick: (choice: FontChoice) => void;
   onManageFonts: (() => void) | undefined;
 }): React.JSX.Element {
-  const listId = React.useId();
-  const [query, setQuery] = React.useState("");
-  const searchable = choices.length > SEARCH_FROM;
-  const needle = query.trim().toLowerCase();
-  const shown =
-    needle === ""
-      ? choices
-      : choices.filter(choice => choice.label.toLowerCase().includes(needle));
-  const [active, setActive] = React.useState(() =>
-    Math.max(
-      0,
-      shown.findIndex(choice => choice.key === current?.key)
-    )
-  );
-  const activeChoice = shown[Math.min(active, shown.length - 1)];
-  const optionId = (choice: FontChoice): string =>
-    `${listId}-${choice.key.replace(/[^a-z0-9-]/gi, "_")}`;
-
-  const list = React.useRef<HTMLUListElement>(null);
-  const search = React.useRef<HTMLInputElement>(null);
-  React.useEffect(() => {
-    (searchable ? search.current : list.current)?.focus();
-  }, [searchable]);
-  React.useEffect(() => {
-    if (activeChoice === undefined) return;
-    document.getElementById(optionId(activeChoice))?.scrollIntoView({
-      block: "nearest",
-    });
-  });
-
-  const onKeyDown = (event: React.KeyboardEvent): void => {
-    const last = shown.length - 1;
-    const moves: Record<string, number> = {
-      ArrowDown: Math.min(active + 1, last),
-      ArrowUp: Math.max(active - 1, 0),
-      Home: 0,
-      End: last,
-    };
-    const next = moves[event.key];
-    if (next !== undefined) {
-      event.preventDefault();
-      setActive(next);
-      return;
-    }
-    if (event.key === "Enter" && activeChoice !== undefined) {
-      event.preventDefault();
-      onPick(activeChoice);
-    }
-  };
-
-  const describedActive =
-    activeChoice === undefined ? undefined : optionId(activeChoice);
-
   return (
     <div className="nx-font-pick__body">
-      {searchable ? (
-        <div className="nx-vars__search nx-font-pick__search">
-          <Search aria-hidden="true" size={16} />
-          <Input
-            ref={search}
-            type="search"
-            role="combobox"
-            aria-label="Search fonts"
-            aria-controls={listId}
-            aria-expanded="true"
-            aria-activedescendant={describedActive}
-            placeholder="Search fonts"
-            value={query}
-            onChange={event => {
-              setQuery(event.target.value);
-              setActive(0);
-            }}
-            onKeyDown={onKeyDown}
-          />
-        </div>
-      ) : null}
-      <ul
-        ref={list}
-        id={listId}
-        role="listbox"
-        aria-label="Fonts"
-        className="nx-font-pick__list"
-        tabIndex={searchable ? -1 : 0}
-        aria-activedescendant={searchable ? undefined : describedActive}
-        onKeyDown={onKeyDown}
-      >
-        {shown.length === 0 ? (
-          <li className="nx-vars__note nx-font-pick__none" role="presentation">
-            No fonts match this search.
-          </li>
-        ) : null}
-        {GROUPS.map(({ group, heading }) => {
-          const members = shown.filter(choice => choice.group === group);
-          if (members.length === 0) return null;
-          return (
-            <li key={group} role="presentation">
-              <span
-                className="nx-vars__group-name nx-font-pick__heading"
-                aria-hidden="true"
-              >
-                {heading}
-              </span>
-              <ul
-                role="group"
-                aria-label={heading}
-                className="nx-font-pick__group"
-              >
-                {members.map(choice => {
-                  const isActive = choice === activeChoice;
-                  return (
-                    <li
-                      key={choice.key}
-                      id={optionId(choice)}
-                      role="option"
-                      aria-selected={isActive}
-                      data-current={
-                        choice.key === current?.key ? "" : undefined
-                      }
-                      className="nx-font-pick__option"
-                      // Cut with an ellipsis when long: whole on hover.
-                      title={choice.label}
-                      style={
-                        choice.drawn === undefined
-                          ? undefined
-                          : { fontFamily: choice.drawn }
-                      }
-                      onMouseMove={() => setActive(shown.indexOf(choice))}
-                      onClick={() => onPick(choice)}
-                    >
-                      {choice.label}
-                    </li>
-                  );
-                })}
-              </ul>
-            </li>
-          );
-        })}
-      </ul>
+      <ChoiceList
+        choices={choices}
+        currentKey={current?.key}
+        onPick={onPick}
+        label="Fonts"
+        searchLabel="Search fonts"
+        noMatch="No fonts match this search."
+        groups={GROUPS}
+        // Each entry is drawn in itself.
+        choiceStyle={choice =>
+          choice.drawn === undefined ? undefined : { fontFamily: choice.drawn }
+        }
+      />
       {onManageFonts === undefined ? null : (
         <div className="nx-font-pick__footer">
           <button

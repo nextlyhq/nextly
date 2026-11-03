@@ -67,6 +67,19 @@ export interface ComponentVariantsHost {
    * dialog then says the placements fall back without a number.
    */
   readonly countUse?: (variantId: string) => Promise<VariantUse>;
+  /**
+   * Which variant is open, held by the host so the canvas can preview it.
+   * Absent, the section holds it alone and the canvas draws the defaults.
+   */
+  readonly preview?: VariantPreviewBinding;
+}
+
+/** The open variant, as the host holds it for the canvas to preview. */
+export interface VariantPreviewBinding {
+  /** The open variant's id, or nothing while none is open. */
+  readonly open: string | undefined;
+  /** Open a variant, or close the open one with `undefined`. */
+  readonly onOpen: (variantId: string | undefined) => void;
 }
 
 /** What the variant edits read from the editor, gathered once. */
@@ -246,11 +259,11 @@ const UNPLACED: BlockNode = {
   props: { componentId: "" },
 };
 
-/** How many values a variant presets, in words: "2 values", "(no changes)". */
+/** How many values a variant presets, in words: "2 changes", "No changes yet". */
 export function valuesSummary(option: VariantOption): string {
-  if (option.empty) return "(no changes)";
+  if (option.empty) return "No changes yet";
   const count = Object.keys(option.values).length;
-  return count === 1 ? "1 value" : `${String(count)} values`;
+  return count === 1 ? "1 change" : `${String(count)} changes`;
 }
 
 /**

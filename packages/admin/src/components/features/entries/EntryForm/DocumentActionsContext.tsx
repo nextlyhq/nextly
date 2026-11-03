@@ -19,6 +19,7 @@ import {
   createContext,
   useContext,
   useLayoutEffect,
+  useMemo,
   type JSX,
   type ReactNode,
   type RefObject,
@@ -27,11 +28,12 @@ import {
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 
 import { DocumentActionConfirmations } from "./DocumentActionConfirmations";
+import { hasPendingWorkingDraft } from "./EntryFormContext";
 import {
   EntryFormProvider,
   type EntryFormProviderProps,
 } from "./EntryFormProvider";
-import type { RecoveryPointState } from "./SaveStateIndicator";
+import type { RecoveryPointState, StoredDocument } from "./SaveStateIndicator";
 import {
   useDocumentActionBindings,
   type DocumentActionBindings,
@@ -58,6 +60,28 @@ const NO_RECOVERY_POINT: RecoveryPointState = {
 const RecoveryPointContext =
   createContext<RecoveryPointState>(NO_RECOVERY_POINT);
 
+/**
+ * How the hosted document stands in storage, so a surface can report it saved
+ * from the moment it opens. Null for a new document, or one with no readable
+ * time.
+ */
+const StoredContext = createContext<StoredDocument | null>(null);
+
+/**
+ * How a document as read stands in storage. A pending working draft is stored,
+ * but its row's `updatedAt` is the published version's (a draft save leaves it
+ * frozen), so its time is unknown rather than wrong.
+ */
+function storedStateOf(
+  entry: DocumentActionBindingsInput["entry"]
+): StoredDocument | null {
+  const updatedAt = entry?.updatedAt;
+  if (updatedAt === undefined) return null;
+  const time = Date.parse(updatedAt);
+  if (Number.isNaN(time)) return null;
+  return { at: hasPendingWorkingDraft(entry) ? null : new Date(time) };
+}
+
 export function DocumentActionsHost({
   input,
   recovery = NO_RECOVERY_POINT,
@@ -69,10 +93,14 @@ export function DocumentActionsHost({
   children: ReactNode;
 }): JSX.Element {
   const documentActions = useDocumentActionBindings(input);
+  const { entry } = input;
+  const stored = useMemo(() => storedStateOf(entry), [entry]);
   return (
     <DocumentActionsContext.Provider value={documentActions}>
       <RecoveryPointContext.Provider value={recovery}>
-        {children}
+        <StoredContext.Provider value={stored}>
+          {children}
+        </StoredContext.Provider>
       </RecoveryPointContext.Provider>
       <DocumentActionConfirmations
         confirmations={documentActions.confirmations}
@@ -86,6 +114,11 @@ export function DocumentActionsHost({
 /** The document's recovery point, or none outside a host that records one. */
 export function useHostedRecoveryPoint(): RecoveryPointState {
   return useContext(RecoveryPointContext);
+}
+
+/** How the hosted document stands in storage, or null outside a host. */
+export function useHostedStored(): StoredDocument | null {
+  return useContext(StoredContext);
 }
 
 /**

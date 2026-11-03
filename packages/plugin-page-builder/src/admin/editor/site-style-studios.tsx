@@ -30,6 +30,8 @@ import {
   type FontFaceUpload,
   type FontsPanelProps,
   type SiteFamily,
+  type TokensPanelProps,
+  useVariablesHeader,
 } from "@nextlyhq/builder/shell";
 import {
   usePluginClientConfig,
@@ -38,6 +40,7 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
 import {
+  createContext,
   useCallback,
   useContext,
   useEffect,
@@ -45,6 +48,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { catalogueFileUrl } from "../../site-fonts/contract";
 import {
@@ -145,11 +149,18 @@ export function offerableTokens(
  * so the canvas behind this panel is the preview — an unsaved edit would show
  * the author a page no visitor would see, with no other surface on which to
  * notice the difference.
+ *
+ * It is the Design panel's FRAME rather than its Variables tab, because the
+ * panel's header belongs to every tab: the preview switch and the
+ * import-and-export menu are drawn into it from here, and an import made from
+ * the Fonts tab writes through the same edits the Variables tab shows. The tab
+ * reads the studio through {@link VariablesTab}.
  */
 export function TokensStudio({
   merged,
   supplied,
   pending,
+  children,
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
   merged: SiteTokenSet | undefined;
@@ -157,13 +168,15 @@ export function TokensStudio({
   supplied: SiteTokenSet | undefined;
   /** Whether the read is still in flight, as against having failed. */
   pending: boolean;
+  /** The Design panel's tabs. */
+  children: React.ReactNode;
 }): React.JSX.Element {
   const { save } = useSaveSiteStyle();
   // The server refuses a change to the site style without this grant; the
   // panel shows the variables read-only rather than offering edits it would
   // refuse.
   const mayChange = useCan("update-site-style");
-  const headerActions = useDesignHeaderSlot();
+  const headerSlot = useDesignHeaderSlot();
   /*
    * What the CANVAS resolves, which is what the studio has to show and edit.
    *
@@ -230,24 +243,47 @@ export function TokensStudio({
     });
   };
 
+  /*
+   * The set as it is at the moment an import needs it, rather than the one
+   * the panel last rendered with. `shown` is written before React is told
+   * anything, so it answers for an edit the panel has not been re-rendered
+   * with yet.
+   */
+  const currentTokens = (): SiteTokenSet | undefined => shownNow() ?? editable;
+  const header = useVariablesHeader({
+    onChange: commit,
+    currentTokens,
+    readOnly: !mayChange,
+  });
+  const studio: TokensPanelProps = {
+    tokens: edits ?? editable,
+    supplied: baseline,
+    issue,
+    absence: pending ? "pending" : "failed",
+    readOnly: !mayChange,
+    onChange: commit,
+    currentTokens,
+    header,
+  };
+
   return (
-    <TokensPanel
-      tokens={edits ?? editable}
-      supplied={baseline}
-      issue={issue}
-      absence={pending ? "pending" : "failed"}
-      readOnly={!mayChange}
-      headerActions={headerActions}
-      onChange={commit}
-      /*
-       * The set as it is at the moment an import needs it, rather than the one
-       * the panel last rendered with. `shown` is written before React is told
-       * anything, so it answers for an edit the panel has not been re-rendered
-       * with yet.
-       */
-      currentTokens={() => shownNow() ?? editable}
-    />
+    <VariablesStudio.Provider value={studio}>
+      {headerSlot === null ? null : createPortal(header.controls, headerSlot)}
+      {/* Above whichever tab is open, since an import or export can be
+          started from any of them. */}
+      <div className="nx-pb-design__reports">{header.overlays}</div>
+      {children}
+    </VariablesStudio.Provider>
   );
+}
+
+/** The tokens studio's state, for the Variables tab inside it. */
+const VariablesStudio = createContext<TokensPanelProps | null>(null);
+
+/** The Variables tab: the studio's variables, in the panel its frame holds. */
+export function VariablesTab(): React.JSX.Element | null {
+  const studio = useContext(VariablesStudio);
+  return studio === null ? null : <TokensPanel {...studio} />;
 }
 
 /**

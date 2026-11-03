@@ -300,6 +300,9 @@ describe("the allowlist", () => {
   // naming a numbered change, no longer exist, and its entry emptied (217 -> 216).
   // 477 -> 475: one recorded offence each in `register-collections.ts` and
   // `collections-handler.ts` no longer exists; both entries remain.
+  // 475 -> 452: the 23 recorded offences in `collection-query-service.ts`,
+  // comments naming milestones in its localized reads, were rewritten to
+  // describe the code, and its entry emptied (216 -> 215).
   const EXPECTED_TOTAL = 452;
 
   it("matches its pinned size exactly", () => {

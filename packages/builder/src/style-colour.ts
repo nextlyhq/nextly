@@ -69,6 +69,7 @@ import {
   resolveSiteTokens,
   STYLE_CATALOG,
   tokenCustomProperty,
+  tokenDisplayLabel,
   tokenIdentity,
   type BlockNode,
   type ContrastResult,
@@ -105,6 +106,14 @@ export interface ColourToken {
   readonly identity: string;
   /** What the author reads and edits. Free to change. */
   readonly name: string;
+  /**
+   * What the token is CALLED where an author picks it: the label they gave
+   * it, else words made from its name ("Brand" for `color.brand`), as the
+   * Variables tab shows it.
+   */
+  readonly label: string;
+  /** Its light and dark values as swatches paint them. See {@link colourPairOf}. */
+  readonly pair: ColourPairValues;
   /** What the token holds, so a leaf can be asked whether it admits one. */
   readonly kind: TokenKind;
   /** The literal this token holds, as the site recorded it. */
@@ -121,6 +130,26 @@ export interface ColourToken {
    * second route. Resolving here means both swatches answer the same way.
    */
   readonly swatch: string | undefined;
+}
+
+/** A colour variable's two values, resolved for painting, or `undefined` each. */
+export interface ColourPairValues {
+  readonly light: string | undefined;
+  readonly dark: string | undefined;
+}
+
+/**
+ * A colour variable's light and dark values as a swatch may paint them.
+ *
+ * A token with no dark value shows its light one for dark, because that is
+ * what the page does: no dark declaration is written for it. Resolved with an
+ * empty table, for the reason {@link colourTokenOf} gives.
+ */
+export function colourPairOf(token: SiteToken): ColourPairValues {
+  return {
+    light: colourHexOf(token.values.light, undefined),
+    dark: colourHexOf(token.values.dark ?? token.values.light, undefined),
+  };
 }
 
 /**
@@ -344,9 +373,9 @@ export function colourTokenLabel(
   among: readonly ColourToken[]
 ): string {
   const shared = among.some(
-    other => other.name === token.name && other.identity !== token.identity
+    other => other.label === token.label && other.identity !== token.identity
   );
-  return shared ? `${token.name} (${token.identity})` : token.name;
+  return shared ? `${token.label} (${token.identity})` : token.label;
 }
 
 /**
@@ -364,6 +393,8 @@ function colourTokenOf(token: SiteToken, mode: TokenMode): ColourToken {
   return {
     identity: tokenIdentity(token),
     name: token.name,
+    label: tokenDisplayLabel(token),
+    pair: colourPairOf(token),
     kind: token.kind,
     colour,
     // Resolved with an EMPTY table, which is what stops this recursing: a token
