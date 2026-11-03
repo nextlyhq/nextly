@@ -35,17 +35,37 @@ afterEach(cleanup);
 function visit(...pages: ReturnType<typeof page>[]) {
   for (const each of pages) {
     const { unmount } = render(
-      <PageTitleSwitcher current={each} userId="u1" onAllPages={() => {}} />
+      <PageTitleSwitcher
+        title={each.title}
+        current={each}
+        userId="u1"
+        onAllPages={() => {}}
+      />
     );
     unmount();
   }
 }
 
 describe("the title switcher", () => {
+  it("names the page as the form holds it, saved or not", () => {
+    render(
+      <PageTitleSwitcher
+        title="Draft title"
+        current={null}
+        userId="u1"
+        onAllPages={() => {}}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "Draft title: switch page" })
+    ).toBeTruthy();
+  });
+
   it("offers the pages edited before this one, newest first, and opens one", async () => {
     visit(page("a", "Home"), page("b", "Pricing"));
     render(
       <PageTitleSwitcher
+        title="About us"
         current={page("c", "About us")}
         userId="u1"
         onAllPages={() => {}}
@@ -67,6 +87,7 @@ describe("the title switcher", () => {
     visit(page("a", "Home"));
     render(
       <PageTitleSwitcher
+        title="About us"
         current={page("c", "About us")}
         userId="someone-else"
         onAllPages={() => {}}
@@ -82,6 +103,7 @@ describe("the title switcher", () => {
     const onAllPages = vi.fn();
     render(
       <PageTitleSwitcher
+        title="About us"
         current={page("c", "About us")}
         userId="u1"
         onAllPages={onAllPages}

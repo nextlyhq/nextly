@@ -32,6 +32,8 @@ import {
 } from "./recent-pages";
 
 export interface PageTitleSwitcherProps {
+  /** The page's title as the form holds it now. */
+  title: string;
   /** The page being edited, or null where it has no saved identity yet. */
   current: RecentPage | null;
   /** The author's id, whose history this is. */
@@ -41,6 +43,7 @@ export interface PageTitleSwitcherProps {
 }
 
 export function PageTitleSwitcher({
+  title: formTitle,
   current,
   userId,
   onAllPages,
@@ -67,7 +70,7 @@ export function PageTitleSwitcher({
 
   // Read when the menu opens, not at mount, so another tab's history counts.
   const [recent, setRecent] = React.useState<RecentPage[]>([]);
-  const title = current?.title.trim() || "Untitled";
+  const title = formTitle.trim() === "" ? "Untitled" : formTitle.trim();
 
   return (
     <DropdownMenu
