@@ -59,7 +59,6 @@ import {
   StretchHorizontal,
   StretchVertical,
   WrapText,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -209,6 +208,7 @@ export function IconChoiceField({
                       <Icon
                         size={16}
                         aria-hidden="true"
+                        style={iconStyle(option)}
                         {...(iconClass(option) === undefined
                           ? {}
                           : { className: iconClass(option) })}
@@ -230,37 +230,25 @@ export function IconChoiceField({
             />
           )}
         </div>
-        {/* Clearing at the row's end while a value is set: an icon still
-            chosen can be pressed again, a value in More cannot. */}
-        {current === undefined ? null : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                className="nx-icon-choice__clear"
-                aria-label={`Clear ${actionName}`}
-                onClick={() => onCommit(null)}
-              >
-                <X size={14} aria-hidden="true" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Clear</TooltipContent>
-          </Tooltip>
-        )}
       </div>
     </TooltipProvider>
   );
 }
 
-/** The class an icon is drawn with: turned upside down, or a quarter. */
+/** The class an icon is drawn with: turned a quarter, for text down the page. */
 function iconClass(
   option: AlignmentGroup["options"][number]
 ): string | undefined {
-  const classes = [
-    option.rotated === true ? "nx-icon-choice__rotated" : "",
-    option.flip === undefined ? "" : `nx-icon-choice__flip-${option.flip}`,
-  ].filter(name => name !== "");
-  return classes.length === 0 ? undefined : classes.join(" ");
+  return option.rotated === true ? "nx-icon-choice__rotated" : undefined;
+}
+
+/** The transform that maps an icon's own directions onto the container's. */
+function iconStyle(
+  option: AlignmentGroup["options"][number]
+): React.CSSProperties | undefined {
+  return option.matrix === undefined
+    ? undefined
+    : { transform: `matrix(${option.matrix.join(", ")}, 0, 0)` };
 }
 
 /**

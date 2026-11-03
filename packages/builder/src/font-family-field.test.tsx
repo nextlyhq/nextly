@@ -163,13 +163,14 @@ describe("FontFamilyField", () => {
     );
   });
 
-  it("shows a value that is none of these, and offers to clear it", () => {
-    const onCommit = mount({ stored: "Comic Sans MS, cursive" });
+  it("shows a value that is none of these, with no Clear of its own", () => {
+    // The row's reset removes a stored family, so a Clear here was a second
+    // way to do one thing on the same row.
+    mount({ stored: "Comic Sans MS, cursive" });
     expect(
       screen.getByText("Comic Sans MS, cursive · not on this site")
     ).toBeDefined();
-    fireEvent.click(screen.getByRole("button", { name: "Clear Font" }));
-    expect(onCommit).toHaveBeenCalledWith(null);
+    expect(screen.queryByRole("button", { name: "Clear Font" })).toBeNull();
   });
 
   it("sends the author to Design's fonts to add or manage one", () => {

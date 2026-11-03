@@ -70,6 +70,10 @@ import { componentActionRoutes } from "./component-actions-route";
 import { componentFactsRoute, storeIsLocalized } from "./component-facts-route";
 import { componentFromSelectionRoute } from "./component-from-selection-route";
 import { indexHostFinder } from "./component-hosts";
+import {
+  componentPageReach,
+  sitePageReachSources,
+} from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
 import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
@@ -1410,6 +1414,51 @@ export const pageBuilder = (
                 index
               ),
             });
+          },
+          // How many pages a change reaches, for the banner over the view:
+          // through other components by the same index, and through the
+          // Layouts wrapping pages, read live, the site's default included.
+          countPages: ctx => async id => {
+            const index =
+              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+              COMPONENT_USAGE_INDEX_SLUG;
+            const host = requireInstalled();
+            const rows = usageRowReader(await host.nextly(), index);
+            const health = await usageHealthService(requireInstalled).read(
+              componentUsageIndex,
+              index
+            );
+            // Imported at call time, as the Layout choices route does, so the
+            // entry stays free of the runtime graph.
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            return componentPageReach(
+              id,
+              sitePageReachSources({
+                nextly: await getCachedNextly(),
+                slugs: {
+                  layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                  settings:
+                    ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+                    PAGE_BUILDER_SETTINGS_SLUG,
+                },
+                pagesCollection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+                componentsCollection:
+                  componentStoreOf(opts).collection ??
+                  ctx.self.collections[COMPONENTS_SLUG] ??
+                  COMPONENTS_SLUG,
+                notPages: new Set([
+                  ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+                  ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+                ]),
+                documentsUsingEach: componentIds =>
+                  listDocumentsUsingEach({
+                    index: componentUsageIndex,
+                    rows,
+                    referenceIds: componentIds,
+                    health,
+                  }),
+              })
+            );
           },
           // The ids a published removal retired, from the store the write
           // hooks record them in. Where those hooks are not registered (the

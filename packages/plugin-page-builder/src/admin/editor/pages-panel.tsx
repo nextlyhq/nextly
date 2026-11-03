@@ -821,8 +821,10 @@ function DeletePageDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
+          {/* The dialog's own destructive action, whose colours are the pair
+              the admin keeps readable for deletes. */}
           <AlertDialogAction
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            variant="destructive"
             onClick={() => {
               if (page !== null) onConfirm(page);
             }}

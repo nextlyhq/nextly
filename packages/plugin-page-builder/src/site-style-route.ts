@@ -17,8 +17,11 @@
  * any other collection or live Single declaring a blocks field the builder
  * opens (a removed code-first Single's leftover registry row does not count).
  * Asked through `ctx.caller.can`, the framework's own answer for a session or
- * an API key, before anything is read. Nobody else: not an anonymous caller,
- * and not one who may only read those documents.
+ * an API key, before anything is read. The update questions are type-level
+ * (`anyEntry`): an update rule limited to the entries a row filter matches
+ * counts, since such an author may edit some of those documents. Nobody
+ * else: not an anonymous caller, and not one who may only read those
+ * documents.
  *
  * ## What it answers
  *
@@ -31,7 +34,12 @@
  *
  * @module site-style-route
  */
-import { getCachedNextly, NextlyError, respondDoc } from "@nextlyhq/plugin-sdk";
+import {
+  getCachedNextly,
+  NextlyError,
+  respondDoc,
+  type PluginRouteCanOptions,
+} from "@nextlyhq/plugin-sdk";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
@@ -62,7 +70,11 @@ export interface SiteStyleRouteContext extends PageCollectionsContext {
     readonly singles: Readonly<Record<string, string | undefined>>;
   };
   readonly caller: {
-    can(action: string, resource: string): Promise<boolean>;
+    can(
+      action: string,
+      resource: string,
+      options?: PluginRouteCanOptions
+    ): Promise<boolean>;
   } | null;
   /** The app's configuration, for which code-first Singles it still declares. */
   readonly config: { readonly singles?: unknown };
@@ -181,11 +193,12 @@ export async function mayReadSiteStyle(
     if (asked.has(slug)) return false;
     asked.add(slug);
     // A type-level question: may this caller edit this kind of document at
-    // all? `can` answers a row-filtered update rule as "no", having no entry
-    // to apply the filter to, so an author whose only update right is
-    // row-filtered is not admitted here and needs `read-site-style`. A probe
-    // that answers "yes" for such a rule, without applying it, belongs here.
-    return caller.can("update", slug);
+    // all? Asked with `anyEntry`, so an author whose update rule limits them
+    // to the entries a row filter matches counts as one who may edit: plain
+    // `can` would answer no, having no entry to apply the filter to. The
+    // filter is neither applied nor bypassed here; only admission is decided,
+    // and every write the author makes is still judged on its entry.
+    return caller.can("update", slug, { anyEntry: true });
   };
   for (const slug of known) if (await mayUpdate(slug)) return true;
   for (const slug of await collectionsTheBuilderOpens(ctx)) {

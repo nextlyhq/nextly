@@ -117,16 +117,9 @@ describe("IconChoiceField", () => {
     ).toContain("inherit");
   });
 
-  it("clears from a button at the row's end, only while a value is set", () => {
-    const onCommit = mount("safe center");
+  it("leaves clearing to the row's reset, with no Clear of its own", () => {
+    mount("safe center");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Clear Justify content" })
-    );
-    expect(onCommit).toHaveBeenLastCalledWith(null);
-
-    cleanup();
-    mount();
     expect(
       screen.queryByRole("button", { name: "Clear Justify content" })
     ).toBeNull();
