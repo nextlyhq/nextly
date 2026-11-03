@@ -14,7 +14,9 @@ import {
   select,
   text,
 } from "../../../config";
+import { runAsPrincipal } from "../../../auth/principal-scope";
 import { container } from "../../../di/container";
+import { makePrincipal } from "../../../plugins/principals/principal";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -81,6 +83,11 @@ const collections = () => [
       text({
         name: "staffNote",
         access: { read: ({ req }) => Boolean(req.user) },
+      }),
+      // Only a plugin's person may read it: hidden from every visitor.
+      text({
+        name: "memberNote",
+        access: { read: ({ principal }) => principal !== null },
       }),
       select({
         name: "kind",
@@ -254,6 +261,18 @@ describe.each(getConfiguredTestDialects())(
         expect(names).not.toContain("staffNote");
         const seo = shapes?.find(shape => shape.name === "seo");
         expect(seo?.fields?.map(shape => shape.name)).toEqual(["summary"]);
+      });
+
+      it("judges the fields as a visitor inside a plugin person's operation", async () => {
+        const person = makePrincipal("accounts:account", "acc_1", {});
+        const shapes = await runAsPrincipal(person, () =>
+          bindingFieldShapes({ collection: POSTS })
+        );
+        const names = shapes?.map(shape => shape.name);
+        // The control: the shapes were read, so the absence below is the
+        // rule's answer for a visitor.
+        expect(names).toContain("title");
+        expect(names).not.toContain("memberNote");
       });
 
       it("leaves out a Single's hidden field", async () => {

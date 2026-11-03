@@ -26,7 +26,6 @@
  */
 import { z } from "zod";
 
-import { runDetachedFromRequest } from "../../auth/caller-scope";
 import type { Nextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ListResult } from "../../direct-api/types/shared";
@@ -35,6 +34,7 @@ import { filterShapeProblems } from "../../domains/collections/query/filter-shap
 import { NextlyError } from "../../errors/nextly-error";
 
 import { isMissOrDenied } from "./miss-or-denied";
+import { readAsVisitor } from "./read-as-visitor";
 
 /** The operators a list's filter row may use, each meaning the same on every database. */
 export const PUBLIC_FILTER_OPS = [
@@ -553,9 +553,10 @@ function selectedFrom(
  * reader it already holds: a count is a one-row read of ids whose total is the
  * answer, under the same fixed options. A Single's read needs `findSingle`.
  *
- * Each read runs detached from any request being served. A page rendered
- * while an API-key request is in flight must not be judged by that key: the
- * read is made by no one, so no caller's scope may narrow or widen it.
+ * Each read runs as no one: detached from any request being served and from
+ * any person the operation around it is made as. A page rendered while an
+ * API-key request is in flight, or inside a plugin person's operation, must
+ * not be judged by that key or that person, so neither may narrow or widen it.
  *
  * @experimental
  */
@@ -563,8 +564,7 @@ export function createPublicReader(
   nextly: PublicReaderSource,
   binding: PublicReaderBinding = {}
 ): PublicReader {
-  const read = (args: FindArgs) =>
-    runDetachedFromRequest(() => nextly.find(args));
+  const read = (args: FindArgs) => readAsVisitor(() => nextly.find(args));
   return Object.freeze({
     async find(query: PublicReadQuery): Promise<PublicReadResult> {
       const result = await read(toPublicFind(query, binding));
@@ -590,7 +590,7 @@ export function createPublicReader(
         });
       }
       try {
-        const document = await runDetachedFromRequest(() =>
+        const document = await readAsVisitor(() =>
           findSingle.call(nextly, args)
         );
         return document === null ? null : selectedFrom(document, query.select);

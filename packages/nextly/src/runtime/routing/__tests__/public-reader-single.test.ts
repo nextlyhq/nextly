@@ -10,8 +10,13 @@ import {
   currentCallerScope,
   runWithCallerScope,
 } from "../../../auth/caller-scope";
+import {
+  currentPrincipal,
+  runAsPrincipal,
+} from "../../../auth/principal-scope";
 import { mergeConfig } from "../../../direct-api/namespaces/helpers";
 import { NextlyError } from "../../../errors/nextly-error";
+import { makePrincipal } from "../../../plugins/principals/principal";
 import {
   createPublicReader,
   toPublicFind,
@@ -252,6 +257,27 @@ describe("createPublicReader findSingle", () => {
       await reader.findSingle({ slug: "banner" });
     });
     expect(seen).toEqual([undefined]);
+  });
+
+  it("reads as no one inside a plugin person's operation, for every read", async () => {
+    const seen: unknown[] = [];
+    const record = async () => {
+      seen.push(currentPrincipal());
+      return { id: "s1", items: [], meta: { total: 0 } };
+    };
+    const reader = createPublicReader({
+      find: vi.fn(record),
+      findSingle: vi.fn(record),
+    } as unknown as PublicReaderSource);
+    const person = makePrincipal("accounts:account", "acc_1", {});
+    await runAsPrincipal(person, async () => {
+      // The control: the person is pinned where the reader is called.
+      expect(currentPrincipal()).toBe(person);
+      await reader.find({ collection: "posts" });
+      await reader.count({ collection: "posts" });
+      await reader.findSingle({ slug: "banner" });
+    });
+    expect(seen).toEqual([null, null, null]);
   });
 
   it("refuses when the reader it was made over cannot read a Single", async () => {

@@ -15,8 +15,13 @@
  */
 import { z } from "zod";
 
-import { runDetachedFromRequest } from "../../auth/caller-scope";
+import type { FieldConfig } from "../../collections/fields/types";
+import type { DatePickerAppearance } from "../../collections/fields/types/date";
+import { isListField } from "../../domains/versions/diff/field-cardinality";
 import { NextlyError } from "../../errors/nextly-error";
+import { addressableFields } from "../../shared/addressable-fields";
+
+import { readAsVisitor } from "./read-as-visitor";
 
 /**
  * Whose fields: a collection's entries, or one Single.
@@ -44,6 +49,12 @@ export interface BindingFieldShape {
   readonly dateOnly?: true;
   /** A date picked as a month and year. */
   readonly monthOnly?: true;
+  /**
+   * A time of day picked without a date: the date part is a fixed placeholder,
+   * so only the time is a value. A date with none of the three flags is an
+   * instant, read in the site's time zone.
+   */
+  readonly timeOnly?: true;
   /** A group's own fields, each judged as this one is. */
   readonly fields?: readonly BindingFieldShape[];
 }
@@ -67,6 +78,7 @@ const STORED_FIELD = z.object({
   name: z.string().min(1),
   type: z.string().min(1),
   hasMany: z.boolean().optional(),
+  repeatable: z.boolean().optional(),
   relationTo: z.union([z.string(), z.array(z.string())]).optional(),
   options: z.array(OPTION).optional(),
   admin: z
@@ -82,11 +94,22 @@ type StoredField = z.infer<typeof STORED_FIELD>;
 /** Types a read never returns a value for, so nothing may bind to them. */
 const NEVER_READ: ReadonlySet<string> = new Set(["password"]);
 
-/** Types whose value is always a list. */
-const ALWAYS_MANY: ReadonlySet<string> = new Set(["repeater", "chips"]);
+/** Types with no cardinality setting whose value is always a list of strings. */
+const LIST_OF_VALUES: ReadonlySet<string> = new Set(["chips"]);
 
+/**
+ * Whether the field holds a list. A repeater and a repeatable component are
+ * lists by core's own cardinality rule (`isListField`, which the version
+ * diff reads rows by); a relationship, upload, select or text field is one
+ * when it says `hasMany`.
+ */
 function manyOf(field: StoredField): Pick<BindingFieldShape, "hasMany"> {
-  return field.hasMany === true || ALWAYS_MANY.has(field.type)
+  // The parsed definition carries the two keys the rule reads, `type` and
+  // `repeatable`, under the names a stored field definition gives them.
+  const listByCardinality = isListField(field as FieldConfig);
+  return field.hasMany === true ||
+    LIST_OF_VALUES.has(field.type) ||
+    listByCardinality
     ? { hasMany: true }
     : {};
 }
@@ -100,15 +123,42 @@ function optionsOf(field: StoredField): Pick<BindingFieldShape, "options"> {
   };
 }
 
-/** A date field's picker, which says whether it holds a day, a month or an instant. */
-function dateKindOf(
-  field: StoredField
-): Pick<BindingFieldShape, "dateOnly" | "monthOnly"> {
+type DateKind = Pick<BindingFieldShape, "dateOnly" | "monthOnly" | "timeOnly">;
+
+/**
+ * What each picker appearance says a date field holds. Keyed by the field
+ * type's own union, so an appearance added there fails to compile here until
+ * it is given a kind.
+ */
+const DATE_KINDS: Readonly<Record<DatePickerAppearance, DateKind>> = {
+  dayOnly: { dateOnly: true },
+  monthOnly: { monthOnly: true },
+  timeOnly: { timeOnly: true },
+  dayAndTime: {},
+};
+
+function isPickerAppearance(value: string): value is DatePickerAppearance {
+  return Object.hasOwn(DATE_KINDS, value);
+}
+
+/** A date field's picker, which says whether it holds a day, a month, a time or an instant. */
+function dateKindOf(field: StoredField): DateKind {
   if (field.type !== "date") return {};
-  // A date field with no picker set is picked as a day.
+  // A date field with no picker set is picked as a day. An appearance this
+  // version does not know is read as an instant, which claims nothing.
   const appearance = field.admin?.date?.pickerAppearance ?? "dayOnly";
-  if (appearance === "dayOnly") return { dateOnly: true };
-  return appearance === "monthOnly" ? { monthOnly: true } : {};
+  return isPickerAppearance(appearance) ? DATE_KINDS[appearance] : {};
+}
+
+/**
+ * Whether an unnamed container's children are stored at the level it sits
+ * in. An unnamed group only lays fields out, so its children are this level's
+ * fields; an unnamed repeater stores its children per row. The same rule the
+ * field-rule registry files its rules by, so a field found here is looked up
+ * at the level its rule is filed under.
+ */
+function storedAtThisLevel(container: { type?: unknown }): boolean {
+  return container.type === "group";
 }
 
 async function shapeOf(
@@ -136,6 +186,10 @@ async function shapeOf(
 /**
  * The shapes of stored field definitions, each kept only when `readable`
  * allows its path. Pure apart from `readable`, which decides who sees what.
+ *
+ * The fields of a level are core's addressable fields, so an unnamed group's
+ * children are shapes of the level it sits in, named by where their values
+ * are stored.
  */
 export async function fieldShapesOf(
   fields: readonly unknown[],
@@ -143,7 +197,9 @@ export async function fieldShapesOf(
   parent: readonly string[] = []
 ): Promise<BindingFieldShape[]> {
   const shapes: BindingFieldShape[] = [];
-  for (const stored of fields) {
+  for (const stored of addressableFields(fields, {
+    descendInto: storedAtThisLevel,
+  })) {
     const parsed = STORED_FIELD.safeParse(stored);
     if (!parsed.success || NEVER_READ.has(parsed.data.type)) continue;
     const path = [...parent, parsed.data.name];
@@ -158,9 +214,9 @@ export async function fieldShapesOf(
  * may read, as the anonymous visitor may read them; `undefined` when the
  * source does not exist or the visitor may read none of it.
  *
- * Judged detached from any request being served, as the public reader's
- * reads are, so the key of an API request a page renders during cannot widen
- * or narrow the answer.
+ * Judged as no one, as the public reader's reads are: neither the key of an
+ * API request a page renders during nor a plugin person the operation around
+ * it is made as can widen or narrow the answer.
  *
  * @experimental
  */
@@ -179,7 +235,7 @@ export async function bindingFieldShapes(
       ? { kind: "collection" as const, slug: parsed.data.collection }
       : { kind: "single" as const, slug: parsed.data.single };
   const { visitorFields } = await import("./visitor-fields");
-  return runDetachedFromRequest(async () => {
+  return readAsVisitor(async () => {
     const visible = await visitorFields(source);
     if (visible === undefined) return undefined;
     return Object.freeze(await fieldShapesOf(visible.fields, visible.readable));

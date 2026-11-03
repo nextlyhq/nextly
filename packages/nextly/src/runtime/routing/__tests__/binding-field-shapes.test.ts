@@ -62,6 +62,11 @@ describe("fieldShapesOf", () => {
           type: "date",
           admin: { date: { pickerAppearance: "dayAndTime" } },
         },
+        {
+          name: "opens",
+          type: "date",
+          admin: { date: { pickerAppearance: "timeOnly" } },
+        },
       ],
       everyone
     );
@@ -70,6 +75,7 @@ describe("fieldShapesOf", () => {
       { name: "day", type: "date", dateOnly: true },
       { name: "month", type: "date", monthOnly: true },
       { name: "at", type: "date" },
+      { name: "opens", type: "date", timeOnly: true },
     ]);
   });
 
@@ -121,6 +127,48 @@ describe("fieldShapesOf", () => {
     );
     expect(shapes).toEqual([]);
     expect(readable).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an unnamed group's fields at the level it sits in, and no repeater's rows", async () => {
+    const readable = vi.fn(async (_path: readonly string[]) => true);
+    const shapes = await fieldShapesOf(
+      [
+        { name: "title", type: "text" },
+        // Laid out in a group with no name: stored beside `title`.
+        { type: "group", fields: [{ name: "summary", type: "text" }] },
+        // A repeater with no name stores its children per row, not here.
+        { type: "repeater", fields: [{ name: "row", type: "text" }] },
+      ],
+      readable
+    );
+    expect(shapes.map(shape => shape.name)).toEqual(["title", "summary"]);
+    expect(readable.mock.calls.map(([path]) => path.join("."))).toEqual([
+      "title",
+      "summary",
+    ]);
+  });
+
+  it("calls a repeater and a repeatable component a list, and a single component one value", async () => {
+    const shapes = await fieldShapesOf(
+      [
+        { name: "rows", type: "repeater" },
+        { name: "cards", type: "component", repeatable: true },
+        { name: "blocks", type: "fieldGroup", repeatable: true },
+        { name: "hero", type: "component" },
+        { name: "byline", type: "fieldGroup", repeatable: false },
+      ],
+      everyone
+    );
+    const many = Object.fromEntries(
+      shapes.map(shape => [shape.name, shape.hasMany === true])
+    );
+    expect(many).toEqual({
+      rows: true,
+      cards: true,
+      blocks: true,
+      hero: false,
+      byline: false,
+    });
   });
 
   it("never offers a password, whatever the reader says", async () => {
