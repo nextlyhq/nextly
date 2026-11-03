@@ -80,7 +80,7 @@ describe("what it lists", () => {
     draw({ nodeClassIds: ["id-badge"] });
     expect(
       screen.getAllByRole("option").map(option => option.textContent)
-    ).toEqual(["hero .hero", "Card .card"]);
+    ).toEqual(["hero .nx-c-hero", "Card .nx-c-card"]);
   });
 
   it("never offers to make a new, empty style from what is typed", () => {

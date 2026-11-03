@@ -1293,6 +1293,16 @@
   color: var(--nx-muted-foreground);
 }
 
+/* The class a shared style gives the page, beside its name in the picker and
+   under the name in the save dialog: mono, muted, and no smaller than the
+   12px the editor reads. */
+.nx-classes__option-class,
+.nx-vars-editor__code.nx-shared-style-save__class {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
 .nx-editing-bar__state-label::after {
   content: ":";
 }

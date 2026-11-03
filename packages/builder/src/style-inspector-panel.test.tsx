@@ -309,6 +309,8 @@ describe("the shared style target", () => {
       "promo",
     ]);
     expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    // Each chip's tooltip names the class the page carries.
+    expect(chip("Card").title).toBe("Edit shared style Card, .nx-c-card");
   });
 
   it("makes a chip the target: pressed, named with its reach, and announced", async () => {
@@ -364,6 +366,31 @@ describe("the shared style target", () => {
       within(bar()).getByRole("button", { name: "Edit this block only" })
     );
     expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("takes Escape only when it switches back, so the editor's own Escape stands down", () => {
+    // The editor's Escape (select the parent block) skips a key already
+    // answered, so the bar marks the one it answers and leaves the rest.
+    mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    expect(fireEvent.keyDown(chip("Card"), { key: "Escape" })).toBe(false);
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    // Already on this block: nothing to answer, so the editor's Escape runs.
+    expect(fireEvent.keyDown(chip("This block"), { key: "Escape" })).toBe(true);
+  });
+
+  it("lets the chip's menu take Escape without leaving the shared target", async () => {
+    mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    const menu = within(bar()).getByRole("button", {
+      name: "Actions for shared style Card",
+    });
+    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    const item = await screen.findByRole("menuitem", { name: /^Detach/ });
+    fireEvent.keyDown(item, { key: "Escape" });
+    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    // The menu closed; the target is still the shared style.
+    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("moves between the chips with the arrow keys, one tab stop for the group", () => {

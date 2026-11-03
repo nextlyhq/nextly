@@ -253,7 +253,11 @@ export function StyleTargetBar({
   return (
     <EditingBar
       target={editTargetOf(target, reach)}
-      chips={worn.map(row => ({ id: row.id, name: row.name }))}
+      chips={worn.map(row => ({
+        id: row.id,
+        name: row.name,
+        className: row.className,
+      }))}
       onTargetChange={host === undefined ? undefined : onChoose}
       onRemove={
         nodeId === null

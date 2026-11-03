@@ -84,7 +84,8 @@ describe("naming the new shared style", () => {
       )
     ).toBeDefined();
     fireEvent.change(name(), { target: { value: "Primary button" } });
-    expect(screen.getByText(".primary-button")).toBeDefined();
+    // The class the page will carry, as developers read it.
+    expect(screen.getByText(".nx-c-primary-button")).toBeDefined();
     expect(screen.getByText(/into Primary button\./)).toBeDefined();
   });
 

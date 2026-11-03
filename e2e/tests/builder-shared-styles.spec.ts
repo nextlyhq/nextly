@@ -154,7 +154,7 @@ test.describe("shared styles on a block", () => {
     const dialog = page.getByRole("dialog", { name: "Save as shared style" });
     await expect(dialog).toContainText("Moves this block's 1 value");
     await dialog.getByRole("textbox", { name: "Name" }).fill("Card");
-    await expect(dialog.getByText(".card", { exact: true })).toBeVisible();
+    await expect(dialog.getByText(".nx-c-card", { exact: true })).toBeVisible();
     const saved = styleWrite(page);
     await dialog.getByRole("button", { name: "Save shared style" }).click();
     await saved;
@@ -190,7 +190,9 @@ test.describe("shared styles on a block", () => {
     await expect(bar(page).getByRole("status")).toHaveText(
       "Now editing shared style Card"
     );
-    await expect(bar(page)).toContainText("Editing shared style Card · .card");
+    await expect(bar(page)).toContainText(
+      "Editing shared style Card · .nx-c-card"
+    );
     await expect(bar(page).locator("[data-shared-reach]")).toContainText(
       "2 blocks on this page"
     );

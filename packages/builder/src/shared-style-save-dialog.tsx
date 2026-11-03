@@ -16,7 +16,11 @@
  * @module shared-style-save-dialog
  */
 
-import { findNode, type NamedClass } from "@nextlyhq/blocks-engine";
+import {
+  findNode,
+  namedClassName,
+  type NamedClass,
+} from "@nextlyhq/blocks-engine";
 import {
   Button,
   Dialog,
@@ -153,8 +157,12 @@ export function SaveSharedStyleDialog({
                 setProblem(undefined);
               }}
             />
-            <p className="nx-vars-editor__code" aria-live="polite">
-              {slug === "" ? " " : `.${slug}`}
+            {/* The class the page will carry, as the Shared styles tab shows it. */}
+            <p
+              className="nx-vars-editor__code nx-shared-style-save__class"
+              aria-live="polite"
+            >
+              {slug === "" ? " " : `.${namedClassName(slug)}`}
             </p>
             <p className="nx-inspector__note" id={hintId}>
               Name it for what it is, like Card or Primary button.

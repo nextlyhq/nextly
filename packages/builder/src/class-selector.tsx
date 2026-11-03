@@ -336,8 +336,9 @@ function OptionList({
           onClick={() => onChoose(option)}
         >
           {nameOf(option)}{" "}
+          {/* The class the page carries, as the Shared styles tab shows it. */}
           <code className="nx-classes__option-class">
-            .{option.choice.slug}
+            .{option.choice.className}
           </code>
         </li>
       ))}

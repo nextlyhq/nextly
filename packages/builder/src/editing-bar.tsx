@@ -52,6 +52,8 @@ export type EditTarget =
 export interface EditingBarChip {
   readonly id: string;
   readonly name: string;
+  /** The class the page carries for it, as developers read it: ".nx-c-card". */
+  readonly className: string;
 }
 
 export interface EditingBarProps {
@@ -117,6 +119,10 @@ export function EditingBar({
         // Escape on a shared target goes back to this block, so leaving a
         // site-wide edit is one key from anywhere in the bar.
         if (event.key !== "Escape" || activeId === null) return;
+        // A key a menu inside the bar already answered (its own Escape) is
+        // left alone, and the one answered here is marked, so the editor's
+        // Escape, which skips an answered key, does not also select the
+        // parent block.
         if (onTargetChange === undefined || event.defaultPrevented) return;
         event.preventDefault();
         onTargetChange(null);
@@ -146,6 +152,7 @@ export function EditingBar({
               <TargetChip
                 id={chip.id}
                 name={chip.name}
+                className={chip.className}
                 tone="shared"
                 active={activeId === chip.id}
                 onSelect={onTargetChange}
@@ -260,12 +267,15 @@ function moveBetweenChips(
 function TargetChip({
   id,
   name,
+  className,
   tone,
   active,
   onSelect,
 }: {
   id: string | null;
   name: string;
+  /** A shared style's class name, named in its tooltip. */
+  className?: string;
   tone: "local" | "shared";
   active: boolean;
   onSelect: ((id: string | null) => void) | undefined;
@@ -283,7 +293,11 @@ function TargetChip({
       // One tab stop for the group: the target. The arrows reach the rest.
       tabIndex={active ? 0 : -1}
       disabled={onSelect === undefined && !active}
-      title={id === null ? "Edit this block only" : `Edit shared style ${name}`}
+      title={
+        id === null
+          ? "Edit this block only"
+          : `Edit shared style ${name}, ${className ?? ""}`
+      }
       onClick={() => {
         if (!active) onSelect?.(id);
       }}
