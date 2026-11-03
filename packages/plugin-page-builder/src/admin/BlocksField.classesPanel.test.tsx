@@ -154,6 +154,12 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
   // The shared-style routes, recorded: the usage read answers every page
   // counted and nothing used, and the where-used read an empty list.
   readPluginRoute: async ({ path }: { path: string }) => {
