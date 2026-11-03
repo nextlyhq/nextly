@@ -74,10 +74,17 @@ async function storedStyles(
   pageId: string,
   nodeId: string
 ): Promise<Record<string, unknown>> {
-  const response = await request.get(`${ENTRIES}?status=draft&limit=100`);
-  const body = (await response.json()) as {
-    items: { id: string; content?: { nodes?: Record<string, unknown>[] } }[];
+  // By its id, not from a list page the shared database may push it off.
+  const response = await request.get(`${ENTRIES}/${pageId}?status=all`);
+  expect(response.ok(), `reading the page: ${response.status()}`).toBe(true);
+  const body = (await response.json()) as Record<string, unknown>;
+  const item = (body.item ?? body) as {
+    content?: string | { nodes?: Record<string, unknown>[] };
   };
+  const content =
+    typeof item.content === "string"
+      ? (JSON.parse(item.content) as { nodes?: Record<string, unknown>[] })
+      : item.content;
   const walk = (
     nodes: Record<string, unknown>[]
   ): Record<string, unknown> | undefined => {
@@ -94,9 +101,7 @@ async function storedStyles(
     }
     return undefined;
   };
-  const node = walk(
-    body.items.find(item => item.id === pageId)?.content?.nodes ?? []
-  );
+  const node = walk(content?.nodes ?? []);
   const styles = node?.styles as
     | { base?: { base?: Record<string, unknown> } }
     | undefined;

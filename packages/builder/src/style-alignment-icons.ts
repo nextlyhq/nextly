@@ -47,8 +47,12 @@ export interface AlignmentOption {
   readonly label: string;
   /** A lucide icon's export name. */
   readonly icon: string;
-  /** Mirrored along an axis, for a value whose icon has no reversed twin. */
-  readonly flip?: "vertical" | "horizontal";
+  /**
+   * A 2×2 matrix, `[a, b, c, d]` as CSS `matrix(a, b, c, d, 0, 0)` takes it,
+   * that maps the icon's own directions onto the container's. Absent when
+   * they already agree.
+   */
+  readonly matrix?: readonly [number, number, number, number];
   /** Turned a quarter, for text that runs down the page. */
   readonly rotated?: true;
 }
@@ -270,23 +274,40 @@ function directionOptions(
   return options.filter(option => values.includes(option.value));
 }
 
+/** A unit vector on the screen, x to the right and y down, toward an edge. */
+const TOWARD: Readonly<Record<Edge, readonly [number, number]>> = {
+  right: [1, 0],
+  left: [-1, 0],
+  bottom: [0, 1],
+  top: [0, -1],
+};
+
 /**
- * The wrap icons, drawn for lines that wrap down the page: turned a quarter
- * when the lines run down it instead (the main axis is vertical), and the
- * reversed one mirrored along the cross axis the lines wrap across.
+ * The wrap icons. Their lines run right and wrap downward, so each carries
+ * the matrix mapping those two directions onto the container's: its main
+ * direction, reversed by a reversed flex direction, and the way its lines
+ * advance, the cross axis's start to end, or the other way for wrap-reverse.
  */
 function wrapOptions(values: readonly string[], flow: Flow): AlignmentOption[] {
-  const turned = !axesOf(flow).main.horizontal;
-  const extra = turned ? { rotated: true as const } : {};
+  const { main, cross } = axesOf(flow);
+  const mainStart = flow.direction.endsWith("-reverse")
+    ? OPPOSITE[main.start]
+    : main.start;
+  const runs = TOWARD[OPPOSITE[mainStart]];
+  const matrixFor = (advanceToward: Edge) => {
+    const advances = TOWARD[advanceToward];
+    const matrix = [runs[0], runs[1], advances[0], advances[1]] as const;
+    return matrix.join(",") === "1,0,0,1" ? {} : { matrix };
+  };
+  const forward = matrixFor(OPPOSITE[cross.start]);
   const options: AlignmentOption[] = [
-    { value: "nowrap", label: "No wrap", icon: "ArrowRightToLine", ...extra },
-    { value: "wrap", label: "Wrap", icon: "WrapText", ...extra },
+    { value: "nowrap", label: "No wrap", icon: "ArrowRightToLine", ...forward },
+    { value: "wrap", label: "Wrap", icon: "WrapText", ...forward },
     {
       value: "wrap-reverse",
       label: "Wrap, reversed",
       icon: "WrapText",
-      ...extra,
-      flip: turned ? "horizontal" : "vertical",
+      ...matrixFor(cross.start),
     },
   ];
   return options.filter(option => values.includes(option.value));

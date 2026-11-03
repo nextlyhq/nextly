@@ -5835,15 +5835,6 @@ fieldset.nx-inspector__fields {
   cursor: not-allowed;
 }
 
-/* An icon with no reversed twin, mirrored along the axis it reverses on. */
-.nx-icon-choice__flip-vertical {
-  scale: 1 -1;
-}
-
-.nx-icon-choice__flip-horizontal {
-  scale: -1 1;
-}
-
 /* A text icon for lines that run down the page, turned a quarter. */
 .nx-icon-choice__rotated {
   rotate: 90deg;

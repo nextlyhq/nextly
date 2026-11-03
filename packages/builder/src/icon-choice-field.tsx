@@ -209,6 +209,7 @@ export function IconChoiceField({
                       <Icon
                         size={16}
                         aria-hidden="true"
+                        style={iconStyle(option)}
                         {...(iconClass(option) === undefined
                           ? {}
                           : { className: iconClass(option) })}
@@ -252,15 +253,20 @@ export function IconChoiceField({
   );
 }
 
-/** The class an icon is drawn with: turned upside down, or a quarter. */
+/** The class an icon is drawn with: turned a quarter, for text down the page. */
 function iconClass(
   option: AlignmentGroup["options"][number]
 ): string | undefined {
-  const classes = [
-    option.rotated === true ? "nx-icon-choice__rotated" : "",
-    option.flip === undefined ? "" : `nx-icon-choice__flip-${option.flip}`,
-  ].filter(name => name !== "");
-  return classes.length === 0 ? undefined : classes.join(" ");
+  return option.rotated === true ? "nx-icon-choice__rotated" : undefined;
+}
+
+/** The transform that maps an icon's own directions onto the container's. */
+function iconStyle(
+  option: AlignmentGroup["options"][number]
+): React.CSSProperties | undefined {
+  return option.matrix === undefined
+    ? undefined
+    : { transform: `matrix(${option.matrix.join(", ")}, 0, 0)` };
 }
 
 /**
