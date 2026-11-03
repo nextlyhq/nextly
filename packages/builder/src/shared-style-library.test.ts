@@ -244,6 +244,21 @@ describe("a row's tile in dark mode", () => {
       });
       expect(ratio(tile.specimen.color, "#ffffff")).toBeGreaterThanOrEqual(3);
     }
+    // A site whose text is light in both modes still gets text that reads:
+    // the engine's own colours come after the site's.
+    const pale = {
+      tokens: [
+        {
+          name: "color.text",
+          kind: "color" as const,
+          values: { light: "#fafafa", dark: "#f5f5f5" },
+        },
+      ],
+    };
+    for (const mode of ["light", "dark"] as const) {
+      const tile = sharedStyleTile(pale, mode, { backgroundColor: "#ffffff" });
+      expect(ratio(tile.specimen.color, "#ffffff")).toBeGreaterThanOrEqual(3);
+    }
     // Without the site's variables too.
     const plain = sharedStyleTile(undefined, "dark", {
       backgroundColor: "#ffffff",

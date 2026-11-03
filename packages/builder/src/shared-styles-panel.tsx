@@ -157,6 +157,14 @@ const PAGE_SIZE = 50;
  */
 export const USAGE_RECOUNT_MS = 15_000;
 
+/**
+ * How many times the rows are asked again when the host does not say whether
+ * the site is still being counted: five minutes of recounts, so a host
+ * written before `counting` existed neither stops while counting nor polls
+ * for ever where the counts cannot finish.
+ */
+export const USAGE_RECOUNT_UNKNOWN_MAX = 20;
+
 /** The words for a refusal that came with none. */
 const UNEXPLAINED_REFUSAL = "This shared style could not be renamed.";
 
@@ -248,16 +256,8 @@ export function SharedStylesPanel({
   // search puts first, then the rest, fifty to a read.
   const usage = useUsage(access, usageOrder(rows, found, pages));
   const exact = countsExact(usage, pageBlocks, rows);
-  // Styles the server refused to remove as still used: used, whatever the
-  // index has counted, until the tab is opened again.
-  const [refused, setRefused] = React.useState<ReadonlySet<string>>(new Set());
   const usageOf = (row: SharedStyleRow) =>
-    refused.has(row.id)
-      ? "used"
-      : sharedStyleUse(
-          pageBlocksOf(pageBlocks, row.id),
-          usage.styles.get(row.id)
-        );
+    sharedStyleUse(pageBlocksOf(pageBlocks, row.id), usage.styles.get(row.id));
   const filtered = found.filter(row =>
     inSharedStyleFilter(row, filter, usageOf(row))
   );
@@ -315,8 +315,7 @@ export function SharedStylesPanel({
           aria-labelledby="nx-shared-styles-all"
         >
           <RemoveUnusedHead
-            // A style the server refused as still used is not offered again.
-            rows={rows.filter(row => !refused.has(row.id))}
+            rows={rows}
             offered={!readOnly && access !== undefined}
             access={access}
             whole={usage.whole}
@@ -329,7 +328,7 @@ export function SharedStylesPanel({
             found={filtered}
             filter={filter}
             query={query.trim()}
-            exact={exact}
+            withheld={unusedWithheld(filter, found, usageOf)}
           >
             {shown.map(row => (
               <StyleRow
@@ -351,10 +350,9 @@ export function SharedStylesPanel({
                     setOpenId(null);
                     search.current?.focus();
                   },
-                  onRefused: () => {
-                    setRefused(current => new Set([...current, row.id]));
-                    usage.reread([row.id]);
-                  },
+                  // A refusal says why, not whether it is used: a lock or a
+                  // count no longer whole refuses too. The read again decides.
+                  onRefused: () => usage.reread([row.id]),
                 }}
                 paint={paint}
                 open={openId === row.id}
@@ -570,13 +568,25 @@ function PanelNotes({
   );
 }
 
+/**
+ * Whether Unused is holding back a row the search found: one whose zero is
+ * not counted in full yet, so it is neither used nor certainly unused.
+ */
+function unusedWithheld(
+  filter: SharedStyleFilter,
+  found: readonly SharedStyleRow[],
+  usageOf: (row: SharedStyleRow) => "used" | "unused" | undefined
+): boolean {
+  return filter === "unused" && found.some(row => usageOf(row) === undefined);
+}
+
 /** The rows, or what to say when there are none or none match. */
 function StyleList({
   rows,
   found,
   filter,
   query,
-  exact,
+  withheld,
   children,
 }: {
   rows: readonly SharedStyleRow[];
@@ -584,15 +594,21 @@ function StyleList({
   found: readonly SharedStyleRow[];
   filter: SharedStyleFilter;
   query: string;
-  /** Whether every count is exact, so a zero means unused. */
-  exact: boolean;
+  /**
+   * Unused is holding back rows whose zero is not counted in full yet. The
+   * rows proven unused are still listed, each judged on its own.
+   */
+  withheld: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
-  // While counts are floors no style is certainly unused, so Unused says why
-  // rather than listing what has merely not been counted yet.
-  if (filter === "unused" && !exact && rows.length > 0) {
+  if (withheld && rows.length > 0) {
     return (
-      <p className="nx-vars__empty">{SHARED_STYLE_UNUSED_WHILE_COUNTING}</p>
+      <>
+        <p className="nx-vars__empty">{SHARED_STYLE_UNUSED_WHILE_COUNTING}</p>
+        {found.length === 0 ? null : (
+          <ul className="nx-vars__list">{children}</ul>
+        )}
+      </>
     );
   }
   if (rows.length === 0) {
@@ -651,24 +667,59 @@ interface UsageState {
   readonly reread: (ids: readonly string[]) => void;
 }
 
-/** Whether the rows on screen are due another read on the recount timer. */
-function recountDue(
-  access: SharedStylesAccess | undefined,
-  whole: boolean | undefined,
-  reads: UsageReads
-): boolean {
+/** The health a style's usage was read under: its read's `whole` and `counting`. */
+interface Reading {
+  readonly whole: boolean;
+  /** Undefined where the host did not say. */
+  readonly counting: boolean | undefined;
+}
+
+/**
+ * Whether the listed styles' floors are worth asking for again: "yes" when a
+ * style read before the count was whole was read while the site was still
+ * being counted, "unknown" when such a reading did not say, "no" otherwise.
+ * Per style, like {@link wholeOf}, since one scan is several reads and the
+ * count can finish between them: a later read saying it is done says nothing
+ * of the floors an earlier read left.
+ */
+function countingOf(
+  readings: ReadonlyMap<string, Reading>,
+  ids: readonly string[]
+): "yes" | "unknown" | "no" {
+  const floors = ids.flatMap(id => {
+    const reading = readings.get(id);
+    return reading === undefined || reading.whole ? [] : [reading.counting];
+  });
+  if (floors.includes(true)) return "yes";
+  return floors.includes(undefined) ? "unknown" : "no";
+}
+
+/**
+ * Whether the rows on screen are due another read on the recount timer: while
+ * their counts are floors the site is still counting, or may be, the latter
+ * only {@link USAGE_RECOUNT_UNKNOWN_MAX} times.
+ */
+function recountDue(args: {
+  access: SharedStylesAccess | undefined;
+  whole: boolean | undefined;
+  counting: "yes" | "unknown" | "no";
+  failed: boolean;
+  recounts: number;
+}): boolean {
+  if (args.access === undefined || args.whole !== false || args.failed) {
+    return false;
+  }
   return (
-    access !== undefined && whole === false && reads.counting && !reads.failed
+    args.counting === "yes" ||
+    (args.counting === "unknown" && args.recounts < USAGE_RECOUNT_UNKNOWN_MAX)
   );
 }
 
 /** What the reads kept: each style's usage, and the health it was read under. */
 interface UsageReads {
   readonly styles: ReadonlyMap<string, SharedStyleReach>;
-  /** Per style, whether the read that counted it saw a whole index. */
-  readonly readWhole: ReadonlyMap<string, boolean>;
-  /** The last read's word on whether floors may still become whole. */
-  readonly counting: boolean;
+  /** Per style, the health of the read that counted it. */
+  readonly readings: ReadonlyMap<string, Reading>;
   readonly mayLock: boolean;
   readonly failed: boolean;
 }
@@ -681,12 +732,12 @@ interface UsageReads {
  * styles listed now are asked, so a style since removed cannot hold it false.
  */
 function wholeOf(
-  readWhole: ReadonlyMap<string, boolean>,
+  readings: ReadonlyMap<string, Reading>,
   ids: readonly string[]
 ): boolean | undefined {
   const read = ids.flatMap(id => {
-    const whole = readWhole.get(id);
-    return whole === undefined ? [] : [whole];
+    const reading = readings.get(id);
+    return reading === undefined ? [] : [reading.whole];
   });
   return read.length === 0 ? undefined : read.every(Boolean);
 }
@@ -717,27 +768,35 @@ function useUsage(
 ): UsageState {
   const [state, setState] = React.useState<UsageReads>({
     styles: new Map(),
-    readWhole: new Map(),
-    counting: false,
+    readings: new Map(),
     mayLock: false,
     failed: false,
   });
   const known = React.useRef(state.styles);
   known.current = state.styles;
   const key = idsKey(ids);
-  const whole = wholeOf(state.readWhole, ids);
+  const whole = wholeOf(state.readings, ids);
+  const counting = countingOf(state.readings, ids);
   const [recount, setRecount] = React.useState(0);
   const recounted = React.useRef(recount);
   React.useEffect(() => {
-    // Only while the site is still being counted: floors that nothing will
-    // make whole (content the index cannot reach) are not asked for again.
-    if (!recountDue(access, whole, state)) return;
+    // Only while the site is still being counted, or may be: floors that
+    // nothing will make whole (content the index cannot reach) are not asked
+    // for again.
+    const due = recountDue({
+      access,
+      whole,
+      counting,
+      failed: state.failed,
+      recounts: recount,
+    });
+    if (!due) return;
     const timer = setTimeout(
       () => setRecount(count => count + 1),
       USAGE_RECOUNT_MS
     );
     return () => clearTimeout(timer);
-  }, [access, whole, state, recount]);
+  }, [access, whole, counting, state, recount]);
   React.useEffect(() => {
     if (access === undefined) return;
     // A recount asks for every row on screen; otherwise only the rows that
@@ -770,11 +829,12 @@ function useUsage(
 function mergedReads(current: UsageReads, read: SharedStylesUsage): UsageReads {
   return {
     styles: new Map([...current.styles, ...read.styles]),
-    readWhole: new Map([
-      ...current.readWhole,
-      ...[...read.styles.keys()].map(id => [id, read.whole] as const),
+    readings: new Map([
+      ...current.readings,
+      ...[...read.styles.keys()].map(
+        id => [id, { whole: read.whole, counting: read.counting }] as const
+      ),
     ]),
-    counting: read.counting,
     mayLock: read.mayLock,
     failed: false,
   };

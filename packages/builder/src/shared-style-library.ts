@@ -49,8 +49,14 @@ export interface SharedStylesUsage {
    * Whether counts that are not whole may still become whole, so they are
    * worth asking for again. False when something the index cannot reach
    * keeps them floors for good.
+   *
+   * Optional, so a host written before it existed still compiles. Absent
+   * means unknown: while the counts are not whole the tab asks again every
+   * 15 seconds, at most 20 times (`USAGE_RECOUNT_MS` and
+   * `USAGE_RECOUNT_UNKNOWN_MAX` in the panel), so it neither stops while the
+   * site may still be counting nor asks for ever where it cannot finish.
    */
-  readonly counting: boolean;
+  readonly counting?: boolean;
   /** Whether this author may lock and unlock shared styles. */
   readonly mayLock: boolean;
   /** Each style asked about, by id. */
@@ -310,8 +316,9 @@ function readable(fg: string | undefined, bg: string | undefined): boolean {
 
 /**
  * Text that reads on a style's own background when it sets no colour: the
- * page's, else the light or dark page's of the site or the engine, the first
- * that reads.
+ * page's, else the site's light or dark text, else the engine's own light or
+ * dark text, the first that reads. The engine's come last so a site whose
+ * text fails on that background in both modes still gets readable text.
  */
 function readableText(
   background: string,
@@ -320,8 +327,10 @@ function readableText(
 ): string | undefined {
   const candidates = [
     page.color,
-    sharedStylePageTile(tokens ?? ENGINE_TOKENS, "light").color,
-    sharedStylePageTile(tokens ?? ENGINE_TOKENS, "dark").color,
+    sharedStylePageTile(tokens, "light").color,
+    sharedStylePageTile(tokens, "dark").color,
+    sharedStylePageTile(ENGINE_TOKENS, "light").color,
+    sharedStylePageTile(ENGINE_TOKENS, "dark").color,
   ];
   return candidates.find(
     colour => colour !== undefined && readable(colour, background)

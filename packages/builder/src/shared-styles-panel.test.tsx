@@ -28,6 +28,7 @@ import type {
 import {
   SharedStylesPanel,
   USAGE_RECOUNT_MS,
+  USAGE_RECOUNT_UNKNOWN_MAX,
   type SharedStylesAccess,
   type SharedStylesPanelProps,
 } from "./shared-styles-panel";
@@ -394,6 +395,89 @@ describe("counts", () => {
     );
   });
 
+  it("keeps asking while an earlier batch was read before the count finished", async () => {
+    // Sixty styles in two batches: the first read while still counting, the
+    // second once counting is done and nothing pending.
+    const many: NamedClass[] = Array.from({ length: 60 }, (_, n) => ({
+      id: `c-${n}`,
+      slug: `s-${n}`,
+      orderIndex: n,
+      styles: {},
+    }));
+    let reads = 0;
+    const base = accessOf().access;
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        reads += 1;
+        const whole = reads > 1;
+        return {
+          whole,
+          counting: !whole,
+          mayLock: false,
+          styles: new Map(ids.map(id => [id, reach({}, whole)])),
+        };
+      }),
+    };
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ library: many, access });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(reads).toBe(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    // The first batch's floors were asked about again.
+    expect(reads).toBeGreaterThan(2);
+  });
+
+  it("re-reads a host that does not say whether it is counting, a bounded number of times", async () => {
+    // A host built before `counting` existed: absent means unknown.
+    const base = accessOf().access;
+    let reads = 0;
+    const access: SharedStylesAccess = {
+      ...base,
+      usage: vi.fn(async (ids: readonly string[]) => {
+        reads += 1;
+        return {
+          whole: false,
+          mayLock: false,
+          styles: new Map(ids.map(id => [id, reach({}, false)])),
+        };
+      }),
+    };
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setTimeout", "clearTimeout"],
+    });
+    try {
+      await panel({ access });
+      const first = reads;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+      });
+      // Still asked again while it may be counting...
+      expect(reads).toBe(first + 1);
+      for (let tick = 0; tick < USAGE_RECOUNT_UNKNOWN_MAX + 5; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(USAGE_RECOUNT_MS);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    // ...but not for ever.
+    expect(reads).toBe(1 + USAGE_RECOUNT_UNKNOWN_MAX);
+  });
+
   it("asks nothing more when the count cannot become whole", async () => {
     // A blocks-backed Single, say: floors for good, so no timer.
     const { access, usageReads } = accessOf({ whole: false, counting: false });
@@ -573,6 +657,37 @@ describe("the filters", () => {
     // A counted use is a use, counted in full or not.
     pick(/^Used/);
     expect(shownRows()).toEqual(["c-card"]);
+  });
+
+  it("lists proven-unused styles while an unrelated count is cut short", async () => {
+    // Every page counted, but Card's count stopped at its cap and Hero's
+    // zero is not complete: only Old note is certainly unused.
+    const { access } = accessOf({
+      styles: {
+        "c-card": reach({ pages: 9 }, false),
+        "c-hero": reach({}, false),
+        "c-old": reach({}),
+      },
+    });
+    await panel({ library: [CARD, HERO, OLD], access });
+    pick(/^Unused/);
+    expect(shownRows()).toEqual(["c-old"]);
+    // Hero is held back, and the note says why.
+    expect(
+      screen.getByText(
+        "Some pages are still being counted, so no style can be called unused yet."
+      )
+    ).toBeTruthy();
+  });
+
+  it("says nothing about counting when no row under Unused is held back", async () => {
+    const { access } = accessOf({
+      styles: { "c-card": reach({ pages: 9 }, false) },
+    });
+    await panel({ library: [CARD, HERO, OLD], access });
+    pick(/^Unused/);
+    expect(shownRows()).toEqual(["c-hero", "c-old"]);
+    expect(screen.queryByText(/no style can be called unused yet/)).toBeNull();
   });
 
   it("keeps a zero on a page not read in full out of Unused", async () => {
@@ -868,9 +983,15 @@ describe("removing one style", () => {
   it("drops the confirmation on a refusal, says why, and reads the style's usage again", async () => {
     const refusal =
       "Still used on Home and 2 more. Remove it from those pages first.";
-    const { access, usageReads } = accessOf({ remove: async () => refusal });
+    const styles: Record<string, SharedStyleReach> = {};
+    const { access, usageReads } = accessOf({
+      styles,
+      remove: async () => refusal,
+    });
     await panel({ access });
     const details = await open(/^Old note/, "Old note");
+    // By the time it is read again, the index has caught up with the page.
+    styles["c-old"] = reach({ pages: 1 });
     fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
     usageReads.length = 0;
     await act(async () => {
@@ -885,7 +1006,7 @@ describe("removing one style", () => {
       within(details).queryByRole("button", { name: /^Remove/ })
     ).toBeNull();
     expect(usageReads).toEqual([["c-old"]]);
-    // The row is no longer offered as unused.
+    // The read again, not the refusal, says the row is used now.
     fireEvent.keyDown(details, { key: "Escape" });
     fireEvent.click(
       within(screen.getByRole("group", { name: "Show" })).getByRole("button", {
@@ -893,6 +1014,30 @@ describe("removing one style", () => {
       })
     );
     expect(screen.queryByRole("button", { name: /^Old note/ })).toBeNull();
+  });
+
+  it("lets the read again decide a style refused for another reason, such as a lock", async () => {
+    const refusal = "Nothing was removed. Old note is locked.";
+    const { access, usageReads } = accessOf({ remove: async () => refusal });
+    await panel({ access });
+    const details = await open(/^Old note/, "Old note");
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    usageReads.length = 0;
+    await act(async () => {
+      fireEvent.click(
+        within(details).getByRole("button", { name: "Remove Old note" })
+      );
+    });
+    expect(within(details).getByRole("alert").textContent).toBe(refusal);
+    expect(usageReads).toEqual([["c-old"]]);
+    // Read again, it is still used by nothing, so it stays under Unused.
+    fireEvent.keyDown(details, { key: "Escape" });
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Show" })).getByRole("button", {
+        name: /^Unused/,
+      })
+    );
+    expect(screen.getByRole("button", { name: /^Old note/ })).toBeTruthy();
   });
 
   it("offers no Remove for a style in use, and says why", async () => {
