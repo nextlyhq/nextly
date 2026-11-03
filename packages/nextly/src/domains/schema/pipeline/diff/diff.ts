@@ -39,7 +39,7 @@
 //   7. The remaining index drops, and every constraint add, in the order
 //      their diff produced them.
 
-import { MIGRATE_STEP_COLUMN_NAMES } from "../../../../lib/system-columns";
+import { isNextlyOwnedDocumentColumn } from "../../../../lib/system-columns";
 import { renderedType } from "../sql-templates/create-table-body";
 
 import { typesDiffer } from "./declared-size";
@@ -66,11 +66,9 @@ import type {
   TableSpec,
 } from "./types";
 
-const MIGRATE_STEP_COLUMNS = new Set(MIGRATE_STEP_COLUMN_NAMES);
-
 /** A table's columns without the ones a step of `nextly migrate` owns. */
 function withoutMigrateStepColumns(columns: ColumnSpec[]): ColumnSpec[] {
-  return columns.filter(column => !MIGRATE_STEP_COLUMNS.has(column.name));
+  return columns.filter(column => !isNextlyOwnedDocumentColumn(column.name));
 }
 
 /** The declared types whose sequence default is part of the type itself. */

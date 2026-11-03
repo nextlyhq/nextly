@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../config";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
+import { withSchemaLock } from "../../domains/schema/pipeline/schema-lock";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -148,6 +149,49 @@ describe.each(getConfiguredTestDialects())(
         } as never)) as Record<string, unknown>;
         expect({ [slug]: read._rev }).toEqual({ [slug]: "1.en:1" });
       }
+    }, 240_000);
+
+    it("waits for the schema lock another process holds before it alters a table", async () => {
+      const t = await boot(dialect);
+      for (const column of PER_DOCUMENT_COLUMNS) {
+        await t.adapter.executeQuery(
+          `ALTER TABLE ${quote(t, "dc_dev_posts")} DROP COLUMN ${quote(t, column)}`
+        );
+      }
+
+      // Held as a migration or a Schema Builder save holds it, until released.
+      let release!: () => void;
+      const released = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      let holding!: () => void;
+      const held = new Promise<void>(resolve => {
+        holding = resolve;
+      });
+      const holder = withSchemaLock(
+        {
+          adapter: t.adapter as never,
+          command: "test: a migration in progress",
+          whenHeld: "wait",
+        },
+        async () => {
+          holding();
+          await released;
+        }
+      );
+      await held;
+
+      const booting = runBootTimeApplyIfDev({ caller: "test" });
+      await new Promise(resolve => setTimeout(resolve, 1_500));
+      // Still waiting: nothing altered while the lock is held.
+      expect(await columnsOf(t, "dc_dev_posts")).not.toContain("_revision");
+
+      release();
+      await holder;
+      await booting;
+      expect(await columnsOf(t, "dc_dev_posts")).toEqual(
+        expect.arrayContaining(PER_DOCUMENT_COLUMNS)
+      );
     }, 240_000);
   }
 );

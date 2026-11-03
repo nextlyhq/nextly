@@ -105,8 +105,13 @@ function revisionOf(value: unknown): number {
 /**
  * The last-changer columns for a save made by `actor`, spelled as content
  * events spell an actor: a kind, an id, and a plugin-defined person's kind.
- * Ids only — a name is looked up when one is shown, so a person erased later
- * leaves nothing in a content row to scrub.
+ * Ids only — a name is looked up when one is shown.
+ *
+ * A plugin-defined person is kept by their kind alone, never their id. A
+ * plugin's id for a person may be an address, and the erasure that replaces
+ * it when the plugin reports the person deleted visits the audit trail and
+ * content history, not content rows; an id never written here is one nothing
+ * has to find. A staff user's id and an API key's are the install's own.
  */
 export function changerColumns(
   actor: RequestActor
@@ -114,7 +119,8 @@ export function changerColumns(
   const event = contentEventActor(actor, null);
   return {
     _changed_by_kind: event.kind,
-    _changed_by_id: event.kind === "system" ? null : event.id,
+    _changed_by_id:
+      event.kind === "system" || event.kind === "principal" ? null : event.id,
     _changed_by_principal_kind:
       event.kind === "principal" ? event.principalKind : null,
   };

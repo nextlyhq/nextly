@@ -19,6 +19,7 @@
  * @module domains/schema/migrate/document-columns
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
@@ -151,4 +152,38 @@ export async function addDocumentColumns(
     );
   }
   return { added };
+}
+
+/**
+ * {@link addDocumentColumns} holding the schema lock, for a caller that is not
+ * already inside a run of `nextly migrate`: the development start that skips
+ * it. Waits while another process holds the lock, as a first start does, so
+ * the step never alters a table under a migration or a Schema Builder save.
+ *
+ * Not released on an interrupt: this runs inside a server, whose shutdown may
+ * let the work run on, and a lock left behind lapses within one lease.
+ */
+export async function addDocumentColumnsUnderLock(
+  adapter: DrizzleAdapter,
+  logger?: {
+    info?: (message: string) => void;
+    warn?: (message: string) => void;
+  }
+): Promise<void> {
+  const { withSchemaLock } = await import("../pipeline/schema-lock");
+  await withSchemaLock(
+    {
+      adapter,
+      command: "development start: per-document columns",
+      whenHeld: "wait",
+      releaseOnInterrupt: false,
+      ...(logger ? { logger } : {}),
+    },
+    () =>
+      addDocumentColumns({
+        db: adapter.getDrizzle(),
+        dialect: adapter.dialect,
+        ...(logger ? { logger } : {}),
+      })
+  );
 }

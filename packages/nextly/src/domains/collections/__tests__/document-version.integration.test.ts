@@ -702,11 +702,37 @@ describe.each(getConfiguredTestDialects())(
         { note: "shared" }
       );
       const shared = await rowOf(t, `dc_${DOCS}`, { id });
+      // A plugin-defined person by kind alone: their id may be an address,
+      // and none is ever written where their erasure would have to find it.
       expect([
         shared._changed_by_kind,
         shared._changed_by_id,
         shared._changed_by_principal_kind,
-      ]).toEqual(["principal", "m-1", "member"]);
+      ]).toEqual(["principal", null, "member"]);
+      expect(JSON.stringify(shared)).not.toContain("m-1");
+
+      // The same for a translation row the person saves: nothing anywhere in
+      // the document's rows for an erasure to have to find.
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DOCS,
+          entryId: id,
+          overrideAccess: true,
+          locale: "es",
+          actor: {
+            type: "principal",
+            principal: { kind: "member", id: "m-1" },
+          },
+        },
+        { title: "hola de nuevo" }
+      );
+      const translated = await languageRow(t, id, "es");
+      expect([
+        translated._changed_by_kind,
+        translated._changed_by_id,
+        translated._changed_by_principal_kind,
+      ]).toEqual(["principal", null, "member"]);
+      expect(JSON.stringify(translated)).not.toContain("m-1");
 
       // Never published: the last changer is for the server to name, through
       // the reader's own access, and only by id.

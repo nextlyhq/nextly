@@ -53,6 +53,8 @@ import type { SingleMetadataService } from "../../singles/services/single-metada
 import { migrateCore } from "../../../cli/commands/migrate";
 import { ensureSchemaEventsTable } from "../events/schema-events-ddl";
 import { diffSnapshots } from "../pipeline/diff/diff";
+import { findColumnDifferences } from "../repair-columns/find-differences";
+import { readRepairEntities } from "../repair-columns/read-entities";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 
 import { addDocumentColumns } from "./document-columns";
@@ -96,43 +98,49 @@ const TABLES = {
 
 const ALL_TABLES = Object.values(TABLES);
 
+// A field group's tables are no document of their own: the document holding
+// it is versioned, never the group, so its tables get none of the columns and
+// its reads must not ask for them.
+const FIELD_GROUPS = [
+  defineFieldGroup({ slug: "fg_plain", fields: [text({ name: "label" })] }),
+  defineFieldGroup({
+    slug: "fg_lang",
+    localized: true,
+    fields: [text({ name: "caption" })],
+  }),
+];
+
+const COLLECTIONS = [
+  defineCollection({
+    slug: "cf_posts",
+    localized: true,
+    fields: [
+      text({ name: "title", localized: true }),
+      fieldGroup({ name: "plainBox", component: "fg_plain" }),
+      fieldGroup({ name: "langBox", component: "fg_lang" }),
+    ],
+  }),
+  defineCollection({
+    slug: "cf_articles",
+    dbName: "custom_articles",
+    fields: [text({ name: "title" })],
+  }),
+];
+
+const SINGLES = [
+  defineSingle({
+    slug: "cf_site",
+    localized: true,
+    fields: [text({ name: "siteName", localized: true })],
+  }),
+];
+
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
-    // A field group's tables are no document of their own: the document
-    // holding it is versioned, never the group, so its tables get none of the
-    // columns and its reads must not ask for them.
-    fieldGroups: [
-      defineFieldGroup({ slug: "fg_plain", fields: [text({ name: "label" })] }),
-      defineFieldGroup({
-        slug: "fg_lang",
-        localized: true,
-        fields: [text({ name: "caption" })],
-      }),
-    ],
-    collections: [
-      defineCollection({
-        slug: "cf_posts",
-        localized: true,
-        fields: [
-          text({ name: "title", localized: true }),
-          fieldGroup({ name: "plainBox", component: "fg_plain" }),
-          fieldGroup({ name: "langBox", component: "fg_lang" }),
-        ],
-      }),
-      defineCollection({
-        slug: "cf_articles",
-        dbName: "custom_articles",
-        fields: [text({ name: "title" })],
-      }),
-    ],
-    singles: [
-      defineSingle({
-        slug: "cf_site",
-        localized: true,
-        fields: [text({ name: "siteName", localized: true })],
-      }),
-    ],
+    fieldGroups: FIELD_GROUPS,
+    collections: COLLECTIONS,
+    singles: SINGLES,
     localization: { locales: ["en", "es"], defaultLocale: "en" },
   });
   expect(current.adapter.dialect).toBe(dialect);
@@ -565,6 +573,38 @@ describe.each(getConfiguredTestDialects())(
       expect(await columnsOf(t, TABLES.codeCollection)).toEqual(
         expect.arrayContaining(PER_DOCUMENT_COLUMNS)
       );
+    }, 240_000);
+    it("leaves repair-columns nothing to report about the columns", async () => {
+      // The comparison judges the columns fields name, and these are no
+      // field's: it must never report them as a difference on an upgraded
+      // site, however it comes to read the live tables.
+      const t = await boot(dialect);
+      await olderSite(t);
+      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+
+      const entities = await readRepairEntities({
+        adapter: t.adapter as never,
+        dialect: t.adapter.dialect as FreshDatabase["dialect"],
+        config: {
+          collections: COLLECTIONS,
+          singles: SINGLES,
+          fieldGroups: FIELD_GROUPS,
+          db: { uiSchemaFile: "ui-schema.json" },
+        },
+        projectRoot: NO_MIGRATIONS,
+        migrationsDir: NO_MIGRATIONS,
+        logger: silent as never,
+      });
+      const findings = await findColumnDifferences({
+        db: t.adapter.getDrizzle(),
+        dialect: t.adapter.dialect as FreshDatabase["dialect"],
+        entities,
+      });
+      expect(
+        findings.filter(finding =>
+          PER_DOCUMENT_COLUMNS.includes(finding.location.column)
+        )
+      ).toEqual([]);
     }, 240_000);
   }
 );

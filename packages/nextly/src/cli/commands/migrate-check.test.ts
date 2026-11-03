@@ -114,6 +114,59 @@ describe("runChecks (F11 PR 4)", () => {
       );
     });
 
+    it("exits 0 when the config carries the per-document columns a snapshot from before them lacks", async () => {
+      // A site's latest snapshot predates the version counter and the last
+      // changer, while the config now declares them on every content table.
+      // `nextly migrate` adds them itself, so this is no schema drift.
+      const sqlContent = "-- placeholder";
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        sqlContent,
+        "utf-8"
+      );
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        "20260101_120000_001_initial",
+        POSTS_DESIRED,
+        sqlContent
+      );
+      const withDocumentColumns: NextlySchemaSnapshot = {
+        tables: [
+          {
+            ...POSTS_TABLE,
+            columns: [
+              ...POSTS_TABLE.columns,
+              {
+                name: "_revision",
+                type: "int4",
+                nullable: false,
+                default: "1",
+              },
+              { name: "_changed_by_kind", type: "varchar", nullable: true },
+              { name: "_changed_by_id", type: "text", nullable: true },
+              {
+                name: "_changed_by_principal_kind",
+                type: "varchar",
+                nullable: true,
+              },
+            ],
+          },
+        ],
+      };
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: withDocumentColumns,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(logger.success).toHaveBeenCalledWith(
+        expect.stringContaining("migrate:check OK")
+      );
+    });
+
     it("exits 0 when there are zero migration files and config matches EMPTY_SNAPSHOT", async () => {
       const logger = makeLogger();
       await runChecks({

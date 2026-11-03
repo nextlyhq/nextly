@@ -686,3 +686,15 @@ export const MIGRATE_STEP_COLUMN_NAMES: readonly string[] =
   SYSTEM_COLUMNS.filter(column => column.addedByMigrateStep === true).map(
     column => column.name
   );
+
+/**
+ * Whether a column is one of the per-document columns Nextly owns on every content table: the
+ * version counter and the last changer.
+ *
+ * The one answer every comparison of a declared schema against a live one asks, so none of them
+ * reports these columns as a difference: they reach existing tables through a step of
+ * `nextly migrate`, never through a migration file or a field.
+ */
+export function isNextlyOwnedDocumentColumn(columnName: string): boolean {
+  return MIGRATE_STEP_COLUMN_NAMES.includes(columnName);
+}
